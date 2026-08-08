@@ -10,6 +10,7 @@ namespace Build.Pipeline.Editor.Tests
     {
         private string projectRoot;
         private string playerSettingsPath;
+        private string editorBuildSettingsPath;
 
         [SetUp]
         public void SetUp()
@@ -18,8 +19,18 @@ namespace Build.Pipeline.Editor.Tests
                 Path.GetTempPath(),
                 "GlobalBuildStateTransactionTests-" + Guid.NewGuid().ToString("N"));
             playerSettingsPath = Path.Combine(projectRoot, "ProjectSettings", "ProjectSettings.asset");
+            editorBuildSettingsPath = Path.Combine(
+                projectRoot,
+                "ProjectSettings",
+                "EditorBuildSettings.asset");
             Directory.CreateDirectory(Path.GetDirectoryName(playerSettingsPath));
-            Directory.CreateDirectory(Path.Combine(projectRoot, "Assets", "Config"));
+            WriteFile(
+                editorBuildSettingsPath,
+                new byte[] { 41, 42, 43 },
+                StableTime());
+            string configDirectory = Path.Combine(projectRoot, "Assets", "Config");
+            Directory.CreateDirectory(configDirectory);
+            WriteFile(configDirectory + ".meta", new byte[] { 1 }, StableTime());
         }
 
         [TearDown]
@@ -32,7 +43,7 @@ namespace Build.Pipeline.Editor.Tests
         }
 
         [Test]
-        public void InterruptedGlobalMutation_IsRestoredExactlyOnNextAcquire()
+        public void InterruptedGlobalMutation_IsRestoredExactlyByExplicitRecovery()
         {
             byte[] original = { 1, 2, 3, 4, 5 };
             DateTime originalTime = new DateTime(637450560000000000L, DateTimeKind.Utc);
@@ -44,25 +55,18 @@ namespace Build.Pipeline.Editor.Tests
             MarkGlobalMutationApplied(first);
             first.AbandonForProcessTerminationSimulation();
 
-            GlobalBuildStateTransaction recovered = GlobalBuildStateTransaction.Acquire(projectRoot);
-            try
+            ExecuteExplicitRecovery(recovered =>
             {
                 Assert.That(recovered.HasPendingRecovery, Is.True);
                 Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(original));
                 Assert.That(File.GetLastWriteTimeUtc(playerSettingsPath), Is.EqualTo(originalTime));
                 Assert.That(File.GetAttributes(playerSettingsPath), Is.EqualTo(originalAttributes));
-
-                recovered.ConfirmPendingRecovery();
-                Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.False);
-            }
-            finally
-            {
-                Assert.That(recovered.Release(), Is.Null);
-            }
+            });
+            Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.False);
         }
 
         [Test]
-        public void InterruptedApplying_WithUnknownPlayerSettingsChange_FailsClosedAndPreservesEvidence()
+        public void InterruptedApplying_WithUnknownPlayerSettingsChange_ExplicitRecoveryFailsClosedAndPreservesEvidence()
         {
             byte[] original = { 1, 2, 3, 4 };
             byte[] foreign = { 9, 8, 7, 6 };
@@ -73,8 +77,11 @@ namespace Build.Pipeline.Editor.Tests
             first.AbandonForProcessTerminationSimulation();
 
             IOException exception = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
-            Assert.That(exception.Message, Does.Contain("unrecognized global-state file"));
+                () => ExecuteExplicitRecovery());
+            Assert.That(
+                exception.Message,
+                Does.Contain("externally changed owned fields")
+                    .Or.Contain("unrecognized global-state file"));
             Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(foreign));
             Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.True);
         }
@@ -111,7 +118,9 @@ namespace Build.Pipeline.Editor.Tests
             WriteFile(playerSettingsPath, foreign, StableTime().AddHours(2));
 
             IOException exception = Assert.Throws<IOException>(
-                () => transaction.MarkGlobalMutationApplied(token));
+                () => transaction.MarkGlobalMutationApplied(
+                    token,
+                    CreateOwnedState()));
             Assert.That(exception.Message, Does.Contain("candidate post-image was not adopted"));
             Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(foreign));
             Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.True);
@@ -133,7 +142,7 @@ namespace Build.Pipeline.Editor.Tests
             WriteFile(playerSettingsPath, transient, originalTime.AddHours(2));
 
             Assert.DoesNotThrow(transaction.EnsurePlayerSettingsOwned);
-            transaction.RestorePlayerSettingsFile();
+            transaction.RestoreGlobalSettingsFiles();
             transaction.Complete();
 
             Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(original));
@@ -175,7 +184,7 @@ namespace Build.Pipeline.Editor.Tests
             MarkGlobalMutationApplied(transaction);
             WriteFile(playerSettingsPath, original, originalTime.AddHours(2));
 
-            transaction.RestorePlayerSettingsFile();
+            transaction.RestoreGlobalSettingsFiles();
             transaction.Complete();
 
             Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(original));
@@ -202,7 +211,7 @@ namespace Build.Pipeline.Editor.Tests
         }
 
         [Test]
-        public void InterruptedAbsentVersionInfoInstallation_IsRemovedOnNextAcquire()
+        public void InterruptedAbsentVersionInfoInstallation_IsRemovedByExplicitRecovery()
         {
             WriteFile(playerSettingsPath, new byte[] { 1, 3, 5 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
@@ -223,85 +232,138 @@ namespace Build.Pipeline.Editor.Tests
             Assert.That(File.Exists(targetPath), Is.True);
             Assert.That(File.Exists(targetPath + ".meta"), Is.True);
 
-            GlobalBuildStateTransaction recovered = GlobalBuildStateTransaction.Acquire(projectRoot);
-            try
+            ExecuteExplicitRecovery(_ =>
             {
                 Assert.That(File.Exists(targetPath), Is.False);
                 Assert.That(File.Exists(targetPath + ".meta"), Is.False);
-                recovered.ConfirmPendingRecovery();
-            }
-            finally
-            {
-                Assert.That(recovered.Release(), Is.Null);
-            }
+            });
         }
 
         [Test]
-        public void InterruptedOwnedVersionInfoParent_IsRemovedOnNextAcquire()
+        public void PrepareVersionInfo_WhenDestinationDirectoriesAreMissing_CreatesAndRestoresThem()
         {
             WriteFile(playerSettingsPath, new byte[] { 1, 4, 7 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
             MarkGlobalMutationApplied(first);
             const string target = "Assets/Generated/Nested/VersionInfo.asset";
-            first.PrepareVersionInfo(target);
+            string generatedDirectory = Path.Combine(projectRoot, "Assets", "Generated");
+            string nestedDirectory = Path.Combine(generatedDirectory, "Nested");
 
-            string ownedRoot = Path.Combine(projectRoot, "Assets", "Generated");
-            string marker = Path.Combine(ownedRoot, "BuildPipelineGlobalState.owner");
-            Assert.That(Directory.Exists(Path.Combine(ownedRoot, "Nested")), Is.True);
-            Assert.That(File.Exists(marker), Is.True);
-
-            string stage = Path.Combine(
-                projectRoot,
-                first.VersionInfoStageAssetPath.Replace('/', Path.DirectorySeparatorChar));
-            WriteFile(stage, new byte[] { 10, 11, 12 }, StableTime().AddMinutes(1));
-            WriteFile(stage + ".meta", new byte[] { 20, 21, 22 }, StableTime().AddMinutes(2));
-            first.MarkVersionStageReady();
-            first.PublishStagedVersionInfo();
-
-            WriteFile(ownedRoot + ".meta", new byte[] { 31, 32 }, StableTime().AddMinutes(3));
-            WriteFile(Path.Combine(ownedRoot, "Nested.meta"), new byte[] { 41, 42 }, StableTime().AddMinutes(4));
-            WriteFile(marker + ".meta", new byte[] { 51, 52 }, StableTime().AddMinutes(5));
-            first.AbandonForProcessTerminationSimulation();
-
-            GlobalBuildStateTransaction recovered = GlobalBuildStateTransaction.Acquire(projectRoot);
             try
             {
-                Assert.That(Directory.Exists(ownedRoot), Is.False);
-                Assert.That(File.Exists(ownedRoot + ".meta"), Is.False);
-                Assert.That(
-                    Directory.GetDirectories(Path.Combine(projectRoot, "Assets"), "__BuildPipelineParent_*"),
-                    Is.Empty);
-                recovered.ConfirmPendingRecovery();
+                first.PrepareVersionInfo(target);
+
+                Assert.That(Directory.Exists(generatedDirectory), Is.True);
+                Assert.That(File.Exists(generatedDirectory + ".meta"), Is.True);
+                Assert.That(Directory.Exists(nestedDirectory), Is.True);
+                Assert.That(File.Exists(nestedDirectory + ".meta"), Is.True);
+
+                first.RestoreVersionInfoFiles();
+                first.ConfirmVersionInfoRestored();
+                first.RestoreGlobalSettingsFiles();
+                first.Complete();
             }
             finally
             {
-                Assert.That(recovered.Release(), Is.Null);
+                Assert.That(first.Release(), Is.Null);
             }
+
+            Assert.That(Directory.Exists(nestedDirectory), Is.False);
+            Assert.That(File.Exists(nestedDirectory + ".meta"), Is.False);
+            Assert.That(Directory.Exists(generatedDirectory), Is.False);
+            Assert.That(File.Exists(generatedDirectory + ".meta"), Is.False);
         }
 
         [Test]
-        public void ExternalFileInOwnedVersionInfoParent_FailsClosedAndPreservesEvidence()
+        public void InterruptedVersionInfoPreparation_WithGeneratedDirectories_IsRemovedByExplicitRecovery()
         {
             WriteFile(playerSettingsPath, new byte[] { 2, 5, 8 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
             MarkGlobalMutationApplied(first);
-            first.PrepareVersionInfo("Assets/Generated/Nested/VersionInfo.asset");
+            const string target = "Assets/Generated/Nested/VersionInfo.asset";
+            string generatedDirectory = Path.Combine(projectRoot, "Assets", "Generated");
+            string nestedDirectory = Path.Combine(generatedDirectory, "Nested");
 
-            string ownedRoot = Path.Combine(projectRoot, "Assets", "Generated");
-            string foreignFile = Path.Combine(ownedRoot, "foreign.txt");
-            byte[] foreignBytes = { 90, 91, 92 };
-            WriteFile(foreignFile, foreignBytes, StableTime().AddDays(1));
+            first.PrepareVersionInfo(target);
             first.AbandonForProcessTerminationSimulation();
 
-            IOException exception = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
-            Assert.That(exception.Message, Does.Contain("Unrecognized file"));
-            Assert.That(File.ReadAllBytes(foreignFile), Is.EqualTo(foreignBytes));
-            Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.True);
+            ExecuteExplicitRecovery(_ =>
+            {
+                Assert.That(Directory.Exists(nestedDirectory), Is.False);
+                Assert.That(File.Exists(nestedDirectory + ".meta"), Is.False);
+                Assert.That(Directory.Exists(generatedDirectory), Is.False);
+                Assert.That(File.Exists(generatedDirectory + ".meta"), Is.False);
+            });
         }
 
         [Test]
-        public void InterruptedExistingVersionInfoInstallation_RestoresBytesAndMetadata()
+        public void GeneratedVersionInfoDirectory_WithUnknownEntry_FailsClosedUntilEntryIsRemoved()
+        {
+            WriteFile(playerSettingsPath, new byte[] { 3, 6, 9 }, StableTime());
+            GlobalBuildStateTransaction transaction = BeginActiveTransaction();
+            MarkGlobalMutationApplied(transaction);
+            const string target = "Assets/Generated/Nested/VersionInfo.asset";
+            string nestedDirectory = Path.Combine(projectRoot, "Assets", "Generated", "Nested");
+            string foreignPath = Path.Combine(nestedDirectory, "foreign.txt");
+
+            try
+            {
+                transaction.PrepareVersionInfo(target);
+                WriteFile(foreignPath, new byte[] { 99 }, StableTime().AddMinutes(1));
+
+                IOException exception = Assert.Throws<IOException>(
+                    transaction.RestoreVersionInfoFiles);
+                Assert.That(exception.Message, Does.Contain("unknown entry"));
+                Assert.That(File.Exists(foreignPath), Is.True);
+                Assert.That(
+                    File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)),
+                    Is.True);
+
+                File.Delete(foreignPath);
+                transaction.RestoreVersionInfoFiles();
+                transaction.ConfirmVersionInfoRestored();
+                transaction.RestoreGlobalSettingsFiles();
+                transaction.Complete();
+            }
+            finally
+            {
+                transaction.Release();
+            }
+        }
+
+        [Test]
+        public void ExistingVersionInfoDestinationDirectory_IsPreservedExactly()
+        {
+            WriteFile(playerSettingsPath, new byte[] { 4, 7, 10 }, StableTime());
+            string configDirectory = Path.Combine(projectRoot, "Assets", "Config");
+            string configMetaPath = configDirectory + ".meta";
+            byte[] originalMeta = File.ReadAllBytes(configMetaPath);
+            DateTime originalMetaTime = File.GetLastWriteTimeUtc(configMetaPath);
+            FileAttributes originalMetaAttributes = File.GetAttributes(configMetaPath);
+            GlobalBuildStateTransaction transaction = BeginActiveTransaction();
+            MarkGlobalMutationApplied(transaction);
+
+            try
+            {
+                transaction.PrepareVersionInfo("Assets/Config/VersionInfo.asset");
+                transaction.RestoreVersionInfoFiles();
+                transaction.ConfirmVersionInfoRestored();
+                transaction.RestoreGlobalSettingsFiles();
+                transaction.Complete();
+            }
+            finally
+            {
+                transaction.Release();
+            }
+
+            Assert.That(Directory.Exists(configDirectory), Is.True);
+            Assert.That(File.ReadAllBytes(configMetaPath), Is.EqualTo(originalMeta));
+            Assert.That(File.GetLastWriteTimeUtc(configMetaPath), Is.EqualTo(originalMetaTime));
+            Assert.That(File.GetAttributes(configMetaPath), Is.EqualTo(originalMetaAttributes));
+        }
+
+        [Test]
+        public void InterruptedExistingVersionInfoInstallation_IsRestoredByExplicitRecovery()
         {
             WriteFile(playerSettingsPath, new byte[] { 2, 4, 6 }, StableTime());
             string targetPath = Path.Combine(projectRoot, "Assets", "Config", "VersionInfo.asset");
@@ -326,8 +388,7 @@ namespace Build.Pipeline.Editor.Tests
             first.PublishStagedVersionInfo();
             first.AbandonForProcessTerminationSimulation();
 
-            GlobalBuildStateTransaction recovered = GlobalBuildStateTransaction.Acquire(projectRoot);
-            try
+            ExecuteExplicitRecovery(_ =>
             {
                 Assert.That(File.ReadAllBytes(targetPath), Is.EqualTo(originalAsset));
                 Assert.That(File.ReadAllBytes(targetPath + ".meta"), Is.EqualTo(originalMeta));
@@ -335,12 +396,7 @@ namespace Build.Pipeline.Editor.Tests
                 Assert.That(File.GetLastWriteTimeUtc(targetPath + ".meta"), Is.EqualTo(metaTime));
                 Assert.That(File.GetAttributes(targetPath), Is.EqualTo(assetAttributes));
                 Assert.That(File.GetAttributes(targetPath + ".meta"), Is.EqualTo(metaAttributes));
-                recovered.ConfirmPendingRecovery();
-            }
-            finally
-            {
-                Assert.That(recovered.Release(), Is.Null);
-            }
+            });
         }
 
         [Test]
@@ -376,7 +432,7 @@ namespace Build.Pipeline.Editor.Tests
         }
 
         [Test]
-        public void ExistingVersionInfoChangedAtAtomicReplace_RetainsCompetingBackup()
+        public void ExistingVersionInfoChangedAtAtomicReplace_ExplicitRecoveryFailsAndRetainsCompetingBackup()
         {
             WriteFile(playerSettingsPath, new byte[] { 2, 4, 6 }, StableTime());
             string targetPath = Path.Combine(projectRoot, "Assets", "Config", "VersionInfo.asset");
@@ -411,14 +467,14 @@ namespace Build.Pipeline.Editor.Tests
             transaction.AbandonForProcessTerminationSimulation();
 
             IOException recoveryException = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
+                () => ExecuteExplicitRecovery());
             Assert.That(recoveryException.Message, Does.Contain("competing backup"));
             Assert.That(File.ReadAllBytes(backups[0]), Is.EqualTo(foreignAsset));
             Assert.That(File.ReadAllBytes(targetPath), Is.EqualTo(stagedAsset));
         }
 
         [Test]
-        public void ExternallyChangedInstalledVersionInfo_FailsClosedAndRetainsJournal()
+        public void ExternallyChangedInstalledVersionInfo_ExplicitRecoveryFailsClosedAndRetainsJournal()
         {
             WriteFile(playerSettingsPath, new byte[] { 7, 7, 7 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
@@ -438,14 +494,14 @@ namespace Build.Pipeline.Editor.Tests
             WriteFile(targetPath, new byte[] { 6, 6, 6, 6 }, StableTime().AddDays(3));
 
             IOException exception = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
+                () => ExecuteExplicitRecovery());
             Assert.That(exception.Message, Does.Contain("externally changed"));
             Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.True);
             Assert.That(File.ReadAllBytes(targetPath), Is.EqualTo(new byte[] { 6, 6, 6, 6 }));
         }
 
         [Test]
-        public void CorruptJournal_FailsClosedAndRetainsEvidence()
+        public void CorruptJournal_AcquireFailsClosedAndRetainsEvidence()
         {
             WriteFile(playerSettingsPath, new byte[] { 5, 4, 3 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
@@ -462,7 +518,7 @@ namespace Build.Pipeline.Editor.Tests
         }
 
         [Test]
-        public void CorruptSnapshot_FailsClosedAndRetainsEvidence()
+        public void CorruptSnapshot_ExplicitRecoveryFailsClosedAndRetainsEvidence()
         {
             WriteFile(playerSettingsPath, new byte[] { 8, 6, 4 }, StableTime());
             GlobalBuildStateTransaction first = BeginActiveTransaction();
@@ -480,7 +536,7 @@ namespace Build.Pipeline.Editor.Tests
             File.WriteAllBytes(snapshots[0], new byte[] { 0, 0, 0 });
 
             IOException exception = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
+                () => ExecuteExplicitRecovery());
             Assert.That(exception.Message, Does.Contain("snapshot checksum"));
             Assert.That(File.Exists(GlobalBuildStateTransaction.GetJournalPathForTests(projectRoot)), Is.True);
         }
@@ -500,7 +556,7 @@ namespace Build.Pipeline.Editor.Tests
             WriteFile(stage + ".meta", new byte[] { 6, 7, 8 }, StableTime().AddMinutes(2));
             transaction.MarkVersionStageReady();
             transaction.PublishStagedVersionInfo();
-            transaction.RestorePlayerSettingsFile();
+            transaction.RestoreGlobalSettingsFiles();
 
             InvalidOperationException exception = Assert.Throws<InvalidOperationException>(transaction.Complete);
             Assert.That(exception.Message, Does.Contain("not confirmed"));
@@ -539,9 +595,9 @@ namespace Build.Pipeline.Editor.Tests
             {
                 string lockPath = Path.Combine(
                     projectRoot,
-                    "Library",
-                    "BuildPipeline",
-                    "GlobalState",
+                    ".buildpipeline",
+                    "transactions",
+                    "global-state",
                     "build.lock");
                 Assert.Throws<IOException>(() =>
                 {
@@ -607,14 +663,12 @@ namespace Build.Pipeline.Editor.Tests
             DateTime originalTime = File.GetLastWriteTimeUtc(actualPlayerSettingsPath);
             FileAttributes originalAttributes = File.GetAttributes(actualPlayerSettingsPath);
             BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
+            bool originalDevelopmentBuild = EditorUserBuildSettings.development;
             NamedBuildTarget namedTarget = BuildRequestFactory.GetNamedBuildTarget(target);
             string applicationVersion = PlayerSettings.bundleVersion;
             long buildNumber = target == BuildTarget.Android
                 ? PlayerSettings.Android.bundleVersionCode
                 : 1L;
-            bool enableObfuz = ObfuzIntegrator.IsBaseObfuzAvailable()
-                && ObfuzIntegrator.TryGetObfuzBuildPipelineEnabled(out bool persistedObfuz)
-                && persistedObfuz;
             string buildRoot = Path.Combine(actualProjectRoot, "Build");
             string outputDirectory = Path.Combine(buildRoot, "GlobalStateGuardTest");
             var request = new BuildRequest(
@@ -624,7 +678,6 @@ namespace Build.Pipeline.Editor.Tests
                 "Assets/Resources/VersionInfoData.asset",
                 Array.Empty<string>(),
                 CheatBuildMode.Disabled,
-                null,
                 target,
                 namedTarget,
                 PlayerSettings.GetScriptingBackend(namedTarget),
@@ -633,19 +686,18 @@ namespace Build.Pipeline.Editor.Tests
                 Path.Combine(outputDirectory, "GuardTest"),
                 outputDirectory,
                 outputIsFolder: false,
-                incrementality: BuildIncrementality.Clean,
                 deleteDebugFiles: true,
-                debugBuild: false,
+                debugBuild: !originalDevelopmentBuild,
                 exportAndroidProject: EditorUserBuildSettings.exportAsGoogleAndroidProject,
                 allowExternalOutput: false,
                 cheatOverride: null,
                 batchMode: false,
                 applicationVersion: applicationVersion,
-                assetContentProviderId: string.Empty,
-                assetContentConfiguration: null,
-                useHybridClr: false,
-                enablePlayerObfuscation: enableObfuz,
-                stepIds: new[] { BuildStepIds.Player });
+                identityOverride: BuildIdentityOverride.Empty,
+                steps: new[]
+                {
+                    new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
+                });
             var version = new BuildVersionContext(
                 applicationVersion,
                 applicationVersion + ".guard",
@@ -659,6 +711,9 @@ namespace Build.Pipeline.Editor.Tests
             BuildGlobalStateScope scope = BuildGlobalStateScope.CaptureAndApply(request, version);
             try
             {
+                Assert.That(
+                    EditorUserBuildSettings.development,
+                    Is.EqualTo(request.DebugBuild));
                 PlayerSettings.companyName = request.CompanyName + ".ForeignMutation";
                 Exception exception = Assert.Catch<Exception>(
                     BuildGlobalStateScope.EnsureCurrentPlayerSettingsOwned);
@@ -671,6 +726,10 @@ namespace Build.Pipeline.Editor.Tests
                 scope.Dispose();
             }
 
+            Assert.That(
+                EditorUserBuildSettings.development,
+                Is.EqualTo(originalDevelopmentBuild));
+
             Assert.That(File.ReadAllBytes(actualPlayerSettingsPath), Is.EqualTo(originalBytes));
             Assert.That(File.GetLastWriteTimeUtc(actualPlayerSettingsPath), Is.EqualTo(originalTime));
             Assert.That(File.GetAttributes(actualPlayerSettingsPath), Is.EqualTo(originalAttributes));
@@ -680,7 +739,7 @@ namespace Build.Pipeline.Editor.Tests
         }
 
         [Test]
-        public void InterruptedRestoreReplacement_IsFinishedAndScratchIsRemoved()
+        public void InterruptedRestoreReplacement_IsFinishedByExplicitRecoveryAndScratchIsRemoved()
         {
             byte[] original = { 4, 2, 4, 2 };
             DateTime originalTime = StableTime();
@@ -705,23 +764,17 @@ namespace Build.Pipeline.Editor.Tests
             File.Replace(temporaryPath, playerSettingsPath, backupPath);
             Assert.That(File.Exists(backupPath), Is.True);
 
-            GlobalBuildStateTransaction recovered = GlobalBuildStateTransaction.Acquire(projectRoot);
-            try
+            ExecuteExplicitRecovery(_ =>
             {
                 Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(original));
                 Assert.That(File.GetLastWriteTimeUtc(playerSettingsPath), Is.EqualTo(originalTime));
                 Assert.That(File.Exists(temporaryPath), Is.False);
                 Assert.That(File.Exists(backupPath), Is.False);
-                recovered.ConfirmPendingRecovery();
-            }
-            finally
-            {
-                Assert.That(recovered.Release(), Is.Null);
-            }
+            });
         }
 
         [Test]
-        public void PlayerSettingsChangedAtAtomicRestore_RetainsCompetingBackup()
+        public void PlayerSettingsChangedAtAtomicRestore_ExplicitRecoveryFailsAndRetainsCompetingBackup()
         {
             byte[] original = { 4, 2, 4, 2 };
             byte[] transient = { 9, 9, 9 };
@@ -734,7 +787,7 @@ namespace Build.Pipeline.Editor.Tests
             transaction.SetBeforePlayerSettingsRestoreReplaceForTests(
                 () => WriteFile(playerSettingsPath, foreign, originalTime.AddDays(2)));
 
-            IOException exception = Assert.Throws<IOException>(transaction.RestorePlayerSettingsFile);
+            IOException exception = Assert.Throws<IOException>(transaction.RestoreGlobalSettingsFiles);
             Assert.That(exception.Message, Does.Contain("captured an unrecognized competing write"));
             string[] backups = Directory.GetFiles(
                 Path.GetDirectoryName(playerSettingsPath),
@@ -746,21 +799,21 @@ namespace Build.Pipeline.Editor.Tests
             transaction.AbandonForProcessTerminationSimulation();
 
             IOException recoveryException = Assert.Throws<IOException>(
-                () => GlobalBuildStateTransaction.Acquire(projectRoot));
+                () => ExecuteExplicitRecovery());
             Assert.That(recoveryException.Message, Does.Contain("competing backup"));
             Assert.That(File.ReadAllBytes(backups[0]), Is.EqualTo(foreign));
             Assert.That(File.ReadAllBytes(playerSettingsPath), Is.EqualTo(original));
         }
 
         [Test]
-        public void DetachedTransactionDirectoryWithoutJournal_FailsClosed()
+        public void DetachedTransactionDirectoryWithoutJournal_AcquireFailsClosed()
         {
             WriteFile(playerSettingsPath, new byte[] { 3, 3, 3 }, StableTime());
             string detached = Path.Combine(
                 projectRoot,
-                "Library",
-                "BuildPipeline",
-                "GlobalState",
+                ".buildpipeline",
+                "transactions",
+                "global-state",
                 "transaction-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(detached);
 
@@ -775,22 +828,82 @@ namespace Build.Pipeline.Editor.Tests
             transaction.Begin(
                 "ProjectSettings/ProjectSettings.asset",
                 originalActiveBuildTarget: (int)BuildTarget.StandaloneWindows64,
-                originalExportAndroidProject: false,
                 requestedBuildTarget: (int)BuildTarget.StandaloneWindows64,
-                originalScriptingBackend: 0,
-                originalCompanyName: "Company",
-                originalProductName: "Product",
-                originalBundleVersion: "1.0",
-                originalApplicationIdentifier: "com.example.product");
+                originalPlayerSettings: CreateOwnedState());
             transaction.BeginGlobalMutation();
+            transaction.MarkEditorBuildSettingsApplied();
             return transaction;
+        }
+
+        private void ExecuteExplicitRecovery(Action<GlobalBuildStateTransaction> assertRestoredState = null)
+        {
+            GlobalBuildStateTransaction transaction = GlobalBuildStateTransaction.Acquire(projectRoot);
+            try
+            {
+                transaction.RestorePendingTransaction();
+                assertRestoredState?.Invoke(transaction);
+                transaction.ConfirmPendingRecovery();
+            }
+            catch (Exception operationException)
+            {
+                Exception releaseException = transaction.Release();
+                if (releaseException != null)
+                {
+                    throw new AggregateException(
+                        "Explicit global-state recovery and transaction release both failed.",
+                        operationException,
+                        releaseException);
+                }
+
+                throw;
+            }
+
+            Exception completionReleaseException = transaction.Release();
+            if (completionReleaseException != null)
+            {
+                throw completionReleaseException;
+            }
         }
 
         private static void MarkGlobalMutationApplied(GlobalBuildStateTransaction transaction)
         {
             GlobalBuildStateTransaction.PlayerSettingsPersistenceToken token =
                 transaction.CapturePlayerSettingsPersistenceToken();
-            transaction.MarkGlobalMutationApplied(token);
+            transaction.MarkGlobalMutationApplied(
+                token,
+                CreateOwnedState());
+        }
+
+        private static PlayerSettingsOwnedState CreateOwnedState()
+        {
+            return new PlayerSettingsOwnedState(
+                (int)ScriptingImplementation.Mono2x,
+                "Company",
+                "Product",
+                "1.0",
+                "com.example.product",
+                1,
+                "1",
+                EditorUserBuildSettings.exportAsGoogleAndroidProject,
+                EditorUserBuildSettings.development,
+                CaptureEditorBuildSceneStates(),
+                new PlayerSettingsSplashState(true, true),
+                Array.Empty<string>());
+        }
+
+        private static EditorBuildSceneState[] CaptureEditorBuildSceneStates()
+        {
+            EditorBuildSettingsScene[] scenes =
+                EditorBuildSettings.scenes ?? Array.Empty<EditorBuildSettingsScene>();
+            var result = new EditorBuildSceneState[scenes.Length];
+            for (int index = 0; index < scenes.Length; index++)
+            {
+                result[index] = new EditorBuildSceneState(
+                    scenes[index]?.path,
+                    scenes[index] != null && scenes[index].enabled);
+            }
+
+            return result;
         }
 
         private BuildRequest CreateBuildRequest(BuildTarget target, bool batchMode)
@@ -804,7 +917,6 @@ namespace Build.Pipeline.Editor.Tests
                 "Assets/Resources/VersionInfoData.asset",
                 Array.Empty<string>(),
                 CheatBuildMode.Disabled,
-                null,
                 target,
                 BuildRequestFactory.GetNamedBuildTarget(target),
                 ScriptingImplementation.Mono2x,
@@ -813,7 +925,6 @@ namespace Build.Pipeline.Editor.Tests
                 Path.Combine(outputDirectory, "TestProduct"),
                 outputDirectory,
                 outputIsFolder: false,
-                incrementality: BuildIncrementality.Clean,
                 deleteDebugFiles: true,
                 debugBuild: false,
                 exportAndroidProject: false,
@@ -821,11 +932,11 @@ namespace Build.Pipeline.Editor.Tests
                 cheatOverride: null,
                 batchMode: batchMode,
                 applicationVersion: "1.0.0",
-                assetContentProviderId: string.Empty,
-                assetContentConfiguration: null,
-                useHybridClr: false,
-                enablePlayerObfuscation: false,
-                stepIds: new[] { BuildStepIds.Player });
+                identityOverride: BuildIdentityOverride.Empty,
+                steps: new[]
+                {
+                    new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
+                });
         }
 
         private static void WriteFile(string path, byte[] bytes, DateTime lastWriteTimeUtc)

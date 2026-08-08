@@ -40,17 +40,29 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             YooAssetPackageProfile profile,
             BuildParameters parameters,
             IBuildPipeline pipeline,
-            string bundledCopyParams)
+            string bundledCopyParams,
+            string cryptographyAdapterId,
+            string runtimeDecryptContractId)
         {
             Profile = profile ?? throw new ArgumentNullException(nameof(profile));
             Parameters = parameters ?? throw new ArgumentNullException(nameof(parameters));
             this.pipeline = pipeline ?? throw new ArgumentNullException(nameof(pipeline));
             BundledCopyParams = bundledCopyParams ?? string.Empty;
-            OutputPackageDirectory = BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            CryptographyAdapterId = cryptographyAdapterId
+                ?? throw new ArgumentNullException(nameof(cryptographyAdapterId));
+            RuntimeDecryptContractId = runtimeDecryptContractId
+                ?? throw new ArgumentNullException(nameof(runtimeDecryptContractId));
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                CryptographyAdapterId,
+                "YooAsset cryptography adapter id");
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                RuntimeDecryptContractId,
+                "YooAsset runtime decrypt contract id");
+            OutputPackageDirectory = BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 System.IO.Path.GetFullPath(parameters.GetPackageOutputDirectory()),
                 $"YooAsset package output directory '{parameters.PackageName}'",
                 1 + YooAssetGeneratedChildPathReserve);
-            BundledPackageDirectory = BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BundledPackageDirectory = BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 System.IO.Path.GetFullPath(parameters.GetBundledRootDirectory()),
                 $"YooAsset bundled package directory '{parameters.PackageName}'",
                 1 + YooAssetGeneratedChildPathReserve);
@@ -73,6 +85,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         public string OutputPackageDirectory { get; }
         public string BundledPackageDirectory { get; }
         public string BundledCopyParams { get; }
+        public string CryptographyAdapterId { get; }
+        public string RuntimeDecryptContractId { get; }
 
         public BuildResult Run()
         {
@@ -94,7 +108,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             };
             foreach (string fileName in fileNames)
             {
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(directory, fileName),
                     $"YooAsset {role} package artifact '{fileName}'");
             }
@@ -114,6 +128,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string packageOutputDirectoryOverride = null,
             string bundledPackageDirectoryOverride = null)
         {
+            YooAsset3CryptographyBinding cryptography =
+                YooAsset3CryptographyRegistry.Resolve(request, profile);
             BuildParameters parameters;
             IBuildPipeline pipeline;
 
@@ -137,7 +153,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         bundledFileRoot,
                         bundledCopyParams,
                         EBuildPipeline.ScriptableBuildPipeline,
-                        EBundleType.AssetBundle);
+                        EBundleType.AssetBundle,
+                        cryptography);
                     break;
 
                 case YooAssetBuildPipelineKind.RawFile:
@@ -153,26 +170,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         bundledFileRoot,
                         bundledCopyParams,
                         EBuildPipeline.RawFileBuildPipeline,
-                        EBundleType.RawBundle);
-                    break;
-
-                case YooAssetBuildPipelineKind.Legacy:
-                    parameters = new TransactionalLegacyBuildParameters(
-                        packageOutputDirectoryOverride,
-                        bundledPackageDirectoryOverride)
-                    {
-                        CompressOption = MapCompression(profile.compression)
-                    };
-                    pipeline = new LegacyBuildPipeline();
-                    SetCommonParameters(
-                        parameters,
-                        request,
-                        profile,
-                        buildOutputRoot,
-                        bundledFileRoot,
-                        bundledCopyParams,
-                        EBuildPipeline.LegacyBuildPipeline,
-                        EBundleType.AssetBundle);
+                        EBundleType.RawBundle,
+                        cryptography);
                     break;
 
                 case YooAssetBuildPipelineKind.ArchiveFile:
@@ -191,7 +190,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         bundledFileRoot,
                         bundledCopyParams,
                         EBuildPipeline.ArchiveFileBuildPipeline,
-                        EBundleType.ArchiveBundle);
+                        EBundleType.ArchiveBundle,
+                        cryptography);
                     break;
 
                 default:
@@ -201,7 +201,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         "Unsupported YooAsset build pipeline profile.");
             }
 
-            return new YooAsset3PackageBuildPlan(profile, parameters, pipeline, bundledCopyParams);
+            return new YooAsset3PackageBuildPlan(
+                profile,
+                parameters,
+                pipeline,
+                bundledCopyParams,
+                cryptography.AdapterId,
+                cryptography.RuntimeDecryptContractId);
         }
 
         private static void SetCommonParameters(
@@ -212,8 +218,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string bundledFileRoot,
             string bundledCopyParams,
             EBuildPipeline pipeline,
-            EBundleType bundleType)
+            EBundleType bundleType,
+            YooAsset3CryptographyBinding cryptography)
         {
+            if (cryptography == null)
+            {
+                throw new ArgumentNullException(nameof(cryptography));
+            }
+
             parameters.BuildOutputRoot = buildOutputRoot;
             parameters.BundledFileRoot = bundledFileRoot;
             parameters.BuildPipeline = pipeline.ToString();
@@ -234,6 +246,30 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             parameters.FileNameStyle = MapFileNameStyle(profile.fileNameStyle);
             parameters.BundledCopyOption = MapBundledCopyOption(profile.bundledCopyOption);
             parameters.BundledCopyParams = bundledCopyParams;
+
+            ApplyCryptographyServices(parameters, cryptography);
+        }
+
+        internal static void ApplyCryptographyServices(
+            BuildParameters parameters,
+            YooAsset3CryptographyBinding cryptography)
+        {
+            if (parameters == null)
+            {
+                throw new ArgumentNullException(nameof(parameters));
+            }
+
+            if (cryptography == null)
+            {
+                throw new ArgumentNullException(nameof(cryptography));
+            }
+
+            // All supported pipeline parameter types derive from BuildParameters.
+            // A null configuration resolves to the explicit unencrypted binding,
+            // whose three service values are intentionally null.
+            parameters.BundleEncryptor = cryptography.BundleEncryptor;
+            parameters.ManifestEncryptor = cryptography.ManifestEncryptor;
+            parameters.ManifestDecryptor = cryptography.ManifestDecryptor;
         }
 
         private static string GetBuiltinShaderBundleName(string packageName)
@@ -324,32 +360,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             private readonly string bundledPackageDirectoryOverride;
 
             public TransactionalRawFileBuildParameters(string packageOutput, string bundledOutput)
-            {
-                packageOutputDirectoryOverride = NormalizeOverride(packageOutput);
-                bundledPackageDirectoryOverride = NormalizeOverride(bundledOutput);
-            }
-
-            protected override string GetPackageOutputDirectoryCore()
-            {
-                return packageOutputDirectoryOverride.Length == 0
-                    ? base.GetPackageOutputDirectoryCore()
-                    : packageOutputDirectoryOverride;
-            }
-
-            protected override string GetBundledRootDirectoryCore()
-            {
-                return bundledPackageDirectoryOverride.Length == 0
-                    ? base.GetBundledRootDirectoryCore()
-                    : bundledPackageDirectoryOverride;
-            }
-        }
-
-        private sealed class TransactionalLegacyBuildParameters : LegacyBuildParameters
-        {
-            private readonly string packageOutputDirectoryOverride;
-            private readonly string bundledPackageDirectoryOverride;
-
-            public TransactionalLegacyBuildParameters(string packageOutput, string bundledOutput)
             {
                 packageOutputDirectoryOverride = NormalizeOverride(packageOutput);
                 bundledPackageDirectoryOverride = NormalizeOverride(bundledOutput);

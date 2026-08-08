@@ -47,7 +47,7 @@ RPC framework、通用 Service Locator 与自动 state-variable replication 不�
 | `CycloneGames.Networking.Serializer.MessagePack` | MessagePack adapter。 | 显式 asmdef reference；依赖 `com.github.messagepack-csharp`。 |
 | `CycloneGames.Networking.Adapter.Mirror` | Mirror transport bridge。 | 显式 asmdef reference；依赖 `com.mirror-networking.mirror`。 |
 | `CycloneGames.Networking.Adapter.Mirage` | Mirage transport bridge。 | 显式 asmdef reference；依赖 `com.miragenet.mirage`。 |
-| `CycloneGames.Networking.Adapter.Nakama` | Nakama client/backend bridge。 | 显式 asmdef reference；依赖 `com.heroiclabs.nakama-unity`。 |
+| `CycloneGames.Networking.Adapter.Nakama` | Nakama client/backend bridge。 | 显式 asmdef reference；依赖 `com.heroiclabs.nakama-unity` 与 UniTask。 |
 
 可选 assembly 只有在目标平台匹配、全部 assembly reference 可解析、`versionDefines` 已生成 capability symbol 且 `defineConstraints` 成立时，才具备编译条件。`autoReferenced: false` 不会关闭 assembly 编译；它表示 consumer 必须显式添加 asmdef reference 才能使用该 assembly 的 API。不要在 PlayerSettings 中重复定义自动生成的 capability symbol。
 
@@ -173,13 +173,25 @@ FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先�
 | --- | --- | --- |
 | Mirror | Client/server/host Unity bridge。 | 所有 Mirror SDK 访问、lifecycle、send、broadcast、disconnect 和 callback 都留在 Unity main owner thread；不存在跨线程发送队列。报告的 payload ceiling 取配置上限与 `NetworkMessages.MaxContentSize` 扣除最坏情况 `ArraySegment<byte>` 前缀及 Cyclone header 后容量的较小值；transport 缺失或无法查询时报告零。 |
 | Mirage | Client/server Unity bridge。 | 所有 Mirage SDK 访问都留在 Unity main owner thread。Server send、broadcast 和 disconnect 只接受已认证 remote-client route；host-local 与 client-to-authority route 使用不同的内部角色。报告的 payload ceiling 取配置上限与已分配 `SocketFactory` 容量扣除 Mirage message ID、packed length 和 Cyclone header 后容量的较小值；缺失 factory 时报告零。 |
-| Nakama | Client-side auth、socket、realtime match、presence 和 matchmaking bridge。 | 只支持 reliable match-state channel。注入的 `ISocket` callback 与 task continuation 必须留在 Unity main owner thread；违反契约时立即失败且不排队。Pending send 和 live connection route 均有界。`SendToServer` 只支持 authoritative match；不支持 server-to-client 与 server-broadcast endpoint route；presence 来源的 state 按 peer-to-peer 分发。 |
+| Nakama | Client-side auth、socket、realtime match、presence 和 matchmaking bridge。 | 只支持 reliable match-state channel。注入的 `ISocket` callback 与 task continuation 必须留在 Unity main owner thread；违反契约时立即失败且不排队。每个 connect epoch 使用一个新 socket：adapter 自有 socket 自动轮换，注入 socket 必须是新创建、未连接、从未使用且未被其他 adapter 持有的实例。Pending send、live connection route 和 socket-close operation 均有界。`SendToServer` 只支持 authoritative match；不支持 server-to-client 与 server-broadcast endpoint route；presence 来源的 state 按 peer-to-peer 分发。 |
 
 Mirror 与 Mirage 为每条 live directional route 分配一个 managed connection wrapper，并在 packet dispatch、error reporting、statistics 和 lifecycle callback 中复用。Disconnect、backend object 替换、server/client stop 或 adapter 销毁时，owner 会使 wrapper 失效、从 cache 移除并释放其 backend reference。Mirage host mode 会刻意保留独立的 authority 与 host-local wrapper，因为两条 route 的发送权限不同。该设计消除了 adapter dispatch 中每包一次的 struct 到 `INetConnection` 装箱。Nakama 同样为每条 authority 或 peer route 缓存一个有界 wrapper；match 替换、presence 离开、stop 或销毁时，会先移除 route 再通知，并清除 adapter、presence 与 target reference。失效 wrapper 只保留稳定的纯值诊断信息，并拒绝 routing 或 mutation。这些结论仅描述 adapter 内部的 allocation 与 lifetime 属性，不代表端到端零分配，因为 SDK serialization、transport、delegate 和产品 handler 仍可能产生分配。产品必须使用实际采用的 SDK 版本编译并测试对应 adapter，再依赖其运行时行为。
 
 Adapter 使用显式 instance reference，并通过 `INetworkMessageEndpoint` 接收 canonical bytes；adapter 不选择 serializer。不支持的 channel、capability、未注册的非 system message ID 或 operation 会显式失败。产品代码必须按具体 API 处理 `NetworkSendStatus`/boolean failure 和 backend exception。
 
 `NakamaNetAdapter.TrySendMatchState` 是 backend service primitive，不是 `INetworkMessageEndpoint` authority route。直接使用时遵循 Nakama target-presence 语义，authorization 与 recipient policy 由产品负责。Nakama integration 暴露的 SDK reference 仍受同一个 Unity main-owner-thread 契约约束。
+
+Adapter 保留同步 queue/control API 与 socket-event 签名，但将异步 SDK 工作委托给受观察的 `UniTask` worker。`.Forget()` 是这些 detached worker 的终态异常观察器；它不拥有 cancellation，也不会自动添加 cancellation。预期 provider fault 通过 `OnError` 报告；逃出该边界的异常进入 UniTask unobserved-exception pipeline，不再从 `async void` callback 逃逸。所有产品 observer（连接、断开、route、presence、match state、data、matchmaker 和 error 通知）都与 transport 状态机隔离。任何可能重入 lifecycle 的 observer 返回后，adapter 都会重新校验 socket epoch、match 和 connection，再继续分发。Observer 异常只会发布一次到同一个 UniTask pipeline。
+
+Connect 工作有界为一个 active provider operation 加一个合并后的 latest request。同一 `StartingClient` generation 内的重复 `StartClient` 保持幂等。在 `Stop`、client/socket 替换或 failure observer 重入之后请求 restart 时，只覆盖唯一 latest 槽位；active worker 进入终态后，latest 会在下一次 Unity `Update` 启动。这一帧的交接可防止同步 provider failure 形成递归 retry loop。`Stop`、`Initialize` 与销毁会使 queued work 失效。实现中不存在 predecessor-task chain。若 active provider task 永不结束，latest 会保持阻塞，但容量恒定而不会增长。Adapter 不会重连同一个 socket，因为 Nakama 3.21.1 会把 Unity-thread event 排入引用可变 listener list 的队列。Adapter 自有 socket 因此会为每个 epoch 创建新的 `UnitySocket` dispatcher，并在已退役 dispatcher 对应的受跟踪 close 进入终态后销毁它。进程级弱引用 registry 会在绑定 event 前声明每个 adapter 自有或注入 socket 的所有权，因此一个 adapter 暴露的 `ISocket` 不能再注入另一个 adapter，两个 adapter 也不能共同绑定同一个 fresh socket。替换或销毁 adapter 时会释放尚未使用的注入 socket claim；connection epoch 一旦开始，或 adapter 自有 socket 被放弃，只要该 socket 仍被引用就保持 retired。注入 socket restart 前必须用新的、未连接的 `ISocket` 调用 `Initialize`。替换 socket 时，也会在发布 replacement 前请求关闭旧的 connected 或 connecting 实例。销毁后 mutating API 会拒绝继续使用；`Stop` 在销毁后仍是幂等的 teardown no-op。
+
+Device authentication 另有 adapter-wide single-flight gate，注入 client 被替换时也适用。Stop 或 timeout 只取消当前 connect 对结果的等待。`ClearSession` 与 `Initialize` 会推进 session/authentication epoch；旧 provider result 仍会被观察到终态，但会被丢弃，不能恢复已清除或已替换的 session。`ClearSession` 还会使 active、coalesced 或已安排到下一帧的 connect request 失效，因此 logout 不会在 handoff 窗口自动重新认证。后续显式认证必须等待该旧真实请求进入终态，才能创建新请求。当前已审计的 Nakama UnityWebRequest adapter 在 SDK cancellation 路径中只结束其 task，并不会物理中止底层 `UnityWebRequest`；如果机械地给每一代请求传 lifecycle token，快速 restart 后反而可能让遗留 HTTP request 与新请求重叠。Adapter 因此会保留并观察真实 provider task，并按配置的等待 timeout 失败。若要实现真实 request cancellation，必须使用已验证、会 abort/dispose request 以及 token registration 的 SDK/source adapter。
+
+Leave-match、matchmaker-add、matchmaker-remove 与 matched-join SDK 操作分别具有 single-flight gate。Stop 会使其状态 generation 失效并解绑 socket event，但这些 Nakama SDK 方法不接受 adapter cancellation token：每个 gate 会一直保持到对应 SDK task 真正进入终态。Socket delegate 会捕获其绑定 socket identity 与 event generation，而物理替换 socket 会阻止已退役 Unity event queue 命中新 epoch。只有 binding 仍 active 时才接纳 send；过期 send fault 会被抑制，pooled payload memory 只会在 provider task 进入终态后归还，而成功 byte/packet counter 保持 adapter-lifetime statistics。永不完成的 provider task 因此会 fail closed，阻止同类新操作，而不是允许 task 无界增长；产品应把该 adapter instance 视为不健康，并按自身 composition/lifecycle policy 替换它。
+
+Socket close operation 按 socket 对象引用去重，而不是共享一个 adapter-wide task。在调用 SDK 前就会发布 in-flight 槽位，因此同步完成、失败或 event 重入都不能重复启动 close。`Initialize` replacement 会先预留容量，再解绑旧 socket event 并提交 replacement state，最后才启动旧 provider close；因此内联 `Closed` callback 不能重入一个只发布了一半的替换事务。普通路径最多允许四个不同 socket 同时处于关闭中；另有一个槽位专门保留给 adapter 销毁，避免 teardown 被 reconnect churn 饿死。第五个普通 close 在容量恢复前最多报告一次 `TransportError.Congestion`；无法预留 close 槽位时，socket replacement 会在发布任何部分状态前失败。完成的槽位会在下一次 close 或 connect 请求时回收。Adapter 自有 Unity dispatcher 只会在对应受跟踪 provider close 进入终态后销毁。连接某个 socket 只等待该 socket 自身已跟踪的 close，不等待无关 socket 的 shutdown。已退役 socket 的迟到 close fault 不会针对替换 socket 的生命周期分发 `OnError`。
+
+Nakama 可能返回 authoritative `MatchId`、relayed-match `Token`，或同时返回两者。只有两个 join credential 都为空时，adapter 才拒绝结果，并清除 ticket 以允许重试 matchmaking。Token-only 结果仍会传给 `ISocket.JoinMatchAsync(IMatchmakerMatched)`；由于 backend-neutral 契约没有 token 字段，join 前的 `OnMatched` callback 会收到无效的 `NetworkMatchId`，SDK join 成功后才能从 adapter match state 获取实际 joined match ID。Join 失败会在报告错误前清除 ticket，因此后续 matchmaker 请求不会被锁死。
 
 发布前必须验证已安装 SDK version、native/browser transport、callback thread、suspend/resume、shutdown、reconnect、encryption、packet limit、stripping/code generation 和 backend outage behavior。Adapter capability flag 只是契约声明，不是平台证据。
 
@@ -251,6 +263,43 @@ public void ReceiveMoveCommand(ReadOnlySpan<byte> payload)
 }
 ```
 
+#### Single-owner thread 与 desync 校验契约
+
+每个 `INetTransport` instance 都有一个由 composition 选定的 owner thread。Control、send、
+broadcast、poll、event subscription 和同步 callback 必须留在该线程；transport 契约不提供
+lock 或隐式跨线程 queue。纯 Core transport 可以选择任意构造/composition 线程。Mirror、
+Mirage、Nakama 和其他 Unity adapter 因持有 Unity 与 backend SDK object，使用 Unity main thread。
+
+`LockstepManager<TInput>` 与 `DesyncDetector<THasher>` 将构造线程记录为 owner。全部状态访问和
+callback 必须留在该线程。Editor 与 Development build 会对错误线程调用快速失败；release 热路径
+不增加同步或 queue。接收 lockstep input 的 transport callback 必须已经运行在 lockstep owner
+thread；否则产品必须在有界 adapter boundary 显式 marshal 后再调用 Core。
+
+Core lockstep 与 transport callback 是同步调用，不携带 cancellation token。Shutdown 或 session
+teardown 时，owner 必须先停止 transport、解绑 callback 并清空其有界 queue，再释放 Core object。
+Unity adapter 通过 `OnDisable`/`OnDestroy` 清理 backend callback；销毁或 domain reload 前不得遗留
+仍注册的 backend callback。
+
+`DesyncDetector<THasher>` 会为 hash history 的每个 slot 保存精确 frame stamp。使用
+`EvaluateRemoteHash` 获取无分配的 `DesyncValidationResult`：
+
+| Verdict | 含义 | `ValidateRemoteHash` 兼容结果 | Desync event |
+| --- | --- | --- | --- |
+| `HashMatch` | 精确保留的 frame hash 相同。 | `true` | 无 |
+| `HashMismatch` | 精确保留的 frame hash 不同。 | `false` | 内联触发 `OnDesyncDetected` |
+| `FrameUnavailable` | Frame 尚在未来，或本地从未 finalize。 | `true` | 无 |
+| `Expired` | Frame 已超出保留历史窗口。 | `true` | 无 |
+
+发送历史 hash 前使用 `TryGetFrameHash`。旧 `GetFrameHash` 为 source compatibility 保留，读取
+raw ring slot；slot 复用后其中可能属于其他 frame。`Reset` 会同时清除 hash 与 frame stamp。
+Unavailable 与 expired 是 protocol blind spot，不代表同步成立；产品负责决定 retry、请求 snapshot、
+断开连接或记录 diagnostics。
+
+`OnDesyncDetected` 现在只表示已确认的 `HashMismatch`。旧版本还会在证据过期时触发该事件；将它
+作为 blind-spot warning 的调用方必须迁移到 `OnValidationUnavailable`，或直接检查
+`EvaluateRemoteHash`。Frame 排序使用 modular `int` arithmetic，支持从 `int.MaxValue` rollover
+到 `int.MinValue`；相距 `2^31` tick 或更远的比较因顺序存在歧义而明确不支持。
+
 ### 主机移交与 Session 恢复
 
 Session recovery flow 在 host migration 期间保持连接状态：
@@ -294,7 +343,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 | `NetworkBufferPool` | 进程级 pool；每次 `Get` 返回一个只能正确 dispose 一次的 lease。 | Pool bookkeeping 已同步；buffer content 仍为 single-owner。 | Retention 有界且可配置。Stale/default/double return 显式失败；清理敏感 byte 会增加 CPU 成本。 |
 | `NetworkBuffer` | 带 generation check 的 `readonly struct` lease；复制值共享同一个 token。 | 禁止并发读写同一个 lease。 | Dispose 任意副本会使全部副本失效；borrowed span/segment 与 lease 同寿命。 |
 | `NetworkMessageCatalog` | Composition root 在冷启动阶段注册 manifest。 | Catalog mutation/query 使用 lock；禁止每 tick 注册。 | Conflict 返回 `false`，且不会部分发布。 |
-| `LocalLoopTransport` | 一组进程内开发 server/client；caller 负责 stop/dispose。 | Main-thread polling。 | 单 peer、reliable channel、有界 queue 和有界 dispatch；release build 不可用。 |
+| `LocalLoopTransport` | 一组进程内开发 server/client；caller 负责 stop/dispose。 | 单一 caller-selected owner thread；Core 不要求 Unity main-thread polling。 | 单 peer、reliable channel、有界 queue 和有界 dispatch；release build 不可用。 |
 | `RateLimiter` | 一个 session/security owner；断开连接时移除 peer，并清理 idle state。 | Concurrent connection table 加 per-bucket synchronization。 | Tracked connection 和 token budget 有界；非法时间或容量耗尽时 fail closed。 |
 | `NetworkReplayGuard` | 一个 session/security owner；shutdown 时清理。 | Concurrent connection table，加锁的 per-message window。 | Peer/stream 有界且使用 64-sequence window；duplicate、stale、invalid 或 over-capacity 输入会被拒绝。 |
 | `NetworkProfiler` | Diagnostics owner；session boundary 重置。 | Counter/statistics 已同步。 | Tracked message ID 有上限；稳定副本查询属于会分配的冷路径。 |
@@ -348,7 +397,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 1. 强制 Unity script refresh/reimport，并确认全部 active assembly 编译通过。
 2. 运行 `CycloneGames.Networking.Tests.Editor` 和已激活 serializer 的测试 assembly。
 3. 运行所有 manifest 或 adapter 引用 Core 的仓库内 domain Networking package 测试。
-4. 只有安装精确支持的 dependency 后，才编译可选 Mirror、Mirage、Nakama 与 MessagePack assembly；同时验证依赖存在和缺失两种状态。
+4. 只有安装精确支持的 dependency 后，才编译可选 Mirror、Mirage、Nakama 与 MessagePack assembly；同时验证依赖存在和缺失两种状态。对 Nakama，运行 `CycloneGames.Networking.Adapter.Nakama.Tests.Editor`，并验证每个 SDK fault 只通过 `OnError` 报告一次、subscriber 异常进入已配置的 UniTask unobserved-exception pipeline、shutdown/generation 改变后迟到 completion 不得修改状态、两个 adapter 不得声明同一个 socket、socket 不得跨 epoch 复用、内联 close callback 不得重入只发布一半的 replacement、`ClearSession` 会取消 queued handoff 工作，以及每种 send 终态路径都会归还 pooled buffer 并递减 pending-send 计数。
 5. 对每个发布配置运行目标 Player/IL2CPP build、stripping check、backend interoperability、suspend/resume、shutdown、packet-loss/fuzz test 和长时间 load。
 6. 使用代表性 workload 测量 allocation、throughput、latency、scale、memory ceiling 和 NativeContainer performance。
 7. 手工验证 Inspector Undo/Redo、Prefab Override、multi-object editing、domain reload 和 asset safety。

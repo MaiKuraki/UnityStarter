@@ -1,537 +1,511 @@
 # Composable Build Pipeline
 
-This module is the project-owned entry point for reproducible Unity content and Player builds. It turns a `BuildData` profile into a read-only invocation request, recovers every registered project-central transaction, validates the request and version snapshot, compiles the requested step identifiers into a dependency-safe plan, executes it, restores transient Unity state, and writes a machine-readable result manifest.
+This module is the project-owned build foundation for Unity Player, hot-update, and asset-content output. One saved `BuildData` profile is compiled into an immutable invocation graph, validated before mutation, executed under a project-wide lease, and published through a shared durable decision. The same composition root is used by the Inspector, Editor menu, TeamCity, Jenkins, and other batch-mode runners.
 
-The same orchestration is used from the Unity Editor and from batch mode. `Build.Pipeline.Editor.BuildEntryPoints` is the only supported orchestration entry point. Provider builders and integration adapters are implementation details; they are not separate build workflows.
+The module is intended to be copied between projects with only project identity, scenes, output roots, and provider configuration changed. Optional packages are isolated behind dependency-free authoring contracts, reflection boundaries, or version-gated integration assemblies so an absent provider does not break the core assembly.
 
-## Architecture
+## Architecture and directory layout
 
-```mermaid
-flowchart LR
-    A["Editor menu or CI"] --> B["BuildEntryPoints"]
-    B --> C["BuildProfileResolver"]
-    C --> D["BuildRequestFactory"]
-    D --> H["BuildPipelineRunner"]
-    H --> R["TypeCache recovery registry"]
-    R --> S["Project-central recovery"]
-    S --> T["Unavailable-state guard"]
-    T --> U["Request and VCS validation"]
-    U --> E["BuildPlanCompiler"]
-    E --> F["TypeCache step registry"]
-    E --> G["Aggregated preflight"]
-    G --> I["hot-update"]
-    G --> J["asset-content"]
-    G --> K["player"]
-    J --> L["Provider adapter registry"]
-    L --> M["YooAsset 3 typed adapter"]
-    L --> N["Addressables canonical adapter"]
-    I --> O["Reverse cleanup and state restore"]
-    J --> O
-    K --> O
-    O --> P["Schema 3 result manifest"]
-
-    classDef entry fill:#dbeafe,stroke:#2563eb,color:#111827;
-    classDef plan fill:#ede9fe,stroke:#7c3aed,color:#111827;
-    classDef step fill:#dcfce7,stroke:#16a34a,color:#111827;
-    classDef result fill:#fef3c7,stroke:#d97706,color:#111827;
-    class A,B,C,D,H entry;
-    class E,F,G,R,S,T,U plan;
-    class I,J,K,L,M,N step;
-    class O,P result;
-```
-
-The principal contracts are:
-
-- `BuildData`: explicit, reviewable project build profile.
-- `BuildRequest`: read-only invocation descriptor containing target, output policy, feature switches, selected steps, and explicit profile/config references.
-- `IBuildStep`: command contract with applicability, dependencies, preflight, execution, and cleanup.
-- `BuildPlanCompiler`: registry lookup, dependency validation, stable topological ordering, and aggregated preflight.
-- `IBuildRecoveryParticipant`: project-root-only recovery contract discovered independently of the current request, selected provider, feature applicability, and configuration asset.
-- `IAssetContentBuildAdapter`: provider-neutral content build boundary.
-- `IAssetContentPlayerBuildSessionFactory`: optional provider hook for validating, opening, and restoring Player-build-only state.
-- `IBuildEventSink`: observer boundary; the default sink emits structured Unity Console messages.
-- `BuildPipelineRunner`: lifecycle owner and result producer.
-
-The core Editor assembly references only `Build.Data` and `Build.VersionControl.Editor`. Optional package APIs are isolated behind reflection or a version-gated integration assembly, so removing an optional package does not make the core build assembly uncompilable. Removal must still respect durable state: if the YooAsset integration is unavailable while its project-central transaction directory contains recovery evidence, the core guard fails closed and instructs the operator to reinstall a supported YooAsset 3 package and finish recovery before removing it.
-
-Adapter discovery is snapshotted once per `BuildExecutionContext`, including an unavailable adapter or a resolution failure. Content validation, content execution, and the Player hook therefore share one adapter instance and cannot observe different registry state during the same run.
-
-### Source layout
-
-The module root first separates runtime data, Editor services, orchestration, and tests by assembly boundary:
+Paths in this document are relative to the Unity project root.
 
 ```text
 Assets/Build/
-  Runtime/Data/          Player-safe version data (`Build.Data`)
-  Editor/VersionControl/ Deterministic VCS metadata adapters (`Build.VersionControl.Editor`)
-  Editor/BuildPipeline/  Authoring and build orchestration (`Build.Pipeline.Editor`)
-  Tests/Editor/          Package-independent EditMode regression suite
-  README.md              Canonical English module guide
-  README.SCH.md          Synchronized Simplified Chinese guide
+  Runtime/Data/                 Player-safe version data (`Build.Data`)
+  Editor/VersionControl/       Git and Perforce metadata providers
+  Editor/BuildPipeline/
+    Authoring/                  BuildData, provider-neutral config assets, Inspectors
+      Content/                  Addressables and YooAsset serialized authoring contracts
+      Player/                   Optional Player extension composition and Inspector
+    Core/
+      Capabilities/             Cross-cutting build capabilities
+      Contracts/               Requests, invocations, steps, adapters, results
+      Discovery/               TypeCache registries and plan compiler
+      Execution/               CLI, request factory, runner, workspace lease
+      Policies/                Identity, path, PlayerSettings, availability
+      Recovery/                Zero-write inspection and explicit recovery
+      Results/                 Provenance, event log, result manifests
+      State/                   ProjectSettings whole-tree guard
+      Transactions/            Global state, Player output, publication barrier
+    EntryPoints/                Shared interactive and batch-mode composition root
+    Integrations/               Optional package adapters and their transactions
+      Addressables/
+      HybridCLR/
+      HybridCLRObfuz/
+      Obfuz/
+      PerformanceTesting/
+      YooAsset3/
+    Presentation/               Workspace Health window
+    Steps/                      Built-in hot-update, asset-content, Player commands
+  Tests/Editor/                 Package-independent EditMode tests
+  README.md                     Canonical English guide
+  README.SCH.md                 Synchronized Simplified Chinese guide
 ```
 
-`Editor/BuildPipeline` is then organized by responsibility rather than by incidental build order:
+The two YooAsset-related locations are deliberate:
 
-```text
-Editor/BuildPipeline/
-  Authoring/       Build profiles, provider configurations, and custom Inspectors
-    Content/       Addressables/YooAsset configs without optional package API references
-    HotUpdate/     HybridCLR authoring assets
-  Core/
-    Capabilities/  Optional capability policies such as Cheat
-    Contracts/     Provider-neutral requests, steps, registrations, and results
-    Discovery/     TypeCache registries and reflection caching
-    Execution/     Request creation, command-line parsing, profile resolution, and runner
-    Policies/      Identity and path safety policies
-    Transactions/ Project-central recovery and core state transactions
-  Steps/           Built-in hot-update, asset-content, and Player commands
-  Integrations/    Narrow package adapters: Addressables, HybridCLR, Obfuz, and YooAsset3
-  EntryPoints/     The sole Editor and CI composition root
+- `Authoring/Content/YooAssetBuildConfig.cs` is a dependency-free serialized contract. Profiles remain readable and diagnosable when YooAsset is absent.
+- `Integrations/YooAsset3/` contains the strongly typed YooAsset implementation, recovery participant, and package-specific tests. Its asmdef is enabled only for `com.tuyoogame.yooasset` in `[3.0.5,4.0.0)`.
+
+Likewise, `Steps/` contains provider-neutral orchestration. `Integrations/HybridCLR` and `Integrations/HybridCLRObfuz` own their configuration assets, adapters, validation, execution, and Player compatibility policy. `Core/` never imports a provider-specific runtime type or provider identifier.
+
+```mermaid
+flowchart LR
+    A["BuildData or CI arguments"] --> R["Immutable BuildRequest"]
+    R --> C["Invocation DAG compiler"]
+    C --> P["Aggregated preflight"]
+    P --> E["Step execution"]
+    E --> S["Restore transient Unity state"]
+    S --> B["Shared publication barrier"]
+    B --> M["Required result evidence"]
 ```
 
-`Authoring` stores package-independent build intent and may use dependency-free metadata or read-only reflection for designer tooling. `Steps` orchestrates that intent. `Integrations` is the only layer that executes optional package APIs or holds strong package references. Package-specific tests stay inside their version-gated integration, while package-independent regression tests stay under `Tests/Editor`. A directory name therefore has one architectural meaning. There is no second top-level YooAsset, HybridCLR, Obfuz, or Pipeline implementation.
+## Core recipe model
 
-## Quick start
+A recipe is an invocation DAG serialized in a stable authoring container. The array is not execution order. The distinction between an invocation and a step type is fundamental.
 
-1. Create a profile with `Assets > Create > CycloneGames > Build > Build Profile`.
-2. Explicitly set company name, product name, application identifier, application version prefix, and a project-relative output root. The three identity fields intentionally have no template defaults and fail preflight when empty.
-3. Assign the launch scene and any additional scenes when the recipe will build a Player. Content-only and hot-update-only recipes do not require a launch scene.
-4. Configure optional capabilities. For external content, select a Provider and assign or create its type-checked configuration asset. If HybridCLR is enabled, assign a `HybridCLRBuildConfig` and complete the package provisioning described below.
-5. In **Build Recipe**, apply `Player + Dependencies`, `Content + Dependencies`, or `Hot Update Only`. Use the registry-backed list only when a Custom recipe is required.
-6. Review **Current Recipe**, **Expected Outputs**, inactive steps, and the copyable CI override. Authoring errors disable the run actions before a build can start.
-7. Run the displayed profile directly from **Run This Recipe**, or select a `BuildData` asset and use `Build > Pipeline > Run Selected Recipe`.
-
-The preset is an Editor command, not serialized state. Applying one replaces only the ordered `pipelineSteps` array and participates in Unity Undo. The saved stable IDs remain the single source of truth for the Inspector, menu commands, `BuildRequest`, and CI.
-
-| Inspector preset | Saved steps | Result |
-| --- | --- | --- |
-| `Player + Dependencies` | `hot-update`, `asset-content`, `player` | Builds the Player. HybridCLR and content steps execute only when their capabilities are configured. |
-| `Content + Dependencies` | `hot-update`, `asset-content` | Builds content packages without a Player. When HybridCLR is enabled, its required DLL outputs are built first; otherwise `hot-update` is skipped. |
-| `Hot Update Only` | `hot-update` | Builds HybridCLR hot-update and AOT metadata outputs without content packages or a Player. |
-| Custom | Any registered ordered IDs | Keeps package and project extensions composable; authoritative dependency validation remains in pipeline preflight. |
-
-The Content preset is available after a Provider and configuration reference are assigned; the Inspector validates the matching configuration type and adapter availability before enabling Run actions. The Hot Update preset is available after HybridCLR and its configuration are enabled. This prevents a one-click recipe from reporting success with no applicable output.
-
-Useful Editor commands are:
-
-| Menu | Behavior |
+| Value | Meaning |
 | --- | --- |
-| `Build/Pipeline/Print Selected Profile` | Resolves the active profile and prints its effective identity, scenes, steps, feature switches, and provider-adapter availability. |
-| `Build/Pipeline/Run Selected Recipe/Release (Clean)` | Runs the selected Profile recipe as a clean release build for the active target. |
-| `Build/Pipeline/Run Selected Recipe/Release (Incremental)` | Runs the selected Profile recipe as an incremental release build. |
-| `Build/Pipeline/Run Selected Recipe/Development (Clean)` | Runs the selected Profile recipe as a clean development build with debugging and profiler connection enabled. |
-| `Build/Pipeline/Run Selected Recipe/Development (Incremental)` | Runs the selected Profile recipe as an incremental development build. |
-| `Build/Pipeline/Android/Export Player Gradle Project` | Runs a clean Android Gradle Player export. The selected recipe must contain `player`. |
+| `InvocationId` | Unique execution identity inside one recipe. Dependencies, CI overrides, logs, provider state, and result records address this value. IDs are case-insensitively unique, at most 64 characters, use lowercase ASCII letters, digits, `.`, `_`, or `-`, and begin with a letter or digit. |
+| `StepTypeId` | Registry identity of the implementation to instantiate, for example `asset-content`. More than one invocation may use the same type only when that registration declares `BuildStepMultiplicity.Multiple`. |
+| `Configuration` | Optional typed `ScriptableObject` owned by this invocation. Required configurations must be persistent main `.asset` files below `Assets`. |
+| `Incrementality` | Per-invocation `Clean` or `Incremental` policy. A single run may combine different policies. Each implementation defines and validates its own semantics. |
+| `Dependencies` | Explicit invocation-to-invocation DAG edges. They determine ordering and which staged upstream outputs a downstream invocation may consume. |
 
-Inspector buttons always run the exact Profile displayed by that Inspector, including when the Inspector is locked and another asset is selected. The Profile is saved first and execution is deferred until the current IMGUI event completes. Menu commands still resolve the selected Profile, and both paths use the same `BuildRequestFactory` and `BuildPipelineRunner`. Content-only is therefore a visible preset and one-click workflow, not a second provider-specific orchestration path. CI can use the same saved recipe or override it with `-pipelineSteps`.
+The built-in step types are:
 
-## Build profile
-
-`BuildData` is the single source of project build intent. Store profiles under `Assets/` and commit them with their referenced configuration assets.
-
-| Field | Contract |
-| --- | --- |
-| Launch Scene | First scene in the Player build. It must resolve to an existing `.unity` asset when the recipe contains `player`; content-only and hot-update-only recipes do not require it. |
-| Additional Scenes | Appended in array order. Duplicate scene paths are removed. |
-| Application Version | Portable file-name segment and version prefix. The canonical package version is `<prefix>.<commit-count>`. |
-| Output Base Path | Required portable project-relative directory below the Unity project root, for example `Build`. |
-| Company Name | Required with no template default; applied to `PlayerSettings` only for the build transaction. |
-| Product Name | Required portable file name with no template default; applied transactionally and used for default artifact names. |
-| Application Identifier | Required with no template default; applied to the requested `NamedBuildTarget` during the transaction. |
-| Version Info Destination | Drag an existing `VersionInfoData` asset or an `Assets/` folder, or use Browse. The Inspector derives and displays the deterministic `VersionInfoData.asset` path; CI may override it with `-pipelineVersionInfo`. Missing parent folders are created and owned only for the build transaction. |
-| Build Recipe | Registry-backed, reorderable step list with safe presets, effective-output summary, inactive-step diagnostics, and a copyable CI override. The serialized contract remains only an ordered ID list. Empty, duplicate, unknown, missing-dependency, no-output, and cyclic plans fail. |
-| Use HybridCLR | Makes `hot-update` applicable and required by content and Player steps. |
-| Enable Player Obfuscation | Declares the required base Obfuz Player-pipeline state independently of hot-update DLL obfuscation. When Obfuz is installed, this must already match the saved Obfuz project setting. |
-| Cheat Build Mode | `Disabled`, development-only, or enabled. `ENABLE_CHEAT` is passed through `BuildPlayerOptions.extraScriptingDefines`; global PlayerSettings defines are not mutated. |
-| Asset Content Provider | Registry-backed Provider choice. `None` disables external content. Canonical IDs are lowercase `yooasset` and `addressables`; custom IDs require no core enum. The Inspector shows the ID read-only for CI use. |
-| Asset Content Configuration | Type-checked object reference constrained by the selected Provider authoring descriptor. It is passed unchanged to the selected adapter and must be set exactly when the Provider is selected. |
-| HybridCLR Config | Explicit configuration reference required when HybridCLR is enabled and the recipe includes `hot-update`. |
-
-Profile selection is deterministic:
-
-- In the Editor, the selected `BuildData` asset wins. Without a selection, exactly one profile must exist.
-- In batch mode, `-pipelineProfile Assets/<path>/<profile>.asset` selects the profile. Without it, exactly one profile must exist.
-- Profile paths must be project-relative `.asset` paths below `Assets/`; rooted paths and traversal segments are rejected.
-
-Version-control metadata providers are discovered through `IVersionControlProviderDetector`. Built-in priorities prefer a Git workspace over Perforce environment variables; equal highest-priority matches fail instead of selecting nondeterministically. `Capture()` returns one validated snapshot: Git verifies that `HEAD` did not change while reading hash, count, branch, and date and retries once, while Perforce validates the latest submitted changelist plus Stream/Client identity. Batch-mode and release builds require a supported provider and coherent metadata and fail rather than publishing a fallback version. Only an interactive Development build may use the explicit `LocalDevelopment` fallback. The full content and Player version is `<ApplicationVersion>.<CommitCount>`.
-
-## Pipeline semantics
-
-The built-in steps are:
-
-| Step ID | Applicable when | Dynamic dependencies | Responsibility |
+| Step Type ID | Multiplicity | Configuration | Responsibility |
 | --- | --- | --- | --- |
-| `hot-update` | `UseHybridCLR` is enabled | None | Runs full or fast HybridCLR generation, optional hot-update obfuscation, copies generated DLL data, and verifies required outputs. |
-| `asset-content` | Content-provider ID is non-empty | `hot-update` when HybridCLR is enabled | Resolves exactly one provider adapter, validates it, builds all configured packages, and records structured content results. |
-| `player` | Always | Enabled `hot-update` and/or `asset-content` | Cleans or prepares the dedicated Player output, validates scenes and optional features, invokes Unity `BuildPipeline.BuildPlayer`, and verifies the report. |
+| `hot-update` | Multiple | `HotUpdateBuildConfiguration` | Resolve requirements, validation, execution, and Player compatibility from the concrete provider adapter. |
+| `asset-content` | Multiple | `AssetContentBuildConfiguration` | Resolve the adapter from the concrete config asset and build one provider session. |
+| `player` | Single | Optional `PlayerBuildConfiguration` | Build a Unity Player into a staging location, run explicitly selected Player extensions, and publish only at the terminal decision. `None` means an unextended Player. |
 
-Steps are discovered with Unity `TypeCache`. Registration attributes are compared before construction: only the unique highest-`Priority` type for each requested ID is instantiated, so an overridden lower-priority plugin cannot break the winning implementation from its constructor. Two types at the same winning priority are an error. The compiler evaluates each step's applicability exactly once and stores that decision in the compiled plan, so later steps cannot change whether another step executes by mutating shared context. Dependencies are evaluated against the same applicability snapshot, every required step must be selected and applicable, and stable topological sorting preserves configured order wherever dependencies do not constrain it.
+`Required` and `IfSelected` dependency modes have precise behavior:
 
-Each entry point resolves authoring input and creates one immutable `BuildRequest` before execution. Cheat effectiveness, Provider binding, paths, target, incrementality, and step IDs are therefore resolved once and reused by preflight and every step; execution does not re-read mutable `BuildData` fields.
+- `Required` fails plan compilation when its target invocation is not selected.
+- `IfSelected` creates an edge when the target is selected and is otherwise ignored.
+- A selected but non-applicable dependency is an error.
+- Self references, duplicate edges, unknown targets, and cycles are rejected.
+- Otherwise independent ready invocations use case-insensitive `InvocationId` order as a deterministic tie-breaker. Serialized array order never changes execution.
 
-Recovery participants are also discovered with `TypeCache`, ordered deterministically by ID, and resolved by unique highest priority before construction. Built-in participants recover global Unity state, HybridCLR outputs, Player publication, and Addressables settings/publication; the version-gated YooAsset assembly contributes its own participant. Every participant runs before request validation, version-control capture, feature applicability, adapter resolution, or plan compilation. A disabled feature, changed profile, removed provider selection, or invalid current request therefore cannot hide an interrupted transaction.
+The list and its Dependencies are not duplicate controls. Membership answers *what may run*; an edge answers *which producer must precede a consumer*, whether that producer is automatically required, and which staged upstream output the consumer is authorized to see. Quick Setup writes the standard edges automatically. Only custom or multi-provider graphs normally need manual edge editing.
 
-All applicable steps complete preflight before any build step runs. Execution stops at the first failure. Every step that started execution receives `Cleanup` in reverse order, including when execution fails. Cleanup and state-restoration failures are combined with the original failure instead of being hidden.
-
-The default `ConsoleBuildEventSink` reports run start, step start/finish, duration, status, output, and result path. Code-based integrations can inject another `IBuildEventSink` into `BuildPipelineRunner` without changing step implementations. Observer callbacks are isolated from orchestration: an exception from `RunStarted`, `StepStarted`, `StepFinished`, or `RunFinished` is captured as an observer failure and never changes step execution or the run's success status.
-
-## Optional integrations
-
-**YooAsset 3**
-
-The typed adapter lives in `Editor/BuildPipeline/Integrations/YooAsset3`. Its asmdef uses the UPM package ID `com.tuyoogame.yooasset` and the version expression `[3.0.5,4.0.0)`. The assembly is compiled only when that range is satisfied, and directly references `YooAsset` and `YooAsset.Editor`.
-
-`YooAssetBuildConfig` contains only provider build intent:
-
-- `buildOutputRoot`: project-relative package output root; empty resolves to `Bundles`.
-- `bundledFileRoot`: project-relative built-in content root under `Assets/StreamingAssets`; empty uses YooAsset's configured StreamingAssets root.
-- `packages`: explicit package profiles with enablement, package name, YooAsset pipeline, note, compression, file-name style, bundled-copy policy/tags, dependency database, bundle sharing, result verification, and exact-version collision policy.
-
-When compatible YooAsset collector settings are installed, the package field is a dropdown populated from the configured collector packages. The stable package name remains serialized for deterministic CI. If collector settings are unavailable, authoring remains compilable and the current value is preserved for diagnosis rather than silently replaced.
-
-Package names must exist in YooAsset collector settings. Portable path components are checked case-insensitively for collisions and are limited by both character and 240-byte UTF-8 budgets; output and bundled roots must not overlap or traverse redirected paths. Every package and bundled snapshot is staged and validated before a durable-journal directory-swap transaction publishes the complete set. `FailIfVersionExists` protects an existing exact version; `ReplaceExactVersion` backs up and replaces only the guarded exact-version directory, with reverse rollback on failure. A clean pipeline request intentionally does not set YooAsset `ClearBuildCacheFiles`, because YooAsset 3.0.5 can remove every historical version under the package root. Results are emitted only after the complete publication commits.
-
-If YooAsset is absent or outside the supported range, the integration assembly is excluded and the core still compiles. With no retained recovery state, selecting YooAsset fails preflight because no supported adapter is available. With retained state, the dependency-free guard fails earlier and preserves the evidence until the integration is reinstalled and recovery succeeds.
-
-**Addressables**
-
-Addressables uses a single canonical content path through `AddressablesBuilder.Build(target, version, config, clean)`. Its package API boundary is reflection-based, so the core compiles when Addressables is absent; selecting it without the required supported Editor API fails preflight.
-
-The adapter:
-
-- requires saved Addressables settings and configuration assets;
-- snapshots every affected configuration asset and its `.meta`, including exact bytes, length, SHA-256 identity, timestamp, and attributes, before temporary settings changes;
-- creates a durable settings transaction before setting `BuildRemoteCatalog` and `OverridePlayerVersion`, then restores both reflected values and the exact persisted files before content publication can commit;
-- performs a real clean through the active data builder's overridden `ClearCachedData` when the request is clean;
-- writes `AddressablesVersion.json` into `Addressables.BuildPath` using the canonical full version;
-- optionally publishes the current build registry transactionally to `Build/AddressablesContent/<BuildTarget>` by default;
-- publishes `PlayerData`, available `RemoteContent`, build metadata, and explicitly approved additional roots, then writes `AddressablesArtifacts.json`;
-- stages publication, validates every registered file and its SHA-256 identity, swaps the destination, and restores the previous publication if the swap fails.
-
-Addressables settings and publication share the project-wide `Library/BuildPipeline/Addressables/build.lock`. The unconditional `AddressablesRecoveryCoordinator` first recovers `<project>/.buildpipeline/transactions/addressables-settings/active.json`, then `<project>/.buildpipeline/transactions/addressables/active.json`, before the current request or provider is validated. The settings journal owns a transaction directory through `transaction.owner`, stores bounded asset/`.meta` snapshots, and performs atomic restoration with fixed `NNNN.restore.tmp`/`.bak` scratch inside that owned directory; it never leaves random scratch beside authored assets. Missing, foreign, corrupt, redirected, or identity-conflicting journal, owner, snapshot, and scratch state fails closed and remains available for inspection.
-
-The checksummed, bounded publication journal records the exact publication root and brackets every directory move, so recovery still finds an interrupted transaction after the configured output root changes. Its atomic journal candidates use the fixed `active.json.tmp` and `active.json.bak` names and are validated before recovery promotes or removes them. An interrupted pre-commit transaction restores the exact previous publication; a durable committed transaction keeps the new publication and finishes cleanup. Corrupt journals, detached stage/backup directories, redirected paths, identity changes, and ambiguous states fail closed and remain available for inspection. Every stage receives a transaction-specific ownership marker before files are copied; no unverified non-empty stage is recursively deleted.
-
-Every non-empty destination must be owned by this pipeline through `.buildpipeline-owner.json` and the exact `AddressablesArtifacts.json` file/hash inventory. Empty destinations may be claimed. Legacy or manually populated non-empty destinations are intentionally not adopted: back them up and remove or relocate them once, then let a successful build establish ownership. Cleanup failures remain build failures and never discard the primary publication failure.
-
-During the Player step, the provider-neutral Player-build hook opens a scoped processor that temporarily selects `DoNotBuildWithPlayer`, validates the canonical version artifact in the provider-owned build data, and lets the official Addressables Player processor map that data to `StreamingAssets/aa`. The hook holds the same project lock and uses the same durable settings transaction, so the original reflected setting plus every captured configuration asset and `.meta` are restored exactly afterward, including after interruption. External profile publication sources are rejected unless the config explicitly enables them; URI, protected, top-level, overlapping, and redirected paths remain invalid.
-
-**HybridCLR and Obfuz**
-
-HybridCLR package types are resolved through a narrow reflection boundary. Enabling HybridCLR requires:
-
-- an assigned `HybridCLRBuildConfig`;
-- an installed and initialized HybridCLR package exposing the required Editor commands;
-- at least one hot-update assembly, also configured in `HybridCLR Settings > Hot Update Assembly Definitions`;
-- distinct, non-overlapping project-relative output directories below `Assets/` for hot-update DLLs and AOT DLLs.
-
-A full request runs HybridCLR prebuild generation. `-pipelineIncremental` uses DLL compilation only and reuses existing stripped-AOT inputs; run a full build after assembly, signature, generic, or AOT dependency changes. The step verifies every configured `.dll.bytes`, `HotUpdate.bytes`, and `AOT.bytes` before it can succeed. HybridCLR publication has exactly two roles: hot-update assemblies and AOT metadata assemblies.
-
-Each HybridCLR output directory is a flat, Build-exclusive publication. Ownership manifest schema `2` records the owner, role, publication transaction ID, and every artifact or in-directory Unity `.meta` with its kind, exact relative path, byte length, and SHA-256 hash. The journal additionally records the manifest identity and a deterministic hash of the complete managed tree. Every identity is revalidated immediately before a move or deletion, so an external replacement fails closed instead of being published, restored, or removed. An existing empty directory can be claimed; an existing non-empty directory must already contain a valid matching schema-2 manifest. Unknown files, subdirectories, reparse points, corrupt or legacy manifests, missing entries, orphan `.meta` files, identity changes, and casing-aliased or overlapping destinations fail without deletion. Legacy non-empty output directories are intentionally not auto-adopted: back them up, remove or relocate their contents, and let the next build establish ownership.
-
-All configured outputs are generated and validated in the stable project state root `<project>/.buildpipeline/transactions/hybridclr/<transaction-id>` before publication. The reusable `build.lock` in that root rejects overlapping HybridCLR output transactions. Stages and root-meta recovery copies stay in that stable transaction directory; each old output directory is renamed to a transaction-specific backup beside its target, keeping the publication swap on the target volume. The bounded schema-2 `active.json` journal stores canonical project/state/scratch roots, every exact target, root-meta, stage, backup, and recovery path, initial and staged identities, transaction and operation phases, a monotonically increasing sequence, and a SHA-256 checksum. Initial creation and every update use a write-through temporary candidate followed by atomic installation; if `active.json` is missing, recovery can reconstruct it only from the unique newest valid candidate. Every filesystem move is bracketed by durable pending and completed states, and committed or rolled-back cleanup is itself a resumable journal phase. Recovery reads the old target set exclusively from the central journal before evaluating the current HybridCLR configuration, so a path change cannot orphan a previous transaction. Transactions that never reached durable `Committed` restore the original output set in reverse order; committed transactions retain the new outputs and finish cleanup. Corrupt or legacy journals, candidates from different transactions, same-sequence conflicts, redirected paths, identity changes, ambiguous copies, and detached transaction directories fail closed and remain available for inspection.
-
-Existing artifact `.meta` files are copied into staging and covered by the ownership hash inventory, preserving their GUIDs and references. The sibling `.meta` for every configured output root is also part of the transaction: an existing sidecar is durably copied before the directory can disappear, while an initially missing sidecar is generated deterministically and moved with journaled pending/completed states. Recovery therefore restores the exact prior GUID or removes the transaction-created sidecar after a crash. `AssetDatabase.Refresh` runs only after the complete output set commits or recovery completes atomically. A failed rollback retains the journal, scratch, and sibling backups and reports an aggregate failure. If cleanup fails after durable commit, the step reports failure with the journal path and clearly states that the new outputs are already active.
-
-Player obfuscation and hot-update DLL obfuscation are independent switches. Player obfuscation requires a provisioned base Obfuz settings asset and a compiled Encryption VM. Hot-update obfuscation additionally requires the atomic HybridCLR + Obfuz + Obfuz4HybridCLR package set. HybridCLR generation invokes its command API directly and never suspends, enables, disables, or saves the Player Obfuz setting; the latter only gates Obfuz's Unity Player-build and linker callbacks. The build pipeline validates these prerequisites but does not install packages, initialize HybridCLR, generate secrets, or provision Obfuz settings; those are explicit project provisioning operations.
-
-**Cheat module**
-
-The Cheat module is an optional Player capability and is independent of `HybridCLRBuildConfig`. `Cheat Build Mode` and the command-line override resolve the effective `ENABLE_CHEAT` state once while creating `BuildRequest`. If a Player request asks for Cheat support while `CycloneGames.Cheat.Runtime` is absent from the target Player compilation, preflight fails. If Cheat support is not requested but that runtime assembly receives `ENABLE_CHEAT` through PlayerSettings or effective compiler response-file defines, preflight also fails so a release cannot silently inherit the capability.
-
-For ordinary Player builds, the effective capability is supplied through `BuildPlayerOptions.extraScriptingDefines` without mutating global PlayerSettings defines. HybridCLR 8.12's public compile command does not expose an equivalent per-invocation extra-define input. Consequently, a Player recipe that combines HybridCLR with effective Cheat support fails preflight by design. A hot-update/content-only recipe remains independent because it does not build a Player with the Cheat capability. This fail-closed rule prevents Player and hot-update assemblies from being compiled under different symbol sets. Supporting the combined Player case requires a separately installed, version-gated compilation strategy with verified HybridCLR API support; it must not be approximated through global define mutation.
-
-## Outputs, cleanup, and state
-
-Every Player artifact owns a dedicated output directory. Default paths are below the profile output root:
+For example, two content invocations can use the same `asset-content` implementation with different configs:
 
 ```text
-<OutputBasePath>/<Platform>/<Release|Development>/<artifact>
+hot-release   : hot-update
+content-base  : asset-content -> IfSelected hot-release
+content-dlc   : asset-content -> IfSelected hot-release
+player        : player        -> Required hot-release, content-base, content-dlc
 ```
 
-For file outputs, the parent directory is the dedicated directory. For folder outputs (iOS, WebGL, macOS app bundles, and Android project export), the output path itself is the dedicated directory. Transaction staging preserves that directory's final leaf name, so a macOS `Product.app` is also built at a staged path ending in `Product.app` rather than a generic payload directory.
+The Player consumes content sessions only from its transitive dependency closure. Explicitly connect every content invocation whose staged built-in data must be visible to that Player. Give independent content invocations non-overlapping final publication roots or package scopes; separate invocation journals prevent identity collisions but do not make overlapping destinations valid.
 
-A clean request is the default. It builds into an empty same-volume transaction stage while the last-known-good dedicated directory remains untouched. `-pipelineIncremental` first copies the complete previous directory into staging and then builds incrementally there. After Unity succeeds, the transaction verifies the staged tree, moves the previous directory to a transaction-specific backup, promotes the stage, writes the new ownership marker, and removes the verified backup. Its durable journal either rolls back or finishes that swap after interruption. This replaces stale executable siblings such as `_Data`, symbols, and runtime files as one publication unit without exposing a partial build. Recursive deletion refuses the project root, the approved build root or any of its ancestors, protected directories (including casing aliases), any path through a reparse point, any reparse-point entry anywhere in the owned directory tree, and a tree containing more than 1,000,000 entries. A clean request adds Unity `CleanBuildCache`; `-pipelineIncremental` does not. Never place unrelated files in a Player output directory.
+An asset-content adapter can implement `IAssetContentBuildOutputClaimProvider` and declare absolute, exclusive terminal output roots. Claims are collected during aggregated preflight. Any exact match or ancestor/descendant overlap within one invocation or across selected invocations fails before a provider build begins. Claim identity is conservatively case-insensitive on every host so macOS case-insensitive APFS aliases cannot bypass preflight. Addressables and YooAsset implement this contract; custom providers that publish terminal files should do the same.
 
-The published sibling marker is `<dedicated-output>.buildpipeline-player-owner.json`. An existing marker is accepted only when its schema, checksum, transaction identity, and complete tree identity match the current output. A foreign, corrupt, detached, or stale marker fails closed and is never overwritten. `Begin`/prepare failures recover any transaction-owned scratch and release the Player lock; if recovery also fails, the original and cleanup failures are both reported.
+The generic hot-update step also supports multiple invocations. Each invocation resolves one `IHotUpdateBuildAdapter` from its config-derived `ProviderId`, caches that stateful adapter for the run, and delegates requirements, validation, and execution. A provider with process-global vendor tooling must reject unsupported same-run combinations itself. The HybridCLR adapters do so because the current generation API has one global output session.
 
-Without `-pipelineAllowExternalOutput`, the artifact and its dedicated directory must be strict descendants of `OutputBasePath`. `-pipelineOutput` is resolved from the Unity project root when explicitly supplied. External output is an explicit opt-in and still rejects volume roots, top-level volume entries, protected Unity directories, well-known operating-system directories, reparse points, and unsafe traversal. `OutputBasePath` itself is always project-relative and portable.
+The compiler discovers registrations, creates a fresh `IBuildStep` instance per invocation, checks multiplicity and typed configuration, builds a stable topological order, and aggregates every applicable invocation's `Validate` result before opening a build mutation window.
 
-The runner treats Unity state as a durable transaction:
+## Build profile and designer workflow
 
-- it requires clean, writable `PlayerSettings` state before both recovery and a new build;
-- requires the active target to equal the request before any mutation and never calls `SwitchActiveBuildTarget`; scripting backend, company/product/version/identifier, and Android export mode are captured and restored transactionally;
-- acquires the project-wide `Library/BuildPipeline/GlobalState/build.lock` before recovery or mutation and retains it until both the `VersionInfoData` and global scopes finish;
-- writes a checksummed, size-bounded `Library/BuildPipeline/GlobalState/active.json` write-ahead journal and durable sidecar snapshots before changing `ProjectSettings/ProjectSettings.asset` or `VersionInfoData`;
-- applies request state, verifies that the persisted file still matches the original snapshot, then opens a main-thread-scoped `OnWillSaveAssets` allowlist around Unity's project save so only the canonical `ProjectSettings/ProjectSettings.asset` path can be written; it immediately captures a content token, revalidates the clean Unity API state, durably records the complete serialized post-image (including Unity- or license-enforced fields) only while that token still matches, and verifies the file again after journal publication;
-- verifies the authorized disk content, clean in-memory `PlayerSettings`, active target, requested Unity API values, Android export mode, and durable Obfuz state immediately before and after `BuildPlayer`; an unknown byte or API change blocks Player publication, retains recovery evidence, and is never adopted retroactively;
-- restores both Unity APIs and the exact original bytes, timestamp, and attributes; atomic replacement keeps the displaced file as a witness and deletes it only after its content matches an authorized pre-image, so an ambiguous crash or competing write stops fail-closed without deleting the competing bytes;
-- stages `VersionInfoData` at a transaction-derived path, records asset and `.meta` identities before installation, then restores the original pair or removes the proven transient pair; when its parent is missing, the journal owns a marked temporary folder tree and removes that tree and its generated folder `.meta` files after validation;
-- rejects corrupt journals, changed project paths, reparse points, detached transaction artifacts, changed snapshot identities, and externally replaced transient files instead of guessing;
-- never temporarily saves Obfuz settings. When Obfuz is installed, `EnablePlayerObfuscation` must match the state already persisted in `ProjectSettings/Obfuz.asset` before the build starts;
-- restores Addressables settings and configuration snapshots in the Addressables scopes;
-- reports restoration failure as a failed run.
+Create a profile with `Assets > Create > CycloneGames > Build > Build Profile`. Commit the profile and every referenced config asset.
 
-The pipeline never claims an existing authored parent folder. If part of the configured parent path is absent, it creates the missing suffix from the first absent directory under `Assets/`, writes a transaction marker before publication, and accepts only the exact generated directory, folder-meta, marker, staging, and target inventory during cleanup. Any foreign entry or conflicting filesystem type fails closed and retains the journal. A retained global-state journal is recovery evidence, not a disposable cache: resolve the reported corruption or identity conflict before removing it manually.
+### Profile fields
 
-Build-owned persistence is explicit:
+| Section | Contract |
+| --- | --- |
+| Scenes | `Launch Scene` and ordered additional scenes are required only when a selected `player` invocation is present. Duplicate asset paths are removed. |
+| Version and Output | `Application Version` uses `major.minor.patch`. `Output Base Directory` is a portable project-relative root. |
+| Runtime Version Info | The default view shows a transactional, auto-cleaned runtime asset. Advanced authoring may select an existing asset or folder only below an exact `Resources` directory. CI may override the same validated path. |
+| Product Identity | Company, product, and application identifier are applied only inside the pipeline-owned transactional Unity global-state envelope and are restored after the run. |
+| Build Recipe | Quick Setup, standard output cards, typed configs, independent incrementality, and an optional Advanced DAG with stable IDs and dependency edges. |
+| Player Options | `CheatBuildMode`. Optional Player integrations are referenced through the Player invocation's typed `PlayerBuildConfiguration`; leaving it empty requires no extra asset. |
 
-Keep `<project>/.buildpipeline/` out of source control. It contains workspace-local locks and durable transaction evidence: it is not a configuration source, but an active or failed journal must be inspected and recovered rather than casually deleted.
+The generic Player step asks only its dependent hot-update adapters for Player compatibility. The current HybridCLR adapters reject invocation-local `ENABLE_CHEAT` because the vendor compilation API cannot guarantee matching defines; another provider is not rejected by that HybridCLR-specific rule. Player extensions and hot-update providers are separate typed seams.
 
-| Owner | Path | Lifetime and source-control policy |
+### Inspector UX
+
+The BuildData Inspector uses a Build-owned, skin-aware presentation module rather than referencing another CycloneGames package. Its compact header and **Build Readiness** card project the existing recipe analysis, validation, workspace, authoring-save, and Unity busy states without creating a second source of truth. The root layout reclaims only the redundant left gutter supplied by the Inspector host; panel padding, status markers, nested hierarchy, and the right scrollbar safety area remain intact. Semantic badges always include text such as `READY`, `UNSAVED`, `RECOVERY`, or `BLOCKED`; color is supporting information only. Normal explanations use compact wrapped text, while actionable failures retain explicit diagnostics.
+
+Recipe presets, workspace commands, saved-recipe builds, and focused builds use one responsive equal-cell grid. The grid shows up to three columns when space permits and collapses to two or one column in a narrow Inspector. At narrow widths, Quick Setup uses shorter labels with the unchanged full meaning in each tooltip, while responsive label widths preserve useful space for serialized controls. Object-reference rows move their label above the field before the field or its `Create`, `Browse`, and `Reset` actions can become unusably small; extremely narrow rows place actions on a separate line. Primary, secondary, selected, and accessory actions retain consistent roles. Enabled primary build actions use a brighter skin-aware green treatment and bold white text, while Unity's disabled state still visibly de-emphasizes unavailable actions. Standard output cards show `Included`, `Retained`, or `Config required` directly instead of using a disabled checkbox as a status indicator; the full state remains available in the tooltip. Collapsed Advanced DAG invocations occupy one summary row; expansion reveals the complete identity, configuration, policy, and dependency editor.
+
+Nested authoring areas use one framed foldout primitive: its arrow, title, optional summary, status badge, and expanded content remain inside the same panel at every supported Inspector width. `Additional Scenes`, `Advanced Version Info Destination`, `Advanced DAG & CI`, and individual DAG invocations therefore share the same click target and visual hierarchy. The scene list remains a serialized reorderable list, so adding, removing, reordering, and Undo preserve the authored scene sequence.
+
+The custom Inspector owns an explicit fail-closed serialization contract for every Unity-serialized field on `BuildData`, `BuildRecipeInvocation`, and `BuildInvocationDependency`. Editor creation compares the declared field owners with the current model and verifies root `SerializedProperty` bindings once; tests enforce exact coverage. A newly added, removed, duplicated, or unbound field produces an **Inspector Contract Failure** card and disables all authoring/build actions until the presentation contract is updated. The Inspector never falls back to an unstructured default editor, so future fields cannot disappear silently or bypass the intended validation and workflow.
+
+The default Inspector exposes Quick Setup plus Player, Asset Content, and Hot Update cards. Config assets can be dragged or created there; a preset may be applied before optional configs exist, and concrete missing-config diagnostics block only the build. `Advanced DAG & CI` contains registry-backed invocation routing rather than free-form provider names:
+
+- New rows receive a unique Invocation ID automatically.
+- Step Type is selected from discovered registrations.
+- Config accepts only the registered type. Existing assets can be dragged in; **Create** offers compatible concrete config types and stores the new asset at a user-selected version-controlled path.
+- Incrementality is selected per invocation.
+- Dependency mode and target are selected from existing invocations. Already-used targets and choices that would introduce a cycle are omitted.
+- Advanced rows are individually collapsible. The list is not draggable because dependencies are the only sequencing contract; a read-only compiled execution plan shows the effective order.
+- Renaming an Invocation ID validates the new value and rewrites every incoming dependency reference atomically.
+- Removing a referenced invocation requires confirmation and removes its incoming edges in the same edit.
+- Unknown registrations, missing optional adapters, invalid config types, duplicate single-multiplicity types, missing dependencies, cycles, unsafe paths, and unsaved authoring assets disable build actions with a concrete diagnostic.
+
+The Inspector never silently saves the project. **Save Build Authoring Assets** saves only the displayed profile and referenced dirty config assets when the user explicitly presses that button. The runner also captures config asset GUID/local ID, file hash, and transitive dependency hash so Editor and CI consume reproducible authoring state.
+
+### Presets and focused output
+
+Presets are authoring helpers; they are not alternate pipelines.
+
+| Preset | Selected built-in types | Intended output |
 | --- | --- | --- |
-| Project configuration | `Assets/**/BuildData.asset` and referenced config assets | Durable source of truth; commit to version control. |
-| Package resolution | `Packages/manifest.json` and `Packages/packages-lock.json` | Reviewable dependency intent and resolved immutable dependency graph; commit both, restore both in CI, and treat unexpected lock drift as a supply-chain change. |
-| Player artifacts | `<OutputBasePath>/<Platform>/<Variant>/...` or approved external directory, plus sibling `<dedicated-output>.buildpipeline-player-owner.json` | Reproducible build output; normally ignored and archived by CI. The complete dedicated directory is published transactionally, and only a validated pipeline ownership marker may be replaced. |
-| Run results | `<OutputBasePath>/.buildpipeline/results/<run-id>.json` | Durable CI evidence; archive as build metadata. It is not deleted with a sibling Player output directory. |
-| Player publication transaction | `<project>/.buildpipeline/transactions/player/active.json`, `active.lock`, and transaction-specific same-volume stage/backup paths beside the dedicated output | Checksummed journal, exclusive project lock, staged tree identities, ownership markers, and resumable rollback/publication. Successful completion or recovery removes the journal and scratch; the reusable lock file may remain. Corrupt, foreign, detached, changed, or ambiguous state remains visible and blocks publication. |
-| Global Unity-state transaction | `Library/BuildPipeline/GlobalState/active.json`, `transaction-<id>/`, `build.lock`, transaction-derived `.globalstate-{install|restore}-<id>.{tmp|bak}` file siblings, and temporary `Assets/**/__BuildPipelineParent_<id>` folder scratch | Checksummed bounded journal, original-file snapshots, deterministic atomic-replacement scratch, transaction-owned missing-parent inventory, and a project-wide exclusive lock for `ProjectSettings.asset` plus transient `VersionInfoData`. Successful completion/recovery removes the journal, transaction directory, owned folder tree, and scratch; the reusable lock file may remain. Corrupt, detached, redirected, moved-project, foreign-entry, or identity-conflicting state remains visible and blocks another build. Ignore the `Library/` state in source control, but do not delete an active or failed journal without inspection. |
-| YooAsset packages | Configured `buildOutputRoot` | Versioned provider artifacts; collision behavior is explicit per package. Archive or publish as required. |
-| YooAsset built-in files | Configured `bundledFileRoot` under `Assets/StreamingAssets` | Player input managed by the selected bundled-copy policy; not automatically removed after a content build. |
-| YooAsset transaction state | `<project>/.buildpipeline/transactions/yooasset3/active.json` and `work/<transaction-id>`; reusable path-keyed locks below `<project>/Temp/BuildPipeline/YooAsset3Locks` | Project-central recovery evidence, staging, protected root-`.meta` copies, same-volume backups, and serialization independent of the current profile roots. Successful completion removes journal/work/backup/protected-meta state; reusable locks may remain. If the integration is removed while any state remains, the core guard blocks all builds until a supported YooAsset 3 integration recovers it. |
-| Addressables cache | Provider-owned `Addressables.BuildPath` and active builder cache | Rebuildable provider output. A clean content build clears the active builder cache. |
-| Addressables publication | Configured publication root, default `Build/AddressablesContent/<BuildTarget>` | Pipeline-owned transactional output with `.buildpipeline-owner.json` and the exact `AddressablesArtifacts.json` inventory; normally ignored and archived/published by CI. |
-| Addressables publication transaction | `<project>/.buildpipeline/transactions/addressables/{active.json,active.json.tmp,active.json.bak}` and transaction-specific same-volume stage/backup paths | Project-central checksummed journal and atomic candidates. Successful recovery removes journal scratch and owned stage/backup state; corrupt, detached, changed, or ambiguous state remains visible and blocks publication. |
-| Addressables settings transaction | `<project>/.buildpipeline/transactions/addressables-settings/active.json`, `<transaction-id>/transaction.owner`, bounded asset/`.meta` snapshots, and owned `NNNN.restore.{tmp|bak}` scratch; shared `Library/BuildPipeline/Addressables/build.lock` | Exact persisted-settings restoration independent of provider selection and current configuration. Owner and snapshots are validated before restore or cleanup. Successful restoration removes the transaction directory and journal; foreign, corrupt, redirected, or identity-conflicting state remains visible and blocks every build. The project `.buildpipeline/` tree is durable recovery evidence, not a disposable Unity cache. |
-| HybridCLR generated assets | Configured distinct directories below `Assets/`, each containing `.buildpipeline-owner.json` | Build-exclusive, transactionally replaced Player input. Same-name `.meta` files are preserved. Commit the complete managed directory (including its manifest and generated `.meta`) or regenerate it in CI; never place authored assets in it. |
-| HybridCLR durable transaction state | `<project>/.buildpipeline/transactions/hybridclr/active.json`, `active.json.tmp-*`, `<transaction-id>/`, and `build.lock`; sibling `.buildpipeline-hybridclr-<transaction-id>-<index>.backup` directories beside active targets | Checksummed schema-2 recovery journal, atomic journal candidates, staging, root-meta recovery copies, same-volume publication backups, and project-wide serialization. Recovery does not depend on current configuration. Successful commit/recovery removes the journal, candidates, scratch, and sibling backups but retains the reusable lock file. Corrupt, legacy, conflicting, detached, ambiguous, externally changed, or incomplete recovery state remains visible and blocks publication. The project `.buildpipeline/` tree is ignored by Git but is durable recovery evidence, not a disposable Unity cache. |
-| Version info | Configured `VersionInfoAssetPath` | Transactional only. An existing asset and `.meta` are restored exactly; otherwise the transaction-owned temporary pair is removed. A missing parent suffix is marked, journaled, created, and removed with its generated folder `.meta` files; pre-existing parent folders are never claimed. |
+| Player Only | `player` | Player without content or hot-update generation. |
+| Player + Content | `asset-content`, `player` | Content and Player without HybridCLR generation. |
+| Full Player | `hot-update`, `asset-content`, `player` | Hot-update output, content, then Player. |
+| Content Only | `asset-content` | Asset content without Player or HybridCLR generation. |
+| Content + Hot Update | `hot-update`, `asset-content` | Hot-update output and content without Player. |
+| Hot Update Only | `hot-update` | Hot-update and AOT metadata output without content or Player. |
 
-The module does not use `EditorPrefs`, `PlayerPrefs`, or `SessionState` as build configuration.
+A preset preserves reusable configuration and incrementality where possible and keeps unrelated/custom entries disabled instead of deleting their authoring data. Preset recognition compares canonical invocation identity, type, and the complete effective dependency graph; a damaged graph is reported as Custom rather than being mislabeled by its type sequence.
 
-## Result manifest
+**Run Saved Recipe** executes enabled invocations. **Focused Output (Does Not Modify Profile)** creates an immutable one-run selection without changing the profile. Common Hot Update Only, Content Only, and Content + Hot Update actions require an unambiguous canonical or single matching invocation. When several invocations share a type, **Exact Invocation** selects one stable ID. Focused execution automatically adds its transitive `Required` closure but never silently adds `IfSelected` dependencies or every same-type invocation.
 
-Once a valid `BuildRequest` exists, every pipeline run attempts to write a UTF-8-without-BOM JSON manifest, including preflight and execution failures:
+Content-only and hot-update-only builds are first-class: they do not require a launch scene, create a Player output transaction, or create `VersionInfoData`. Provider results and artifacts are still recorded and use the same lease, validation, publication, recovery, and result-evidence rules.
+
+### Player extensions
+
+The Player invocation accepts an optional `PlayerBuildConfiguration`. Its ordered list contains persistent `PlayerBuildExtensionConfiguration` assets; designers can drag existing assets or use **Create** in the configuration Inspector. Provider IDs come from the concrete assets and resolve exactly one `IPlayerBuildExtensionAdapter`. Every adapter registration and runtime instance must also expose the same lowercase stable `CompatibilityId`; changing adapter behavior that can affect output compatibility requires a new ID. Missing adapters, duplicate provider IDs, duplicate registrations, wrong configuration types, invalid or mismatched compatibility IDs, unsaved referenced assets, and unavailable package prerequisites fail during aggregated preflight.
+
+An extension adapter validates its own durable state and may open a reversible session around `BuildPlayer`. Process-global package behavior belongs to a provider-owned `IPlayerBuildEnvironmentGuard`, so Core does not know vendor identifiers. Obfuz Player obfuscation is enabled by adding `ObfuzPlayerBuildExtensionConfiguration`; the adapter requires the saved Obfuz Player setting to agree, validates the generated Encryption VM, and never rewrites `ProjectSettings/Obfuz.asset`. Remove the extension and disable the durable Obfuz setting to build without it. This is independent from `HybridCLRObfuzBuildConfig`, which controls hot-update DLL processing.
+
+The recipe provenance records the Player configuration plus its transitive asset dependency hash. A separate SHA-256 Player-extension fingerprint resolves every configured provider through the unique registry entry and binds the ordered provider ID, actual adapter `CompatibilityId`, and config asset identity to incremental Player output compatibility. The strict fingerprint is captured once in the run context after successful resolution, then reused by Player execution, result writing, and terminal confirmation; a second different value fails closed instead of replacing the snapshot. Each extension asset has a 64 MiB read/hash limit, all extension assets have a 256 MiB aggregate limit, and one Player may select at most 64 extensions. Changing adapter compatibility, configuration, order, membership, or asset identity requires a Clean Player build.
+
+### Player incrementality
+
+Player `Clean` and `Incremental` are output/cache reuse policies for one Player invocation; they are not content hot-update or patch-delivery modes. `Clean` starts with an empty transaction stage and adds `BuildOptions.CleanBuildCache`. It can publish into an absent or empty output, or replace an output whose current format-1 Build ownership marker and complete tree identity are valid, even when the previous compatibility identity differs. Successful publication writes a new sibling marker at `<OutputDirectory>.buildpipeline-player-owner.json`; any non-current marker is rejected.
+
+`Incremental` requires the published output and marker to exist before any active journal or stage is created. The marker checksum, complete output-tree identity, nested format-1 compatibility identity, and SHA-256 compatibility digest must be valid. The compatibility identity must exactly match the owner-local Player pipeline compatibility revision, `Application.unityVersion`, `BuildTarget`, `NamedBuildTarget.TargetName`, `ScriptingBackend`, the relative output artifact path (or output-directory leaf when the output path is the directory), `OutputIsFolder`, company, product, application identifier, Android export, Development/debug, debug-file deletion, Cheat, and the Player-extension provenance fingerprint. The format version and pipeline compatibility revision are independent: `formatVersion` describes this owner's JSON contract, while the positive revision invalidates reuse after a behaviorally incompatible Player pipeline change. The verified published tree is copied into owned staging, `CleanBuildCache` is omitted, and compatibility is checked again immediately before publication. Any missing, corrupt, changed, or unsupported value fails closed and instructs the operator to run `Clean`.
+
+The Player recovery journal uses `formatVersion: 1` and records the original and new compatibility identities. Rollback restores the original owner identity; committed recovery retains the new identity. CI that expects Player `Incremental` must archive and restore the Player output directory and its sibling ownership marker together; never synthesize or edit the marker.
+
+All Build-owned JSON files use an owner-local integer `formatVersion: 1` contract. Readers accept only the current format and validate every invariant required by that document owner; unknown versions are rejected without reinterpretation. After adopting this redesigned module, use empty publication roots or move prior outputs aside and run `Clean`; do not copy prior ownership markers or baselines into a new pipeline workspace.
+
+## Optional providers and incrementality
+
+### Addressables
+
+`AddressablesBuildConfig` selects Addressables by its concrete `ProviderId`; there is no separate handwritten provider field. The adapter uses a narrow reflection boundary so the core assembly compiles without Addressables and fails preflight when the selected package API is missing or incompatible.
+
+- `Clean` clears the configured active builder cache, temporarily sets the requested content version, and calls the official `AddressableAssetSettings.BuildPlayerContent` flow.
+- An empty `Publication Root` is invocation-scoped as `Build/AddressablesContent/<InvocationId>/<BuildTarget>`, so independent Addressables invocations do not collide by default. An explicit root is used exactly as authored; overlapping explicit roots are rejected during output-claim preflight.
+- `Incremental` is the official Content Update flow. It requires **Build Remote Catalog**, publication enabled, and exactly one explicit previous `addressables_content_state.bin` baseline. Designers can drag a baseline imported below `Assets`; CI can restore it at a portable project-relative path. The baseline must remain in a prior pipeline publication whose root `AddressablesArtifacts.json` proves target, active profile, remote-catalog location, player/editor identity, size, and SHA-256. The adapter snapshots the validated file and calls `ContentUpdateScript.BuildContentUpdate(AddressableAssetSettings, string)`.
+- Missing, changed, malformed, wrong-target, wrong-profile, wrong-load-path, or unowned baselines fail closed. Every successful Incremental build, and any Clean build for which the official API returns a content-state file, publishes that state under `BuildMetadata` for a following update. A Clean result without that file may publish content but cannot seed Content Update.
+- Incremental Addressables output cannot feed a Player build. Run it as content-only; use Clean with remote-catalog/state generation to establish a new Player/content baseline.
+- The Addressables adapter declares a stable, process-global `ExclusivePlayerSessionKey`. Generic Player preflight groups every content session in the dependency closure by this key and fails closed when two invocations claim it; the core pipeline contains no Addressables provider-name rule.
+- A published target contains `PlayerData`, optional `RemoteContent`, optional `BuildMetadata`, configured additional roots, and a root `AddressablesArtifacts.json`. Provider publication/recovery journals are isolated at `.buildpipeline/transactions/addressables/<InvocationId>`; temporary shared settings restoration is journaled separately below `.buildpipeline/transactions/addressables-settings` under the single workspace lease.
+- The Addressables integration registers an `IPlayerBuildEnvironmentGuard`. It suppresses the official package hook only when Addressables is installed but absent from the Player dependency closure, does nothing when the package is missing, and remains a no-op when the selected Addressables adapter already owns the content session. The generic Player step only validates, begins, and reverses discovered guards.
+
+Addressables settings and referenced group/schema assets must be saved before the run. Temporary settings changes are byte-snapshotted, restored, and covered by durable recovery evidence.
+
+### YooAsset 3
+
+The YooAsset adapter assembly uses `versionDefines` and direct references only inside `Integrations/YooAsset3`. When a supported package is absent, the integration assembly disappears naturally while `Build.Pipeline.Editor` and saved `YooAssetBuildConfig` assets remain compilable. Do not define its capability symbol in PlayerSettings.
+
+A config explicitly owns output roots and one or more package profiles. Each profile selects package name, Scriptable/RawFile/ArchiveFile pipeline, compression, naming, bundled-copy policy, verification, and exact-version collision policy. Builds are staged before final paths are touched. `FailIfVersionExists` is the default; `ReplaceExactVersion` can replace only a Build-owned exact target. Clean mode deliberately does not call YooAsset's broad historical-cache deletion API.
+
+Built-in packages required by a downstream Player are activated reversibly before Player execution. Exact-version package publication remains staged until the terminal decision. Ownership markers, bounded content identities, sibling `.meta` protection, and per-invocation state at `.buildpipeline/transactions/yooasset3/<InvocationId>` make rollback and recovery deterministic. See `Editor/BuildPipeline/Integrations/YooAsset3/README.md` for provider details.
+
+### HybridCLR and Obfuz
+
+`hot-update` is provider-neutral. Select `HybridCLRBuildConfig` for standard DLLs or `HybridCLRObfuzBuildConfig` for the explicit HybridCLR + Obfuz provider. There is no serialized obfuscation toggle and no handwritten provider ID. Both require IL2CPP. Clean runs full HybridCLR generation. Incremental standard HybridCLR compiles hot DLLs only and obtains every AOT metadata DLL from a validated release baseline; it never trusts the current stripped-AOT scratch directory.
+
+The Inspector exposes the standard provider only when its HybridCLR editor prerequisite is present. The combined provider requires HybridCLR, Obfuz, and Obfuz4HybridCLR editor capabilities together; a partial installation remains non-selectable and fails authoring validation instead of surprising the build after Unity state has changed.
+
+A HybridCLR release baseline is published only when all of these are true:
+
+1. the hot-update invocation is `Clean`;
+2. the request is Release, not Development;
+3. a selected Player invocation directly depends on that hot-update invocation; and
+4. the shared terminal publication decision commits successfully.
+
+The baseline is stored at:
 
 ```text
-<OutputBasePath>/.buildpipeline/results/<UTC-run-id>-<suffix>.json
+<BuildRoot>/.buildpipeline/baselines/hybridclr/
+  <BuildTarget>/<ScriptingBackend>/<release-key>/
+    baseline.json
+    AOT/*.dll
 ```
 
-Schema version `3` contains:
+The release key derives from application identifier, application version, and hot-update Invocation ID. The manifest binds target, backend, Unity and HybridCLR identities, authoring/configuration hashes, Player AOT compatibility settings, assembly inventory, source provenance, and each DLL's length and SHA-256. A Clean hot-update-only or Development build does not create a baseline. Archive the matching baseline with a released Player and restore it at the same Build Root before a later incremental hot-update-only CI job.
 
-- run identity and success: `schemaVersion`, `runId`, `succeeded`, `failure`, and isolated `observerFailures`;
-- environment and version: `unityVersion`, `target`, `applicationVersion`, `packageVersion`, `commitHash`, `versionControlProvider`, and `branch`;
-- artifact location: `outputPath`, `outputDirectory`;
-- top-level `steps`: ordered entries containing `id`, `status`, `durationSeconds`, and `message`;
-- top-level `content`: provider/package/version results; `succeeded`, `failedTask`, `errorInfo`, and `errorStack`; output and bundled directories; provider report path; produced artifacts; and warnings.
+The explicit `HybridCLRObfuzBuildConfig` provider rejects Incremental because the current Obfuz4HybridCLR boundary reads an implicit stripped-AOT directory instead of an explicit validated baseline. Its Clean mode remains supported. See `Editor/BuildPipeline/Integrations/HybridCLR/README.md` for the full baseline contract.
 
-The file is written durably through a fixed, exclusively created temporary sibling and atomically moved into place. The writer flushes bytes before publication, applies a 64 MiB manifest budget, never deletes a pre-existing temporary sibling it does not own, and preserves both write and owned-temporary cleanup failures. `RunFinished` is notified after execution/restoration and before manifest publication, so failures from every observer callback are included in the manifest without changing `succeeded`. A manifest publication failure is logged directly, returned as a failed run, and makes batch mode exit non-zero. Batch mode returns exit code `0` only when execution, restoration, and manifest publication succeed; parsing, profile resolution, request creation, project-central recovery, version-control capture, preflight, build, cleanup, restoration, or manifest-write failures return exit code `1`. Failures before a request and manifest root can be safely resolved are reported through the Unity log and exit code, without a result manifest.
+## Execution, publication, and recovery
 
-## Command line and CI
+The runner applies the following order:
 
-Use the canonical method:
+1. Acquire the project-wide OS file lease at `Temp/BuildPipeline/Workspace/lease.lock`. Its byte-range OS lock is the sole authority and acquisition is fail-fast. While the lease is held, `Temp/BuildPipeline/Workspace/lease.json` exposes human-readable diagnostic metadata; that metadata may be stale and never proves ownership.
+2. Require an idle Editor and a `Clean` zero-write workspace inspection.
+3. Snapshot the entire `ProjectSettings/` tree, validate request paths and identity, capture recipe provenance, resolve version identity, compile the invocation DAG, and run all applicable preflights.
+4. Open only the declared state envelopes. A content-only step does not receive PlayerSettings, Player output, or `VersionInfoData` privileges.
+5. Execute invocations in topological order. Outputs stay in owned staging; only explicitly registered downstream inputs may be activated early and they remain reversible.
+6. Restore transient `VersionInfoData`, PlayerSettings, Editor build settings, optional preloaded assets, and other scoped state. Verify the whole `ProjectSettings/` tree before publication.
+7. Seal the execution context, freeze the manifest's common payload, and serialize a worst-case failed terminal envelope with the same `JsonUtility` and strict UTF-8 path used by the final write. The 64 MiB capacity gate must pass before any deferred publication is allowed to publish.
+8. Publish every deferred output, persist one shared `Commit` decision, complete child transactions, then remove the barrier only after their recovery evidence is gone.
+9. Persist the required result manifest from the frozen snapshot while the workspace lease is still held. The final writer does not re-read mutable context or recompute the Player-extension fingerprint. Immediately after the runner releases the lease and returns, the entry point strictly validates the complete manifest contract, closes the evidence log, and removes the started marker only after terminal evidence is confirmed.
+
+Before a durable commit, any failure disposes publications in reverse order and rolls back. Context mutations that can change result evidence or publication membership are rejected after sealing. After the commit, rollback is no longer legal: an incomplete refresh or cleanup retains journals and explicit recovery finishes the committed state. Output replacement is guarded by path containment, ownership markers, checksums, reparse-point rejection, bounded inventories, and write-ahead journals; unknown data is preserved and blocks the operation.
+
+### Transient VersionInfo lifecycle
+
+`VersionInfoData` exists only while a Player build needs it and must be below an exact `Resources` directory so it is included and runtime-discoverable. If the configured asset already exists, its bytes and metadata are restored. If its parent path does not exist, the transaction creates the required `Assets` folders and folder `.meta` files, writes the asset, then removes only the folders and metas it created after success or a handled failure. An abrupt process termination retains the write-ahead journal; Workspace Recovery performs the same ownership checks before the next build. A generated folder that gained an unknown file or a changed `.meta` is preserved and reported instead of being recursively deleted. Consequently, the default `Assets/Build/Runtime/Resources/VersionInfoData.asset` path does not leave an extra `Resources` folder in a project that did not have one.
+
+### Workspace health
+
+`BuildWorkspaceService.Inspect` does not write or recover anything.
+
+| Status | Meaning | Next action |
+| --- | --- | --- |
+| `Clean` | No actionable transaction evidence. | A normal build may start. |
+| `RecoveryRequired` | Valid evidence has an unambiguous recovery path. | Review and run explicit recovery. |
+| `Blocked` | Evidence is malformed, unsafe, contradictory, unclaimed, or its optional integration is unavailable. | Preserve evidence and resolve the reported cause. |
+| `Busy` | The authoritative OS lock on `lease.lock`, or another Unity operation, is active. `lease.json` is diagnostic only. | Wait for the owner to finish; do not delete either lease file to bypass ownership. |
+
+Use `Build > Pipeline > Workspace Health`. Recovery requires the fresh optimistic snapshot token, so a changed journal forces another inspection. There is no force-delete operation.
+
+After a failed build, switching platform is safe only when Workspace Health is `Clean`. A complete rollback removes its journal and the new target may proceed. If evidence remains, every target is blocked before mutation. Recovery uses the target, roots, identities, and durable decision captured by the interrupted run, not the newly selected profile; the window reports a required target when a participant needs one. Reinstall a removed optional package when its participant owns pending evidence, recover to `Clean`, and only then remove it again.
+
+## Result evidence and observability
+
+Every interactive and batch entry point creates evidence before command-line parsing or profile loading:
+
+```text
+.buildpipeline/results/<run-id>.started.json
+.buildpipeline/results/<run-id>.log
+.buildpipeline/results/<run-id>.json
+```
+
+The started marker survives abrupt process termination and is removed only after terminal evidence is durably confirmed. Early parsing, profile, request, or recovery failures receive a partial `formatVersion: 1` terminal manifest with stage and process exit code. Its independent confirmation checks operation, run ID, stage, outcome, exit-code consistency, `partial=true`, log path, UTC timestamp order, and the success/failure contract. A completed build receives the full format-1 manifest with detected/effective source identity, identity origin, CI provenance, target/settings, recipe Invocation IDs and Step Type IDs, dependency modes, per-invocation incrementality, config provenance and hashes, the Player pipeline compatibility revision, the adapter-bound Player-extension fingerprint, step timings/status, provider results, artifacts, warnings, and failure details. If invalid extension authoring prevents a unique adapter from resolving, evidence uses a deterministic `invalid:<sha256>` marker derived from the failure category and bounded basic configuration identity; this marker is never accepted by Player output ownership, while the independent failure field retains the original preflight diagnostic. Full confirmation requires `formatVersion: 1`, `operation=build`, the expected run ID and in-memory success outcome, `partial=false`, the exact current Unity and Player pipeline compatibility identities, valid ordered UTC timestamps, every required scalar and identity object, all top-level arrays, and valid nested dependency, artifact, and warning records.
+
+Short failure, non-fatal failure, recipe-validation, and step-message text is preserved exactly. Invalid UTF-16 or text beyond the per-value diagnostic budget becomes a deterministic bounded marker containing a SHA-256 digest; a shared run budget can summarize later diagnostic values in the same way. Provider-owned content evidence is never silently truncated: result creation rejects more than 4,096 artifacts, 1,024 warnings, a field above 256 KiB UTF-8, or a result above 1 MiB UTF-8. One content operation may return at most 1,024 package results; the run accepts at most 4,096 content results, 131,072 content evidence values, and 8 MiB of provider text. The writer and strict confirmation use the same evidence policy.
+
+The pre-publication gate proves only that the frozen payload plus the largest normalized terminal failure fits the 64 MiB manifest limit. It performs no file write and cannot make later storage I/O atomic with already committed artifacts. Disk-full, permission, locking, or device failures during the final create-new temporary-file/write-through/move sequence still prevent confirmation and produce exit code `2`; the recovery journals and publication barrier remain the authority for committed output state.
+
+The terminal manifest and event log are required. Evidence I/O failures raised by non-terminal event callbacks immediately abort further build execution and are never downgraded into `nonFatalFailures`. A terminal event write or log-close failure cannot roll back an already committed publication, but it prevents confirmation and returns evidence exit code `2`. If the canonical manifest already exists but violates its contract, it is preserved rather than overwritten; the started marker also remains for diagnosis. Inspect the log, outputs, marker, and transaction evidence before retrying.
+
+Batch-mode exit codes are stable:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Requested build or recovery completed and terminal evidence was confirmed. |
+| `1` | Validation, build, publication, or recovery failed. |
+| `2` | Required result evidence could not be established, written, closed, or validated. |
+| `3` | The build workspace lease is already held. |
+
+Result files are diagnostic history, not recovery truth. CI should archive them; recovery reads only registered durable transaction evidence and the publication barrier.
+
+The manifest contract records provider-declared artifact paths, but it is not a universal byte-level attestation of every published Player or content tree. Player publication maintains a SHA-256 tree identity in its sibling owner marker, while Addressables, YooAsset, and HybridCLR publications maintain their own provider manifests or release baselines. A release job must archive those ownership records with the outputs and generate or verify a final archive inventory before upload; path presence alone is not a supply-chain signature.
+
+## Command-line and CI
+
+Use the canonical entry point:
 
 ```text
 -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine
 ```
 
-Build-specific options are case-insensitive. Every custom option is namespaced with `-pipeline`; unknown tokens in that namespace, duplicate options, missing values, and invalid mutually exclusive combinations fail immediately. Unity-native and third-party arguments outside that namespace pass through untouched. The pipeline never changes Unity's active target synchronously: in the Editor, select the target in File > Build Settings and wait for import, compilation, and domain reload to finish before invoking a menu command. In batch mode, pass Unity 2022.3's native startup alias: `Win64`, `OSXUniversal`, or `Linux64` for the three standalone targets, and `Android`, `iOS`, or `WebGL` unchanged. The pipeline parser also accepts `StandaloneWindows64`, `StandaloneOSX`, and `StandaloneLinux64` when invoked as script input, but those enum names are not valid substitutes for Unity's native standalone startup aliases. The resulting active target must exactly match the request or execution fails before any `PlayerSettings` mutation.
+`-buildTarget` is required for builds and accepts `Win64`, `OSXUniversal`, `Linux64`, `Android`, `iOS`, or `WebGL`. Unity must finish switching to that active target before provider execution; the pipeline does not synchronously switch targets during a transaction.
 
-| Option | Value/default | Effect |
+### Recipe options
+
+The five invocation-level options are repeatable and address stable Invocation IDs:
+
+| Option | Syntax | Effect |
 | --- | --- | --- |
-| `-buildTarget` | Required request target and native Editor startup target | Native Unity 2022.3 values are `Win64`, `OSXUniversal`, `Linux64`, `Android`, `iOS`, and `WebGL`. The parser additionally maps the standalone enum names for script-driven calls. The corresponding target must already be active when the entry point runs. |
-| `-pipelineProfile` | `Assets/.../*.asset`; optional only with exactly one profile | Selects the `BuildData` profile. |
-| `-pipelineScriptingBackend` | `Mono2x` or `IL2CPP`; current target setting | Overrides the transaction-scoped backend. |
-| `-pipelineOutput` | Generated platform/variant path | Explicit artifact path. Relative values are resolved from the Unity project root. |
-| `-pipelineOutputRoot` | Profile value | Overrides the project-relative approved build root and manifest root. |
-| `-pipelineVersion` | Profile value | Overrides the version prefix; commit count is still appended. |
-| `-pipelineVersionInfo` | Profile value | Overrides the project-relative `Assets/**/*.asset` destination used for transient `VersionInfoData`. |
-| `-pipelineSteps` | Profile list | Comma-separated explicit step IDs, for example `hot-update,asset-content,player`. |
-| `-pipelineProvider` | Profile binding | Overrides the Provider with a canonical registry ID such as `yooasset` or `addressables`; `none` disables external content for this invocation. |
-| `-pipelineProviderConfig` | Required with a non-`none` Provider override | Project-relative `Assets/**/*.asset` path to the configuration type declared by that Provider. |
-| `-pipelineClean` | Default | Requests clean provider behavior and clean Player output. Mutually exclusive with `-pipelineIncremental`. |
-| `-pipelineIncremental` | Off | Incremental content/Player behavior and HybridCLR DLL-only compilation. |
-| `-pipelineDevelopment` | Off | Enables Unity development, debugging, and profiler-connect options. |
-| `-pipelineExportAndroidProject` | Off | Exports a directory and is valid only with `-buildTarget Android` and a recipe containing `player`. |
-| `-pipelineAllowExternalOutput` | Off | Allows an explicit `-pipelineOutput` outside the profile build root, subject to path safety rules. |
-| `-pipelineUseHybridCLR` / `-pipelineSkipHybridCLR` | Profile value | Enables or disables HybridCLR for this request. Mutually exclusive. |
-| `-pipelineEnableCheat` / `-pipelineDisableCheat` | Profile mode | Overrides cheat capability for this request. Mutually exclusive. |
+| `-pipelineSelect` | `<invocation>` | Selects one root from the explicit `-pipelineProfile` without changing the asset. Repeat for several roots. The run also selects their transitive `Required` closure; `IfSelected` never adds a node. |
+| `-pipelineRecipe` | `<invocation>=<step-type>` | Adds one invocation to an explicit CI recipe. Supplying any entries replaces the saved enabled selection for that run. |
+| `-pipelineStepConfig` | `<invocation>=Assets/.../Config.asset` | Assigns a persistent main config asset to a selected invocation. |
+| `-pipelineStepIncrementality` | `<invocation>=Clean\|Incremental` | Overrides that invocation's policy. |
+| `-pipelineStepDependency` | `<owner>=Required\|IfSelected:<dependency>` | Adds an edge. Specifying dependency entries for an owner replaces that owner's saved dependency list. |
 
-Profiles remain the default, reviewable source of Provider intent. CI may use `-pipelineProvider` together with `-pipelineProviderConfig` for an explicit invocation-only binding, or `-pipelineProvider none` to disable external content without editing the asset. A no-Player recipe containing `asset-content` rejects `none`, because a successful run must not omit the requested content output. Provider IDs are matched case-insensitively at input and normalized to the registry's canonical lowercase ID. `-pipelineProviderConfig` without a Provider, or together with `none`, is rejected. Overrides do not create missing assets or install dependencies, so the same type, adapter-availability, and package preflight still runs.
+`-pipelineSelect` requires an explicit `-pipelineProfile`, preserves the selected profile invocations' typed configs, policies, and complete dependency declarations, and is mutually exclusive with `-pipelineRecipe`. Unknown or duplicate selections fail closed. Keyed overrides may target a selected root or an automatically selected `Required` dependency; an override targeting anything outside the effective selection is rejected.
 
-Android package outputs must end in `.apk` or `.aab`; Android project export requires a directory path and a recipe containing `player`. `-pipelineExportAndroidProject` rejects package-file paths and content-only recipes instead of reporting success without a Gradle Player output. iOS, WebGL, macOS, and Android project exports are treated as folder outputs for dedicated-directory cleanup.
+An explicit CI recipe starts each invocation with no config, no dependencies, and `Clean`; provide the required overrides explicitly. If neither `-pipelineSelect` nor `-pipelineRecipe` is supplied, the saved enabled invocations and their configs, policies, and dependencies are used, while keyed overrides may replace selected values.
 
-Example clean Windows IL2CPP build from PowerShell:
+Normal CI should pass `-pipelineProfile Assets/.../BuildData.asset` and keep the graph in the version-controlled profile. The Inspector copies this short form. Expanded recipe arguments are an advanced replacement interface, not a serialization format; do not expand a large 256-node/4,096-edge graph into process arguments because operating-system and CI launcher command-length limits are much smaller than pipeline graph budgets.
 
-```powershell
-& $UnityEditor `
-  -batchmode `
-  -nographics `
-  -quit `
-  -projectPath "$RepoRoot/UnityStarter" `
-  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine `
-  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset `
-  -buildTarget Win64 `
-  -pipelineScriptingBackend IL2CPP `
-  -pipelineOutput Build/CI/Windows/Release/UnityStarter.exe `
-  -logFile "$RepoRoot/Artifacts/unity-build.log"
-
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-```
-
-Incremental no-Player YooAsset content example:
-
-```powershell
-& $UnityEditor `
-  -batchmode `
-  -nographics `
-  -quit `
-  -projectPath "$RepoRoot/UnityStarter" `
-  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine `
-  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset `
-  -buildTarget Android `
-  -pipelineIncremental `
-  -pipelineSteps hot-update,asset-content `
-  -pipelineProvider yooasset `
-  -pipelineProviderConfig Assets/UnityStarter/Editor/Build/YooAssetBuildConfig.asset `
-  -logFile "$RepoRoot/Artifacts/unity-content.log"
-```
-
-This example overrides the selected Profile with canonical Provider ID `yooasset` and an explicit `YooAssetBuildConfig` asset path. When HybridCLR is disabled, omit `hot-update` from a custom content-only plan. When the content-provider ID is empty, omit `asset-content`. Dependencies are strict; the compiler does not insert missing steps.
-
-**TeamCity**
-
-Use a PowerShell build step and expose the Unity Editor path as a parameter such as `%env.UNITY_EDITOR%`:
-
-```powershell
-$unity = "%env.UNITY_EDITOR%"
-$project = "%teamcity.build.checkoutDir%/UnityStarter"
-$log = "%teamcity.build.checkoutDir%/Artifacts/unity-build.log"
-
-& $unity -batchmode -nographics -quit `
-  -projectPath $project `
-  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine `
-  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset `
-  -buildTarget Win64 `
-  -pipelineOutput Build/CI/Windows/Release/UnityStarter.exe `
-  -logFile $log
-
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-```
-
-Recommended TeamCity artifact rules:
+For example, this focused run builds `content-dlc` plus only its transitive `Required` dependencies while retaining all authoring from the profile:
 
 ```text
-UnityStarter/Build/CI/** => player
-UnityStarter/Build/.buildpipeline/results/*.json => build-metadata
-Artifacts/unity-build.log => build-metadata
+-pipelineProfile Assets/Settings/Build/Release.asset -pipelineSelect content-dlc
 ```
 
-**Jenkins**
+### Other options
 
-This declarative Windows stage uses the same entry point and archives both artifacts and metadata:
+| Option | Contract |
+| --- | --- |
+| `-pipelineProfile Assets/.../BuildData.asset` | Selects the profile. It may be omitted only when exactly one `BuildData` exists. |
+| `-pipelineScriptingBackend Mono2x\|IL2CPP` | Overrides the target backend for this run. |
+| `-pipelineOutput <path>` | Overrides the Player output path. |
+| `-pipelineOutputRoot <project-relative-dir>` | Overrides the profile Build Root. |
+| `-pipelineVersion <major.minor.patch>` | Overrides the application version. |
+| `-pipelineVersionInfo Assets/.../Resources/.../VersionInfoData.asset` | Overrides the transient Player version asset path; the exact `Resources` segment and fixed file name are required. |
+| `-pipelineDevelopment` | Creates a Development request. |
+| `-pipelineExportAndroidProject` | Exports an Android Gradle project; valid only with Android and a Player invocation. |
+| `-pipelineEnableCheat` / `-pipelineDisableCheat` | Mutually exclusive Player Cheat override. |
+| `-pipelineAllowExternalOutput` | Allows an explicitly requested Player output outside the normal project-owned root after path safety checks. |
+| `-pipelineBuildNumber <1..Int32.MaxValue>` | Explicit native/content build number. |
+| `-pipelineSourceProvider`, `-pipelineSourceRevision`, `-pipelineSourceBranch` | Complete source identity group; all three are supplied together or omitted. |
+| `-pipelineCiProvider`, `-pipelineCiRunId` | CI provenance group; both are supplied together or omitted. |
+| `-pipelineRecoverOnly` | Runs explicit workspace recovery as a separate action. It may be combined only with the optional native `-buildTarget`; all other pipeline build options are rejected. |
 
-```groovy
-stage('Unity Build') {
-    steps {
-        bat '''
-        "%UNITY_EDITOR%" -batchmode -nographics -quit ^
-          -projectPath "%WORKSPACE%\\UnityStarter" ^
-          -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine ^
-          -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset ^
-          -buildTarget Win64 ^
-          -pipelineOutput Build/CI/Windows/Release/UnityStarter.exe ^
-          -logFile "%WORKSPACE%\\Artifacts\\unity-build.log"
-        '''
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'UnityStarter/Build/.buildpipeline/results/*.json, Artifacts/unity-build.log', allowEmptyArchive: true
-        }
-        success {
-            archiveArtifacts artifacts: 'UnityStarter/Build/CI/**', fingerprint: true
-        }
-    }
-}
+The pipeline never guesses CI identity from environment variables. Map TeamCity/Jenkins variables to explicit arguments in the job definition. When local VCS metadata is available, an explicit provider/revision must match it. Batch and Release builds require reliable local VCS metadata or a complete explicit source identity plus build number. Only an interactive Development build may fall back to clearly marked local-development identity. The effective provider package version is `<ApplicationVersion>.<BuildNumber>`; absent an override, reliable VCS commit count supplies a minimum build number of `1`. Native limits still apply, including Android's `2100000000` maximum version code.
+
+### Advanced explicit CI recipe example
+
+This example assumes the supported HybridCLR and YooAsset integrations are installed, the three referenced config assets exist and are saved, the target switch can complete before execution, and every placeholder is replaced by the CI job. It requests one hot-update build, two independent content builds, and one Player.
+
+```text
+Unity.exe -batchmode -quit -projectPath <UnityProject> \
+  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine \
+  -buildTarget Win64 \
+  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset \
+  -pipelineScriptingBackend IL2CPP \
+  -pipelineRecipe hot-release=hot-update \
+  -pipelineRecipe content-base=asset-content \
+  -pipelineRecipe content-dlc=asset-content \
+  -pipelineRecipe player=player \
+  -pipelineStepConfig hot-release=Assets/Settings/Build/HybridCLRBuildConfig.asset \
+  -pipelineStepConfig content-base=Assets/Settings/Build/YooAssetBaseBuildConfig.asset \
+  -pipelineStepConfig content-dlc=Assets/Settings/Build/YooAssetDlcBuildConfig.asset \
+  -pipelineStepIncrementality hot-release=Clean \
+  -pipelineStepIncrementality content-base=Clean \
+  -pipelineStepIncrementality content-dlc=Clean \
+  -pipelineStepDependency content-base=IfSelected:hot-release \
+  -pipelineStepDependency content-dlc=IfSelected:hot-release \
+  -pipelineStepDependency player=Required:hot-release \
+  -pipelineStepDependency player=Required:content-base \
+  -pipelineStepDependency player=Required:content-dlc \
+  -pipelineBuildNumber 4201 \
+  -pipelineSourceProvider git \
+  -pipelineSourceRevision <full-revision> \
+  -pipelineSourceBranch refs/heads/release \
+  -pipelineCiProvider TeamCity \
+  -pipelineCiRunId 4201
 ```
 
-CI agents should pin the Unity Editor version from `ProjectSettings/ProjectVersion.txt`, restore the committed `Packages/manifest.json` and `Packages/packages-lock.json` as one reviewed dependency state, use an isolated workspace, save no dirty Editor state, archive the schema-3 manifest even on failure, and publish content only after the manifest reports success. The lock file is a required supply-chain input because it records immutable hashes for Git dependencies whose manifest URLs do not name a commit. Batch and release jobs must also provide a detectable Git or Perforce workspace; unavailable, incoherent, timed-out, or malformed VCS metadata is a hard failure rather than version `0` publication.
+Content-only CI normally uses `-pipelineSelect <content-invocation>` against the saved profile. An advanced explicit replacement instead omits `player`. Official Addressables Content Update uses one incremental `asset-content` invocation and a config whose baseline asset/path points to an artifact restored before Unity starts.
 
-## Extending the pipeline
+Recovery example:
 
-To add a step, annotate and implement a public, concrete `IBuildStep` with a parameterless constructor. Registration metadata must exactly match the runtime `Id` and `Priority` contract:
+```text
+Unity.exe -batchmode -quit -projectPath <UnityProject> \
+  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine \
+  -pipelineRecoverOnly
+```
+
+Add `-buildTarget <target>` only when Workspace Health reports that pending recovery evidence requires that target; otherwise omit it.
+
+## Persistence and ownership
+
+| Data | Location | Owner and lifecycle | Version control / cleanup |
+| --- | --- | --- | --- |
+| Build profile and configs | `Assets/**/*.asset` | Human-authored source of truth; saved explicitly. | Commit. |
+| Transient `VersionInfoData` | Configured `Assets/.../VersionInfoData.asset` | Created/replaced only for a Player build, then exactly restored; transaction-created empty folders/metas are removed. | Do not commit transient output. Use recovery if interrupted. |
+| Result evidence | `.buildpipeline/results/<run-id>.*` | Per-run started marker, event log, and format-1 terminal manifest. Not recovery truth. | Usually ignore locally and archive in CI. |
+| Recovery journals | `.buildpipeline/transactions/<owner>/...` | Durable write-ahead truth for global state, publication barrier, Player, providers, and integrations. | Ignore. Remove only through successful completion/recovery. |
+| Workspace authority lock | `Temp/BuildPipeline/Workspace/lease.lock` | The held byte-range OS lock is the sole workspace-ownership authority. | Ignore. Never delete or replace it to bypass `Busy`. |
+| Workspace lease diagnostics | `Temp/BuildPipeline/Workspace/lease.json` | Human-readable `formatVersion`, `runId`, `operation`, `pid`, and `startedUtc` written after the authority lock is acquired. It can remain after release, can be stale, and is never ownership evidence. | Ignore. The next successful acquisition overwrites it; never use it to infer that the workspace is free. |
+| Provider locks and scratch | Selected provider cache locks and other `Temp/BuildPipeline/...` paths | Reconstructible coordination and temporary snapshots. | Ignore. Clean only when no owner is active and the owning integration permits it. |
+| Player/content outputs | Profile/provider publication roots | Build-owned final artifacts protected by staging, identity markers, and collision policy. | Apply the project's release retention policy. |
+| Player incremental owner | `<OutputDirectory>.buildpipeline-player-owner.json` | Format-1 owner/checksum/tree identity plus a format-1 compatibility identity containing Unity version, owner-local Player pipeline compatibility revision, adapter-bound Player-extension fingerprint, and SHA-256 digest; transactionally published and recovered with the Player output. | Archive/restore beside the output for Incremental. Never synthesize, edit, or detach it. |
+| Addressables Content Update baseline | A prior published `BuildMetadata/.../addressables_content_state.bin` plus the `AddressablesArtifacts.json` at that publication root | Durable release input for the next incremental update. | Archive/restore as one publication; never detach or synthesize it. |
+| HybridCLR release baseline | `<BuildRoot>/.buildpipeline/baselines/hybridclr/...` | Durable AOT input for compatible incremental hot-update builds. | Archive with the released Player; safe deletion disables incremental builds until regenerated. |
+
+No critical build configuration is stored in `EditorPrefs`, `SessionState`, or PlayerSettings scripting define symbols. Cache files are reconstructible; journals and release baselines are not caches.
+
+Unity Performance Testing 3.5.x is a contained third-party exception: that package owns an `EditorPrefs` cleanup switch used by its build callbacks. The integration snapshots, temporarily owns, verifies, and exactly restores that external switch under its durable transaction; it never treats the preference as Build configuration. When the package is absent or outside the audited API range, the guard is inactive or fails closed before mutation.
+
+## Extension model
+
+Add a step when the capability has its own validation/execution boundary. Keep dependency edges in recipes so the same implementation can be composed differently by different products.
 
 ```csharp
-[BuildStepRegistration("sign-artifacts")]
-public sealed class SignArtifactsStep : IBuildStep
+[CreateAssetMenu(menuName = "CycloneGames/Build/Sign Artifact Config")]
+public sealed class SignArtifactConfig : ScriptableObject
 {
-    public string Id => "sign-artifacts";
-    public int Priority => 0;
-    public bool IsApplicable(BuildExecutionContext context) => true;
-    public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) =>
-        new[] { BuildStepIds.Player };
-    public IReadOnlyList<string> Validate(BuildExecutionContext context) =>
-        Array.Empty<string>();
-    public void Execute(BuildExecutionContext context) { /* sign owned output */ }
-    public void Cleanup(BuildExecutionContext context) { }
+    public string keyAlias;
+}
+
+[BuildStepRegistration(
+    "sign-artifact",
+    DisplayName = "Sign Artifact",
+    Category = "Release",
+    ConfigurationType = typeof(SignArtifactConfig),
+    ConfigurationRequired = true,
+    Multiplicity = BuildStepMultiplicity.Multiple)]
+public sealed class SignArtifactStep : IBuildStep
+{
+    public string StepTypeId => "sign-artifact";
+
+    public bool IsApplicable(
+        BuildExecutionContext context,
+        BuildStepInvocation invocation) => true;
+
+    public IReadOnlyList<string> Validate(
+        BuildExecutionContext context,
+        BuildStepInvocation invocation)
+    {
+        SignArtifactConfig config = invocation.GetConfiguration<SignArtifactConfig>();
+        return config == null || string.IsNullOrWhiteSpace(config.keyAlias)
+            ? new[] { "A signing key alias is required." }
+            : Array.Empty<string>();
+    }
+
+    public void Execute(
+        BuildExecutionContext context,
+        BuildStepInvocation invocation)
+    {
+        SignArtifactConfig config = invocation.GetRequiredConfiguration<SignArtifactConfig>();
+        // Stage output. If it becomes terminal state, register an
+        // IBuildDeferredPublication with context before returning.
+    }
 }
 ```
 
-Step IDs are plain text of at most 128 characters, have no surrounding whitespace, and may not contain `,`, which is reserved as the `-pipelineSteps` delimiter. This guarantees every Inspector-authored recipe has an equivalent CI representation. Place the step in an Editor assembly, add `sign-artifacts` to the profile or `-pipelineSteps`, and add EditMode tests for applicability, dependencies, failure, and cleanup. Keep provider or platform APIs in a narrow integration assembly. Do not mutate global settings in a step without an owned snapshot-and-restore scope.
+Rules for production extensions:
 
-To add a content provider:
+- A discovered step is a public, non-abstract, parameterless type with one registration. Its runtime `StepTypeId` must match the registration, and that ID must be globally unique. A duplicate fails closed and reports every conflicting implementation type; registration order never selects a winner.
+- Implement `IBuildStepRequirementsProvider` only for the state envelopes genuinely needed. Do not request Player state for a content-only utility.
+- Return all deterministic preflight errors from `Validate`; do not start external tools or mutate assets there.
+- Put optional third-party code in a narrow adapter or integration asmdef. Do not expose optional types through core public contracts.
+- A terminal filesystem mutation implements `IBuildDeferredPublication`; a reversible input required by downstream invocations additionally implements `IBuildDownstreamInputPublication`.
+- A durable transaction registers an `IBuildRecoveryParticipant`. Recovery IDs are globally unique; `Priority` only orders participants with different IDs and never selects an override. Recovery must validate paths, identity, checksums, cardinality, and the publication decision before changing data.
+- A new content provider derives a dependency-free config from `AssetContentBuildConfiguration`, owns its stable provider ID on that concrete config type, declares `AssetContentProviderAuthoringAttribute`, and registers an `IAssetContentBuildAdapter` in its integration boundary. Core does not enumerate vendor IDs. Provider IDs must be globally unique; duplicate adapters fail closed rather than overriding one another.
+- A content provider with terminal filesystem output also implements `IAssetContentBuildOutputClaimProvider`; return every exclusive absolute output root so cross-invocation collisions fail during preflight.
+- A content provider that owns temporary Player state implements `IAssetContentPlayerBuildSessionFactory`. Return an empty `ExclusivePlayerSessionKey` only when sessions from separate invocations can coexist; otherwise return a stable provider-owned identifier. Duplicate non-empty keys in one Player dependency closure fail preflight.
+- Package-wide Player hooks belong to an integration-owned `IPlayerBuildEnvironmentGuard`. Guard IDs are globally unique, guards never override each other by priority, and every begun guard is disposed in reverse order even when the Player build or another cleanup fails.
+- A Player extension adapter registers a stable lowercase `CompatibilityId` and returns the exact same value at runtime. Bump it whenever adapter behavior can change generated Player compatibility; duplicate providers, invalid IDs, and registration/runtime mismatches fail closed before Player output staging.
+- A new hot-update provider derives a dependency-free config from `HotUpdateBuildConfiguration`, declares `HotUpdateProviderAuthoringAttribute`, and registers one `IHotUpdateBuildAdapter`. Provider IDs and configuration types are checked against registration metadata. Missing, duplicate, or mismatched adapters fail closed. Provider-specific Player constraints implement `IHotUpdatePlayerBuildValidator` instead of adding vendor branches to `PlayerBuildStep`.
+- Use `IBuildEventSink` for observability; event sinks do not own orchestration or durable output.
 
-1. Define a provider-specific `ScriptableObject` configuration without exposing provider package types through core public API.
-2. Add `AssetContentProviderAuthoring` to that configuration with a stable canonical ID, display name, and description. This metadata drives the Build Profile dropdown and typed Object field even when the package adapter is unavailable.
-3. Create a separate Editor integration asmdef that references the core and provider assemblies.
-4. Gate UPM packages with an exact `versionDefines` range plus an assembly `defineConstraints` capability.
-5. Add `AssetContentAdapterRegistration` and implement `IAssetContentBuildAdapter` with matching stable, unique `ProviderId` and `Priority` values. The registry compares metadata first and instantiates only the unique highest-priority adapter for the requested provider.
-6. If publication can outlive the process, add a public `IBuildRecoveryParticipant` with `BuildRecoveryRegistration`. It must locate and recover state from only the project root and its durable central journal, without the current profile, provider selection, configuration asset, or feature switch. Registration metadata is resolved by unique highest priority before construction, and recovery must either prove one state or fail closed.
-7. Keep the participant available when practical even if the provider package is removed. If version gating must remove it, add a dependency-free residual-state guard so pending evidence blocks execution with an actionable reinstall-and-recover message. Do not add a configuration-dependent adapter recovery path; crash recovery must remain project-central and independent of the active request.
-8. If the Provider needs temporary state around `BuildPipeline.BuildPlayer`, also implement `IAssetContentPlayerBuildSessionFactory`; the returned session owns restoration and must use the same durable transaction when persisted settings can change.
-9. Select that Provider and a matching configuration asset in `BuildData`.
-10. Return structured validation and per-package build results with verified artifact paths.
-11. Test dependency-present, dependency-absent, provider-disabled, provider-removed-with-pending-state, interrupted preparation/commit/restore, and corrupt-state cases. The core must compile without the optional package.
+## Safety budgets and scaling
 
-Adding a provider does not require a core enum, a provider switch in the content step, or a new CLI flag. `BuildData.AssetContentConfiguration` is passed unchanged through the provider-neutral request boundary, and the registry resolves the adapter dynamically by ID.
+The pipeline is designed for large recipes but remains deliberately bounded. Current core limits include 256 invocations, 4,096 dependency edges, 4,096 exclusive output claims, 512 deferred publications, and 1,024 Player scenes. Result evidence additionally limits one content operation to 1,024 results, one run to 4,096 content results, 131,072 content values and 8 MiB provider UTF-8 text, and the final manifest to 64 MiB. Config provenance, result logs, journals, ProjectSettings snapshots, directory depth, entry counts, file sizes, total bytes, path lengths, exception traversal, and provider artifacts also have explicit budgets. The Inspector checks the recipe node/edge budget before materializing or drawing the graph; an over-budget or corrupt asset shows only an explicit, Undo-capable reset action instead of allocating unbounded UI state.
 
-Provider adapters with the same ID use the highest priority. Equal highest priorities fail to prevent nondeterministic selection.
+Exceeding a budget is a validation or recovery error, never permission to truncate output or delete unknown files. Increase a limit only with measured project data, path/collision review, fault-injection tests, and CI artifact/storage capacity. For very large games, prefer several explicit content invocations with non-overlapping ownership roots and independently archived release baselines instead of one unbounded transaction.
 
-## Validation and troubleshooting
+The runner deliberately executes the Unity DAG serially. `AssetDatabase`, PlayerSettings, provider settings, Player hooks, and publication decisions are process-global or main-thread-affine; wrapping independent nodes in `Task.WhenAll` would trade determinism and rollback safety for unmeasured contention. Unity, SBP, shader compilation, Burst, IL2CPP, compression, and vendor tools may use their own workers. Parallelize platform/profile matrices across isolated CI checkouts, Libraries, Unity processes, and output roots; the workspace lease intentionally rejects concurrent mutation of one checkout. Within one provenance checkpoint, shared config assets are memoized by GUID/local file ID so multiple invocations do not rescan the same dependency graph. The runner intentionally performs fresh checkpoints before applicable steps and terminal publication to detect configuration changes during the run.
 
-Run the Editor tests after changing contracts, parsing, dependency compilation, or path policy:
+## Validation and release qualification
 
-```powershell
-& $UnityEditor `
-  -batchmode `
-  -nographics `
-  -quit `
-  -projectPath "$RepoRoot/UnityStarter" `
-  -runTests `
-  -testPlatform EditMode `
-  -assemblyNames Build.Pipeline.Tests.Editor `
-  -testResults "$RepoRoot/Artifacts/build-pipeline-tests.xml" `
-  -logFile "$RepoRoot/Artifacts/build-pipeline-tests.log"
-```
+Run validation in layers and record `Passed`, `Failed`, or `Not run` for each target. Source inspection or C# compilation alone does not prove Player, IL2CPP, AOT, stripping, filesystem, or CI-agent behavior.
 
-Minimum release validation is:
+1. With optional packages absent, compile `Build.Data`, `Build.VersionControl.Editor`, `Build.Pipeline.Editor`, and `Build.Pipeline.Tests.Editor`; run the package-independent EditMode suite.
+2. Install each supported optional package independently, reload/reimport, compile its integration assembly, and run its focused EditMode tests. Remove it again and confirm the core still compiles.
+3. Exercise duplicate IDs, missing/optional dependencies, cycle rejection, serialized-order invariance, multi-content ordering, exact/ancestor/case-alias output-claim overlap, graph-aware preset recognition, Editor and CLI focused selection with Required closure, CLI full-recipe replacement, and config path validation.
+4. For each supported target/backend, run Player Only, Player + Content, Full Player, Content Only, Content + Hot Update, and Hot Update Only as applicable. Qualify Release, Development, Android export, and external-output policy separately.
+5. For Player incrementality, publish a Clean output, archive/restore its sibling owner marker, then run Incremental. Corrupt the marker checksum, tree identity, compatibility digest, `formatVersion`, pipeline compatibility revision, Unity version, adapter `CompatibilityId` provenance, and each remaining compatibility field in turn; confirm pre-stage fail-closed behavior and verify rollback/committed recovery preserve the correct original/new identity.
+6. For Addressables, qualify Clean Player content and an official content-only Incremental update restored from the prior published state. Corrupt every identity field/file hash and confirm fail-closed behavior; also verify that one Player rejects a second Addressables invocation in its dependency closure.
+7. For YooAsset, qualify every enabled pipeline kind, multi-package failure rollback, built-in Player activation, exact-version collision policies, and missing-package recovery.
+8. For HybridCLR, publish a Clean Release Player baseline, restore it in a clean CI workspace, run incremental hot-update-only, and verify target/backend/Unity/config/hash mismatches are rejected.
+9. Exercise the result-capacity gate at its exact boundary and above it; verify an overflow writes no manifest or temporary file and invokes no child `Publish`. Inject long Unicode/control-character failures after durable commit and confirm bounded SHA-256-marked evidence writes and validates. Also inject failures during refresh, manifest/event-log I/O, strict terminal confirmation, and cleanup. Restart Unity, switch the selected platform, confirm normal build remains blocked, then recover to `Clean`.
+10. Run concurrent build/recovery attempts and verify one receives exit code `3`; verify malformed evidence returns a safe `Blocked` state without data deletion.
+11. Archive `.buildpipeline/results`, release outputs and Player owner markers, Addressables state, and HybridCLR baselines in TeamCity/Jenkins; verify exit codes and artifact paths from a clean agent checkout.
 
-1. Import and compile with each optional integration required by that release.
-2. Run `Build.Pipeline.Tests.Editor`.
-3. Print the selected profile and inspect effective steps and adapter availability.
-4. Run a clean content build for the selected provider and verify provider artifacts.
-5. Run at least one clean Player build for every release target/backend combination.
-6. Confirm `ProjectSettings/ProjectSettings.asset` and a pre-existing version-info asset are byte-identical after success and an induced failure.
-7. Parse the schema-3 manifest and verify every expected step, content result, provider failure field, and content artifact.
-8. For IL2CPP/HybridCLR/Obfuz releases, perform the actual target Player build; static analysis or an Editor-only test is not an AOT/stripping validation.
-9. Interrupt each enabled durable transaction at a fault checkpoint, then rerun with its feature disabled or the current request invalid. Verify project-central recovery still runs first; for a removed YooAsset integration, verify the residual-state guard preserves evidence and blocks execution.
-
-| Failure | Meaning and action |
-| --- | --- |
-| Multiple profiles found | Select a profile in the Editor or pass `-pipelineProfile` in CI. |
-| Missing/non-applicable dependency | Add the required step or disable the feature that declares it. |
-| No supported provider adapter | Install a supported provider version or select another provider. |
-| Pending YooAsset recovery state but integration unavailable | Reinstall a supported YooAsset 3 package, run the pipeline so the project-central participant completes recovery, verify `.buildpipeline/transactions/yooasset3` is empty, and only then remove the package again. Do not delete the retained evidence. |
-| Version-control metadata unavailable or incoherent | Configure a detectable Git or Perforce workspace and retry. Batch/release builds never publish fallback versions; only an interactive Development build may use `LocalDevelopment`. |
-| Player output is unsafe | Move it into a dedicated child of `OutputBasePath`; use external output only for an explicitly owned nested directory. |
-| Active build target mismatch | In the Editor, switch in File > Build Settings and wait for compilation/reload. In CI, restart Unity with the matching native alias: `Win64`, `OSXUniversal`, `Linux64`, `Android`, `iOS`, or `WebGL`. |
-| PlayerSettings has unsaved changes | Save or revert the settings before starting the transaction. |
-| Addressables configuration is dirty | Save or revert Addressables settings, profiles, groups, schemas, and data builders. |
-| YooAsset version already exists | Use a new canonical version or deliberately select exact-version replacement for that package. |
-| HybridCLR ownership validation failed | The directory is non-empty but unowned, its manifest is invalid, or it contains undeclared content. Preserve authored files elsewhere; only empty or correctly managed exclusive directories are accepted. |
-| HybridCLR output verification failed | Check package initialization, HybridCLR Settings, configured asmdefs, target, non-overlapping generated directories, and ownership manifests. |
-| Obfuz preflight failed | Provision settings and compile the Encryption VM before invoking the build. |
-| Manifest reports restore failure | Treat the run as failed; inspect the aggregated exception before reusing that workspace. |
-| Observer failure recorded | Fix the injected event sink. The callback failure is diagnostic and isolated; use the run's `succeeded`, step results, and primary failure to decide artifact publication. |
-
-When copying this module into another project, preserve `.meta` and asmdef files and create a project-specific `BuildData`. Explicitly fill company name, product name, and application identifier; the module provides no identity fallback that could leak a template package name. Then set project scenes/output paths, assign only the integrations the project actually uses, and make the same `RunCommandLine` method the CI entry point. Do not add a second orchestration path for a provider or platform.
+Common first checks are: save authoring assets, wait for Unity to finish compiling/importing and switching target, open Workspace Health, inspect the per-run log/manifest, verify optional-package availability, and verify that multiple invocations do not share a final output root unintentionally.

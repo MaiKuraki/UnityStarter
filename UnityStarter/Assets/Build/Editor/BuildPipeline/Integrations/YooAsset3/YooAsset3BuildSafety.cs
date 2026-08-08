@@ -324,23 +324,31 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             return child.StartsWith(parent, FileSystemPathComparison);
         }
 
-        public static string[] EnumerateArtifacts(string rootDirectory, int maximumFileCount)
+        public static int ValidateArtifactTree(string rootDirectory, int maximumEntryCount)
         {
-            if (maximumFileCount <= 0)
+            if (maximumEntryCount <= 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(maximumFileCount));
+                throw new ArgumentOutOfRangeException(nameof(maximumEntryCount));
             }
 
             string root = Path.GetFullPath(rootDirectory);
-            var files = new List<string>();
             var pendingDirectories = new Stack<string>();
             pendingDirectories.Push(root);
+            int entryCount = 0;
+            int fileCount = 0;
 
             while (pendingDirectories.Count > 0)
             {
                 string directory = pendingDirectories.Pop();
                 foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.TopDirectoryOnly))
                 {
+                    entryCount++;
+                    if (entryCount > maximumEntryCount)
+                    {
+                        throw new InvalidOperationException(
+                            $"Artifact tree entry count exceeds the configured safety limit of {maximumEntryCount}: '{root}'.");
+                    }
+
                     string fullEntry = Path.GetFullPath(entry);
                     if (!IsStrictDescendant(root, fullEntry))
                     {
@@ -359,18 +367,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         continue;
                     }
 
-                    if (files.Count >= maximumFileCount)
-                    {
-                        throw new InvalidOperationException(
-                            $"Artifact count exceeds the configured safety limit of {maximumFileCount}: '{root}'.");
-                    }
-
-                    files.Add(fullEntry);
+                    fileCount++;
                 }
             }
 
-            files.Sort(FileSystemPathComparer);
-            return files.ToArray();
+            return fileCount;
         }
 
         private static void EnsureNoReparsePoints(string approvedRoot, string target)

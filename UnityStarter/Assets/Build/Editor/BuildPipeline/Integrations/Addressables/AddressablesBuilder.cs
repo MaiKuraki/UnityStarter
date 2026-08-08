@@ -16,76 +16,283 @@ namespace Build.Pipeline.Editor
         private const string LogTag = "[Addressables]";
         private const int MaximumConfigurationAssetBytes = 32 * 1024 * 1024;
         private const int MaximumVersionArtifactBytes = 64 * 1024;
+        private const long MaximumContentStateBytes = 512L * 1024L * 1024L;
+        private const int MaximumArtifactManifestBytes = 16 * 1024 * 1024;
+        private const int MaximumArtifactManifestSearchDepth = 16;
         private const int AddressablesGeneratedChildPathReserve = 128;
+        private const string ContentUpdateScriptTypeName =
+            "UnityEditor.AddressableAssets.Build.ContentUpdateScript";
         internal const string VersionArtifactTemporaryFileName = ".bp-version.tmp";
         internal const string VersionArtifactBackupFileName = ".bp-version.bak";
         private static readonly object ContentBuildGate = new object();
         private static bool contentBuildActive;
 
-        internal static void Build(
+        internal static IBuildDeferredPublication Build(
+            string invocationId,
             BuildTarget buildTarget,
             string contentVersion,
             AddressablesBuildConfig config,
-            bool cleanBuild)
+            BuildIncrementality incrementality)
         {
             if (config == null)
             {
                 throw new ArgumentNullException(nameof(config));
             }
 
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            RunInContentBuildScope(projectRoot, () =>
-            {
-                AddressablesSettingsTransaction.RecoverPending(projectRoot);
-                RecoverPendingPublicationUnderLock(projectRoot, buildTarget, config);
-                BuildInternal(projectRoot, buildTarget, contentVersion, config, cleanBuild);
-            });
-        }
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                invocationId,
+                "Addressables content invocation id");
 
-        internal static void RecoverPendingPublication(
-            BuildTarget buildTarget,
-            AddressablesBuildConfig config)
-        {
-            if (config == null)
+            if (incrementality != BuildIncrementality.Clean
+                && incrementality != BuildIncrementality.Incremental)
             {
-                throw new ArgumentNullException(nameof(config));
+                throw new ArgumentOutOfRangeException(
+                    nameof(incrementality),
+                    incrementality,
+                    "Addressables supports only Clean and Incremental content invocations.");
             }
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            RunInContentBuildScope(projectRoot, () =>
-            {
-                AddressablesSettingsTransaction.RecoverPending(projectRoot);
-                RecoverPendingPublicationUnderLock(projectRoot, buildTarget, config);
-            });
-        }
-
-        private static void RecoverPendingPublicationUnderLock(
-            string projectRoot,
-            BuildTarget buildTarget,
-            AddressablesBuildConfig config)
-        {
-            string publicationRoot = ResolvePublicationRoot(projectRoot, config.buildOutputDirectory);
-            string destination = Path.Combine(publicationRoot, buildTarget.ToString());
-            AddressablesPublicationTransaction.RecoverPending(
+            string configurationError = ValidateContentBuildConfiguration(
                 projectRoot,
-                publicationRoot,
-                destination);
+                buildTarget,
+                incrementality,
+                config);
+            if (!string.IsNullOrEmpty(configurationError))
+            {
+                throw new InvalidOperationException(configurationError);
+            }
+
+            PendingAddressablesPublication publication = null;
+            RunInContentBuildScope(projectRoot, () =>
+            {
+                AddressablesSettingsTransaction.EnsureNoPendingRecovery(projectRoot);
+                AddressablesPublicationTransaction.EnsureNoPendingRecovery(
+                    projectRoot,
+                    invocationId);
+                publication = BuildInternal(
+                    projectRoot,
+                    invocationId,
+                    buildTarget,
+                    contentVersion,
+                    config,
+                    incrementality);
+            });
+            return publication;
+        }
+
+        internal static string ResolveConfiguredPublicationDirectory(
+            string invocationId,
+            string configuredOutputDirectory)
+        {
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                invocationId,
+                "Addressables content invocation id");
+            return string.IsNullOrWhiteSpace(configuredOutputDirectory)
+                ? AddressablesBuildConfig.DefaultBuildOutputBaseDirectory
+                  + "/"
+                  + invocationId.Trim()
+                : configuredOutputDirectory.Trim().Replace('\\', '/');
         }
 
         private static string ResolvePublicationRoot(string projectRoot, string configuredOutputDirectory)
         {
             string targetDirectory = string.IsNullOrWhiteSpace(configuredOutputDirectory)
-                ? AddressablesBuildConfig.DefaultBuildOutputDirectory
+                ? AddressablesBuildConfig.DefaultBuildOutputBaseDirectory
                 : configuredOutputDirectory;
             return BuildPathPolicy.ResolveBuildRoot(projectRoot, targetDirectory);
         }
 
-        private static void BuildInternal(
+        internal static string ValidateContentBuildConfiguration(
+            AssetContentBuildRequest request,
+            AddressablesBuildConfig config)
+        {
+            if (request == null)
+            {
+                return "Addressables content build request is required.";
+            }
+
+            return ValidateContentBuildConfiguration(
+                request.ProjectRoot,
+                request.BuildTarget,
+                request.Incrementality,
+                config);
+        }
+
+        private static string ValidateContentBuildConfiguration(
             string projectRoot,
+            BuildTarget buildTarget,
+            BuildIncrementality incrementality,
+            AddressablesBuildConfig config)
+        {
+            if (config == null)
+            {
+                return "AddressablesBuildConfig is required.";
+            }
+
+            if (incrementality == BuildIncrementality.Clean)
+            {
+                return null;
+            }
+
+            if (incrementality != BuildIncrementality.Incremental)
+            {
+                return $"Unsupported Addressables incrementality mode '{incrementality}'.";
+            }
+
+            try
+            {
+                if (!config.buildRemoteCatalog)
+                {
+                    throw new InvalidOperationException(
+                        "Addressables Incremental mode requires Build Remote Catalog.");
+                }
+
+                if (!config.copyToOutputDirectory)
+                {
+                    throw new InvalidOperationException(
+                        "Addressables Incremental mode requires publication so the next official content-state baseline is preserved.");
+                }
+
+                Type settingsType = ReflectionCache.GetType(
+                    "UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
+                Type contentUpdateType = ReflectionCache.GetType(ContentUpdateScriptTypeName);
+                if (settingsType == null
+                    || AddressablesVersionBuildProcessor.FindContentUpdateBuildMethod(
+                        contentUpdateType,
+                        settingsType) == null
+                    || AddressablesVersionBuildProcessor.FindContentStateLoadMethod(
+                        contentUpdateType) == null)
+                {
+                    throw new InvalidOperationException(
+                        "The installed Addressables package does not expose the supported official Content Update API.");
+                }
+
+                object settings = GetDefaultSettings();
+                if (settings == null)
+                {
+                    throw new InvalidOperationException(
+                        "AddressableAssetSettings was not found.");
+                }
+
+                ActiveProfileIdentity profileIdentity = GetActiveProfileIdentity(
+                    settings,
+                    settingsType);
+                string baselinePath = ResolveContentUpdateBaselinePath(
+                    config,
+                    projectRoot);
+                LoadAndValidateContentUpdateBaseline(
+                    projectRoot,
+                    baselinePath,
+                    buildTarget,
+                    settings,
+                    settingsType,
+                    profileIdentity);
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return "Addressables Incremental preflight failed: " + exception.Message;
+            }
+        }
+
+        internal static string ResolveContentUpdateBaselinePath(
+            AddressablesBuildConfig config,
+            string projectRoot)
+        {
+            if (config == null)
+            {
+                throw new ArgumentNullException(nameof(config));
+            }
+
+            if (string.IsNullOrWhiteSpace(projectRoot))
+            {
+                throw new ArgumentException(
+                    "Unity project root is required.",
+                    nameof(projectRoot));
+            }
+
+            string assetPath = config.contentUpdateBaselineAsset == null
+                ? null
+                : AssetDatabase.GetAssetPath(config.contentUpdateBaselineAsset)
+                    ?.Replace('\\', '/');
+            string configuredPath = string.IsNullOrWhiteSpace(config.contentUpdateBaselinePath)
+                ? null
+                : config.contentUpdateBaselinePath.Trim().Replace('\\', '/');
+            if (!string.IsNullOrWhiteSpace(assetPath)
+                && !string.IsNullOrWhiteSpace(configuredPath))
+            {
+                throw new InvalidOperationException(
+                    "Choose either Addressables Baseline Asset or Baseline Path, not both.");
+            }
+
+            string relativePath = !string.IsNullOrWhiteSpace(assetPath)
+                ? assetPath
+                : configuredPath;
+            if (string.IsNullOrWhiteSpace(relativePath))
+            {
+                throw new InvalidOperationException(
+                    "An explicit official addressables_content_state.bin baseline is required.");
+            }
+
+            BuildPathPolicy.ValidatePortableProjectRelativePath(
+                relativePath,
+                "Addressables content update baseline");
+            if (!string.Equals(
+                    Path.GetExtension(relativePath),
+                    ".bin",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The Addressables content update baseline must be a .bin file.");
+            }
+
+            string firstSegment = relativePath.Split('/')[0];
+            string[] forbiddenRoots =
+            {
+                ".git",
+                "Library",
+                "Logs",
+                "Packages",
+                "ProjectSettings",
+                "Temp",
+                "UserSettings"
+            };
+            foreach (string forbiddenRoot in forbiddenRoots)
+            {
+                if (string.Equals(
+                        firstSegment,
+                        forbiddenRoot,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Addressables content update baseline cannot be read from '{forbiddenRoot}'.");
+                }
+            }
+
+            string normalizedProjectRoot = Path.GetFullPath(projectRoot);
+            string absolutePath = Path.GetFullPath(
+                Path.Combine(normalizedProjectRoot, relativePath));
+            absolutePath = BuildPathPolicy.EnsureSafeReadableFile(
+                normalizedProjectRoot,
+                absolutePath);
+            FileInfo fileInfo = new FileInfo(absolutePath);
+            if (fileInfo.Length <= 0 || fileInfo.Length > MaximumContentStateBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Addressables content update baseline must contain between 1 and {MaximumContentStateBytes} bytes: '{absolutePath}'.");
+            }
+
+            return absolutePath;
+        }
+
+        private static PendingAddressablesPublication BuildInternal(
+            string projectRoot,
+            string invocationId,
             BuildTarget buildTarget,
             string contentVersion,
             AddressablesBuildConfig config,
-            bool cleanBuild)
+            BuildIncrementality incrementality)
         {
             ValidatePortablePathSegment(contentVersion, "Addressables content version");
 
@@ -98,9 +305,11 @@ namespace Build.Pipeline.Editor
 
             bool useBuildRemoteCatalog = config.buildRemoteCatalog;
             bool useCopyToOutputDirectory = config.copyToOutputDirectory;
-            string useBuildOutputDirectory = config.buildOutputDirectory;
+            string useBuildOutputDirectory = ResolveConfiguredPublicationDirectory(
+                invocationId,
+                config.buildOutputDirectory);
             Debug.Log(
-                $"{LogTag} Building content. Target={buildTarget}, Version={contentVersion}, " +
+                $"{LogTag} Building content. Target={buildTarget}, Version={contentVersion}, Mode={incrementality}, " +
                 $"RemoteCatalog={useBuildRemoteCatalog}, Publish={useCopyToOutputDirectory}.");
 
             Type settingsType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
@@ -120,6 +329,7 @@ namespace Build.Pipeline.Editor
             PendingAddressablesPublication pendingPublication = null;
             Exception buildFailure = null;
             bool contentBuildSucceeded = false;
+            ContentUpdateBaseline contentUpdateBaseline = null;
             try
             {
                 settings = GetDefaultSettings();
@@ -153,6 +363,21 @@ namespace Build.Pipeline.Editor
                     buildTarget,
                     useBuildRemoteCatalog);
 
+                ActiveProfileIdentity profileIdentity = GetActiveProfileIdentity(
+                    settings,
+                    settingsType);
+                if (incrementality == BuildIncrementality.Incremental)
+                {
+                    contentUpdateBaseline = PrepareContentUpdateBaseline(
+                        projectRoot,
+                        invocationId,
+                        buildTarget,
+                        settings,
+                        settingsType,
+                        profileIdentity,
+                        config);
+                }
+
                 buildRemoteCatalogProperty = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
                 overridePlayerVersionProperty = ReflectionCache.GetProperty(settingsType, "OverridePlayerVersion", BindingFlags.Public | BindingFlags.Instance);
                 if (buildRemoteCatalogProperty == null || overridePlayerVersionProperty == null)
@@ -169,39 +394,50 @@ namespace Build.Pipeline.Editor
 
                 buildRemoteCatalogProperty.SetValue(settings, useBuildRemoteCatalog);
 
-                if (cleanBuild)
+                if (incrementality == BuildIncrementality.Clean)
                 {
                     ClearActiveBuilderCache(settings, settingsType, buildTarget);
+                    overridePlayerVersionProperty.SetValue(settings, contentVersion);
                 }
 
-                overridePlayerVersionProperty.SetValue(settings, contentVersion);
-
-                object buildResult = BuildWithSettings(settingsType);
+                object buildResult = incrementality == BuildIncrementality.Clean
+                    ? BuildWithSettings(settingsType)
+                    : BuildContentUpdateWithSettings(
+                        settingsType,
+                        settings,
+                        contentUpdateBaseline.SnapshotPath);
 
                 if (buildResult != null)
                 {
                     bool isSuccess = CheckBuildResult(buildResult);
                     if (isSuccess)
                     {
-                        SaveVersionDataToAddressablesBuildPath(contentVersion, buildTarget);
+                        ContentStateIdentity contentStateIdentity = GetRequiredContentStateIdentity(
+                            buildResult,
+                            projectRoot,
+                            incrementality,
+                            contentVersion,
+                            contentUpdateBaseline);
+                        if (incrementality == BuildIncrementality.Clean)
+                        {
+                            SaveVersionDataToAddressablesBuildPath(contentVersion, buildTarget);
+                        }
 
                         if (useCopyToOutputDirectory)
                         {
-                            string outputDir = useBuildOutputDirectory;
-                            if (string.IsNullOrEmpty(outputDir))
-                            {
-                                outputDir = AddressablesBuildConfig.DefaultBuildOutputDirectory;
-                            }
-
                             pendingPublication = CopyBuildResultToOutput(
+                                invocationId,
                                 buildTarget,
-                                outputDir,
+                                useBuildOutputDirectory,
                                 useBuildRemoteCatalog,
                                 buildResult,
                                 settings,
                                 settingsType,
                                 contentVersion,
-                                config);
+                                config,
+                                incrementality,
+                                profileIdentity,
+                                contentStateIdentity);
                         }
 
                         contentBuildSucceeded = true;
@@ -243,21 +479,29 @@ namespace Build.Pipeline.Editor
                         settingsTransaction);
                 }
 
-                Exception publicationFinalizationFailure = null;
-                if (pendingPublication != null)
+                Exception baselineCleanupFailure = null;
+                if (contentUpdateBaseline != null)
                 {
                     try
                     {
-                        if (buildFailure == null
-                            && restoreFailure == null
-                            && settingsFinalizationFailure == null)
-                        {
-                            pendingPublication.Commit();
-                        }
-                        else
-                        {
-                            pendingPublication.Abort();
-                        }
+                        contentUpdateBaseline.Dispose();
+                    }
+                    catch (Exception exception)
+                    {
+                        baselineCleanupFailure = exception;
+                    }
+                }
+
+                Exception publicationFinalizationFailure = null;
+                if (pendingPublication != null
+                    && (buildFailure != null
+                        || restoreFailure != null
+                        || settingsFinalizationFailure != null
+                        || baselineCleanupFailure != null))
+                {
+                    try
+                    {
+                        pendingPublication.Abort();
                     }
                     catch (Exception exception)
                     {
@@ -267,6 +511,7 @@ namespace Build.Pipeline.Editor
 
                 if (restoreFailure != null
                     || settingsFinalizationFailure != null
+                    || baselineCleanupFailure != null
                     || publicationFinalizationFailure != null)
                 {
                     var failures = new List<Exception>();
@@ -289,6 +534,13 @@ namespace Build.Pipeline.Editor
                             settingsFinalizationFailure));
                     }
 
+                    if (baselineCleanupFailure != null)
+                    {
+                        failures.Add(new InvalidOperationException(
+                            "Failed to clean the Addressables Content Update baseline snapshot.",
+                            baselineCleanupFailure));
+                    }
+
                     if (publicationFinalizationFailure != null)
                     {
                         failures.Add(new InvalidOperationException(
@@ -308,6 +560,8 @@ namespace Build.Pipeline.Editor
                     Debug.Log($"{LogTag} Content build completed for target '{buildTarget}'.");
                 }
             }
+
+            return pendingPublication;
         }
 
         internal static object GetDefaultSettings()
@@ -491,7 +745,7 @@ namespace Build.Pipeline.Editor
 
         internal static void WriteNewTextDurably(string path, string content)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 path,
                 "Addressables durable text artifact");
             byte[] bytes = new UTF8Encoding(false, true).GetBytes(content ?? string.Empty);
@@ -509,39 +763,44 @@ namespace Build.Pipeline.Editor
         }
 
         internal static void WriteVersionArtifactDurably(
+            string projectRoot,
             string versionFilePath,
             string contentVersion)
         {
             ValidatePortablePathSegment(
                 contentVersion,
                 "Addressables content version");
-            string finalPath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            string finalPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 versionFilePath,
                 "Addressables version artifact");
-            EnsureVersionArtifactPathIsInsideProject(finalPath);
+            EnsureVersionArtifactPathIsInsideProject(projectRoot, finalPath);
             string directory = Path.GetDirectoryName(finalPath);
             if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
             {
                 throw new DirectoryNotFoundException(
                     $"Addressables version artifact directory is missing: '{directory}'.");
             }
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 directory,
                 "Addressables version artifact directory");
 
-            string temporaryPath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            string temporaryPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(directory, VersionArtifactTemporaryFileName),
                 "Addressables temporary version artifact");
-            string backupPath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            string backupPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(directory, VersionArtifactBackupFileName),
                 "Addressables backup version artifact");
-            RecoverVersionArtifactScratch(finalPath, temporaryPath, backupPath);
+            RecoverVersionArtifactScratch(
+                projectRoot,
+                finalPath,
+                temporaryPath,
+                backupPath);
 
             var versionData = new VersionDataJson { contentVersion = contentVersion };
             WriteNewTextDurably(
                 temporaryPath,
                 JsonUtility.ToJson(versionData, true));
-            ReadAndValidateVersionArtifact(temporaryPath, contentVersion);
+            ReadAndValidateVersionArtifact(projectRoot, temporaryPath, contentVersion);
             if (IsRegularVersionArtifact(finalPath))
             {
                 File.Replace(temporaryPath, finalPath, backupPath);
@@ -551,15 +810,19 @@ namespace Build.Pipeline.Editor
                 File.Move(temporaryPath, finalPath);
             }
 
-            ReadAndValidateVersionArtifact(finalPath, contentVersion);
+            ReadAndValidateVersionArtifact(projectRoot, finalPath, contentVersion);
             if (IsRegularVersionArtifact(backupPath))
             {
-                ReadAndValidateVersionArtifact(backupPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    backupPath,
+                    expectedContentVersion: null);
                 DeleteVersionArtifactStrict(backupPath);
             }
         }
 
         private static void RecoverVersionArtifactScratch(
+            string projectRoot,
             string finalPath,
             string temporaryPath,
             string backupPath)
@@ -569,15 +832,24 @@ namespace Build.Pipeline.Editor
             bool backupExists = IsRegularVersionArtifact(backupPath);
             if (finalExists)
             {
-                ReadAndValidateVersionArtifact(finalPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    finalPath,
+                    expectedContentVersion: null);
                 if (temporaryExists)
                 {
-                    ReadAndValidateVersionArtifact(temporaryPath, expectedContentVersion: null);
+                    ReadAndValidateVersionArtifact(
+                        projectRoot,
+                        temporaryPath,
+                        expectedContentVersion: null);
                 }
 
                 if (backupExists)
                 {
-                    ReadAndValidateVersionArtifact(backupPath, expectedContentVersion: null);
+                    ReadAndValidateVersionArtifact(
+                        projectRoot,
+                        backupPath,
+                        expectedContentVersion: null);
                 }
 
                 DeleteVersionArtifactStrict(temporaryPath);
@@ -587,23 +859,38 @@ namespace Build.Pipeline.Editor
 
             if (backupExists)
             {
-                ReadAndValidateVersionArtifact(backupPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    backupPath,
+                    expectedContentVersion: null);
                 if (temporaryExists)
                 {
-                    ReadAndValidateVersionArtifact(temporaryPath, expectedContentVersion: null);
+                    ReadAndValidateVersionArtifact(
+                        projectRoot,
+                        temporaryPath,
+                        expectedContentVersion: null);
                 }
 
                 File.Move(backupPath, finalPath);
-                ReadAndValidateVersionArtifact(finalPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    finalPath,
+                    expectedContentVersion: null);
                 DeleteVersionArtifactStrict(temporaryPath);
                 return;
             }
 
             if (temporaryExists)
             {
-                ReadAndValidateVersionArtifact(temporaryPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    temporaryPath,
+                    expectedContentVersion: null);
                 File.Move(temporaryPath, finalPath);
-                ReadAndValidateVersionArtifact(finalPath, expectedContentVersion: null);
+                ReadAndValidateVersionArtifact(
+                    projectRoot,
+                    finalPath,
+                    expectedContentVersion: null);
             }
         }
 
@@ -631,10 +918,11 @@ namespace Build.Pipeline.Editor
         }
 
         internal static string ReadAndValidateVersionArtifact(
+            string projectRoot,
             string path,
             string expectedContentVersion)
         {
-            EnsureVersionArtifactPathIsInsideProject(path);
+            EnsureVersionArtifactPathIsInsideProject(projectRoot, path);
             if (!IsRegularVersionArtifact(path))
             {
                 throw new FileNotFoundException(
@@ -722,18 +1010,28 @@ namespace Build.Pipeline.Editor
             return data.contentVersion;
         }
 
-        private static void EnsureVersionArtifactPathIsInsideProject(string path)
+        private static void EnsureVersionArtifactPathIsInsideProject(
+            string projectRoot,
+            string path)
         {
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            if (string.IsNullOrWhiteSpace(projectRoot))
+            {
+                throw new ArgumentException(
+                    "A trusted Unity project root is required for an Addressables version artifact.",
+                    nameof(projectRoot));
+            }
+
+            string normalizedProjectRoot = Path.GetFullPath(projectRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string fullPath = Path.GetFullPath(path);
-            if (!BuildPathPolicy.IsStrictDescendant(projectRoot, fullPath))
+            if (!BuildPathPolicy.IsStrictDescendant(normalizedProjectRoot, fullPath))
             {
                 throw new InvalidOperationException(
                     $"Addressables version artifact must remain inside the Unity project: '{fullPath}'.");
             }
 
             AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
-                projectRoot,
+                normalizedProjectRoot,
                 fullPath);
         }
 
@@ -883,6 +1181,7 @@ namespace Build.Pipeline.Editor
         }
 
         private static PendingAddressablesPublication CopyBuildResultToOutput(
+            string invocationId,
             BuildTarget buildTarget,
             string outputDirectory,
             bool buildRemoteCatalog,
@@ -890,7 +1189,10 @@ namespace Build.Pipeline.Editor
             object settings,
             Type settingsType,
             string contentVersion,
-            AddressablesBuildConfig config)
+            AddressablesBuildConfig config,
+            BuildIncrementality incrementality,
+            ActiveProfileIdentity profileIdentity,
+            ContentStateIdentity contentStateIdentity)
         {
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             string customDestRoot = ResolvePublicationRoot(projectRoot, outputDirectory);
@@ -921,16 +1223,21 @@ namespace Build.Pipeline.Editor
                 buildVersionPath,
                 customDestRoot,
                 contentVersion,
-                config);
+                config,
+                contentStateIdentity);
             string destinationDirectory = Path.Combine(customDestRoot, buildTarget.ToString());
             Debug.Log($"{LogTag} Publishing {files.Count} files to '{destinationDirectory}'.");
             return StageFilesTransactionally(
                 projectRoot,
+                invocationId,
                 customDestRoot,
                 destinationDirectory,
                 files,
                 buildTarget,
                 contentVersion,
+                incrementality,
+                profileIdentity,
+                contentStateIdentity,
                 Path.Combine("PlayerData", versionFileName));
         }
 
@@ -944,7 +1251,8 @@ namespace Build.Pipeline.Editor
             string versionFilePath,
             string publicationRoot,
             string contentVersion,
-            AddressablesBuildConfig config)
+            AddressablesBuildConfig config,
+            ContentStateIdentity contentStateIdentity)
         {
             var roots = new List<PublicationRoot>
             {
@@ -1008,6 +1316,13 @@ namespace Build.Pipeline.Editor
             PublicationRoot contentStatePublicationRoot = null;
             if (!string.IsNullOrEmpty(contentStatePath))
             {
+                if (contentStateIdentity == null
+                    || !PathsEqual(contentStateIdentity.Path, contentStatePath))
+                {
+                    throw new InvalidOperationException(
+                        "Addressables ContentStateFilePath changed after validation.");
+                }
+
                 string approvedContentStateRoot = ResolveContentStatePublicationRoot(
                     settings,
                     settingsType,
@@ -1044,7 +1359,10 @@ namespace Build.Pipeline.Editor
             var files = new List<PublicationFile>(registryFiles.Count);
             var destinationOwners = new Dictionary<string, string>(PortableDestinationPathComparer);
             string expectedRemoteCatalogBaseName = buildRemoteCatalog
-                ? GetExpectedRemoteCatalogBaseName(settings, settingsType, contentVersion)
+                ? GetExpectedRemoteCatalogBaseName(
+                    settings,
+                    settingsType,
+                    contentStateIdentity?.PlayerVersion ?? contentVersion)
                 : null;
             bool remoteCatalogDataFound = !buildRemoteCatalog;
             bool remoteCatalogHashFound = !buildRemoteCatalog;
@@ -1123,11 +1441,15 @@ namespace Build.Pipeline.Editor
 
         private static PendingAddressablesPublication StageFilesTransactionally(
             string projectRoot,
+            string invocationId,
             string publicationRoot,
             string destinationDirectory,
             IReadOnlyList<PublicationFile> files,
             BuildTarget buildTarget,
             string contentVersion,
+            BuildIncrementality incrementality,
+            ActiveProfileIdentity profileIdentity,
+            ContentStateIdentity contentStateIdentity,
             string requiredPublishedRelativePath)
         {
             BuildPathPolicy.EnsureSafeDeleteTarget(
@@ -1140,6 +1462,7 @@ namespace Build.Pipeline.Editor
                 projectRoot,
                 publicationRoot,
                 destinationDirectory,
+                invocationId,
                 buildTarget + "\n" + contentVersion);
             Exception failure = null;
             try
@@ -1168,10 +1491,10 @@ namespace Build.Pipeline.Editor
                             $"Addressables publication path has no parent: '{stagedPath}'.");
                     }
 
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         stagedPath,
                         "Addressables staged artifact");
-                    BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                         parent,
                         "Addressables staged artifact directory");
                     Directory.CreateDirectory(parent);
@@ -1197,18 +1520,27 @@ namespace Build.Pipeline.Editor
 
                 var manifest = new AddressablesArtifactManifest
                 {
-                    schemaVersion = 2,
                     buildTarget = buildTarget.ToString(),
                     contentVersion = contentVersion,
+                    incrementality = incrementality.ToString(),
+                    unityVersion = Application.unityVersion,
+                    activeProfileId = profileIdentity.Id,
+                    activeProfileName = profileIdentity.Name,
+                    addressablesPlayerVersion = contentStateIdentity?.PlayerVersion ?? string.Empty,
+                    remoteCatalogLoadPath = contentStateIdentity?.RemoteCatalogLoadPath ?? string.Empty,
                     files = manifestEntries
                 };
-                string manifestPath = Path.Combine(stagingDirectory, "AddressablesArtifacts.json");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                string manifestPath = Path.Combine(
+                    stagingDirectory,
+                    AddressablesArtifactManifestFormat.FileName);
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     manifestPath,
                     "Addressables staged artifact manifest");
                 WriteNewTextDurably(
                     manifestPath,
-                    JsonUtility.ToJson(manifest, true));
+                    AddressablesArtifactManifestFormat.Serialize(
+                        manifest,
+                        prettyPrint: true));
 
                 AddressablesPublicationOwnership.WriteOwner(
                     stagingDirectory,
@@ -1268,10 +1600,10 @@ namespace Build.Pipeline.Editor
             string stagingDirectory,
             IReadOnlyList<PublicationFile> files)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destinationDirectory,
                 "Addressables publication destination");
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stagingDirectory,
                 "Addressables publication stage");
 
@@ -1283,28 +1615,28 @@ namespace Build.Pipeline.Editor
                 string publishedPath = Path.Combine(
                     destinationDirectory,
                     file.DestinationRelativePath);
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     stagedPath,
                     "Addressables staged artifact");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     publishedPath,
                     "Addressables published artifact");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     Path.GetDirectoryName(stagedPath),
                     "Addressables staged artifact directory");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     Path.GetDirectoryName(publishedPath),
                     "Addressables published artifact directory");
             }
 
             const string manifestFileName = "AddressablesArtifacts.json";
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stagingDirectory, manifestFileName),
                 "Addressables staged artifact manifest");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(destinationDirectory, manifestFileName),
                 "Addressables published artifact manifest");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(destinationDirectory, AddressablesPublicationOwnership.OwnerFileName),
                 "Addressables published ownership marker");
         }
@@ -1338,10 +1670,10 @@ namespace Build.Pipeline.Editor
             string destinationPath,
             out long copiedLength)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 sourcePath,
                 "Addressables source artifact");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 destinationPath,
                 "Addressables staged artifact");
             using (var source = new FileStream(
@@ -1892,7 +2224,7 @@ namespace Build.Pipeline.Editor
             BuildTarget buildTarget,
             bool buildRemoteCatalog)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 GetAddressablesBuildPath(buildTarget),
                 "Addressables.BuildPath",
                 1 + AddressablesGeneratedChildPathReserve);
@@ -1903,7 +2235,7 @@ namespace Build.Pipeline.Editor
                 "Remote.BuildPath");
             if (!IsUndefinedProfileValue(profileRemoteRoot))
             {
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     NormalizeSourceRoot(projectRoot, profileRemoteRoot),
                     "Addressables Remote.BuildPath",
                     1 + AddressablesGeneratedChildPathReserve);
@@ -1919,7 +2251,7 @@ namespace Build.Pipeline.Editor
                 settingsType);
             if (!IsUndefinedProfileValue(remoteCatalogBuildPath))
             {
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     NormalizeSourceRoot(projectRoot, remoteCatalogBuildPath),
                     "Addressables RemoteCatalogBuildPath",
                     1 + AddressablesGeneratedChildPathReserve);
@@ -1927,6 +2259,7 @@ namespace Build.Pipeline.Editor
         }
 
         internal static string ValidatePublicationConfiguration(
+            string invocationId,
             AddressablesBuildConfig config,
             string projectRoot)
         {
@@ -1942,9 +2275,9 @@ namespace Build.Pipeline.Editor
                     return null;
                 }
 
-                string outputDirectory = string.IsNullOrWhiteSpace(config.buildOutputDirectory)
-                    ? AddressablesBuildConfig.DefaultBuildOutputDirectory
-                    : config.buildOutputDirectory;
+                string outputDirectory = ResolveConfiguredPublicationDirectory(
+                    invocationId,
+                    config.buildOutputDirectory);
                 string publicationRoot = BuildPathPolicy.ResolveBuildRoot(projectRoot, outputDirectory);
                 if (config.additionalPublicationRoots == null)
                 {
@@ -2251,11 +2584,11 @@ namespace Build.Pipeline.Editor
                 }
 
                 const string versionFileName = "AddressablesVersion.json";
-                string versionFilePath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                string versionFilePath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(buildPath, versionFileName),
                     "Addressables version artifact");
                 string directory = Path.GetDirectoryName(versionFilePath);
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     directory,
                     "Addressables version artifact directory");
                 if (!Directory.Exists(directory))
@@ -2263,7 +2596,12 @@ namespace Build.Pipeline.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                WriteVersionArtifactDurably(versionFilePath, contentVersion);
+                string projectRoot = Path.GetFullPath(
+                    Path.Combine(Application.dataPath, ".."));
+                WriteVersionArtifactDurably(
+                    projectRoot,
+                    versionFilePath,
+                    contentVersion);
 
                 if (!File.Exists(versionFilePath))
                 {
@@ -2582,13 +2920,15 @@ namespace Build.Pipeline.Editor
             public string Kind { get; }
         }
 
-        private sealed class PendingAddressablesPublication
+        private sealed class PendingAddressablesPublication : IBuildDeferredPublication
         {
             private readonly AddressablesPublicationTransaction transaction;
             private readonly string destinationDirectory;
             private readonly IReadOnlyList<PublicationFile> files;
             private readonly string requiredPublishedRelativePath;
-            private bool finalized;
+            private bool published;
+            private bool completed;
+            private bool disposed;
 
             public PendingAddressablesPublication(
                 AddressablesPublicationTransaction transaction,
@@ -2607,55 +2947,83 @@ namespace Build.Pipeline.Editor
                 this.requiredPublishedRelativePath = requiredPublishedRelativePath;
             }
 
-            public void Commit()
+            public string Id => transaction.PublicationId;
+            public string RecoveryStateRelativePath => transaction.StateRelativePath;
+
+            public void Publish()
             {
-                FinalizeTransaction(() =>
+                ThrowIfDisposed();
+                if (published)
                 {
-                    transaction.Commit(() =>
+                    throw new InvalidOperationException(
+                        "Addressables publication has already installed its stage.");
+                }
+
+                transaction.Publish(() =>
+                {
+                    ValidatePublishedFiles(
+                        destinationDirectory,
+                        files,
+                        Path.Combine(
+                            destinationDirectory,
+                            AddressablesPublicationOwnership.ArtifactManifestFileName));
+                    string requiredPath = Path.GetFullPath(Path.Combine(
+                        destinationDirectory,
+                        requiredPublishedRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                    if (!BuildPathPolicy.IsStrictDescendant(destinationDirectory, requiredPath)
+                        || !File.Exists(requiredPath))
                     {
-                        ValidatePublishedFiles(
-                            destinationDirectory,
-                            files,
-                            Path.Combine(
-                                destinationDirectory,
-                                AddressablesPublicationOwnership.ArtifactManifestFileName));
-                        string requiredPath = Path.GetFullPath(Path.Combine(
-                            destinationDirectory,
-                            requiredPublishedRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-                        if (!BuildPathPolicy.IsStrictDescendant(destinationDirectory, requiredPath)
-                            || !File.Exists(requiredPath))
-                        {
-                            throw new FileNotFoundException(
-                                "Required Addressables publication artifact is missing.",
-                                requiredPath);
-                        }
-                    });
-                    Debug.Log($"{LogTag} Published and verified Addressables artifacts.");
+                        throw new FileNotFoundException(
+                            "Required Addressables publication artifact is missing.",
+                            requiredPath);
+                    }
                 });
+                published = true;
+            }
+
+            public void Complete()
+            {
+                ThrowIfDisposed();
+                if (!published)
+                {
+                    throw new InvalidOperationException(
+                        "Addressables publication must install its stage before completion.");
+                }
+
+                transaction.Complete();
+                completed = true;
+                Debug.Log($"{LogTag} Published and verified Addressables artifacts.");
             }
 
             public void Abort()
             {
-                FinalizeTransaction(transaction.Abort);
+                ThrowIfDisposed();
+                if (!completed)
+                {
+                    transaction.Abort();
+                    completed = true;
+                }
             }
 
-            private void FinalizeTransaction(Action operation)
+            public void Dispose()
             {
-                if (finalized)
+                if (disposed)
                 {
-                    throw new InvalidOperationException(
-                        "Addressables publication transaction has already been finalized.");
+                    return;
                 }
 
-                finalized = true;
+                disposed = true;
                 Exception operationFailure = null;
-                try
+                if (!completed)
                 {
-                    operation();
-                }
-                catch (Exception exception)
-                {
-                    operationFailure = exception;
+                    try
+                    {
+                        transaction.Abort();
+                    }
+                    catch (Exception exception)
+                    {
+                        operationFailure = exception;
+                    }
                 }
 
                 Exception disposeFailure = null;
@@ -2686,24 +3054,647 @@ namespace Build.Pipeline.Editor
                     throw disposeFailure;
                 }
             }
+
+            private void ThrowIfDisposed()
+            {
+                if (disposed)
+                {
+                    throw new ObjectDisposedException(
+                        nameof(PendingAddressablesPublication));
+                }
+            }
         }
 
-        [Serializable]
-        private sealed class AddressablesArtifactManifest
+        private static object BuildContentUpdateWithSettings(
+            Type settingsType,
+            object settings,
+            string baselineSnapshotPath)
         {
-            public int schemaVersion;
-            public string buildTarget;
-            public string contentVersion;
-            public AddressablesArtifactManifestEntry[] files;
+            Type contentUpdateType = ReflectionCache.GetType(ContentUpdateScriptTypeName);
+            MethodInfo buildMethod =
+                AddressablesVersionBuildProcessor.FindContentUpdateBuildMethod(
+                    contentUpdateType,
+                    settingsType);
+            if (buildMethod == null)
+            {
+                throw new MissingMethodException(
+                    contentUpdateType?.FullName ?? ContentUpdateScriptTypeName,
+                    "BuildContentUpdate(AddressableAssetSettings, string)");
+            }
+
+            try
+            {
+                return buildMethod.Invoke(
+                    null,
+                    new[] { settings, baselineSnapshotPath });
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException != null)
+            {
+                throw new InvalidOperationException(
+                    "Addressables ContentUpdateScript.BuildContentUpdate threw an exception.",
+                    exception.InnerException);
+            }
         }
 
-        [Serializable]
-        private sealed class AddressablesArtifactManifestEntry
+        private static ActiveProfileIdentity GetActiveProfileIdentity(
+            object settings,
+            Type settingsType)
         {
-            public string kind;
-            public string path;
-            public long size;
-            public string sha256;
+            FieldInfo activeProfileField = ReflectionCache.GetField(
+                settingsType,
+                "m_ActiveProfileId",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            string profileId = activeProfileField?.GetValue(settings)?.ToString();
+            if (string.IsNullOrWhiteSpace(profileId))
+            {
+                throw new MissingMemberException(
+                    settingsType.FullName,
+                    "saved m_ActiveProfileId");
+            }
+
+            PropertyInfo profileSettingsProperty = ReflectionCache.GetProperty(
+                settingsType,
+                "profileSettings",
+                BindingFlags.Public | BindingFlags.Instance);
+            object profileSettings = profileSettingsProperty?.GetValue(settings);
+            MethodInfo getProfileNameMethod = profileSettings == null
+                ? null
+                : ReflectionCache.GetMethod(
+                    profileSettings.GetType(),
+                    "GetProfileName",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    new[] { typeof(string) });
+            if (getProfileNameMethod == null)
+            {
+                throw new MissingMethodException(
+                    profileSettings?.GetType().FullName ?? "Addressables profile settings",
+                    "GetProfileName(string)");
+            }
+
+            string profileName;
+            try
+            {
+                profileName = getProfileNameMethod.Invoke(
+                    profileSettings,
+                    new object[] { profileId })?.ToString();
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException != null)
+            {
+                throw new InvalidOperationException(
+                    "Failed to read the saved Addressables active profile name.",
+                    exception.InnerException);
+            }
+
+            if (string.IsNullOrWhiteSpace(profileName))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables active profile '{profileId}' does not resolve to a saved profile name.");
+            }
+
+            return new ActiveProfileIdentity(profileId, profileName);
+        }
+
+        private static ContentUpdateBaseline PrepareContentUpdateBaseline(
+            string projectRoot,
+            string invocationId,
+            BuildTarget buildTarget,
+            object settings,
+            Type settingsType,
+            ActiveProfileIdentity profileIdentity,
+            AddressablesBuildConfig config)
+        {
+            string baselinePath = ResolveContentUpdateBaselinePath(config, projectRoot);
+            ContentStateIdentity state = LoadAndValidateContentUpdateBaseline(
+                projectRoot,
+                baselinePath,
+                buildTarget,
+                settings,
+                settingsType,
+                profileIdentity);
+
+            string scratchRoot = Path.GetFullPath(Path.Combine(
+                projectRoot,
+                "Temp",
+                "BuildPipeline",
+                "Addressables",
+                "ContentUpdate",
+                invocationId));
+            string snapshotDirectory = Path.Combine(
+                scratchRoot,
+                Guid.NewGuid().ToString("N"));
+            string snapshotPath = Path.Combine(
+                snapshotDirectory,
+                "addressables_content_state.bin");
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
+                snapshotDirectory,
+                "Addressables Content Update baseline snapshot directory");
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
+                snapshotPath,
+                "Addressables Content Update baseline snapshot");
+            AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                projectRoot,
+                scratchRoot);
+            Directory.CreateDirectory(snapshotDirectory);
+            AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                projectRoot,
+                snapshotDirectory);
+
+            try
+            {
+                string copiedHash = CopyFileWithStableHash(
+                    state.Path,
+                    snapshotPath,
+                    out long copiedSize);
+                if (copiedSize != state.Size
+                    || !string.Equals(
+                        copiedHash,
+                        state.Sha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException(
+                        "Addressables Content Update baseline changed after preflight.");
+                }
+
+                return new ContentUpdateBaseline(
+                    snapshotDirectory,
+                    snapshotPath,
+                    state);
+            }
+            catch
+            {
+                DeleteContentUpdateSnapshot(snapshotDirectory, snapshotPath);
+                throw;
+            }
+        }
+
+        private static ContentStateIdentity LoadAndValidateContentUpdateBaseline(
+            string projectRoot,
+            string baselinePath,
+            BuildTarget buildTarget,
+            object settings,
+            Type settingsType,
+            ActiveProfileIdentity profileIdentity)
+        {
+            ContentStateIdentity state = LoadContentStateIdentity(
+                projectRoot,
+                baselinePath,
+                requireRemoteCatalogLoadPath: true);
+            string remoteCatalogLoadPath = GetRemoteCatalogLoadPath(
+                settings,
+                settingsType);
+            ValidateContentUpdateArtifactManifest(
+                projectRoot,
+                baselinePath,
+                buildTarget,
+                profileIdentity.Id,
+                remoteCatalogLoadPath,
+                state.PlayerVersion,
+                state.EditorVersion,
+                state.RemoteCatalogLoadPath,
+                state.Size,
+                state.Sha256);
+            return state;
+        }
+
+        private static ContentStateIdentity GetRequiredContentStateIdentity(
+            object buildResult,
+            string projectRoot,
+            BuildIncrementality incrementality,
+            string requestedContentVersion,
+            ContentUpdateBaseline baseline)
+        {
+            string path = GetOptionalBuildResultPath(
+                buildResult,
+                projectRoot,
+                "ContentStateFilePath");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                if (incrementality == BuildIncrementality.Incremental)
+                {
+                    throw new InvalidOperationException(
+                        "Addressables Content Update did not return ContentStateFilePath.");
+                }
+
+                return null;
+            }
+
+            ContentStateIdentity state = LoadContentStateIdentity(
+                projectRoot,
+                path,
+                requireRemoteCatalogLoadPath:
+                    incrementality == BuildIncrementality.Incremental);
+            string expectedPlayerVersion = incrementality == BuildIncrementality.Incremental
+                ? baseline?.State.PlayerVersion
+                : requestedContentVersion;
+            if (!string.Equals(
+                    state.PlayerVersion,
+                    expectedPlayerVersion,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables content state player version '{state.PlayerVersion}' does not match expected '{expectedPlayerVersion}'.");
+            }
+
+            return state;
+        }
+
+        private static ContentStateIdentity LoadContentStateIdentity(
+            string projectRoot,
+            string contentStatePath,
+            bool requireRemoteCatalogLoadPath)
+        {
+            string safePath = BuildPathPolicy.EnsureSafeReadableFile(
+                projectRoot,
+                contentStatePath);
+            FileInfo before = new FileInfo(safePath);
+            if (before.Length <= 0 || before.Length > MaximumContentStateBytes)
+            {
+                throw new InvalidDataException(
+                    $"Addressables content state size is outside the supported 1..{MaximumContentStateBytes} byte range: '{safePath}'.");
+            }
+
+            long length = before.Length;
+            DateTime lastWriteTimeUtc = before.LastWriteTimeUtc;
+            string hash = ComputeSha256(safePath);
+            Type contentUpdateType = ReflectionCache.GetType(ContentUpdateScriptTypeName);
+            MethodInfo loadMethod =
+                AddressablesVersionBuildProcessor.FindContentStateLoadMethod(
+                    contentUpdateType);
+            if (loadMethod == null)
+            {
+                throw new MissingMethodException(
+                    contentUpdateType?.FullName ?? ContentUpdateScriptTypeName,
+                    "LoadContentState(string)");
+            }
+
+            object state;
+            try
+            {
+                state = loadMethod.Invoke(null, new object[] { safePath });
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException != null)
+            {
+                throw new InvalidDataException(
+                    "Addressables failed to deserialize the official content state.",
+                    exception.InnerException);
+            }
+
+            if (state == null)
+            {
+                throw new InvalidDataException(
+                    "Addressables returned null while loading the official content state.");
+            }
+
+            FileInfo after = new FileInfo(safePath);
+            if (after.Length != length
+                || after.LastWriteTimeUtc != lastWriteTimeUtc
+                || !string.Equals(
+                    ComputeSha256(safePath),
+                    hash,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException(
+                    "Addressables content state changed while it was being validated.");
+            }
+
+            Type stateType = state.GetType();
+            string playerVersion = GetRequiredStringField(
+                state,
+                stateType,
+                "playerVersion");
+            string editorVersion = GetRequiredStringField(
+                state,
+                stateType,
+                "editorVersion");
+            string remoteCatalogLoadPath = GetStringField(
+                state,
+                stateType,
+                "remoteCatalogLoadPath",
+                requireRemoteCatalogLoadPath);
+            return new ContentStateIdentity(
+                safePath,
+                length,
+                hash,
+                playerVersion,
+                editorVersion,
+                remoteCatalogLoadPath);
+        }
+
+        private static string GetRequiredStringField(
+            object owner,
+            Type ownerType,
+            string fieldName)
+        {
+            return GetStringField(owner, ownerType, fieldName, required: true);
+        }
+
+        private static string GetStringField(
+            object owner,
+            Type ownerType,
+            string fieldName,
+            bool required)
+        {
+            FieldInfo field = ReflectionCache.GetField(
+                ownerType,
+                fieldName,
+                BindingFlags.Public | BindingFlags.Instance);
+            string value = field?.GetValue(owner)?.ToString();
+            if (required && string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidDataException(
+                    $"Addressables content state field '{fieldName}' is missing or empty.");
+            }
+
+            return value ?? string.Empty;
+        }
+
+        internal static void ValidateContentUpdateArtifactManifest(
+            string projectRoot,
+            string baselinePath,
+            BuildTarget buildTarget,
+            string activeProfileId,
+            string currentRemoteCatalogLoadPath,
+            string statePlayerVersion,
+            string stateEditorVersion,
+            string stateRemoteCatalogLoadPath,
+            long stateSize,
+            string stateSha256)
+        {
+            string manifestPath = FindContentUpdateArtifactManifest(
+                projectRoot,
+                baselinePath);
+            string json = ReadBoundedUtf8Text(
+                manifestPath,
+                MaximumArtifactManifestBytes,
+                "Addressables artifact manifest");
+            AddressablesArtifactManifest manifest =
+                AddressablesArtifactManifestFormat.Deserialize(
+                    json,
+                    $"Addressables artifact manifest '{manifestPath}'");
+
+            if (!string.Equals(
+                    manifest.buildTarget,
+                    buildTarget.ToString(),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables baseline target '{manifest.buildTarget}' does not match '{buildTarget}'.");
+            }
+
+            if (!string.Equals(
+                    manifest.activeProfileId,
+                    activeProfileId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables baseline profile '{manifest.activeProfileId}' does not match active profile '{activeProfileId}'.");
+            }
+
+            if (!string.Equals(
+                    manifest.unityVersion,
+                    Application.unityVersion,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    stateEditorVersion,
+                    Application.unityVersion,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables baseline Unity version is incompatible. Manifest='{manifest.unityVersion}', state='{stateEditorVersion}', current='{Application.unityVersion}'.");
+            }
+
+            if (!string.Equals(
+                    manifest.addressablesPlayerVersion,
+                    statePlayerVersion,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Addressables baseline player version does not match its artifact manifest.");
+            }
+
+            if (string.IsNullOrWhiteSpace(currentRemoteCatalogLoadPath)
+                || !string.Equals(
+                    manifest.remoteCatalogLoadPath,
+                    stateRemoteCatalogLoadPath,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    stateRemoteCatalogLoadPath,
+                    currentRemoteCatalogLoadPath,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Addressables baseline remote catalog load path does not match the active profile.");
+            }
+
+            string manifestRoot = Path.GetDirectoryName(manifestPath);
+            AddressablesArtifactManifestEntry match = null;
+            if (manifest.files != null)
+            {
+                foreach (AddressablesArtifactManifestEntry entry in manifest.files)
+                {
+                    if (entry == null || string.IsNullOrWhiteSpace(entry.path))
+                    {
+                        throw new InvalidDataException(
+                            "Addressables artifact manifest contains an empty file entry.");
+                    }
+
+                    BuildPathPolicy.ValidatePortableProjectRelativePath(
+                        entry.path,
+                        "Addressables artifact manifest path");
+                    string candidate = Path.GetFullPath(Path.Combine(
+                        manifestRoot,
+                        entry.path.Replace('/', Path.DirectorySeparatorChar)));
+                    if (!BuildPathPolicy.IsStrictDescendant(manifestRoot, candidate))
+                    {
+                        throw new InvalidDataException(
+                            $"Addressables artifact manifest path escaped its publication root: '{entry.path}'.");
+                    }
+
+                    if (!PathsEqual(candidate, baselinePath))
+                    {
+                        continue;
+                    }
+
+                    if (match != null)
+                    {
+                        throw new InvalidDataException(
+                            "Addressables artifact manifest contains duplicate baseline entries.");
+                    }
+
+                    match = entry;
+                }
+            }
+
+            if (match == null
+                || !string.Equals(match.kind, "BuildMetadata", StringComparison.Ordinal)
+                || match.size != stateSize
+                || !string.Equals(
+                    match.sha256,
+                    stateSha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "Addressables baseline file identity is not proven by its artifact manifest.");
+            }
+        }
+
+        private static string FindContentUpdateArtifactManifest(
+            string projectRoot,
+            string baselinePath)
+        {
+            string root = Path.GetFullPath(projectRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string current = Path.GetDirectoryName(Path.GetFullPath(baselinePath));
+            for (int depth = 0;
+                 depth < MaximumArtifactManifestSearchDepth
+                 && !string.IsNullOrEmpty(current)
+                 && BuildPathPolicy.IsStrictDescendant(root, current);
+                 depth++)
+            {
+                string candidate = Path.Combine(
+                    current,
+                    AddressablesArtifactManifestFormat.FileName);
+                if (File.Exists(candidate))
+                {
+                    return BuildPathPolicy.EnsureSafeReadableFile(root, candidate);
+                }
+
+                current = Path.GetDirectoryName(current);
+            }
+
+            throw new FileNotFoundException(
+                "The official content-state baseline must remain inside a pipeline publication with a sibling AddressablesArtifacts.json manifest.",
+                baselinePath);
+        }
+
+        private static string ReadBoundedUtf8Text(
+            string path,
+            int maximumBytes,
+            string displayName)
+        {
+            FileInfo before = new FileInfo(path);
+            if (before.Length <= 0 || before.Length > maximumBytes)
+            {
+                throw new InvalidDataException(
+                    $"{displayName} must contain between 1 and {maximumBytes} bytes: '{path}'.");
+            }
+
+            byte[] bytes = File.ReadAllBytes(path);
+            FileInfo after = new FileInfo(path);
+            if (bytes.LongLength != before.Length
+                || after.Length != before.Length
+                || after.LastWriteTimeUtc != before.LastWriteTimeUtc)
+            {
+                throw new IOException(
+                    $"{displayName} changed while it was being read: '{path}'.");
+            }
+
+            return new UTF8Encoding(false, true).GetString(bytes);
+        }
+
+        private static void DeleteContentUpdateSnapshot(
+            string snapshotDirectory,
+            string snapshotPath)
+        {
+            if (File.Exists(snapshotPath))
+            {
+                FileAttributes attributes = File.GetAttributes(snapshotPath);
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Addressables baseline snapshot is not a regular file: '{snapshotPath}'.");
+                }
+
+                File.Delete(snapshotPath);
+            }
+
+            if (!Directory.Exists(snapshotDirectory))
+            {
+                return;
+            }
+
+            using (IEnumerator<string> entries = Directory
+                       .EnumerateFileSystemEntries(snapshotDirectory)
+                       .GetEnumerator())
+            {
+                if (entries.MoveNext())
+                {
+                    throw new IOException(
+                        $"Addressables baseline snapshot directory contains an unexpected entry: '{entries.Current}'.");
+                }
+            }
+
+            Directory.Delete(snapshotDirectory);
+        }
+
+        private sealed class ActiveProfileIdentity
+        {
+            public ActiveProfileIdentity(string id, string name)
+            {
+                Id = id ?? throw new ArgumentNullException(nameof(id));
+                Name = name ?? throw new ArgumentNullException(nameof(name));
+            }
+
+            public string Id { get; }
+            public string Name { get; }
+        }
+
+        private sealed class ContentStateIdentity
+        {
+            public ContentStateIdentity(
+                string path,
+                long size,
+                string sha256,
+                string playerVersion,
+                string editorVersion,
+                string remoteCatalogLoadPath)
+            {
+                Path = path ?? throw new ArgumentNullException(nameof(path));
+                Size = size;
+                Sha256 = sha256 ?? throw new ArgumentNullException(nameof(sha256));
+                PlayerVersion = playerVersion ?? throw new ArgumentNullException(nameof(playerVersion));
+                EditorVersion = editorVersion ?? throw new ArgumentNullException(nameof(editorVersion));
+                RemoteCatalogLoadPath = remoteCatalogLoadPath ?? string.Empty;
+            }
+
+            public string Path { get; }
+            public long Size { get; }
+            public string Sha256 { get; }
+            public string PlayerVersion { get; }
+            public string EditorVersion { get; }
+            public string RemoteCatalogLoadPath { get; }
+        }
+
+        private sealed class ContentUpdateBaseline : IDisposable
+        {
+            private readonly string snapshotDirectory;
+            private bool disposed;
+
+            public ContentUpdateBaseline(
+                string snapshotDirectory,
+                string snapshotPath,
+                ContentStateIdentity state)
+            {
+                this.snapshotDirectory = snapshotDirectory
+                    ?? throw new ArgumentNullException(nameof(snapshotDirectory));
+                SnapshotPath = snapshotPath
+                    ?? throw new ArgumentNullException(nameof(snapshotPath));
+                State = state ?? throw new ArgumentNullException(nameof(state));
+            }
+
+            public string SnapshotPath { get; }
+            public ContentStateIdentity State { get; }
+
+            public void Dispose()
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                DeleteContentUpdateSnapshot(snapshotDirectory, SnapshotPath);
+                disposed = true;
+            }
         }
 
         [Serializable]

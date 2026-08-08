@@ -11,6 +11,33 @@ namespace Build.Pipeline.Editor
     {
         public const int MaximumApplicationIdentifierCharacters = 255;
         public const int MaximumApplicationVersionCharacters = 64;
+        public const int MaximumBuildIdentifierCharacters = 64;
+
+        public static void ValidateBuildIdentifier(
+            string value,
+            string displayName)
+        {
+            ValidatePlainText(
+                value,
+                displayName,
+                MaximumBuildIdentifierCharacters);
+
+            for (int index = 0; index < value.Length; index++)
+            {
+                char character = value[index];
+                bool isLowerAsciiLetter = character >= 'a' && character <= 'z';
+                bool isAsciiDigit = character >= '0' && character <= '9';
+                bool isSeparator = index > 0
+                    && (character == '-' || character == '_' || character == '.');
+                if (!isLowerAsciiLetter && !isAsciiDigit && !isSeparator)
+                {
+                    throw new ArgumentException(
+                        $"{displayName} must use lowercase ASCII letters, digits, '.', '_' or '-'; " +
+                        "the first character must be a letter or digit.",
+                        nameof(value));
+                }
+            }
+        }
 
         public static void ValidatePlainText(
             string value,

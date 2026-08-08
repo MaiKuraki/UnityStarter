@@ -236,7 +236,13 @@ GameplayTagManager.InitializeIfNeeded();
 
 ### Player Build Data
 
-Before a Player build, the Editor writes all definitions (except `None`) to `Assets/Resources/GameplayTags.bytes`:
+Before a Player build, the Editor publishes all definitions (except `None`) to the isolated build-only asset path:
+
+```text
+Assets/Generated/CycloneGames.GameplayTags/Resources/CycloneGames.GameplayTags/GameplayTags.bytes
+```
+
+The Runtime adapter loads it with `Resources.Load<TextAsset>("CycloneGames.GameplayTags/GameplayTags")`. The binary format is:
 
 ```text
 4 bytes ASCII signature "CGTG"
@@ -246,6 +252,31 @@ uint64 contentHash
 ```
 
 Runtime validates the signature, strict UTF-8, size, count, name, flag, duplicate, trailing-data, and content hash before registration. Missing or corrupted data fails initialization rather than starting silently.
+
+The generated asset is controlled by a write-ahead transaction. Before changing `Assets`, the Editor writes every planned file and directory effect, its absent pre-state, expected SHA-256, size budget, and generated Unity GUID to:
+
+```text
+.buildpipeline/transactions/gameplay-tags/active.json
+```
+
+Normal build preprocessing never recovers pending state implicitly. A pending journal, journal candidate, scratch directory, or unknown state entry stops the build before new output is created. Postprocessing validates every generated file and scans every transaction-created directory for unknown content before deleting anything; any cleanup failure fails the build and retains the journal and evidence.
+
+Recovery is an explicit operation:
+
+```csharp
+BuildTags.Recover(projectRoot);
+```
+
+The public static facade belongs to the GameplayTags Editor assembly and has no dependency on the project Build module, so a CI/build orchestrator may invoke it through reflection. Recovery accepts only the fixed GameplayTags path set, rejects traversal and reparse points, applies bounded reads, verifies exact hashes, and never recursively deletes directories. Unknown or modified files are preserved and require manual reconciliation.
+
+Persistence contract:
+
+| State | Owner | Version control | Lifetime and safe cleanup |
+| --- | --- | --- | --- |
+| `.buildpipeline/transactions/gameplay-tags/active.json` | GameplayTags build asset transaction | Exclude from Git | Exists from preprocess through successful postprocess; remove only through `BuildTags.Recover` |
+| `.buildpipeline/transactions/gameplay-tags/active.json.new` | Atomic journal writer | Exclude from Git | May remain after interruption; explicit recovery validates and reconciles it |
+| `.buildpipeline/transactions/gameplay-tags/scratch/` | Transaction staging | Exclude from Git | Contains only journal-named staging files; explicit recovery rejects unknown entries |
+| `.buildpipeline/transactions/gameplay-tags/build.lock` | Cross-process exclusion | Exclude from Git | Empty, rebuildable coordination file; it does not contain build facts |
 
 ## Advanced Topics
 
@@ -369,7 +400,8 @@ Core is managed C# without UnityEngine, native plugins, or runtime reflection di
 | Tag not found after `RequestTag` | Registry not initialized or tag not registered | Call `InitializeIfNeeded()` before requesting; verify the tag exists in source definitions |
 | Container operations throw on index mismatch | Runtime index epoch changed after reload | Capture a fresh container or `Clear()` after a non-preserving reload |
 | Query always returns false after graph change | Compiled cache stale | Call `InvalidateCompiledCache()` after modifying the expression graph |
-| Player build starts with empty tag registry | Build data missing or corrupted | Verify `Assets/Resources/GameplayTags.bytes` exists and passes content hash validation |
+| Player build starts with empty tag registry | Build data missing or corrupted | Verify the isolated generated `GameplayTags.bytes` asset was included and passes content hash validation |
+| Player build refuses to start because GameplayTags recovery is required | A previous build was interrupted or cleanup evidence is ambiguous | Inspect `.buildpipeline/transactions/gameplay-tags/`, then run the build workspace recovery command or `BuildTags.Recover(projectRoot)`; do not delete modified/unknown files blindly |
 | JSON file edits silently ignored | External edit conflict detected | Check for `.tmp`/`.bak` recovery files in `ProjectSettings/GameplayTags/` |
 | Count callback not firing | Increment from 1 to 2 does not trigger `NewOrRemoved` | `NewOrRemoved` fires only on 0↔1 transitions; use `AnyCountChange` for all changes |
 

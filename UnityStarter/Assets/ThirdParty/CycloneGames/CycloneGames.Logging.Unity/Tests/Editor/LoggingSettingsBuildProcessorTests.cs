@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
 using CycloneGames.Logging.Pipeline;
 using CycloneGames.Logging.Unity.Editor;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEditor.Build;
 using UnityEngine;
 
@@ -12,10 +15,24 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
     public sealed class LoggingSettingsBuildProcessorTests
     {
         private readonly List<LoggingSettings> _settings = new List<LoggingSettings>();
+        private string _projectRoot;
+
+        [SetUp]
+        public void SetUp()
+        {
+            _projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests = null;
+            LoggingSettingsBuildOverrideTransaction.RecoveryCheckpointForTests = null;
+            LoggingSettingsBuildRecovery.Recover(_projectRoot);
+        }
 
         [TearDown]
         public void TearDown()
         {
+            LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests = null;
+            LoggingSettingsBuildOverrideTransaction.RecoveryCheckpointForTests = null;
+            LoggingSettingsBuildRecovery.Recover(_projectRoot);
+
             for (int i = 0; i < _settings.Count; i++)
             {
                 if (_settings[i] != null)
@@ -28,94 +45,399 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
         }
 
         [Test]
-        public void MarkerValidation_AcceptsCompleteMatchingIdentity()
+        public void ProvenanceValidation_AcceptsMatchingIdentityAndPayload()
         {
-            const string guid = "0123456789abcdef0123456789abcdef";
-            string projectIdentity = LoggingSettingsBuildProcessor.ComputeProjectIdentityForTests(Application.dataPath);
-            string json = CreateMarkerJson(projectIdentity, guid);
+            LoggingSettings settings = CreateSettings();
+            string transactionId = System.Guid.NewGuid().ToString("N");
+            string projectToken = System.Guid.NewGuid().ToString("N");
+            string payloadHash = LoggingSettingsBuildOverrideTransaction.ComputePayloadHashForTests(settings);
+            settings.SetBuildOverrideProvenance(transactionId, projectToken, payloadHash);
 
-            bool valid = LoggingSettingsBuildProcessor.ValidateMarkerForTests(json, projectIdentity, guid, out string error);
+            bool valid = LoggingSettingsBuildOverrideTransaction.ValidateProvenanceForTests(
+                settings,
+                transactionId,
+                projectToken,
+                payloadHash,
+                out string error);
 
             Assert.IsTrue(valid, error);
         }
 
         [Test]
-        public void MarkerValidation_RejectsProjectIdentityMismatch()
+        public void ProvenanceValidation_RejectsTransactionMismatch()
         {
-            const string guid = "0123456789abcdef0123456789abcdef";
-            string projectIdentity = LoggingSettingsBuildProcessor.ComputeProjectIdentityForTests(Application.dataPath);
-            string json = CreateMarkerJson("different-project", guid);
+            LoggingSettings settings = CreateSettings();
+            string transactionId = System.Guid.NewGuid().ToString("N");
+            string projectToken = System.Guid.NewGuid().ToString("N");
+            string payloadHash = LoggingSettingsBuildOverrideTransaction.ComputePayloadHashForTests(settings);
+            settings.SetBuildOverrideProvenance(transactionId, projectToken, payloadHash);
 
-            bool valid = LoggingSettingsBuildProcessor.ValidateMarkerForTests(json, projectIdentity, guid, out string error);
-
-            Assert.IsFalse(valid);
-            StringAssert.Contains("project identity", error);
-        }
-
-        [Test]
-        public void MarkerValidation_RejectsAssetGuidMismatch()
-        {
-            const string markerGuid = "0123456789abcdef0123456789abcdef";
-            const string actualGuid = "fedcba9876543210fedcba9876543210";
-            string projectIdentity = LoggingSettingsBuildProcessor.ComputeProjectIdentityForTests(Application.dataPath);
-            string json = CreateMarkerJson(projectIdentity, markerGuid);
-
-            bool valid = LoggingSettingsBuildProcessor.ValidateMarkerForTests(json, projectIdentity, actualGuid, out string error);
-
-            Assert.IsFalse(valid);
-            StringAssert.Contains("GUID", error);
-        }
-
-        [Test]
-        public void PreparedMarkerCleanup_AcceptsMatchingMarkerWhenGeneratedAssetIsMissing()
-        {
-            string projectIdentity = LoggingSettingsBuildProcessor.ComputeProjectIdentityForTests(Application.dataPath);
-            string json = CreateMarkerJson(projectIdentity, string.Empty, "Prepared");
-
-            bool canCleanup = LoggingSettingsBuildProcessor.CanCleanupPreparedMarkerForTests(
-                json,
-                projectIdentity,
-                generatedAssetExists: false,
+            bool valid = LoggingSettingsBuildOverrideTransaction.ValidateProvenanceForTests(
+                settings,
+                System.Guid.NewGuid().ToString("N"),
+                projectToken,
+                payloadHash,
                 out string error);
 
-            Assert.IsTrue(canCleanup, error);
+            Assert.IsFalse(valid);
+            StringAssert.Contains("identity", error);
         }
 
         [Test]
-        public void PreparedMarkerCleanup_RejectsCleanupWhenGeneratedAssetStillExists()
+        public void ProvenanceValidation_RejectsPayloadMutation()
         {
-            string projectIdentity = LoggingSettingsBuildProcessor.ComputeProjectIdentityForTests(Application.dataPath);
-            string json = CreateMarkerJson(projectIdentity, string.Empty, "Prepared");
+            LoggingSettings settings = CreateSettings();
+            string transactionId = System.Guid.NewGuid().ToString("N");
+            string projectToken = System.Guid.NewGuid().ToString("N");
+            string payloadHash = LoggingSettingsBuildOverrideTransaction.ComputePayloadHashForTests(settings);
+            settings.SetBuildOverrideProvenance(transactionId, projectToken, payloadHash);
+            settings.minimumSeverity = LogSeverity.Error;
 
-            bool canCleanup = LoggingSettingsBuildProcessor.CanCleanupPreparedMarkerForTests(
-                json,
-                projectIdentity,
-                generatedAssetExists: true,
+            bool valid = LoggingSettingsBuildOverrideTransaction.ValidateProvenanceForTests(
+                settings,
+                transactionId,
+                projectToken,
+                payloadHash,
                 out string error);
 
-            Assert.IsFalse(canCleanup);
-            StringAssert.Contains("still exists", error);
+            Assert.IsFalse(valid);
+            StringAssert.Contains("payload hash", error);
         }
 
         [Test]
-        public void MarkerRead_RejectsOversizedInputBeforeJsonParsing()
+        public void CompletedTransaction_RemovesGeneratedAssetAndRecoveryState()
+        {
+            LoggingSettings settings = CreateSettings();
+            using (LoggingSettingsBuildOverrideTransaction transaction =
+                   LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings))
+            {
+                Assert.That(
+                    AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                        LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                    Is.Not.Null);
+                transaction.Complete();
+            }
+
+            Assert.That(
+                AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                    LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                Is.Null);
+            Assert.That(Directory.Exists(GetTransactionDirectory()), Is.False);
+        }
+
+        [Test]
+        public void PendingTransaction_BlocksNormalBuildUntilExplicitRecovery()
+        {
+            LoggingSettings settings = CreateSettings();
+            LoggingSettingsBuildOverrideTransaction transaction =
+                LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings);
+            transaction.Dispose();
+
+            Assert.Throws<System.InvalidOperationException>(
+                () => LoggingSettingsBuildOverrideTransaction.ThrowIfPendingEvidence(_projectRoot));
+            Assert.Throws<BuildFailedException>(() => new LoggingSettingsBuildProcessor().OnPreprocessBuild(null));
+            Assert.That(
+                AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                    LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                Is.Not.Null,
+                "Normal preprocessing must not recover or delete pending state implicitly.");
+
+            LoggingSettingsBuildRecovery.Recover(_projectRoot);
+            Assert.DoesNotThrow(
+                () => LoggingSettingsBuildOverrideTransaction.ThrowIfPendingEvidence(_projectRoot));
+        }
+
+        [Test]
+        public void CleanupRefusesModifiedAssetAndRetainsRecoverableEvidence()
+        {
+            LoggingSettings settings = CreateSettings();
+            LoggingSettingsBuildOverrideTransaction transaction =
+                LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings);
+            string assetAbsolutePath = Path.Combine(
+                _projectRoot,
+                LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath
+                    .Replace('/', Path.DirectorySeparatorChar));
+            byte[] originalAssetBytes = File.ReadAllBytes(assetAbsolutePath);
+
+            LoggingSettings generated = AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath);
+            generated.minimumSeverity = LogSeverity.Fatal;
+            EditorUtility.SetDirty(generated);
+            AssetDatabase.SaveAssetIfDirty(generated);
+            AssetDatabase.ImportAsset(
+                LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+
+            Assert.Throws<System.InvalidOperationException>(() => transaction.Complete());
+            transaction.Dispose();
+            Assert.That(File.Exists(Path.Combine(GetTransactionDirectory(), "journal.json")), Is.True);
+            Assert.That(File.Exists(assetAbsolutePath), Is.True);
+
+            File.WriteAllBytes(assetAbsolutePath, originalAssetBytes);
+            AssetDatabase.ImportAsset(
+                LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            Assert.DoesNotThrow(() => LoggingSettingsBuildRecovery.Recover(_projectRoot));
+        }
+
+        [Test]
+        public void Recovery_UsesValidBackupWhenMainJournalIsInterrupted()
+        {
+            LoggingSettings settings = CreateSettings();
+            LoggingSettingsBuildOverrideTransaction transaction =
+                LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings);
+            transaction.Dispose();
+
+            string stateDirectory = GetTransactionDirectory();
+            string journalPath = Path.Combine(stateDirectory, "journal.json");
+            string backupPath = Path.Combine(stateDirectory, "journal.json.bak");
+            File.Copy(journalPath, backupPath);
+            File.WriteAllText(journalPath, "{interrupted", new UTF8Encoding(false));
+
+            Assert.DoesNotThrow(() => LoggingSettingsBuildRecovery.Recover(_projectRoot));
+            Assert.That(Directory.Exists(stateDirectory), Is.False);
+            Assert.That(
+                AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                    LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                Is.Null);
+        }
+
+        [Test]
+        public void Recovery_ClosesPreparedCreateAssetCrashWindowUsingEmbeddedProvenance()
+        {
+            LoggingSettings settings = CreateSettings();
+            LoggingSettingsBuildOverrideTransaction transaction =
+                LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings);
+            transaction.Dispose();
+
+            string journalPath = Path.Combine(GetTransactionDirectory(), "journal.json");
+            string journal = File.ReadAllText(journalPath);
+            journal = journal.Replace("\"phase\":\"Active\"", "\"phase\":\"Prepared\"");
+            journal = new Regex("\"assetGuid\":\"[0-9a-fA-F]{32}\"")
+                .Replace(journal, "\"assetGuid\":\"\"", 1);
+            journal = Regex.Replace(journal, "\"assetSha256\":\"[0-9a-fA-F]{64}\"", "\"assetSha256\":\"\"");
+            journal = Regex.Replace(journal, "\"assetBytes\":[0-9]+", "\"assetBytes\":0");
+            File.WriteAllText(journalPath, journal, new UTF8Encoding(false));
+
+            Assert.DoesNotThrow(() => LoggingSettingsBuildRecovery.Recover(_projectRoot));
+            Assert.That(Directory.Exists(GetTransactionDirectory()), Is.False);
+            Assert.That(
+                AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                    LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                Is.Null);
+        }
+
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.IntentPersisted)]
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.FolderCreated)]
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.AppliedPersisted)]
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.GuidResolved)]
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.FolderMoved)]
+        [TestCase((int)LoggingSettingsBuildFolderCheckpoint.GuidPersisted)]
+        public void FolderCreationInterruption_ExplicitRecoveryReconcilesEveryDurableStage(
+            int interruptionPointValue)
+        {
+            var interruptionPoint = (LoggingSettingsBuildFolderCheckpoint)interruptionPointValue;
+            LoggingSettings settings = CreateSettings();
+            string finalFolderAssetPath = null;
+            string stagingFolderAssetPath = null;
+            LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests =
+                (finalAssetPath, stagingAssetPath, checkpoint) =>
+                {
+                    if (finalFolderAssetPath != null || checkpoint != interruptionPoint)
+                    {
+                        return;
+                    }
+
+                    finalFolderAssetPath = finalAssetPath;
+                    stagingFolderAssetPath = stagingAssetPath;
+                    throw new InvalidOperationException("Simulated process interruption during folder creation.");
+                };
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings));
+            }
+            finally
+            {
+                LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests = null;
+            }
+
+            Assert.That(finalFolderAssetPath, Is.Not.Null);
+            Assert.That(stagingFolderAssetPath, Is.Not.Null);
+            Assert.That(File.Exists(Path.Combine(GetTransactionDirectory(), "journal.json")), Is.True);
+
+            string finalFolderAbsolutePath = Path.Combine(
+                _projectRoot,
+                finalFolderAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            string stagingFolderAbsolutePath = Path.Combine(
+                _projectRoot,
+                stagingFolderAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            Assert.DoesNotThrow(() => LoggingSettingsBuildRecovery.Recover(_projectRoot));
+            Assert.That(Directory.Exists(GetTransactionDirectory()), Is.False);
+            Assert.That(Directory.Exists(finalFolderAbsolutePath), Is.False);
+            Assert.That(File.Exists(finalFolderAbsolutePath + ".meta"), Is.False);
+            Assert.That(Directory.Exists(stagingFolderAbsolutePath), Is.False);
+            Assert.That(File.Exists(stagingFolderAbsolutePath + ".meta"), Is.False);
+            Assert.That(
+                AssetDatabase.LoadAssetAtPath<LoggingSettings>(
+                    LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath),
+                Is.Null);
+        }
+
+        [Test]
+        public void IntentOnlyRecovery_RefusesToAdoptAnUnrelatedFinalPathFolder()
+        {
+            string unrelatedFolderAssetPath = null;
+            LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests =
+                (finalAssetPath, stagingAssetPath, checkpoint) =>
+                {
+                    if (checkpoint == LoggingSettingsBuildFolderCheckpoint.IntentPersisted)
+                    {
+                        unrelatedFolderAssetPath = finalAssetPath;
+                        throw new InvalidOperationException("Simulated interruption before CreateFolder.");
+                    }
+                };
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, CreateSettings()));
+            }
+            finally
+            {
+                LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests = null;
+            }
+
+            Assert.That(unrelatedFolderAssetPath, Is.Not.Null);
+            Assert.That(AssetDatabase.IsValidFolder(unrelatedFolderAssetPath), Is.False);
+            int separatorIndex = unrelatedFolderAssetPath.LastIndexOf('/');
+            string unrelatedParentAssetPath = unrelatedFolderAssetPath.Substring(0, separatorIndex);
+            string unrelatedFolderName = unrelatedFolderAssetPath.Substring(separatorIndex + 1);
+            string unrelatedGuid = AssetDatabase.CreateFolder(
+                unrelatedParentAssetPath,
+                unrelatedFolderName);
+            Assert.That(unrelatedGuid, Has.Length.EqualTo(32));
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    LoggingSettingsBuildRecovery.Recover(_projectRoot));
+                Assert.That(AssetDatabase.IsValidFolder(unrelatedFolderAssetPath), Is.True);
+                Assert.That(Directory.Exists(GetTransactionDirectory()), Is.True);
+            }
+            finally
+            {
+                if (AssetDatabase.IsValidFolder(unrelatedFolderAssetPath))
+                {
+                    Assert.That(AssetDatabase.DeleteAsset(unrelatedFolderAssetPath), Is.True);
+                }
+
+                LoggingSettingsBuildRecovery.Recover(_projectRoot);
+            }
+        }
+
+        [TestCase((int)LoggingSettingsBuildRecoveryCheckpoint.RecoveryAnchorPersisted)]
+        [TestCase((int)LoggingSettingsBuildRecoveryCheckpoint.OriginalCandidatesPruned)]
+        public void RecoveryNormalizationInterruption_PreservesADurableFolderOwnershipCandidate(
+            int interruptionPointValue)
+        {
+            string finalFolderAssetPath = null;
+            string stagingFolderAssetPath = null;
+            LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests =
+                (finalAssetPath, stagingAssetPath, checkpoint) =>
+                {
+                    if (finalFolderAssetPath != null ||
+                        checkpoint != LoggingSettingsBuildFolderCheckpoint.FolderCreated)
+                    {
+                        return;
+                    }
+
+                    finalFolderAssetPath = finalAssetPath;
+                    stagingFolderAssetPath = stagingAssetPath;
+                    throw new InvalidOperationException("Simulated process interruption after CreateFolder.");
+                };
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, CreateSettings()));
+            }
+            finally
+            {
+                LoggingSettingsBuildOverrideTransaction.FolderCheckpointForTests = null;
+            }
+
+            var interruptionPoint =
+                (LoggingSettingsBuildRecoveryCheckpoint)interruptionPointValue;
+            LoggingSettingsBuildOverrideTransaction.RecoveryCheckpointForTests = checkpoint =>
+            {
+                if (checkpoint == interruptionPoint)
+                {
+                    throw new InvalidOperationException("Simulated process interruption during recovery normalization.");
+                }
+            };
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    LoggingSettingsBuildRecovery.Recover(_projectRoot));
+            }
+            finally
+            {
+                LoggingSettingsBuildOverrideTransaction.RecoveryCheckpointForTests = null;
+            }
+
+            string finalFolderAbsolutePath = Path.Combine(
+                _projectRoot,
+                finalFolderAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            string stagingFolderAbsolutePath = Path.Combine(
+                _projectRoot,
+                stagingFolderAssetPath.Replace('/', Path.DirectorySeparatorChar));
+            Assert.That(Directory.Exists(GetTransactionDirectory()), Is.True);
+            Assert.That(Directory.Exists(stagingFolderAbsolutePath), Is.True);
+
+            Assert.DoesNotThrow(() => LoggingSettingsBuildRecovery.Recover(_projectRoot));
+            Assert.That(Directory.Exists(GetTransactionDirectory()), Is.False);
+            Assert.That(Directory.Exists(finalFolderAbsolutePath), Is.False);
+            Assert.That(File.Exists(finalFolderAbsolutePath + ".meta"), Is.False);
+            Assert.That(Directory.Exists(stagingFolderAbsolutePath), Is.False);
+            Assert.That(File.Exists(stagingFolderAbsolutePath + ".meta"), Is.False);
+        }
+
+        [Test]
+        public void Journal_DoesNotPersistAbsoluteProjectPath()
+        {
+            LoggingSettings settings = CreateSettings();
+            LoggingSettingsBuildOverrideTransaction transaction =
+                LoggingSettingsBuildOverrideTransaction.Begin(_projectRoot, settings);
+            transaction.Dispose();
+
+            string journal = File.ReadAllText(Path.Combine(GetTransactionDirectory(), "journal.json"));
+
+            StringAssert.DoesNotContain(_projectRoot.Replace('\\', '/'), journal.Replace('\\', '/'));
+            StringAssert.Contains("projectToken", journal);
+        }
+
+        [Test]
+        public void JournalRead_RejectsOversizedInputBeforeJsonParsing()
         {
             string directory = Path.Combine(
                 Path.GetTempPath(),
-                "CycloneGames.Logging.BuildMarkerTests",
+                "CycloneGames.Logging.BuildJournalTests",
                 Guid.NewGuid().ToString("N"));
-            string markerPath = Path.Combine(directory, "oversized.marker.json");
+            string journalPath = Path.Combine(directory, "oversized.journal.json");
             Directory.CreateDirectory(directory);
             try
             {
                 File.WriteAllBytes(
-                    markerPath,
-                    new byte[LoggingSettingsBuildProcessor.MaximumMarkerFileBytes + 1]);
+                    journalPath,
+                    new byte[LoggingSettingsBuildOverrideTransaction.MaximumJournalFileBytes + 1]);
 
                 InvalidDataException exception = Assert.Throws<InvalidDataException>(
-                    () => LoggingSettingsBuildProcessor.ReadMarkerJsonForTests(markerPath));
+                    () => LoggingSettingsBuildOverrideTransaction.ReadBoundedJournalForTests(journalPath));
                 StringAssert.Contains("byte limit", exception.Message);
-                Assert.That(File.Exists(markerPath), Is.True, "Rejected markers must remain available for diagnosis.");
+                Assert.That(File.Exists(journalPath), Is.True, "Rejected journals must remain available for diagnosis.");
             }
             finally
             {
@@ -375,16 +697,12 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             return environment.TryGetValue(key, out string value) ? value : null;
         }
 
-        private static string CreateMarkerJson(string projectIdentity, string guid, string phase = "Active")
+        private string GetTransactionDirectory()
         {
-            return "{" +
-                   "\"schemaVersion\":1," +
-                   "\"transactionId\":\"0123456789abcdef0123456789abcdef\"," +
-                   "\"projectIdentity\":\"" + projectIdentity + "\"," +
-                   "\"generatedAssetGuid\":\"" + guid + "\"," +
-                   "\"assetPath\":\"" + LoggingSettingsBuildProcessor.GeneratedSettingsAssetPath + "\"," +
-                   "\"phase\":\"" + phase + "\"" +
-                   "}";
+            return Path.Combine(
+                _projectRoot,
+                LoggingSettingsBuildOverrideTransaction.StateDirectoryRelativePath
+                    .Replace('/', Path.DirectorySeparatorChar));
         }
     }
 }

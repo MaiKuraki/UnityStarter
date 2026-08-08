@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Editor;
@@ -36,6 +37,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Guid.NewGuid().ToString("N"));
          m_SettingsRoot = Path.Combine(m_TemporaryProjectRoot, "ProjectSettings", "GameplayTags");
          Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "ProjectSettings"));
+         Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "Assets"));
 
          m_PreviousSettingsDirectory = GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory;
          m_PreviousProjectSources = GameplayTagRuntimePlatform.EnumerateProjectTagSources;
@@ -305,52 +307,133 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       }
 
       [Test]
-      public void BuildTransaction_RejectsOrphanAssetMeta()
+      public void BuildTransaction_PublishesToIsolatedResourcesPathAndCleansExactly()
       {
-         Assert.Throws<BuildFailedException>(() =>
-            BuildTags.ValidateUnownedOutputState(false, true, true, true, false));
+         byte[] payload = { 1, 2, 3, 4 };
+         GameplayTagsBuildAssetTransaction transaction = GameplayTagsBuildAssetTransaction.Begin(
+            m_TemporaryProjectRoot,
+            payload,
+            synchronizeAssetDatabase: false);
+         try
+         {
+            string outputPath = ProjectPath(GameplayTagsBuildAssetTransaction.GeneratedAssetPath);
+            Assert.That(File.ReadAllBytes(outputPath), Is.EqualTo(payload));
+            Assert.That(File.Exists(outputPath + ".meta"), Is.True);
+            Assert.That(File.Exists(ProjectPath(
+               BuildTags.RecoveryStateDirectoryRelativePath + "/active.json")), Is.True);
+            string journal = File.ReadAllText(ProjectPath(
+               BuildTags.RecoveryStateDirectoryRelativePath + "/active.json"), new UTF8Encoding(false, true));
+            StringAssert.Contains("\"beforeExists\":false", journal);
+            StringAssert.Contains("\"expectedSha256\":", journal);
+            StringAssert.Contains(GameplayTagsBuildAssetTransaction.GeneratedAssetPath, journal);
+
+            transaction.Complete();
+
+            Assert.That(File.Exists(outputPath), Is.False);
+            Assert.That(File.Exists(outputPath + ".meta"), Is.False);
+            Assert.That(Directory.Exists(ProjectPath("Assets/Generated")), Is.False);
+            Assert.That(File.Exists(ProjectPath(
+               BuildTags.RecoveryStateDirectoryRelativePath + "/active.json")), Is.False);
+         }
+         finally
+         {
+            transaction.Dispose();
+         }
       }
 
       [Test]
-      public void BuildTransaction_RejectsOrphanDirectoryMeta()
+      public void BuildRecovery_PublicFacadeIsAvailableForDependencyFreeReflection()
       {
-         Assert.Throws<BuildFailedException>(() =>
-            BuildTags.ValidateUnownedOutputState(false, false, false, true, false));
+         MethodInfo recover = typeof(BuildTags).GetMethod(
+            nameof(BuildTags.Recover),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: new[] { typeof(string) },
+            modifiers: null);
+
+         Assert.That(recover, Is.Not.Null);
+         Assert.That(
+            typeof(BuildTags).FullName,
+            Is.EqualTo("CycloneGames.GameplayTags.Unity.Editor.BuildTags"));
+         Assert.That(
+            BuildTags.RecoveryStateDirectoryRelativePath,
+            Is.EqualTo(".buildpipeline/transactions/gameplay-tags"));
       }
 
       [Test]
-      public void BuildTransaction_RejectsExistingDirectoryWithoutMeta()
+      public void BuildTransaction_PendingJournalFailsClosedUntilExplicitRecovery()
       {
-         Assert.Throws<BuildFailedException>(() =>
-            BuildTags.ValidateUnownedOutputState(false, false, true, false, false));
+         GameplayTagsBuildAssetTransaction transaction = GameplayTagsBuildAssetTransaction.Begin(
+            m_TemporaryProjectRoot,
+            new byte[] { 1, 2, 3 },
+            synchronizeAssetDatabase: false);
+         transaction.Dispose();
+
+         BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+            GameplayTagsBuildAssetTransaction.Begin(
+               m_TemporaryProjectRoot,
+               new byte[] { 4, 5, 6 },
+               synchronizeAssetDatabase: false));
+         StringAssert.Contains("explicit recovery", exception.Message);
+
+         GameplayTagsBuildAssetTransaction.Recover(
+            m_TemporaryProjectRoot,
+            synchronizeAssetDatabase: false);
+         Assert.That(
+            File.Exists(ProjectPath(GameplayTagsBuildAssetTransaction.GeneratedAssetPath)),
+            Is.False);
       }
 
       [Test]
-      public void BuildTransaction_AcceptsUnoccupiedExistingResourcesDirectory()
+      public void BuildTransaction_CleanupFailureThrowsAndRetainsEvidence()
       {
-         Assert.DoesNotThrow(() =>
-             BuildTags.ValidateUnownedOutputState(false, false, true, true, false));
+         GameplayTagsBuildAssetTransaction transaction = GameplayTagsBuildAssetTransaction.Begin(
+            m_TemporaryProjectRoot,
+            new byte[] { 1, 2, 3 },
+            synchronizeAssetDatabase: false);
+         string outputPath = ProjectPath(GameplayTagsBuildAssetTransaction.GeneratedAssetPath);
+         File.WriteAllBytes(outputPath, new byte[] { 9, 9, 9 });
+
+         BuildFailedException exception;
+         try
+         {
+            exception = Assert.Throws<BuildFailedException>(() => transaction.Complete());
+         }
+         finally
+         {
+            transaction.Dispose();
+         }
+
+         StringAssert.Contains("journaled hash", exception.Message);
+         Assert.That(File.Exists(outputPath), Is.True);
+         Assert.That(File.Exists(ProjectPath(
+            BuildTags.RecoveryStateDirectoryRelativePath + "/active.json")), Is.True);
       }
 
       [Test]
-      public void BuildTransaction_PrePromotionMarkerNeverOwnsAnAppearingPayload()
+      public void BuildRecovery_UnknownContentPreventsEveryDeletion()
       {
-         Assert.Throws<InvalidDataException>(() =>
-            BuildTags.ValidatePayloadCleanupPhase(phase: 0, payloadExists: true, metaExists: false));
-      }
+         GameplayTagsBuildAssetTransaction transaction = GameplayTagsBuildAssetTransaction.Begin(
+            m_TemporaryProjectRoot,
+            new byte[] { 1, 2, 3 },
+            synchronizeAssetDatabase: false);
+         transaction.Dispose();
+         string ownedDirectory = ProjectPath(
+            "Assets/Generated/CycloneGames.GameplayTags/Resources/CycloneGames.GameplayTags");
+         string unknownPath = Path.Combine(ownedDirectory, "UserOwned.txt");
+         File.WriteAllText(unknownPath, "keep", new UTF8Encoding(false, true));
 
-      [Test]
-      public void BuildTransaction_PromotedPayloadMayBeCleanedBeforeImport()
-      {
-         Assert.DoesNotThrow(() =>
-            BuildTags.ValidatePayloadCleanupPhase(phase: 1, payloadExists: true, metaExists: false));
-      }
+         BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+            GameplayTagsBuildAssetTransaction.Recover(
+               m_TemporaryProjectRoot,
+               synchronizeAssetDatabase: false));
 
-      [Test]
-      public void BuildTransaction_PreImportMarkerNeverOwnsAssetMetadata()
-      {
-         Assert.Throws<InvalidDataException>(() =>
-            BuildTags.ValidatePayloadCleanupPhase(phase: 1, payloadExists: true, metaExists: true));
+         StringAssert.Contains("Unknown content", exception.Message);
+         Assert.That(File.Exists(unknownPath), Is.True);
+         Assert.That(
+            File.Exists(ProjectPath(GameplayTagsBuildAssetTransaction.GeneratedAssetPath)),
+            Is.True,
+            "Recovery must preflight all effects before deleting any owned output.");
       }
 
       [Test]
@@ -359,7 +442,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          string path = Path.Combine(m_TemporaryProjectRoot, "OversizedMarker.json");
          File.WriteAllBytes(path, new byte[17]);
 
-         Assert.Throws<InvalidDataException>(() => BuildTags.ReadBoundedUtf8File(path, maxLength: 16));
+         Assert.Throws<InvalidDataException>(() =>
+            GameplayTagsBuildAssetTransaction.ReadBoundedUtf8File(path, maxLength: 16));
       }
 
       [Test]
@@ -369,7 +453,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             stream.SetLength(17);
 
-         Assert.Throws<InvalidDataException>(() => BuildTags.ComputeSha256File(path, maxLength: 16));
+         Assert.Throws<InvalidDataException>(() =>
+            GameplayTagsBuildAssetTransaction.ComputeSha256File(path, maxLength: 16));
       }
 
       [Test]
@@ -746,6 +831,14 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          SerializedProperty name = serializedObject.FindProperty("Tag").FindPropertyRelative("m_Name");
          name.stringValue = value;
          serializedObject.ApplyModifiedPropertiesWithoutUndo();
+      }
+
+      private string ProjectPath(string projectRelativePath)
+      {
+         string path = m_TemporaryProjectRoot;
+         foreach (string segment in projectRelativePath.Split('/'))
+            path = Path.Combine(path, segment);
+         return path;
       }
    }
 

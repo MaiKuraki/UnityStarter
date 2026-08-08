@@ -135,7 +135,9 @@ Application lifetime
 
 Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。Lease Dispose 幂等。Dispose 后访问会抛出 `ObjectDisposedException`。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
 
-`WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 对每个 pending 操作都拒绝它。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
+`WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 与 YooAsset 对每个 pending 操作都拒绝它；terminal 调用是 no-op。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
+
+这是 YooAsset wrapper 的行为迁移：过去会要求 provider 同步推进的 pending 调用现在抛出 `NotSupportedException`。现有调用方必须改为 await `IOperation.Task`；独立的 `IAssetSyncOperations` 能力不受影响。
 
 调用方取消只取消该调用方的等待，不取消可能被其他调用方使用的共享后端加载。调用方仍必须 Dispose 其 lease。这把请求取消与共享资源所有权分离。
 
@@ -507,7 +509,7 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 1. 从 Unity 生成的工程构建 `CycloneGames.AssetManagement.Runtime` 与 `CycloneGames.AssetManagement.Runtime.CacheRetention`。
 2. 运行全部 `CycloneGames.AssetManagement.Tests.Editor` EditMode test、`CycloneGames.AssetManagement.Tests.PlayMode` PlayMode test 与两个 `AssetCachePerformanceTests` harness。
 3. Play Mode 下演练 package initialize/load/cancel/dispose、Resources deferred-destruction 屏障、重复 await memoized task、provider-fault 传播、owner 退役取消及迟到 provider 成功/失败与尾任务排空、跨 package 拒绝、手动 activation/unload、低内存 idle 清理、downloader prepare/start 失败与取消、泄漏操作的 shutdown 清理与 shutdown 重试。
-4. 对每个可选 provider，安装确切锁定的依赖，编译 provider assembly，运行 provider 专属测试，演练干净 Player 缓存。验证 `PrepareAsync` 不执行 payload 写入、total 只在 prepare 后才权威、Dispose 幂等。
+4. 对每个可选 provider，安装确切锁定的依赖，编译 provider assembly，运行 provider 专属测试，演练干净 Player 缓存。对 YooAsset 的 asset、all-assets、raw-file、instance 与 scene wrapper，验证 pending 同步等待会抛出且不调用 provider wait API；succeeded、faulted 与 canceled 终态调用都是 no-op；Dispose、迟到 completion 与 source release 保持 exactly-once。验证 `PrepareAsync` 不执行 payload 写入、total 只在 prepare 后才权威、Dispose 幂等。
 5. 对每个声明的 Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与批准的主机配置运行 clean-clone CI 与目标 Player build。在 Mono 与 IL2CPP、低存储、磁盘满、权限拒绝、网络丢失、suspend/resume 与禁用 domain reload 下重复关键场景。
 
 Editor 或 CLI assembly 结果不能证明 Player、IL2CPP、长期会话、存储设备或跨平台正确性。在发布验证记录中显式记录每个未执行的验证维度。
@@ -516,7 +518,7 @@ Editor 或 CLI assembly 结果不能证明 Player、IL2CPP、长期会话、存�
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter \
   -runTests -testPlatform EditMode \
   -testFilter CycloneGames.AssetManagement \
-  -testResults <result-path> -quit
+  -testResults <result-path>
 ```
 
 对 deferred Unity object-destruction 契约，改用 `-testPlatform PlayMode -assemblyNames CycloneGames.AssetManagement.Tests.PlayMode` 再运行一次。

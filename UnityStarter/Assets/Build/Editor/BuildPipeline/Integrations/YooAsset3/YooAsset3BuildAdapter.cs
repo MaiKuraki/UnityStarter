@@ -11,16 +11,39 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
     /// <summary>
     /// Version-gated YooAsset 3.x content build adapter discovered by the core pipeline through TypeCache.
     /// </summary>
-    [AssetContentAdapterRegistration(AssetContentProviderIds.YooAsset, 100)]
-    public sealed class YooAsset3BuildAdapter : IAssetContentBuildAdapter
+    [AssetContentAdapterRegistration(YooAssetBuildConfig.ProviderIdValue)]
+    public sealed class YooAsset3BuildAdapter :
+        IAssetContentBuildAdapter,
+        IAssetContentBuildOutputClaimProvider,
+        IAssetContentPlayerBuildSessionFactory
     {
         private const int MaxPackageProfileCount = 128;
         private const int MaxCollectorPackageCount = 1024;
         private const int MaxPackageNoteLength = 512;
-        private const int MaxProducedArtifactCount = 100000;
+        private const int MaxProducedArtifactTreeEntries = 100000;
+        private YooAsset3DeferredPublication pendingPublication;
+        private string pendingInvocationId;
 
-        public string ProviderId => AssetContentProviderIds.YooAsset;
-        public int Priority => 100;
+        public string ProviderId => YooAssetBuildConfig.ProviderIdValue;
+        public string ExclusivePlayerSessionKey => string.Empty;
+
+        public IReadOnlyList<string> GetExclusiveOutputPaths(
+            AssetContentBuildRequest request)
+        {
+            YooAsset3BuildPlan plan = CreateValidatedPlan(request);
+            var paths = new List<string>(plan.Packages.Length * 2);
+            for (int index = 0; index < plan.Packages.Length; index++)
+            {
+                YooAsset3PackageBuildPlan package = plan.Packages[index];
+                paths.Add(package.OutputPackageDirectory);
+                if (package.Parameters.BundledCopyOption != EBundledCopyOption.None)
+                {
+                    paths.Add(package.BundledPackageDirectory);
+                }
+            }
+
+            return paths.AsReadOnly();
+        }
 
         public AssetContentBuildResult Validate(AssetContentBuildRequest request)
         {
@@ -39,7 +62,48 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
-        public IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request)
+        public IReadOnlyList<string> ValidatePlayerBuild(AssetContentBuildRequest request)
+        {
+            AssetContentBuildResult validation = Validate(request);
+            if (validation != null && validation.Succeeded)
+            {
+                return Array.Empty<string>();
+            }
+
+            return new[]
+            {
+                validation?.ErrorInfo ?? "YooAsset Player build validation returned no result."
+            };
+        }
+
+        public IDisposable BeginPlayerBuild(AssetContentBuildRequest request)
+        {
+            IReadOnlyList<string> errors = ValidatePlayerBuild(request);
+            if (errors.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset Player build preflight failed: " + string.Join("; ", errors));
+            }
+
+            if (pendingPublication == null)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset content must be built and registered before the Player build begins.");
+            }
+
+            if (!string.Equals(
+                    pendingInvocationId,
+                    request.InvocationId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "YooAsset Player build request does not match the invocation that owns the pending content publication.");
+            }
+
+            return pendingPublication.BeginPlayerBuild();
+        }
+
+        public AssetContentBuildOperation Build(AssetContentBuildRequest request)
         {
             string projectRoot;
             string buildOutputRoot;
@@ -54,7 +118,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
             catch (Exception exception)
             {
-                return new[] { CreateValidationFailure(request, exception) };
+                return FailureOperation(CreateValidationFailure(request, exception));
             }
 
             YooAsset3BuildLock buildLock;
@@ -64,51 +128,53 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
             catch (Exception exception)
             {
-                return new[]
-                {
+                return FailureOperation(
                     AssetContentBuildResult.Failure(
                         ProviderId,
                         string.Empty,
                         request.PackageVersion,
                         "TransactionLock",
                         exception.Message,
-                        exception.ToString())
-                };
+                        exception.ToString()));
             }
 
             using (buildLock)
             {
                 try
                 {
-                    YooAsset3PublicationTransaction.RecoverPending(projectRoot, AssetDatabase.Refresh);
-                }
-                catch (YooAsset3CommittedPublicationException exception)
-                {
-                    return new[]
-                    {
-                        CreateCommittedRecoveryFailure(request, string.Empty, exception)
-                    };
+                    YooAsset3PublicationTransaction.EnsureNoPendingRecovery(
+                        projectRoot,
+                        request.InvocationId);
                 }
                 catch (Exception exception)
                 {
-                    return new[]
-                    {
+                    return FailureOperation(
                         AssetContentBuildResult.Failure(
                             ProviderId,
                             string.Empty,
                             request.PackageVersion,
-                            "TransactionRecovery",
+                            "RecoveryRequired",
                             exception.Message,
-                            exception.ToString())
-                    };
+                            exception.ToString()));
                 }
 
                 return BuildUnderLock(request);
             }
         }
 
-        private IReadOnlyList<AssetContentBuildResult> BuildUnderLock(AssetContentBuildRequest request)
+        private AssetContentBuildOperation BuildUnderLock(AssetContentBuildRequest request)
         {
+            if (pendingPublication != null)
+            {
+                return FailureOperation(
+                    AssetContentBuildResult.Failure(
+                        ProviderId,
+                        string.Empty,
+                        request.PackageVersion,
+                        "InvocationState",
+                        "This YooAsset adapter instance already owns a pending publication."));
+            }
+
             YooAsset3BuildPlan plan;
             try
             {
@@ -116,10 +182,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
             catch (Exception exception)
             {
-                return new[] { CreateValidationFailure(request, exception) };
+                return FailureOperation(CreateValidationFailure(request, exception));
             }
 
-            YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan);
+            YooAsset3PublicationTransaction transaction =
+                YooAsset3PublicationTransaction.Create(
+                    plan,
+                    request.InvocationId);
             var stagedPackages = new List<StagedPackageResult>(plan.Packages.Length);
             string activePackageName = string.Empty;
             var activeWarnings = new List<string>(plan.Warnings);
@@ -192,44 +261,62 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
                 transaction.SealReadyDirectories();
 
-                var publishedResults = new List<AssetContentBuildResult>(stagedPackages.Count);
-                transaction.Commit(() =>
+                var preparedResults = new List<AssetContentBuildResult>(stagedPackages.Count);
+                foreach (StagedPackageResult staged in stagedPackages)
                 {
-                    foreach (StagedPackageResult staged in stagedPackages)
+                    preparedResults.Add(CreatePreparedSuccessResult(
+                        staged.Publication,
+                        staged.Warnings));
+                }
+
+                var deferredPublication = new YooAsset3DeferredPublication(
+                    transaction,
+                    () =>
                     {
-                        publishedResults.Add(CreatePublishedSuccessResult(
-                            staged.Publication.FinalPlan,
-                            staged.Warnings));
-                    }
-                }, AssetDatabase.Refresh);
-                return publishedResults;
+                        foreach (StagedPackageResult staged in stagedPackages)
+                        {
+                            CreatePublishedSuccessResult(
+                                staged.Publication.FinalPlan,
+                                staged.Warnings);
+                        }
+                    });
+                pendingPublication = deferredPublication;
+                pendingInvocationId = request.InvocationId;
+                transaction = null;
+                return new AssetContentBuildOperation(
+                    preparedResults,
+                    deferredPublication);
             }
             catch (YooAsset3CommittedPublicationException exception)
             {
-                return new[]
-                {
-                    CreateCommittedRecoveryFailure(request, activePackageName, exception, activeWarnings)
-                };
+                return FailureOperation(
+                    CreateCommittedRecoveryFailure(
+                        request,
+                        activePackageName,
+                        exception,
+                        activeWarnings));
             }
             catch (Exception exception)
             {
                 Exception failure = exception;
-                try
+                if (transaction != null)
                 {
-                    transaction.Abort();
-                }
-                catch (Exception rollbackException)
-                {
-                    failure = new AggregateException(
-                        "YooAsset build failed and publication rollback did not complete.",
-                        exception,
-                        rollbackException);
+                    try
+                    {
+                        transaction.Abort(AssetDatabase.Refresh);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        failure = new AggregateException(
+                            "YooAsset build failed and publication rollback did not complete.",
+                            exception,
+                            rollbackException);
+                    }
                 }
 
                 if (exception is YooAsset3BuildFailureException buildFailure)
                 {
-                    return new[]
-                    {
+                    return FailureOperation(
                         AssetContentBuildResult.Failure(
                             ProviderId,
                             buildFailure.PackageName,
@@ -239,12 +326,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                             string.IsNullOrWhiteSpace(buildFailure.ErrorStack)
                                 ? failure.ToString()
                                 : buildFailure.ErrorStack + Environment.NewLine + failure,
-                            activeWarnings.ToArray())
-                    };
+                            activeWarnings.ToArray()));
                 }
 
-                return new[]
-                {
+                return FailureOperation(
                     AssetContentBuildResult.Failure(
                         ProviderId,
                         activePackageName,
@@ -252,8 +337,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         "TransactionalPublication",
                         failure.Message,
                         failure.ToString(),
-                        activeWarnings.ToArray())
-                };
+                        activeWarnings.ToArray()));
+            }
+            finally
+            {
+                transaction?.Dispose();
             }
         }
 
@@ -640,7 +728,67 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 warnings);
         }
 
-        private AssetContentBuildResult CreateSuccessResultForDirectories(
+        private AssetContentBuildResult CreatePreparedSuccessResult(
+            YooAsset3PackagePublication publication,
+            IReadOnlyList<string> warnings)
+        {
+            YooAsset3PackageBuildPlan packagePlan = publication.FinalPlan;
+            string stagedOutput = publication.OutputOperation.stage;
+            string stagedBundled = publication.BundledOperation == null
+                ? string.Empty
+                : publication.BundledOperation.stage;
+            AssetContentBuildResult stagedResult = CreateSuccessResultForDirectories(
+                packagePlan,
+                stagedOutput,
+                stagedBundled,
+                warnings);
+
+            string finalOutput = Path.GetFullPath(packagePlan.OutputPackageDirectory);
+            string finalBundled = packagePlan.Parameters.BundledCopyOption == EBundledCopyOption.None
+                ? string.Empty
+                : Path.GetFullPath(packagePlan.BundledPackageDirectory);
+            string stagedOutputRoot = Path.GetFullPath(stagedOutput);
+            string[] finalArtifacts = stagedResult.ProducedArtifacts
+                .Select(path => Path.Combine(
+                    finalOutput,
+                    GetRelativeArtifactPath(stagedOutputRoot, path)))
+                .ToArray();
+            string reportRelativePath = GetRelativeArtifactPath(
+                stagedOutputRoot,
+                stagedResult.ReportPath);
+
+            return AssetContentBuildResult.Success(
+                ProviderId,
+                packagePlan.PackageName,
+                packagePlan.PackageVersion,
+                finalOutput,
+                finalBundled,
+                Path.Combine(finalOutput, reportRelativePath),
+                finalArtifacts,
+                warnings);
+        }
+
+        private static string GetRelativeArtifactPath(string root, string path)
+        {
+            string normalizedRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string normalizedPath = Path.GetFullPath(path);
+            if (!YooAsset3BuildSafety.IsStrictDescendant(normalizedRoot, normalizedPath))
+            {
+                throw new InvalidOperationException(
+                    $"Prepared YooAsset artifact escaped its sealed stage: '{normalizedPath}'.");
+            }
+
+            return normalizedPath.Substring(normalizedRoot.Length + 1);
+        }
+
+        private static AssetContentBuildOperation FailureOperation(
+            AssetContentBuildResult result)
+        {
+            return new AssetContentBuildOperation(new[] { result });
+        }
+
+        internal AssetContentBuildResult CreateSuccessResultForDirectories(
             YooAsset3PackageBuildPlan packagePlan,
             string outputPackageDirectory,
             string bundledPackageDirectory,
@@ -657,13 +805,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string reportPath = RequireArtifact(
                 reportedOutputDirectory,
                 YooAssetConfiguration.GetBuildReportFileName(packagePlan.PackageName, packagePlan.PackageVersion));
-            RequireArtifact(
+            string manifestPath = RequireArtifact(
                 reportedOutputDirectory,
                 YooAssetConfiguration.GetManifestBinaryFileName(packagePlan.PackageName, packagePlan.PackageVersion));
-            RequireArtifact(
+            string hashPath = RequireArtifact(
                 reportedOutputDirectory,
                 YooAssetConfiguration.GetPackageHashFileName(packagePlan.PackageName, packagePlan.PackageVersion));
-            RequireArtifact(
+            string versionPath = RequireArtifact(
                 reportedOutputDirectory,
                 YooAssetConfiguration.GetPackageVersionFileName(packagePlan.PackageName));
 
@@ -672,16 +820,26 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 ValidateBundledArtifacts(packagePlan, bundledPackageDirectory);
             }
 
-            string[] producedArtifacts = YooAsset3BuildSafety.EnumerateArtifacts(
+            int scannedFileCount = YooAsset3BuildSafety.ValidateArtifactTree(
                 reportedOutputDirectory,
-                MaxProducedArtifactCount)
-                .Where(path => !YooAsset3PublicationOwnership.IsMarkerArtifact(path))
-                .ToArray();
-            if (producedArtifacts.Length == 0)
+                MaxProducedArtifactTreeEntries);
+            if (scannedFileCount == 0)
             {
                 throw new InvalidOperationException(
                     $"YooAsset reported success, but no package artifacts were produced in '{reportedOutputDirectory}'.");
             }
+
+            // Keep the provider-neutral result bounded. Output and bundled roots
+            // are carried by dedicated result fields; the complete tree is sealed
+            // separately by the publication owner using entry/byte budgets and a
+            // deterministic content digest.
+            string[] producedArtifacts =
+            {
+                reportPath,
+                manifestPath,
+                hashPath,
+                versionPath
+            };
 
             return AssetContentBuildResult.Success(
                 ProviderId,
@@ -715,6 +873,168 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 YooAssetConfiguration.GetPackageVersionFileName(packagePlan.PackageName));
             RequireArtifact(bundledPackageDirectory, "BuiltinCatalog.json");
             RequireArtifact(bundledPackageDirectory, "BuiltinCatalog.bytes");
+        }
+
+        private sealed class YooAsset3DeferredPublication : IBuildDownstreamInputPublication
+        {
+            private YooAsset3PublicationTransaction transaction;
+            private readonly Action validatePublishedState;
+            private bool published;
+            private bool activated;
+            private bool completed;
+
+            public YooAsset3DeferredPublication(
+                YooAsset3PublicationTransaction transaction,
+                Action validatePublishedState)
+            {
+                this.transaction = transaction
+                    ?? throw new ArgumentNullException(nameof(transaction));
+                this.validatePublishedState = validatePublishedState
+                    ?? throw new ArgumentNullException(nameof(validatePublishedState));
+            }
+
+            public string Id => transaction.PublicationId;
+            public string RecoveryStateRelativePath => transaction.StateRelativePath;
+
+            public void Publish()
+            {
+                if (transaction == null)
+                {
+                    throw new ObjectDisposedException(nameof(YooAsset3DeferredPublication));
+                }
+
+                if (published)
+                {
+                    validatePublishedState();
+                    return;
+                }
+
+                transaction.Publish(validatePublishedState, AssetDatabase.Refresh);
+                published = true;
+            }
+
+            public void ActivateForDownstream()
+            {
+                if (transaction == null)
+                {
+                    throw new ObjectDisposedException(nameof(YooAsset3DeferredPublication));
+                }
+
+                if (!transaction.HasDownstreamInputs)
+                {
+                    return;
+                }
+
+                if (activated)
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset bundled inputs have already been activated for downstream steps.");
+                }
+
+                transaction.ActivateDownstreamInputs(AssetDatabase.Refresh);
+                transaction.ValidateActivatedInputs();
+                activated = true;
+            }
+
+            public IDisposable BeginPlayerBuild()
+            {
+                if (!transaction.HasDownstreamInputs)
+                {
+                    return new PlayerBuildSession(null);
+                }
+
+                ActivateForDownstream();
+                return new PlayerBuildSession(this);
+            }
+
+            public void Complete()
+            {
+                if (transaction == null)
+                {
+                    throw new ObjectDisposedException(nameof(YooAsset3DeferredPublication));
+                }
+
+                if (!published)
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset publication must install its stages before completion.");
+                }
+
+                // The shared barrier is committed before this call. Mark the
+                // wrapper terminal first so Dispose preserves recovery evidence
+                // if refresh or durable cleanup fails.
+                completed = true;
+                transaction.Complete(AssetDatabase.Refresh);
+            }
+
+            public void Dispose()
+            {
+                if (transaction == null)
+                {
+                    return;
+                }
+
+                Exception failure = null;
+                if (!completed)
+                {
+                    try
+                    {
+                        transaction.Abort(AssetDatabase.Refresh);
+                    }
+                    catch (Exception exception)
+                    {
+                        failure = exception;
+                    }
+                }
+
+                failure = DisposeTransaction(failure);
+                if (failure != null)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(failure)
+                        .Throw();
+                }
+            }
+
+            private Exception DisposeTransaction(Exception failure)
+            {
+                try
+                {
+                    transaction.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    failure = failure == null
+                        ? exception
+                        : new AggregateException(
+                            "YooAsset publication and transaction disposal both failed.",
+                            failure,
+                            exception);
+                }
+                finally
+                {
+                    transaction = null;
+                }
+
+                return failure;
+            }
+
+            private sealed class PlayerBuildSession : IDisposable
+            {
+                private YooAsset3DeferredPublication owner;
+
+                internal PlayerBuildSession(YooAsset3DeferredPublication owner)
+                {
+                    this.owner = owner;
+                }
+
+                public void Dispose()
+                {
+                    YooAsset3DeferredPublication current = owner;
+                    owner = null;
+                    current?.transaction.ValidateActivatedInputs();
+                }
+            }
         }
 
         private static string RequireArtifact(string directory, string fileName)
