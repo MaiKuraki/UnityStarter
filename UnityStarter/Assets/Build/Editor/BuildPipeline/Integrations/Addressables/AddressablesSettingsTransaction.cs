@@ -17,7 +17,7 @@ namespace Build.Pipeline.Editor
     /// </summary>
     internal sealed class AddressablesSettingsTransaction : IDisposable
     {
-        private const string SchemaVersion = "1";
+        private const int FormatVersion = 1;
         private const string PreparingPhase = "Preparing";
         private const string ActivePhase = "Active";
         private const string RestoredPhase = "Restored";
@@ -91,13 +91,13 @@ namespace Build.Pipeline.Editor
                 normalizedProjectRoot,
                 stateRoot,
                 allowMissingLeaf: true);
-            RecoverPending(normalizedProjectRoot, importAssets);
+            EnsureNoPendingRecovery(normalizedProjectRoot);
 
             FileRecord[] records = CreateRecords(normalizedProjectRoot, snapshots);
             string transactionId = Guid.NewGuid().ToString("N");
             var journal = new Journal
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = FormatVersion,
                 transactionId = transactionId,
                 projectRoot = NormalizePath(normalizedProjectRoot),
                 transactionDirectoryName = "transaction-" + transactionId,
@@ -193,6 +193,38 @@ namespace Build.Pipeline.Editor
         public static void RecoverPending(string projectRoot)
         {
             RecoverPending(projectRoot, importAssets: true, checkpoint: null);
+        }
+
+        internal static void EnsureNoPendingRecovery(string projectRoot)
+        {
+            string normalizedProjectRoot = NormalizeProjectRoot(projectRoot);
+            string stateRoot = GetStateRoot(normalizedProjectRoot);
+            ValidateStatePathBudget(stateRoot);
+            if (!TryGetAttributes(stateRoot, out FileAttributes stateAttributes))
+            {
+                return;
+            }
+
+            if ((stateAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint))
+                != FileAttributes.Directory)
+            {
+                throw new InvalidOperationException(
+                    $"Addressables settings recovery state root is unsafe: '{stateRoot}'.");
+            }
+
+            EnsurePathHasNoReparsePoints(
+                normalizedProjectRoot,
+                stateRoot,
+                allowMissingLeaf: false);
+            string evidencePath = Directory
+                .EnumerateFileSystemEntries(stateRoot, "*", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+            if (evidencePath != null)
+            {
+                throw new InvalidOperationException(
+                    $"Pending Addressables settings recovery must be completed before starting another build: '{stateRoot}'. " +
+                    "Use the Build workspace recovery action or -pipelineRecoverOnly.");
+            }
         }
 
         internal static void RecoverPending(string projectRoot, bool importAssets)
@@ -630,7 +662,7 @@ namespace Build.Pipeline.Editor
             Journal journal)
         {
             if (journal == null
-                || !string.Equals(journal.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || journal.formatVersion != FormatVersion
                 || !IsGuidN(journal.transactionId)
                 || !string.Equals(journal.projectRoot, NormalizePath(projectRoot), StringComparison.Ordinal)
                 || !string.Equals(
@@ -646,7 +678,7 @@ namespace Build.Pipeline.Editor
                 || journal.records.Length > MaximumRecordCount)
             {
                 throw new InvalidDataException(
-                    "Addressables settings journal has an unsupported or incomplete schema.");
+                    "Addressables settings journal has an unsupported or incomplete format.");
             }
 
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -878,7 +910,7 @@ namespace Build.Pipeline.Editor
             byte[] payloadBytes = StrictUtf8.GetBytes(payload);
             var envelope = new JournalEnvelope
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = FormatVersion,
                 payloadBase64 = Convert.ToBase64String(payloadBytes),
                 sha256 = ComputeSha256(payloadBytes)
             };
@@ -908,7 +940,7 @@ namespace Build.Pipeline.Editor
             }
 
             if (envelope == null
-                || !string.Equals(envelope.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || envelope.formatVersion != FormatVersion
                 || string.IsNullOrWhiteSpace(envelope.payloadBase64)
                 || !IsSha256(envelope.sha256))
             {
@@ -1319,16 +1351,16 @@ namespace Build.Pipeline.Editor
 
         private static void ValidateStatePathBudget(string stateRoot)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stateRoot,
                 "Addressables settings transaction state root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalFileName),
                 "Addressables settings transaction journal");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalTemporaryFileName),
                 "Addressables settings temporary journal");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalBackupFileName),
                 "Addressables settings backup journal");
         }
@@ -1339,33 +1371,33 @@ namespace Build.Pipeline.Editor
             Journal journal)
         {
             string transactionDirectory = GetTransactionDirectory(stateRoot, journal);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 transactionDirectory,
                 "Addressables settings transaction directory");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(transactionDirectory, OwnerFileName),
                 "Addressables settings transaction owner");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(transactionDirectory, OwnerTemporaryFileName),
                 "Addressables settings temporary owner");
 
             for (int index = 0; index < journal.records.Length; index++)
             {
                 FileRecord record = journal.records[index];
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(transactionDirectory, record.snapshotFileName),
                     "Addressables settings snapshot");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(
                         transactionDirectory,
                         index.ToString("D4") + ".restore.tmp"),
                     "Addressables settings restore scratch");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(
                         transactionDirectory,
                         index.ToString("D4") + ".restore.bak"),
                     "Addressables settings restore backup");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     ResolveRecordPath(projectRoot, record.relativePath),
                     "Addressables settings configuration file");
             }
@@ -1566,7 +1598,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class JournalEnvelope
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string payloadBase64;
             public string sha256;
         }
@@ -1574,7 +1606,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string transactionId;
             public string projectRoot;
             public string transactionDirectoryName;

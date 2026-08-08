@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEngine;
@@ -13,20 +12,19 @@ namespace Build.Pipeline.Editor
     public sealed class BuildPipelineRunner
     {
         private const int MaximumBuildSceneCount = 1024;
-        private const int MaximumBuildStepCount = 256;
         private readonly IBuildEventSink eventSink;
         private readonly Func<bool> isEditorBusy;
         private readonly string trustedProjectRoot;
 
         public BuildPipelineRunner(IBuildEventSink eventSink = null)
-            : this(eventSink, GetCurrentProjectRoot(), IsUnityEditorBusy)
+            : this(eventSink, GetCurrentProjectRoot(), EditorBuildAvailabilityPolicy.IsBusy)
         {
         }
 
         internal BuildPipelineRunner(
             IBuildEventSink eventSink,
             string trustedProjectRoot)
-            : this(eventSink, trustedProjectRoot, IsUnityEditorBusy)
+            : this(eventSink, trustedProjectRoot, EditorBuildAvailabilityPolicy.IsBusy)
         {
         }
 
@@ -46,93 +44,179 @@ namespace Build.Pipeline.Editor
 
         public BuildRunResult Run(BuildRequest request)
         {
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ")
+                + "-"
+                + Guid.NewGuid().ToString("N").Substring(0, 8);
+            return RunCore(request, runId, requiredResultManifestPath: null);
+        }
+
+        /// <summary>
+        /// Executes a build under an entry-point-owned result identity. The
+        /// required manifest path must exactly match the canonical path derived
+        /// from the request project root and run id.
+        /// </summary>
+        public BuildRunResult Run(
+            BuildRequest request,
+            string runId,
+            string requiredResultManifestPath)
+        {
+            if (string.IsNullOrWhiteSpace(requiredResultManifestPath))
+            {
+                throw new ArgumentException(
+                    "A required build result manifest path is required.",
+                    nameof(requiredResultManifestPath));
+            }
+
+            return RunCore(request, runId, requiredResultManifestPath);
+        }
+
+        private BuildRunResult RunCore(
+            BuildRequest request,
+            string runId,
+            string requiredResultManifestPath)
+        {
             if (request == null)
             {
                 throw new ArgumentNullException(nameof(request));
             }
 
             ValidateInvocationBoundary(request);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            BuildResultEvidenceSession.ValidateRunId(runId);
             string resultPath = BuildResultManifestWriter.GetManifestPath(request, runId);
+            if (requiredResultManifestPath != null
+                && !PathsEqual(resultPath, requiredResultManifestPath))
+            {
+                throw new ArgumentException(
+                    "The required build result manifest path does not match the canonical path " +
+                    $"for run '{runId}'. Expected='{resultPath}', required='{requiredResultManifestPath}'.",
+                    nameof(requiredResultManifestPath));
+            }
+
             var context = new BuildExecutionContext(request, runId, eventSink);
             var stepResults = new List<BuildStepResult>();
-            var executedSteps = new List<IBuildStep>();
             IReadOnlyList<CompiledBuildStep> plan = Array.Empty<CompiledBuildStep>();
+            BuildStepRequirements requirements = BuildStepRequirements.None;
             BuildGlobalStateScope globalStateScope = null;
             VersionInfoAssetScope versionInfoScope = null;
+            ProjectSettingsStateGuard projectSettingsGuard = null;
+            BuildWorkspaceLease workspaceLease = null;
+            BuildRecipeProvenanceCapture recipeProvenance = null;
+            BuildResultManifestSnapshot manifestSnapshot = null;
             Exception failure = null;
-            var eventSinkFailures = new List<Exception>();
+            var nonFatalFailures = new List<Exception>();
 
             try
             {
-                // Project-central recovery precedes feature applicability and current
-                // configuration validation. Disabling, removing, or reconfiguring an optional
-                // provider cannot orphan a transaction created by an earlier request.
-                IReadOnlyList<IBuildRecoveryParticipant> recoveryParticipants =
-                    BuildPipelineRegistry.ResolveRecoveryParticipants();
-                foreach (IBuildRecoveryParticipant recoveryParticipant in recoveryParticipants)
-                {
-                    recoveryParticipant.Recover(request.ProjectRoot);
-                }
-
-                OptionalRecoveryStateGuard.EnsureNoUnavailableRecoveryState(
-                    request.ProjectRoot,
-                    recoveryParticipants);
-
-                ValidateRequest(request);
+                workspaceLease = BuildWorkspaceLease.Acquire(
+                    trustedProjectRoot,
+                    runId,
+                    BuildWorkspaceOperation.Build);
+                EnsureEditorIsIdle();
+                BuildWorkspaceService.EnsureReady(request.ProjectRoot);
+                projectSettingsGuard = ProjectSettingsStateGuard.Capture(
+                    request.ProjectRoot);
+                ValidateRequestBoundary(request);
+                BuildRecipeProvenanceCapture preflightProvenance =
+                    BuildRecipeProvenanceCapture.Capture(request);
+                context.SetRecipeProvenance(preflightProvenance.Entries);
+                preflightProvenance.ThrowIfInvalid();
+                recipeProvenance = preflightProvenance;
                 context.Version = BuildVersionResolver.Resolve(request);
                 plan = BuildPlanCompiler.Compile(context);
+                requirements = ResolveRequirements(context, plan);
+                ValidatePlanRequirements(request, requirements);
                 NotifyEventSink(
-                    () => eventSink.RunStarted(context, plan.Select(entry => entry.Step).ToArray()),
+                    () => eventSink.RunStarted(context, plan),
                     "RunStarted",
-                    eventSinkFailures);
+                    nonFatalFailures);
+                recipeProvenance.ValidateUnchanged(
+                    request,
+                    "before build-state mutation");
 
-                globalStateScope = BuildGlobalStateScope.CaptureAndApply(request, context.Version);
-                versionInfoScope = VersionInfoAssetScope.Create(
-                    request.VersionInfoAssetPath,
-                    context.Version);
+                if ((requirements & BuildStepRequirements.UnityGlobalState) != 0)
+                {
+                    using (ProjectSettingsStateGuard.AuthorizationWindow authorization =
+                           projectSettingsGuard.BeginAuthorization(
+                               "ProjectSettings/ProjectSettings.asset",
+                               "ProjectSettings/EditorBuildSettings.asset"))
+                    {
+                        globalStateScope = BuildGlobalStateScope.CaptureAndApply(
+                            request,
+                            context.Version);
+                        authorization.Commit();
+                    }
+                }
+
+                if ((requirements & BuildStepRequirements.VersionInfoAsset) != 0)
+                {
+                    versionInfoScope = VersionInfoAssetScope.Create(
+                        request.VersionInfoAssetPath,
+                        context.Version);
+                }
 
                 foreach (CompiledBuildStep compiledStep in plan)
                 {
                     IBuildStep step = compiledStep.Step;
+                    BuildStepInvocation invocation = compiledStep.Invocation;
                     if (!compiledStep.IsApplicable)
                     {
-                        var skipped = new BuildStepResult(step.Id, BuildStepStatus.Skipped, TimeSpan.Zero, "Step is not applicable to this request.");
+                        var skipped = new BuildStepResult(
+                            invocation.InvocationId,
+                            invocation.StepTypeId,
+                            BuildStepStatus.Skipped,
+                            TimeSpan.Zero,
+                            "Step is not applicable to this request.");
                         stepResults.Add(skipped);
                         NotifyEventSink(
                             () => eventSink.StepFinished(context, skipped),
-                            $"StepFinished:{step.Id}",
-                            eventSinkFailures);
+                            $"StepFinished:{invocation.InvocationId}",
+                            nonFatalFailures);
                         continue;
                     }
 
                     NotifyEventSink(
-                        () => eventSink.StepStarted(context, step),
-                        $"StepStarted:{step.Id}",
-                        eventSinkFailures);
+                        () => eventSink.StepStarted(context, compiledStep),
+                        $"StepStarted:{invocation.InvocationId}",
+                        nonFatalFailures);
                     var stopwatch = Stopwatch.StartNew();
-                    executedSteps.Add(step);
                     try
                     {
-                        step.Execute(context);
+                        recipeProvenance.ValidateUnchanged(
+                            request,
+                            invocation,
+                            $"before invocation '{invocation.InvocationId}'");
+                        step.Execute(context, invocation);
                         stopwatch.Stop();
-                        var succeeded = new BuildStepResult(step.Id, BuildStepStatus.Succeeded, stopwatch.Elapsed, "Completed.");
+                        var succeeded = new BuildStepResult(
+                            invocation.InvocationId,
+                            invocation.StepTypeId,
+                            BuildStepStatus.Succeeded,
+                            stopwatch.Elapsed,
+                            "Completed.");
                         stepResults.Add(succeeded);
                         NotifyEventSink(
                             () => eventSink.StepFinished(context, succeeded),
-                            $"StepFinished:{step.Id}",
-                            eventSinkFailures);
+                            $"StepFinished:{invocation.InvocationId}",
+                            nonFatalFailures);
                     }
-                    catch (Exception exception)
+                    catch (Exception exception) when (
+                        BuildProcessExitCodes.FromFailure(exception)
+                            != BuildProcessExitCodes.ResultEvidenceFailed)
                     {
                         stopwatch.Stop();
-                        var failed = new BuildStepResult(step.Id, BuildStepStatus.Failed, stopwatch.Elapsed, exception.Message, exception);
+                        var failed = new BuildStepResult(
+                            invocation.InvocationId,
+                            invocation.StepTypeId,
+                            BuildStepStatus.Failed,
+                            stopwatch.Elapsed,
+                            exception.Message,
+                            exception);
                         stepResults.Add(failed);
                         failure = Combine(failure, exception);
                         NotifyEventSink(
                             () => eventSink.StepFinished(context, failed),
-                            $"StepFinished:{step.Id}",
-                            eventSinkFailures);
+                            $"StepFinished:{invocation.InvocationId}",
+                            nonFatalFailures);
                         break;
                     }
                 }
@@ -142,37 +226,70 @@ namespace Build.Pipeline.Editor
                 failure = Combine(failure, exception);
                 if (stepResults.All(result => result.Status != BuildStepStatus.Failed))
                 {
-                    var preflightFailure = new BuildStepResult("preflight", BuildStepStatus.Failed, TimeSpan.Zero, exception.Message, exception);
+                    var preflightFailure = new BuildStepResult(
+                        "preflight",
+                        "pipeline-preflight",
+                        BuildStepStatus.Failed,
+                        TimeSpan.Zero,
+                        exception.Message,
+                        exception);
                     stepResults.Add(preflightFailure);
                     NotifyEventSink(
                         () => eventSink.StepFinished(context, preflightFailure),
                         "StepFinished:preflight",
-                        eventSinkFailures);
+                        nonFatalFailures);
                 }
             }
             finally
             {
-                for (int index = executedSteps.Count - 1; index >= 0; index--)
+                failure = VerifyProjectSettings(
+                    projectSettingsGuard,
+                    "Pre-restore Player publication gate",
+                    failure);
+                failure = DisposeScope(versionInfoScope, "VersionInfoData restore", failure);
+                failure = RestoreGlobalState(
+                    globalStateScope,
+                    projectSettingsGuard,
+                    failure);
+                failure = VerifyProjectSettings(
+                    projectSettingsGuard,
+                    "Post-restore Player publication gate",
+                    failure);
+                failure = ValidateRecipeProvenance(
+                    recipeProvenance,
+                    request,
+                    "terminal publication",
+                    failure);
+                var provisionalResult = new BuildRunResult(
+                    runId,
+                    failure == null,
+                    request.OutputPath,
+                    resultPath,
+                    stepResults,
+                    failure,
+                    nonFatalFailures);
+                try
                 {
-                    IBuildStep step = executedSteps[index];
-                    try
-                    {
-                        step.Cleanup(context);
-                    }
-                    catch (Exception cleanupException)
-                    {
-                        failure = Combine(failure, new InvalidOperationException($"Cleanup failed for step '{step.Id}'.", cleanupException));
-                        stepResults.Add(new BuildStepResult(
-                            step.Id + ":cleanup",
-                            BuildStepStatus.Failed,
-                            TimeSpan.Zero,
-                            cleanupException.Message,
-                            cleanupException));
-                    }
+                    context.SealForPublication();
+                    manifestSnapshot =
+                        BuildResultManifestWriter.FreezeForPublication(
+                            context,
+                            provisionalResult);
+                    BuildResultManifestWriter.ValidatePublicationCapacity(
+                        manifestSnapshot);
+                }
+                catch (Exception exception)
+                {
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            "Terminal result evidence exceeded its publication-safe envelope before any deferred publication was committed.",
+                            exception));
                 }
 
-                failure = DisposeScope(versionInfoScope, "VersionInfoData restore", failure);
-                failure = DisposeScope(globalStateScope, "Unity build settings restore", failure);
+                failure = FinalizeDeferredPublications(
+                    context,
+                    failure);
             }
 
             var result = new BuildRunResult(
@@ -182,51 +299,85 @@ namespace Build.Pipeline.Editor
                 resultPath,
                 stepResults,
                 failure,
-                eventSinkFailures);
-
-            NotifyEventSink(
-                () => eventSink.RunFinished(context, result),
-                "RunFinished",
-                eventSinkFailures);
-            if (eventSinkFailures.Count != result.ObserverFailures.Count)
-            {
-                result = new BuildRunResult(
-                    runId,
-                    failure == null,
-                    request.OutputPath,
-                    resultPath,
-                    stepResults,
-                    failure,
-                    eventSinkFailures);
-            }
+                nonFatalFailures);
 
             try
             {
-                BuildResultManifestWriter.Write(context, result);
+                try
+                {
+                    if (manifestSnapshot == null)
+                    {
+                        throw new InvalidOperationException(
+                            "The terminal result manifest snapshot was not available.");
+                    }
+
+                    BuildResultManifestWriter.Write(manifestSnapshot, result);
+                }
+                catch (Exception manifestException)
+                {
+                    var manifestFailure = new InvalidOperationException(
+                        "Failed to persist the required build result manifest. " +
+                        "The build invocation is failed even if artifacts were already committed; inspect the output and transaction evidence before retrying.",
+                        manifestException);
+                    result = new BuildRunResult(
+                        runId,
+                        succeeded: false,
+                        request.OutputPath,
+                        resultPath,
+                        stepResults,
+                        Combine(result.Failure, manifestFailure),
+                        result.NonFatalFailures);
+                    UnityEngine.Debug.LogException(manifestFailure);
+                }
+
+                NotifyTerminalEventSink(
+                    () => eventSink.RunFinished(context, result),
+                    "RunFinished");
             }
-            catch (Exception manifestException)
+            finally
             {
-                failure = Combine(failure, new InvalidOperationException("Failed to write the build result manifest.", manifestException));
-                result = new BuildRunResult(
-                    runId,
-                    false,
-                    request.OutputPath,
-                    resultPath,
-                    stepResults,
-                    failure,
-                    eventSinkFailures);
-                UnityEngine.Debug.LogException(manifestException);
+                workspaceLease?.Dispose();
             }
 
             return result;
         }
 
-        private void ValidateRequest(BuildRequest request)
+        private static void NotifyTerminalEventSink(
+            Action callback,
+            string eventName)
         {
-            if (isEditorBusy())
+            try
             {
-                throw new BuildFailedException("Unity is compiling or updating assets. Wait for the Editor to become idle before building.");
+                callback();
             }
+            catch (Exception exception)
+            {
+                if (BuildProcessExitCodes.FromFailure(exception)
+                    == BuildProcessExitCodes.ResultEvidenceFailed)
+                {
+                    throw;
+                }
+
+                UnityEngine.Debug.LogException(
+                    new InvalidOperationException(
+                        $"Build event sink failed after the terminal outcome in '{eventName}'.",
+                        exception));
+            }
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            return string.Equals(
+                Path.GetFullPath(left ?? string.Empty),
+                Path.GetFullPath(right ?? string.Empty),
+                Path.DirectorySeparatorChar == '\\'
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
+        }
+
+        private void ValidateRequestBoundary(BuildRequest request)
+        {
+            EnsureEditorIsIdle();
 
             if (!BuildCommandLine.IsSupportedBuildTarget(request.Target))
             {
@@ -249,105 +400,208 @@ namespace Build.Pipeline.Editor
                     $"Unsupported scripting backend '{request.ScriptingBackend}'.");
             }
 
-            if (request.Incrementality != BuildIncrementality.Clean
-                && request.Incrementality != BuildIncrementality.Incremental)
-            {
-                throw new BuildFailedException(
-                    $"Unsupported build incrementality mode '{request.Incrementality}'.");
-            }
-
             if (request.BuildScenePaths.Count > MaximumBuildSceneCount)
             {
                 throw new BuildFailedException(
                     $"Build request exceeds the {MaximumBuildSceneCount}-scene safety budget.");
             }
 
-            if (request.StepIds.Count == 0
-                || request.StepIds.Count > MaximumBuildStepCount)
+            if (request.Steps.Count == 0
+                || request.Steps.Count > BuildPipelineBudgets.MaximumInvocationCount)
             {
                 throw new BuildFailedException(
-                    $"Build request must contain between 1 and {MaximumBuildStepCount} steps.");
+                    $"Build request must contain between 1 and {BuildPipelineBudgets.MaximumInvocationCount} invocations.");
+            }
+
+            int dependencyEdgeCount = 0;
+            for (int index = 0; index < request.Steps.Count; index++)
+            {
+                try
+                {
+                    dependencyEdgeCount = checked(
+                        dependencyEdgeCount + request.Steps[index].Dependencies.Count);
+                }
+                catch (OverflowException exception)
+                {
+                    throw new BuildFailedException(
+                        "Build dependency edge count overflowed its safety budget: " +
+                        exception.Message);
+                }
+
+                if (dependencyEdgeCount > BuildPipelineBudgets.MaximumDependencyEdgeCount)
+                {
+                    throw new BuildFailedException(
+                        $"Build request exceeds the {BuildPipelineBudgets.MaximumDependencyEdgeCount}-edge dependency safety budget.");
+                }
             }
 
             ValidateIdentity(
                 () => BuildIdentityPolicy.ValidateApplicationVersion(
                     request.ApplicationVersion));
 
-            ValidateIdentity(
-                () => BuildIdentityPolicy.ValidatePlainText(
-                    request.CompanyName,
-                    "Company name",
-                    256));
-
-            try
-            {
-                BuildPathPolicy.ValidatePortableFileName(request.ProductName, "Product name");
-            }
-            catch (ArgumentException exception)
-            {
-                throw new BuildFailedException(
-                    "Product name is not a portable file name. " + exception.Message);
-            }
-
-            ValidateIdentity(
-                () => BuildIdentityPolicy.ValidateApplicationIdentifier(
-                    request.ApplicationIdentifier));
-            ValidateVersionInfoPath(request.VersionInfoAssetPath);
-
-            foreach (string stepId in request.StepIds)
+            foreach (BuildStepInvocation invocation in request.Steps)
             {
                 ValidateIdentity(
-                    () => BuildIdentityPolicy.ValidatePlainText(
-                        stepId,
-                        "Build step identifier",
-                        BuildStepRegistrationAttribute.MaximumIdCharacters));
+                    () => BuildIdentityPolicy.ValidateBuildIdentifier(
+                        invocation.InvocationId,
+                        "Build invocation identifier"));
+                ValidateIdentity(
+                    () => BuildIdentityPolicy.ValidateBuildIdentifier(
+                        invocation.StepTypeId,
+                        "Build step type identifier"));
+                if (invocation.Incrementality != BuildIncrementality.Clean
+                    && invocation.Incrementality != BuildIncrementality.Incremental)
+                {
+                    throw new BuildFailedException(
+                        $"Build invocation '{invocation.InvocationId}' has unsupported " +
+                        $"incrementality mode '{invocation.Incrementality}'.");
+                }
             }
 
             ValidateIdentity(
                 () => BuildRequestFactory.ValidateAndroidExportRecipe(
-                    request.StepIds,
+                    request.Steps,
                     request.ExportAndroidProject));
-            ValidateIdentity(
-                () => BuildRequestFactory.ValidateContentOnlyRecipeBinding(
-                    request.StepIds,
-                    request.AssetContentProviderId,
-                    request.AssetContentConfiguration));
 
-            bool hasContentProvider = !string.IsNullOrWhiteSpace(request.AssetContentProviderId);
-            bool hasContentConfiguration = request.AssetContentConfiguration != null;
-            if (hasContentProvider != hasContentConfiguration)
+            IReadOnlyList<BuildStepInvocation> hotUpdateInvocations =
+                request.GetInvocationsByStepType(BuildStepTypeIds.HotUpdate);
+            for (int index = 0; index < hotUpdateInvocations.Count; index++)
             {
-                throw new BuildFailedException(
-                    "Asset content provider id and configuration must either both be set or both be empty.");
+                BuildStepInvocation invocation = hotUpdateInvocations[index];
+                var configuration = invocation.Configuration as HotUpdateBuildConfiguration;
+                if (configuration == null)
+                {
+                    continue;
+                }
+
+                string providerId = configuration.ProviderId?.Trim();
+                if (string.IsNullOrWhiteSpace(providerId))
+                {
+                    throw new BuildFailedException(
+                        $"Hot-update invocation '{invocation.InvocationId}' returned an empty provider id.");
+                }
+
+                ValidateIdentity(
+                    () => BuildIdentityPolicy.ValidateBuildIdentifier(
+                        providerId,
+                        "Hot-update provider identifier"));
             }
 
-            if (hasContentProvider)
+            IReadOnlyList<BuildStepInvocation> contentInvocations =
+                request.GetInvocationsByStepType(BuildStepTypeIds.AssetContent);
+            for (int index = 0; index < contentInvocations.Count; index++)
+            {
+                BuildStepInvocation invocation = contentInvocations[index];
+                var configuration = invocation.Configuration as AssetContentBuildConfiguration;
+                if (configuration == null)
+                {
+                    continue;
+                }
+
+                string providerId = configuration.ProviderId?.Trim();
+                if (string.IsNullOrWhiteSpace(providerId))
+                {
+                    throw new BuildFailedException(
+                        $"Asset Content invocation '{invocation.InvocationId}' returned an empty provider id.");
+                }
+
+                ValidateIdentity(
+                    () => BuildIdentityPolicy.ValidateBuildIdentifier(
+                        providerId,
+                        "Asset content provider identifier"));
+            }
+
+        }
+
+        private static BuildStepRequirements ResolveRequirements(
+            BuildExecutionContext context,
+            IReadOnlyList<CompiledBuildStep> plan)
+        {
+            BuildStepRequirements requirements = BuildStepRequirements.None;
+            for (int index = 0; index < plan.Count; index++)
+            {
+                CompiledBuildStep compiled = plan[index];
+                if (!compiled.IsApplicable
+                    || !(compiled.Step is IBuildStepRequirementsProvider provider))
+                {
+                    continue;
+                }
+
+                BuildStepRequirements declared = provider.GetRequirements(
+                    context,
+                    compiled.Invocation);
+                const BuildStepRequirements Known =
+                    BuildStepRequirements.UnityGlobalState
+                    | BuildStepRequirements.VersionInfoAsset
+                    | BuildStepRequirements.PlayerOutput;
+                if ((declared & ~Known) != 0)
+                {
+                    throw new BuildFailedException(
+                        $"Build invocation '{compiled.Invocation.InvocationId}' ({compiled.Step.StepTypeId}) " +
+                        $"declared unknown run requirements '{declared}'.");
+                }
+
+                requirements |= declared;
+            }
+
+            return requirements;
+        }
+
+        private static void ValidatePlanRequirements(
+            BuildRequest request,
+            BuildStepRequirements requirements)
+        {
+            if ((requirements & (BuildStepRequirements.UnityGlobalState
+                                 | BuildStepRequirements.PlayerOutput)) != 0)
             {
                 ValidateIdentity(
                     () => BuildIdentityPolicy.ValidatePlainText(
-                        request.AssetContentProviderId,
-                        "Asset content provider identifier",
-                        128));
+                        request.CompanyName,
+                        "Company name",
+                        256));
+
+                try
+                {
+                    BuildPathPolicy.ValidatePortableFileName(
+                        request.ProductName,
+                        "Product name");
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new BuildFailedException(
+                        "Product name is not a portable file name. " +
+                        exception.Message);
+                }
+
+                ValidateIdentity(
+                    () => BuildIdentityPolicy.ValidateApplicationIdentifier(
+                        request.ApplicationIdentifier));
+            }
+
+            if ((requirements & BuildStepRequirements.VersionInfoAsset) != 0)
+            {
+                ValidateVersionInfoPath(
+                    request.ProjectRoot,
+                    request.VersionInfoAssetPath);
+            }
+
+            if ((requirements & BuildStepRequirements.PlayerOutput) == 0)
+            {
+                return;
             }
 
             ValidateOutputShape(request);
-
             BuildPathPolicy.EnsureSafeDeleteTarget(
                 request.ProjectRoot,
                 request.OutputDirectory,
                 request.BuildRoot,
                 request.AllowExternalOutput);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 request.OutputDirectory,
                 "Player output directory");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 request.OutputPath,
                 "Player output artifact");
-        }
-
-        private static bool IsUnityEditorBusy()
-        {
-            return EditorApplication.isCompiling || EditorApplication.isUpdating;
         }
 
         private static void ValidateIdentity(Action validation)
@@ -362,26 +616,41 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private static void ValidateVersionInfoPath(string path)
+        private static void ValidateVersionInfoPath(
+            string projectRoot,
+            string path)
         {
             try
             {
-                BuildPathPolicy.ValidatePortableProjectRelativePath(
-                    path,
-                    "VersionInfoData path");
+                RuntimeVersionInfoPathPolicy.Validate(path);
             }
             catch (ArgumentException exception)
             {
                 throw new BuildFailedException(
-                    "VersionInfoData path is not a portable project-relative path. " +
                     exception.Message);
             }
 
-            if (!path.StartsWith("Assets/", StringComparison.Ordinal)
-                || !path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
+            string parentRelativePath = Path.GetDirectoryName(path)?.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(parentRelativePath)
+                || string.Equals(parentRelativePath, "Assets", StringComparison.Ordinal))
             {
                 throw new BuildFailedException(
-                    "VersionInfoData path must be a project-relative .asset path below Assets.");
+                    "VersionInfoData must be stored in a child directory below Assets; " +
+                    "the Assets root is not a valid generated-asset destination.");
+            }
+
+            try
+            {
+                BuildPathPolicy.ResolveGeneratedAssetsDirectory(
+                    projectRoot,
+                    parentRelativePath);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException
+                || exception is InvalidOperationException
+                || exception is PathTooLongException)
+            {
+                throw new BuildFailedException(exception.Message);
             }
         }
 
@@ -490,6 +759,280 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        private void EnsureEditorIsIdle()
+        {
+            if (isEditorBusy())
+            {
+                throw new BuildFailedException(
+                    "Unity is compiling or updating assets. Wait for the Editor to become idle before building.");
+            }
+        }
+
+        private static Exception RestoreGlobalState(
+            BuildGlobalStateScope scope,
+            ProjectSettingsStateGuard guard,
+            Exception failure)
+        {
+            if (scope == null)
+            {
+                return failure;
+            }
+
+            try
+            {
+                if (guard == null)
+                {
+                    scope.Dispose();
+                }
+                else
+                {
+                    using (ProjectSettingsStateGuard.AuthorizationWindow authorization =
+                           guard.BeginRecoveryAuthorization(
+                               "ProjectSettings/ProjectSettings.asset",
+                               "ProjectSettings/EditorBuildSettings.asset"))
+                    {
+                        scope.Dispose();
+                        authorization.Commit();
+                    }
+                }
+
+                return failure;
+            }
+            catch (Exception exception)
+            {
+                return Combine(
+                    failure,
+                    new InvalidOperationException(
+                        "Unity build settings restore failed.",
+                        exception));
+            }
+        }
+
+        private static Exception VerifyProjectSettings(
+            ProjectSettingsStateGuard guard,
+            string operation,
+            Exception failure)
+        {
+            if (guard == null)
+            {
+                return failure;
+            }
+
+            try
+            {
+                guard.VerifyOrThrow(operation);
+                return failure;
+            }
+            catch (Exception exception)
+            {
+                return Combine(failure, exception);
+            }
+        }
+
+        private static Exception ValidateRecipeProvenance(
+            BuildRecipeProvenanceCapture provenance,
+            BuildRequest request,
+            string checkpoint,
+            Exception failure)
+        {
+            if (provenance == null)
+            {
+                return failure;
+            }
+
+            try
+            {
+                provenance.ValidateUnchanged(request, checkpoint);
+                return failure;
+            }
+            catch (Exception exception)
+            {
+                return Combine(failure, exception);
+            }
+        }
+
+        private static Exception FinalizeDeferredPublications(
+            BuildExecutionContext context,
+            Exception failure)
+        {
+            IReadOnlyList<IBuildDeferredPublication> publications =
+                context.DeferredPublications;
+            if (publications.Count == 0)
+            {
+                return failure;
+            }
+
+            if (failure != null)
+            {
+                DisposeDeferredPublications(publications, ref failure, out _);
+                return failure;
+            }
+
+            BuildPublicationBarrier barrier;
+            try
+            {
+                barrier = BuildPublicationBarrier.Begin(
+                    context.Request.ProjectRoot,
+                    context.RunId,
+                    publications);
+            }
+            catch (Exception exception)
+            {
+                failure = Combine(
+                    failure,
+                    new InvalidOperationException(
+                        "Failed to prepare the terminal publication barrier.",
+                        exception));
+                DisposeDeferredPublications(publications, ref failure, out _);
+                return failure;
+            }
+
+            bool publishFailed = false;
+            for (int index = 0; index < publications.Count; index++)
+            {
+                IBuildDeferredPublication publication = publications[index];
+                try
+                {
+                    publication.Publish();
+                }
+                catch (Exception exception)
+                {
+                    publishFailed = true;
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            $"Deferred publication '{publication.Id}' failed before the terminal decision.",
+                            exception));
+                    break;
+                }
+            }
+
+            if (!publishFailed)
+            {
+                try
+                {
+                    barrier.CommitDecision();
+                }
+                catch (Exception exception)
+                {
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            "Failed to persist the terminal publication commit decision.",
+                            exception));
+                }
+            }
+
+            BuildPublicationDecision durableDecision = BuildPublicationDecision.None;
+            bool durableDecisionRead = false;
+            try
+            {
+                durableDecision = barrier.ReadDurableDecision();
+                durableDecisionRead = true;
+            }
+            catch (Exception exception)
+            {
+                failure = Combine(
+                    failure,
+                    new InvalidOperationException(
+                        "The terminal publication decision could not be read back from durable storage.",
+                        exception));
+            }
+
+            if (durableDecision != BuildPublicationDecision.Commit)
+            {
+                DisposeDeferredPublications(
+                    publications,
+                    ref failure,
+                    out bool rollbackFailed);
+                if (durableDecisionRead
+                    && durableDecision == BuildPublicationDecision.Rollback
+                    && !rollbackFailed)
+                {
+                    try
+                    {
+                        barrier.AbortAfterRollback();
+                    }
+                    catch (Exception exception)
+                    {
+                        failure = Combine(
+                            failure,
+                            new InvalidOperationException(
+                                "Deferred publications rolled back, but the prepared publication barrier could not be cleared.",
+                                exception));
+                    }
+                }
+
+                return failure;
+            }
+
+            bool completionFailed = false;
+            for (int index = 0; index < publications.Count; index++)
+            {
+                IBuildDeferredPublication publication = publications[index];
+                try
+                {
+                    publication.Complete();
+                }
+                catch (Exception exception)
+                {
+                    completionFailed = true;
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            $"Committed deferred publication '{publication.Id}' requires explicit recovery.",
+                            exception));
+                }
+            }
+
+            DisposeDeferredPublications(
+                publications,
+                ref failure,
+                out bool committedDisposeFailed);
+            if (!completionFailed && !committedDisposeFailed)
+            {
+                try
+                {
+                    barrier.Complete();
+                }
+                catch (Exception exception)
+                {
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            "Deferred publications completed, but the committed publication barrier requires explicit recovery.",
+                            exception));
+                }
+            }
+
+            return failure;
+        }
+
+        private static void DisposeDeferredPublications(
+            IReadOnlyList<IBuildDeferredPublication> publications,
+            ref Exception failure,
+            out bool disposeFailed)
+        {
+            disposeFailed = false;
+            for (int index = publications.Count - 1; index >= 0; index--)
+            {
+                IBuildDeferredPublication publication = publications[index];
+                try
+                {
+                    publication.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    disposeFailed = true;
+                    failure = Combine(
+                        failure,
+                        new InvalidOperationException(
+                            $"Deferred publication cleanup failed for '{publication.Id}'.",
+                            exception));
+                }
+            }
+        }
+
         private static void NotifyEventSink(
             Action callback,
             string callbackName,
@@ -501,6 +1044,12 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception exception)
             {
+                if (BuildProcessExitCodes.FromFailure(exception)
+                    == BuildProcessExitCodes.ResultEvidenceFailed)
+                {
+                    throw;
+                }
+
                 failures.Add(new InvalidOperationException(
                     $"Build event sink callback '{callbackName}' failed.",
                     exception));
@@ -520,21 +1069,31 @@ namespace Build.Pipeline.Editor
 
     public sealed class ConsoleBuildEventSink : IBuildEventSink
     {
-        public void RunStarted(BuildExecutionContext context, IReadOnlyList<IBuildStep> plan)
+        public void RunStarted(
+            BuildExecutionContext context,
+            IReadOnlyList<CompiledBuildStep> plan)
         {
-            string stepIds = string.Join(" -> ", plan.Select(step => step.Id));
+            string invocations = string.Join(
+                " -> ",
+                plan.Select(step =>
+                    step.Invocation.InvocationId + ":" + step.Invocation.StepTypeId));
             UnityEngine.Debug.Log(
-                $"[BuildPipeline] Run {context.RunId} started. Target={context.Request.Target}, PackageVersion={context.Version.PackageVersion}, Steps={stepIds}");
+                $"[BuildPipeline] Run {context.RunId} started. Target={context.Request.Target}, PackageVersion={context.Version.PackageVersion}, Invocations={invocations}");
         }
 
-        public void StepStarted(BuildExecutionContext context, IBuildStep step)
+        public void StepStarted(BuildExecutionContext context, CompiledBuildStep step)
         {
-            UnityEngine.Debug.Log($"[BuildPipeline] Step '{step.Id}' started.");
+            UnityEngine.Debug.Log(
+                $"[BuildPipeline] Invocation '{step.Invocation.InvocationId}' " +
+                $"({step.Invocation.StepTypeId}) started.");
         }
 
         public void StepFinished(BuildExecutionContext context, BuildStepResult result)
         {
-            string message = $"[BuildPipeline] Step '{result.StepId}' {result.Status} in {result.Duration.TotalSeconds:F2}s. {result.Message}";
+            string message =
+                $"[BuildPipeline] Invocation '{result.InvocationId}' ({result.StepTypeId}) " +
+                $"{result.Status} in {result.Duration.TotalSeconds:F2}s. " +
+                BuildResultEvidencePolicy.NormalizeDiagnosticText(result.Message);
             if (result.Status == BuildStepStatus.Failed)
             {
                 UnityEngine.Debug.LogError(message);
@@ -560,199 +1119,9 @@ namespace Build.Pipeline.Editor
             }
             else
             {
-                UnityEngine.Debug.LogError(message + "\n" + result.Failure);
-            }
-        }
-    }
-
-    internal static class BuildResultManifestWriter
-    {
-        private const int BufferSize = 8192;
-        private const int MaximumManifestBytes = 64 * 1024 * 1024;
-
-        [Serializable]
-        private sealed class Manifest
-        {
-            public string schemaVersion = "3";
-            public string runId;
-            public bool succeeded;
-            public string unityVersion;
-            public string target;
-            public string applicationVersion;
-            public string packageVersion;
-            public long buildNumber;
-            public string commitHash;
-            public string versionControlProvider;
-            public string branch;
-            public string outputPath;
-            public string outputDirectory;
-            public string failure;
-            public string[] observerFailures;
-            public StepEntry[] steps;
-            public ContentEntry[] content;
-        }
-
-        [Serializable]
-        private sealed class StepEntry
-        {
-            public string id;
-            public string status;
-            public double durationSeconds;
-            public string message;
-        }
-
-        [Serializable]
-        private sealed class ContentEntry
-        {
-            public bool succeeded;
-            public string providerId;
-            public string packageName;
-            public string packageVersion;
-            public string failedTask;
-            public string errorInfo;
-            public string errorStack;
-            public string outputPackageDirectory;
-            public string bundledPackageDirectory;
-            public string reportPath;
-            public string[] artifacts;
-            public string[] warnings;
-        }
-
-        public static string GetManifestPath(BuildRequest request, string runId)
-        {
-            string path = Path.Combine(
-                request.BuildRoot,
-                ".buildpipeline",
-                "results",
-                runId + ".json");
-            return BuildPathPolicy.EnsureLegacyWindowsPathBudget(
-                path,
-                "Build result manifest",
-                ".tmp".Length);
-        }
-
-        public static void Write(BuildExecutionContext context, BuildRunResult result)
-        {
-            string path = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
-                result.ResultManifestPath,
-                "Build result manifest",
-                ".tmp".Length);
-            string directory = Path.GetDirectoryName(path);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
-                directory,
-                "Build result manifest directory");
-            Directory.CreateDirectory(directory);
-
-            var manifest = new Manifest
-            {
-                runId = result.RunId,
-                succeeded = result.Succeeded,
-                unityVersion = Application.unityVersion,
-                target = context.Request.Target.ToString(),
-                applicationVersion = context.Request.ApplicationVersion,
-                packageVersion = context.Version?.PackageVersion ?? string.Empty,
-                buildNumber = context.Version?.BuildNumber ?? 0,
-                commitHash = context.Version?.CommitHash ?? string.Empty,
-                versionControlProvider = context.Version?.ProviderId ?? string.Empty,
-                branch = context.Version?.Branch ?? string.Empty,
-                outputPath = result.OutputPath,
-                outputDirectory = context.Request.OutputDirectory,
-                failure = result.Failure?.ToString() ?? string.Empty,
-                observerFailures = result.ObserverFailures
-                    .Select(observerFailure => observerFailure.ToString())
-                    .ToArray(),
-                steps = result.Steps.Select(step => new StepEntry
-                {
-                    id = step.StepId,
-                    status = step.Status.ToString(),
-                    durationSeconds = step.Duration.TotalSeconds,
-                    message = step.Message
-                }).ToArray(),
-                content = context.ContentResults.Select(content => new ContentEntry
-                {
-                    succeeded = content.Succeeded,
-                    providerId = content.ProviderId,
-                    packageName = content.PackageName,
-                    packageVersion = content.PackageVersion,
-                    failedTask = content.FailedTask,
-                    errorInfo = content.ErrorInfo,
-                    errorStack = content.ErrorStack,
-                    outputPackageDirectory = content.OutputPackageDirectory,
-                    bundledPackageDirectory = content.BundledPackageDirectory,
-                    reportPath = content.ReportPath,
-                    artifacts = content.ProducedArtifacts.ToArray(),
-                    warnings = content.Warnings.ToArray()
-                }).ToArray()
-            };
-
-            string json = JsonUtility.ToJson(manifest, true);
-            byte[] bytes = new UTF8Encoding(false, true).GetBytes(json);
-            if (bytes.Length > MaximumManifestBytes)
-            {
-                throw new IOException(
-                    $"Build result manifest exceeds the {MaximumManifestBytes}-byte safety budget: '{path}'.");
-            }
-
-            string temporaryPath = path + ".tmp";
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
-                temporaryPath,
-                "Build result manifest temporary file");
-            bool ownsTemporaryFile = false;
-            Exception writeFailure = null;
-            try
-            {
-                using (var stream = new FileStream(
-                           temporaryPath,
-                           FileMode.CreateNew,
-                           FileAccess.Write,
-                           FileShare.None,
-                           BufferSize,
-                           FileOptions.WriteThrough))
-                {
-                    ownsTemporaryFile = true;
-                    stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush(true);
-                }
-
-                File.Move(temporaryPath, path);
-                ownsTemporaryFile = false;
-            }
-            catch (Exception exception)
-            {
-                writeFailure = exception;
-            }
-
-            Exception cleanupFailure = null;
-            try
-            {
-                if (ownsTemporaryFile && File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                }
-            }
-            catch (Exception exception)
-            {
-                cleanupFailure = exception;
-            }
-
-            if (writeFailure != null && cleanupFailure != null)
-            {
-                throw new AggregateException(
-                    "Build result manifest write and temporary-file cleanup both failed.",
-                    writeFailure,
-                    cleanupFailure);
-            }
-
-            if (writeFailure != null)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(writeFailure).Throw();
-            }
-
-            if (cleanupFailure != null)
-            {
-                throw new IOException(
-                    $"Build result manifest was written, but temporary file '{temporaryPath}' could not be removed.",
-                    cleanupFailure);
+                UnityEngine.Debug.LogError(
+                    message + "\n" +
+                    BuildResultEvidencePolicy.NormalizeException(result.Failure));
             }
         }
     }

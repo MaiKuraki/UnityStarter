@@ -17,14 +17,22 @@
 ## 目录
 
 - [概述](#概述)
-- [日志接入与迁移](#logging-接入与迁移)
-- [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
+- [Architecture](#architecture)
+- [Assembly 接入](#assembly-接入)
+- [Quick Start](#quick-start)
+- [Runtime 生命周期](#runtime-生命周期)
+- [WorldSettings 与 WorldDefinition](#worldsettings-与-worlddefinition)
+- [Actor 与 World 所有权](#actor-与-world-所有权)
+- [GameMode 登录与 Roster](#gamemode-登录与-roster)
+- [Controller、Pawn 与 Possession](#controllerpawn-与-possession)
+- [PlayerState 与 GameState](#playerstate-与-gamestate)
+- [Camera 系统](#camera-系统)
+- [Integrations](#integrations)
+- [Editor 工具](#editor-工具)
+- [持久化与数据所有权](#持久化与数据所有权)
+- [性能、线程与平台说明](#性能线程与平台说明)
+- [由简到深示例](#由简到深示例)
+- [验证](#验证)
 - [故障排查](#故障排查)
 
 ## 概述
@@ -32,6 +40,17 @@
 `GameInstance` 拥有一个 active `World`。World 拥有 actor 和权威端 `GameMode`。玩家通过 GameMode 登录，获得 `PlayerController`，posses 一个 `Pawn`。`PlayerState` 在 Pawn 替换后仍然追踪参与者身份；`GameState` 保存已提交的匹配数据。对本地玩家，`CameraManager` 管理 camera mode 栈并负责混合。
 
 本模块处理 UE 中所谓的"game flow"层——不是输入，不是物理，不是网络传输。`WorldNetMode`（Standalone、ListenServer、DedicatedServer）控制框架的 authority 行为；实际的网络传输和复制放在你自行组合进 World 的独立模块中。
+
+### Owner-thread 契约
+
+`GameInstance` 与每个 `World` 都是 single-owner runtime scope。创建 `GameInstance` 的线程成为
+owner；Unity composition 应在 Unity main thread 创建并使用它。World mutation 与内联 callback
+必须留在该 owner thread，不提供隐式 lock 或跨线程 queue。
+
+对已绑定 World 的 `Actor`，`SetOwner` 与 `SetInstigator` 会在 mutation 前校验 World owner
+thread。`OwnerChanged` 在同一线程同步触发。未绑定 Actor 保持既有 Unity-facing 契约，应在 Unity
+main thread 访问。产品 network adapter 必须先将 remote input 显式 marshal 到 World owner，
+再修改这些引用。
 
 ## Architecture
 
@@ -1094,6 +1113,7 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 | 结构/输入 | 限制或默认值 |
 | --- | --- |
 | LocalPlayer 槽位 | 最多 8 |
+| World Actor registration | 每个 World 最多 `World.MaximumActorCount`（`65,536`）个 |
 | Actor string tag | 最多 64 个；每个最多 128 个字符 |
 | 登录文本输入 | name/address/options 分别为 64/256/1024 个字符 |
 | GameSession 参与者总数 | 最多 100,000 |
@@ -1103,7 +1123,7 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 | CameraActionBinding active/pool count | 可配置；默认各 8 |
 | Actor primary Tick phase | 每个 Actor 一个 phase；热路径 registry size 取决于 Runtime-enabled Actor 数量 |
 
-World Actor collection 没有模块级 hard cap。Roster 只会在 GameSession 限制内增长。产品容量规划必须定义并验证额外的 Actor、spawn rate 和 scene content budget。
+World Actor ceiling 是 implementation safety limit，不是产品预算；调用方应使用 `Try*` 准入 API，并定义更低且经过验证的 Actor count、spawn rate 和 scene content budget。Roster growth 受 GameSession limit 约束。
 
 ### 分配点
 

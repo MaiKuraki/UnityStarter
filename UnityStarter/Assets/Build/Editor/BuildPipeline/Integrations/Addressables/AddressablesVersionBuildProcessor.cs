@@ -20,10 +20,16 @@ namespace Build.Pipeline.Editor
 
         public override int callbackOrder => 2;
 
-        internal static string ValidateSupport(bool cleanBuild = false)
+        internal static string ValidateSupport(BuildIncrementality incrementality)
         {
             try
             {
+                if (incrementality != BuildIncrementality.Clean
+                    && incrementality != BuildIncrementality.Incremental)
+                {
+                    return $"Unsupported Addressables incrementality mode '{incrementality}'.";
+                }
+
                 Type settingsType = ReflectionCache.GetType(
                     "UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
                 if (settingsType == null)
@@ -62,37 +68,37 @@ namespace Build.Pipeline.Editor
                     }
                 }
 
-                bool buildMethodFound = false;
-                foreach (MethodInfo method in settingsType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                if (incrementality == BuildIncrementality.Clean)
                 {
-                    if (method.Name == "BuildPlayerContent")
+                    bool buildMethodFound = false;
+                    foreach (MethodInfo method in settingsType.GetMethods(BindingFlags.Public | BindingFlags.Static))
                     {
-                        ParameterInfo[] parameters = method.GetParameters();
-                        if (parameters.Length == 1 && parameters[0].IsOut)
+                        if (method.Name == "BuildPlayerContent")
                         {
-                            Type resultType = parameters[0].ParameterType.GetElementType();
-                            PropertyInfo errorProperty = resultType == null
-                                ? null
-                                : ReflectionCache.GetProperty(
-                                    resultType,
-                                    "Error",
-                                    BindingFlags.Public | BindingFlags.Instance);
-                            if (errorProperty != null && errorProperty.CanRead)
+                            ParameterInfo[] parameters = method.GetParameters();
+                            if (parameters.Length == 1 && parameters[0].IsOut)
                             {
-                                buildMethodFound = true;
-                                break;
+                                Type resultType = parameters[0].ParameterType.GetElementType();
+                                PropertyInfo errorProperty = resultType == null
+                                    ? null
+                                    : ReflectionCache.GetProperty(
+                                        resultType,
+                                        "Error",
+                                        BindingFlags.Public | BindingFlags.Instance);
+                                if (errorProperty != null && errorProperty.CanRead)
+                                {
+                                    buildMethodFound = true;
+                                    break;
+                                }
                             }
                         }
                     }
-                }
 
-                if (!buildMethodFound)
-                {
-                    return "Addressables BuildPlayerContent API is unavailable or unsupported.";
-                }
+                    if (!buildMethodFound)
+                    {
+                        return "Addressables BuildPlayerContent API is unavailable or unsupported.";
+                    }
 
-                if (cleanBuild)
-                {
                     PropertyInfo activeBuilderProperty = ReflectionCache.GetProperty(
                         settingsType,
                         "ActivePlayerDataBuilder",
@@ -107,6 +113,39 @@ namespace Build.Pipeline.Editor
                     if (!AddressablesBuilder.IsUsableClearCachedData(clearMethod))
                     {
                         return "Addressables clean build requires an active data builder that overrides ClearCachedData.";
+                    }
+                }
+                else
+                {
+                    Type contentUpdateType = ReflectionCache.GetType(
+                        "UnityEditor.AddressableAssets.Build.ContentUpdateScript");
+                    if (FindContentUpdateBuildMethod(contentUpdateType, settingsType) == null)
+                    {
+                        return "Addressables ContentUpdateScript.BuildContentUpdate(AddressableAssetSettings, string) API is unavailable or unsupported.";
+                    }
+
+                    MethodInfo loadMethod = FindContentStateLoadMethod(contentUpdateType);
+                    if (loadMethod == null)
+                    {
+                        return "Addressables ContentUpdateScript.LoadContentState(string) API is unavailable or unsupported.";
+                    }
+
+                    Type stateType = loadMethod.ReturnType;
+                    foreach (string fieldName in new[]
+                             {
+                                 "playerVersion",
+                                 "editorVersion",
+                                 "remoteCatalogLoadPath"
+                             })
+                    {
+                        FieldInfo field = ReflectionCache.GetField(
+                            stateType,
+                            fieldName,
+                            BindingFlags.Public | BindingFlags.Instance);
+                        if (field == null || field.FieldType != typeof(string))
+                        {
+                            return $"Addressables content state field '{fieldName}' is unavailable or unsupported.";
+                        }
                     }
                 }
 
@@ -129,14 +168,62 @@ namespace Build.Pipeline.Editor
                     addressablesType,
                     "BuildPath",
                     BindingFlags.Public | BindingFlags.Static);
-                return buildPathProperty == null
-                    ? "Addressables.BuildPath API is unavailable."
-                    : null;
+                if (buildPathProperty == null)
+                {
+                    return "Addressables.BuildPath API is unavailable.";
+                }
+
+                return AddressablesPlayerBuildIsolation.ValidateContentSessionSupport();
             }
             catch (Exception exception)
             {
                 return exception.Message;
             }
+        }
+
+        internal static MethodInfo FindContentUpdateBuildMethod(
+            Type contentUpdateType,
+            Type settingsType)
+        {
+            if (contentUpdateType == null || settingsType == null)
+            {
+                return null;
+            }
+
+            MethodInfo method = ReflectionCache.GetMethod(
+                contentUpdateType,
+                "BuildContentUpdate",
+                BindingFlags.Public | BindingFlags.Static,
+                new[] { settingsType, typeof(string) });
+            if (method == null || method.ReturnType == typeof(void))
+            {
+                return null;
+            }
+
+            PropertyInfo errorProperty = ReflectionCache.GetProperty(
+                method.ReturnType,
+                "Error",
+                BindingFlags.Public | BindingFlags.Instance);
+            return errorProperty != null && errorProperty.CanRead
+                ? method
+                : null;
+        }
+
+        internal static MethodInfo FindContentStateLoadMethod(Type contentUpdateType)
+        {
+            if (contentUpdateType == null)
+            {
+                return null;
+            }
+
+            MethodInfo method = ReflectionCache.GetMethod(
+                contentUpdateType,
+                "LoadContentState",
+                BindingFlags.Public | BindingFlags.Static,
+                new[] { typeof(string) });
+            return method != null && method.ReturnType != typeof(void)
+                ? method
+                : null;
         }
 
         internal static IDisposable BeginSession(BuildTarget target, string contentVersion)
@@ -160,139 +247,39 @@ namespace Build.Pipeline.Editor
                 }
 
                 string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-                AddressablesBuildLock buildLock = null;
-                AddressablesSettingsTransaction settingsTransaction = null;
+                IDisposable isolationScope = null;
                 try
                 {
-                    buildLock = AddressablesBuildLock.Acquire(projectRoot);
-                    AddressablesSettingsTransaction.RecoverPending(projectRoot);
-                    AddressablesPublicationTransaction.RecoverPending(projectRoot);
-
-                    Type settingsType = ReflectionCache.GetType(
-                        "UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
-                    if (settingsType == null)
-                    {
-                        throw new InvalidOperationException(
-                            "Addressables is selected, but its Editor settings API is unavailable.");
-                    }
-
-                    object settings = AddressablesBuilder.GetDefaultSettings();
-                    if (settings == null)
-                    {
-                        throw new InvalidOperationException(
-                            "AddressableAssetSettings was not found before the Player build.");
-                    }
-
-                    IReadOnlyList<string> dirtyAssets =
-                        AddressablesBuilder.GetDirtyConfigurationAssetPaths(
-                            settings,
-                            settingsType,
-                            includeSettingsAsset: true);
-                    if (dirtyAssets.Count > 0)
-                    {
-                        throw new InvalidOperationException(
-                            "Addressables configuration has unsaved changes before the Player build: "
-                            + string.Join(", ", dirtyAssets));
-                    }
-
-                    PropertyInfo buildWithPlayerProperty = ReflectionCache.GetProperty(
-                        settingsType,
-                        "BuildAddressablesWithPlayerBuild",
-                        BindingFlags.Public | BindingFlags.Instance);
-                    if (buildWithPlayerProperty == null
-                        || !buildWithPlayerProperty.CanRead
-                        || !buildWithPlayerProperty.CanWrite
-                        || !buildWithPlayerProperty.PropertyType.IsEnum)
-                    {
-                        throw new MissingMemberException(
-                            settingsType.FullName,
-                            "BuildAddressablesWithPlayerBuild");
-                    }
-
-                    object disabledValue;
-                    try
-                    {
-                        disabledValue = Enum.Parse(
-                            buildWithPlayerProperty.PropertyType,
-                            "DoNotBuildWithPlayer",
-                            ignoreCase: false);
-                    }
-                    catch (Exception exception)
-                    {
-                        throw new InvalidOperationException(
-                            "Addressables does not expose the required DoNotBuildWithPlayer option.",
-                            exception);
-                    }
-
-                    object originalValue = buildWithPlayerProperty.GetValue(settings);
-                    IReadOnlyList<AddressablesBuilder.AssetFileSnapshot> configurationSnapshots =
-                        AddressablesBuilder.CaptureConfigurationAssetSnapshots(settings, settingsType);
-                    settingsTransaction = AddressablesSettingsTransaction.Begin(
-                        projectRoot,
-                        configurationSnapshots);
-                    try
-                    {
-                        buildWithPlayerProperty.SetValue(settings, disabledValue);
-                    }
-                    catch (Exception exception)
-                    {
-                        throw new InvalidOperationException(
-                            "Failed to disable Addressables content rebuilding for the Player build.",
-                            exception);
-                    }
-
+                    isolationScope =
+                        AddressablesPlayerBuildIsolation.BeginContentSession(projectRoot);
                     session = new BuildSession(
+                        projectRoot,
                         target,
                         contentVersion,
-                        settings,
-                        buildWithPlayerProperty,
-                        originalValue,
-                        settingsTransaction,
-                        buildLock);
+                        isolationScope);
                     activeSession = session;
-                    settingsTransaction = null;
-                    buildLock = null;
+                    isolationScope = null;
                 }
                 catch (Exception operationException)
                 {
-                    var cleanupFailures = new List<Exception>();
-                    if (settingsTransaction != null)
-                    {
-                        try
-                        {
-                            settingsTransaction.Dispose();
-                        }
-                        catch (Exception exception)
-                        {
-                            cleanupFailures.Add(new InvalidOperationException(
-                                "Failed to recover Addressables settings after Player session startup failed.",
-                                exception));
-                        }
-                    }
-
-                    if (buildLock != null)
-                    {
-                        try
-                        {
-                            buildLock.Dispose();
-                        }
-                        catch (Exception exception)
-                        {
-                            cleanupFailures.Add(new InvalidOperationException(
-                                "Failed to release the Addressables build lock after Player session startup failed.",
-                                exception));
-                        }
-                    }
-
-                    if (cleanupFailures.Count == 0)
+                    if (isolationScope == null)
                     {
                         throw;
                     }
 
-                    cleanupFailures.Insert(0, operationException);
-                    throw new AggregateException(
-                        "Addressables Player build session startup and cleanup failed.",
-                        cleanupFailures);
+                    try
+                    {
+                        isolationScope.Dispose();
+                    }
+                    catch (Exception cleanupException)
+                    {
+                        throw new AggregateException(
+                            "Addressables version session startup and isolation cleanup failed.",
+                            operationException,
+                            cleanupException);
+                    }
+
+                    throw;
                 }
             }
 
@@ -345,6 +332,7 @@ namespace Build.Pipeline.Editor
             try
             {
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
+                    session.ProjectRoot,
                     versionFilePath,
                     session.ContentVersion);
             }
@@ -361,31 +349,24 @@ namespace Build.Pipeline.Editor
         private sealed class BuildSession
         {
             public BuildSession(
+                string projectRoot,
                 BuildTarget target,
                 string contentVersion,
-                object settings,
-                PropertyInfo buildWithPlayerProperty,
-                object originalBuildWithPlayerValue,
-                AddressablesSettingsTransaction settingsTransaction,
-                AddressablesBuildLock buildLock)
+                IDisposable isolationScope)
             {
+                ProjectRoot = Path.GetFullPath(
+                    projectRoot
+                    ?? throw new ArgumentNullException(nameof(projectRoot)));
                 Target = target;
                 ContentVersion = contentVersion;
-                Settings = settings;
-                BuildWithPlayerProperty = buildWithPlayerProperty;
-                OriginalBuildWithPlayerValue = originalBuildWithPlayerValue;
-                SettingsTransaction = settingsTransaction
-                    ?? throw new ArgumentNullException(nameof(settingsTransaction));
-                BuildLock = buildLock ?? throw new ArgumentNullException(nameof(buildLock));
+                IsolationScope = isolationScope
+                    ?? throw new ArgumentNullException(nameof(isolationScope));
             }
 
+            public string ProjectRoot { get; }
             public BuildTarget Target { get; }
             public string ContentVersion { get; }
-            public object Settings { get; }
-            public PropertyInfo BuildWithPlayerProperty { get; }
-            public object OriginalBuildWithPlayerValue { get; }
-            public AddressablesSettingsTransaction SettingsTransaction { get; }
-            public AddressablesBuildLock BuildLock { get; }
+            public IDisposable IsolationScope { get; }
         }
 
         private sealed class BuildSessionScope : IDisposable
@@ -421,51 +402,15 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
-                var failures = new List<Exception>();
                 try
                 {
-                    session.BuildWithPlayerProperty.SetValue(
-                        session.Settings,
-                        session.OriginalBuildWithPlayerValue);
+                    session.IsolationScope.Dispose();
                 }
                 catch (Exception exception)
                 {
-                    failures.Add(new InvalidOperationException(
-                        "Failed to restore Addressables Build With Player setting.",
-                        exception));
-                }
-
-                Exception settingsTransactionFailure =
-                    AddressablesBuilder.FinalizeSettingsTransaction(
-                        session.SettingsTransaction);
-                if (settingsTransactionFailure != null)
-                {
-                    failures.Add(new InvalidOperationException(
-                        "Failed to finalize the durable Addressables settings transaction.",
-                        settingsTransactionFailure));
-                }
-
-                try
-                {
-                    session.BuildLock.Dispose();
-                }
-                catch (Exception exception)
-                {
-                    failures.Add(new InvalidOperationException(
-                        "Failed to release the Addressables build lock.",
-                        exception));
-                }
-
-                if (failures.Count == 1)
-                {
-                    throw failures[0];
-                }
-
-                if (failures.Count > 1)
-                {
-                    throw new AggregateException(
-                        "Multiple Addressables Player build session settings failed to restore.",
-                        failures);
+                    throw new InvalidOperationException(
+                        "Failed to restore Addressables Player isolation state.",
+                        exception);
                 }
             }
         }

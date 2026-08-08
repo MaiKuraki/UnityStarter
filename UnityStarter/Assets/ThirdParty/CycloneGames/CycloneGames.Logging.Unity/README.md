@@ -195,9 +195,11 @@ Environment variables are parsed before command-line arguments. For the same opt
 
 `loggingSettings` must identify a `LoggingSettings` asset under the current project's `Assets/` tree. It cannot point to the generated override asset.
 
-When any override exists, preprocessing clones the canonical asset or defaults, applies and validates the override, and creates the generated Resources asset. Player bootstrap loads this override before the canonical asset. Postprocessing removes it after identity validation.
+When any override exists, preprocessing clones the canonical asset or defaults, applies and validates the override, and creates the generated Resources asset. Player bootstrap loads this override before the canonical asset. Postprocessing removes it only after provenance, payload hash, Unity GUID, and file hash validation. Only the generated settings asset is saved; the processor never calls the project-wide `AssetDatabase.SaveAssets()` API.
 
-Cleanup is fail-closed. A marker records schema, transaction, project identity, asset path, phase, and generated asset GUID. Marker input is capped at 64 KiB before JSON parsing. An oversized, unreadable, or mismatched marker is preserved with the unknown asset and fails cleanup instead of deleting unverified data.
+Cleanup is a fail-closed transaction. `journal.json` records a random transaction ID, a relocatable project token, phase, revision, owned asset path, payload SHA-256, Unity GUID, file SHA-256/size, and every folder creation owned by the transaction. A folder intent with a transaction-unique staging path is flushed before `AssetDatabase.CreateFolder`; the staging folder's GUID is then persisted as `Applied`, the folder is moved to its final path without changing that GUID, and the record becomes `Identified`. Explicit recovery reconciles intent-only, staged, moved-but-not-published, and identified folders before cleanup. It never treats an unrelated empty final-path folder as proof of ownership, closing the interruption windows around folder creation, GUID lookup, move, and journal publication without deleting ambiguous data. The generated asset carries matching hidden provenance and payload hash, which closes the crash window between `AssetDatabase.CreateAsset` and active-journal publication. Journal input is capped at 64 KiB, generated asset hashing is capped at 1 MiB, state entry counts are bounded, and owned paths reject traversal and reparse points.
+
+Normal preprocessing never performs recovery. Any `journal.json`, `journal.json.tmp`, `journal.json.bak`, `journal.recovery.json`, lock, or generated override left by an interrupted operation blocks the next build. Recovery is an explicit operation through `CycloneGames.Logging.Unity.Editor.LoggingSettingsBuildRecovery.Recover(string projectRoot)`. Recovery evaluates every journal candidate, validates asset ownership before deletion, and preserves all evidence when identity is ambiguous. Recovery normalization first flushes `journal.recovery.json`, retains that anchor while pruning older candidates, and atomically renames it to the main journal; an interruption of recovery itself therefore retains at least one durable ownership record. The journal stores no absolute checkout path, so moving the complete project does not invalidate an otherwise matching transaction.
 
 ## Persistence and cleanup
 
@@ -205,7 +207,8 @@ Cleanup is fail-closed. A marker records schema, transaction, project identity, 
 | --- | --- | --- |
 | Canonical settings | `Assets/Resources/CycloneGames.Logging.Unity/LoggingSettings.asset` | Project-owned Unity asset; normally committed; deletion restores package defaults |
 | Build override | `Assets/Generated/CycloneGames.Logging.Unity/Resources/CycloneGames.Logging.Unity/LoggingSettingsBuildOverride.asset` | Temporary build transaction; do not commit or use as a profile |
-| Build marker | `Library/CycloneGames.Logging.Unity/LoggingSettingsBuildOverride.marker.json`, UTF-8 JSON, at most 64 KiB | Build processor; cleaned only after bounded read and exact identity validation |
+| Build transaction | `.buildpipeline/transactions/logging-settings/`, UTF-8 JSON plus an exclusive lock | Explicitly recoverable, Git-ignored Editor state; main, temporary, backup, and recovery-anchor journals are candidates |
+| Folder staging | `Assets/**/__CycloneGamesLoggingBuild_<transactionId>_<index>` plus Unity `.meta` | Transaction-owned, normally short-lived Editor evidence; never commit or delete manually while a matching journal exists; explicit recovery verifies GUID/emptiness and moves or removes it |
 | Active default log | `Application.persistentDataPath/App.log`, plaintext UTF-8 without BOM | `FileLogSink` writes/rotates; product owns privacy, quota, backup, retention, and final cleanup |
 | Rotated archives | Beside the active log | `FileLogSink` removes only archives matching its own naming grammar and configured count |
 | Custom log | Fully qualified `customFilePath` | Product/platform owner; validate sandbox and cleanup explicitly |
@@ -242,7 +245,7 @@ Runtime code uses no unsafe code, dynamic code generation, runtime reflection di
 | No records | Check `minimumSeverity`, `categoryFilter`, active sink registration, pipeline drops, and Unity handoff drops |
 | Unity Console loses records under burst | Inspect both queue layers; avoid assuming critical reserve guarantees delivery |
 | File is absent | Check WebGL exclusion, selected path mode, absolute custom path, sandbox, quota, and `FileLogSink` health |
-| Build is blocked by generated override cleanup | Inspect the generated asset and marker; identity mismatch intentionally prevents deletion |
+| Build is blocked by LoggingSettings recovery | Inspect `.buildpipeline/transactions/logging-settings/` and the generated asset, then invoke `LoggingSettingsBuildRecovery.Recover(projectRoot)` through the owning build workspace; identity mismatch intentionally prevents deletion |
 | Settings changes are not visible during play | Runtime state was copied at initialization; call `Reinitialize` on the main thread and inspect its result |
 
 ## Validation
@@ -258,7 +261,7 @@ Release validation should also:
 1. enter and leave Play Mode repeatedly with domain reload enabled and disabled;
 2. verify external writer ownership, initialization races, no-sink behavior, and shutdown-timeout recovery;
 3. build once without overrides and with environment, command-line, profile, mode, and individual override combinations;
-4. confirm generated override and marker cleanup after a successful build, and fail-closed preservation on an identity mismatch fixture;
+4. confirm generated override, journal, and staging-folder cleanup after a successful build, and fail-closed evidence preservation on identity-mismatch and non-empty-folder fixtures;
 5. exercise count/character saturation in both queues and inspect critical/drop/abandoned counters;
 6. test pause, graceful quit, forced termination, file permission, rotation, low storage, and recovery on each target;
 7. build IL2CPP separately where used;

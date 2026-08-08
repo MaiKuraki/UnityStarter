@@ -90,6 +90,16 @@ namespace Build.Pipeline.Editor
                     errors.Add($"Package '{packageName}' requires a deterministic package note.");
                 }
 
+                var cryptography = profile.FindPropertyRelative("cryptography")
+                    .objectReferenceValue as YooAssetCryptographyConfiguration;
+                YooAssetCryptographyAvailability cryptographyAvailability =
+                    YooAssetCryptographyAuthoringCatalog.Inspect(cryptography);
+                if (cryptographyAvailability.Status != YooAssetCryptographyAvailabilityStatus.None
+                    && !cryptographyAvailability.IsAvailable)
+                {
+                    errors.Add($"Package '{packageName}' cryptography is unavailable: {cryptographyAvailability.Diagnostic}");
+                }
+
                 var copyOption = (YooAssetBundledCopyOption)profile.FindPropertyRelative("bundledCopyOption").enumValueIndex;
                 bool tagCopy = copyOption == YooAssetBundledCopyOption.ClearAndCopyByTags
                     || copyOption == YooAssetBundledCopyOption.OnlyCopyByTags;

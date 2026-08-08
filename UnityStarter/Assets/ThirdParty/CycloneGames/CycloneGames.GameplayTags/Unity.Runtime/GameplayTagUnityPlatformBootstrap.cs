@@ -9,6 +9,9 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 {
     internal static class GameplayTagUnityPlatformBootstrap
     {
+        private const string BuildCatalogResourcePath =
+            "CycloneGames.GameplayTags/GameplayTags";
+
         private static bool s_ownsAmbientDiagnostics;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -47,7 +50,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         private static byte[] LoadBuildTagData()
         {
-            TextAsset asset = Resources.Load<TextAsset>("GameplayTags");
+            TextAsset asset = Resources.Load<TextAsset>(BuildCatalogResourcePath);
             if (asset == null)
             {
                 return null;

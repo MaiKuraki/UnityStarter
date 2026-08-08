@@ -33,7 +33,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class OwnershipManifest
         {
-            public int schemaVersion;
+            public int formatVersion;
             public string owner;
             public string role;
             public string transactionId;
@@ -51,7 +51,7 @@ namespace Build.Pipeline.Editor
 
         internal const string ManifestFileName = ".buildpipeline-owner.json";
         internal const string Owner = "Build.Pipeline.Editor.HybridCLR";
-        internal const int SchemaVersion = 2;
+        internal const int FormatVersion = 1;
         internal const int MaximumArtifactCount = 4096;
         internal const int MaximumManagedFileCount = MaximumArtifactCount * 2 + 2;
         internal const int MaximumArtifactFileNameByteCount = 240;
@@ -150,7 +150,7 @@ namespace Build.Pipeline.Editor
             files.Sort((left, right) => StringComparer.Ordinal.Compare(left.path, right.path));
             var manifest = new OwnershipManifest
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = FormatVersion,
                 owner = Owner,
                 role = role,
                 transactionId = transactionId,
@@ -326,10 +326,10 @@ namespace Build.Pipeline.Editor
             HybridCLRFileIdentity expected,
             string description)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 source,
                 $"HybridCLR {description} source");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 destination,
                 $"HybridCLR {description} destination");
             RequireFileIdentity(source, expected, description + " source");
@@ -346,7 +346,7 @@ namespace Build.Pipeline.Editor
                     $"HybridCLR {description} destination has no parent: '{destination}'.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 parent,
                 $"HybridCLR {description} destination directory");
             Directory.CreateDirectory(parent);
@@ -420,7 +420,7 @@ namespace Build.Pipeline.Editor
                 && string.Equals(left.sha256, right.sha256, StringComparison.OrdinalIgnoreCase);
         }
 
-        internal static void ValidateDirectoryIdentitySchema(
+        internal static void ValidateDirectoryIdentityFormat(
             HybridCLRDirectoryIdentity identity,
             bool allowNull,
             string fieldName)
@@ -468,7 +468,7 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        internal static void ValidateFileIdentitySchema(
+        internal static void ValidateFileIdentityFormat(
             HybridCLRFileIdentity identity,
             bool allowNull,
             string fieldName)
@@ -569,7 +569,7 @@ namespace Build.Pipeline.Editor
         {
             string manifestPath = Path.Combine(directory, ManifestFileName);
             OwnershipManifest manifest = ReadManifest(manifestPath);
-            if (manifest.schemaVersion != SchemaVersion
+            if (manifest.formatVersion != FormatVersion
                 || !string.Equals(manifest.owner, Owner, StringComparison.Ordinal)
                 || !string.Equals(manifest.role, expectedRole, StringComparison.Ordinal)
                 || !IsTransactionId(manifest.transactionId)
@@ -578,7 +578,7 @@ namespace Build.Pipeline.Editor
                 || manifest.files.Length > MaximumManagedFileCount)
             {
                 throw new InvalidOperationException(
-                    $"HybridCLR ownership manifest is invalid or uses an unsupported schema: '{manifestPath}'.");
+                    $"HybridCLR ownership manifest is invalid or uses an unsupported format: '{manifestPath}'.");
             }
 
             OwnershipFileEntry[] entries = manifest.files
@@ -941,7 +941,7 @@ namespace Build.Pipeline.Editor
 
         internal static void WriteFileDurably(string path, byte[] bytes)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 path,
                 "HybridCLR durable artifact");
             string parent = Path.GetDirectoryName(path);
@@ -950,7 +950,7 @@ namespace Build.Pipeline.Editor
                 throw new InvalidOperationException($"HybridCLR file has no parent: '{path}'.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 parent,
                 "HybridCLR durable artifact directory");
             Directory.CreateDirectory(parent);

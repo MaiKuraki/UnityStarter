@@ -4,13 +4,45 @@ using System.IO;
 
 namespace Build.Pipeline.Editor
 {
-    [AssetContentAdapterRegistration(AssetContentProviderIds.Addressables)]
+    [AssetContentAdapterRegistration(AddressablesBuildConfig.ProviderIdValue)]
     public sealed class AddressablesContentBuildAdapter :
         IAssetContentBuildAdapter,
+        IAssetContentBuildOutputClaimProvider,
         IAssetContentPlayerBuildSessionFactory
     {
-        public string ProviderId => AssetContentProviderIds.Addressables;
-        public int Priority => 0;
+        internal const string PlayerSessionKey = "addressables-player-session";
+
+        public string ProviderId => AddressablesBuildConfig.ProviderIdValue;
+        public string ExclusivePlayerSessionKey => PlayerSessionKey;
+
+        public IReadOnlyList<string> GetExclusiveOutputPaths(
+            AssetContentBuildRequest request)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            if (!(request.Configuration is AddressablesBuildConfig config))
+            {
+                throw new InvalidOperationException(
+                    "AddressablesBuildConfig is required for output claims.");
+            }
+
+            if (!config.copyToOutputDirectory)
+            {
+                return Array.Empty<string>();
+            }
+
+            string configuredOutput =
+                AddressablesBuilder.ResolveConfiguredPublicationDirectory(
+                    request.InvocationId,
+                    config.buildOutputDirectory);
+            string root = BuildPathPolicy.ResolveBuildRoot(
+                request.ProjectRoot,
+                configuredOutput);
+            return new[] { Path.Combine(root, request.BuildTarget.ToString()) };
+        }
 
         public AssetContentBuildResult Validate(AssetContentBuildRequest request)
         {
@@ -30,7 +62,7 @@ namespace Build.Pipeline.Editor
             }
 
             string integrationError = AddressablesVersionBuildProcessor.ValidateSupport(
-                request.Incrementality == BuildIncrementality.Clean);
+                request.Incrementality);
             if (!string.IsNullOrEmpty(integrationError))
             {
                 return AssetContentBuildResult.Failure(
@@ -41,7 +73,21 @@ namespace Build.Pipeline.Editor
                     integrationError);
             }
 
+            string contentBuildError = AddressablesBuilder.ValidateContentBuildConfiguration(
+                request,
+                config);
+            if (!string.IsNullOrEmpty(contentBuildError))
+            {
+                return AssetContentBuildResult.Failure(
+                    ProviderId,
+                    "Addressables",
+                    request.PackageVersion,
+                    "Preflight",
+                    contentBuildError);
+            }
+
             string publicationError = AddressablesBuilder.ValidatePublicationConfiguration(
+                request.InvocationId,
                 config,
                 request.ProjectRoot);
             if (!string.IsNullOrEmpty(publicationError))
@@ -57,74 +103,85 @@ namespace Build.Pipeline.Editor
             return AssetContentBuildResult.Success(ProviderId, "Addressables", request.PackageVersion);
         }
 
-        public IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request)
+        public AssetContentBuildOperation Build(AssetContentBuildRequest request)
         {
             var config = (AddressablesBuildConfig)request.Configuration;
+            IBuildDeferredPublication publication = null;
             try
             {
-                AddressablesBuilder.Build(
+                publication = AddressablesBuilder.Build(
+                    request.InvocationId,
                     request.BuildTarget,
                     request.PackageVersion,
                     config,
-                    request.Incrementality == BuildIncrementality.Clean);
+                    request.Incrementality);
 
                 string outputDirectory = null;
                 string reportPath = null;
                 var artifacts = new List<string>();
                 if (config.copyToOutputDirectory)
                 {
-                    string configuredOutput = string.IsNullOrWhiteSpace(config.buildOutputDirectory)
-                        ? AddressablesBuildConfig.DefaultBuildOutputDirectory
-                        : config.buildOutputDirectory;
+                    string configuredOutput =
+                        AddressablesBuilder.ResolveConfiguredPublicationDirectory(
+                            request.InvocationId,
+                            config.buildOutputDirectory);
                     string root = BuildPathPolicy.ResolveBuildRoot(request.ProjectRoot, configuredOutput);
                     outputDirectory = Path.Combine(root, request.BuildTarget.ToString());
-                    if (!Directory.Exists(outputDirectory))
-                    {
-                        throw new DirectoryNotFoundException($"Addressables published output was not found: '{outputDirectory}'.");
-                    }
-
                     string playerDataDirectory = Path.Combine(outputDirectory, "PlayerData");
                     reportPath = Path.Combine(outputDirectory, "AddressablesArtifacts.json");
-                    if (!Directory.Exists(playerDataDirectory) || !File.Exists(reportPath))
-                    {
-                        throw new FileNotFoundException(
-                            "Addressables publication is incomplete or its manifest is missing.",
-                            reportPath);
-                    }
-
                     artifacts.Add(playerDataDirectory);
                     string remoteDirectory = Path.Combine(outputDirectory, "RemoteContent");
-                    if (Directory.Exists(remoteDirectory))
+                    if (config.buildRemoteCatalog)
                     {
                         artifacts.Add(remoteDirectory);
                     }
 
+                    artifacts.Add(Path.Combine(outputDirectory, "BuildMetadata"));
                     artifacts.Add(reportPath);
                 }
 
-                return new[]
-                {
-                    AssetContentBuildResult.Success(
-                        ProviderId,
-                        "Addressables",
-                        request.PackageVersion,
-                        outputDirectory,
-                        reportPath: reportPath,
-                        producedArtifacts: artifacts)
-                };
+                return new AssetContentBuildOperation(
+                    new[]
+                    {
+                        AssetContentBuildResult.Success(
+                            ProviderId,
+                            "Addressables",
+                            request.PackageVersion,
+                            outputDirectory,
+                            reportPath: reportPath,
+                            producedArtifacts: artifacts)
+                    },
+                    publication);
             }
             catch (Exception exception)
             {
-                return new[]
+                Exception failure = exception;
+                if (publication != null)
                 {
-                    AssetContentBuildResult.Failure(
-                        ProviderId,
-                        "Addressables",
-                        request.PackageVersion,
-                        "AddressablesBuilder.Build",
-                        exception.Message,
-                        exception.ToString())
-                };
+                    try
+                    {
+                        publication.Dispose();
+                    }
+                    catch (Exception disposeException)
+                    {
+                        failure = new AggregateException(
+                            "Addressables preparation failed and staged publication rollback did not complete.",
+                            exception,
+                            disposeException);
+                    }
+                }
+
+                return new AssetContentBuildOperation(
+                    new[]
+                    {
+                        AssetContentBuildResult.Failure(
+                            ProviderId,
+                            "Addressables",
+                            request.PackageVersion,
+                            "AddressablesBuilder.Build",
+                            failure.Message,
+                            failure.ToString())
+                    });
             }
         }
 
@@ -143,8 +200,15 @@ namespace Build.Pipeline.Editor
                 return errors;
             }
 
+            if (request.Incrementality == BuildIncrementality.Incremental)
+            {
+                errors.Add(
+                    "Addressables Content Update output cannot feed a Player build. " +
+                    "Run the Incremental asset-content invocation without the player step, or use Clean to build a new Player baseline.");
+            }
+
             string integrationError = AddressablesVersionBuildProcessor.ValidateSupport(
-                request.Incrementality == BuildIncrementality.Clean);
+                request.Incrementality);
             if (!string.IsNullOrEmpty(integrationError))
             {
                 errors.Add(integrationError);

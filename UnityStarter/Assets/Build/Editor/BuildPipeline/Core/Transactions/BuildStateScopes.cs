@@ -25,6 +25,10 @@ namespace Build.Pipeline.Editor
         private readonly int originalAndroidBundleVersionCode;
         private readonly string originalIosBuildNumber;
         private readonly bool originalExportAndroidProject;
+        private readonly bool originalDevelopmentBuild;
+        private readonly EditorBuildSceneState[] originalEditorBuildScenes;
+        private readonly PlayerSettingsSplashState originalSplashState;
+        private readonly string[] originalPreloadedAssetIds;
         private readonly BuildRequest request;
         private readonly BuildVersionContext appliedVersion;
         private readonly PlayerSettings playerSettingsAsset;
@@ -68,7 +72,10 @@ namespace Build.Pipeline.Editor
             originalAndroidBundleVersionCode = PlayerSettings.Android.bundleVersionCode;
             originalIosBuildNumber = PlayerSettings.iOS.buildNumber;
             originalExportAndroidProject = EditorUserBuildSettings.exportAsGoogleAndroidProject;
-            ValidateDurableObfuzState(request.EnablePlayerObfuscation);
+            originalDevelopmentBuild = EditorUserBuildSettings.development;
+            originalEditorBuildScenes = CaptureEditorBuildScenes();
+            originalSplashState = PlayerSettingsLicensePolicy.Capture(playerSettingsAsset);
+            originalPreloadedAssetIds = PlayerSettingsPreloadedAssetPolicy.Capture();
         }
 
         public static BuildGlobalStateScope CaptureAndApply(BuildRequest request, BuildVersionContext version)
@@ -91,7 +98,8 @@ namespace Build.Pipeline.Editor
             {
                 if (transaction.HasPendingRecovery)
                 {
-                    RecoverInterruptedUnityState(transaction);
+                    throw new BuildFailedException(
+                        "A pending global build-state transaction requires explicit workspace recovery before another build can begin.");
                 }
 
                 EnsureActiveBuildTargetMatches(
@@ -101,13 +109,8 @@ namespace Build.Pipeline.Editor
                 transaction.Begin(
                     PlayerSettingsAssetPath,
                     (int)scope.originalActiveTarget,
-                    scope.originalExportAndroidProject,
                     (int)request.Target,
-                    (int)scope.originalScriptingBackend,
-                    scope.originalCompanyName,
-                    scope.originalProductName,
-                    scope.originalBundleVersion,
-                    scope.originalApplicationIdentifier);
+                    scope.CaptureOriginalOwnedPlayerSettings());
                 scope.transactionStarted = true;
                 transaction.BeginGlobalMutation();
                 scope.Apply(version);
@@ -210,7 +213,6 @@ namespace Build.Pipeline.Editor
             }
 
             scope.ValidateAppliedState(scope.appliedVersion);
-            ValidateDurableObfuzState(scope.request.EnablePlayerObfuscation);
         }
 
         public void Dispose()
@@ -227,35 +229,15 @@ namespace Build.Pipeline.Editor
             }
 
             var restoreFailures = new List<Exception>();
-            TryRestore(
-                () => PlayerSettings.SetScriptingBackend(request.NamedTarget, originalScriptingBackend),
-                "scripting backend",
-                restoreFailures);
-            TryRestore(() => PlayerSettings.companyName = originalCompanyName, "company name", restoreFailures);
-            TryRestore(() => PlayerSettings.productName = originalProductName, "product name", restoreFailures);
-            TryRestore(() => PlayerSettings.bundleVersion = originalBundleVersion, "bundle version", restoreFailures);
-            TryRestore(
-                () => PlayerSettings.SetApplicationIdentifier(request.NamedTarget, originalApplicationIdentifier),
-                "application identifier",
-                restoreFailures);
-            TryRestore(
-                () => PlayerSettings.Android.bundleVersionCode = originalAndroidBundleVersionCode,
-                "Android build number",
-                restoreFailures);
-            TryRestore(
-                () => PlayerSettings.iOS.buildNumber = originalIosBuildNumber,
-                "iOS build number",
-                restoreFailures);
-            TryRestore(
-                () => EditorUserBuildSettings.exportAsGoogleAndroidProject = originalExportAndroidProject,
-                "Android export setting",
-                restoreFailures);
-
             bool playerSettingsFileRestored = false;
+            TryRestore(
+                RestoreEditorUserBuildState,
+                "Editor user build state",
+                restoreFailures);
             TryRestore(
                 () =>
                 {
-                    transaction.RestorePlayerSettingsFile();
+                    transaction.RestoreGlobalSettingsFiles();
                     playerSettingsFileRestored = true;
                 },
                 "PlayerSettings asset bytes",
@@ -300,6 +282,15 @@ namespace Build.Pipeline.Editor
                     $"Failed to restore {stateName}.",
                     exception));
             }
+        }
+
+        private void RestoreEditorUserBuildState()
+        {
+            EditorUserBuildSettings.exportAsGoogleAndroidProject =
+                originalExportAndroidProject;
+            EditorUserBuildSettings.development = originalDevelopmentBuild;
+            EditorBuildSettings.scenes = CreateEditorBuildSettingsScenes(
+                originalEditorBuildScenes);
         }
 
         private static PlayerSettings GetPlayerSettingsAsset()
@@ -375,16 +366,14 @@ namespace Build.Pipeline.Editor
             }
 
             EditorUserBuildSettings.exportAsGoogleAndroidProject = request.ExportAndroidProject;
-            if (ObfuzIntegrator.IsBaseObfuzAvailable())
+            EditorUserBuildSettings.development = request.DebugBuild;
+            if (RequiresRecipeScenes(request))
             {
-                if (!ObfuzIntegrator.TryGetObfuzBuildPipelineEnabled(out bool persistedState)
-                    || persistedState != request.EnablePlayerObfuscation)
-                {
-                    throw new InvalidOperationException(
-                        "The persisted Obfuz Player pipeline state changed after preflight. " +
-                        "Provision ProjectSettings/Obfuz.asset before starting the build; the build transaction never rewrites it.");
-                }
+                EditorBuildSettings.scenes = CreateRequestedEditorBuildScenes(
+                    request.BuildScenePaths);
             }
+            transaction.MarkEditorBuildSettingsApplied();
+            PlayerSettingsLicensePolicy.Apply(playerSettingsAsset);
         }
 
         private void ValidateAppliedState(BuildVersionContext version)
@@ -442,6 +431,42 @@ namespace Build.Pipeline.Editor
                 failures.Add("Android export setting");
             }
 
+            if (EditorUserBuildSettings.development != request.DebugBuild)
+            {
+                failures.Add("Development build setting");
+            }
+
+            if (RequiresRecipeScenes(request)
+                && !EditorBuildScenesEqual(
+                    CaptureEditorBuildScenes(),
+                    CreateRequestedEditorBuildSceneStates(request.BuildScenePaths)))
+            {
+                failures.Add("Editor build scene sequence");
+            }
+
+            try
+            {
+                PlayerSettingsLicensePolicy.Validate(playerSettingsAsset);
+            }
+            catch (Exception exception)
+            {
+                failures.Add("license-compliant splash policy: " + exception.Message);
+            }
+
+            try
+            {
+                if (!PlayerSettingsPreloadedAssetPolicy.SequenceEqual(
+                        PlayerSettingsPreloadedAssetPolicy.Capture(),
+                        originalPreloadedAssetIds))
+                {
+                    failures.Add("preloaded asset sequence");
+                }
+            }
+            catch (Exception exception)
+            {
+                failures.Add("preloaded asset sequence: " + exception.Message);
+            }
+
             if (failures.Count > 0)
             {
                 throw new InvalidOperationException(
@@ -464,6 +489,7 @@ namespace Build.Pipeline.Editor
 
             transaction.MarkGlobalMutationApplied(
                 persistenceToken,
+                CaptureCurrentOwnedPlayerSettings(),
                 HasRequestedPlayerSettingsMutation(version));
             if (EditorUtility.IsDirty(playerSettingsAsset))
             {
@@ -489,66 +515,142 @@ namespace Build.Pipeline.Editor
                     && !string.Equals(
                         originalIosBuildNumber,
                         version.BuildNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        StringComparison.Ordinal));
+                        StringComparison.Ordinal))
+                || PlayerSettingsLicensePolicy.RequiresMutation(originalSplashState);
         }
 
-        private static void ValidateDurableObfuzState(bool requestedState)
+        private PlayerSettingsOwnedState CaptureOriginalOwnedPlayerSettings()
         {
-            if (!ObfuzIntegrator.IsBaseObfuzAvailable())
+            return new PlayerSettingsOwnedState(
+                (int)originalScriptingBackend,
+                originalCompanyName,
+                originalProductName,
+                originalBundleVersion,
+                originalApplicationIdentifier,
+                originalAndroidBundleVersionCode,
+                originalIosBuildNumber,
+                originalExportAndroidProject,
+                originalDevelopmentBuild,
+                originalEditorBuildScenes,
+                originalSplashState,
+                originalPreloadedAssetIds);
+        }
+
+        private PlayerSettingsOwnedState CaptureCurrentOwnedPlayerSettings()
+        {
+            return new PlayerSettingsOwnedState(
+                (int)PlayerSettings.GetScriptingBackend(request.NamedTarget),
+                PlayerSettings.companyName,
+                PlayerSettings.productName,
+                PlayerSettings.bundleVersion,
+                PlayerSettings.GetApplicationIdentifier(request.NamedTarget),
+                PlayerSettings.Android.bundleVersionCode,
+                PlayerSettings.iOS.buildNumber,
+                EditorUserBuildSettings.exportAsGoogleAndroidProject,
+                EditorUserBuildSettings.development,
+                CaptureEditorBuildScenes(),
+                PlayerSettingsLicensePolicy.Capture(playerSettingsAsset),
+                PlayerSettingsPreloadedAssetPolicy.Capture());
+        }
+
+        private static bool RequiresRecipeScenes(BuildRequest request)
+        {
+            IReadOnlyList<BuildStepInvocation> hotUpdateInvocations =
+                request.GetInvocationsByStepType(BuildStepTypeIds.HotUpdate);
+            for (int index = 0; index < hotUpdateInvocations.Count; index++)
             {
-                if (requestedState)
+                if (hotUpdateInvocations[index].Incrementality ==
+                    BuildIncrementality.Clean)
                 {
-                    throw new InvalidOperationException(
-                        "Player obfuscation is enabled, but a compatible base Obfuz package is unavailable.");
+                    return true;
                 }
-
-                return;
             }
 
-            if (!ObfuzIntegrator.TryGetObfuzBuildPipelineEnabled(out bool persistedState))
+            return false;
+        }
+
+        private static EditorBuildSettingsScene[] CreateRequestedEditorBuildScenes(
+            IReadOnlyList<string> paths)
+        {
+            var scenes = new EditorBuildSettingsScene[paths.Count];
+            for (int index = 0; index < paths.Count; index++)
             {
-                throw new InvalidOperationException(
-                    "Obfuz settings are unavailable or incomplete. Provision ProjectSettings/Obfuz.asset before building.");
+                scenes[index] = new EditorBuildSettingsScene(paths[index], true);
             }
 
-            if (persistedState != requestedState)
+            return scenes;
+        }
+
+        private static EditorBuildSettingsScene[] CreateEditorBuildSettingsScenes(
+            IReadOnlyList<EditorBuildSceneState> states)
+        {
+            var scenes = new EditorBuildSettingsScene[states.Count];
+            for (int index = 0; index < states.Count; index++)
             {
-                throw new InvalidOperationException(
-                    $"The build request requires EnablePlayerObfuscation={requestedState}, but the durable Obfuz setting is {persistedState}. " +
-                    "Change and save ProjectSettings/Obfuz.asset before invoking the build. " +
-                    "The build pipeline does not temporarily persist Obfuz settings because its Save API is not crash-transactional.");
+                scenes[index] = new EditorBuildSettingsScene(
+                    states[index].Path,
+                    states[index].Enabled);
             }
+
+            return scenes;
+        }
+
+        private static EditorBuildSceneState[] CreateRequestedEditorBuildSceneStates(
+            IReadOnlyList<string> paths)
+        {
+            var scenes = new EditorBuildSceneState[paths.Count];
+            for (int index = 0; index < paths.Count; index++)
+            {
+                scenes[index] = new EditorBuildSceneState(paths[index], true);
+            }
+
+            return scenes;
+        }
+
+        private static EditorBuildSceneState[] CaptureEditorBuildScenes()
+        {
+            EditorBuildSettingsScene[] configured =
+                EditorBuildSettings.scenes ?? Array.Empty<EditorBuildSettingsScene>();
+            var result = new EditorBuildSceneState[configured.Length];
+            for (int index = 0; index < configured.Length; index++)
+            {
+                EditorBuildSettingsScene scene = configured[index];
+                result[index] = new EditorBuildSceneState(
+                    scene?.path,
+                    scene != null && scene.enabled);
+            }
+
+            return result;
+        }
+
+        private static bool EditorBuildScenesEqual(
+            IReadOnlyList<EditorBuildSceneState> left,
+            IReadOnlyList<EditorBuildSceneState> right)
+        {
+            if (left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < left.Count; index++)
+            {
+                if (left[index].Enabled != right[index].Enabled
+                    || !string.Equals(
+                        left[index].Path,
+                        right[index].Path,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static void RecoverInterruptedUnityState(GlobalBuildStateTransaction transaction)
         {
-            BuildTargetRecoveryState state = transaction.PendingBuildTargetState;
-            if (!Enum.IsDefined(typeof(BuildTarget), state.ActiveBuildTarget)
-                || !Enum.IsDefined(typeof(BuildTarget), state.RequestedBuildTarget)
-                || !Enum.IsDefined(typeof(ScriptingImplementation), state.ScriptingBackend))
-            {
-                throw new InvalidOperationException(
-                    "The interrupted global-state journal contains unsupported Unity enum values.");
-            }
-
-            EnsureRecoveryActiveBuildTargetMatches(
-                (BuildTarget)state.ActiveBuildTarget,
-                EditorUserBuildSettings.activeBuildTarget);
-
-            BuildTarget requestedTarget = (BuildTarget)state.RequestedBuildTarget;
-            NamedBuildTarget requestedNamedTarget = BuildRequestFactory.GetNamedBuildTarget(requestedTarget);
-            PlayerSettings.SetScriptingBackend(
-                requestedNamedTarget,
-                (ScriptingImplementation)state.ScriptingBackend);
-            PlayerSettings.companyName = state.CompanyName;
-            PlayerSettings.productName = state.ProductName;
-            PlayerSettings.bundleVersion = state.BundleVersion;
-            PlayerSettings.SetApplicationIdentifier(
-                requestedNamedTarget,
-                state.ApplicationIdentifier);
-            EditorUserBuildSettings.exportAsGoogleAndroidProject = state.ExportAndroidProject;
-
-            transaction.ReassertPendingRecovery();
+            transaction.RestorePendingEditorUserState();
+            transaction.RestorePendingTransaction();
             PlayerSettings loadedSettings = GetPlayerSettingsAsset();
             EditorUtility.ClearDirty(loadedSettings);
             if (EditorUtility.IsDirty(loadedSettings))
@@ -610,20 +712,6 @@ namespace Build.Pipeline.Editor
                 resolution + " The build pipeline never switches active targets synchronously because Unity may compile scripts and reload the domain.");
         }
 
-        private static void EnsureRecoveryActiveBuildTargetMatches(
-            BuildTarget expectedTarget,
-            BuildTarget activeTarget)
-        {
-            if (expectedTarget == BuildTarget.NoTarget || activeTarget == expectedTarget)
-            {
-                return;
-            }
-
-            throw new BuildFailedException(
-                $"Interrupted build recovery requires active target '{expectedTarget}', but the Editor is using '{activeTarget}'. " +
-                $"Restart Unity with the native '-buildTarget {BuildCommandLine.GetUnityBuildTargetArgument(expectedTarget)}' argument, or select that target in File > Build Settings, before retrying recovery. " +
-                "The build pipeline never switches active targets synchronously.");
-        }
     }
 
     internal sealed class VersionInfoAssetScope : IDisposable
@@ -776,16 +864,22 @@ namespace Build.Pipeline.Editor
         private void WriteVersionInfoAsset(BuildVersionContext version)
         {
             string stageAssetPath = transaction.VersionInfoStageAssetPath;
+            string targetObjectName = Path.GetFileNameWithoutExtension(assetPath);
             VersionInfoData data = ScriptableObject.CreateInstance<VersionInfoData>();
             try
             {
+                // CreateAsset requires the main object name to match the staging
+                // filename. Serialize the final target name only after creation so
+                // the bytes sealed by MarkVersionStageReady already match the
+                // installed asset and never need an unjournaled post-install edit.
+                data.name = Path.GetFileNameWithoutExtension(stageAssetPath);
                 AssetDatabase.CreateAsset(data, stageAssetPath);
-                data.name = Path.GetFileNameWithoutExtension(assetPath);
                 data.commitHash = version.CommitHash;
                 data.commitCount = version.CommitCount;
                 data.commitBranch = version.Branch;
                 data.commitDate = version.CommitDate;
                 data.buildDate = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                data.name = targetObjectName;
                 EditorUtility.SetDirty(data);
                 AssetDatabase.SaveAssetIfDirty(data);
             }
@@ -809,6 +903,13 @@ namespace Build.Pipeline.Editor
             {
                 throw new InvalidOperationException(
                     $"Installed transient VersionInfoData could not be loaded: '{assetPath}'.");
+            }
+
+            if (!string.Equals(installed.name, targetObjectName, StringComparison.Ordinal))
+            {
+                throw new IOException(
+                    $"Installed transient VersionInfoData has unexpected main object name '{installed.name}'. " +
+                    $"Expected '{targetObjectName}'.");
             }
 
             transaction.RefreshInstalledVersionIdentity();
@@ -844,66 +945,165 @@ namespace Build.Pipeline.Editor
                 throw new ArgumentNullException(nameof(request));
             }
 
+            BuildIdentityOverride identityOverride = request.IdentityOverride;
             bool allowLocalDevelopmentFallback = !request.BatchMode && request.DebugBuild;
+            VersionControlMetadata metadata = null;
+            long detectedCommitCount = 0L;
+            string detectionFailure = null;
+
             if (provider == null)
             {
-                return allowLocalDevelopmentFallback
-                    ? CreateLocalDevelopmentVersion(request, "No supported version-control provider was detected.")
-                    : throw new BuildFailedException(
-                        "A supported version-control provider is required for batch-mode and release builds. " +
-                        "Install/configure Git or Perforce, or use an interactive Development build for the explicit local fallback.");
+                detectionFailure = "No supported version-control provider was detected.";
+            }
+            else
+            {
+                try
+                {
+                    metadata = provider.Capture();
+                    detectedCommitCount = ValidateMetadata(metadata);
+                }
+                catch (Exception exception)
+                {
+                    metadata = null;
+                    detectionFailure =
+                        "Version-control metadata capture failed: " + exception.Message;
+                }
             }
 
-            VersionControlMetadata metadata;
-            long commitCount;
-            try
+            if (metadata == null)
             {
-                metadata = provider.Capture();
-                commitCount = ValidateMetadata(metadata);
-            }
-            catch (Exception exception)
-            {
-                if (allowLocalDevelopmentFallback)
+                if (identityOverride.HasSourceIdentity
+                    && identityOverride.BuildNumber.HasValue)
+                {
+                    Debug.LogWarning(
+                        "[BuildPipeline] Using the explicit source and build identity because local version-control detection is unavailable. " +
+                        detectionFailure);
+                    return CreateExplicitVersionWithoutDetection(request, identityOverride);
+                }
+
+                if (allowLocalDevelopmentFallback
+                    && !identityOverride.HasSourceIdentity)
                 {
                     return CreateLocalDevelopmentVersion(
                         request,
-                        "Version-control metadata capture failed: " + exception.Message);
+                        identityOverride,
+                        detectionFailure);
                 }
 
                 throw new BuildFailedException(
-                    "Version-control metadata capture failed. Batch-mode and release builds never publish fallback version identifiers. " +
-                    exception.Message);
+                    detectionFailure + " Batch-mode and release builds require either reliable local version-control metadata " +
+                    "or a complete explicit source identity and build number.");
             }
 
-            long buildNumber = GetNativeBuildNumber(request.Target, commitCount);
-            string packageVersion = $"{request.ApplicationVersion}.{metadata.CommitCount}";
+            ValidateExplicitSourceMatchesDetected(identityOverride, metadata);
+
+            long detectedBuildNumber = Math.Max(1L, detectedCommitCount);
+            long effectiveBuildNumber = identityOverride.BuildNumber
+                ?? detectedBuildNumber;
+            ValidateNativeBuildNumber(request.Target, effectiveBuildNumber);
+            bool hasExplicitIdentity =
+                identityOverride.BuildNumber.HasValue
+                || identityOverride.HasSourceIdentity;
+            string effectiveProvider = identityOverride.HasSourceIdentity
+                ? identityOverride.SourceProvider
+                : metadata.ProviderId;
+            string effectiveRevision = identityOverride.HasSourceIdentity
+                ? identityOverride.SourceRevision
+                : metadata.CommitHash;
+            string effectiveBranch = identityOverride.HasSourceIdentity
+                ? identityOverride.SourceBranch
+                : metadata.BranchName;
             return new BuildVersionContext(
                 request.ApplicationVersion,
-                packageVersion,
-                buildNumber,
+                CreatePackageVersion(request.ApplicationVersion, effectiveBuildNumber),
+                effectiveBuildNumber,
+                effectiveRevision,
+                metadata.CommitCount,
+                effectiveBranch,
+                metadata.CommitDate,
+                effectiveProvider,
+                hasExplicitIdentity
+                    ? BuildIdentityOrigin.ExplicitOverride
+                    : BuildIdentityOrigin.VersionControl,
                 metadata.CommitHash,
                 metadata.CommitCount,
                 metadata.BranchName,
                 metadata.CommitDate,
-                metadata.ProviderId);
+                metadata.ProviderId,
+                detectedBuildNumber,
+                identityOverride.CiProvider,
+                identityOverride.CiRunId);
         }
 
         private static BuildVersionContext CreateLocalDevelopmentVersion(
             BuildRequest request,
+            BuildIdentityOverride identityOverride,
             string reason)
         {
             Debug.LogWarning(
                 "[BuildPipeline] Using explicit local Development version metadata. " + reason);
             const string CommitCount = "0";
+            long buildNumber = identityOverride.BuildNumber ?? 1L;
+            ValidateNativeBuildNumber(request.Target, buildNumber);
             return new BuildVersionContext(
                 request.ApplicationVersion,
-                $"{request.ApplicationVersion}.{CommitCount}",
-                1,
+                CreatePackageVersion(request.ApplicationVersion, buildNumber),
+                buildNumber,
                 "local",
                 CommitCount,
                 "local-development",
                 "unversioned",
-                "LocalDevelopment");
+                "LocalDevelopment",
+                BuildIdentityOrigin.LocalDevelopment,
+                ciProvider: identityOverride.CiProvider,
+                ciRunId: identityOverride.CiRunId);
+        }
+
+        private static BuildVersionContext CreateExplicitVersionWithoutDetection(
+            BuildRequest request,
+            BuildIdentityOverride identityOverride)
+        {
+            long buildNumber = identityOverride.BuildNumber.Value;
+            ValidateNativeBuildNumber(request.Target, buildNumber);
+            string buildNumberText = buildNumber.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            return new BuildVersionContext(
+                request.ApplicationVersion,
+                CreatePackageVersion(request.ApplicationVersion, buildNumber),
+                buildNumber,
+                identityOverride.SourceRevision,
+                buildNumberText,
+                identityOverride.SourceBranch,
+                string.Empty,
+                identityOverride.SourceProvider,
+                BuildIdentityOrigin.ExplicitOverride,
+                ciProvider: identityOverride.CiProvider,
+                ciRunId: identityOverride.CiRunId);
+        }
+
+        private static void ValidateExplicitSourceMatchesDetected(
+            BuildIdentityOverride identityOverride,
+            VersionControlMetadata metadata)
+        {
+            if (!identityOverride.HasSourceIdentity)
+            {
+                return;
+            }
+
+            if (!string.Equals(
+                    identityOverride.SourceProvider,
+                    metadata.ProviderId,
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    identityOverride.SourceRevision,
+                    metadata.CommitHash,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BuildFailedException(
+                    "Explicit source identity does not match the detected workspace revision. " +
+                    $"Explicit={identityOverride.SourceProvider}:{identityOverride.SourceRevision}, " +
+                    $"detected={metadata.ProviderId}:{metadata.CommitHash}.");
+            }
         }
 
         private static long ValidateMetadata(VersionControlMetadata metadata)
@@ -932,16 +1132,29 @@ namespace Build.Pipeline.Editor
             return count;
         }
 
-        private static long GetNativeBuildNumber(BuildTarget target, long commitCount)
+        private static string CreatePackageVersion(
+            string applicationVersion,
+            long buildNumber)
         {
-            long buildNumber = Math.Max(1L, commitCount);
+            return applicationVersion + "." + buildNumber.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static void ValidateNativeBuildNumber(
+            BuildTarget target,
+            long buildNumber)
+        {
+            if (buildNumber < 1L || buildNumber > int.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"The effective native build number must be between 1 and {int.MaxValue}.");
+            }
+
             if (target == BuildTarget.Android && buildNumber > 2100000000L)
             {
                 throw new InvalidOperationException(
-                    "The VCS-derived Android build number exceeds Google Play's maximum versionCode of 2100000000.");
+                    "The effective Android build number exceeds Google Play's maximum versionCode of 2100000000.");
             }
-
-            return buildNumber;
         }
 
         private static void ValidateBoundedText(

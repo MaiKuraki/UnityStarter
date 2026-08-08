@@ -13,15 +13,32 @@ namespace Build.Pipeline.Editor
             BuildData buildData,
             BuildTarget target,
             bool debugBuild,
-            BuildIncrementality incrementality,
-            bool exportAndroidProject = false)
+            bool exportAndroidProject = false,
+            IReadOnlyList<string> invocationIdsOverride = null)
         {
+            if (buildData == null)
+            {
+                throw new ArgumentNullException(nameof(buildData));
+            }
+
+            IReadOnlyList<string> effectiveInvocationIds = invocationIdsOverride;
+            if (invocationIdsOverride != null
+                && !BuildRecipeSelection.TryExpandRequiredClosure(
+                    buildData.RecipeInvocations,
+                    invocationIdsOverride,
+                    out effectiveInvocationIds,
+                    out string selectionError))
+            {
+                throw new BuildFailedException(selectionError);
+            }
+
+            BuildAuthoringAssetGuard.EnsureSaved(buildData, effectiveInvocationIds);
             ValidateAndroidExport(target, exportAndroidProject);
             NamedBuildTarget namedTarget = GetNamedBuildTarget(target);
             bool outputIsFolder = IsFolderOutput(target, null, exportAndroidProject);
             string output = GetDefaultRelativeOutput(
                 target,
-                buildData?.ProductName,
+                buildData.ProductName,
                 debugBuild,
                 exportAndroidProject);
 
@@ -33,7 +50,6 @@ namespace Build.Pipeline.Editor
                 output,
                 outputRelativeToBuildRoot: true,
                 outputIsFolder,
-                incrementality,
                 deleteDebugFiles: !debugBuild,
                 debugBuild,
                 exportAndroidProject,
@@ -42,13 +58,17 @@ namespace Build.Pipeline.Editor
                 applicationVersionOverride: null,
                 outputBasePathOverride: null,
                 versionInfoAssetPathOverride: null,
-                assetContentProviderIdOverride: null,
-                assetContentConfigurationPathOverride: null,
-                useHybridClrOverride: null,
-                stepIdsOverride: null);
+                effectiveInvocationIds,
+                commandLineRecipeOverride: null,
+                stepConfigurationPathOverrides: null,
+                stepIncrementalityOverrides: null,
+                stepDependencyOverrides: null,
+                identityOverride: BuildIdentityOverride.Empty);
         }
 
-        public static BuildRequest CreateForCommandLine(BuildData buildData, BuildCommandLineOptions options)
+        public static BuildRequest CreateForCommandLine(
+            BuildData buildData,
+            BuildCommandLineOptions options)
         {
             if (options == null)
             {
@@ -78,7 +98,6 @@ namespace Build.Pipeline.Editor
                 requestedOutput,
                 outputRelativeToBuildRoot,
                 outputIsFolder,
-                options.Incrementality,
                 deleteDebugFiles: !options.DebugBuild,
                 options.DebugBuild,
                 options.ExportAndroidProject,
@@ -87,10 +106,14 @@ namespace Build.Pipeline.Editor
                 options.ApplicationVersion,
                 options.OutputBasePath,
                 options.VersionInfoAssetPath,
-                options.AssetContentProviderId,
-                options.AssetContentConfigurationPath,
-                options.UseHybridClr,
-                options.StepIds);
+                invocationIdsOverride: options.SelectedInvocationIds.Count == 0
+                    ? null
+                    : options.SelectedInvocationIds,
+                options.RecipeInvocations,
+                options.StepConfigurationPathOverrides,
+                options.StepIncrementalityOverrides,
+                options.StepDependencyOverrides,
+                identityOverride: options.IdentityOverride);
         }
 
         private static BuildRequest Create(
@@ -101,7 +124,6 @@ namespace Build.Pipeline.Editor
             string requestedOutput,
             bool outputRelativeToBuildRoot,
             bool outputIsFolder,
-            BuildIncrementality incrementality,
             bool deleteDebugFiles,
             bool debugBuild,
             bool exportAndroidProject,
@@ -110,10 +132,12 @@ namespace Build.Pipeline.Editor
             string applicationVersionOverride,
             string outputBasePathOverride,
             string versionInfoAssetPathOverride,
-            string assetContentProviderIdOverride,
-            string assetContentConfigurationPathOverride,
-            bool? useHybridClrOverride,
-            IReadOnlyList<string> stepIdsOverride)
+            IReadOnlyList<string> invocationIdsOverride,
+            IReadOnlyList<BuildCommandLineRecipeInvocation> commandLineRecipeOverride,
+            IReadOnlyDictionary<string, string> stepConfigurationPathOverrides,
+            IReadOnlyDictionary<string, BuildIncrementality> stepIncrementalityOverrides,
+            IReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>> stepDependencyOverrides,
+            BuildIdentityOverride identityOverride)
         {
             if (buildData == null)
             {
@@ -142,23 +166,18 @@ namespace Build.Pipeline.Editor
             string applicationVersion = string.IsNullOrWhiteSpace(applicationVersionOverride)
                 ? buildData.ApplicationVersion
                 : applicationVersionOverride.Trim();
-            bool useHybridClr = useHybridClrOverride ?? buildData.UseHybridCLR;
-            IReadOnlyList<string> stepIds = stepIdsOverride ?? buildData.PipelineSteps;
-            ValidateAndroidExportRecipe(stepIds, exportAndroidProject);
+            IReadOnlyList<BuildStepInvocation> invocations = ResolveStepInvocations(
+                buildData,
+                invocationIdsOverride,
+                commandLineRecipeOverride,
+                stepConfigurationPathOverrides,
+                stepIncrementalityOverrides,
+                stepDependencyOverrides);
+
+            ValidateAndroidExportRecipe(invocations, exportAndroidProject);
             string versionInfoAssetPath = string.IsNullOrWhiteSpace(versionInfoAssetPathOverride)
                 ? buildData.VersionInfoAssetPath
                 : versionInfoAssetPathOverride.Trim().Replace('\\', '/');
-            ResolveAssetContentBinding(
-                buildData,
-                assetContentProviderIdOverride,
-                assetContentConfigurationPathOverride,
-                out string assetContentProviderId,
-                out ScriptableObject assetContentConfiguration);
-            ValidateContentOnlyRecipeBinding(
-                stepIds,
-                assetContentProviderId,
-                assetContentConfiguration);
-
             return new BuildRequest(
                 buildData.CompanyName,
                 buildData.ProductName,
@@ -166,7 +185,6 @@ namespace Build.Pipeline.Editor
                 versionInfoAssetPath,
                 buildData.GetBuildScenePaths(),
                 buildData.CheatBuildMode,
-                buildData.HybridCLRBuildConfig,
                 target,
                 namedTarget,
                 scriptingBackend,
@@ -175,7 +193,6 @@ namespace Build.Pipeline.Editor
                 outputPath,
                 outputDirectory,
                 outputIsFolder,
-                incrementality,
                 deleteDebugFiles,
                 debugBuild,
                 exportAndroidProject,
@@ -183,91 +200,265 @@ namespace Build.Pipeline.Editor
                 cheatOverride,
                 Application.isBatchMode,
                 applicationVersion,
-                assetContentProviderId,
-                assetContentConfiguration,
-                useHybridClr,
-                buildData.EnablePlayerObfuscation,
-                stepIds);
+                identityOverride ?? throw new ArgumentNullException(nameof(identityOverride)),
+                invocations);
         }
 
-        private static void ResolveAssetContentBinding(
+        private static IReadOnlyList<BuildStepInvocation> ResolveStepInvocations(
             BuildData buildData,
-            string providerIdOverride,
-            string configurationPathOverride,
-            out string providerId,
-            out ScriptableObject configuration)
+            IReadOnlyList<string> invocationIdsOverride,
+            IReadOnlyList<BuildCommandLineRecipeInvocation> commandLineRecipeOverride,
+            IReadOnlyDictionary<string, string> configurationPathOverrides,
+            IReadOnlyDictionary<string, BuildIncrementality> incrementalityOverrides,
+            IReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>> dependencyOverrides)
         {
-            if (string.IsNullOrWhiteSpace(providerIdOverride))
+            IReadOnlyList<BuildRecipeInvocation> authored = buildData.RecipeInvocations;
+            var authoredByInvocation = new Dictionary<string, BuildRecipeInvocation>(
+                StringComparer.OrdinalIgnoreCase);
+            for (int index = 0; index < authored.Count; index++)
             {
-                providerId = buildData.AssetContentProviderId?.Trim() ?? string.Empty;
-                configuration = buildData.AssetContentConfiguration;
-                return;
-            }
-
-            string requestedId = providerIdOverride.Trim();
-            if (string.Equals(requestedId, "none", StringComparison.OrdinalIgnoreCase))
-            {
-                providerId = string.Empty;
-                configuration = null;
-                return;
-            }
-
-            AssetContentProviderDescriptor descriptor = null;
-            var catalogDiagnostics = new List<string>();
-            foreach (AssetContentProviderDescriptor candidate in
-                     BuildPipelineRegistry.GetAssetContentProviderDescriptors(catalogDiagnostics))
-            {
-                if (string.Equals(
-                    candidate.ProviderId,
-                    requestedId,
-                    StringComparison.OrdinalIgnoreCase))
+                BuildRecipeInvocation entry = authored[index];
+                string invocationId = entry?.InvocationId?.Trim();
+                if (string.IsNullOrEmpty(invocationId))
                 {
-                    descriptor = candidate;
-                    break;
+                    throw new BuildFailedException(
+                        $"Build recipe invocation at index {index} has an empty invocation id.");
+                }
+
+                if (string.IsNullOrWhiteSpace(entry.StepTypeId))
+                {
+                    throw new BuildFailedException(
+                        $"Build recipe invocation '{invocationId}' has an empty step type id.");
+                }
+
+                if (!authoredByInvocation.TryAdd(invocationId, entry))
+                {
+                    throw new BuildFailedException(
+                        $"Build recipe contains duplicate invocation id '{invocationId}'.");
                 }
             }
 
-            if (descriptor == null)
+            bool hasExplicitCommandLineRecipe = commandLineRecipeOverride != null
+                && commandLineRecipeOverride.Count > 0;
+            if (hasExplicitCommandLineRecipe
+                && invocationIdsOverride != null
+                && invocationIdsOverride.Count > 0)
             {
-                string diagnostics = catalogDiagnostics.Count == 0
-                    ? string.Empty
-                    : " Catalog diagnostics: " + string.Join(" | ", catalogDiagnostics);
                 throw new BuildFailedException(
-                    $"Asset content provider '{requestedId}' is not declared by an installed authoring integration." +
-                    diagnostics);
+                    "A focused profile selection cannot be combined with an explicit command-line recipe replacement.");
             }
 
-            string normalizedPath = configurationPathOverride?.Trim().Replace('\\', '/');
+            IReadOnlyList<string> selectedIds;
+            if (invocationIdsOverride == null)
+            {
+                selectedIds = buildData.EnabledInvocationIds;
+            }
+            else if (!BuildRecipeSelection.TryExpandRequiredClosure(
+                         authored,
+                         invocationIdsOverride,
+                         out selectedIds,
+                         out string selectionError))
+            {
+                throw new BuildFailedException(selectionError);
+            }
+
+            int selectedCount = hasExplicitCommandLineRecipe
+                ? commandLineRecipeOverride.Count
+                : selectedIds.Count;
+            var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var invocations = new List<BuildStepInvocation>(selectedCount);
+            for (int index = 0; index < selectedCount; index++)
+            {
+                string invocationId;
+                string stepTypeId;
+                ScriptableObject configuration;
+                BuildIncrementality incrementality;
+                IReadOnlyList<BuildInvocationDependency> dependencies;
+
+                if (hasExplicitCommandLineRecipe)
+                {
+                    BuildCommandLineRecipeInvocation commandLineInvocation =
+                        commandLineRecipeOverride[index]
+                        ?? throw new BuildFailedException(
+                            $"Command-line recipe invocation at index {index} is null.");
+                    invocationId = commandLineInvocation.InvocationId?.Trim();
+                    stepTypeId = commandLineInvocation.StepTypeId?.Trim();
+                    configuration = null;
+                    incrementality = BuildIncrementality.Clean;
+                    dependencies = Array.Empty<BuildInvocationDependency>();
+                }
+                else
+                {
+                    invocationId = selectedIds[index]?.Trim();
+                    if (string.IsNullOrEmpty(invocationId))
+                    {
+                        throw new BuildFailedException(
+                            $"Selected recipe invocation at index {index} has an empty id.");
+                    }
+
+                    if (!authoredByInvocation.TryGetValue(
+                            invocationId,
+                            out BuildRecipeInvocation authoredEntry))
+                    {
+                        throw new BuildFailedException(
+                            $"Selected recipe invocation '{invocationId}' does not exist in the build profile.");
+                    }
+
+                    stepTypeId = authoredEntry.StepTypeId;
+                    configuration = authoredEntry.Configuration;
+                    incrementality = authoredEntry.Incrementality;
+                    dependencies = authoredEntry.Dependencies;
+                }
+
+                if (string.IsNullOrWhiteSpace(invocationId)
+                    || string.IsNullOrWhiteSpace(stepTypeId))
+                {
+                    throw new BuildFailedException(
+                        $"Selected recipe invocation at index {index} requires non-empty invocation and step type ids.");
+                }
+
+                if (!selected.Add(invocationId))
+                {
+                    throw new BuildFailedException(
+                        $"Selected recipe invocation '{invocationId}' is specified more than once.");
+                }
+
+                if (configurationPathOverrides != null
+                    && configurationPathOverrides.TryGetValue(
+                        invocationId,
+                        out string configurationPath))
+                {
+                    configuration = LoadStepConfiguration(invocationId, configurationPath);
+                }
+
+                if (incrementalityOverrides != null
+                    && incrementalityOverrides.TryGetValue(
+                        invocationId,
+                        out BuildIncrementality overridePolicy))
+                {
+                    incrementality = overridePolicy;
+                }
+
+                if (dependencyOverrides != null
+                    && dependencyOverrides.TryGetValue(
+                        invocationId,
+                        out IReadOnlyList<BuildInvocationDependency> overrideDependencies))
+                {
+                    dependencies = overrideDependencies;
+                }
+
+                ValidateStepConfigurationAsset(invocationId, configuration);
+                invocations.Add(new BuildStepInvocation(
+                    invocationId,
+                    stepTypeId,
+                    configuration,
+                    incrementality,
+                    dependencies));
+            }
+
+            ValidateOverrideTargets(selected, configurationPathOverrides, "configuration");
+            ValidateOverrideTargets(selected, incrementalityOverrides, "incrementality");
+            ValidateOverrideTargets(selected, dependencyOverrides, "dependency");
+            return invocations;
+        }
+
+        private static void ValidateOverrideTargets<T>(
+            HashSet<string> selectedInvocationIds,
+            IReadOnlyDictionary<string, T> overrides,
+            string overrideKind)
+        {
+            if (overrides == null)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, T> entry in overrides)
+            {
+                if (!selectedInvocationIds.Contains(entry.Key))
+                {
+                    throw new BuildFailedException(
+                        $"Step {overrideKind} override '{entry.Key}' does not target a selected recipe invocation.");
+                }
+            }
+        }
+
+        private static ScriptableObject LoadStepConfiguration(
+            string invocationId,
+            string configurationPath)
+        {
+            string normalizedPath = configurationPath?.Trim().Replace('\\', '/');
             if (string.IsNullOrWhiteSpace(normalizedPath)
                 || !normalizedPath.StartsWith("Assets/", StringComparison.Ordinal)
                 || !normalizedPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
             {
                 throw new BuildFailedException(
-                    $"Asset content configuration must be a project-relative .asset path below Assets: '{configurationPathOverride}'.");
+                    $"Configuration override for invocation '{invocationId}' must be a project-relative " +
+                    $".asset path below Assets: '{configurationPath}'.");
             }
 
             try
             {
                 BuildPathPolicy.ValidatePortableProjectRelativePath(
                     normalizedPath,
-                    "Asset content configuration");
+                    $"Configuration override for invocation '{invocationId}'");
             }
             catch (ArgumentException exception)
             {
                 throw new BuildFailedException(
-                    $"Asset content configuration path is not portable: '{configurationPathOverride}'. {exception.Message}");
+                    $"Configuration override path for invocation '{invocationId}' is not portable: " +
+                    $"'{configurationPath}'. {exception.Message}");
             }
 
-            configuration = AssetDatabase.LoadAssetAtPath(
-                normalizedPath,
-                descriptor.ConfigurationType) as ScriptableObject;
+            ScriptableObject configuration = AssetDatabase.LoadAssetAtPath<ScriptableObject>(
+                normalizedPath);
             if (configuration == null)
             {
                 throw new BuildFailedException(
-                    $"{descriptor.DisplayName} requires a {descriptor.ConfigurationType.Name} asset at '{normalizedPath}'.");
+                    $"Configuration override for invocation '{invocationId}' does not resolve to a " +
+                    $"ScriptableObject asset at '{normalizedPath}'.");
             }
 
-            providerId = descriptor.ProviderId;
+            return configuration;
+        }
+
+        private static void ValidateStepConfigurationAsset(
+            string invocationId,
+            ScriptableObject configuration)
+        {
+            if (configuration == null)
+            {
+                return;
+            }
+
+            string path = AssetDatabase.GetAssetPath(configuration)?.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(path)
+                || !path.StartsWith("Assets/", StringComparison.Ordinal)
+                || !path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BuildFailedException(
+                    $"Configuration for invocation '{invocationId}' must be a persistent .asset below Assets. " +
+                    "Package assets, in-memory objects, and scene objects cannot provide an equivalent CI recipe.");
+            }
+
+            try
+            {
+                BuildPathPolicy.ValidatePortableProjectRelativePath(
+                    path,
+                    $"Configuration for invocation '{invocationId}'");
+            }
+            catch (ArgumentException exception)
+            {
+                throw new BuildFailedException(
+                    $"Configuration asset for invocation '{invocationId}' has a non-portable path: " +
+                    $"'{path}'. {exception.Message}");
+            }
+
+            if (AssetDatabase.LoadMainAssetAtPath(path) != configuration)
+            {
+                throw new BuildFailedException(
+                    $"Configuration for invocation '{invocationId}' must be the main asset at '{path}'. " +
+                    "Sub-assets cannot be addressed unambiguously by CI.");
+            }
         }
 
         public static NamedBuildTarget GetNamedBuildTarget(BuildTarget target)
@@ -285,7 +476,10 @@ namespace Build.Pipeline.Editor
                 case BuildTarget.StandaloneLinux64:
                     return NamedBuildTarget.Standalone;
                 default:
-                    throw new ArgumentOutOfRangeException(nameof(target), target, "Unsupported player build target.");
+                    throw new ArgumentOutOfRangeException(
+                        nameof(target),
+                        target,
+                        "Unsupported player build target.");
             }
         }
 
@@ -306,7 +500,10 @@ namespace Build.Pipeline.Editor
                 case BuildTarget.WebGL:
                     return "WebGL";
                 default:
-                    throw new ArgumentOutOfRangeException(nameof(target), target, "Unsupported player build target.");
+                    throw new ArgumentOutOfRangeException(
+                        nameof(target),
+                        target,
+                        "Unsupported player build target.");
             }
         }
 
@@ -362,21 +559,20 @@ namespace Build.Pipeline.Editor
         {
             BuildPathPolicy.ValidatePortableFileName(productName, "Product name");
 
-            string safeProductName = productName;
             string artifactName;
             switch (target)
             {
                 case BuildTarget.Android:
-                    artifactName = exportAndroidProject ? "AndroidProject" : safeProductName + ".apk";
+                    artifactName = exportAndroidProject ? "AndroidProject" : productName + ".apk";
                     break;
                 case BuildTarget.StandaloneWindows64:
-                    artifactName = safeProductName + ".exe";
+                    artifactName = productName + ".exe";
                     break;
                 case BuildTarget.StandaloneOSX:
-                    artifactName = safeProductName + ".app";
+                    artifactName = productName + ".app";
                     break;
                 default:
-                    artifactName = safeProductName;
+                    artifactName = productName;
                     break;
             }
 
@@ -388,12 +584,13 @@ namespace Build.Pipeline.Editor
         {
             if (exportAndroidProject && target != BuildTarget.Android)
             {
-                throw new ArgumentException("Android project export is valid only for the Android build target.");
+                throw new ArgumentException(
+                    "Android project export is valid only for the Android build target.");
             }
         }
 
         internal static void ValidateAndroidExportRecipe(
-            IReadOnlyList<string> stepIds,
+            IReadOnlyList<BuildStepInvocation> invocations,
             bool exportAndroidProject)
         {
             if (!exportAndroidProject)
@@ -401,16 +598,16 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            if (stepIds == null)
+            if (invocations == null)
             {
-                throw new ArgumentNullException(nameof(stepIds));
+                throw new ArgumentNullException(nameof(invocations));
             }
 
-            for (int index = 0; index < stepIds.Count; index++)
+            for (int index = 0; index < invocations.Count; index++)
             {
                 if (string.Equals(
-                        stepIds[index]?.Trim(),
-                        BuildStepIds.Player,
+                        invocations[index]?.StepTypeId?.Trim(),
+                        BuildStepTypeIds.Player,
                         StringComparison.OrdinalIgnoreCase))
                 {
                     return;
@@ -418,51 +615,9 @@ namespace Build.Pipeline.Editor
             }
 
             throw new ArgumentException(
-                $"Android Gradle export requires the '{BuildStepIds.Player}' step. " +
-                "Apply the Player + Dependencies preset or add the step to the selected recipe.",
-                nameof(stepIds));
-        }
-
-        internal static void ValidateContentOnlyRecipeBinding(
-            IReadOnlyList<string> stepIds,
-            string providerId,
-            ScriptableObject configuration)
-        {
-            if (stepIds == null)
-            {
-                throw new ArgumentNullException(nameof(stepIds));
-            }
-
-            bool includesAssetContent = false;
-            bool includesPlayer = false;
-            for (int index = 0; index < stepIds.Count; index++)
-            {
-                string stepId = stepIds[index]?.Trim();
-                includesAssetContent |= string.Equals(
-                    stepId,
-                    BuildStepIds.AssetContent,
-                    StringComparison.OrdinalIgnoreCase);
-                includesPlayer |= string.Equals(
-                    stepId,
-                    BuildStepIds.Player,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-
-            if (!includesAssetContent || includesPlayer)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(providerId) && configuration != null)
-            {
-                return;
-            }
-
-            throw new ArgumentException(
-                $"A recipe containing '{BuildStepIds.AssetContent}' without '{BuildStepIds.Player}' " +
-                "requires both an Asset Content Provider and its Configuration. " +
-                "Configure the content binding or choose a Player recipe.",
-                nameof(stepIds));
+                $"Android Gradle export requires a '{BuildStepTypeIds.Player}' invocation. " +
+                "Add one to the selected recipe.",
+                nameof(invocations));
         }
     }
 }

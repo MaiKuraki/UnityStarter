@@ -1,7 +1,7 @@
 using System;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using UnityEditor;
-using UnityEditor.Build;
 using UnityEngine;
 
 namespace Build.Pipeline.Editor
@@ -21,63 +21,55 @@ namespace Build.Pipeline.Editor
             builder.AppendLine($"  Version Prefix: {profile.ApplicationVersion}");
             builder.AppendLine($"  Output Root: {profile.OutputBasePath}");
             builder.AppendLine($"  Scenes: {string.Join(", ", profile.GetBuildScenePaths())}");
-            builder.AppendLine($"  Steps: {string.Join(" -> ", profile.PipelineSteps)}");
+            builder.AppendLine(
+                $"  Enabled Invocation Membership: {string.Join(", ", profile.EnabledInvocationIds)}");
             BuildRecipeAnalysis recipe = BuildRecipePresetCatalog.Analyze(
-                profile.PipelineSteps,
-                profile.UseHybridCLR,
-                !string.IsNullOrWhiteSpace(profile.AssetContentProviderId));
+                profile.RecipeInvocations);
             builder.AppendLine(
                 $"  Recipe: {(recipe.MatchedPreset.HasValue ? BuildRecipePresetCatalog.GetDisplayName(recipe.MatchedPreset.Value) : "Custom")}");
             builder.AppendLine(
                 $"  Effective Outputs: Player={recipe.ProducesPlayer}, Content={recipe.ProducesAssetContent}, HotUpdate={recipe.ProducesHotUpdate}");
-            builder.AppendLine($"  Asset Provider: {(string.IsNullOrWhiteSpace(profile.AssetContentProviderId) ? "None" : profile.AssetContentProviderId)}");
-            builder.AppendLine($"  HybridCLR: {profile.UseHybridCLR}");
-            builder.AppendLine($"  Player Obfuscation: {profile.EnablePlayerObfuscation}");
+            builder.AppendLine(
+                "  Compiled Execution Plan: " +
+                (recipe.IsReady
+                    ? string.Join(" -> ", recipe.ExecutionOrderInvocationIds)
+                    : "Unavailable: " + string.Join(" | ", recipe.BlockingIssues)));
 
-            if (!string.IsNullOrWhiteSpace(profile.AssetContentProviderId))
+            foreach (BuildRecipeInvocation invocation in profile.RecipeInvocations)
             {
-                IAssetContentBuildAdapter adapter = BuildPipelineRegistry.ResolveContentAdapter(
-                    profile.AssetContentProviderId);
-                builder.AppendLine($"  Provider Adapter: {(adapter == null ? "Unavailable" : adapter.GetType().FullName)}");
+                string configurationPath = invocation.Configuration == null
+                    ? "None"
+                    : AssetDatabase.GetAssetPath(invocation.Configuration);
+                string dependencies = string.Join(
+                    ", ",
+                    System.Linq.Enumerable.Select(
+                        invocation.Dependencies,
+                        dependency => dependency.Mode + ":" + dependency.InvocationId));
+                builder.AppendLine(
+                    $"  Invocation: enabled={invocation.Enabled}, id={invocation.InvocationId}, " +
+                    $"type={invocation.StepTypeId}, policy={invocation.Incrementality}, " +
+                    $"dependencies=[{dependencies}], config={configurationPath}");
             }
 
             Debug.Log(builder.ToString());
         }
 
-        [MenuItem("Build/Pipeline/Run Selected Recipe/Release (Clean)", priority = 20)]
-        public static void RunSelectedRecipeReleaseClean()
+        [MenuItem("Build/Pipeline/Run Selected Recipe/Release", priority = 20)]
+        public static void RunSelectedRecipeRelease()
         {
             RunSelectedRecipe(
                 EditorUserBuildSettings.activeBuildTarget,
                 debug: false,
-                incrementality: BuildIncrementality.Clean);
+                exportAndroidProject: false);
         }
 
-        [MenuItem("Build/Pipeline/Run Selected Recipe/Release (Incremental)", priority = 21)]
-        public static void RunSelectedRecipeReleaseIncremental()
-        {
-            RunSelectedRecipe(
-                EditorUserBuildSettings.activeBuildTarget,
-                debug: false,
-                incrementality: BuildIncrementality.Incremental);
-        }
-
-        [MenuItem("Build/Pipeline/Run Selected Recipe/Development (Clean)", priority = 22)]
-        public static void RunSelectedRecipeDevelopmentClean()
+        [MenuItem("Build/Pipeline/Run Selected Recipe/Development", priority = 21)]
+        public static void RunSelectedRecipeDevelopment()
         {
             RunSelectedRecipe(
                 EditorUserBuildSettings.activeBuildTarget,
                 debug: true,
-                incrementality: BuildIncrementality.Clean);
-        }
-
-        [MenuItem("Build/Pipeline/Run Selected Recipe/Development (Incremental)", priority = 23)]
-        public static void RunSelectedRecipeDevelopmentIncremental()
-        {
-            RunSelectedRecipe(
-                EditorUserBuildSettings.activeBuildTarget,
-                debug: true,
-                incrementality: BuildIncrementality.Incremental);
+                exportAndroidProject: false);
         }
 
         [MenuItem("Build/Pipeline/Android/Export Player Gradle Project", priority = 40)]
@@ -86,7 +78,6 @@ namespace Build.Pipeline.Editor
             RunSelectedRecipe(
                 BuildTarget.Android,
                 debug: false,
-                incrementality: BuildIncrementality.Clean,
                 exportAndroidProject: true);
         }
 
@@ -95,69 +86,85 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void RunCommandLine()
         {
-            try
-            {
-                BuildCommandLineOptions options = BuildCommandLine.Parse(Environment.GetCommandLineArgs());
-                BuildData profile = BuildProfileResolver.ResolveCommandLine(options.BuildProfilePath);
-                BuildRequest request = BuildRequestFactory.CreateForCommandLine(profile, options);
-                EnsureSucceeded(new BuildPipelineRunner().Run(request));
-
-                if (Application.isBatchMode)
-                {
-                    EditorApplication.Exit(0);
-                }
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-                if (Application.isBatchMode)
-                {
-                    EditorApplication.Exit(1);
-                    return;
-                }
-
-                throw;
-            }
+            BuildEntryPointExecutionResult execution =
+                BuildEntryPointExecutor.ExecuteCommandLine(
+                    GetCurrentProjectRoot(),
+                    Environment.GetCommandLineArgs(),
+                    DefaultBuildEntryPointOperations.Instance);
+            CompleteExecution(execution);
         }
 
         private static void RunSelectedRecipe(
             BuildTarget target,
             bool debug,
-            BuildIncrementality incrementality,
             bool exportAndroidProject = false)
         {
-            BuildData profile = BuildProfileResolver.ResolveInteractive();
-            RunProfile(profile, target, debug, incrementality, exportAndroidProject);
+            BuildEntryPointExecutionResult execution =
+                BuildEntryPointExecutor.ExecuteInteractive(
+                    GetCurrentProjectRoot(),
+                    BuildProfileResolver.ResolveInteractive,
+                    target,
+                    debug,
+                    exportAndroidProject,
+                    invocationIdsOverride: null,
+                    DefaultBuildEntryPointOperations.Instance);
+            CompleteExecution(execution);
         }
 
         internal static void RunProfile(
             BuildData profile,
             BuildTarget target,
             bool debug,
-            BuildIncrementality incrementality,
-            bool exportAndroidProject = false)
+            bool exportAndroidProject = false,
+            System.Collections.Generic.IReadOnlyList<string> invocationIdsOverride = null)
         {
-            if (profile == null)
-            {
-                throw new ArgumentNullException(nameof(profile));
-            }
-
-            BuildRequest request = BuildRequestFactory.CreateInteractive(
-                profile,
-                target,
-                debug,
-                incrementality,
-                exportAndroidProject);
-            EnsureSucceeded(new BuildPipelineRunner().Run(request));
+            BuildEntryPointExecutionResult execution =
+                BuildEntryPointExecutor.ExecuteInteractive(
+                    GetCurrentProjectRoot(),
+                    () => profile,
+                    target,
+                    debug,
+                    exportAndroidProject,
+                    invocationIdsOverride,
+                    DefaultBuildEntryPointOperations.Instance);
+            CompleteExecution(execution);
         }
 
-        private static void EnsureSucceeded(BuildRunResult result)
+        private static void CompleteExecution(BuildEntryPointExecutionResult execution)
         {
-            if (!result.Succeeded)
+            if (execution == null)
             {
-                throw new BuildFailedException(
-                    $"Build run '{result.RunId}' failed. See '{result.ResultManifestPath}'.\n{result.Failure}");
+                throw new ArgumentNullException(nameof(execution));
             }
+
+            if (execution.Failure != null)
+            {
+                Debug.LogException(execution.Failure);
+            }
+
+            if (Application.isBatchMode)
+            {
+                EditorApplication.Exit(execution.ExitCode);
+                return;
+            }
+
+            if (!execution.Succeeded)
+            {
+                if (execution.Failure != null)
+                {
+                    ExceptionDispatchInfo.Capture(execution.Failure).Throw();
+                }
+
+                throw new InvalidOperationException(
+                    $"Build run '{execution.RunId}' failed without an exception. " +
+                    $"See '{execution.ManifestPath}'.");
+            }
+        }
+
+        private static string GetCurrentProjectRoot()
+        {
+            return System.IO.Path.GetFullPath(
+                System.IO.Path.Combine(Application.dataPath, ".."));
         }
     }
 }

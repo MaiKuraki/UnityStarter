@@ -26,7 +26,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         {
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
             string lockRoot = GetLockRoot(normalizedProjectRoot);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 lockRoot,
                 "YooAsset publication lock root");
             YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, lockRoot);
@@ -35,7 +35,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             string[] publicationRoots = new[]
                 {
-                    YooAsset3PublicationTransaction.GetStateRoot(normalizedProjectRoot),
+                    YooAsset3PublicationTransaction.GetProviderStateRoot(normalizedProjectRoot),
                     Path.GetFullPath(buildOutputRoot),
                     Path.GetFullPath(bundledFileRoot)
                 }
@@ -48,7 +48,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 foreach (string publicationRoot in publicationRoots)
                 {
                     string lockPath = GetLockPath(normalizedProjectRoot, publicationRoot);
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         lockPath,
                         "YooAsset publication lock");
                     ValidateLockPath(normalizedProjectRoot, lockRoot, lockPath);
@@ -151,6 +151,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         public string kind;
         public string packageName;
         public string packageVersion;
+        public string cryptographyAdapterId;
+        public string runtimeDecryptContractId;
         public string approvedRoot;
         public string target;
         public string stage;
@@ -159,6 +161,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         public bool originalWasOwned;
         public string originalTransactionId;
         public string originalPackageVersion;
+        public string originalCryptographyAdapterId;
+        public string originalRuntimeDecryptContractId;
         public string originalContentIdentity;
         public int originalEntryCount;
         public string installedContentIdentity;
@@ -197,7 +201,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
     internal sealed class YooAsset3PublicationTransaction : IDisposable
     {
-        private const int JournalSchemaVersion = 3;
+        private const string PublicationIdPrefix = "asset-content:yooasset:";
+        internal const string StateRootRelativePath = ".buildpipeline/transactions/yooasset3";
+
+        private const int JournalFormatVersion = 1;
         private const int MaximumJournalBytes = 1024 * 1024;
         private const int MaximumOperationCount = 512;
         private const int MaximumCopiedEntries = 250000;
@@ -210,6 +217,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private const string PreparedPhase = "Prepared";
         private const string CommittingPhase = "Committing";
         private const string RollingBackPhase = "RollingBack";
+        private const string RollbackRefreshPendingPhase = "RollbackRefreshPending";
+        private const string ActivationRefreshPendingPhase = "ActivationRefreshPending";
+        private const string DownstreamActivePhase = "DownstreamActive";
+        private const string AwaitingDecisionPhase = "AwaitingDecision";
         private const string RefreshPendingPhase = "RefreshPending";
         private const string CommittedPhase = "Committed";
         private const string PreparedState = "Prepared";
@@ -220,6 +231,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private readonly string projectRoot;
         private readonly string buildOutputRoot;
         private readonly string bundledFileRoot;
+        private readonly string invocationId;
+        private readonly string publicationId;
+        private readonly string stateRelativePath;
         private readonly string stateRoot;
         private readonly string activeJournalPath;
         private readonly Journal journal;
@@ -232,38 +246,92 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string projectRoot,
             string buildOutputRoot,
             string bundledFileRoot,
+            string invocationId,
             Journal journal,
             YooAsset3PackagePublication[] packages)
         {
             this.projectRoot = projectRoot;
             this.buildOutputRoot = buildOutputRoot;
             this.bundledFileRoot = bundledFileRoot;
-            stateRoot = GetStateRoot(projectRoot);
+            this.invocationId = NormalizeInvocationId(invocationId);
+            publicationId = GetPublicationId(this.invocationId);
+            stateRelativePath = GetStateRelativePath(this.invocationId);
+            stateRoot = GetStateRoot(projectRoot, this.invocationId);
             activeJournalPath = Path.Combine(stateRoot, ActiveJournalFileName);
             this.journal = journal;
             this.packages = packages;
         }
 
         public IReadOnlyList<YooAsset3PackagePublication> Packages => packages;
+        internal bool HasDownstreamInputs => packages.Any(package => package.BundledOperation != null);
+        internal string PublicationId => publicationId;
+        internal string StateRelativePath => stateRelativePath;
 
-        public static string GetStateRoot(string projectRoot)
+        public static string GetProviderStateRoot(string projectRoot)
         {
             return Path.GetFullPath(Path.Combine(
                 projectRoot,
-                ".buildpipeline",
-                "transactions",
-                "yooasset3"));
+                StateRootRelativePath.Replace('/', Path.DirectorySeparatorChar)));
         }
 
-        public static YooAsset3PublicationTransaction Create(YooAsset3BuildPlan plan)
+        public static string GetStateRoot(
+            string projectRoot,
+            string invocationId)
+        {
+            return Path.Combine(
+                GetProviderStateRoot(projectRoot),
+                NormalizeInvocationId(invocationId));
+        }
+
+        internal static string GetStateRelativePath(string invocationId)
+        {
+            return StateRootRelativePath + "/" + NormalizeInvocationId(invocationId);
+        }
+
+        internal static string GetPublicationId(string invocationId)
+        {
+            return PublicationIdPrefix + NormalizeInvocationId(invocationId);
+        }
+
+        private static string NormalizeInvocationId(string invocationId)
+        {
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                invocationId,
+                "YooAsset content invocation id");
+            BuildPathPolicy.ValidatePortableFileName(
+                invocationId,
+                "YooAsset content invocation state directory",
+                BuildIdentityPolicy.MaximumBuildIdentifierCharacters);
+            return invocationId;
+        }
+
+        private static bool IsValidInvocationId(string invocationId)
+        {
+            try
+            {
+                NormalizeInvocationId(invocationId);
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        public static YooAsset3PublicationTransaction Create(
+            YooAsset3BuildPlan plan,
+            string invocationId)
         {
             if (plan == null)
             {
                 throw new ArgumentNullException(nameof(plan));
             }
 
+            string normalizedInvocationId = NormalizeInvocationId(invocationId);
             string transactionId = Guid.NewGuid().ToString("N");
-            string stateRoot = GetStateRoot(plan.ProjectRoot);
+            string stateRoot = GetStateRoot(
+                plan.ProjectRoot,
+                normalizedInvocationId);
             string workRoot = Path.GetFullPath(Path.Combine(stateRoot, "work", transactionId));
             var operations = new List<YooAsset3PublicationJournalOperation>(plan.Packages.Length * 2);
             var publications = new YooAsset3PackagePublication[plan.Packages.Length];
@@ -277,6 +345,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     YooAsset3PublicationOwnership.PackageOutputKind,
                     packagePlan.PackageName,
                     packagePlan.PackageVersion,
+                    packagePlan.CryptographyAdapterId,
+                    packagePlan.RuntimeDecryptContractId,
                     plan.BuildOutputRoot,
                     packagePlan.OutputPackageDirectory,
                     suffix);
@@ -291,6 +361,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         YooAsset3PublicationOwnership.BundledPackageKind,
                         packagePlan.PackageName,
                         packagePlan.PackageVersion,
+                        packagePlan.CryptographyAdapterId,
+                        packagePlan.RuntimeDecryptContractId,
                         plan.BundledFileRoot,
                         packagePlan.BundledPackageDirectory,
                         suffix);
@@ -310,7 +382,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             var journal = new Journal
             {
-                schemaVersion = JournalSchemaVersion,
+                formatVersion = JournalFormatVersion,
+                invocationId = normalizedInvocationId,
                 transactionId = transactionId,
                 phase = PreparedPhase,
                 projectRoot = Path.GetFullPath(plan.ProjectRoot),
@@ -325,6 +398,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 journal.projectRoot,
                 journal.buildOutputRoot,
                 journal.bundledFileRoot,
+                normalizedInvocationId,
                 journal,
                 publications);
         }
@@ -338,7 +412,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             {
                 if (!string.IsNullOrEmpty(publication.BundledWorkDirectory))
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                         publication.BundledWorkDirectory,
                         $"YooAsset bundled work directory '{publication.FinalPlan.PackageName}'",
                         65);
@@ -348,42 +422,44 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static void ValidateJournalPathBudgets(Journal value)
         {
-            string stateRoot = GetStateRoot(value.projectRoot);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            string stateRoot = GetStateRoot(
+                value.projectRoot,
+                value.invocationId);
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stateRoot,
                 "YooAsset publication state root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, ActiveJournalFileName),
                 "YooAsset publication journal",
                 ".tmp-".Length + 32);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 value.workRoot,
                 "YooAsset publication work root",
                 65);
 
             foreach (YooAsset3PublicationJournalOperation operation in value.operations)
             {
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.target,
                     $"YooAsset publication target '{operation.packageName}'");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.stage,
                     $"YooAsset publication stage '{operation.packageName}'");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.backup,
                     $"YooAsset publication backup '{operation.packageName}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(operation.stage, YooAsset3PublicationOwnership.MarkerFileName),
                     $"YooAsset staged ownership marker '{operation.packageName}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(operation.target, YooAsset3PublicationOwnership.MarkerFileName),
                     $"YooAsset published ownership marker '{operation.packageName}'");
                 if (operation.managesSiblingMeta)
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         operation.targetMeta,
                         $"YooAsset published sibling meta '{operation.packageName}'");
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         operation.protectedMeta,
                         $"YooAsset protected sibling meta '{operation.packageName}'");
                 }
@@ -393,25 +469,149 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         public static void RecoverPending(string projectRoot, Action refreshAssets)
         {
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
-            string stateRoot = GetStateRoot(normalizedProjectRoot);
-            string journalPath = Path.Combine(stateRoot, ActiveJournalFileName);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, stateRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, journalPath);
-            if (!File.Exists(journalPath))
+            string providerStateRoot = GetProviderStateRoot(normalizedProjectRoot);
+            if (!Directory.Exists(providerStateRoot) && !File.Exists(providerStateRoot))
             {
-                EnsureNoDetachedState(stateRoot);
                 return;
             }
 
-            Journal recovered = ReadAndValidateJournal(journalPath, normalizedProjectRoot);
-            CleanupJournalTemporaryFiles(normalizedProjectRoot, stateRoot, journalPath);
-
-            if (string.Equals(recovered.phase, RefreshPendingPhase, StringComparison.Ordinal))
+            if (File.Exists(providerStateRoot))
             {
+                throw new InvalidOperationException(
+                    $"YooAsset provider transaction state root is a file: '{providerStateRoot}'.");
+            }
+
+            YooAsset3BuildSafety.ValidateNoPathRedirection(
+                normalizedProjectRoot,
+                providerStateRoot);
+            string[] invocationStateRoots = Directory.GetDirectories(
+                providerStateRoot,
+                "*",
+                SearchOption.TopDirectoryOnly);
+            if (invocationStateRoots.Length > 256)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset publication recovery exceeds the 256-invocation safety budget.");
+            }
+
+            string unexpectedFile = Directory.GetFiles(
+                    providerStateRoot,
+                    "*",
+                    SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+            if (unexpectedFile != null)
+            {
+                throw new InvalidOperationException(
+                    $"Unknown YooAsset provider transaction state file requires manual review: '{unexpectedFile}'.");
+            }
+
+            Array.Sort(invocationStateRoots, StringComparer.Ordinal);
+            foreach (string invocationStateRoot in invocationStateRoots)
+            {
+                YooAsset3BuildSafety.ValidateNoPathRedirection(
+                    normalizedProjectRoot,
+                    invocationStateRoot);
+                RecoverPendingInvocation(
+                    normalizedProjectRoot,
+                    NormalizeInvocationId(Path.GetFileName(invocationStateRoot)),
+                    refreshAssets);
+            }
+        }
+
+        private static void RecoverPendingInvocation(
+            string normalizedProjectRoot,
+            string invocationId,
+            Action refreshAssets)
+        {
+            string stateRoot = GetStateRoot(normalizedProjectRoot, invocationId);
+            string journalPath = Path.Combine(stateRoot, ActiveJournalFileName);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, stateRoot);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, journalPath);
+            Journal recovered = ResolveLatestJournalForRecovery(
+                normalizedProjectRoot,
+                stateRoot,
+                journalPath);
+            if (recovered == null)
+            {
+                EnsureNoDetachedState(stateRoot);
+                TryDeleteEmptyStateDirectories(
+                    normalizedProjectRoot,
+                    invocationId);
+                return;
+            }
+
+            BuildPublicationDecision decision = BuildPublicationBarrier.GetDecision(
+                normalizedProjectRoot,
+                GetPublicationId(invocationId),
+                GetStateRelativePath(invocationId));
+            if (!string.Equals(recovered.phase, RefreshPendingPhase, StringComparison.Ordinal)
+                && !string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal)
+                && !string.Equals(recovered.phase, RollbackRefreshPendingPhase, StringComparison.Ordinal))
+            {
+                if (CaptureActivatedSiblingMetasForRollback(recovered))
+                {
+                    WriteJournal(recovered, journalPath, createNew: false);
+                }
+            }
+
+            if (string.Equals(recovered.phase, ActivationRefreshPendingPhase, StringComparison.Ordinal))
+            {
+                recovered.phase = DownstreamActivePhase;
+                WriteJournal(recovered, journalPath, createNew: false);
+            }
+
+            if (string.Equals(recovered.phase, DownstreamActivePhase, StringComparison.Ordinal))
+            {
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "Committed terminal barrier references a YooAsset publication whose terminal outputs were never published.");
+                }
+
+                Rollback(recovered, journalPath, refreshAssets);
+            }
+            else if (string.Equals(recovered.phase, AwaitingDecisionPhase, StringComparison.Ordinal))
+            {
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    ValidatePreRefreshCommittedPublications(recovered);
+                    recovered.phase = RefreshPendingPhase;
+                    WriteJournal(recovered, journalPath, createNew: false);
+                    CompletePendingRefresh(recovered, journalPath, refreshAssets);
+                }
+                else
+                {
+                    Rollback(recovered, journalPath, refreshAssets);
+                }
+            }
+            else if (string.Equals(recovered.phase, RollbackRefreshPendingPhase, StringComparison.Ordinal))
+            {
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "Committed terminal barrier conflicts with a YooAsset publication that already restored its original files.");
+                }
+
+                CompleteRollbackRefresh(recovered, journalPath, refreshAssets);
+            }
+            else if (string.Equals(recovered.phase, RefreshPendingPhase, StringComparison.Ordinal))
+            {
+                if (decision != BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset committed refresh recovery requires an explicit durable Commit decision.");
+                }
+
                 CompletePendingRefresh(recovered, journalPath, refreshAssets);
             }
             else if (string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal))
             {
+                if (decision != BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset committed cleanup recovery requires an explicit durable Commit decision.");
+                }
+
                 try
                 {
                     CleanupCommitted(recovered, journalPath);
@@ -426,8 +626,40 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
             else
             {
-                Rollback(recovered, journalPath);
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "Committed terminal barrier references a YooAsset publication that was not fully installed.");
+                }
+
+                Rollback(recovered, journalPath, refreshAssets);
             }
+        }
+
+        internal static void EnsureNoPendingRecovery(
+            string projectRoot,
+            string invocationId)
+        {
+            if (string.IsNullOrWhiteSpace(projectRoot))
+            {
+                throw new ArgumentException("A Unity project root is required.", nameof(projectRoot));
+            }
+
+            string normalizedProjectRoot = Path.GetFullPath(projectRoot);
+            string stateRoot = GetStateRoot(
+                normalizedProjectRoot,
+                NormalizeInvocationId(invocationId));
+            string journalPath = Path.Combine(stateRoot, ActiveJournalFileName);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, stateRoot);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(normalizedProjectRoot, journalPath);
+            if (File.Exists(journalPath) || Directory.Exists(journalPath))
+            {
+                throw new InvalidOperationException(
+                    $"Pending YooAsset publication recovery must be completed before starting another build: '{stateRoot}'. " +
+                    "Use the Build workspace recovery action or -pipelineRecoverOnly.");
+            }
+
+            EnsureNoDetachedState(stateRoot);
         }
 
         public void Prepare()
@@ -493,7 +725,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException("Prepare the YooAsset publication transaction before creating execution plans.");
             }
 
-            return YooAsset3BuildParameterFactory.Create(
+            YooAsset3PackageBuildPlan executionPlan = YooAsset3BuildParameterFactory.Create(
                 request,
                 publication.FinalPlan.Profile,
                 buildOutputRoot,
@@ -503,6 +735,20 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 publication.BundledOperation == null
                     ? Path.Combine(journal.workRoot, "unused-bundled", publication.FinalPlan.PackageName)
                     : publication.BundledWorkDirectory);
+            if (!string.Equals(
+                    executionPlan.CryptographyAdapterId,
+                    publication.FinalPlan.CryptographyAdapterId,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    executionPlan.RuntimeDecryptContractId,
+                    publication.FinalPlan.RuntimeDecryptContractId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset cryptography identity changed between preflight and execution for package '{publication.FinalPlan.PackageName}'.");
+            }
+
+            return executionPlan;
         }
 
         public void PrepareReadyDirectories()
@@ -548,6 +794,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     operation.kind,
                     operation.packageName,
                     operation.packageVersion,
+                    operation.cryptographyAdapterId,
+                    operation.runtimeDecryptContractId,
                     journal.transactionId);
                 operation.installedContentIdentity = sealedStage.ContentIdentity;
                 operation.installedEntryCount = sealedStage.EntryCount;
@@ -556,91 +804,62 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             WriteJournal(journal, activeJournalPath, createNew: false);
         }
 
-        public void Commit(Action validatePublishedState, Action refreshAssets)
+        internal void Publish(
+            Action validatePublishedState,
+            Action refreshAssets)
         {
             ThrowIfDisposed();
             if (!prepared)
             {
-                throw new InvalidOperationException("Prepare the YooAsset publication transaction before committing it.");
+                throw new InvalidOperationException("Prepare the YooAsset publication transaction before publishing it.");
             }
 
-            bool refreshPendingWasPersisted = false;
             try
             {
-                ValidateReadyToCommit();
+                if (!string.Equals(journal.phase, PreparedPhase, StringComparison.Ordinal)
+                    && !string.Equals(journal.phase, DownstreamActivePhase, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset publication cannot publish terminal outputs from phase '{journal.phase}'.");
+                }
+
+                YooAsset3PublicationJournalOperation[] pending = journal.operations
+                    .Where(operation => string.Equals(
+                        operation.state,
+                        PreparedState,
+                        StringComparison.Ordinal))
+                    .ToArray();
+                if (pending.Length == 0)
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset publication has no pending terminal output operations.");
+                }
+
+                ValidateReadyToCommit(pending);
                 journal.phase = CommittingPhase;
                 WriteJournal(journal, activeJournalPath, createNew: false);
-                foreach (YooAsset3PublicationJournalOperation operation in journal.operations)
+                foreach (YooAsset3PublicationJournalOperation operation in pending)
                 {
                     CommitOperation(operation);
                 }
 
                 validatePublishedState?.Invoke();
                 ValidatePreRefreshCommittedPublications(journal);
-                journal.phase = RefreshPendingPhase;
+                journal.phase = AwaitingDecisionPhase;
                 WriteJournal(journal, activeJournalPath, createNew: false);
-                refreshPendingWasPersisted = true;
-                completed = true;
-                try
-                {
-                    if (refreshAssets == null)
-                    {
-                        throw new InvalidOperationException("A refresh callback is required to complete a YooAsset publication.");
-                    }
-
-                    refreshAssets();
-                    CaptureInstalledSiblingMetas(journal, null);
-                }
-                catch (Exception refreshException)
-                {
-                    throw new YooAsset3CommittedPublicationException(
-                        "YooAsset publication files were committed, but AssetDatabase refresh did not complete. " +
-                        "The journal and backups were retained; run transaction recovery before another publication.",
-                        activeJournalPath,
-                        refreshException);
-                }
-
-                journal.phase = CommittedPhase;
-                WriteJournal(journal, activeJournalPath, createNew: false);
-                try
-                {
-                    CleanupCommitted(journal, activeJournalPath);
-                }
-                catch (Exception cleanupException)
-                {
-                    throw new YooAsset3CommittedPublicationException(
-                        "YooAsset publication and AssetDatabase refresh completed, but transaction cleanup did not. " +
-                        "The committed journal was retained for recovery.",
-                        activeJournalPath,
-                        cleanupException);
-                }
             }
-            catch (YooAsset3CommittedPublicationException)
+            catch (Exception publicationException)
             {
-                throw;
-            }
-            catch (Exception commitException)
-            {
-                if (refreshPendingWasPersisted)
-                {
-                    completed = true;
-                    throw new YooAsset3CommittedPublicationException(
-                        "YooAsset publication reached its durable committed boundary, but finalization did not complete. " +
-                        "The journal and backups were retained for recovery.",
-                        activeJournalPath,
-                        commitException);
-                }
-
                 try
                 {
-                    Rollback(journal, activeJournalPath);
+                    Rollback(journal, activeJournalPath, refreshAssets);
                     completed = true;
                 }
                 catch (Exception rollbackException)
                 {
                     throw new AggregateException(
                         "YooAsset publication failed and rollback did not complete. The durable journal was retained for recovery.",
-                        commitException,
+                        publicationException,
                         rollbackException);
                 }
 
@@ -648,7 +867,125 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
-        public void Abort()
+        internal void ActivateDownstreamInputs(Action refreshAssets)
+        {
+            ThrowIfDisposed();
+            if (!HasDownstreamInputs)
+            {
+                return;
+            }
+
+            if (!prepared || !string.Equals(journal.phase, PreparedPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "YooAsset bundled inputs can only be activated from the prepared phase.");
+            }
+
+            if (refreshAssets == null)
+            {
+                throw new ArgumentNullException(nameof(refreshAssets));
+            }
+
+            YooAsset3PublicationJournalOperation[] bundled = journal.operations
+                .Where(operation => operation.managesSiblingMeta)
+                .ToArray();
+            try
+            {
+                ValidateReadyToCommit(bundled);
+                journal.phase = CommittingPhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                foreach (YooAsset3PublicationJournalOperation operation in bundled)
+                {
+                    CommitOperation(operation);
+                }
+
+                ValidateDownstreamInputs(journal, afterRefresh: false);
+                journal.phase = ActivationRefreshPendingPhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                refreshAssets();
+                CaptureInstalledSiblingMetas(journal, recoveryCandidates: null);
+                journal.phase = DownstreamActivePhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+            }
+            catch
+            {
+                CaptureActivatedSiblingMetasForRollback(journal);
+                if (bundled.All(operation => string.Equals(
+                    operation.state,
+                    InstalledState,
+                    StringComparison.Ordinal)))
+                {
+                    journal.phase = DownstreamActivePhase;
+                }
+
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                throw;
+            }
+        }
+
+        internal void ValidateActivatedInputs()
+        {
+            ThrowIfDisposed();
+            if (!HasDownstreamInputs)
+            {
+                return;
+            }
+
+            if (!string.Equals(journal.phase, DownstreamActivePhase, StringComparison.Ordinal)
+                && !string.Equals(journal.phase, AwaitingDecisionPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "YooAsset bundled inputs are not active at the terminal decision boundary.");
+            }
+
+            ValidateDownstreamInputs(journal, afterRefresh: true);
+        }
+
+        internal void Complete(Action refreshAssets)
+        {
+            ThrowIfDisposed();
+            if (!prepared || !string.Equals(journal.phase, AwaitingDecisionPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "YooAsset publication has not reached the terminal decision barrier.");
+            }
+
+            BuildPublicationDecision decision = BuildPublicationBarrier.GetDecision(
+                projectRoot,
+                PublicationId,
+                StateRelativePath);
+            if (decision != BuildPublicationDecision.Commit)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset publication completion requires an explicit durable Commit decision from the terminal barrier.");
+            }
+
+            // Complete is invoked only after the shared barrier has persisted its
+            // commit decision. From this point disposal must preserve evidence for
+            // explicit recovery instead of attempting a contradictory rollback.
+            completed = true;
+            try
+            {
+                ValidatePreRefreshCommittedPublications(journal);
+                journal.phase = RefreshPendingPhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                CompletePendingRefresh(journal, activeJournalPath, refreshAssets);
+            }
+            catch (YooAsset3CommittedPublicationException)
+            {
+                throw;
+            }
+            catch (Exception completionException)
+            {
+                throw new YooAsset3CommittedPublicationException(
+                    "YooAsset publication was selected by the terminal commit barrier, but durable refresh finalization did not complete. " +
+                    "The journal and backups were retained for explicit recovery.",
+                    activeJournalPath,
+                    completionException);
+            }
+        }
+
+        public void Abort(Action refreshAssets)
         {
             ThrowIfDisposed();
             if (completed)
@@ -658,7 +995,17 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             if (prepared && File.Exists(activeJournalPath))
             {
-                Rollback(journal, activeJournalPath);
+                if (BuildPublicationBarrier.GetDecision(
+                        projectRoot,
+                        PublicationId,
+                        StateRelativePath)
+                    == BuildPublicationDecision.Commit)
+                {
+                    completed = true;
+                    return;
+                }
+
+                Rollback(journal, activeJournalPath, refreshAssets);
             }
 
             completed = true;
@@ -673,7 +1020,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             if (!completed)
             {
-                Abort();
+                Abort(refreshAssets: null);
             }
 
             disposed = true;
@@ -684,6 +1031,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string kind,
             string packageName,
             string packageVersion,
+            string cryptographyAdapterId,
+            string runtimeDecryptContractId,
             string approvedRoot,
             string target,
             string suffix)
@@ -707,6 +1056,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 kind = kind,
                 packageName = packageName,
                 packageVersion = packageVersion,
+                cryptographyAdapterId = cryptographyAdapterId,
+                runtimeDecryptContractId = runtimeDecryptContractId,
                 approvedRoot = Path.GetFullPath(approvedRoot),
                 target = normalizedTarget,
                 stage = stage,
@@ -730,6 +1081,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             operation.originalWasOwned = original.Owned;
             operation.originalTransactionId = original.TransactionId;
             operation.originalPackageVersion = original.PackageVersion;
+            operation.originalCryptographyAdapterId = original.CryptographyAdapterId;
+            operation.originalRuntimeDecryptContractId = original.RuntimeDecryptContractId;
             operation.originalContentIdentity = original.ContentIdentity;
             operation.originalEntryCount = original.EntryCount;
             if (!operation.managesSiblingMeta)
@@ -750,10 +1103,24 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             operation.originalMetaSha256 = originalMeta.Sha256;
         }
 
-        private void ValidateReadyToCommit()
+        private void ValidateReadyToCommit(
+            IReadOnlyList<YooAsset3PublicationJournalOperation> operations)
         {
-            foreach (YooAsset3PublicationJournalOperation operation in journal.operations)
+            if (operations == null || operations.Count == 0)
             {
+                throw new InvalidOperationException(
+                    "YooAsset publication has no operations to commit.");
+            }
+
+            foreach (YooAsset3PublicationJournalOperation operation in operations)
+            {
+                if (operation == null ||
+                    !string.Equals(operation.state, PreparedState, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "YooAsset publication can only commit prepared operations.");
+                }
+
                 ValidateDirectoryMovePathBudgets(
                     operation.stage,
                     operation.target,
@@ -869,6 +1236,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     operation.kind,
                     operation.packageName,
                     operation.originalPackageVersion,
+                    operation.originalCryptographyAdapterId,
+                    operation.originalRuntimeDecryptContractId,
                     operation.originalTransactionId,
                     operation.originalContentIdentity,
                     operation.originalEntryCount);
@@ -905,6 +1274,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 operation.kind,
                 operation.packageName,
                 operation.packageVersion,
+                operation.cryptographyAdapterId,
+                operation.runtimeDecryptContractId,
                 transactionId,
                 operation.installedContentIdentity,
                 operation.installedEntryCount);
@@ -963,6 +1334,19 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 return;
             }
 
+
+            if (!operation.originalMetaExisted && operation.installedMetaExisted)
+            {
+                ValidateMetaSnapshot(
+                    actual,
+                    operation.targetMeta,
+                    true,
+                    operation.installedMetaLength,
+                    operation.installedMetaSha256,
+                    "activated bundled publication meta");
+                return;
+            }
+
             ValidateMetaSnapshot(
                 actual,
                 operation.targetMeta,
@@ -1014,6 +1398,128 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
+        private static void ValidateDownstreamInputs(Journal recovered, bool afterRefresh)
+        {
+            bool terminalOutputsInstalled = string.Equals(
+                recovered.phase,
+                AwaitingDecisionPhase,
+                StringComparison.Ordinal);
+            foreach (YooAsset3PublicationJournalOperation operation in recovered.operations)
+            {
+                if (operation.managesSiblingMeta)
+                {
+                    if (!string.Equals(operation.state, InstalledState, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"YooAsset bundled downstream input is not installed for package '{operation.packageName}'.");
+                    }
+
+                    ValidateInstalledPublicationAt(
+                        operation,
+                        operation.target,
+                        recovered.projectRoot,
+                        recovered.transactionId);
+                    if (afterRefresh)
+                    {
+                        ValidateInstalledSiblingMeta(recovered, operation);
+                    }
+                    else
+                    {
+                        ValidatePreRefreshSiblingMeta(
+                            recovered.projectRoot,
+                            operation,
+                            allowMissingOriginalMeta: false);
+                    }
+
+                    continue;
+                }
+
+                if (terminalOutputsInstalled)
+                {
+                    if (!string.Equals(operation.state, InstalledState, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"YooAsset terminal output is not installed for package '{operation.packageName}'.");
+                    }
+
+                    ValidateInstalledPublicationAt(
+                        operation,
+                        operation.target,
+                        recovered.projectRoot,
+                        recovered.transactionId);
+                }
+                else
+                {
+                    if (!string.Equals(operation.state, PreparedState, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"YooAsset terminal output changed before the terminal publication barrier for package '{operation.packageName}'.");
+                    }
+
+                    ValidateInstalledPublicationAt(
+                        operation,
+                        operation.stage,
+                        recovered.projectRoot,
+                        recovered.transactionId);
+                }
+            }
+        }
+
+        private static bool CaptureActivatedSiblingMetasForRollback(Journal recovered)
+        {
+            bool changed = false;
+            foreach (YooAsset3PublicationJournalOperation operation in recovered.operations)
+            {
+                if (!operation.managesSiblingMeta)
+                {
+                    continue;
+                }
+
+                bool installMayBeVisible =
+                    string.Equals(operation.state, InstalledState, StringComparison.Ordinal)
+                    || string.Equals(operation.state, BackedUpState, StringComparison.Ordinal)
+                    && Directory.Exists(operation.target)
+                    && !Directory.Exists(operation.stage);
+                if (!installMayBeVisible || !Directory.Exists(operation.target))
+                {
+                    continue;
+                }
+
+                ValidateInstalledPublicationAt(
+                    operation,
+                    operation.target,
+                    recovered.projectRoot,
+                    recovered.transactionId);
+
+                MetaFileSnapshot installed = CaptureMetaFile(recovered.projectRoot, operation.targetMeta);
+                if (operation.originalMetaExisted)
+                {
+                    ValidateMetaSnapshot(
+                        installed,
+                        operation.targetMeta,
+                        true,
+                        operation.originalMetaLength,
+                        operation.originalMetaSha256,
+                        "activated bundled publication meta");
+                }
+
+                if (operation.installedMetaExisted != installed.Exists
+                    || operation.installedMetaLength != installed.Length
+                    || !string.Equals(
+                        operation.installedMetaSha256,
+                        installed.Sha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    operation.installedMetaExisted = installed.Exists;
+                    operation.installedMetaLength = installed.Length;
+                    operation.installedMetaSha256 = installed.Sha256;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
         private static void ValidateInstalledSiblingMeta(
             Journal recovered,
             YooAsset3PublicationJournalOperation operation)
@@ -1049,7 +1555,27 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 operation.originalMetaSha256,
                 "protected bundled publication meta");
             MetaFileSnapshot targetMeta = CaptureMetaFile(recovered.projectRoot, operation.targetMeta);
-            if (targetMeta.Exists)
+            if (!operation.originalMetaExisted && targetMeta.Exists)
+            {
+                if (!operation.installedMetaExisted)
+                {
+                    throw new InvalidOperationException(
+                        $"Bundled publication meta appeared without a durable installed identity: '{operation.targetMeta}'.");
+                }
+
+                ValidateMetaSnapshot(
+                    targetMeta,
+                    operation.targetMeta,
+                    true,
+                    operation.installedMetaLength,
+                    operation.installedMetaSha256,
+                    "activated bundled publication meta before rollback");
+                YooAsset3BuildSafety.DeleteOwnedFile(
+                    recovered.projectRoot,
+                    operation.approvedRoot,
+                    operation.targetMeta);
+            }
+            else if (targetMeta.Exists)
             {
                 ValidateMetaSnapshot(
                     targetMeta,
@@ -1305,8 +1831,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
-        private static void Rollback(Journal recovered, string journalPath)
+        private static void Rollback(
+            Journal recovered,
+            string journalPath,
+            Action refreshAssets)
         {
+            CaptureActivatedSiblingMetasForRollback(recovered);
             recovered.phase = RollingBackPhase;
             var failures = new List<Exception>();
             try
@@ -1339,7 +1869,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             {
                 YooAsset3BuildSafety.DeleteOwnedDirectory(
                     recovered.projectRoot,
-                    GetStateRoot(recovered.projectRoot),
+                    GetStateRoot(recovered.projectRoot, recovered.invocationId),
                     recovered.workRoot);
             }
             catch (Exception exception)
@@ -1355,10 +1885,83 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             CleanupOperationMetadata(recovered);
+            ValidateRolledBackState(recovered);
+            recovered.phase = RollbackRefreshPendingPhase;
+            WriteJournal(recovered, journalPath, createNew: false);
+            CompleteRollbackRefresh(recovered, journalPath, refreshAssets);
+        }
+
+        private static void CompleteRollbackRefresh(
+            Journal recovered,
+            string journalPath,
+            Action refreshAssets)
+        {
+            ValidateRolledBackState(recovered);
+            bool requiresRefresh = recovered.operations.Any(operation =>
+                operation.managesSiblingMeta);
+            if (requiresRefresh && refreshAssets == null)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset rollback restored bundled Assets content, but no AssetDatabase refresh callback was supplied. " +
+                    "The durable rollback journal was retained for explicit recovery.");
+            }
+
+            refreshAssets?.Invoke();
+            ValidateRolledBackState(recovered);
             YooAsset3BuildSafety.DeleteOwnedFile(
                 recovered.projectRoot,
-                GetStateRoot(recovered.projectRoot),
+                GetStateRoot(recovered.projectRoot, recovered.invocationId),
                 journalPath);
+            TryDeleteEmptyStateDirectories(
+                recovered.projectRoot,
+                recovered.invocationId);
+        }
+
+        private static void ValidateRolledBackState(Journal recovered)
+        {
+            if (Directory.Exists(recovered.workRoot) || File.Exists(recovered.workRoot))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset rollback work directory still exists: '{recovered.workRoot}'.");
+            }
+
+            foreach (YooAsset3PublicationJournalOperation operation in recovered.operations)
+            {
+                if (Directory.Exists(operation.stage) || File.Exists(operation.stage)
+                    || Directory.Exists(operation.backup) || File.Exists(operation.backup)
+                    || Directory.Exists(operation.protectedMeta) || File.Exists(operation.protectedMeta))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset rollback retained transaction-owned evidence for package '{operation.packageName}'.");
+                }
+
+                if (operation.targetInitiallyExisted)
+                {
+                    ValidateOriginalPublicationAt(
+                        operation,
+                        operation.target,
+                        recovered.projectRoot);
+                }
+                else
+                {
+                    if (Directory.Exists(operation.target) || File.Exists(operation.target))
+                    {
+                        throw new InvalidOperationException(
+                            $"YooAsset rollback retained a newly installed target: '{operation.target}'.");
+                    }
+
+                    if (operation.managesSiblingMeta)
+                    {
+                        ValidateMetaFile(
+                            recovered.projectRoot,
+                            operation.targetMeta,
+                            expectedExists: false,
+                            expectedLength: 0,
+                            expectedSha256: string.Empty,
+                            description: "rolled-back bundled publication meta");
+                    }
+                }
+            }
         }
 
         private static void RollbackOperation(Journal recovered, YooAsset3PublicationJournalOperation operation)
@@ -1461,14 +2064,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     recovered.projectRoot,
                     operation.approvedRoot,
                     operation.target);
+                if (operation.managesSiblingMeta)
+                {
+                    RestoreOriginalSiblingMeta(recovered, operation);
+                }
             }
 
-            if (!operation.targetInitiallyExisted)
+            if (!operation.targetInitiallyExisted && operation.managesSiblingMeta)
             {
-                ValidatePreRefreshSiblingMeta(
+                RestoreOriginalSiblingMeta(recovered, operation);
+                ValidateMetaFile(
                     recovered.projectRoot,
-                    operation,
-                    allowMissingOriginalMeta: false);
+                    operation.targetMeta,
+                    expectedExists: false,
+                    expectedLength: 0,
+                    expectedSha256: string.Empty,
+                    description: "rolled-back bundled publication meta");
             }
 
             DeleteStageIfOwned(recovered, operation);
@@ -1652,13 +2263,52 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             YooAsset3BuildSafety.DeleteOwnedDirectory(
                 recovered.projectRoot,
-                GetStateRoot(recovered.projectRoot),
+                GetStateRoot(recovered.projectRoot, recovered.invocationId),
                 recovered.workRoot);
             CleanupOperationMetadata(recovered);
             YooAsset3BuildSafety.DeleteOwnedFile(
                 recovered.projectRoot,
-                GetStateRoot(recovered.projectRoot),
+                GetStateRoot(recovered.projectRoot, recovered.invocationId),
                 journalPath);
+            TryDeleteEmptyStateDirectories(
+                recovered.projectRoot,
+                recovered.invocationId);
+        }
+
+        private static void TryDeleteEmptyStateDirectories(
+            string projectRoot,
+            string invocationId)
+        {
+            string stateRoot = GetStateRoot(projectRoot, invocationId);
+            TryDeleteEmptyStateDirectory(
+                projectRoot,
+                Path.Combine(stateRoot, "work"));
+            TryDeleteEmptyStateDirectory(projectRoot, stateRoot);
+            TryDeleteEmptyStateDirectory(
+                projectRoot,
+                GetProviderStateRoot(projectRoot));
+        }
+
+        private static void TryDeleteEmptyStateDirectory(
+            string projectRoot,
+            string path)
+        {
+            if (!Directory.Exists(path) && !File.Exists(path))
+            {
+                return;
+            }
+
+            if (File.Exists(path))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset transaction state path is a file: '{path}'.");
+            }
+
+            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, path);
+            if (!Directory.EnumerateFileSystemEntries(path).Any())
+            {
+                Directory.Delete(path, recursive: false);
+            }
         }
 
         private static void CleanupOperationMetadata(Journal recovered)
@@ -1778,7 +2428,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         $"Transactional copy exceeds the maximum directory depth of {MaximumCopyDepth}: '{current.Source}'.");
                 }
 
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     current.Destination,
                     "YooAsset transactional copy directory");
                 Directory.CreateDirectory(current.Destination);
@@ -1800,14 +2450,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     string destinationEntry = Path.Combine(current.Destination, Path.GetFileName(entry));
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                             destinationEntry,
                             "YooAsset transactional copy directory");
                         pending.Push(new CopyDirectoryEntry(entry, destinationEntry, current.Depth + 1));
                         continue;
                     }
 
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         destinationEntry,
                         "YooAsset transactional copy artifact");
 
@@ -1829,7 +2479,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string destinationDirectory,
             string displayName)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destinationDirectory,
                 displayName + " root");
             if (!Directory.Exists(sourceDirectory))
@@ -1873,7 +2523,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                             destination,
                             displayName);
                         pending.Push(new CopyDirectoryEntry(
@@ -1883,7 +2533,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     }
                     else
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxPathBudget(
                             destination,
                             displayName);
                     }
@@ -1893,7 +2543,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static Journal ReadAndValidateJournal(string journalPath, string projectRoot)
         {
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, GetStateRoot(projectRoot));
             YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, journalPath);
             var info = new FileInfo(journalPath);
             if (info.Length <= 0 || info.Length > MaximumJournalBytes)
@@ -1913,13 +2562,15 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException($"YooAsset publication journal is not valid JSON: '{journalPath}'.", exception);
             }
 
-            if (recovered == null || recovered.schemaVersion != JournalSchemaVersion ||
+            if (recovered == null || recovered.formatVersion != JournalFormatVersion ||
+                !IsValidInvocationId(recovered.invocationId) ||
+                recovered.sequence <= 0 ||
                 recovered.operationRecords == null || recovered.operationRecords.Length == 0 ||
                 recovered.operationRecords.Length > MaximumOperationCount ||
                 !IsTransactionId(recovered.transactionId) ||
                 !IsKnownPhase(recovered.phase))
             {
-                throw new InvalidOperationException($"YooAsset publication journal has an unsupported or incomplete schema: '{journalPath}'.");
+                throw new InvalidOperationException($"YooAsset publication journal has an unsupported or incomplete format: '{journalPath}'.");
             }
 
             try
@@ -1939,6 +2590,27 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     $"YooAsset publication journal belongs to a different Unity project: '{journalPath}'.");
             }
 
+            string stateRoot = GetStateRoot(projectRoot, recovered.invocationId);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, stateRoot);
+            string candidateDirectory = Path.GetDirectoryName(journalPath);
+            string candidateName = Path.GetFileName(journalPath);
+            string temporaryName = ActiveJournalFileName + ".tmp-" + recovered.transactionId;
+            bool candidateNameIsKnown = string.Equals(
+                    candidateName,
+                    ActiveJournalFileName,
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    candidateName,
+                    temporaryName,
+                    StringComparison.Ordinal);
+            if (string.IsNullOrEmpty(candidateDirectory)
+                || !YooAsset3BuildSafety.PathsEqual(candidateDirectory, stateRoot)
+                || !candidateNameIsKnown)
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset publication journal is outside its invocation-owned state directory: '{journalPath}'.");
+            }
+
             string buildOutputRoot = Path.GetFullPath(recovered.buildOutputRoot);
             string bundledFileRoot = Path.GetFullPath(recovered.bundledFileRoot);
             string streamingAssetsRoot = Path.GetFullPath(Path.Combine(projectRoot, "Assets", "StreamingAssets"));
@@ -1954,7 +2626,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, buildOutputRoot);
             YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, bundledFileRoot);
 
-            string expectedWorkRoot = Path.Combine(GetStateRoot(projectRoot), "work", recovered.transactionId);
+            string expectedWorkRoot = Path.Combine(
+                stateRoot,
+                "work",
+                recovered.transactionId);
             if (!YooAsset3BuildSafety.PathsEqual(expectedWorkRoot, recovered.workRoot))
             {
                 throw new InvalidOperationException($"YooAsset publication journal work root is invalid: '{recovered.workRoot}'.");
@@ -1982,6 +2657,90 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             return recovered;
         }
 
+        private static Journal ResolveLatestJournalForRecovery(
+            string projectRoot,
+            string stateRoot,
+            string journalPath)
+        {
+            string pattern = Path.GetFileName(journalPath) + ".tmp-*";
+            string[] temporaryPaths = Directory.Exists(stateRoot)
+                ? Directory.EnumerateFiles(stateRoot, pattern, SearchOption.TopDirectoryOnly).ToArray()
+                : Array.Empty<string>();
+            if (temporaryPaths.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple YooAsset publication journal candidates require manual inspection: '{stateRoot}'.");
+            }
+
+            Journal active = File.Exists(journalPath)
+                ? ReadAndValidateJournal(journalPath, projectRoot)
+                : null;
+            if (temporaryPaths.Length == 0)
+            {
+                return active;
+            }
+
+            string temporaryPath = temporaryPaths[0];
+            Journal candidate = ReadAndValidateJournal(temporaryPath, projectRoot);
+            string expectedTemporaryPath = journalPath + ".tmp-" + candidate.transactionId;
+            if (!YooAsset3BuildSafety.PathsEqual(temporaryPath, expectedTemporaryPath))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset publication journal candidate name does not match its transaction identity: '{temporaryPath}'.");
+            }
+
+            if (active != null && !string.Equals(
+                    active.transactionId,
+                    candidate.transactionId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset publication journal candidates belong to different transactions: " +
+                    $"'{journalPath}', '{temporaryPath}'.");
+            }
+
+            if (active != null && candidate.sequence < active.sequence)
+            {
+                YooAsset3BuildSafety.DeleteOwnedFile(projectRoot, stateRoot, temporaryPath);
+                return active;
+            }
+
+            if (active != null && candidate.sequence == active.sequence)
+            {
+                if (!string.Equals(active.checksum, candidate.checksum, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset publication journal candidates have the same sequence but different content: " +
+                        $"'{journalPath}', '{temporaryPath}'.");
+                }
+
+                YooAsset3BuildSafety.DeleteOwnedFile(projectRoot, stateRoot, temporaryPath);
+                return active;
+            }
+
+            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, journalPath);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, temporaryPath);
+            if (active == null)
+            {
+                File.Move(temporaryPath, journalPath);
+            }
+            else
+            {
+                File.Replace(temporaryPath, journalPath, null);
+            }
+
+            Journal promoted = ReadAndValidateJournal(journalPath, projectRoot);
+            if (promoted.sequence != candidate.sequence ||
+                !string.Equals(promoted.checksum, candidate.checksum, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset publication journal candidate promotion could not be verified: '{journalPath}'.");
+            }
+
+            CleanupJournalTemporaryFiles(projectRoot, stateRoot, journalPath);
+            return promoted;
+        }
+
         private static void ValidateOperation(
             YooAsset3PublicationJournalOperation operation,
             string projectRoot,
@@ -1996,6 +2755,37 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 !IsKnownOperationState(operation.state))
             {
                 throw new InvalidOperationException("YooAsset publication journal contains an invalid operation.");
+            }
+
+            try
+            {
+                BuildIdentityPolicy.ValidateBuildIdentifier(
+                    operation.cryptographyAdapterId,
+                    "YooAsset cryptography adapter id");
+                BuildIdentityPolicy.ValidateBuildIdentifier(
+                    operation.runtimeDecryptContractId,
+                    "YooAsset runtime decrypt contract id");
+                if (operation.originalWasOwned)
+                {
+                    BuildIdentityPolicy.ValidateBuildIdentifier(
+                        operation.originalCryptographyAdapterId,
+                        "Original YooAsset cryptography adapter id");
+                    BuildIdentityPolicy.ValidateBuildIdentifier(
+                        operation.originalRuntimeDecryptContractId,
+                        "Original YooAsset runtime decrypt contract id");
+                }
+                else if (!string.IsNullOrEmpty(operation.originalCryptographyAdapterId)
+                         || !string.IsNullOrEmpty(operation.originalRuntimeDecryptContractId))
+                {
+                    throw new InvalidOperationException(
+                        "An unowned original YooAsset publication may not carry cryptography provenance.");
+                }
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset publication journal cryptography identity is invalid for package '{operation.packageName}'.",
+                    exception);
             }
 
             string expectedRoot = string.Equals(operation.kind, YooAsset3PublicationOwnership.PackageOutputKind, StringComparison.Ordinal)
@@ -2085,8 +2875,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             if ((operation.targetInitiallyExisted && string.IsNullOrWhiteSpace(operation.originalContentIdentity)) ||
                 (operation.originalWasOwned &&
-                 (string.IsNullOrWhiteSpace(operation.originalTransactionId) ||
-                  string.IsNullOrWhiteSpace(operation.originalPackageVersion))) ||
+                  (string.IsNullOrWhiteSpace(operation.originalTransactionId) ||
+                   string.IsNullOrWhiteSpace(operation.originalPackageVersion) ||
+                   string.IsNullOrWhiteSpace(operation.originalCryptographyAdapterId) ||
+                   string.IsNullOrWhiteSpace(operation.originalRuntimeDecryptContractId))) ||
                 (string.Equals(operation.state, InstalledState, StringComparison.Ordinal) &&
                  string.IsNullOrWhiteSpace(operation.installedContentIdentity)))
             {
@@ -2097,7 +2889,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static void WriteJournal(Journal value, string journalPath, bool createNew)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 journalPath,
                 "YooAsset publication journal",
                 ".tmp-".Length + 32);
@@ -2109,8 +2901,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalDirectory);
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalPath);
-            value.checksum = ComputeChecksum(value);
+            value.sequence = checked(value.sequence + 1);
             value.operationRecords = SerializeOperations(value.operations);
+            value.checksum = ComputeChecksum(value);
             string json = JsonUtility.ToJson(value, true);
             byte[] bytes = new UTF8Encoding(false).GetBytes(json);
             if (bytes.Length <= 0 || bytes.Length > MaximumJournalBytes)
@@ -2121,28 +2914,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             Directory.CreateDirectory(journalDirectory);
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalDirectory);
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalPath);
-            if (createNew)
-            {
-                using (var stream = new FileStream(
-                           journalPath,
-                           FileMode.CreateNew,
-                           FileAccess.Write,
-                           FileShare.None,
-                           4096,
-                           FileOptions.WriteThrough))
-                {
-                    stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush(true);
-                }
-
-                return;
-            }
-
             string temporaryPath = journalPath + ".tmp-" + value.transactionId;
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 temporaryPath,
                 "YooAsset publication temporary journal");
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, temporaryPath);
+            bool candidateIsDurable = false;
             try
             {
                 using (var stream = new FileStream(
@@ -2157,16 +2934,41 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     stream.Flush(true);
                 }
 
+                candidateIsDurable = true;
+
                 YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalPath);
                 YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, temporaryPath);
-                File.Replace(temporaryPath, journalPath, null);
+                if (createNew)
+                {
+                    if (File.Exists(journalPath) || Directory.Exists(journalPath))
+                    {
+                        throw new InvalidOperationException(
+                            $"A YooAsset publication journal already exists: '{journalPath}'.");
+                    }
+
+                    File.Move(temporaryPath, journalPath);
+                }
+                else
+                {
+                    File.Replace(temporaryPath, journalPath, null);
+                }
+
+                Journal persisted = ReadAndValidateJournal(journalPath, value.projectRoot);
+                if (persisted.sequence != value.sequence ||
+                    !string.Equals(persisted.checksum, value.checksum, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset publication journal write could not be verified: '{journalPath}'.");
+                }
             }
-            finally
+            catch
             {
-                if (File.Exists(temporaryPath))
+                if (!candidateIsDurable && File.Exists(temporaryPath))
                 {
                     File.Delete(temporaryPath);
                 }
+
+                throw;
             }
         }
 
@@ -2223,7 +3025,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private static string ComputeChecksum(Journal value)
         {
             var builder = new StringBuilder();
-            AppendChecksumValue(builder, value.schemaVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.formatVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.sequence.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.invocationId);
             AppendChecksumValue(builder, value.transactionId);
             AppendChecksumValue(builder, value.phase);
             AppendChecksumValue(builder, value.projectRoot);
@@ -2238,6 +3042,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 AppendChecksumValue(builder, operation?.kind);
                 AppendChecksumValue(builder, operation?.packageName);
                 AppendChecksumValue(builder, operation?.packageVersion);
+                AppendChecksumValue(builder, operation?.cryptographyAdapterId);
+                AppendChecksumValue(builder, operation?.runtimeDecryptContractId);
                 AppendChecksumValue(builder, operation?.approvedRoot);
                 AppendChecksumValue(builder, operation?.target);
                 AppendChecksumValue(builder, operation?.stage);
@@ -2246,6 +3052,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 AppendChecksumValue(builder, operation != null && operation.originalWasOwned ? "1" : "0");
                 AppendChecksumValue(builder, operation?.originalTransactionId);
                 AppendChecksumValue(builder, operation?.originalPackageVersion);
+                AppendChecksumValue(builder, operation?.originalCryptographyAdapterId);
+                AppendChecksumValue(builder, operation?.originalRuntimeDecryptContractId);
                 AppendChecksumValue(builder, operation?.originalContentIdentity);
                 AppendChecksumValue(builder, operation == null
                     ? string.Empty
@@ -2319,6 +3127,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             return string.Equals(value, PreparedPhase, StringComparison.Ordinal) ||
                    string.Equals(value, CommittingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, RollingBackPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, RollbackRefreshPendingPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, ActivationRefreshPendingPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, DownstreamActivePhase, StringComparison.Ordinal) ||
+                   string.Equals(value, AwaitingDecisionPhase, StringComparison.Ordinal) ||
                    string.Equals(value, RefreshPendingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, CommittedPhase, StringComparison.Ordinal);
         }
@@ -2342,7 +3154,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         [Serializable]
         private sealed class Journal
         {
-            public int schemaVersion;
+            public int formatVersion;
+            public long sequence;
+            public string invocationId;
             public string transactionId;
             public string phase;
             public string projectRoot;

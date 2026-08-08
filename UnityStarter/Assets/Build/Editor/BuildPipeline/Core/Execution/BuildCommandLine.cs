@@ -1,28 +1,89 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.Build;
 
 namespace Build.Pipeline.Editor
 {
+    public sealed class BuildCommandLineRecipeInvocation
+    {
+        internal BuildCommandLineRecipeInvocation(string invocationId, string stepTypeId)
+        {
+            InvocationId = invocationId;
+            StepTypeId = stepTypeId;
+        }
+
+        public string InvocationId { get; }
+        public string StepTypeId { get; }
+    }
+
     public sealed class BuildCommandLineOptions
     {
+        private readonly List<BuildCommandLineRecipeInvocation> recipeInvocations =
+            new List<BuildCommandLineRecipeInvocation>();
+        private readonly List<string> selectedInvocationIds = new List<string>();
+        private readonly Dictionary<string, string> stepConfigurationPaths =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, BuildIncrementality> stepIncrementalities =
+            new Dictionary<string, BuildIncrementality>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<BuildInvocationDependency>> stepDependencies =
+            new Dictionary<string, List<BuildInvocationDependency>>(StringComparer.OrdinalIgnoreCase);
+
         public BuildTarget BuildTarget { get; internal set; } = BuildTarget.NoTarget;
         public string BuildProfilePath { get; internal set; }
         public string OutputPath { get; internal set; }
         public string ApplicationVersion { get; internal set; }
         public string OutputBasePath { get; internal set; }
         public string VersionInfoAssetPath { get; internal set; }
-        public string AssetContentProviderId { get; internal set; }
-        public string AssetContentConfigurationPath { get; internal set; }
-        public BuildIncrementality Incrementality { get; internal set; } = BuildIncrementality.Clean;
         public bool DebugBuild { get; internal set; }
         public bool ExportAndroidProject { get; internal set; }
         public bool AllowExternalOutput { get; internal set; }
         public ScriptingImplementation? ScriptingBackend { get; internal set; }
-        public bool? UseHybridClr { get; internal set; }
         public bool? CheatEnabled { get; internal set; }
-        public string[] StepIds { get; internal set; }
+        public BuildIdentityOverride IdentityOverride { get; internal set; } = BuildIdentityOverride.Empty;
+        public IReadOnlyList<BuildCommandLineRecipeInvocation> RecipeInvocations =>
+            new ReadOnlyCollection<BuildCommandLineRecipeInvocation>(recipeInvocations);
+        public IReadOnlyList<string> SelectedInvocationIds =>
+            new ReadOnlyCollection<string>(selectedInvocationIds);
+        public IReadOnlyDictionary<string, string> StepConfigurationPathOverrides =>
+            new ReadOnlyDictionary<string, string>(stepConfigurationPaths);
+        public IReadOnlyDictionary<string, BuildIncrementality> StepIncrementalityOverrides =>
+            new ReadOnlyDictionary<string, BuildIncrementality>(stepIncrementalities);
+        public IReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>> StepDependencyOverrides
+        {
+            get
+            {
+                var snapshot = new Dictionary<string, IReadOnlyList<BuildInvocationDependency>>(
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, List<BuildInvocationDependency>> entry in stepDependencies)
+                {
+                    snapshot.Add(
+                        entry.Key,
+                        new ReadOnlyCollection<BuildInvocationDependency>(entry.Value.ToArray()));
+                }
+
+                return new ReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>>(snapshot);
+            }
+        }
+        public bool RecoverOnly { get; internal set; }
+
+        internal List<BuildCommandLineRecipeInvocation> MutableRecipeInvocations => recipeInvocations;
+        internal List<string> MutableSelectedInvocationIds => selectedInvocationIds;
+        internal Dictionary<string, string> MutableStepConfigurationPaths =>
+            stepConfigurationPaths;
+        internal Dictionary<string, BuildIncrementality> MutableStepIncrementalities =>
+            stepIncrementalities;
+        internal Dictionary<string, List<BuildInvocationDependency>> MutableStepDependencies =>
+            stepDependencies;
+        internal long? IdentityBuildNumber { get; set; }
+        internal string IdentitySourceProvider { get; set; }
+        internal string IdentitySourceRevision { get; set; }
+        internal string IdentitySourceBranch { get; set; }
+        internal string IdentityCiProvider { get; set; }
+        internal string IdentityCiRunId { get; set; }
     }
 
     /// <summary>
@@ -41,22 +102,28 @@ namespace Build.Pipeline.Editor
         public const string Version = Prefix + "Version";
         public const string OutputRoot = Prefix + "OutputRoot";
         public const string VersionInfo = Prefix + "VersionInfo";
-        public const string Provider = Prefix + "Provider";
-        public const string ProviderConfiguration = Prefix + "ProviderConfig";
-        public const string Steps = Prefix + "Steps";
-        public const string Clean = Prefix + "Clean";
-        public const string Incremental = Prefix + "Incremental";
+        public const string BuildNumber = Prefix + "BuildNumber";
+        public const string SourceProvider = Prefix + "SourceProvider";
+        public const string SourceRevision = Prefix + "SourceRevision";
+        public const string SourceBranch = Prefix + "SourceBranch";
+        public const string CiProvider = Prefix + "CiProvider";
+        public const string CiRunId = Prefix + "CiRunId";
+        public const string Recipe = Prefix + "Recipe";
+        public const string Selection = Prefix + "Select";
+        public const string StepConfiguration = Prefix + "StepConfig";
+        public const string StepIncrementality = Prefix + "StepIncrementality";
+        public const string StepDependency = Prefix + "StepDependency";
         public const string Development = Prefix + "Development";
         public const string ExportAndroidProject = Prefix + "ExportAndroidProject";
-        public const string UseHybridCLR = Prefix + "UseHybridCLR";
-        public const string SkipHybridCLR = Prefix + "SkipHybridCLR";
         public const string EnableCheat = Prefix + "EnableCheat";
         public const string DisableCheat = Prefix + "DisableCheat";
         public const string AllowExternalOutput = Prefix + "AllowExternalOutput";
+        public const string RecoverOnly = Prefix + "RecoverOnly";
     }
 
     public static class BuildCommandLine
     {
+
         private static readonly HashSet<string> ValueOptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             BuildCommandLineOptionNames.BuildTarget,
@@ -66,22 +133,37 @@ namespace Build.Pipeline.Editor
             BuildCommandLineOptionNames.Version,
             BuildCommandLineOptionNames.OutputRoot,
             BuildCommandLineOptionNames.VersionInfo,
-            BuildCommandLineOptionNames.Provider,
-            BuildCommandLineOptionNames.ProviderConfiguration,
-            BuildCommandLineOptionNames.Steps
+            BuildCommandLineOptionNames.BuildNumber,
+            BuildCommandLineOptionNames.SourceProvider,
+            BuildCommandLineOptionNames.SourceRevision,
+            BuildCommandLineOptionNames.SourceBranch,
+            BuildCommandLineOptionNames.CiProvider,
+            BuildCommandLineOptionNames.CiRunId,
+            BuildCommandLineOptionNames.Recipe,
+            BuildCommandLineOptionNames.Selection,
+            BuildCommandLineOptionNames.StepConfiguration,
+            BuildCommandLineOptionNames.StepIncrementality,
+            BuildCommandLineOptionNames.StepDependency
         };
+
+        private static readonly HashSet<string> RepeatableValueOptions =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                BuildCommandLineOptionNames.Recipe,
+                BuildCommandLineOptionNames.Selection,
+                BuildCommandLineOptionNames.StepConfiguration,
+                BuildCommandLineOptionNames.StepIncrementality,
+                BuildCommandLineOptionNames.StepDependency
+            };
 
         private static readonly HashSet<string> FlagOptions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            BuildCommandLineOptionNames.Clean,
-            BuildCommandLineOptionNames.Incremental,
             BuildCommandLineOptionNames.Development,
             BuildCommandLineOptionNames.ExportAndroidProject,
-            BuildCommandLineOptionNames.UseHybridCLR,
-            BuildCommandLineOptionNames.SkipHybridCLR,
             BuildCommandLineOptionNames.EnableCheat,
             BuildCommandLineOptionNames.DisableCheat,
-            BuildCommandLineOptionNames.AllowExternalOutput
+            BuildCommandLineOptionNames.AllowExternalOutput,
+            BuildCommandLineOptionNames.RecoverOnly
         };
 
         public static BuildCommandLineOptions Parse(IReadOnlyList<string> arguments)
@@ -107,15 +189,19 @@ namespace Build.Pipeline.Editor
                     continue;
                 }
 
-                if (!seen.Add(argument))
+                if (!RepeatableValueOptions.Contains(argument) && !seen.Add(argument))
                 {
                     throw new ArgumentException($"Build pipeline option '{argument}' was specified more than once.");
                 }
 
+                seen.Add(argument);
+
                 string value = null;
                 if (ValueOptions.Contains(argument))
                 {
-                    if (index + 1 >= arguments.Count || string.IsNullOrWhiteSpace(arguments[index + 1]) || arguments[index + 1].StartsWith("-", StringComparison.Ordinal))
+                    if (index + 1 >= arguments.Count
+                        || string.IsNullOrWhiteSpace(arguments[index + 1])
+                        || arguments[index + 1].StartsWith("-", StringComparison.Ordinal))
                     {
                         throw new ArgumentException($"Build pipeline option '{argument}' requires a value.");
                     }
@@ -149,6 +235,7 @@ namespace Build.Pipeline.Editor
             else if (argument.Equals(BuildCommandLineOptionNames.ScriptingBackend, StringComparison.OrdinalIgnoreCase))
             {
                 if (!Enum.TryParse(value, true, out ScriptingImplementation backend)
+                    || !Enum.IsDefined(typeof(ScriptingImplementation), backend)
                     || (backend != ScriptingImplementation.Mono2x && backend != ScriptingImplementation.IL2CPP))
                 {
                     throw new ArgumentException(
@@ -173,25 +260,55 @@ namespace Build.Pipeline.Editor
             {
                 options.VersionInfoAssetPath = value;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.Provider, StringComparison.OrdinalIgnoreCase))
+            else if (argument.Equals(BuildCommandLineOptionNames.BuildNumber, StringComparison.OrdinalIgnoreCase))
             {
-                options.AssetContentProviderId = value;
+                if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long buildNumber))
+                {
+                    throw new ArgumentException(
+                        $"Invalid build number '{value}'. Use a positive integer between 1 and {int.MaxValue}.");
+                }
+
+                options.IdentityBuildNumber = buildNumber;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.ProviderConfiguration, StringComparison.OrdinalIgnoreCase))
+            else if (argument.Equals(BuildCommandLineOptionNames.SourceProvider, StringComparison.OrdinalIgnoreCase))
             {
-                options.AssetContentConfigurationPath = value;
+                options.IdentitySourceProvider = value;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.Steps, StringComparison.OrdinalIgnoreCase))
+            else if (argument.Equals(BuildCommandLineOptionNames.SourceRevision, StringComparison.OrdinalIgnoreCase))
             {
-                options.StepIds = ParseStepIds(value);
+                options.IdentitySourceRevision = value;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.Clean, StringComparison.OrdinalIgnoreCase))
+            else if (argument.Equals(BuildCommandLineOptionNames.SourceBranch, StringComparison.OrdinalIgnoreCase))
             {
-                options.Incrementality = BuildIncrementality.Clean;
+                options.IdentitySourceBranch = value;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.Incremental, StringComparison.OrdinalIgnoreCase))
+            else if (argument.Equals(BuildCommandLineOptionNames.CiProvider, StringComparison.OrdinalIgnoreCase))
             {
-                options.Incrementality = BuildIncrementality.Incremental;
+                options.IdentityCiProvider = value;
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.CiRunId, StringComparison.OrdinalIgnoreCase))
+            {
+                options.IdentityCiRunId = value;
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.Recipe, StringComparison.OrdinalIgnoreCase))
+            {
+                AddRecipeInvocation(options, value);
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.Selection, StringComparison.OrdinalIgnoreCase))
+            {
+                AddSelectedInvocation(options, value);
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.StepConfiguration, StringComparison.OrdinalIgnoreCase))
+            {
+                AddStepConfiguration(options, value);
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.StepIncrementality, StringComparison.OrdinalIgnoreCase))
+            {
+                AddStepIncrementality(options, value);
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.StepDependency, StringComparison.OrdinalIgnoreCase))
+            {
+                AddStepDependency(options, value);
             }
             else if (argument.Equals(BuildCommandLineOptionNames.Development, StringComparison.OrdinalIgnoreCase))
             {
@@ -205,14 +322,6 @@ namespace Build.Pipeline.Editor
             {
                 options.AllowExternalOutput = true;
             }
-            else if (argument.Equals(BuildCommandLineOptionNames.UseHybridCLR, StringComparison.OrdinalIgnoreCase))
-            {
-                options.UseHybridClr = true;
-            }
-            else if (argument.Equals(BuildCommandLineOptionNames.SkipHybridCLR, StringComparison.OrdinalIgnoreCase))
-            {
-                options.UseHybridClr = false;
-            }
             else if (argument.Equals(BuildCommandLineOptionNames.EnableCheat, StringComparison.OrdinalIgnoreCase))
             {
                 options.CheatEnabled = true;
@@ -221,36 +330,252 @@ namespace Build.Pipeline.Editor
             {
                 options.CheatEnabled = false;
             }
+            else if (argument.Equals(BuildCommandLineOptionNames.RecoverOnly, StringComparison.OrdinalIgnoreCase))
+            {
+                options.RecoverOnly = true;
+            }
         }
 
-        private static string[] ParseStepIds(string value)
+        private static void AddRecipeInvocation(BuildCommandLineOptions options, string value)
         {
-            string[] raw = value.Split(',');
-            var result = new List<string>(raw.Length);
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string item in raw)
+            ParseAssignment(value, BuildCommandLineOptionNames.Recipe, out string invocationId, out string stepTypeId);
+            ValidateRecipeIdentifier(invocationId, "Recipe invocation id");
+            ValidateRecipeIdentifier(stepTypeId, "Recipe step type id");
+
+            if (options.MutableRecipeInvocations.Count >= BuildPipelineBudgets.MaximumInvocationCount)
             {
-                string stepId = item.Trim();
-                if (stepId.Length == 0)
-                {
-                    throw new ArgumentException(
-                        $"The {BuildCommandLineOptionNames.Steps} option contains an empty step identifier.");
-                }
-
-                if (!seen.Add(stepId))
-                {
-                    throw new ArgumentException(
-                        $"The {BuildCommandLineOptionNames.Steps} option contains duplicate step '{stepId}'.");
-                }
-
-                result.Add(stepId);
+                throw new ArgumentException(
+                    $"{BuildCommandLineOptionNames.Recipe} may be specified at most {BuildPipelineBudgets.MaximumInvocationCount} times.");
             }
 
-            return result.ToArray();
+            for (int index = 0; index < options.MutableRecipeInvocations.Count; index++)
+            {
+                if (string.Equals(
+                        options.MutableRecipeInvocations[index].InvocationId,
+                        invocationId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        $"Recipe invocation '{invocationId}' was specified more than once.");
+                }
+            }
+
+            options.MutableRecipeInvocations.Add(
+                new BuildCommandLineRecipeInvocation(invocationId, stepTypeId));
+        }
+
+        private static void AddSelectedInvocation(
+            BuildCommandLineOptions options,
+            string value)
+        {
+            string invocationId = value?.Trim();
+            ValidateRecipeIdentifier(invocationId, "Selected invocation id");
+            if (options.MutableSelectedInvocationIds.Count
+                >= BuildPipelineBudgets.MaximumInvocationCount)
+            {
+                throw new ArgumentException(
+                    $"{BuildCommandLineOptionNames.Selection} may be specified at most " +
+                    $"{BuildPipelineBudgets.MaximumInvocationCount} times.");
+            }
+
+            for (int index = 0;
+                 index < options.MutableSelectedInvocationIds.Count;
+                 index++)
+            {
+                if (string.Equals(
+                        options.MutableSelectedInvocationIds[index],
+                        invocationId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        $"Selected invocation '{invocationId}' was specified more than once.");
+                }
+            }
+
+            options.MutableSelectedInvocationIds.Add(invocationId);
+        }
+
+        private static void AddStepConfiguration(BuildCommandLineOptions options, string value)
+        {
+            ParseAssignment(
+                value,
+                BuildCommandLineOptionNames.StepConfiguration,
+                out string invocationId,
+                out string path);
+            ValidateRecipeIdentifier(invocationId, "Step configuration invocation id");
+            if (options.MutableStepConfigurationPaths.Count >= BuildPipelineBudgets.MaximumInvocationCount)
+            {
+                throw new ArgumentException(
+                    $"{BuildCommandLineOptionNames.StepConfiguration} may be specified at most {BuildPipelineBudgets.MaximumInvocationCount} times.");
+            }
+
+            if (!options.MutableStepConfigurationPaths.TryAdd(invocationId, path))
+            {
+                throw new ArgumentException(
+                    $"A configuration override for invocation '{invocationId}' was specified more than once.");
+            }
+        }
+
+        private static void AddStepIncrementality(BuildCommandLineOptions options, string value)
+        {
+            ParseAssignment(
+                value,
+                BuildCommandLineOptionNames.StepIncrementality,
+                out string invocationId,
+                out string modeValue);
+            ValidateRecipeIdentifier(invocationId, "Step incrementality invocation id");
+            if (!TryParseIncrementality(modeValue, out BuildIncrementality incrementality))
+            {
+                throw new ArgumentException(
+                    $"Unsupported step incrementality '{modeValue}'. Use Clean or Incremental.");
+            }
+
+            if (!options.MutableStepIncrementalities.TryAdd(invocationId, incrementality))
+            {
+                throw new ArgumentException(
+                    $"An incrementality override for invocation '{invocationId}' was specified more than once.");
+            }
+        }
+
+        private static void AddStepDependency(BuildCommandLineOptions options, string value)
+        {
+            ParseAssignment(
+                value,
+                BuildCommandLineOptionNames.StepDependency,
+                out string invocationId,
+                out string dependencyExpression);
+            ValidateRecipeIdentifier(invocationId, "Step dependency owner invocation id");
+
+            int modeDelimiter = dependencyExpression.IndexOf(':');
+            if (modeDelimiter <= 0 || modeDelimiter == dependencyExpression.Length - 1)
+            {
+                throw new ArgumentException(
+                    $"{BuildCommandLineOptionNames.StepDependency} requires " +
+                    "'<invocation-id>=<Required|IfSelected>:<dependency-invocation-id>'.");
+            }
+
+            string modeValue = dependencyExpression.Substring(0, modeDelimiter).Trim();
+            string dependencyId = dependencyExpression.Substring(modeDelimiter + 1).Trim();
+            ValidateRecipeIdentifier(dependencyId, "Dependency invocation id");
+            if (!TryParseDependencyMode(modeValue, out BuildDependencyMode mode))
+            {
+                throw new ArgumentException(
+                    $"Unsupported dependency mode '{modeValue}'. Use Required or IfSelected.");
+            }
+
+            int dependencyCount = options.MutableStepDependencies.Sum(entry => entry.Value.Count);
+            if (dependencyCount >= BuildPipelineBudgets.MaximumDependencyEdgeCount)
+            {
+                throw new ArgumentException(
+                    $"{BuildCommandLineOptionNames.StepDependency} may be specified at most {BuildPipelineBudgets.MaximumDependencyEdgeCount} times.");
+            }
+
+            if (!options.MutableStepDependencies.TryGetValue(
+                    invocationId,
+                    out List<BuildInvocationDependency> dependencies))
+            {
+                dependencies = new List<BuildInvocationDependency>();
+                options.MutableStepDependencies.Add(invocationId, dependencies);
+            }
+
+            for (int index = 0; index < dependencies.Count; index++)
+            {
+                if (string.Equals(
+                        dependencies[index].InvocationId,
+                        dependencyId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        $"Dependency '{dependencyId}' for invocation '{invocationId}' was specified more than once.");
+                }
+            }
+
+            dependencies.Add(new BuildInvocationDependency(dependencyId, mode));
+        }
+
+        private static void ParseAssignment(
+            string value,
+            string optionName,
+            out string key,
+            out string assignedValue)
+        {
+            int delimiter = value?.IndexOf('=') ?? -1;
+            if (delimiter <= 0 || delimiter == value.Length - 1)
+            {
+                throw new ArgumentException(
+                    $"{optionName} requires a non-empty '<key>=<value>' assignment.");
+            }
+
+            key = value.Substring(0, delimiter).Trim();
+            assignedValue = value.Substring(delimiter + 1).Trim();
+            if (key.Length == 0 || assignedValue.Length == 0)
+            {
+                throw new ArgumentException(
+                    $"{optionName} requires a non-empty '<key>=<value>' assignment.");
+            }
+        }
+
+        private static bool TryParseIncrementality(
+            string value,
+            out BuildIncrementality incrementality)
+        {
+            if (string.Equals(value, nameof(BuildIncrementality.Clean), StringComparison.OrdinalIgnoreCase))
+            {
+                incrementality = BuildIncrementality.Clean;
+                return true;
+            }
+
+            if (string.Equals(value, nameof(BuildIncrementality.Incremental), StringComparison.OrdinalIgnoreCase))
+            {
+                incrementality = BuildIncrementality.Incremental;
+                return true;
+            }
+
+            incrementality = default;
+            return false;
+        }
+
+        private static bool TryParseDependencyMode(
+            string value,
+            out BuildDependencyMode mode)
+        {
+            if (string.Equals(value, nameof(BuildDependencyMode.Required), StringComparison.OrdinalIgnoreCase))
+            {
+                mode = BuildDependencyMode.Required;
+                return true;
+            }
+
+            if (string.Equals(value, nameof(BuildDependencyMode.IfSelected), StringComparison.OrdinalIgnoreCase))
+            {
+                mode = BuildDependencyMode.IfSelected;
+                return true;
+            }
+
+            mode = default;
+            return false;
+        }
+
+        private static void ValidateRecipeIdentifier(string value, string label)
+        {
+            BuildIdentityPolicy.ValidateBuildIdentifier(value, label);
         }
 
         private static void Validate(BuildCommandLineOptions options, HashSet<string> seen)
         {
+            if (options.RecoverOnly)
+            {
+                string incompatible = seen.FirstOrDefault(option =>
+                    !option.Equals(BuildCommandLineOptionNames.RecoverOnly, StringComparison.OrdinalIgnoreCase)
+                    && !option.Equals(BuildCommandLineOptionNames.BuildTarget, StringComparison.OrdinalIgnoreCase));
+                if (incompatible != null)
+                {
+                    throw new ArgumentException(
+                        $"{BuildCommandLineOptionNames.RecoverOnly} cannot be combined with build option '{incompatible}'.");
+                }
+
+                return;
+            }
+
             if (options.BuildTarget == BuildTarget.NoTarget)
             {
                 throw new ArgumentException(
@@ -259,17 +584,25 @@ namespace Build.Pipeline.Editor
 
             ValidateMutuallyExclusive(
                 seen,
-                BuildCommandLineOptionNames.UseHybridCLR,
-                BuildCommandLineOptionNames.SkipHybridCLR);
-            ValidateMutuallyExclusive(
-                seen,
                 BuildCommandLineOptionNames.EnableCheat,
                 BuildCommandLineOptionNames.DisableCheat);
-            ValidateMutuallyExclusive(
-                seen,
-                BuildCommandLineOptionNames.Clean,
-                BuildCommandLineOptionNames.Incremental);
-            ValidateAssetContentOverride(options, seen);
+
+            if (options.MutableSelectedInvocationIds.Count > 0)
+            {
+                if (!seen.Contains(BuildCommandLineOptionNames.Profile))
+                {
+                    throw new ArgumentException(
+                        $"{BuildCommandLineOptionNames.Selection} requires an explicit " +
+                        $"{BuildCommandLineOptionNames.Profile} so selection always addresses a version-controlled graph.");
+                }
+
+                if (options.MutableRecipeInvocations.Count > 0)
+                {
+                    throw new ArgumentException(
+                        $"{BuildCommandLineOptionNames.Selection} cannot be combined with " +
+                        $"{BuildCommandLineOptionNames.Recipe}. Select invocations from the profile or replace the recipe, not both.");
+                }
+            }
 
             if (options.ExportAndroidProject && options.BuildTarget != BuildTarget.Android)
             {
@@ -278,45 +611,13 @@ namespace Build.Pipeline.Editor
                     $"{BuildCommandLineOptionNames.BuildTarget} Android.");
             }
 
-        }
-
-        private static void ValidateAssetContentOverride(
-            BuildCommandLineOptions options,
-            HashSet<string> seen)
-        {
-            bool providerSpecified = seen.Contains(BuildCommandLineOptionNames.Provider);
-            bool configurationSpecified = seen.Contains(BuildCommandLineOptionNames.ProviderConfiguration);
-            if (!providerSpecified && configurationSpecified)
-            {
-                throw new ArgumentException(
-                    $"{BuildCommandLineOptionNames.ProviderConfiguration} requires " +
-                    $"{BuildCommandLineOptionNames.Provider}.");
-            }
-
-            if (!providerSpecified)
-            {
-                return;
-            }
-
-            bool disable = string.Equals(
-                options.AssetContentProviderId?.Trim(),
-                "none",
-                StringComparison.OrdinalIgnoreCase);
-            if (disable && configurationSpecified)
-            {
-                throw new ArgumentException(
-                    $"{BuildCommandLineOptionNames.ProviderConfiguration} cannot be used when " +
-                    $"{BuildCommandLineOptionNames.Provider} is 'none'.");
-            }
-
-            if (!disable && !configurationSpecified)
-            {
-                throw new ArgumentException(
-                    $"{BuildCommandLineOptionNames.Provider} requires " +
-                    $"{BuildCommandLineOptionNames.ProviderConfiguration} Assets/<path>/<config>.asset. " +
-                    $"Use {BuildCommandLineOptionNames.Provider} none to disable content building " +
-                    "for this invocation.");
-            }
+            options.IdentityOverride = new BuildIdentityOverride(
+                options.IdentityBuildNumber,
+                options.IdentitySourceProvider,
+                options.IdentitySourceRevision,
+                options.IdentitySourceBranch,
+                options.IdentityCiProvider,
+                options.IdentityCiRunId);
         }
 
         private static void ValidateMutuallyExclusive(HashSet<string> seen, string first, string second)

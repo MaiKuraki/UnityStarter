@@ -6,10 +6,14 @@ using UnityEngine;
 
 namespace Build.Pipeline.Editor
 {
-    public static class AssetContentProviderIds
+    /// <summary>
+    /// Base contract for provider-owned content configuration assets. The
+    /// provider identifier is derived from the assigned asset, so a build
+    /// recipe cannot drift into an id/configuration mismatch.
+    /// </summary>
+    public abstract class AssetContentBuildConfiguration : ScriptableObject
     {
-        public const string Addressables = "addressables";
-        public const string YooAsset = "yooasset";
+        public abstract string ProviderId { get; }
     }
 
     /// <summary>
@@ -18,25 +22,37 @@ namespace Build.Pipeline.Editor
     public sealed class AssetContentBuildRequest
     {
         public AssetContentBuildRequest(
+            string invocationId,
             BuildTarget buildTarget,
             string packageVersion,
             string projectRoot,
-            ScriptableObject configuration,
+            AssetContentBuildConfiguration configuration,
             BuildIncrementality incrementality,
             bool batchMode)
         {
+            if (string.IsNullOrWhiteSpace(invocationId))
+            {
+                throw new ArgumentException(
+                    "Content build invocation id is required.",
+                    nameof(invocationId));
+            }
+
+            InvocationId = invocationId.Trim();
             BuildTarget = buildTarget;
             PackageVersion = packageVersion ?? throw new ArgumentNullException(nameof(packageVersion));
             ProjectRoot = projectRoot ?? throw new ArgumentNullException(nameof(projectRoot));
             Configuration = configuration;
+            ProviderId = configuration?.ProviderId ?? string.Empty;
             Incrementality = incrementality;
             BatchMode = batchMode;
         }
 
+        public string InvocationId { get; }
+        public string ProviderId { get; }
         public BuildTarget BuildTarget { get; }
         public string PackageVersion { get; }
         public string ProjectRoot { get; }
-        public ScriptableObject Configuration { get; }
+        public AssetContentBuildConfiguration Configuration { get; }
         public BuildIncrementality Incrementality { get; }
         public bool BatchMode { get; }
     }
@@ -74,6 +90,10 @@ namespace Build.Pipeline.Editor
             ReportPath = reportPath ?? string.Empty;
             ProducedArtifacts = SnapshotStrings(producedArtifacts);
             Warnings = SnapshotStrings(warnings);
+            EvidenceValueCount = checked(
+                9 + ProducedArtifacts.Count + Warnings.Count);
+            EvidenceUtf8Bytes =
+                BuildResultEvidencePolicy.ValidateContentResult(this);
         }
 
         public bool Succeeded { get; }
@@ -88,6 +108,8 @@ namespace Build.Pipeline.Editor
         public string ReportPath { get; }
         public IReadOnlyList<string> ProducedArtifacts { get; }
         public IReadOnlyList<string> Warnings { get; }
+        internal long EvidenceUtf8Bytes { get; }
+        internal int EvidenceValueCount { get; }
 
         public static AssetContentBuildResult Success(
             string providerId,
@@ -155,22 +177,66 @@ namespace Build.Pipeline.Editor
         }
     }
 
+    /// <summary>
+    /// Provider build results plus an optional sealed publication. The
+    /// publication is committed by the pipeline only after every selected
+    /// step and transient Unity-state restoration gate succeeds.
+    /// </summary>
+    public sealed class AssetContentBuildOperation
+    {
+        private readonly IReadOnlyList<AssetContentBuildResult> results;
+
+        public AssetContentBuildOperation(
+            IReadOnlyList<AssetContentBuildResult> results,
+            IBuildDeferredPublication publication = null)
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            if (results.Count
+                > BuildResultEvidencePolicy.MaximumContentOperationResultCount)
+            {
+                throw new InvalidOperationException(
+                    $"A content build operation may return at most {BuildResultEvidencePolicy.MaximumContentOperationResultCount} result entries.");
+            }
+
+            var snapshot = new AssetContentBuildResult[results.Count];
+            for (int index = 0; index < results.Count; index++)
+            {
+                snapshot[index] = results[index]
+                    ?? throw new ArgumentException(
+                        $"Content build operation result at index {index} is null.",
+                        nameof(results));
+            }
+
+            this.results = new ReadOnlyCollection<AssetContentBuildResult>(snapshot);
+            Publication = publication;
+        }
+
+        public IReadOnlyList<AssetContentBuildResult> Results => results;
+        public IBuildDeferredPublication Publication { get; }
+    }
+
     [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
     public sealed class AssetContentAdapterRegistrationAttribute : Attribute
     {
-        public AssetContentAdapterRegistrationAttribute(string providerId, int priority = 0)
+        public AssetContentAdapterRegistrationAttribute(string providerId)
         {
             if (string.IsNullOrWhiteSpace(providerId))
             {
                 throw new ArgumentException("Content adapter provider id is required.", nameof(providerId));
             }
 
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                providerId,
+                "Content adapter provider id");
+
             ProviderId = providerId.Trim();
-            Priority = priority;
         }
 
         public string ProviderId { get; }
-        public int Priority { get; }
     }
 
     [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
@@ -182,6 +248,10 @@ namespace Build.Pipeline.Editor
             {
                 throw new ArgumentException("Content provider authoring id is required.", nameof(providerId));
             }
+
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                providerId,
+                "Content provider authoring id");
 
             if (string.IsNullOrWhiteSpace(displayName))
             {
@@ -236,16 +306,32 @@ namespace Build.Pipeline.Editor
     public interface IAssetContentBuildAdapter
     {
         string ProviderId { get; }
-        int Priority { get; }
         AssetContentBuildResult Validate(AssetContentBuildRequest request);
-        IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request);
+        AssetContentBuildOperation Build(AssetContentBuildRequest request);
+    }
+
+    /// <summary>
+    /// Optional preflight contract for provider-owned terminal output paths.
+    /// Every returned path must be absolute. The pipeline rejects exact and
+    /// ancestor/descendant overlap across selected invocations before any
+    /// provider build begins.
+    /// </summary>
+    public interface IAssetContentBuildOutputClaimProvider
+    {
+        IReadOnlyList<string> GetExclusiveOutputPaths(
+            AssetContentBuildRequest request);
     }
 
     /// <summary>
     /// Optional provider hook for transactional state required only while Unity builds a Player.
+    /// A non-empty <see cref="ExclusivePlayerSessionKey"/> claims one process-global
+    /// session namespace. A Player dependency closure may contain at most one
+    /// session factory for each non-empty key. An empty key declares that sessions
+    /// owned by separate invocations may coexist.
     /// </summary>
     public interface IAssetContentPlayerBuildSessionFactory
     {
+        string ExclusivePlayerSessionKey { get; }
         IReadOnlyList<string> ValidatePlayerBuild(AssetContentBuildRequest request);
         IDisposable BeginPlayerBuild(AssetContentBuildRequest request);
     }

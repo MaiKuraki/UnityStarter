@@ -35,7 +35,7 @@ namespace Build.Pipeline.Editor
     /// <summary>
     /// Publishes all HybridCLR generated outputs as one durable, identity-checked transaction.
     /// </summary>
-    internal sealed class HybridCLROutputTransaction : IDisposable
+    internal sealed class HybridCLROutputTransaction : IBuildDownstreamInputPublication
     {
         private sealed class OutputState
         {
@@ -46,7 +46,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int schemaVersion;
+            public int formatVersion;
             public long sequence;
             public string transactionId;
             public string phase;
@@ -104,16 +104,19 @@ namespace Build.Pipeline.Editor
 
         internal const string OwnershipManifestFileName = HybridCLROutputOwnership.ManifestFileName;
         internal const string OwnershipIdentifier = HybridCLROutputOwnership.Owner;
-        internal const int OwnershipSchemaVersion = HybridCLROutputOwnership.SchemaVersion;
+        internal const int OwnershipFormatVersion = HybridCLROutputOwnership.FormatVersion;
+        internal const string PublicationId = "hot-update:hybridclr";
+        internal const string StateRelativePath = ".buildpipeline/transactions/hybridclr";
         internal bool OutputsCommitted => committed;
 
-        private const int JournalSchemaVersion = 2;
+        private const int JournalFormatVersion = 1;
         private const string StateFolderName = "hybridclr";
         private const string LockFileName = "build.lock";
         private const string ActiveJournalFileName = "active.json";
         private const string JournalTemporaryPrefix = ActiveJournalFileName + ".tmp-";
         private const string PreparedPhase = "Prepared";
         private const string CommittingPhase = "Committing";
+        private const string AwaitingDecisionPhase = "AwaitingDecision";
         private const string RollingBackPhase = "RollingBack";
         private const string RolledBackPhase = "RolledBack";
         private const string CommittedPhase = "Committed";
@@ -148,6 +151,7 @@ namespace Build.Pipeline.Editor
         private readonly Journal journal;
         private readonly List<OutputState> outputs;
         private readonly FileStream outputLock;
+        private bool activated;
         private bool committed;
         private bool finished;
         private bool disposed;
@@ -187,7 +191,7 @@ namespace Build.Pipeline.Editor
             FileStream outputLock = AcquireProjectLock(stateRoot);
             try
             {
-                RecoverPendingUnderLock(project, stateRoot);
+                EnsureNoPendingRecoveryUnderLock(stateRoot);
                 ValidateExistingOutputs(targets);
                 EnsureNoDetachedState(stateRoot, expectedTransactionId: null);
 
@@ -252,6 +256,26 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        internal static void EnsureNoPendingRecovery(string projectRoot)
+        {
+            string project = NormalizeProjectRoot(projectRoot);
+            string stateRoot = GetStateRoot(project);
+            EnsureStateRootIsSafe(project, stateRoot);
+            if (!Directory.Exists(stateRoot))
+            {
+                return;
+            }
+
+            using (FileStream outputLock = AcquireProjectLock(stateRoot))
+            {
+                EnsureNoPendingRecoveryUnderLock(stateRoot);
+                EnsureNoDetachedState(stateRoot, expectedTransactionId: null);
+            }
+        }
+
+        public string Id => PublicationId;
+        public string RecoveryStateRelativePath => StateRelativePath;
+
         internal static bool RecoverPending(
             string projectRoot,
             IReadOnlyList<HybridCLROutputTarget> targets)
@@ -293,7 +317,7 @@ namespace Build.Pipeline.Editor
         {
             ThrowIfDisposed();
             HybridCLROutputOwnership.ValidateManagedFileName(fileName, allowMeta: false);
-            return BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            return BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(FindOutput(role).Operation.stage, fileName),
                 $"HybridCLR staged artifact '{fileName}'");
         }
@@ -302,7 +326,7 @@ namespace Build.Pipeline.Editor
         {
             ThrowIfDisposed();
             HybridCLROutputOwnership.ValidateManagedFileName(fileName, allowMeta: false);
-            return BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            return BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(FindOutput(role).Target.FinalDirectory, fileName),
                 $"HybridCLR published artifact '{fileName}'");
         }
@@ -352,10 +376,48 @@ namespace Build.Pipeline.Editor
             Action<string> beforePublish,
             Func<CrashCheckpoint, string, bool> crashPredicate)
         {
+            ActivateCore(beforePublish, crashPredicate);
+            CompleteCore(
+                requireTerminalDecision: false,
+                crashPredicate: crashPredicate);
+        }
+
+        public void ActivateForDownstream()
+        {
+            ActivateCore(beforePublish: null, crashPredicate: null);
+        }
+
+        public void Publish()
+        {
             ThrowIfDisposed();
-            if (finished || committed)
+            if (!activated)
             {
-                throw new InvalidOperationException("HybridCLR outputs have already been committed.");
+                ActivateCore(beforePublish: null, crashPredicate: null);
+                return;
+            }
+
+            if (!string.Equals(journal.phase, AwaitingDecisionPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR output activation is not waiting at the terminal publication barrier.");
+            }
+
+            ValidateCommittedOutputs(journal);
+        }
+
+        public void Complete()
+        {
+            CompleteCore(requireTerminalDecision: true, crashPredicate: null);
+        }
+
+        private void ActivateCore(
+            Action<string> beforePublish,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            ThrowIfDisposed();
+            if (finished || committed || activated)
+            {
+                throw new InvalidOperationException("HybridCLR outputs have already been activated.");
             }
 
             OutputState incomplete = outputs.FirstOrDefault(output =>
@@ -378,15 +440,9 @@ namespace Build.Pipeline.Editor
                 }
 
                 ValidateCommittedOutputs(journal);
-                journal.phase = CommittedPhase;
+                journal.phase = AwaitingDecisionPhase;
                 PersistJournal(journal, activeJournalPath, createNew: false);
-                committed = true;
-                TriggerCrashCheckpoint(
-                    crashPredicate,
-                    CrashCheckpoint.AfterCommittedJournalBeforeCleanup,
-                    string.Empty);
-                CleanupCommitted(journal, activeJournalPath, projectRoot, stateRoot);
-                finished = true;
+                activated = true;
             }
             catch (SimulatedProcessCrashException)
             {
@@ -395,17 +451,6 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception commitFailure)
             {
-                if (committed
-                    || journal.phase == CommittedPhase
-                    || journal.phase == CleaningCommittedPhase)
-                {
-                    preserveStateForRecovery = true;
-                    throw new IOException(
-                        "HybridCLR outputs committed successfully, but durable cleanup did not complete. " +
-                        $"Recovery state remains at '{activeJournalPath}'.",
-                        commitFailure);
-                }
-
                 try
                 {
                     Rollback(
@@ -430,6 +475,53 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        private void CompleteCore(
+            bool requireTerminalDecision,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            ThrowIfDisposed();
+            if (!activated || !string.Equals(journal.phase, AwaitingDecisionPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs must be activated before terminal completion.");
+            }
+
+            if (requireTerminalDecision
+                && BuildPublicationBarrier.GetDecision(projectRoot, PublicationId, StateRelativePath)
+                   != BuildPublicationDecision.Commit)
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs cannot complete without the shared terminal commit decision.");
+            }
+
+            try
+            {
+                ValidateCommittedOutputs(journal);
+                journal.phase = CommittedPhase;
+                PersistJournal(journal, activeJournalPath, createNew: false);
+                committed = true;
+                TriggerCrashCheckpoint(
+                    crashPredicate,
+                    CrashCheckpoint.AfterCommittedJournalBeforeCleanup,
+                    string.Empty);
+                CleanupCommitted(journal, activeJournalPath, projectRoot, stateRoot);
+                finished = true;
+            }
+            catch (SimulatedProcessCrashException)
+            {
+                preserveStateForRecovery = true;
+                throw;
+            }
+            catch (Exception completionFailure)
+            {
+                preserveStateForRecovery = true;
+                throw new IOException(
+                    "HybridCLR outputs were selected by the terminal commit decision, but durable cleanup did not complete. " +
+                    $"Recovery state remains at '{activeJournalPath}'.",
+                    completionFailure);
+            }
+        }
+
         public void Dispose()
         {
             if (disposed)
@@ -442,13 +534,26 @@ namespace Build.Pipeline.Editor
             {
                 if (!finished && !committed && !preserveStateForRecovery)
                 {
-                    Rollback(
-                        journal,
-                        activeJournalPath,
-                        projectRoot,
-                        stateRoot,
-                        crashPredicate: null);
-                    finished = true;
+                    BuildPublicationDecision decision = activated
+                        ? BuildPublicationBarrier.GetDecision(
+                            projectRoot,
+                            PublicationId,
+                            StateRelativePath)
+                        : BuildPublicationDecision.None;
+                    if (decision == BuildPublicationDecision.Commit)
+                    {
+                        preserveStateForRecovery = true;
+                    }
+                    else
+                    {
+                        Rollback(
+                            journal,
+                            activeJournalPath,
+                            projectRoot,
+                            stateRoot,
+                            crashPredicate: null);
+                        finished = true;
+                    }
                 }
             }
             catch (Exception exception)
@@ -1258,7 +1363,7 @@ namespace Build.Pipeline.Editor
         private static string PrepareStateRoot(string projectRoot)
         {
             string stateRoot = GetStateRoot(projectRoot);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stateRoot,
                 "HybridCLR transaction state root",
                 86);
@@ -1270,7 +1375,7 @@ namespace Build.Pipeline.Editor
 
         private static FileStream AcquireProjectLock(string stateRoot)
         {
-            string lockPath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            string lockPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, LockFileName),
                 "HybridCLR transaction lock");
             if (Directory.Exists(lockPath))
@@ -1376,7 +1481,7 @@ namespace Build.Pipeline.Editor
 
             var journal = new Journal
             {
-                schemaVersion = JournalSchemaVersion,
+                formatVersion = JournalFormatVersion,
                 sequence = 0,
                 transactionId = transactionId,
                 phase = PreparedPhase,
@@ -1400,41 +1505,41 @@ namespace Build.Pipeline.Editor
                 + maximumSequenceCharacterCount
                 + 1
                 + 32;
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 value.stateRoot,
                 "HybridCLR transaction state root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(value.stateRoot, LockFileName),
                 "HybridCLR transaction lock");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(value.stateRoot, ActiveJournalFileName),
                 "HybridCLR durable journal",
                 temporaryJournalSuffixLength);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 value.scratchRoot,
                 "HybridCLR transaction scratch root");
 
             foreach (JournalOperation operation in value.operations)
             {
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.target,
                     $"HybridCLR published directory for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     operation.targetMeta,
                     $"HybridCLR published root meta for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.stage,
                     $"HybridCLR staged directory for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.backup,
                     $"HybridCLR backup directory for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     operation.stagedMeta,
                     $"HybridCLR staged root meta for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     operation.recoveryMeta,
                     $"HybridCLR recovery root meta for role '{operation.role}'");
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     Path.Combine(operation.stage, HybridCLROutputOwnership.ManifestFileName),
                     $"HybridCLR staged ownership manifest for role '{operation.role}'");
             }
@@ -1460,7 +1565,7 @@ namespace Build.Pipeline.Editor
             string destinationDirectory,
             string displayName)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destinationDirectory,
                 displayName + " root");
             if (!Directory.Exists(sourceDirectory))
@@ -1479,13 +1584,13 @@ namespace Build.Pipeline.Editor
                 FileAttributes attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                         destination,
                         displayName);
                 }
                 else
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         destination,
                         displayName);
                 }
@@ -1553,7 +1658,25 @@ namespace Build.Pipeline.Editor
                 projectRoot,
                 stateRoot);
             EnsureNoDetachedState(stateRoot, recovered.transactionId);
-            if (recovered.phase == CommittedPhase
+            if (recovered.phase == AwaitingDecisionPhase)
+            {
+                BuildPublicationDecision decision = BuildPublicationBarrier.GetDecision(
+                    projectRoot,
+                    PublicationId,
+                    StateRelativePath);
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    ValidateCommittedOutputs(recovered);
+                    recovered.phase = CommittedPhase;
+                    PersistJournal(recovered, journalPath, createNew: false);
+                    CleanupCommitted(recovered, journalPath, projectRoot, stateRoot);
+                }
+                else
+                {
+                    Rollback(recovered, journalPath, projectRoot, stateRoot, crashPredicate: null);
+                }
+            }
+            else if (recovered.phase == CommittedPhase
                 || recovered.phase == CleaningCommittedPhase)
             {
                 CleanupCommitted(recovered, journalPath, projectRoot, stateRoot);
@@ -1575,6 +1698,29 @@ namespace Build.Pipeline.Editor
 
             EnsureNoDetachedState(stateRoot, expectedTransactionId: null);
             return true;
+        }
+
+        private static void EnsureNoPendingRecoveryUnderLock(string stateRoot)
+        {
+            string journalPath = Path.Combine(stateRoot, ActiveJournalFileName);
+            if (Directory.Exists(journalPath))
+            {
+                throw new InvalidOperationException(
+                    $"HybridCLR recovery evidence is invalid because the active journal path is a directory: '{journalPath}'. " +
+                    "Inspect the Build workspace before starting another build.");
+            }
+
+            bool hasJournal = File.Exists(journalPath);
+            bool hasJournalScratch = Directory
+                .EnumerateFiles(stateRoot, JournalTemporaryPrefix + "*", SearchOption.TopDirectoryOnly)
+                .Take(1)
+                .Any();
+            if (hasJournal || hasJournalScratch)
+            {
+                throw new InvalidOperationException(
+                    $"Pending HybridCLR output recovery must be completed before starting another build: '{stateRoot}'. " +
+                    "Use the Build workspace recovery action or -pipelineRecoverOnly.");
+            }
         }
 
         private static Journal ReadJournalAndReconcileTemporaryFiles(
@@ -1709,7 +1855,7 @@ namespace Build.Pipeline.Editor
             NormalizeJsonUtilityOptionalIdentities(recovered);
 
             if (recovered == null
-                || recovered.schemaVersion != JournalSchemaVersion
+                || recovered.formatVersion != JournalFormatVersion
                 || recovered.sequence <= 0
                 || !HybridCLROutputOwnership.IsTransactionId(recovered.transactionId)
                 || !IsKnownPhase(recovered.phase)
@@ -1718,7 +1864,7 @@ namespace Build.Pipeline.Editor
                 || recovered.operations.Length > MaximumOutputCount)
             {
                 throw new InvalidOperationException(
-                    $"HybridCLR durable journal has an unsupported or incomplete schema: '{fullPath}'.");
+                    $"HybridCLR durable journal has an unsupported or incomplete format: '{fullPath}'.");
             }
 
             string journalName = Path.GetFileName(fullPath);
@@ -1796,7 +1942,8 @@ namespace Build.Pipeline.Editor
                     "HybridCLR prepared journal contains a publication operation.");
             }
 
-            if ((recovered.phase == CommittedPhase
+            if ((recovered.phase == AwaitingDecisionPhase
+                 || recovered.phase == CommittedPhase
                  || recovered.phase == CleaningCommittedPhase)
                 && recovered.operations.Any(operation => operation.state != InstalledState))
             {
@@ -1865,19 +2012,19 @@ namespace Build.Pipeline.Editor
             EnsureNoReparsePointsInPath(owner.stateRoot, operation.stage);
             EnsureNoReparsePointsInPath(owner.stateRoot, operation.stagedMeta);
             EnsureNoReparsePointsInPath(owner.stateRoot, operation.recoveryMeta);
-            HybridCLROutputOwnership.ValidateDirectoryIdentitySchema(
+            HybridCLROutputOwnership.ValidateDirectoryIdentityFormat(
                 operation.initialDirectory,
                 allowNull: true,
                 operation.role + ".initialDirectory");
-            HybridCLROutputOwnership.ValidateDirectoryIdentitySchema(
+            HybridCLROutputOwnership.ValidateDirectoryIdentityFormat(
                 operation.stagedDirectory,
                 allowNull: true,
                 operation.role + ".stagedDirectory");
-            HybridCLROutputOwnership.ValidateFileIdentitySchema(
+            HybridCLROutputOwnership.ValidateFileIdentityFormat(
                 operation.initialMeta,
                 allowNull: true,
                 operation.role + ".initialMeta");
-            HybridCLROutputOwnership.ValidateFileIdentitySchema(
+            HybridCLROutputOwnership.ValidateFileIdentityFormat(
                 operation.finalMeta,
                 allowNull: false,
                 operation.role + ".finalMeta");
@@ -1984,10 +2131,10 @@ namespace Build.Pipeline.Editor
                 journalPath,
                 value.transactionId,
                 value.sequence);
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 journalPath,
                 "HybridCLR durable journal");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 temporaryPath,
                 "HybridCLR durable journal temporary file");
             using (var stream = new FileStream(
@@ -2015,7 +2162,7 @@ namespace Build.Pipeline.Editor
         private static string ComputeJournalChecksum(Journal value)
         {
             var builder = new StringBuilder(2048);
-            AppendChecksumValue(builder, value.schemaVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.formatVersion.ToString(CultureInfo.InvariantCulture));
             AppendChecksumValue(builder, value.sequence.ToString(CultureInfo.InvariantCulture));
             AppendChecksumValue(builder, value.transactionId);
             AppendChecksumValue(builder, value.phase);
@@ -2595,6 +2742,7 @@ namespace Build.Pipeline.Editor
         {
             return value == PreparedPhase
                 || value == CommittingPhase
+                || value == AwaitingDecisionPhase
                 || value == RollingBackPhase
                 || value == RolledBackPhase
                 || value == CommittedPhase

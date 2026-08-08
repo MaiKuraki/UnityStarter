@@ -9,6 +9,7 @@ namespace Build.Pipeline.Tests.Editor
 {
     public sealed class AddressablesPublicationTransactionTests
     {
+        private const string InvocationId = "addressables-main";
         private string projectRoot;
         private string sandboxRoot;
         private string publicationRoot;
@@ -17,11 +18,10 @@ namespace Build.Pipeline.Tests.Editor
         [SetUp]
         public void SetUp()
         {
-            string hostProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             sandboxRoot = Path.Combine(
-                hostProjectRoot,
-                "Build",
-                nameof(AddressablesPublicationTransactionTests) + "-" +
+                Path.GetTempPath(),
+                "UnityStarter",
+                nameof(AddressablesPublicationTransactionTests),
                 Guid.NewGuid().ToString("N"));
             projectRoot = Path.Combine(sandboxRoot, "UnityProject");
             publicationRoot = Path.Combine(projectRoot, "Build", "publication");
@@ -34,6 +34,13 @@ namespace Build.Pipeline.Tests.Editor
         {
             if (Directory.Exists(sandboxRoot))
             {
+                string expectedParent = Path.GetFullPath(Path.Combine(
+                    Path.GetTempPath(),
+                    "UnityStarter",
+                    nameof(AddressablesPublicationTransactionTests)));
+                string candidate = Path.GetFullPath(sandboxRoot);
+                Assert.That(Path.GetDirectoryName(candidate), Is.EqualTo(expectedParent));
+                Assert.That(Guid.TryParseExact(Path.GetFileName(candidate), "N", out _), Is.True);
                 Directory.Delete(sandboxRoot, recursive: true);
             }
         }
@@ -43,9 +50,10 @@ namespace Build.Pipeline.Tests.Editor
         {
             CreateOwnedPublication(destination, Guid.NewGuid().ToString("N"), "old");
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             try
             {
                 transaction.Prepare();
@@ -60,8 +68,14 @@ namespace Build.Pipeline.Tests.Editor
                 Assert.That(File.Exists(Path.Combine(destination, "PlayerData", "old.bundle")), Is.False);
                 Assert.That(
                     File.Exists(Path.Combine(
-                        AddressablesPublicationTransaction.GetStateRoot(projectRoot),
+                        AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
                         "active.json")),
+                    Is.False);
+                Assert.That(
+                    Directory.Exists(AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId)),
+                    Is.False);
+                Assert.That(
+                    Directory.Exists(AddressablesPublicationTransaction.GetProviderStateRoot(projectRoot)),
                     Is.False);
                 Assert.That(
                     Directory.GetDirectories(publicationRoot, "*.stage-*", SearchOption.TopDirectoryOnly),
@@ -74,6 +88,119 @@ namespace Build.Pipeline.Tests.Editor
             {
                 transaction.Dispose();
             }
+        }
+
+        [Test]
+        public void EnsureNoPendingRecovery_WhenNoStateExists_IsZeroWrite()
+        {
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
+
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+            Assert.DoesNotThrow(() =>
+                AddressablesPublicationTransaction.EnsureNoPendingRecovery(projectRoot, InvocationId));
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+        }
+
+        [TestCase("../escape")]
+        [TestCase("nested/id")]
+        [TestCase("Uppercase")]
+        [TestCase("trailing.")]
+        public void GetStateRoot_WithUnsafeInvocationId_RejectsPathFragment(
+            string invocationId)
+        {
+            Assert.Throws<ArgumentException>(() =>
+                AddressablesPublicationTransaction.GetStateRoot(
+                    projectRoot,
+                    invocationId));
+        }
+
+        [Test]
+        public void EnsureNoPendingRecovery_WhenPreparedJournalExists_FailsClosedWithoutChangingIt()
+        {
+            var transaction = AddressablesPublicationTransaction.Begin(
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
+            try
+            {
+                transaction.Prepare();
+                string journalPath = Path.Combine(
+                    AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
+                    "active.json");
+                byte[] journalBeforeRetry = File.ReadAllBytes(journalPath);
+
+                InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+                    AddressablesPublicationTransaction.EnsureNoPendingRecovery(projectRoot, InvocationId));
+
+                StringAssert.Contains("Pending Addressables publication recovery", exception.Message);
+                Assert.That(File.ReadAllBytes(journalPath), Is.EqualTo(journalBeforeRetry));
+                Assert.That(Directory.Exists(transaction.StagingDirectory), Is.True);
+            }
+            finally
+            {
+                transaction.Dispose();
+            }
+        }
+
+        [Test]
+        public void InvocationIsolation_AllowsIndependentPendingTransactionsForSameProvider()
+        {
+            const string secondInvocationId = "addressables-secondary";
+            string secondDestination = Path.Combine(
+                publicationRoot,
+                "StandaloneWindows64-Secondary");
+            var first = AddressablesPublicationTransaction.Begin(
+                projectRoot,
+                publicationRoot,
+                destination,
+                InvocationId);
+            var second = AddressablesPublicationTransaction.Begin(
+                projectRoot,
+                publicationRoot,
+                secondDestination,
+                secondInvocationId);
+            try
+            {
+                first.Prepare();
+                second.Prepare();
+
+                Assert.That(first.PublicationId, Is.Not.EqualTo(second.PublicationId));
+                Assert.That(first.StateRelativePath, Is.Not.EqualTo(second.StateRelativePath));
+                Assert.That(
+                    File.Exists(Path.Combine(
+                        AddressablesPublicationTransaction.GetStateRoot(
+                            projectRoot,
+                            InvocationId),
+                        "active.json")),
+                    Is.True);
+                Assert.That(
+                    File.Exists(Path.Combine(
+                        AddressablesPublicationTransaction.GetStateRoot(
+                            projectRoot,
+                            secondInvocationId),
+                        "active.json")),
+                    Is.True);
+            }
+            finally
+            {
+                second.Dispose();
+                first.Dispose();
+            }
+
+            Assert.That(
+                Directory.Exists(AddressablesPublicationTransaction.GetStateRoot(
+                    projectRoot,
+                    InvocationId)),
+                Is.False);
+            Assert.That(
+                Directory.Exists(AddressablesPublicationTransaction.GetStateRoot(
+                    projectRoot,
+                    secondInvocationId)),
+                Is.False);
+            Assert.That(
+                Directory.Exists(AddressablesPublicationTransaction.GetProviderStateRoot(projectRoot)),
+                Is.False);
         }
 
         [Test]
@@ -108,7 +235,7 @@ namespace Build.Pipeline.Tests.Editor
                     Is.Empty);
                 Assert.That(
                     File.Exists(Path.Combine(
-                        AddressablesPublicationTransaction.GetStateRoot(projectRoot),
+                        AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
                         "active.json")),
                     Is.False);
             }
@@ -125,9 +252,10 @@ namespace Build.Pipeline.Tests.Editor
             string authoredPath = Path.Combine(destination, "authored.txt");
             File.WriteAllText(authoredPath, "keep");
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             try
             {
                 Assert.Throws<InvalidDataException>(() => transaction.Prepare());
@@ -150,15 +278,16 @@ namespace Build.Pipeline.Tests.Editor
                 new string('d', segmentLength));
             Assert.That(
                 longDestination.Length,
-                Is.LessThanOrEqualTo(BuildPathPolicy.LegacyWindowsMaximumPathCharacters));
+                Is.LessThanOrEqualTo(BuildPathPolicy.Win32MaxPathCharacters));
 
             Assert.Throws<PathTooLongException>(() =>
                 AddressablesPublicationTransaction.Begin(
                     projectRoot,
                     publicationRoot,
-                    longDestination));
+                    longDestination,
+                    InvocationId));
             Assert.That(
-                Directory.Exists(AddressablesPublicationTransaction.GetStateRoot(projectRoot)),
+                Directory.Exists(AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId)),
                 Is.False);
         }
 
@@ -180,8 +309,8 @@ namespace Build.Pipeline.Tests.Editor
         {
             string path = Path.Combine(publicationRoot, "AddressablesVersion.json");
 
-            AddressablesBuilder.WriteVersionArtifactDurably(path, "1.0.0");
-            AddressablesBuilder.WriteVersionArtifactDurably(path, "1.0.1");
+            AddressablesBuilder.WriteVersionArtifactDurably(projectRoot, path, "1.0.0");
+            AddressablesBuilder.WriteVersionArtifactDurably(projectRoot, path, "1.0.1");
 
             StringAssert.Contains("1.0.1", File.ReadAllText(path));
             Assert.That(
@@ -207,7 +336,7 @@ namespace Build.Pipeline.Tests.Editor
                 scratchPath,
                 "{\"contentVersion\":\"interrupted\"}");
 
-            AddressablesBuilder.WriteVersionArtifactDurably(path, "current");
+            AddressablesBuilder.WriteVersionArtifactDurably(projectRoot, path, "current");
 
             StringAssert.Contains("current", File.ReadAllText(path));
             Assert.That(File.Exists(scratchPath), Is.False);
@@ -230,11 +359,14 @@ namespace Build.Pipeline.Tests.Editor
             string temporaryPath = Path.Combine(
                 publicationRoot,
                 AddressablesBuilder.VersionArtifactTemporaryFileName);
-            AddressablesBuilder.WriteVersionArtifactDurably(path, "preserve");
+            AddressablesBuilder.WriteVersionArtifactDurably(projectRoot, path, "preserve");
             File.WriteAllText(temporaryPath, "corrupt");
 
             Assert.Throws<InvalidDataException>(() =>
-                AddressablesBuilder.WriteVersionArtifactDurably(path, "replacement"));
+                AddressablesBuilder.WriteVersionArtifactDurably(
+                    projectRoot,
+                    path,
+                    "replacement"));
             StringAssert.Contains("preserve", File.ReadAllText(path));
             Assert.That(File.Exists(temporaryPath), Is.True);
         }
@@ -247,6 +379,7 @@ namespace Build.Pipeline.Tests.Editor
 
             Assert.Throws<InvalidDataException>(() =>
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
+                    projectRoot,
                     path,
                     expectedContentVersion: null));
         }
@@ -259,6 +392,7 @@ namespace Build.Pipeline.Tests.Editor
 
             Assert.Throws<InvalidDataException>(() =>
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
+                    projectRoot,
                     path,
                     expectedContentVersion: null));
         }
@@ -284,6 +418,7 @@ namespace Build.Pipeline.Tests.Editor
 
                 AddressablesPublicationTransaction.RecoverPending(
                     projectRoot,
+                    InvocationId,
                     publicationRoot,
                     destination);
 
@@ -319,6 +454,7 @@ namespace Build.Pipeline.Tests.Editor
 
                 AddressablesPublicationTransaction.RecoverPending(
                     projectRoot,
+                    InvocationId,
                     publicationRoot,
                     destination);
 
@@ -359,9 +495,10 @@ namespace Build.Pipeline.Tests.Editor
 
                 Assert.Throws<AggregateException>(
                     () => AddressablesPublicationTransaction.RecoverPending(
-                        projectRoot,
-                        publicationRoot,
-                        destination));
+                    projectRoot,
+                    InvocationId,
+                    publicationRoot,
+                    destination));
                 Assert.That(File.ReadAllText(externalPath), Is.EqualTo("do not delete"));
                 Assert.That(
                     Directory.GetDirectories(publicationRoot, "*.backup-*", SearchOption.TopDirectoryOnly),
@@ -380,7 +517,7 @@ namespace Build.Pipeline.Tests.Editor
             try
             {
                 string journalPath = Path.Combine(
-                    AddressablesPublicationTransaction.GetStateRoot(projectRoot),
+                    AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
                     "active.json");
                 string journal = File.ReadAllText(journalPath);
                 File.WriteAllText(
@@ -389,9 +526,10 @@ namespace Build.Pipeline.Tests.Editor
 
                 Assert.Throws<InvalidDataException>(
                     () => AddressablesPublicationTransaction.RecoverPending(
-                        projectRoot,
-                        publicationRoot,
-                        destination));
+                    projectRoot,
+                    InvocationId,
+                    publicationRoot,
+                    destination));
                 Assert.That(File.Exists(journalPath), Is.True);
                 Assert.That(Directory.Exists(transaction.StagingDirectory), Is.True);
             }
@@ -420,9 +558,10 @@ namespace Build.Pipeline.Tests.Editor
         public void Abort_WhenUnreadyStageWasExternallyReplaced_FailsClosedAndRetainsJournal()
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
             Directory.Delete(transaction.StagingDirectory, recursive: true);
             Directory.CreateDirectory(transaction.StagingDirectory);
@@ -433,7 +572,7 @@ namespace Build.Pipeline.Tests.Editor
             Assert.Throws<AggregateException>(() => transaction.Abort());
             Assert.That(
                 File.Exists(Path.Combine(
-                    AddressablesPublicationTransaction.GetStateRoot(projectRoot),
+                    AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
                     "active.json")),
                 Is.True);
             Assert.That(
@@ -472,6 +611,7 @@ namespace Build.Pipeline.Tests.Editor
                     "StandaloneWindows64");
                 AddressablesPublicationTransaction.RecoverPending(
                     projectRoot,
+                    InvocationId,
                     newPublicationRoot,
                     newDestination);
 
@@ -481,7 +621,7 @@ namespace Build.Pipeline.Tests.Editor
                 Assert.That(Directory.Exists(newDestination), Is.False);
                 Assert.That(
                     File.Exists(Path.Combine(
-                        AddressablesPublicationTransaction.GetStateRoot(projectRoot),
+                        AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId),
                         "active.json")),
                     Is.False);
             }
@@ -497,11 +637,12 @@ namespace Build.Pipeline.Tests.Editor
             string scratchFileName)
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
-            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot);
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
             string scratchPath = Path.Combine(stateRoot, scratchFileName);
             File.Move(journalPath, scratchPath);
@@ -521,11 +662,12 @@ namespace Build.Pipeline.Tests.Editor
             string scratchFileName)
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
-            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot);
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
             string scratchPath = Path.Combine(stateRoot, scratchFileName);
             File.WriteAllText(scratchPath, "corrupt");
@@ -544,11 +686,12 @@ namespace Build.Pipeline.Tests.Editor
             string scratchFileName)
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
-            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot);
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
             string scratchPath = Path.Combine(stateRoot, scratchFileName);
             Directory.CreateDirectory(scratchPath);
@@ -564,11 +707,12 @@ namespace Build.Pipeline.Tests.Editor
         public void RecoverPending_BackupWithCorruptTemporaryJournal_FailsBeforePromotion()
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
-            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot);
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
             string backupPath = Path.Combine(stateRoot, "active.json.bak");
             string temporaryPath = Path.Combine(stateRoot, "active.json.tmp");
@@ -588,11 +732,12 @@ namespace Build.Pipeline.Tests.Editor
         public void RecoverPending_ActiveWithBothValidScratchFiles_FailsClosed()
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
-            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot);
+            string stateRoot = AddressablesPublicationTransaction.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
             string temporaryPath = Path.Combine(stateRoot, "active.json.tmp");
             string backupPath = Path.Combine(stateRoot, "active.json.bak");
@@ -610,9 +755,10 @@ namespace Build.Pipeline.Tests.Editor
         private AddressablesPublicationTransaction PrepareReadyTransaction(string label)
         {
             var transaction = AddressablesPublicationTransaction.Begin(
-                projectRoot,
-                publicationRoot,
-                destination);
+                    projectRoot,
+                    publicationRoot,
+                    destination,
+                    InvocationId);
             transaction.Prepare();
             string stagedIdentity = CreateOwnedPublication(
                 transaction.StagingDirectory,
@@ -642,14 +788,13 @@ namespace Build.Pipeline.Tests.Editor
             byte[] artifactBytes = new UTF8Encoding(false).GetBytes(label);
             File.WriteAllBytes(artifactPath, artifactBytes);
 
-            var manifest = new TestManifest
+            var manifest = new AddressablesArtifactManifest
             {
-                schemaVersion = 2,
                 buildTarget = "StandaloneWindows64",
                 contentVersion = "test",
                 files = new[]
                 {
-                    new TestManifestEntry
+                    new AddressablesArtifactManifestEntry
                     {
                         kind = "PlayerData",
                         path = relativePath,
@@ -660,28 +805,13 @@ namespace Build.Pipeline.Tests.Editor
             };
             File.WriteAllText(
                 Path.Combine(root, AddressablesPublicationOwnership.ArtifactManifestFileName),
-                JsonUtility.ToJson(manifest, true),
+                AddressablesArtifactManifestFormat.Serialize(
+                    manifest,
+                    prettyPrint: true),
                 new UTF8Encoding(false));
             AddressablesPublicationOwnership.WriteOwner(root, transactionId);
             return AddressablesPublicationOwnership.CaptureIdentity(root, transactionId);
         }
 
-        [Serializable]
-        private sealed class TestManifest
-        {
-            public int schemaVersion;
-            public string buildTarget;
-            public string contentVersion;
-            public TestManifestEntry[] files;
-        }
-
-        [Serializable]
-        private sealed class TestManifestEntry
-        {
-            public string kind;
-            public string path;
-            public long size;
-            public string sha256;
-        }
     }
 }

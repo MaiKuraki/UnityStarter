@@ -5,6 +5,7 @@ using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 
 namespace Build.Pipeline.Editor
@@ -15,8 +16,12 @@ namespace Build.Pipeline.Editor
     /// </summary>
     internal sealed class GlobalBuildStateTransaction
     {
-        private const string SchemaVersion = "1";
-        private const string StateDirectoryRelativePath = "Library/BuildPipeline/GlobalState";
+        private const int FormatVersion = 1;
+        private const string StateDirectoryRelativePath = ".buildpipeline/transactions/global-state";
+        private const string PlayerSettingsRelativePath =
+            "ProjectSettings/ProjectSettings.asset";
+        private const string EditorBuildSettingsRelativePath =
+            "ProjectSettings/EditorBuildSettings.asset";
         private const string JournalFileName = "active.json";
         private const string LockFileName = "build.lock";
         private const int BufferSize = 8192;
@@ -24,8 +29,9 @@ namespace Build.Pipeline.Editor
         private const int MaximumSnapshotBytes = 16 * 1024 * 1024;
         private const int MaximumPathCharacters = 2048;
         private const int MaximumTransactionDirectories = 4;
-        private const int MaximumOwnedParentEntries = 256;
-        private const string OwnedParentMarkerFileName = "BuildPipelineGlobalState.owner";
+        private const int MaximumGeneratedAssetDirectories = 32;
+        private const int MaximumFolderMetaBytes = 4096;
+        private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private static GlobalBuildStateTransaction current;
 
@@ -36,6 +42,8 @@ namespace Build.Pipeline.Editor
         private FileStream lockStream;
         private Journal journal;
         private Journal pendingRecoveryJournal;
+        private bool activePlayerSettingsMerged;
+        private bool pendingPlayerSettingsMerged;
         private bool released;
 #if UNITY_INCLUDE_TESTS
         private Action beforePlayerSettingsRestoreReplaceForTests;
@@ -57,27 +65,6 @@ namespace Build.Pipeline.Editor
         }
 
         internal bool HasPendingRecovery => pendingRecoveryJournal != null;
-
-        internal BuildTargetRecoveryState PendingBuildTargetState
-        {
-            get
-            {
-                if (pendingRecoveryJournal == null)
-                {
-                    throw new InvalidOperationException("No interrupted global-state transaction is pending recovery.");
-                }
-
-                return new BuildTargetRecoveryState(
-                    pendingRecoveryJournal.originalActiveBuildTarget,
-                    pendingRecoveryJournal.originalExportAndroidProject,
-                    pendingRecoveryJournal.requestedBuildTarget,
-                    pendingRecoveryJournal.originalScriptingBackend,
-                    pendingRecoveryJournal.originalCompanyName,
-                    pendingRecoveryJournal.originalProductName,
-                    pendingRecoveryJournal.originalBundleVersion,
-                    pendingRecoveryJournal.originalApplicationIdentifier);
-            }
-        }
 
         internal bool PendingRecoveryHasVersionInfo =>
             pendingRecoveryJournal != null && pendingRecoveryJournal.versionInfo != null;
@@ -150,7 +137,7 @@ namespace Build.Pipeline.Editor
             try
             {
                 transaction.WriteLockOwner();
-                transaction.LoadAndRestorePendingTransaction();
+                transaction.LoadPendingTransaction();
                 current = transaction;
                 return transaction;
             }
@@ -192,10 +179,11 @@ namespace Build.Pipeline.Editor
             VerifyOriginalState(pendingRecoveryJournal);
             CleanupTransactionArtifacts(pendingRecoveryJournal);
             pendingRecoveryJournal = null;
+            pendingPlayerSettingsMerged = false;
             EnsureNoDetachedArtifacts();
         }
 
-        internal void ReassertPendingRecovery()
+        internal void RestorePendingTransaction()
         {
             EnsureNotReleased();
             if (pendingRecoveryJournal == null)
@@ -203,19 +191,15 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
+            CleanupAtomicJournalScratch(pendingRecoveryJournal);
             RestoreJournalState(pendingRecoveryJournal);
         }
 
         internal void Begin(
             string playerSettingsRelativePath,
             int originalActiveBuildTarget,
-            bool originalExportAndroidProject,
             int requestedBuildTarget,
-            int originalScriptingBackend,
-            string originalCompanyName,
-            string originalProductName,
-            string originalBundleVersion,
-            string originalApplicationIdentifier)
+            PlayerSettingsOwnedState originalPlayerSettings)
         {
             EnsureNotReleased();
             if (pendingRecoveryJournal != null)
@@ -252,29 +236,36 @@ namespace Build.Pipeline.Editor
                     $"PlayerSettings must be writable for a transactional build: '{playerPath}'.");
             }
 
+            FileRecord editorBuildSettingsRecord = CaptureFileRecord(
+                EditorBuildSettingsRelativePath,
+                transactionDirectoryRelativePath + "/editor-build-settings.snapshot",
+                requireExisting: true);
+            if ((editorBuildSettingsRecord.attributes & (int)FileAttributes.ReadOnly) != 0)
+            {
+                throw new InvalidOperationException(
+                    $"EditorBuildSettings must be writable for a transactional build: '{EditorBuildSettingsRelativePath}'.");
+            }
+
             journal = new Journal
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = FormatVersion,
                 transactionId = transactionId,
                 projectRoot = NormalizeAbsolutePath(projectRoot),
                 transactionDirectory = transactionDirectoryRelativePath,
                 phase = GlobalPhasePreparing,
                 sequence = 0,
                 originalActiveBuildTarget = originalActiveBuildTarget,
-                originalExportAndroidProject = originalExportAndroidProject,
                 requestedBuildTarget = requestedBuildTarget,
-                originalScriptingBackend = originalScriptingBackend,
-                originalCompanyName = originalCompanyName ?? string.Empty,
-                originalProductName = originalProductName ?? string.Empty,
-                originalBundleVersion = originalBundleVersion ?? string.Empty,
-                originalApplicationIdentifier = originalApplicationIdentifier ?? string.Empty,
-                playerSettings = playerRecord
+                originalPlayerSettings = ToRecord(originalPlayerSettings),
+                playerSettings = playerRecord,
+                editorBuildSettings = editorBuildSettingsRecord
             };
 
             WriteJournal();
             Directory.CreateDirectory(transactionDirectory);
             EnsurePathHasNoReparsePoints(projectRoot, transactionDirectory, allowMissingLeaf: false);
             WriteSnapshot(playerRecord);
+            WriteSnapshot(editorBuildSettingsRecord);
             journal.phase = GlobalPhasePrepared;
             WriteJournal();
         }
@@ -292,11 +283,28 @@ namespace Build.Pipeline.Editor
             FileIdentity identity = CaptureIdentity(
                 journal.playerSettings.relativePath,
                 requireExisting: true);
-            return new PlayerSettingsPersistenceToken(identity.length, identity.sha256);
+            FileIdentity editorBuildSettingsIdentity = CaptureIdentity(
+                journal.editorBuildSettings.relativePath,
+                requireExisting: true);
+            return new PlayerSettingsPersistenceToken(
+                identity.length,
+                identity.sha256,
+                editorBuildSettingsIdentity.length,
+                editorBuildSettingsIdentity.sha256);
+        }
+
+        internal void MarkEditorBuildSettingsApplied()
+        {
+            RequirePhase(GlobalPhaseApplying);
+            journal.transientEditorBuildSettings = CaptureIdentity(
+                journal.editorBuildSettings.relativePath,
+                requireExisting: true);
+            WriteJournal();
         }
 
         internal void MarkGlobalMutationApplied(
             PlayerSettingsPersistenceToken expectedPersistence,
+            PlayerSettingsOwnedState appliedPlayerSettings,
             bool requireContentChange = false)
         {
             RequirePhase(GlobalPhaseApplying);
@@ -316,6 +324,20 @@ namespace Build.Pipeline.Editor
                     "The candidate post-image was not adopted and the journal was retained.");
             }
 
+            FileIdentity persistedEditorBuildSettings = CaptureIdentity(
+                journal.editorBuildSettings.relativePath,
+                requireExisting: true);
+            if (persistedEditorBuildSettings.length
+                    != expectedPersistence.EditorBuildSettingsLength
+                || !FixedTimeEquals(
+                    persistedEditorBuildSettings.sha256,
+                    expectedPersistence.EditorBuildSettingsSha256))
+            {
+                throw new IOException(
+                    $"EditorBuildSettings changed after the targeted persistence barrier: '{journal.editorBuildSettings.relativePath}'. " +
+                    "The candidate post-image was not adopted and the journal was retained.");
+            }
+
             if (requireContentChange && MatchesRecordContent(journal.playerSettings, persistedIdentity))
             {
                 throw new IOException(
@@ -323,6 +345,8 @@ namespace Build.Pipeline.Editor
             }
 
             journal.transientPlayerSettings = persistedIdentity;
+            journal.transientEditorBuildSettings = persistedEditorBuildSettings;
+            journal.appliedPlayerSettings = ToRecord(appliedPlayerSettings);
             journal.phase = GlobalPhaseActive;
             WriteJournal();
             EnsurePlayerSettingsOwned();
@@ -340,6 +364,21 @@ namespace Build.Pipeline.Editor
                     $"PlayerSettings changed before the pipeline persistence barrier: '{journal.playerSettings.relativePath}'. " +
                     "The journal and snapshot were retained; inspect the competing change before recovery.");
             }
+
+            FileIdentity currentEditorBuildSettings = CaptureIdentity(
+                journal.editorBuildSettings.relativePath,
+                requireExisting: true);
+            FileIdentity expectedEditorBuildSettings =
+                journal.transientEditorBuildSettings;
+            if (expectedEditorBuildSettings == null
+                || !SameContent(
+                    currentEditorBuildSettings,
+                    expectedEditorBuildSettings))
+            {
+                throw new IOException(
+                    $"EditorBuildSettings changed before the pipeline persistence barrier: '{journal.editorBuildSettings.relativePath}'. " +
+                    "The journal and snapshot were retained; inspect the competing change before recovery.");
+            }
         }
 
         internal void EnsurePlayerSettingsOwned()
@@ -353,6 +392,19 @@ namespace Build.Pipeline.Editor
             {
                 throw new IOException(
                     $"PlayerSettings no longer matches the build transaction's authorized content: '{journal.playerSettings.relativePath}'. " +
+                    "The Player output will not be published and recovery will stop fail-closed.");
+            }
+
+            FileIdentity currentEditorBuildSettings = CaptureIdentity(
+                journal.editorBuildSettings.relativePath,
+                requireExisting: true);
+            if (journal.transientEditorBuildSettings == null
+                || !SameContent(
+                    currentEditorBuildSettings,
+                    journal.transientEditorBuildSettings))
+            {
+                throw new IOException(
+                    $"EditorBuildSettings no longer matches the build transaction's authorized content: '{journal.editorBuildSettings.relativePath}'. " +
                     "The Player output will not be published and recovery will stop fail-closed.");
             }
         }
@@ -377,13 +429,21 @@ namespace Build.Pipeline.Editor
             }
 
             string parentRelativePath = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
-            string missingParentRoot = FindFirstMissingAssetDirectory(parentRelativePath);
-            bool ownsParentRoot = !string.IsNullOrEmpty(missingParentRoot);
-            if (!ownsParentRoot)
+            if (string.IsNullOrWhiteSpace(parentRelativePath)
+                || string.Equals(parentRelativePath, "Assets", StringComparison.Ordinal))
             {
-                string parentPath = ResolveProjectRelativePath(projectRoot, parentRelativePath, allowMissingLeaf: false);
-                EnsurePathHasNoReparsePoints(projectRoot, parentPath, allowMissingLeaf: false);
+                throw new InvalidOperationException(
+                    "VersionInfoData must be stored in a child directory below Assets; " +
+                    "the Assets root is not a valid generated-asset destination.");
             }
+
+            string parentPath = ResolveProjectRelativePath(
+                projectRoot,
+                parentRelativePath,
+                allowMissingLeaf: true);
+            GeneratedAssetDirectoryRecord[] generatedDirectories =
+                CaptureGeneratedAssetDirectories(parentRelativePath, parentPath);
+
             string metaPath = assetPath + ".meta";
             FileRecord assetRecord = CaptureFileRecord(
                 assetPath,
@@ -412,25 +472,13 @@ namespace Build.Pipeline.Editor
                 meta = metaRecord,
                 stageAssetPath = stageAssetPath,
                 stageMetaPath = stageMetaPath,
-                ownsParentRoot = ownsParentRoot,
-                ownedParentRootPath = ownsParentRoot ? missingParentRoot : string.Empty,
-                ownedParentRootMetaPath = ownsParentRoot ? missingParentRoot + ".meta" : string.Empty,
-                ownedParentScratchPath = ownsParentRoot
-                    ? GetOwnedParentScratchPath(missingParentRoot, journal.transactionId)
-                    : string.Empty,
-                ownedParentMarkerSha256 = ownsParentRoot
-                    ? ComputeSha256(GetOwnedParentMarkerBytes(journal.transactionId))
-                    : string.Empty
+                generatedDirectories = generatedDirectories
             };
             journal.hasVersionInfo = true;
             WriteJournal();
             WriteSnapshot(assetRecord);
             WriteSnapshot(metaRecord);
-            if (ownsParentRoot)
-            {
-                PrepareAndInstallOwnedParent(journal.versionInfo, parentRelativePath);
-            }
-
+            CreateGeneratedAssetDirectories(journal.versionInfo);
             journal.versionInfo.state = VersionStatePrepared;
             WriteJournal();
         }
@@ -552,10 +600,23 @@ namespace Build.Pipeline.Editor
             WriteJournal();
         }
 
-        internal void RestorePlayerSettingsFile()
+        internal void RestoreGlobalSettingsFiles()
         {
             EnsureActiveJournal();
-            RestoreOriginalFile(journal.playerSettings, allowOwnedTransient: true, journal.transientPlayerSettings);
+            RestoreOwnedEditorBuildSettingsFile(journal);
+            RestoreOwnedPlayerSettings(journal);
+        }
+
+        internal void RestorePendingEditorUserState()
+        {
+            EnsureNotReleased();
+            if (pendingRecoveryJournal == null)
+            {
+                return;
+            }
+
+            RestoreOwnedEditorBuildSettings(
+                pendingRecoveryJournal.originalPlayerSettings);
         }
 
         internal void Complete()
@@ -573,6 +634,7 @@ namespace Build.Pipeline.Editor
             WriteJournal();
             CleanupTransactionArtifacts(journal);
             journal = null;
+            activePlayerSettingsMerged = false;
         }
 
         internal Exception Release()
@@ -618,7 +680,7 @@ namespace Build.Pipeline.Editor
         }
 #endif
 
-        private void LoadAndRestorePendingTransaction()
+        private void LoadPendingTransaction()
         {
             ValidateStateDirectoryInventoryBeforeLoad();
             if (!File.Exists(journalPath))
@@ -629,9 +691,7 @@ namespace Build.Pipeline.Editor
 
             Journal loaded = ReadJournal(journalPath);
             ValidateJournal(loaded);
-            CleanupAtomicJournalScratch(loaded);
             pendingRecoveryJournal = loaded;
-            RestoreJournalState(loaded);
         }
 
         private void RestoreJournalState(Journal interrupted)
@@ -646,27 +706,701 @@ namespace Build.Pipeline.Editor
                 VerifyIdentity(interrupted.playerSettings, CaptureIdentity(
                     interrupted.playerSettings.relativePath,
                     requireExisting: true), "PlayerSettings");
+                VerifyIdentity(interrupted.editorBuildSettings, CaptureIdentity(
+                    interrupted.editorBuildSettings.relativePath,
+                    requireExisting: true), "EditorBuildSettings");
                 return;
             }
 
-            RestoreOriginalFile(
-                interrupted.playerSettings,
-                allowOwnedTransient: true,
-                interrupted.transientPlayerSettings);
+            RestoreOwnedEditorBuildSettingsFile(interrupted);
+            RestoreOwnedPlayerSettings(interrupted);
+        }
+
+        private void RestoreOwnedEditorBuildSettingsFile(Journal owner)
+        {
+            FileIdentity currentIdentity = CaptureIdentity(
+                owner.editorBuildSettings.relativePath,
+                requireExisting: true);
+            if (MatchesRecordContent(owner.editorBuildSettings, currentIdentity))
+            {
+                RestoreOriginalFile(
+                    owner.editorBuildSettings,
+                    allowOwnedTransient:
+                        owner.transientEditorBuildSettings != null,
+                    owner.transientEditorBuildSettings);
+                return;
+            }
+
+            if (owner.transientEditorBuildSettings != null
+                && SameContent(
+                    currentIdentity,
+                    owner.transientEditorBuildSettings))
+            {
+                RestoreOriginalFile(
+                    owner.editorBuildSettings,
+                    allowOwnedTransient: true,
+                    owner.transientEditorBuildSettings);
+                return;
+            }
+
+            throw new IOException(
+                $"EditorBuildSettings changed outside the transaction: '{owner.editorBuildSettings.relativePath}'. " +
+                "The snapshot and journal were retained; no unknown content was overwritten.");
+        }
+
+        private void RestoreOwnedPlayerSettings(Journal owner)
+        {
+            FileIdentity currentIdentity = CaptureIdentity(
+                owner.playerSettings.relativePath,
+                requireExisting: true);
+            if (MatchesRecordContent(owner.playerSettings, currentIdentity))
+            {
+                RestoreOriginalFile(
+                    owner.playerSettings,
+                    allowOwnedTransient: owner.transientPlayerSettings != null,
+                    owner.transientPlayerSettings);
+                return;
+            }
+
+            if (owner.transientPlayerSettings != null
+                && SameContent(currentIdentity, owner.transientPlayerSettings))
+            {
+                RestoreOriginalFile(
+                    owner.playerSettings,
+                    allowOwnedTransient: true,
+                    owner.transientPlayerSettings);
+                return;
+            }
+
+            if (owner.appliedPlayerSettings == null)
+            {
+                throw new IOException(
+                    $"PlayerSettings changed before an applied owned-state image was journaled: '{owner.playerSettings.relativePath}'. "
+                    + "The snapshot and journal were retained; no unknown content was overwritten.");
+            }
+
+            MergeOwnedPlayerSettings(owner);
+            if (ReferenceEquals(owner, journal))
+            {
+                activePlayerSettingsMerged = true;
+            }
+
+            if (ReferenceEquals(owner, pendingRecoveryJournal))
+            {
+                pendingPlayerSettingsMerged = true;
+            }
+        }
+
+        private void MergeOwnedPlayerSettings(Journal owner)
+        {
+            PlayerSettings settings = GetPlayerSettingsAssetForMerge();
+            if (EditorUtility.IsDirty(settings))
+            {
+                throw new IOException(
+                    "PlayerSettings has unsaved in-memory changes. Property-level recovery refused to overwrite or adopt them.");
+            }
+
+            AssetDatabase.Refresh(
+                ImportAssetOptions.ForceUpdate
+                | ImportAssetOptions.ForceSynchronousImport);
+            settings = GetPlayerSettingsAssetForMerge();
+            if (EditorUtility.IsDirty(settings))
+            {
+                throw new IOException(
+                    "PlayerSettings became dirty while preparing property-level recovery.");
+            }
+
+            OwnedPlayerSettingsRecord current = CaptureOwnedPlayerSettings(
+                settings,
+                owner.requestedBuildTarget);
+            EnsureThreeWayMergeIsSafe(
+                current,
+                owner.originalPlayerSettings,
+                owner.appliedPlayerSettings);
+            ApplyOwnedPlayerSettings(
+                settings,
+                owner.requestedBuildTarget,
+                owner.originalPlayerSettings);
+            BuildPipelineAssetSaveFilter.SaveOnlyPlayerSettings(settings);
+            if (EditorUtility.IsDirty(settings))
+            {
+                throw new IOException(
+                    "PlayerSettings remained dirty after property-level recovery persistence.");
+            }
+
+            OwnedPlayerSettingsRecord restored = CaptureOwnedPlayerSettings(
+                settings,
+                owner.requestedBuildTarget);
+            EnsureOwnedPlayerSettingsEqual(
+                restored,
+                owner.originalPlayerSettings,
+                "Property-level PlayerSettings recovery verification");
+        }
+
+        private static PlayerSettings GetPlayerSettingsAssetForMerge()
+        {
+            PlayerSettings[] assets = Resources.FindObjectsOfTypeAll<PlayerSettings>();
+            if (assets.Length != 1 || assets[0] == null)
+            {
+                throw new InvalidOperationException(
+                    $"Expected exactly one loaded PlayerSettings asset, but found {assets.Length}.");
+            }
+
+            string path = AssetDatabase.GetAssetPath(assets[0]);
+            if (!string.Equals(
+                    path,
+                    BuildPipelineAssetSaveFilter.PlayerSettingsAssetPath,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected PlayerSettings asset path: '{path}'.");
+            }
+
+            return assets[0];
+        }
+
+        private static OwnedPlayerSettingsRecord CaptureOwnedPlayerSettings(
+            PlayerSettings settings,
+            int requestedBuildTarget)
+        {
+            BuildTarget target = (BuildTarget)requestedBuildTarget;
+            NamedBuildTarget namedTarget = BuildRequestFactory.GetNamedBuildTarget(target);
+            PlayerSettingsSplashState splash = PlayerSettingsLicensePolicy.Capture(settings);
+            return new OwnedPlayerSettingsRecord
+            {
+                scriptingBackend = (int)PlayerSettings.GetScriptingBackend(namedTarget),
+                companyName = PlayerSettings.companyName ?? string.Empty,
+                productName = PlayerSettings.productName ?? string.Empty,
+                bundleVersion = PlayerSettings.bundleVersion ?? string.Empty,
+                applicationIdentifier = PlayerSettings.GetApplicationIdentifier(namedTarget) ?? string.Empty,
+                androidBundleVersionCode = PlayerSettings.Android.bundleVersionCode,
+                iosBuildNumber = PlayerSettings.iOS.buildNumber ?? string.Empty,
+                exportAndroidProject = EditorUserBuildSettings.exportAsGoogleAndroidProject,
+                developmentBuild = EditorUserBuildSettings.development,
+                editorBuildScenes = CaptureEditorBuildScenes(),
+                showSplashScreen = splash.ShowSplashScreen,
+                showUnityLogo = splash.ShowUnityLogo,
+                preloadedAssetIds = PlayerSettingsPreloadedAssetPolicy.Capture()
+            };
+        }
+
+        private static void ApplyOwnedPlayerSettings(
+            PlayerSettings settings,
+            int requestedBuildTarget,
+            OwnedPlayerSettingsRecord value)
+        {
+            BuildTarget target = (BuildTarget)requestedBuildTarget;
+            NamedBuildTarget namedTarget = BuildRequestFactory.GetNamedBuildTarget(target);
+            PlayerSettings.SetScriptingBackend(
+                namedTarget,
+                (ScriptingImplementation)value.scriptingBackend);
+            PlayerSettings.companyName = value.companyName;
+            PlayerSettings.productName = value.productName;
+            PlayerSettings.bundleVersion = value.bundleVersion;
+            PlayerSettings.SetApplicationIdentifier(
+                namedTarget,
+                value.applicationIdentifier);
+            PlayerSettings.Android.bundleVersionCode = value.androidBundleVersionCode;
+            PlayerSettings.iOS.buildNumber = value.iosBuildNumber;
+            PlayerSettingsLicensePolicy.ApplyExact(
+                settings,
+                new PlayerSettingsSplashState(
+                    value.showSplashScreen,
+                    value.showUnityLogo));
+            PlayerSettingsPreloadedAssetPolicy.ApplyExact(value.preloadedAssetIds);
+        }
+
+        private static void RestoreOwnedEditorBuildSettings(
+            OwnedPlayerSettingsRecord value)
+        {
+            if (value == null)
+            {
+                throw new InvalidOperationException(
+                    "Original owned PlayerSettings state is unavailable.");
+            }
+
+            EditorUserBuildSettings.exportAsGoogleAndroidProject =
+                value.exportAndroidProject;
+            EditorUserBuildSettings.development = value.developmentBuild;
+            EditorBuildSettings.scenes = CreateEditorBuildSettingsScenes(
+                value.editorBuildScenes);
+        }
+
+        private static void EnsureThreeWayMergeIsSafe(
+            OwnedPlayerSettingsRecord current,
+            OwnedPlayerSettingsRecord original,
+            OwnedPlayerSettingsRecord applied)
+        {
+            var conflicts = new List<string>();
+            AddConflictIfUnknown(
+                current.scriptingBackend,
+                original.scriptingBackend,
+                applied.scriptingBackend,
+                "scripting backend",
+                conflicts);
+            AddConflictIfUnknown(current.companyName, original.companyName, applied.companyName, "company name", conflicts);
+            AddConflictIfUnknown(current.productName, original.productName, applied.productName, "product name", conflicts);
+            AddConflictIfUnknown(current.bundleVersion, original.bundleVersion, applied.bundleVersion, "bundle version", conflicts);
+            AddConflictIfUnknown(current.applicationIdentifier, original.applicationIdentifier, applied.applicationIdentifier, "application identifier", conflicts);
+            AddConflictIfUnknown(current.androidBundleVersionCode, original.androidBundleVersionCode, applied.androidBundleVersionCode, "Android bundle version code", conflicts);
+            AddConflictIfUnknown(current.iosBuildNumber, original.iosBuildNumber, applied.iosBuildNumber, "iOS build number", conflicts);
+            AddConflictIfUnknown(current.exportAndroidProject, original.exportAndroidProject, applied.exportAndroidProject, "Android export setting", conflicts);
+            AddConflictIfUnknown(current.developmentBuild, original.developmentBuild, applied.developmentBuild, "Development build setting", conflicts);
+            AddEditorSceneConflictIfUnknown(
+                current.editorBuildScenes,
+                original.editorBuildScenes,
+                applied.editorBuildScenes,
+                "Editor build scene sequence",
+                conflicts);
+            AddConflictIfUnknown(current.showSplashScreen, original.showSplashScreen, applied.showSplashScreen, "splash screen visibility", conflicts);
+            AddConflictIfUnknown(current.showUnityLogo, original.showUnityLogo, applied.showUnityLogo, "Unity splash logo visibility", conflicts);
+            AddSequenceConflictIfUnknown(
+                current.preloadedAssetIds,
+                original.preloadedAssetIds,
+                applied.preloadedAssetIds,
+                "preloaded asset sequence",
+                conflicts);
+            if (conflicts.Count > 0)
+            {
+                throw new IOException(
+                    "PlayerSettings property-level recovery found externally changed owned fields: "
+                    + string.Join(", ", conflicts)
+                    + ". The journal and snapshot were retained; no unknown content was overwritten.");
+            }
+        }
+
+        private static void EnsureOwnedPlayerSettingsEqual(
+            OwnedPlayerSettingsRecord current,
+            OwnedPlayerSettingsRecord expected,
+            string operation)
+        {
+            var conflicts = new List<string>();
+            AddConflictIfUnknown(current.scriptingBackend, expected.scriptingBackend, expected.scriptingBackend, "scripting backend", conflicts);
+            AddConflictIfUnknown(current.companyName, expected.companyName, expected.companyName, "company name", conflicts);
+            AddConflictIfUnknown(current.productName, expected.productName, expected.productName, "product name", conflicts);
+            AddConflictIfUnknown(current.bundleVersion, expected.bundleVersion, expected.bundleVersion, "bundle version", conflicts);
+            AddConflictIfUnknown(current.applicationIdentifier, expected.applicationIdentifier, expected.applicationIdentifier, "application identifier", conflicts);
+            AddConflictIfUnknown(current.androidBundleVersionCode, expected.androidBundleVersionCode, expected.androidBundleVersionCode, "Android bundle version code", conflicts);
+            AddConflictIfUnknown(current.iosBuildNumber, expected.iosBuildNumber, expected.iosBuildNumber, "iOS build number", conflicts);
+            AddConflictIfUnknown(current.exportAndroidProject, expected.exportAndroidProject, expected.exportAndroidProject, "Android export setting", conflicts);
+            AddConflictIfUnknown(current.developmentBuild, expected.developmentBuild, expected.developmentBuild, "Development build setting", conflicts);
+            AddEditorSceneConflictIfUnknown(
+                current.editorBuildScenes,
+                expected.editorBuildScenes,
+                expected.editorBuildScenes,
+                "Editor build scene sequence",
+                conflicts);
+            AddConflictIfUnknown(current.showSplashScreen, expected.showSplashScreen, expected.showSplashScreen, "splash screen visibility", conflicts);
+            AddConflictIfUnknown(current.showUnityLogo, expected.showUnityLogo, expected.showUnityLogo, "Unity splash logo visibility", conflicts);
+            AddSequenceConflictIfUnknown(
+                current.preloadedAssetIds,
+                expected.preloadedAssetIds,
+                expected.preloadedAssetIds,
+                "preloaded asset sequence",
+                conflicts);
+            if (conflicts.Count > 0)
+            {
+                throw new IOException(
+                    operation + " failed for: " + string.Join(", ", conflicts) + ".");
+            }
+        }
+
+        private static void AddConflictIfUnknown<T>(
+            T current,
+            T original,
+            T applied,
+            string label,
+            ICollection<string> conflicts)
+        {
+            EqualityComparer<T> comparer = EqualityComparer<T>.Default;
+            if (!comparer.Equals(current, original)
+                && !comparer.Equals(current, applied))
+            {
+                conflicts.Add(label);
+            }
+        }
+
+        private static void AddSequenceConflictIfUnknown(
+            string[] current,
+            string[] original,
+            string[] applied,
+            string label,
+            ICollection<string> conflicts)
+        {
+            if (!PlayerSettingsPreloadedAssetPolicy.SequenceEqual(current, original)
+                && !PlayerSettingsPreloadedAssetPolicy.SequenceEqual(current, applied))
+            {
+                conflicts.Add(label);
+            }
+        }
+
+        private static void AddEditorSceneConflictIfUnknown(
+            EditorBuildSceneRecord[] current,
+            EditorBuildSceneRecord[] original,
+            EditorBuildSceneRecord[] applied,
+            string label,
+            ICollection<string> conflicts)
+        {
+            if (!EditorBuildScenesEqual(current, original)
+                && !EditorBuildScenesEqual(current, applied))
+            {
+                conflicts.Add(label);
+            }
+        }
+
+        private static bool EditorBuildScenesEqual(
+            EditorBuildSceneRecord[] left,
+            EditorBuildSceneRecord[] right)
+        {
+            if (left == null || right == null || left.Length != right.Length)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < left.Length; index++)
+            {
+                EditorBuildSceneRecord leftEntry = left[index];
+                EditorBuildSceneRecord rightEntry = right[index];
+                if (leftEntry == null
+                    || rightEntry == null
+                    || leftEntry.enabled != rightEntry.enabled
+                    || !string.Equals(
+                        leftEntry.path,
+                        rightEntry.path,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static EditorBuildSceneRecord[] CaptureEditorBuildScenes()
+        {
+            EditorBuildSettingsScene[] scenes =
+                EditorBuildSettings.scenes ?? Array.Empty<EditorBuildSettingsScene>();
+            var records = new EditorBuildSceneRecord[scenes.Length];
+            for (int index = 0; index < scenes.Length; index++)
+            {
+                EditorBuildSettingsScene scene = scenes[index];
+                records[index] = new EditorBuildSceneRecord
+                {
+                    path = scene?.path ?? string.Empty,
+                    enabled = scene != null && scene.enabled
+                };
+            }
+
+            return records;
+        }
+
+        private static EditorBuildSettingsScene[] CreateEditorBuildSettingsScenes(
+            EditorBuildSceneRecord[] records)
+        {
+            if (records == null)
+            {
+                throw new InvalidOperationException(
+                    "Editor build scene state is unavailable.");
+            }
+
+            var scenes = new EditorBuildSettingsScene[records.Length];
+            for (int index = 0; index < records.Length; index++)
+            {
+                EditorBuildSceneRecord record = records[index]
+                    ?? throw new InvalidOperationException(
+                        "Editor build scene state contains a null entry.");
+                scenes[index] = new EditorBuildSettingsScene(
+                    record.path,
+                    record.enabled);
+            }
+
+            return scenes;
+        }
+
+        private GeneratedAssetDirectoryRecord[] CaptureGeneratedAssetDirectories(
+            string parentRelativePath,
+            string parentPath)
+        {
+            string assetsPath = ResolveProjectRelativePath(
+                projectRoot,
+                "Assets",
+                allowMissingLeaf: false);
+            if (!Directory.Exists(assetsPath))
+            {
+                throw new DirectoryNotFoundException(
+                    $"Unity Assets directory does not exist: '{assetsPath}'.");
+            }
+
+            EnsurePathHasNoReparsePoints(projectRoot, assetsPath, allowMissingLeaf: false);
+            string relativeTail = parentRelativePath.Substring("Assets/".Length);
+            string[] segments = relativeTail.Split('/');
+            if (segments.Length == 0 || segments.Length > MaximumGeneratedAssetDirectories)
+            {
+                throw new InvalidOperationException(
+                    $"VersionInfoData destination exceeds the {MaximumGeneratedAssetDirectories}-directory budget: '{parentRelativePath}'.");
+            }
+
+            var generated = new List<GeneratedAssetDirectoryRecord>(segments.Length);
+            string currentRelativePath = "Assets";
+            string currentPath = assetsPath;
+            bool foundMissingDirectory = false;
+            foreach (string segment in segments)
+            {
+                currentRelativePath += "/" + segment;
+                currentPath = Path.Combine(currentPath, segment);
+                string metaPath = currentPath + ".meta";
+
+                if (Directory.Exists(currentPath))
+                {
+                    if (foundMissingDirectory)
+                    {
+                        throw new IOException(
+                            $"VersionInfoData destination contains a directory below an absent parent: '{currentRelativePath}'.");
+                    }
+
+                    EnsurePathHasNoReparsePoints(projectRoot, currentPath, allowMissingLeaf: false);
+                    EnsureExistingUnityFolderMeta(currentRelativePath, metaPath);
+                    continue;
+                }
+
+                if (File.Exists(currentPath))
+                {
+                    throw new IOException(
+                        $"VersionInfoData destination directory resolves to a file: '{currentRelativePath}'.");
+                }
+
+                if (File.Exists(metaPath) || Directory.Exists(metaPath))
+                {
+                    throw new IOException(
+                        $"VersionInfoData destination has an orphan folder meta path: '{currentRelativePath}.meta'.");
+                }
+
+                foundMissingDirectory = true;
+                string guid = Guid.NewGuid().ToString("N");
+                byte[] metaBytes = CreateFolderMetaBytes(guid);
+                generated.Add(new GeneratedAssetDirectoryRecord
+                {
+                    relativePath = currentRelativePath,
+                    guid = guid,
+                    metaBase64 = Convert.ToBase64String(metaBytes),
+                    metaSha256 = ComputeSha256(metaBytes)
+                });
+            }
+
+            if (!PathEquals(currentPath, parentPath))
+            {
+                throw new IOException(
+                    $"VersionInfoData destination path changed during directory planning: '{parentRelativePath}'.");
+            }
+
+            return generated.ToArray();
+        }
+
+        private void CreateGeneratedAssetDirectories(VersionInfoRecord version)
+        {
+            foreach (GeneratedAssetDirectoryRecord directory in version.generatedDirectories)
+            {
+                string absolutePath = ResolveProjectRelativePath(
+                    projectRoot,
+                    directory.relativePath,
+                    allowMissingLeaf: true);
+                string metaPath = absolutePath + ".meta";
+                string parentPath = Path.GetDirectoryName(absolutePath);
+                if (string.IsNullOrEmpty(parentPath) || !Directory.Exists(parentPath))
+                {
+                    throw new DirectoryNotFoundException(
+                        $"Transaction-created Unity folder parent is missing: '{directory.relativePath}'.");
+                }
+
+                EnsurePathHasNoReparsePoints(projectRoot, parentPath, allowMissingLeaf: false);
+                if (File.Exists(absolutePath)
+                    || Directory.Exists(absolutePath)
+                    || File.Exists(metaPath)
+                    || Directory.Exists(metaPath))
+                {
+                    throw new IOException(
+                        $"VersionInfoData destination changed after its transaction plan was persisted: '{directory.relativePath}'.");
+                }
+
+                byte[] metaBytes = DecodeFolderMetaBytes(directory);
+                WriteDurably(metaPath, metaBytes, createNew: true);
+                Directory.CreateDirectory(absolutePath);
+                EnsurePathHasNoReparsePoints(projectRoot, absolutePath, allowMissingLeaf: false);
+                VerifyGeneratedAssetDirectoryMeta(directory);
+            }
+        }
+
+        private void DeleteGeneratedAssetDirectories(VersionInfoRecord version)
+        {
+            GeneratedAssetDirectoryRecord[] directories = version.generatedDirectories
+                ?? Array.Empty<GeneratedAssetDirectoryRecord>();
+            for (int index = directories.Length - 1; index >= 0; index--)
+            {
+                GeneratedAssetDirectoryRecord directory = directories[index];
+                string absolutePath = ResolveProjectRelativePath(
+                    projectRoot,
+                    directory.relativePath,
+                    allowMissingLeaf: true);
+                string metaPath = absolutePath + ".meta";
+
+                if (File.Exists(absolutePath))
+                {
+                    throw new IOException(
+                        $"Transaction-created Unity folder was replaced by a file: '{directory.relativePath}'.");
+                }
+
+                if (Directory.Exists(absolutePath))
+                {
+                    EnsurePathHasNoReparsePoints(projectRoot, absolutePath, allowMissingLeaf: false);
+                    VerifyGeneratedAssetDirectoryMeta(directory);
+                    using (IEnumerator<string> entries = Directory
+                               .EnumerateFileSystemEntries(absolutePath)
+                               .GetEnumerator())
+                    {
+                        if (entries.MoveNext())
+                        {
+                            throw new IOException(
+                                $"Transaction-created Unity folder contains an unknown entry and will not be deleted: '{entries.Current}'.");
+                        }
+                    }
+
+                    Directory.Delete(absolutePath, recursive: false);
+                    if (Directory.Exists(absolutePath))
+                    {
+                        throw new IOException(
+                            $"Transaction-created Unity folder still exists after deletion: '{directory.relativePath}'.");
+                    }
+                }
+
+                if (Directory.Exists(metaPath))
+                {
+                    throw new IOException(
+                        $"Transaction-created Unity folder meta was replaced by a directory: '{directory.relativePath}.meta'.");
+                }
+
+                if (File.Exists(metaPath))
+                {
+                    VerifyGeneratedAssetDirectoryMeta(directory);
+                    DeleteFileExactly(metaPath);
+                }
+            }
+        }
+
+        private void VerifyGeneratedAssetDirectoriesAbsent(VersionInfoRecord version)
+        {
+            GeneratedAssetDirectoryRecord[] directories = version.generatedDirectories
+                ?? Array.Empty<GeneratedAssetDirectoryRecord>();
+            foreach (GeneratedAssetDirectoryRecord directory in directories)
+            {
+                string absolutePath = ResolveProjectRelativePath(
+                    projectRoot,
+                    directory.relativePath,
+                    allowMissingLeaf: true);
+                if (File.Exists(absolutePath)
+                    || Directory.Exists(absolutePath)
+                    || File.Exists(absolutePath + ".meta")
+                    || Directory.Exists(absolutePath + ".meta"))
+                {
+                    throw new IOException(
+                        $"Transaction-created Unity folder was not restored to absence: '{directory.relativePath}'.");
+                }
+            }
+        }
+
+        private void EnsureExistingUnityFolderMeta(string relativePath, string metaPath)
+        {
+            if (Directory.Exists(metaPath) || !File.Exists(metaPath))
+            {
+                throw new IOException(
+                    $"Existing VersionInfoData destination folder is missing its Unity meta file: '{relativePath}.meta'.");
+            }
+
+            FileAttributes attributes = File.GetAttributes(metaPath);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                throw new IOException(
+                    $"Existing VersionInfoData destination folder meta is not a regular file: '{relativePath}.meta'.");
+            }
+        }
+
+        private void VerifyGeneratedAssetDirectoryMeta(GeneratedAssetDirectoryRecord directory)
+        {
+            string metaRelativePath = directory.relativePath + ".meta";
+            string metaPath = ResolveProjectRelativePath(
+                projectRoot,
+                metaRelativePath,
+                allowMissingLeaf: false);
+            if (!File.Exists(metaPath))
+            {
+                throw new IOException(
+                    $"Transaction-created Unity folder meta is missing: '{metaRelativePath}'.");
+            }
+
+            FileAttributes attributes = File.GetAttributes(metaPath);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                throw new IOException(
+                    $"Transaction-created Unity folder meta is not a regular file: '{metaRelativePath}'.");
+            }
+
+            byte[] expected = DecodeFolderMetaBytes(directory);
+            byte[] actual = ReadBoundedFile(
+                metaPath,
+                MaximumFolderMetaBytes,
+                "transaction-created Unity folder meta");
+            if (!FixedTimeEquals(ComputeSha256(actual), directory.metaSha256)
+                || !ByteArraysEqual(actual, expected))
+            {
+                throw new IOException(
+                    $"Transaction-created Unity folder meta changed and will not be deleted: '{metaRelativePath}'.");
+            }
+        }
+
+        private static byte[] DecodeFolderMetaBytes(GeneratedAssetDirectoryRecord directory)
+        {
+            try
+            {
+                byte[] bytes = Convert.FromBase64String(directory.metaBase64);
+                if (bytes.Length <= 0 || bytes.Length > MaximumFolderMetaBytes)
+                {
+                    throw new IOException(
+                        "Transaction-created Unity folder meta exceeds its byte budget.");
+                }
+
+                return bytes;
+            }
+            catch (FormatException exception)
+            {
+                throw new IOException(
+                    "Transaction-created Unity folder meta payload is malformed.",
+                    exception);
+            }
+        }
+
+        private static byte[] CreateFolderMetaBytes(string guid)
+        {
+            string yaml =
+                "fileFormatVersion: 2\n" +
+                "guid: " + guid + "\n" +
+                "folderAsset: yes\n" +
+                "DefaultImporter:\n" +
+                "  externalObjects: {}\n" +
+                "  userData: \n" +
+                "  assetBundleName: \n" +
+                "  assetBundleVariant: \n";
+            return StrictUtf8.GetBytes(yaml);
         }
 
         private void RestoreVersionInfo(Journal owner)
         {
             VersionInfoRecord version = owner.versionInfo;
-            if (string.Equals(version.state, VersionStatePreparing, StringComparison.Ordinal)
-                || string.Equals(version.state, VersionStateParentPrepared, StringComparison.Ordinal)
-                || string.Equals(version.state, VersionStateParentInstalling, StringComparison.Ordinal))
+            if (string.Equals(version.state, VersionStatePreparing, StringComparison.Ordinal))
             {
                 VerifyOriginalFileOrAbsence(version.asset);
                 VerifyOriginalFileOrAbsence(version.meta);
                 DeleteTransactionStage(version.stageAssetPath, version.stageAsset, "VersionInfoData staging asset");
                 DeleteTransactionStage(version.stageMetaPath, version.stageMeta, "VersionInfoData staging meta file");
-                CleanupOwnedParent(version);
+                DeleteGeneratedAssetDirectories(version);
                 VerifyVersionOriginalState(version);
                 return;
             }
@@ -693,15 +1427,13 @@ namespace Build.Pipeline.Editor
 
             DeleteTransactionStage(version.stageAssetPath, version.stageAsset, "VersionInfoData staging asset");
             DeleteTransactionStage(version.stageMetaPath, version.stageMeta, "VersionInfoData staging meta file");
-            CleanupOwnedParent(version);
+            DeleteGeneratedAssetDirectories(version);
             VerifyVersionOriginalState(version);
         }
 
         private void ValidateVersionFilesystemForRecovery(VersionInfoRecord version)
         {
             if (string.Equals(version.state, VersionStatePreparing, StringComparison.Ordinal)
-                || string.Equals(version.state, VersionStateParentPrepared, StringComparison.Ordinal)
-                || string.Equals(version.state, VersionStateParentInstalling, StringComparison.Ordinal)
                 || string.Equals(version.state, VersionStatePrepared, StringComparison.Ordinal))
             {
                 VerifyOriginalFileOrAbsence(version.asset);
@@ -813,7 +1545,13 @@ namespace Build.Pipeline.Editor
             }
 
 #if UNITY_INCLUDE_TESTS
-            beforePlayerSettingsRestoreReplaceForTests?.Invoke();
+            if (string.Equals(
+                    original.relativePath,
+                    PlayerSettingsRelativePath,
+                    StringComparison.Ordinal))
+            {
+                beforePlayerSettingsRestoreReplaceForTests?.Invoke();
+            }
 #endif
             File.Replace(temporaryPath, absolutePath, backupPath);
             FileIdentity replacedIdentity = CaptureIdentity(
@@ -1081,7 +1819,24 @@ namespace Build.Pipeline.Editor
 
         private void VerifyOriginalState(Journal state)
         {
-            VerifyOriginalFileOrAbsence(state.playerSettings);
+            bool merged = (ReferenceEquals(state, journal) && activePlayerSettingsMerged)
+                || (ReferenceEquals(state, pendingRecoveryJournal) && pendingPlayerSettingsMerged);
+            if (merged)
+            {
+                EnsureOwnedPlayerSettingsEqual(
+                    CaptureOwnedPlayerSettings(
+                        GetPlayerSettingsAssetForMerge(),
+                        state.requestedBuildTarget),
+                    state.originalPlayerSettings,
+                    "Merged PlayerSettings restoration verification");
+            }
+            else
+            {
+                VerifyOriginalFileOrAbsence(state.playerSettings);
+            }
+
+            VerifyOriginalFileOrAbsence(state.editorBuildSettings);
+
             if (state.versionInfo != null)
             {
                 VerifyVersionOriginalState(state.versionInfo);
@@ -1094,12 +1849,7 @@ namespace Build.Pipeline.Editor
             VerifyOriginalFileOrAbsence(version.meta);
             EnsureFileAbsent(version.stageAssetPath, "VersionInfoData staging asset");
             EnsureFileAbsent(version.stageMetaPath, "VersionInfoData staging meta file");
-            if (version.ownsParentRoot)
-            {
-                EnsureFileSystemEntryAbsent(version.ownedParentRootPath, "owned VersionInfoData parent root");
-                EnsureFileSystemEntryAbsent(version.ownedParentRootMetaPath, "owned VersionInfoData parent meta file");
-                EnsureFileSystemEntryAbsent(version.ownedParentScratchPath, "owned VersionInfoData parent scratch");
-            }
+            VerifyGeneratedAssetDirectoriesAbsent(version);
         }
 
         private void VerifyOriginalFileOrAbsence(FileRecord record)
@@ -1123,6 +1873,9 @@ namespace Build.Pipeline.Editor
                 EnsurePathHasNoReparsePoints(projectRoot, transactionDirectory, allowMissingLeaf: false);
                 var expectedSnapshots = new HashSet<string>(PathComparer);
                 AddExpectedSnapshot(completed.playerSettings, expectedSnapshots);
+                AddExpectedSnapshot(
+                    completed.editorBuildSettings,
+                    expectedSnapshots);
                 if (completed.versionInfo != null)
                 {
                     AddExpectedSnapshot(completed.versionInfo.asset, expectedSnapshots);
@@ -1178,7 +1931,7 @@ namespace Build.Pipeline.Editor
 
             var envelope = new JournalEnvelope
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = FormatVersion,
                 payloadBase64 = Convert.ToBase64String(payloadBytes),
                 sha256 = ComputeSha256(payloadBytes)
             };
@@ -1239,7 +1992,7 @@ namespace Build.Pipeline.Editor
             }
 
             if (envelope == null
-                || !string.Equals(envelope.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || envelope.formatVersion != FormatVersion
                 || string.IsNullOrWhiteSpace(envelope.payloadBase64)
                 || string.IsNullOrWhiteSpace(envelope.sha256))
             {
@@ -1282,7 +2035,7 @@ namespace Build.Pipeline.Editor
 
         private void ValidateJournal(Journal candidate)
         {
-            if (!string.Equals(candidate.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+            if (candidate.formatVersion != FormatVersion
                 || !IsGuidN(candidate.transactionId)
                 || candidate.sequence <= 0
                 || !IsKnownGlobalPhase(candidate.phase))
@@ -1290,10 +2043,23 @@ namespace Build.Pipeline.Editor
                 throw new IOException("Global-state journal header is invalid.");
             }
 
-            ValidateBoundedJournalString(candidate.originalCompanyName, "company name");
-            ValidateBoundedJournalString(candidate.originalProductName, "product name");
-            ValidateBoundedJournalString(candidate.originalBundleVersion, "bundle version");
-            ValidateBoundedJournalString(candidate.originalApplicationIdentifier, "application identifier");
+            ValidateOwnedPlayerSettingsRecord(
+                candidate.originalPlayerSettings,
+                "original PlayerSettings");
+            bool requiresAppliedState = string.Equals(
+                    candidate.phase,
+                    GlobalPhaseActive,
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    candidate.phase,
+                    GlobalPhaseRestored,
+                    StringComparison.Ordinal);
+            if (requiresAppliedState)
+            {
+                ValidateOwnedPlayerSettingsRecord(
+                    candidate.appliedPlayerSettings,
+                    "applied PlayerSettings");
+            }
 
             if (!BuildCommandLine.IsSupportedBuildTarget(
                     (BuildTarget)candidate.originalActiveBuildTarget)
@@ -1302,14 +2068,6 @@ namespace Build.Pipeline.Editor
             {
                 throw new IOException(
                     "Global-state journal contains an unsupported build target.");
-            }
-
-            var originalBackend = (ScriptingImplementation)candidate.originalScriptingBackend;
-            if (originalBackend != ScriptingImplementation.Mono2x
-                && originalBackend != ScriptingImplementation.IL2CPP)
-            {
-                throw new IOException(
-                    "Global-state journal contains an unsupported scripting backend.");
             }
 
             if (!PathEquals(candidate.projectRoot, NormalizeAbsolutePath(projectRoot)))
@@ -1332,10 +2090,32 @@ namespace Build.Pipeline.Editor
                 throw new IOException("Global-state journal references an unexpected PlayerSettings path.");
             }
 
+            ValidateFileRecord(
+                candidate.editorBuildSettings,
+                requireExistingRecord: true,
+                candidate.transactionDirectory);
+            if (!string.Equals(
+                    candidate.editorBuildSettings.relativePath,
+                    EditorBuildSettingsRelativePath,
+                    StringComparison.Ordinal))
+            {
+                throw new IOException(
+                    "Global-state journal references an unexpected EditorBuildSettings path.");
+            }
+
             candidate.transientPlayerSettings = NormalizeOptionalIdentity(candidate.transientPlayerSettings);
             if (candidate.transientPlayerSettings != null)
             {
                 ValidateIdentity(candidate.transientPlayerSettings, candidate.playerSettings.relativePath);
+            }
+
+            candidate.transientEditorBuildSettings = NormalizeOptionalIdentity(
+                candidate.transientEditorBuildSettings);
+            if (candidate.transientEditorBuildSettings != null)
+            {
+                ValidateIdentity(
+                    candidate.transientEditorBuildSettings,
+                    candidate.editorBuildSettings.relativePath);
             }
 
             bool phaseRequiresTransient = string.Equals(candidate.phase, GlobalPhaseActive, StringComparison.Ordinal)
@@ -1344,6 +2124,23 @@ namespace Build.Pipeline.Editor
             {
                 throw new IOException(
                     "Global-state journal phase and transient PlayerSettings identity are inconsistent.");
+            }
+
+            bool phaseForbidsEditorTransient = string.Equals(
+                    candidate.phase,
+                    GlobalPhasePreparing,
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    candidate.phase,
+                    GlobalPhasePrepared,
+                    StringComparison.Ordinal);
+            if ((phaseRequiresTransient
+                    && candidate.transientEditorBuildSettings == null)
+                || (phaseForbidsEditorTransient
+                    && candidate.transientEditorBuildSettings != null))
+            {
+                throw new IOException(
+                    "Global-state journal phase and transient EditorBuildSettings identity are inconsistent.");
             }
 
             if (!candidate.hasVersionInfo)
@@ -1406,6 +2203,7 @@ namespace Build.Pipeline.Editor
                 throw new IOException("Global-state journal contains unexpected VersionInfoData staging paths.");
             }
 
+            ValidateGeneratedAssetDirectoryRecords(version, parent);
             ResolveProjectRelativePath(projectRoot, version.stageAssetPath, allowMissingLeaf: true);
             ResolveProjectRelativePath(projectRoot, version.stageMetaPath, allowMissingLeaf: true);
             version.stageAsset = NormalizeOptionalIdentity(version.stageAsset);
@@ -1416,8 +2214,6 @@ namespace Build.Pipeline.Editor
             ValidateOptionalIdentity(version.stageMeta, version.stageMetaPath);
             ValidateOptionalIdentity(version.installedAsset, version.asset.relativePath);
             ValidateOptionalIdentity(version.installedMeta, version.meta.relativePath);
-
-            ValidateOwnedVersionParent(version, owner, parent);
 
             bool stageIdentityRequired = string.Equals(version.state, VersionStateStageReady, StringComparison.Ordinal)
                 || string.Equals(version.state, VersionStateInstalling, StringComparison.Ordinal)
@@ -1441,70 +2237,6 @@ namespace Build.Pipeline.Editor
             {
                 throw new IOException(
                     "VersionInfoData journal state and installed identities are inconsistent.");
-            }
-        }
-
-        private void ValidateOwnedVersionParent(
-            VersionInfoRecord version,
-            Journal owner,
-            string targetParent)
-        {
-            bool parentPreparationState =
-                string.Equals(version.state, VersionStateParentPrepared, StringComparison.Ordinal)
-                || string.Equals(version.state, VersionStateParentInstalling, StringComparison.Ordinal);
-            if (!version.ownsParentRoot)
-            {
-                if (parentPreparationState
-                    || !string.IsNullOrEmpty(version.ownedParentRootPath)
-                    || !string.IsNullOrEmpty(version.ownedParentRootMetaPath)
-                    || !string.IsNullOrEmpty(version.ownedParentScratchPath)
-                    || !string.IsNullOrEmpty(version.ownedParentMarkerSha256))
-                {
-                    throw new IOException(
-                        "VersionInfoData journal contains unexpected owned-parent state.");
-                }
-
-                return;
-            }
-
-            if (version.asset.existed
-                || version.meta.existed
-                || string.IsNullOrEmpty(version.ownedParentRootPath)
-                || !version.ownedParentRootPath.StartsWith("Assets/", StringComparison.Ordinal)
-                || (!string.Equals(targetParent, version.ownedParentRootPath, StringComparison.Ordinal)
-                    && !targetParent.StartsWith(version.ownedParentRootPath + "/", StringComparison.Ordinal)))
-            {
-                throw new IOException(
-                    "VersionInfoData journal contains an invalid owned-parent root.");
-            }
-
-            string normalizedRoot = NormalizeAndValidateProjectRelativePath(
-                projectRoot,
-                version.ownedParentRootPath,
-                "owned VersionInfoData parent root");
-            string expectedMeta = normalizedRoot + ".meta";
-            string expectedScratch = GetOwnedParentScratchPath(normalizedRoot, owner.transactionId);
-            string expectedMarkerSha256 = ComputeSha256(GetOwnedParentMarkerBytes(owner.transactionId));
-            if (!string.Equals(version.ownedParentRootMetaPath, expectedMeta, StringComparison.Ordinal)
-                || !string.Equals(version.ownedParentScratchPath, expectedScratch, StringComparison.Ordinal)
-                || !IsSha256(version.ownedParentMarkerSha256)
-                || !FixedTimeEquals(version.ownedParentMarkerSha256, expectedMarkerSha256))
-            {
-                throw new IOException(
-                    "VersionInfoData journal contains invalid owned-parent metadata.");
-            }
-
-            ResolveProjectRelativePath(projectRoot, version.ownedParentRootMetaPath, allowMissingLeaf: true);
-            ResolveProjectRelativePath(projectRoot, version.ownedParentScratchPath, allowMissingLeaf: true);
-            string existingParent = Path.GetDirectoryName(version.ownedParentRootPath)?.Replace('\\', '/');
-            string existingParentPath = ResolveProjectRelativePath(
-                projectRoot,
-                existingParent,
-                allowMissingLeaf: false);
-            if (!Directory.Exists(existingParentPath))
-            {
-                throw new IOException(
-                    "The recorded owner of the VersionInfoData parent no longer has its original existing parent.");
             }
         }
 
@@ -1553,6 +2285,15 @@ namespace Build.Pipeline.Editor
             if (string.Equals(relativePath, "ProjectSettings/ProjectSettings.asset", StringComparison.Ordinal))
             {
                 return transactionDirectory + "/player-settings.snapshot";
+            }
+
+            if (string.Equals(
+                    relativePath,
+                    EditorBuildSettingsRelativePath,
+                    StringComparison.Ordinal))
+            {
+                return transactionDirectory +
+                    "/editor-build-settings.snapshot";
             }
 
             return relativePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
@@ -1747,332 +2488,6 @@ namespace Build.Pipeline.Editor
             if (File.Exists(absolutePath) || Directory.Exists(absolutePath))
             {
                 throw new IOException($"The {label} path is occupied: '{relativePath}'.");
-            }
-        }
-
-        private void EnsureFileSystemEntryAbsent(string relativePath, string label)
-        {
-            string absolutePath = ResolveProjectRelativePath(projectRoot, relativePath, allowMissingLeaf: true);
-            if (File.Exists(absolutePath) || Directory.Exists(absolutePath))
-            {
-                throw new IOException($"The {label} still exists: '{relativePath}'.");
-            }
-        }
-
-        private string FindFirstMissingAssetDirectory(string parentRelativePath)
-        {
-            string normalized = NormalizeAndValidateProjectRelativePath(
-                projectRoot,
-                parentRelativePath,
-                "VersionInfoData parent path");
-            if (!string.Equals(normalized, "Assets", StringComparison.Ordinal)
-                && !normalized.StartsWith("Assets/", StringComparison.Ordinal))
-            {
-                throw new IOException(
-                    $"VersionInfoData parent path must be below Assets: '{parentRelativePath}'.");
-            }
-
-            string[] segments = normalized.Split('/');
-            string current = segments[0];
-            string currentAbsolute = ResolveProjectRelativePath(projectRoot, current, allowMissingLeaf: false);
-            if (!Directory.Exists(currentAbsolute))
-            {
-                throw new DirectoryNotFoundException("The Unity Assets directory does not exist.");
-            }
-
-            for (int index = 1; index < segments.Length; index++)
-            {
-                current += "/" + segments[index];
-                currentAbsolute = ResolveProjectRelativePath(projectRoot, current, allowMissingLeaf: true);
-                if (Directory.Exists(currentAbsolute))
-                {
-                    EnsurePathHasNoReparsePoints(projectRoot, currentAbsolute, allowMissingLeaf: false);
-                    continue;
-                }
-
-                if (File.Exists(currentAbsolute))
-                {
-                    throw new IOException(
-                        $"VersionInfoData parent path is occupied by a file: '{current}'.");
-                }
-
-                return current;
-            }
-
-            return string.Empty;
-        }
-
-        private static string GetOwnedParentScratchPath(string missingParentRoot, string transactionId)
-        {
-            string existingParent = Path.GetDirectoryName(missingParentRoot)?.Replace('\\', '/');
-            return existingParent + "/__BuildPipelineParent_" + transactionId;
-        }
-
-        private void PrepareAndInstallOwnedParent(
-            VersionInfoRecord version,
-            string targetParentRelativePath)
-        {
-            EnsureFileSystemEntryAbsent(version.ownedParentRootPath, "owned VersionInfoData parent root");
-            EnsureFileSystemEntryAbsent(version.ownedParentRootMetaPath, "owned VersionInfoData parent meta file");
-            EnsureFileSystemEntryAbsent(version.ownedParentScratchPath, "owned VersionInfoData parent scratch");
-
-            string scratchPath = ResolveProjectRelativePath(
-                projectRoot,
-                version.ownedParentScratchPath,
-                allowMissingLeaf: true);
-            Directory.CreateDirectory(scratchPath);
-            EnsurePathHasNoReparsePoints(projectRoot, scratchPath, allowMissingLeaf: false);
-
-            string markerPath = Path.Combine(scratchPath, OwnedParentMarkerFileName);
-            byte[] markerBytes = GetOwnedParentMarkerBytes(journal.transactionId);
-            WriteDurably(markerPath, markerBytes, createNew: true);
-            VerifyOwnedParentMarker(markerPath, version);
-
-            string remaining = targetParentRelativePath.Substring(version.ownedParentRootPath.Length).Trim('/');
-            if (!string.IsNullOrEmpty(remaining))
-            {
-                string nestedPath = Path.Combine(
-                    scratchPath,
-                    remaining.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(nestedPath);
-                EnsurePathHasNoReparsePoints(projectRoot, nestedPath, allowMissingLeaf: false);
-            }
-
-            version.state = VersionStateParentPrepared;
-            WriteJournal();
-            version.state = VersionStateParentInstalling;
-            WriteJournal();
-
-            string rootPath = ResolveProjectRelativePath(
-                projectRoot,
-                version.ownedParentRootPath,
-                allowMissingLeaf: true);
-            Directory.Move(scratchPath, rootPath);
-            VerifyOwnedParentMarker(
-                Path.Combine(rootPath, OwnedParentMarkerFileName),
-                version);
-        }
-
-        private void CleanupOwnedParent(VersionInfoRecord version)
-        {
-            if (!version.ownsParentRoot)
-            {
-                return;
-            }
-
-            string rootPath = ResolveProjectRelativePath(
-                projectRoot,
-                version.ownedParentRootPath,
-                allowMissingLeaf: true);
-            string rootMetaPath = ResolveProjectRelativePath(
-                projectRoot,
-                version.ownedParentRootMetaPath,
-                allowMissingLeaf: true);
-            string scratchPath = ResolveProjectRelativePath(
-                projectRoot,
-                version.ownedParentScratchPath,
-                allowMissingLeaf: true);
-
-            bool rootExists = Directory.Exists(rootPath);
-            bool scratchExists = Directory.Exists(scratchPath);
-            if (File.Exists(rootPath) || File.Exists(scratchPath) || Directory.Exists(rootMetaPath))
-            {
-                throw new IOException("Owned VersionInfoData parent paths have incompatible filesystem entry types.");
-            }
-
-            if (rootExists && scratchExists)
-            {
-                throw new IOException(
-                    "Both owned VersionInfoData parent root and scratch directories exist; recovery is ambiguous.");
-            }
-
-            if (rootExists)
-            {
-                ValidateOwnedParentTree(rootPath, version);
-                Directory.Move(rootPath, scratchPath);
-                scratchExists = true;
-            }
-
-            if (File.Exists(rootMetaPath))
-            {
-                EnsurePathHasNoReparsePoints(projectRoot, rootMetaPath, allowMissingLeaf: false);
-                DeleteFileExactly(rootMetaPath);
-            }
-
-            if (scratchExists)
-            {
-                DeleteValidatedOwnedParentTree(scratchPath, version);
-            }
-        }
-
-        private void ValidateOwnedParentTree(string containerPath, VersionInfoRecord version)
-        {
-            EnsurePathHasNoReparsePoints(projectRoot, containerPath, allowMissingLeaf: false);
-            string markerPath = Path.Combine(containerPath, OwnedParentMarkerFileName);
-            string[] immediateEntries = Directory.GetFileSystemEntries(containerPath);
-            if (!File.Exists(markerPath))
-            {
-                if (immediateEntries.Length == 0)
-                {
-                    return;
-                }
-
-                throw new IOException(
-                    $"Owned VersionInfoData parent marker is missing: '{containerPath}'.");
-            }
-
-            VerifyOwnedParentMarker(markerPath, version);
-            BuildOwnedParentAllowList(
-                containerPath,
-                version,
-                out HashSet<string> allowedDirectories,
-                out HashSet<string> allowedFiles);
-
-            var pendingDirectories = new Stack<string>();
-            pendingDirectories.Push(containerPath);
-            int entryCount = 0;
-            while (pendingDirectories.Count > 0)
-            {
-                string directory = pendingDirectories.Pop();
-                EnsurePathHasNoReparsePoints(projectRoot, directory, allowMissingLeaf: false);
-                foreach (string entry in Directory.GetFileSystemEntries(directory))
-                {
-                    entryCount++;
-                    if (entryCount > MaximumOwnedParentEntries)
-                    {
-                        throw new IOException(
-                            $"Owned VersionInfoData parent exceeds {MaximumOwnedParentEntries} entries.");
-                    }
-
-                    string canonicalEntry = Path.GetFullPath(entry);
-                    if (Directory.Exists(canonicalEntry))
-                    {
-                        EnsurePathHasNoReparsePoints(projectRoot, canonicalEntry, allowMissingLeaf: false);
-                        if (!allowedDirectories.Contains(canonicalEntry))
-                        {
-                            throw new IOException(
-                                $"Unrecognized directory exists in the owned VersionInfoData parent: '{canonicalEntry}'.");
-                        }
-
-                        pendingDirectories.Push(canonicalEntry);
-                    }
-                    else
-                    {
-                        EnsurePathHasNoReparsePoints(projectRoot, canonicalEntry, allowMissingLeaf: false);
-                        if (!allowedFiles.Contains(canonicalEntry))
-                        {
-                            throw new IOException(
-                                $"Unrecognized file exists in the owned VersionInfoData parent: '{canonicalEntry}'.");
-                        }
-                    }
-                }
-            }
-        }
-
-        private void BuildOwnedParentAllowList(
-            string containerPath,
-            VersionInfoRecord version,
-            out HashSet<string> allowedDirectories,
-            out HashSet<string> allowedFiles)
-        {
-            allowedDirectories = new HashSet<string>(PathComparer)
-            {
-                Path.GetFullPath(containerPath)
-            };
-            allowedFiles = new HashSet<string>(PathComparer)
-            {
-                Path.Combine(containerPath, OwnedParentMarkerFileName),
-                Path.Combine(containerPath, OwnedParentMarkerFileName + ".meta")
-            };
-
-            string targetParent = Path.GetDirectoryName(version.asset.relativePath)?.Replace('\\', '/');
-            string remaining = targetParent.Substring(version.ownedParentRootPath.Length).Trim('/');
-            string current = containerPath;
-            if (!string.IsNullOrEmpty(remaining))
-            {
-                foreach (string segment in remaining.Split('/'))
-                {
-                    string next = Path.Combine(current, segment);
-                    allowedDirectories.Add(Path.GetFullPath(next));
-                    allowedFiles.Add(Path.GetFullPath(next + ".meta"));
-                    current = next;
-                }
-            }
-
-            AddMappedOwnedFile(version.asset.relativePath, version, containerPath, allowedFiles);
-            AddMappedOwnedFile(version.meta.relativePath, version, containerPath, allowedFiles);
-            AddMappedOwnedFile(version.stageAssetPath, version, containerPath, allowedFiles);
-            AddMappedOwnedFile(version.stageMetaPath, version, containerPath, allowedFiles);
-        }
-
-        private static void AddMappedOwnedFile(
-            string projectRelativePath,
-            VersionInfoRecord version,
-            string containerPath,
-            ISet<string> files)
-        {
-            string suffix = projectRelativePath.Substring(version.ownedParentRootPath.Length).TrimStart('/');
-            files.Add(Path.GetFullPath(Path.Combine(
-                containerPath,
-                suffix.Replace('/', Path.DirectorySeparatorChar))));
-        }
-
-        private void DeleteValidatedOwnedParentTree(string containerPath, VersionInfoRecord version)
-        {
-            ValidateOwnedParentTree(containerPath, version);
-            string markerPath = Path.Combine(containerPath, OwnedParentMarkerFileName);
-            if (!File.Exists(markerPath))
-            {
-                Directory.Delete(containerPath, recursive: false);
-                return;
-            }
-
-            var directories = new List<string>();
-            var pending = new Stack<string>();
-            pending.Push(containerPath);
-            while (pending.Count > 0)
-            {
-                string directory = pending.Pop();
-                directories.Add(directory);
-                foreach (string entry in Directory.GetFileSystemEntries(directory))
-                {
-                    if (Directory.Exists(entry))
-                    {
-                        pending.Push(entry);
-                    }
-                    else if (!PathEquals(entry, markerPath))
-                    {
-                        DeleteFileExactly(entry);
-                    }
-                }
-            }
-
-            directories.Sort((left, right) => right.Length.CompareTo(left.Length));
-            foreach (string directory in directories)
-            {
-                if (!PathEquals(directory, containerPath))
-                {
-                    Directory.Delete(directory, recursive: false);
-                }
-            }
-
-            DeleteFileExactly(markerPath);
-            Directory.Delete(containerPath, recursive: false);
-        }
-
-        private static byte[] GetOwnedParentMarkerBytes(string transactionId)
-        {
-            return Encoding.UTF8.GetBytes(
-                "schema=1\ntransaction=" + transactionId + "\nowner=Build.Pipeline.Editor\n");
-        }
-
-        private static void VerifyOwnedParentMarker(string markerPath, VersionInfoRecord version)
-        {
-            byte[] bytes = ReadBoundedFile(markerPath, 1024, "owned VersionInfoData parent marker");
-            if (!FixedTimeEquals(version.ownedParentMarkerSha256, ComputeSha256(bytes)))
-            {
-                throw new IOException(
-                    $"Owned VersionInfoData parent marker checksum is invalid: '{markerPath}'.");
             }
         }
 
@@ -2524,6 +2939,175 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        private void ValidateGeneratedAssetDirectoryRecords(
+            VersionInfoRecord version,
+            string targetParentRelativePath)
+        {
+            GeneratedAssetDirectoryRecord[] directories = version.generatedDirectories;
+            if (directories == null || directories.Length > MaximumGeneratedAssetDirectories)
+            {
+                throw new IOException(
+                    "Global-state journal contains an invalid generated Unity folder inventory.");
+            }
+
+            string previousPath = null;
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (GeneratedAssetDirectoryRecord directory in directories)
+            {
+                if (directory == null
+                    || string.IsNullOrWhiteSpace(directory.relativePath)
+                    || !directory.relativePath.StartsWith("Assets/", StringComparison.Ordinal)
+                    || !IsGuidN(directory.guid)
+                    || !IsSha256(directory.metaSha256)
+                    || !paths.Add(directory.relativePath))
+                {
+                    throw new IOException(
+                        "Global-state journal contains an invalid generated Unity folder record.");
+                }
+
+                string normalized = NormalizeAndValidateProjectRelativePath(
+                    projectRoot,
+                    directory.relativePath,
+                    "generated Unity folder path");
+                if (!string.Equals(normalized, directory.relativePath, StringComparison.Ordinal))
+                {
+                    throw new IOException(
+                        "Global-state journal contains a non-canonical generated Unity folder path.");
+                }
+
+                if (previousPath != null)
+                {
+                    string expectedParent = Path.GetDirectoryName(directory.relativePath)
+                        ?.Replace('\\', '/');
+                    if (!string.Equals(expectedParent, previousPath, StringComparison.Ordinal))
+                    {
+                        throw new IOException(
+                            "Global-state journal generated Unity folders do not form one contiguous parent chain.");
+                    }
+                }
+
+                byte[] recordedBytes = DecodeFolderMetaBytes(directory);
+                byte[] expectedBytes = CreateFolderMetaBytes(directory.guid);
+                if (!ByteArraysEqual(recordedBytes, expectedBytes)
+                    || !FixedTimeEquals(ComputeSha256(recordedBytes), directory.metaSha256))
+                {
+                    throw new IOException(
+                        "Global-state journal generated Unity folder meta identity is invalid.");
+                }
+
+                ResolveProjectRelativePath(
+                    projectRoot,
+                    directory.relativePath,
+                    allowMissingLeaf: true);
+                previousPath = directory.relativePath;
+            }
+
+            if (directories.Length > 0
+                && !string.Equals(previousPath, targetParentRelativePath, StringComparison.Ordinal))
+            {
+                throw new IOException(
+                    "Global-state journal generated Unity folder chain does not end at the VersionInfoData parent.");
+            }
+        }
+
+        private static void ValidateOwnedPlayerSettingsRecord(
+            OwnedPlayerSettingsRecord record,
+            string label)
+        {
+            if (record == null)
+            {
+                throw new IOException(
+                    $"Global-state journal {label} is missing.");
+            }
+
+            var backend = (ScriptingImplementation)record.scriptingBackend;
+            if (backend != ScriptingImplementation.Mono2x
+                && backend != ScriptingImplementation.IL2CPP)
+            {
+                throw new IOException(
+                    $"Global-state journal {label} contains an unsupported scripting backend.");
+            }
+
+            if (record.androidBundleVersionCode <= 0)
+            {
+                throw new IOException(
+                    $"Global-state journal {label} contains an invalid Android bundle version code.");
+            }
+
+            ValidateBoundedJournalString(record.companyName, label + " company name");
+            ValidateBoundedJournalString(record.productName, label + " product name");
+            ValidateBoundedJournalString(record.bundleVersion, label + " bundle version");
+            ValidateBoundedJournalString(record.applicationIdentifier, label + " application identifier");
+            ValidateBoundedJournalString(record.iosBuildNumber, label + " iOS build number");
+            if (record.editorBuildScenes == null
+                || record.editorBuildScenes.Length > 1024)
+            {
+                throw new IOException(
+                    $"Global-state journal {label} contains an invalid Editor build scene sequence.");
+            }
+
+            for (int index = 0; index < record.editorBuildScenes.Length; index++)
+            {
+                EditorBuildSceneRecord scene = record.editorBuildScenes[index];
+                if (scene == null)
+                {
+                    throw new IOException(
+                        $"Global-state journal {label} contains a null Editor build scene entry.");
+                }
+
+                ValidateBoundedJournalString(
+                    scene.path,
+                    label + " Editor build scene path");
+            }
+            try
+            {
+                PlayerSettingsPreloadedAssetPolicy.ValidateIdentifiers(
+                    record.preloadedAssetIds,
+                    label + " preloaded assets");
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new IOException(exception.Message, exception);
+            }
+        }
+
+        private static OwnedPlayerSettingsRecord ToRecord(
+            PlayerSettingsOwnedState state)
+        {
+            return new OwnedPlayerSettingsRecord
+            {
+                scriptingBackend = state.ScriptingBackend,
+                companyName = state.CompanyName,
+                productName = state.ProductName,
+                bundleVersion = state.BundleVersion,
+                applicationIdentifier = state.ApplicationIdentifier,
+                androidBundleVersionCode = state.AndroidBundleVersionCode,
+                iosBuildNumber = state.IosBuildNumber,
+                exportAndroidProject = state.ExportAndroidProject,
+                developmentBuild = state.DevelopmentBuild,
+                editorBuildScenes = ToRecords(state.EditorBuildScenes),
+                showSplashScreen = state.Splash.ShowSplashScreen,
+                showUnityLogo = state.Splash.ShowUnityLogo,
+                preloadedAssetIds = (string[])state.PreloadedAssetIds.Clone()
+            };
+        }
+
+        private static EditorBuildSceneRecord[] ToRecords(
+            IReadOnlyList<EditorBuildSceneState> states)
+        {
+            var records = new EditorBuildSceneRecord[states.Count];
+            for (int index = 0; index < states.Count; index++)
+            {
+                records[index] = new EditorBuildSceneRecord
+                {
+                    path = states[index].Path,
+                    enabled = states[index].Enabled
+                };
+            }
+
+            return records;
+        }
+
         private static bool IsKnownGlobalPhase(string phase)
         {
             return string.Equals(phase, GlobalPhasePreparing, StringComparison.Ordinal)
@@ -2536,8 +3120,6 @@ namespace Build.Pipeline.Editor
         private static bool IsKnownVersionState(string state)
         {
             return string.Equals(state, VersionStatePreparing, StringComparison.Ordinal)
-                || string.Equals(state, VersionStateParentPrepared, StringComparison.Ordinal)
-                || string.Equals(state, VersionStateParentInstalling, StringComparison.Ordinal)
                 || string.Equals(state, VersionStatePrepared, StringComparison.Ordinal)
                 || string.Equals(state, VersionStateStageReady, StringComparison.Ordinal)
                 || string.Equals(state, VersionStateInstalling, StringComparison.Ordinal)
@@ -2582,6 +3164,22 @@ namespace Build.Pipeline.Editor
             for (int index = 0; index < firstBytes.Length; index++)
             {
                 difference |= firstBytes[index] ^ secondBytes[index];
+            }
+
+            return difference == 0;
+        }
+
+        private static bool ByteArraysEqual(byte[] first, byte[] second)
+        {
+            if (first == null || second == null || first.Length != second.Length)
+            {
+                return false;
+            }
+
+            int difference = 0;
+            for (int index = 0; index < first.Length; index++)
+            {
+                difference |= first[index] ^ second[index];
             }
 
             return difference == 0;
@@ -2636,8 +3234,6 @@ namespace Build.Pipeline.Editor
         private const string GlobalPhaseActive = "Active";
         private const string GlobalPhaseRestored = "Restored";
         private const string VersionStatePreparing = "Preparing";
-        private const string VersionStateParentPrepared = "ParentPrepared";
-        private const string VersionStateParentInstalling = "ParentInstalling";
         private const string VersionStatePrepared = "Prepared";
         private const string VersionStateStageReady = "StageReady";
         private const string VersionStateInstalling = "Installing";
@@ -2647,7 +3243,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class JournalEnvelope
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string payloadBase64;
             public string sha256;
         }
@@ -2655,24 +3251,47 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string transactionId;
             public string projectRoot;
             public string transactionDirectory;
             public string phase;
             public long sequence;
             public int originalActiveBuildTarget;
-            public bool originalExportAndroidProject;
             public int requestedBuildTarget;
-            public int originalScriptingBackend;
-            public string originalCompanyName;
-            public string originalProductName;
-            public string originalBundleVersion;
-            public string originalApplicationIdentifier;
+            public OwnedPlayerSettingsRecord originalPlayerSettings;
+            public OwnedPlayerSettingsRecord appliedPlayerSettings;
             public FileRecord playerSettings;
             public FileIdentity transientPlayerSettings;
+            public FileRecord editorBuildSettings;
+            public FileIdentity transientEditorBuildSettings;
             public bool hasVersionInfo;
             public VersionInfoRecord versionInfo;
+        }
+
+        [Serializable]
+        private sealed class OwnedPlayerSettingsRecord
+        {
+            public int scriptingBackend;
+            public string companyName;
+            public string productName;
+            public string bundleVersion;
+            public string applicationIdentifier;
+            public int androidBundleVersionCode;
+            public string iosBuildNumber;
+            public bool exportAndroidProject;
+            public bool developmentBuild;
+            public EditorBuildSceneRecord[] editorBuildScenes;
+            public bool showSplashScreen;
+            public bool showUnityLogo;
+            public string[] preloadedAssetIds;
+        }
+
+        [Serializable]
+        private sealed class EditorBuildSceneRecord
+        {
+            public string path;
+            public bool enabled;
         }
 
         [Serializable]
@@ -2683,26 +3302,40 @@ namespace Build.Pipeline.Editor
             public FileRecord meta;
             public string stageAssetPath;
             public string stageMetaPath;
-            public bool ownsParentRoot;
-            public string ownedParentRootPath;
-            public string ownedParentRootMetaPath;
-            public string ownedParentScratchPath;
-            public string ownedParentMarkerSha256;
             public FileIdentity stageAsset;
             public FileIdentity stageMeta;
             public FileIdentity installedAsset;
             public FileIdentity installedMeta;
+            public GeneratedAssetDirectoryRecord[] generatedDirectories;
+        }
+
+        [Serializable]
+        private sealed class GeneratedAssetDirectoryRecord
+        {
+            public string relativePath;
+            public string guid;
+            public string metaBase64;
+            public string metaSha256;
         }
 
         internal sealed class PlayerSettingsPersistenceToken
         {
             internal long Length { get; }
             internal string Sha256 { get; }
+            internal long EditorBuildSettingsLength { get; }
+            internal string EditorBuildSettingsSha256 { get; }
 
-            internal PlayerSettingsPersistenceToken(long length, string sha256)
+            internal PlayerSettingsPersistenceToken(
+                long length,
+                string sha256,
+                long editorBuildSettingsLength,
+                string editorBuildSettingsSha256)
             {
                 Length = length;
                 Sha256 = sha256 ?? string.Empty;
+                EditorBuildSettingsLength = editorBuildSettingsLength;
+                EditorBuildSettingsSha256 =
+                    editorBuildSettingsSha256 ?? string.Empty;
             }
         }
 
@@ -2730,42 +3363,4 @@ namespace Build.Pipeline.Editor
         }
     }
 
-    internal readonly struct BuildTargetRecoveryState
-    {
-        internal BuildTargetRecoveryState(
-            int activeBuildTarget,
-            bool exportAndroidProject,
-            int requestedBuildTarget,
-            int scriptingBackend,
-            string companyName,
-            string productName,
-            string bundleVersion,
-            string applicationIdentifier)
-        {
-            ActiveBuildTarget = activeBuildTarget;
-            ExportAndroidProject = exportAndroidProject;
-            RequestedBuildTarget = requestedBuildTarget;
-            ScriptingBackend = scriptingBackend;
-            CompanyName = companyName;
-            ProductName = productName;
-            BundleVersion = bundleVersion;
-            ApplicationIdentifier = applicationIdentifier;
-        }
-
-        internal int ActiveBuildTarget { get; }
-
-        internal bool ExportAndroidProject { get; }
-
-        internal int RequestedBuildTarget { get; }
-
-        internal int ScriptingBackend { get; }
-
-        internal string CompanyName { get; }
-
-        internal string ProductName { get; }
-
-        internal string BundleVersion { get; }
-
-        internal string ApplicationIdentifier { get; }
-    }
 }

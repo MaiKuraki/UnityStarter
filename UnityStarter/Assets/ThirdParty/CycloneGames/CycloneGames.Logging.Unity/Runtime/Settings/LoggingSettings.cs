@@ -66,5 +66,38 @@ namespace CycloneGames.Logging.Unity
         [Header("Filtering")]
         public LogSeverity minimumSeverity = LogSeverity.Info;
         public LogCategoryFilterMode categoryFilter = LogCategoryFilterMode.All;
+
+        // Build-only provenance is serialized into the temporary Resources override so an
+        // interrupted Editor transaction can prove ownership before deleting the asset.
+        [SerializeField, HideInInspector] private string buildOverrideTransactionId = string.Empty;
+        [SerializeField, HideInInspector] private string buildOverrideProjectToken = string.Empty;
+        [SerializeField, HideInInspector] private string buildOverridePayloadHash = string.Empty;
+
+        internal void SetBuildOverrideProvenance(string transactionId, string projectToken, string payloadHash)
+        {
+            buildOverrideTransactionId = transactionId ?? string.Empty;
+            buildOverrideProjectToken = projectToken ?? string.Empty;
+            buildOverridePayloadHash = payloadHash ?? string.Empty;
+        }
+
+        internal void ClearBuildOverrideProvenance()
+        {
+            buildOverrideTransactionId = string.Empty;
+            buildOverrideProjectToken = string.Empty;
+            buildOverridePayloadHash = string.Empty;
+        }
+
+        internal bool TryGetBuildOverrideProvenance(
+            out string transactionId,
+            out string projectToken,
+            out string payloadHash)
+        {
+            transactionId = buildOverrideTransactionId;
+            projectToken = buildOverrideProjectToken;
+            payloadHash = buildOverridePayloadHash;
+            return !string.IsNullOrEmpty(transactionId) &&
+                   !string.IsNullOrEmpty(projectToken) &&
+                   !string.IsNullOrEmpty(payloadHash);
+        }
     }
 }

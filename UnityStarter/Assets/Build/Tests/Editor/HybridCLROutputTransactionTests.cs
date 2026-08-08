@@ -27,6 +27,7 @@ namespace Build.Pipeline.Tests.Editor
             hotUpdateDirectory = Path.Combine(projectRoot, "Assets", "Generated", "HotUpdate");
             aotDirectory = Path.Combine(projectRoot, "Assets", "Generated", "AOT");
             Directory.CreateDirectory(Path.Combine(projectRoot, "Assets"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "ProjectSettings"));
             Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
         }
 
@@ -70,7 +71,7 @@ namespace Build.Pipeline.Tests.Editor
             string manifest = File.ReadAllText(Path.Combine(
                 hotUpdateDirectory,
                 HybridCLROutputTransaction.OwnershipManifestFileName));
-            StringAssert.Contains("\"schemaVersion\": 2", manifest);
+            StringAssert.Contains("\"formatVersion\": 1", manifest);
             StringAssert.Contains("\"transactionId\"", manifest);
             StringAssert.Contains("\"size\"", manifest);
             StringAssert.Contains("\"sha256\"", manifest);
@@ -95,6 +96,76 @@ namespace Build.Pipeline.Tests.Editor
 
             Assert.That(File.ReadAllText(metaPath), Is.EqualTo(originalMeta));
             Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("v2"));
+        }
+
+        [Test]
+        public void ActivateForDownstream_WhenRunFails_RestoresExactPreviousOutputs()
+        {
+            HybridCLROutputTarget[] targets = CreateTargets();
+            SeedManagedOutputs(targets, "old");
+
+            using (HybridCLROutputTransaction transaction =
+                   HybridCLROutputTransaction.Begin(projectRoot, targets))
+            {
+                StageOutputs(transaction, "new");
+                transaction.ActivateForDownstream();
+
+                Assert.That(
+                    File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                    Is.EqualTo("new"));
+            }
+
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                Is.EqualTo("old"));
+            Assert.That(
+                File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")),
+                Is.EqualTo("old"));
+            Assert.That(
+                File.Exists(HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.False);
+        }
+
+        [Test]
+        public void ActivateForDownstream_WhenTerminalBarrierCommits_KeepsNewOutputs()
+        {
+            HybridCLROutputTarget[] targets = CreateTargets();
+            SeedManagedOutputs(targets, "old");
+            HybridCLROutputTransaction transaction =
+                HybridCLROutputTransaction.Begin(projectRoot, targets);
+            try
+            {
+                StageOutputs(transaction, "new");
+                transaction.ActivateForDownstream();
+                BuildPublicationBarrier barrier = BuildPublicationBarrier.Begin(
+                    projectRoot,
+                    "hybridclr-test-run",
+                    new IBuildDeferredPublication[] { transaction });
+
+                transaction.Publish();
+                barrier.CommitDecision();
+                transaction.Complete();
+                transaction.Dispose();
+                transaction = null;
+                barrier.Complete();
+            }
+            finally
+            {
+                transaction?.Dispose();
+            }
+
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                Is.EqualTo("new"));
+            Assert.That(
+                File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")),
+                Is.EqualTo("new"));
+            Assert.That(
+                File.Exists(HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.False);
+            Assert.That(
+                Directory.Exists(BuildPublicationBarrier.GetStateRoot(projectRoot)),
+                Is.False);
         }
 
         [Test]
@@ -208,6 +279,18 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void EnsureNoPendingRecovery_WhenNoStateExists_IsZeroWrite()
+        {
+            string stateRoot = Path.GetDirectoryName(
+                HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot));
+
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+            Assert.DoesNotThrow(() =>
+                HybridCLROutputTransaction.EnsureNoPendingRecovery(projectRoot));
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+        }
+
+        [Test]
         public void GetStagingFilePath_PortableReservedName_Throws()
         {
             using (HybridCLROutputTransaction transaction =
@@ -220,9 +303,9 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void GetFinalFilePath_WhenArtifactExceedsLegacyWindowsBudget_ThrowsBeforeWrite()
+        public void GetFinalFilePath_WhenArtifactExceedsWin32MaxPathBudget_ThrowsBeforeWrite()
         {
-            int fileNameLength = BuildPathPolicy.LegacyWindowsMaximumPathCharacters
+            int fileNameLength = BuildPathPolicy.Win32MaxPathCharacters
                 - Path.GetFullPath(hotUpdateDirectory).Length;
             const string extension = ".bytes";
             Assert.That(fileNameLength, Is.GreaterThan(extension.Length));
@@ -406,11 +489,15 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void Runner_WhenHybridClrIsDisabled_RecoversJournalBeforePlanValidation()
+        public void Runner_WhenHybridClrIsDisabled_DoesNotRecoverJournalImplicitly()
         {
             HybridCLROutputTarget[] targets = CreateTargets();
             SeedManagedOutputs(targets, "old");
             LeaveCrashedTransaction(targets);
+
+            string journalPath = HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot);
+            byte[] journalBeforeRetry = File.ReadAllBytes(journalPath);
+            string[] transactionDirectoriesBeforeRetry = GetTransactionDirectories();
 
             string buildRoot = Path.Combine(projectRoot, "Build");
             string outputDirectory = Path.Combine(buildRoot, "Windows", "Release");
@@ -421,7 +508,6 @@ namespace Build.Pipeline.Tests.Editor
                 "Assets/Generated/VersionInfo.asset",
                 Array.Empty<string>(),
                 CheatBuildMode.Disabled,
-                hybridClrConfiguration: null,
                 UnityEditor.BuildTarget.StandaloneWindows64,
                 UnityEditor.Build.NamedBuildTarget.Standalone,
                 UnityEditor.ScriptingImplementation.Mono2x,
@@ -430,7 +516,6 @@ namespace Build.Pipeline.Tests.Editor
                 Path.Combine(outputDirectory, "TestProduct.exe"),
                 outputDirectory,
                 outputIsFolder: false,
-                incrementality: BuildIncrementality.Clean,
                 deleteDebugFiles: true,
                 debugBuild: false,
                 exportAndroidProject: false,
@@ -438,37 +523,23 @@ namespace Build.Pipeline.Tests.Editor
                 cheatOverride: null,
                 batchMode: false,
                 applicationVersion: "1.0.0",
-                assetContentProviderId: string.Empty,
-                assetContentConfiguration: null,
-                useHybridClr: false,
-                enablePlayerObfuscation: false,
-                stepIds: new[] { BuildStepIds.Player });
-
-            UnityEngine.TestTools.LogAssert.Expect(
-                UnityEngine.LogType.Error,
-                new Regex(
-                    @"^\[BuildPipeline\] Step 'preflight' Failed in [0-9.]+s\. Build preflight failed:\r?\n" +
-                    @"\[player\] At least one build scene is required\.$"));
-            UnityEngine.TestTools.LogAssert.Expect(
-                UnityEngine.LogType.Error,
-                new Regex(
-                    @"^\[BuildPipeline\] Run [\s\S]+ failed\.[\s\S]+" +
-                    @"\[player\] At least one build scene is required\."));
+                identityOverride: BuildIdentityOverride.Empty,
+                steps: new[]
+                {
+                    new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
+                });
 
             BuildRunResult result = new BuildPipelineRunner(
-                    eventSink: null,
+                    eventSink: new NoOpEventSink(),
                     trustedProjectRoot: projectRoot,
                     isEditorBusy: () => false)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);
-            StringAssert.Contains("At least one build scene is required", result.Failure.ToString());
-            Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("old"));
-            Assert.That(File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")), Is.EqualTo("old"));
-            Assert.That(
-                File.Exists(HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot)),
-                Is.False);
-            Assert.That(GetTransactionDirectories(), Is.Empty);
+            StringAssert.Contains("Build workspace status is 'RecoveryRequired'", result.Failure.ToString());
+            Assert.That(File.ReadAllBytes(journalPath), Is.EqualTo(journalBeforeRetry));
+            Assert.That(File.Exists(journalPath), Is.True);
+            Assert.That(GetTransactionDirectories(), Is.EqualTo(transactionDirectoriesBeforeRetry));
         }
 
         [Test]
@@ -497,7 +568,7 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void Begin_AfterSecondInstallMoveCrash_RecoversMixedOutputsBeforeStartingNewTransaction()
+        public void Begin_AfterSecondInstallMoveCrash_FailsClosedUntilExplicitRecovery()
         {
             HybridCLROutputTarget[] targets = CreateTargets();
             SeedManagedOutputs(targets, "old");
@@ -511,6 +582,26 @@ namespace Build.Pipeline.Tests.Editor
                     && role == HybridCLRBuilder.AOTOutputRole));
             }
 
+            string journalPath = HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot);
+            byte[] journalBeforeRetry = File.ReadAllBytes(journalPath);
+            string hotUpdateBeforeRetry = File.ReadAllText(
+                Path.Combine(hotUpdateDirectory, "Game.dll.bytes"));
+            string aotBeforeRetry = File.ReadAllText(
+                Path.Combine(aotDirectory, "mscorlib.dll.bytes"));
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+                HybridCLROutputTransaction.Begin(projectRoot, targets));
+
+            StringAssert.Contains("Pending HybridCLR output recovery", exception.Message);
+            Assert.That(File.ReadAllBytes(journalPath), Is.EqualTo(journalBeforeRetry));
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                Is.EqualTo(hotUpdateBeforeRetry));
+            Assert.That(
+                File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")),
+                Is.EqualTo(aotBeforeRetry));
+
+            Assert.That(HybridCLROutputTransaction.RecoverPending(projectRoot, targets), Is.True);
             using (HybridCLROutputTransaction next =
                    HybridCLROutputTransaction.Begin(projectRoot, targets))
             {
@@ -519,7 +610,7 @@ namespace Build.Pipeline.Tests.Editor
             }
 
             Assert.That(
-                File.Exists(HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                File.Exists(journalPath),
                 Is.False);
         }
 
@@ -710,6 +801,17 @@ namespace Build.Pipeline.Tests.Editor
                 HybridCLRBuilder.AOTOutputRole,
                 "mscorlib.dll.bytes",
                 content);
+        }
+
+        private sealed class NoOpEventSink : IBuildEventSink
+        {
+            public void RunStarted(
+                BuildExecutionContext context,
+                System.Collections.Generic.IReadOnlyList<CompiledBuildStep> plan) { }
+
+            public void StepStarted(BuildExecutionContext context, CompiledBuildStep step) { }
+            public void StepFinished(BuildExecutionContext context, BuildStepResult result) { }
+            public void RunFinished(BuildExecutionContext context, BuildRunResult result) { }
         }
 
         private string[] GetTransactionDirectories()
