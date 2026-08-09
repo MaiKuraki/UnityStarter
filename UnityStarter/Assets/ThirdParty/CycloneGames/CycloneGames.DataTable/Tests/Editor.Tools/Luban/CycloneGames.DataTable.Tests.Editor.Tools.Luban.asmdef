@@ -2,7 +2,9 @@
     "name": "CycloneGames.DataTable.Tests.Editor.Tools.Luban",
     "rootNamespace": "CycloneGames.DataTable.Tests.Editor.Tools.Luban",
     "references": [
+        "CycloneGames.DataTable.Core",
         "CycloneGames.DataTable.Unity.Editor",
+        "CycloneGames.DataTable.Integrations.Logging.Editor",
         "UniTask"
     ],
     "includePlatforms": [

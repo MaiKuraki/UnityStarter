@@ -12,7 +12,10 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
     /// one in-flight load operation; returned memory is borrowed until <see cref="Dispose"/>.
     /// Editor file fallback is opt-in and restricted to canonical paths below Assets/.
     /// </summary>
-    public sealed class AssetManagementDataTableRawFileBytesLoader : IDataTableBytesProvider, IDisposable
+    public sealed class AssetManagementDataTableRawFileBytesLoader :
+        IDataTableBytesProvider,
+        IDataTableBytesInventory,
+        IDisposable
     {
         private readonly AssetBucketScope _assetScope;
         private readonly IDataTableLocationResolver _locationResolver;
@@ -22,10 +25,16 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
         private readonly bool _enableEditorFileFallback;
         private readonly int _ownerThreadId;
         private readonly CancellationTokenSource _lifetimeCancellation;
+        private readonly DataTableAssetHandleRetirement _handleRetirement =
+            new DataTableAssetHandleRetirement();
         private IRawFileHandle _activeHandle;
         private bool _activeHandleDisposedByOwner;
         private bool _loadInProgress;
         private bool _disposed;
+        private bool _disposeCompleted;
+        private bool _lifetimeCancellationRequested;
+        private bool _lifetimeCancellationDisposed;
+        private bool _bytesCacheDisposed;
 
         public AssetManagementDataTableRawFileBytesLoader(
             IAssetPackage assetPackage,
@@ -125,7 +134,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
                     }
                 }
 
-                _manifest?.ValidateRequiredTables(this);
+                _manifest?.ValidateInventory(this);
             }
             catch
             {
@@ -143,6 +152,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             CancellationToken cancellationToken = default)
         {
             EnsureUsable();
+            string normalizedName = _limits.NormalizeTableName(tableName);
 
             BeginLoad();
             try
@@ -151,7 +161,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
                     CancellationTokenSource.CreateLinkedTokenSource(
                         cancellationToken,
                         _lifetimeCancellation.Token);
-                await LoadCoreAsync(tableName, linkedCancellation.Token);
+                await LoadCoreAsync(normalizedName, linkedCancellation.Token);
             }
             finally
             {
@@ -160,12 +170,11 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
         }
 
         private async UniTask<string> LoadCoreAsync(
-            string tableName,
+            string normalizedName,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string normalizedName = DataTableNameUtility.NormalizeTableName(tableName);
             if (_bytesCache.TryGetBytes(normalizedName, out _))
             {
                 return null;
@@ -192,25 +201,19 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
                 cancellationToken.ThrowIfCancellationRequested();
                 EnsureUsable();
 
-                if (!string.IsNullOrEmpty(handle.Error))
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to load data table raw file. Table={normalizedName}, " +
-                        $"Location={location}, Error={handle.Error}");
-                }
-
-                byte[] handleBytes = handle.ReadBytes();
+                byte[] ownedBytes = handle.ReadBytes();
                 cancellationToken.ThrowIfCancellationRequested();
-                if (handleBytes == null)
+                if (ownedBytes == null)
                 {
                     throw new InvalidOperationException(
                         $"Raw file handle returned no data. Table={normalizedName}, Location={location}");
                 }
 
-                byte[] ownedBytes = (byte[])handleBytes.Clone();
+                ValidatePayload(normalizedName, ownedBytes);
                 cancellationToken.ThrowIfCancellationRequested();
-                ValidateBytes(normalizedName, ownedBytes);
-                cancellationToken.ThrowIfCancellationRequested();
+                // IRawFileHandle.ReadBytes returns a caller-owned snapshot. Transfer that array
+                // directly into the cache; cloning it here would double the cold-load peak for
+                // every raw table without adding an ownership boundary.
                 _bytesCache.AddOwned(normalizedName, ownedBytes);
                 loadCompletedSuccessfully = true;
                 return normalizedName;
@@ -238,7 +241,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
                 if (fallbackBytes != null)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    ValidateBytes(normalizedName, fallbackBytes);
+                    ValidatePayload(normalizedName, fallbackBytes);
                     cancellationToken.ThrowIfCancellationRequested();
                     _bytesCache.AddOwned(normalizedName, fallbackBytes);
                     loadCompletedSuccessfully = true;
@@ -263,7 +266,11 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
                 {
                     try
                     {
-                        DisposeHandle(handle, loadCompletedSuccessfully, normalizedName);
+                        _handleRetirement.DisposeOrRetain(
+                            handle,
+                            nameof(AssetManagementDataTableRawFileBytesLoader),
+                            normalizedName,
+                            suppressRecoverableFailure: !loadCompletedSuccessfully);
                     }
                     catch
                     {
@@ -290,55 +297,130 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             return _bytesCache.TryGetBytes(tableName, out bytes);
         }
 
+        public int Count
+        {
+            get
+            {
+                EnsureUsable();
+                return _bytesCache.Count;
+            }
+        }
+
+        public string GetTableName(int index)
+        {
+            EnsureUsable();
+            return _bytesCache.GetTableName(index);
+        }
+
         public void Dispose()
         {
-            if (_disposed)
+            EnsureOwnerThread();
+            if (_disposeCompleted)
             {
                 return;
             }
 
-            EnsureOwnerThread();
             _disposed = true;
             Exception cleanupFailure = null;
-            try
+            if (!_lifetimeCancellationRequested)
             {
-                _lifetimeCancellation.Cancel();
-            }
-            catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
-            {
-                cleanupFailure = exception;
-            }
-
-            try
-            {
-                if (_activeHandle != null)
+                _lifetimeCancellationRequested = true;
+                try
                 {
-                    _activeHandleDisposedByOwner = true;
-                    _activeHandle.Dispose();
+                    _lifetimeCancellation.Cancel();
+                }
+                catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+                {
+                    cleanupFailure = exception;
                 }
             }
-            catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+
+            IRawFileHandle activeHandle = _activeHandle;
+            if (activeHandle != null)
             {
-                cleanupFailure ??= exception;
+                _activeHandleDisposedByOwner = true;
+                _activeHandle = null;
+                try
+                {
+                    _handleRetirement.DisposeOrRetain(
+                        activeHandle,
+                        nameof(AssetManagementDataTableRawFileBytesLoader),
+                        "<active>",
+                        suppressRecoverableFailure: false);
+                }
+                catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+                {
+                    cleanupFailure ??= exception;
+                }
+            }
+            else if (_handleRetirement.HasPending)
+            {
+                try
+                {
+                    _handleRetirement.Retry(nameof(AssetManagementDataTableRawFileBytesLoader));
+                }
+                catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+                {
+                    cleanupFailure ??= exception;
+                }
             }
 
-            _activeHandle = null;
-            try
+            if (!_bytesCacheDisposed)
             {
-                _bytesCache.Dispose();
-            }
-            catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
-            {
-                cleanupFailure ??= exception;
+                try
+                {
+                    _bytesCache.Dispose();
+                    _bytesCacheDisposed = true;
+                }
+                catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+                {
+                    cleanupFailure ??= exception;
+                }
             }
 
-            _lifetimeCancellation.Dispose();
+            if (!_lifetimeCancellationDisposed)
+            {
+                try
+                {
+                    _lifetimeCancellation.Dispose();
+                    _lifetimeCancellationDisposed = true;
+                }
+                catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+                {
+                    cleanupFailure ??= exception;
+                }
+            }
+
+            _disposeCompleted = cleanupFailure == null && !_handleRetirement.HasPending;
             if (cleanupFailure != null)
             {
                 throw new InvalidOperationException(
                     "One or more DataTable loader resources failed to shut down cleanly.",
                     cleanupFailure);
             }
+        }
+
+        /// <summary>
+        /// True when a provider handle release failed and the exact ownership edge is retained for retry.
+        /// This owner-thread-only property remains available after loader disposal starts.
+        /// </summary>
+        public bool HasPendingHandleDisposal
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return _handleRetirement.HasPending;
+            }
+        }
+
+        /// <summary>
+        /// Retries the retained provider handle release on the owner thread. A recoverable failure
+        /// throws and leaves the same handle retained for another explicit retry.
+        /// </summary>
+        public void RetryPendingHandleDisposal()
+        {
+            EnsureOwnerThread();
+            _handleRetirement.Retry(nameof(AssetManagementDataTableRawFileBytesLoader));
         }
 
         private byte[] TryLoadEditorFile(string assetPath)
@@ -368,22 +450,34 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
 
         private string ResolveLocation(string normalizedName)
         {
+            string location;
             if (_manifest != null &&
                 _manifest.TryGetEntry(normalizedName, out DataTableManifestEntry entry))
             {
-                return entry.HasLocation
+                location = entry.HasLocation
                     ? entry.Location
                     : _locationResolver.Resolve(entry.TableName);
             }
+            else
+            {
+                location = _locationResolver.Resolve(normalizedName);
+            }
 
-            return _locationResolver.Resolve(normalizedName);
+            location = _limits.NormalizeLocation(location);
+            if (location.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Data-table location resolver returned an empty location. Table={normalizedName}");
+            }
+
+            return location;
         }
 
-        private void ValidateBytes(string normalizedName, ReadOnlyMemory<byte> bytes)
+        private void ValidatePayload(string normalizedName, ReadOnlyMemory<byte> bytes)
         {
             _limits.ValidatePayloadLength(normalizedName, bytes.Length);
             _limits.ValidateTotalBytes(checked(_bytesCache.TotalBytes + bytes.Length));
-            _manifest?.ValidateBytes(normalizedName, bytes);
+            _manifest?.ValidatePayload(normalizedName, bytes);
         }
 
         private string[] CreateTableNameSnapshot(IReadOnlyList<string> tableNames)
@@ -403,9 +497,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             var snapshot = new string[count];
             for (int i = 0; i < snapshot.Length; i++)
             {
-                string normalizedName = DataTableNameUtility.NormalizeTableName(tableNames[i]);
-                _limits.ValidateTableName(normalizedName);
-                snapshot[i] = normalizedName;
+                snapshot[i] = _limits.NormalizeTableName(tableNames[i]);
             }
 
             return snapshot;
@@ -424,39 +516,14 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             }
         }
 
-        private static void DisposeHandle(
-            IRawFileHandle handle,
-            bool loadCompletedSuccessfully,
-            string tableName)
-        {
-            if (handle == null)
-            {
-                return;
-            }
-
-            try
-            {
-                handle.Dispose();
-            }
-            catch (Exception exception) when (
-                !loadCompletedSuccessfully &&
-                DataTableAssetLoaderUtility.IsRecoverableException(exception))
-            {
-                DataTableAssetLoaderUtility.LogSuppressedCleanupFailure(
-                    nameof(AssetManagementDataTableRawFileBytesLoader),
-                    tableName,
-                    exception);
-            }
-            catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
-            {
-                throw new InvalidOperationException(
-                    $"Data table loaded, but its raw-file handle could not be released. Table={tableName}",
-                    exception);
-            }
-        }
-
         private void BeginLoad()
         {
+            if (_handleRetirement.HasPending)
+            {
+                throw new InvalidOperationException(
+                    "A provider handle release is pending. Call RetryPendingHandleDisposal before loading again.");
+            }
+
             if (_loadInProgress)
             {
                 throw new InvalidOperationException(

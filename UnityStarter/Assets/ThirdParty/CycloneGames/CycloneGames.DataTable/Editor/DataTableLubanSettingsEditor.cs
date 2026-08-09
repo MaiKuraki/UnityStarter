@@ -1,892 +1,1225 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Threading;
-using CycloneGames.Logging;
-using Cysharp.Threading.Tasks;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
-using Handles = UnityEditor.Handles;
 
 namespace CycloneGames.DataTable.Unity.Editor
 {
-    [CustomEditor(typeof(DataTableLubanSettings), true)]
+    [CustomEditor(typeof(DataTableLubanSettings))]
     [CanEditMultipleObjects]
-    public class DataTableLubanSettingsEditor : UnityEditor.Editor
+    public sealed class DataTableLubanSettingsEditor : UnityEditor.Editor
     {
-        private const float SectionSpacing = 8f;
-        private const float ButtonWidth = 72f;
-        private const float ButtonGap = 4f;
+        private const int MaximumRenderedOutputCharacters = 32 * 1024;
 
-        private static readonly LogChannel Log = DataTableEditorLog.SettingsChannel;
+        private static readonly HashSet<string> OwnedSerializedFields =
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "m_Script",
+                "schemaVersion",
+                "buildConfigurationPath",
+                "defaultProfileName",
+                "refreshAssetsAfterSuccess",
+                "maximumCapturedOutputCharacters",
+            };
 
-        private SerializedProperty _lubanProjectDir;
-        private SerializedProperty _scriptName;
-        private SerializedProperty _scriptArguments;
-        private SerializedProperty _timeoutSeconds;
-        private SerializedProperty _autoRefreshAssets;
+        private SerializedProperty _buildConfigurationPath;
+        private SerializedProperty _defaultProfileName;
+        private SerializedProperty _refreshAssetsAfterSuccess;
+        private SerializedProperty _maximumCapturedOutputCharacters;
+        private string _contractError = string.Empty;
+        private bool _showReadiness = true;
+        private bool _showSetup = true;
+        private bool _showProfile = true;
+        private bool _showIssues = true;
+        private bool _showToolchain;
+        private bool _showActions = true;
+        private bool _showLastResult = true;
+        private bool _showOutput;
+        private bool _savedSettingsThisFrame;
 
-        private DataTableLubanRunRequest _cachedRequest;
-        private string _cachedValidationError;
-        private string[] _cachedScripts = Array.Empty<string>();
-        private string[] _cachedSettingsPaths = Array.Empty<string>();
-        private SerializedProperty[] _extensionProperties = Array.Empty<SerializedProperty>();
-        private string _cachedSettingsAssetLabel;
-        private string _cachedSettingsCountLabel;
-        private string _cachedTimeoutLabel;
-        private bool _cachedProjectRootExists;
-        private bool _cachedWorkingDirectoryExists;
-        private bool _cachedScriptExists;
-        private bool _editorEnabled;
-        private bool _runInProgress;
-        private CancellationTokenSource _runCancellation;
-        private int _lastTargetHash;
-
-        private bool _settingsFoldout = true;
-        private bool _pathsFoldout = true;
-        private bool _diagnosticsFoldout = true;
-        private bool _actionsFoldout = true;
-        private bool _extensionsFoldout = true;
-
-        private static readonly GUIContent ProjectDirLabel = new GUIContent("Luban Project Dir");
-        private static readonly GUIContent ScriptNameLabel = new GUIContent("Luban Script Name");
-        private static readonly GUIContent ScriptArgumentsLabel = new GUIContent("Luban Script Arguments");
-        private static readonly GUIContent TimeoutLabel = new GUIContent("Luban Timeout Seconds");
-        private static readonly GUIContent RefreshLabel = new GUIContent("Refresh After Luban Build");
-        private static readonly GUIContent BrowseLabel = new GUIContent("Browse");
-        private static readonly GUIContent UseLabel = new GUIContent("Use");
-        private static readonly Color BuildSettingsHeaderColor = new Color(0.22f, 0.46f, 0.70f);
-        private static readonly Color BuildSettingsHeaderCollapsedColor = new Color(0.1584f, 0.3312f, 0.5040f);
-        private static readonly Color PathsHeaderColor = new Color(0.28f, 0.55f, 0.48f);
-        private static readonly Color PathsHeaderCollapsedColor = new Color(0.2016f, 0.3960f, 0.3456f);
-        private static readonly Color ValidationHeaderColor = new Color(0.55f, 0.45f, 0.23f);
-        private static readonly Color ValidationHeaderCollapsedColor = new Color(0.3960f, 0.3240f, 0.1656f);
-        private static readonly Color ActionsHeaderColor = new Color(0.42f, 0.42f, 0.48f);
-        private static readonly Color ActionsHeaderCollapsedColor = new Color(0.3024f, 0.3024f, 0.3456f);
-        private static readonly Color ExtensionsHeaderColor = new Color(0.42f, 0.34f, 0.56f);
-        private static readonly Color ExtensionsHeaderCollapsedColor = new Color(0.3024f, 0.2448f, 0.4032f);
-
-        protected virtual void OnEnable()
+        private void OnEnable()
         {
-            _editorEnabled = true;
-            _lubanProjectDir = serializedObject.FindProperty("LubanProjectDir");
-            _scriptName = serializedObject.FindProperty("LubanScriptName");
-            _scriptArguments = serializedObject.FindProperty("LubanScriptArguments");
-            _timeoutSeconds = serializedObject.FindProperty("LubanTimeoutSeconds");
-            _autoRefreshAssets = serializedObject.FindProperty("RefreshAssetsAfterLubanBuild");
-            _extensionProperties = FindExtensionProperties();
-            _cachedSettingsAssetLabel = serializedObject.isEditingMultipleObjects
-                ? targets.Length + " assets selected"
-                : AssetDatabase.GetAssetPath(target);
-            RefreshValidationCache();
-        }
-
-        protected virtual void OnDisable()
-        {
-            _editorEnabled = false;
-            if (_runCancellation == null)
+            _buildConfigurationPath = serializedObject.FindProperty("buildConfigurationPath");
+            _defaultProfileName = serializedObject.FindProperty("defaultProfileName");
+            _refreshAssetsAfterSuccess = serializedObject.FindProperty("refreshAssetsAfterSuccess");
+            _maximumCapturedOutputCharacters = serializedObject.FindProperty(
+                "maximumCapturedOutputCharacters");
+            if (!TryValidateSerializedFieldOwnership(serializedObject, out _contractError))
             {
                 return;
             }
 
-            _runCancellation.Cancel();
+            DataTableLubanAuthoringCoordinator.Changed += HandleCoordinatorChanged;
+            EditorApplication.update += RepaintWhileActive;
+            if (!serializedObject.isEditingMultipleObjects)
+            {
+                DataTableLubanAuthoringCoordinator.Observe(
+                    this,
+                    (DataTableLubanSettings)target);
+            }
+        }
+
+        private void OnDisable()
+        {
+            DataTableLubanAuthoringCoordinator.StopObserving(this);
+            DataTableLubanAuthoringCoordinator.Changed -= HandleCoordinatorChanged;
+            EditorApplication.update -= RepaintWhileActive;
         }
 
         public override void OnInspectorGUI()
         {
+            int previousIndentLevel = EditorGUI.indentLevel;
+            try
+            {
+                EditorGUI.indentLevel = 0;
+                DrawInspectorContents();
+            }
+            finally
+            {
+                EditorGUI.indentLevel = previousIndentLevel;
+            }
+        }
+
+        private void DrawInspectorContents()
+        {
             serializedObject.Update();
-
-            DrawSettingsHeader();
-            EditorGUILayout.Space(SectionSpacing);
-
-            EditorGUI.BeginChangeCheck();
-            _settingsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
-                "Luban Build Settings",
-                _settingsFoldout,
-                BuildSettingsHeaderColor,
-                BuildSettingsHeaderCollapsedColor);
-            if (_settingsFoldout)
+            if (!string.IsNullOrEmpty(_contractError))
             {
-                DrawSettingsFields();
+                DrawContractFailure();
+                return;
             }
 
-            if (EditorGUI.EndChangeCheck())
+            if (serializedObject.isEditingMultipleObjects)
             {
-                serializedObject.ApplyModifiedProperties();
-                RefreshValidationCache();
-                serializedObject.Update();
+                DrawMultipleSelection();
+                return;
             }
 
-            EditorGUILayout.Space(SectionSpacing);
-            DrawPathPreview();
-            EditorGUILayout.Space(SectionSpacing);
-            DrawDiagnostics();
-            EditorGUILayout.Space(SectionSpacing);
-            DrawActions();
-            EditorGUILayout.Space(SectionSpacing);
-            EditorGUI.BeginChangeCheck();
-            DrawExtensionFields();
-            if (EditorGUI.EndChangeCheck())
-            {
-                serializedObject.ApplyModifiedProperties();
-                RefreshValidationCache();
-                serializedObject.Update();
-            }
+            var settings = (DataTableLubanSettings)target;
+            string previousConfiguration = settings.BuildConfigurationPath;
+            string previousProfile = settings.SelectedProfileName;
+            _savedSettingsThisFrame = false;
+            DataTableLubanAuthoringSnapshot snapshot = DataTableLubanAuthoringCoordinator.Snapshot;
+            bool running = DataTableLubanAuthoringCoordinator.IsOperationInProgress;
+            DataTableLubanAuthoringState effectiveState = running
+                ? DataTableLubanAuthoringState.Busy
+                : snapshot.State;
+            string status = running ? "RUNNING" : snapshot.StatusLabel;
+            string subtitle = string.IsNullOrEmpty(snapshot.SelectedProfile.CodeOutputPath)
+                ? settings.SelectedProfileName
+                : settings.SelectedProfileName + "  ->  " + snapshot.SelectedProfile.CodeOutputPath;
+            DataTableLubanInspectorUi.DrawHero(
+                "Luban Data Pipeline",
+                subtitle,
+                status,
+                DataTableLubanInspectorUi.GetStateTone(effectiveState));
 
-            serializedObject.ApplyModifiedProperties();
+            DrawReadiness(snapshot, effectiveState);
+            bool settingsChanged = DrawSetup(settings, snapshot);
+            DrawSelectedProfile(snapshot);
+            DrawIssues(snapshot);
+            DrawToolchain(snapshot);
+            DrawActions(settings, snapshot, running);
+            DrawLastOperation();
+            DrawQuickStart(settings, snapshot);
+
+            bool applied = serializedObject.ApplyModifiedProperties();
+            if ((settingsChanged || applied) && !_savedSettingsThisFrame)
+            {
+                bool requiresDeepInspection =
+                    !string.Equals(
+                        previousConfiguration,
+                        settings.BuildConfigurationPath,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        previousProfile,
+                        settings.SelectedProfileName,
+                        StringComparison.Ordinal);
+                DataTableLubanAuthoringCoordinator.NotifySettingsChanged(
+                    settings,
+                    requiresDeepInspection);
+            }
         }
 
-        protected virtual void DrawSettingsHeader()
+        internal static bool TryValidateSerializedFieldOwnership(
+            SerializedObject value,
+            out string error)
         {
-            EditorGUILayout.LabelField("DataTable Luban Settings", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Visible project-level Luban generation settings. Default tooling discovers this asset by type; keep exactly one DataTableLubanSettings asset in the project.",
-                MessageType.Info);
+            if (value == null)
+            {
+                error = "SerializedObject is required.";
+                return false;
+            }
 
-            DataTableInspectorUiUtility.DrawStatusRow(
+            var unknown = new List<string>();
+            SerializedProperty iterator = value.GetIterator();
+            bool enterChildren = true;
+            while (iterator.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (!OwnedSerializedFields.Contains(iterator.propertyPath))
+                {
+                    unknown.Add(iterator.propertyPath);
+                }
+            }
+
+            string[] required =
+            {
+                "schemaVersion",
+                "buildConfigurationPath",
+                "defaultProfileName",
+                "refreshAssetsAfterSuccess",
+                "maximumCapturedOutputCharacters",
+            };
+            for (int index = 0; index < required.Length; index++)
+            {
+                if (value.FindProperty(required[index]) == null)
+                {
+                    unknown.Add("missing:" + required[index]);
+                }
+            }
+
+            if (unknown.Count == 0)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            error =
+                "The DataTableLubanSettings Inspector does not own every serialized field:\n" +
+                string.Join("\n", unknown);
+            return false;
+        }
+
+        private void DrawReadiness(
+            DataTableLubanAuthoringSnapshot snapshot,
+            DataTableLubanAuthoringState effectiveState)
+        {
+            _showReadiness = DataTableLubanInspectorUi.DrawSection(
+                "Pipeline Readiness",
+                _showReadiness,
+                DataTableLubanInspectorUi.SafetyColor,
+                effectiveState == DataTableLubanAuthoringState.Busy
+                    ? "RUNNING"
+                    : snapshot.StatusLabel,
+                DataTableLubanInspectorUi.GetStateTone(effectiveState),
+                "Read-only projection of authoring, toolchain, output, and transaction state.");
+            if (!_showReadiness)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            DataTableLubanInspectorUi.DrawStatusRow(
                 "Settings Asset",
-                string.IsNullOrEmpty(_cachedSettingsAssetLabel) ? "(unsaved)" : _cachedSettingsAssetLabel,
-                string.IsNullOrEmpty(_cachedSettingsAssetLabel) ? DataTableStatusKind.Warning : DataTableStatusKind.Info);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Build Status",
-                serializedObject.isEditingMultipleObjects
-                    ? "Multiple Selection"
-                    : string.IsNullOrEmpty(_cachedValidationError) ? "Ready" : "Needs Attention",
-                serializedObject.isEditingMultipleObjects
-                    ? DataTableStatusKind.Info
-                    : string.IsNullOrEmpty(_cachedValidationError) ? DataTableStatusKind.Success : DataTableStatusKind.Warning);
+                snapshot.SettingsAssetCount == 1
+                    ? "Single"
+                    : snapshot.SettingsAssetCount + " assets",
+                snapshot.SettingsAssetCount == 1
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Error);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Authoring",
+                snapshot.SettingsDirty ? "Unsaved" : "Saved",
+                snapshot.SettingsDirty
+                    ? DataTableLubanInspectorTone.Warning
+                    : DataTableLubanInspectorTone.Ready);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Configuration",
+                snapshot.IsInspectionPending
+                    ? "Inspecting"
+                    : string.IsNullOrEmpty(snapshot.InspectionError) ? "Parsed" : "Invalid",
+                snapshot.IsInspectionPending
+                    ? DataTableLubanInspectorTone.Busy
+                    : string.IsNullOrEmpty(snapshot.InspectionError)
+                        ? DataTableLubanInspectorTone.Ready
+                        : DataTableLubanInspectorTone.Error);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Profile",
+                snapshot.SelectedProfileName,
+                string.IsNullOrEmpty(snapshot.SelectedProfile.Name)
+                    ? DataTableLubanInspectorTone.Error
+                    : DataTableLubanInspectorTone.Ready);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Luban Identity",
+                snapshot.Toolchain.LubanIdentityStatus,
+                IsReadyValue(snapshot.Toolchain.LubanIdentityStatus, "approved")
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Warning);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Source Fingerprint",
+                snapshot.Toolchain.SourceFingerprintStatus,
+                IsReadyValue(snapshot.Toolchain.SourceFingerprintStatus, "current")
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Warning);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Published Output",
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? "Deferred while writer is active"
+                    : snapshot.Output.State,
+                GetOutputTone(snapshot.Output.State));
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Transaction",
+                snapshot.Transaction.State,
+                snapshot.Transaction.RecoveryRequired
+                    ? DataTableLubanInspectorTone.Error
+                    : string.Equals(snapshot.Transaction.State, "active", StringComparison.Ordinal)
+                        ? DataTableLubanInspectorTone.Busy
+                        : DataTableLubanInspectorTone.Ready);
+            DataTableLubanInspectorUi.EndPanel();
         }
 
-        protected virtual void DrawSettingsFields()
+        private bool DrawSetup(
+            DataTableLubanSettings settings,
+            DataTableLubanAuthoringSnapshot snapshot)
         {
-            DrawProjectDirectoryField();
-            DrawPropertyIfPresent(_scriptName, ScriptNameLabel);
-            DrawScriptSuggestions();
-            DrawPropertyIfPresent(_scriptArguments, ScriptArgumentsLabel);
-            DrawPropertyIfPresent(_timeoutSeconds, TimeoutLabel);
-            DrawPropertyIfPresent(_autoRefreshAssets, RefreshLabel);
-        }
-
-        protected virtual void DrawProjectDirectoryField()
-        {
-            if (_lubanProjectDir == null)
+            _showSetup = DataTableLubanInspectorUi.DrawSection(
+                "Project Setup",
+                _showSetup,
+                DataTableLubanInspectorUi.SetupColor,
+                snapshot.SettingsDirty ? "UNSAVED" : "CONFIGURED",
+                snapshot.SettingsDirty
+                    ? DataTableLubanInspectorTone.Warning
+                    : DataTableLubanInspectorTone.Info);
+            if (!_showSetup)
             {
-                return;
+                return false;
             }
 
-            var rect = EditorGUILayout.GetControlRect(true, EditorGUIUtility.singleLineHeight);
-            var fieldRect = rect;
-            fieldRect.width -= ButtonWidth + ButtonGap;
-
-            var buttonRect = rect;
-            buttonRect.xMin = fieldRect.xMax + ButtonGap;
-
-            EditorGUI.PropertyField(fieldRect, _lubanProjectDir, ProjectDirLabel);
-            using (new EditorGUI.DisabledScope(serializedObject.isEditingMultipleObjects))
+            bool changed = false;
+            DataTableLubanInspectorUi.BeginPanel();
+            EditorGUILayout.LabelField("Build Configuration", EditorStyles.miniBoldLabel);
+            DataTableLubanFieldActionLayout configurationLayout =
+                DataTableLubanInspectorUi.GetFieldActionLayout(EditorGUIUtility.singleLineHeight);
+            EditorGUI.PropertyField(
+                configurationLayout.FieldRect,
+                _buildConfigurationPath,
+                GUIContent.none);
+            if (GUI.Button(configurationLayout.FirstActionRect, "Browse"))
             {
-                if (GUI.Button(buttonRect, BrowseLabel, EditorStyles.miniButton))
-                {
-                    BrowseProjectDirectory();
-                }
-            }
-        }
-
-        protected virtual void DrawPathPreview()
-        {
-            _pathsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
-                "Resolved Paths",
-                _pathsFoldout,
-                PathsHeaderColor,
-                PathsHeaderCollapsedColor);
-            if (!_pathsFoldout)
-            {
-                return;
+                changed |= BrowseConfiguration(_buildConfigurationPath);
             }
 
-            if (serializedObject.isEditingMultipleObjects)
+            if (GUI.Button(configurationLayout.SecondActionRect, "Reset"))
             {
-                EditorGUILayout.HelpBox(
-                    "Resolved paths are hidden while multiple settings assets are selected because derived settings can resolve different project roots.",
-                    MessageType.Info);
-                return;
+                _buildConfigurationPath.stringValue =
+                    DataTableLubanSettings.DefaultBuildConfigurationPath;
+                changed = true;
             }
 
-            var request = GetCachedRequest();
-            var savedWidth = EditorGUIUtility.labelWidth;
-            EditorGUIUtility.labelWidth = 118f;
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Resolved Path",
+                snapshot.ConfigurationPath,
+                showReveal: true,
+                tooltip: "Read-only absolute path derived from Build Configuration.");
 
-            EditorGUILayout.LabelField("Project Root", request.ProjectRoot);
-            EditorGUILayout.LabelField("Configured Dir", request.ProjectDirectory);
-            EditorGUILayout.LabelField("Working Dir", request.WorkingDirectory);
-            EditorGUILayout.LabelField("Script Path", request.ScriptPath);
+            EditorGUILayout.Space(4f);
+            changed |= DrawProfilePopup(snapshot);
+            DrawSerializedToggleLeft(
+                _refreshAssetsAfterSuccess,
+                new GUIContent(
+                    "Refresh After Success",
+                    "Refresh the AssetDatabase after successful generation or recovery."));
             EditorGUILayout.LabelField(
-                "Arguments",
-                string.IsNullOrWhiteSpace(request.ScriptArguments) ? "(none)" : request.ScriptArguments);
+                new GUIContent(
+                    "Captured Output Limit",
+                    "Combined stdout/stderr characters retained for the last Editor operation."),
+                EditorStyles.miniBoldLabel);
+            EditorGUILayout.PropertyField(
+                _maximumCapturedOutputCharacters,
+                GUIContent.none);
 
-            EditorGUIUtility.labelWidth = savedWidth;
-        }
-
-        protected virtual void DrawDiagnostics()
-        {
-            _diagnosticsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
-                "Validation",
-                _diagnosticsFoldout,
-                ValidationHeaderColor,
-                ValidationHeaderCollapsedColor);
-            if (!_diagnosticsFoldout)
+            EditorGUILayout.Space(4f);
+            DataTableLubanDualButtonLayout settingsActions =
+                DataTableLubanInspectorUi.GetDualButtonLayout(EditorGUIUtility.singleLineHeight);
+            if (GUI.Button(settingsActions.FirstRect, "Ping Settings"))
             {
-                return;
+                EditorGUIUtility.PingObject(settings);
             }
 
-            if (serializedObject.isEditingMultipleObjects)
+            using (new EditorGUI.DisabledScope(!EditorUtility.IsDirty(settings)))
             {
-                EditorGUILayout.HelpBox(
-                    "Select one settings asset to validate resolved paths. Shared serialized fields can still be edited above.",
-                    MessageType.Info);
-                return;
-            }
-
-            var request = GetCachedRequest();
-
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Project Root",
-                _cachedProjectRootExists ? request.ProjectRoot : "Missing",
-                _cachedProjectRootExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Luban Directory",
-                _cachedWorkingDirectoryExists ? request.WorkingDirectory : "Missing",
-                _cachedWorkingDirectoryExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Build Script",
-                _cachedScriptExists ? Path.GetFileName(request.ScriptPath) : "Missing",
-                _cachedScriptExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Settings Count",
-                _cachedSettingsCountLabel,
-                _cachedSettingsPaths.Length <= 1 ? DataTableStatusKind.Success : DataTableStatusKind.Warning);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Timeout",
-                _cachedTimeoutLabel,
-                DataTableStatusKind.Info);
-            DataTableInspectorUiUtility.DrawStatusRow(
-                "Asset Refresh",
-                request.AutoRefreshAssets ? "After Success" : "Manual",
-                request.AutoRefreshAssets ? DataTableStatusKind.Success : DataTableStatusKind.Info);
-
-            if (_cachedSettingsPaths.Length > 1)
-            {
-                EditorGUILayout.HelpBox(
-                    "Multiple DataTableLubanSettings assets exist. Default tooling uses the first deterministic asset path; remove duplicates to keep generation predictable.",
-                    MessageType.Warning);
-                for (int i = 0; i < _cachedSettingsPaths.Length; i++)
+                if (GUI.Button(settingsActions.SecondRect, "Save Settings"))
                 {
-                    EditorGUILayout.LabelField(_cachedSettingsPaths[i], EditorStyles.miniLabel);
-                }
-            }
-
-            if (string.IsNullOrEmpty(_cachedValidationError))
-            {
-                EditorGUILayout.HelpBox(
-                    "Ready. The configured Luban project directory and build script both exist.",
-                    MessageType.Info);
-                return;
-            }
-
-            EditorGUILayout.HelpBox(_cachedValidationError, MessageType.Warning);
-        }
-
-        protected virtual void DrawActions()
-        {
-            _actionsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
-                "Actions",
-                _actionsFoldout,
-                ActionsHeaderColor,
-                ActionsHeaderCollapsedColor);
-            if (!_actionsFoldout)
-            {
-                return;
-            }
-
-            if (serializedObject.isEditingMultipleObjects)
-            {
-                EditorGUILayout.HelpBox(
-                    "Build and filesystem actions require a single settings asset selection.",
-                    MessageType.Info);
-                return;
-            }
-
-            DrawButtonRow("Refresh", RefreshValidationCache, "Reveal Settings", RevealSettingsAsset);
-            DrawButtonRow("Open Directory", OpenProjectDirectory, "Validate Paths", RefreshValidationCache);
-
-            if (_runInProgress)
-            {
-                EditorGUILayout.HelpBox(
-                    "This Inspector owns a Luban build running on a worker thread. Cancellation requests termination of its directly owned shell process and waits for the bounded termination path.",
-                    MessageType.Info);
-
-                var cancelRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                if (GUI.Button(cancelRect, "Cancel Luban Build"))
-                {
-                    _runCancellation?.Cancel();
-                }
-
-                return;
-            }
-
-            if (DataTableLubanRunner.IsRunning)
-            {
-                EditorGUILayout.HelpBox(
-                    "Another caller owns the active Luban build. This Inspector cannot cancel a run that it does not own.",
-                    MessageType.Info);
-                return;
-            }
-
-            EditorGUILayout.HelpBox(
-                "Inspector runs are asynchronous and keep the Editor responsive. The synchronous API remains available for CI. Shutdown and domain-reload cancellation are best-effort; the positive process timeout is the bounded fallback.",
-                MessageType.Info);
-
-            var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-            using (new EditorGUI.DisabledScope(!string.IsNullOrEmpty(_cachedValidationError)))
-            {
-                if (GUI.Button(rect, "Run Luban Build"))
-                {
-                    StartLubanBuild();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Derived editors can override this to draw project-specific fields after the base UI.
-        /// </summary>
-        protected virtual void DrawExtensionFields()
-        {
-            if (_extensionProperties.Length == 0)
-            {
-                return;
-            }
-
-            _extensionsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
-                "Project Extensions",
-                _extensionsFoldout,
-                ExtensionsHeaderColor,
-                ExtensionsHeaderCollapsedColor);
-            if (!_extensionsFoldout)
-            {
-                return;
-            }
-
-            for (int i = 0; i < _extensionProperties.Length; i++)
-            {
-                EditorGUILayout.PropertyField(_extensionProperties[i], true);
-            }
-        }
-
-        protected virtual DataTableLubanRunRequest CreatePreviewRequest()
-        {
-            return ((DataTableLubanSettings)target).CreateLubanRunRequest();
-        }
-
-        protected void RefreshValidationCache()
-        {
-            _cachedRequest = CreatePreviewRequest();
-            _cachedValidationError = DataTableLubanRunner.ValidateRequest(_cachedRequest);
-            _cachedScripts = FindBuildScripts(_cachedRequest.WorkingDirectory);
-            _cachedSettingsPaths = FindSettingsAssetPaths();
-            _cachedSettingsCountLabel = _cachedSettingsPaths.Length <= 1
-                ? "Single"
-                : _cachedSettingsPaths.Length + " assets found";
-            _cachedTimeoutLabel = _cachedRequest.TimeoutMilliseconds + " ms";
-            _cachedProjectRootExists = Directory.Exists(_cachedRequest.ProjectRoot);
-            _cachedWorkingDirectoryExists = Directory.Exists(_cachedRequest.WorkingDirectory);
-            _cachedScriptExists = !string.IsNullOrEmpty(_cachedRequest.ScriptPath) && File.Exists(_cachedRequest.ScriptPath);
-            _lastTargetHash = ComputeTargetHash();
-        }
-
-        protected DataTableLubanRunRequest GetCachedRequest()
-        {
-            if (_cachedRequest == null || _lastTargetHash != ComputeTargetHash())
-            {
-                RefreshValidationCache();
-            }
-
-            return _cachedRequest;
-        }
-
-        private void DrawScriptSuggestions()
-        {
-            if (serializedObject.isEditingMultipleObjects || _cachedScripts.Length == 0)
-            {
-                return;
-            }
-
-            EditorGUI.indentLevel++;
-            EditorGUILayout.LabelField("Scripts Found", EditorStyles.miniBoldLabel);
-            for (int i = 0; i < _cachedScripts.Length; i++)
-            {
-                var scriptName = _cachedScripts[i];
-                var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                var labelRect = rect;
-                labelRect.width -= ButtonWidth + ButtonGap;
-
-                var buttonRect = rect;
-                buttonRect.xMin = labelRect.xMax + ButtonGap;
-
-                EditorGUI.LabelField(labelRect, scriptName, EditorStyles.miniLabel);
-                if (GUI.Button(buttonRect, UseLabel, EditorStyles.miniButton))
-                {
-                    _scriptName.stringValue = Path.GetFileNameWithoutExtension(scriptName);
                     serializedObject.ApplyModifiedProperties();
-                    RefreshValidationCache();
+                    _savedSettingsThisFrame = true;
+                    DataTableLubanAuthoring.SaveSettings(settings);
                 }
             }
 
-            EditorGUI.indentLevel--;
+            DataTableLubanInspectorUi.EndPanel();
+            return changed;
         }
 
-        private void BrowseProjectDirectory()
+        private bool DrawProfilePopup(DataTableLubanAuthoringSnapshot snapshot)
         {
-            var request = GetCachedRequest();
-            var startDirectory = Directory.Exists(request.WorkingDirectory)
-                ? request.WorkingDirectory
-                : Directory.Exists(request.ProjectRoot) ? request.ProjectRoot : Application.dataPath;
-            var selected = EditorUtility.OpenFolderPanel("Select Luban Project Directory", startDirectory, string.Empty);
+            EditorGUILayout.LabelField("Default Profile", EditorStyles.miniBoldLabel);
+            if (snapshot.Profiles.Length == 0)
+            {
+                EditorGUILayout.PropertyField(
+                    _defaultProfileName,
+                    GUIContent.none);
+                return false;
+            }
+
+            string current = _defaultProfileName.stringValue ?? string.Empty;
+            var profileLabels = new string[snapshot.Profiles.Length];
+            int selectedIndex = -1;
+            for (int index = 0; index < snapshot.Profiles.Length; index++)
+            {
+                DataTableLubanProfileSnapshot profile = snapshot.Profiles[index];
+                profileLabels[index] = profile.Name + "  (" + profile.CodeTarget + "/" +
+                                       profile.DataTarget + ", " + profile.LineEnding + ")";
+                if (string.Equals(profile.Name, current, StringComparison.Ordinal))
+                {
+                    selectedIndex = index;
+                }
+            }
+
+            if (selectedIndex < 0)
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "PROFILE NOT FOUND",
+                    "The configured profile was not found. Select one of the parsed profiles below.",
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Warning);
+                var missingLabels = new string[profileLabels.Length + 1];
+                missingLabels[0] = "<Missing: " + current + ">";
+                Array.Copy(profileLabels, 0, missingLabels, 1, profileLabels.Length);
+                int selected = EditorGUILayout.Popup(0, missingLabels);
+                if (selected <= 0)
+                {
+                    return false;
+                }
+
+                _defaultProfileName.stringValue = snapshot.Profiles[selected - 1].Name;
+                return true;
+            }
+
+            int next = EditorGUILayout.Popup(selectedIndex, profileLabels);
+            if (next == selectedIndex)
+            {
+                return false;
+            }
+
+            _defaultProfileName.stringValue = snapshot.Profiles[next].Name;
+            return true;
+        }
+
+        private void DrawSelectedProfile(DataTableLubanAuthoringSnapshot snapshot)
+        {
+            DataTableLubanProfileSnapshot profile = snapshot.SelectedProfile;
+            _showProfile = DataTableLubanInspectorUi.DrawSection(
+                "Selected Profile",
+                _showProfile,
+                DataTableLubanInspectorUi.ProfileColor,
+                string.IsNullOrEmpty(profile.Name) ? "MISSING" : profile.Name.ToUpperInvariant(),
+                string.IsNullOrEmpty(profile.Name)
+                    ? DataTableLubanInspectorTone.Error
+                    : DataTableLubanInspectorTone.Info);
+            if (!_showProfile)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Targets",
+                profile.CodeTarget + " / " + profile.DataTarget,
+                string.IsNullOrEmpty(profile.Name)
+                    ? DataTableLubanInspectorTone.Error
+                    : DataTableLubanInspectorTone.Info);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Line Ending",
+                profile.LineEnding,
+                DataTableLubanInspectorTone.Neutral);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Code Output",
+                profile.CodeOutputPath,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Data Output",
+                profile.DataOutputPath,
+                showReveal: true);
+            DataTableLubanInspectorUi.EndPanel();
+        }
+
+        private void DrawIssues(DataTableLubanAuthoringSnapshot snapshot)
+        {
+            int errorCount = 0;
+            for (int index = 0; index < snapshot.Issues.Length; index++)
+            {
+                if (snapshot.Issues[index].Severity == DataTableLubanIssueSeverity.Error)
+                {
+                    errorCount++;
+                }
+            }
+
+            _showIssues = DataTableLubanInspectorUi.DrawSection(
+                "Validation Issues",
+                _showIssues,
+                errorCount == 0
+                    ? DataTableLubanInspectorUi.SafetyColor
+                    : new Color(0.70f, 0.30f, 0.22f),
+                snapshot.Issues.Length == 0 ? "CLEAR" : snapshot.Issues.Length + " ISSUE(S)",
+                errorCount == 0
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Error);
+            if (!_showIssues)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            if (snapshot.IsInspectionPending)
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "INSPECTION",
+                    "Inspecting the authoritative pipeline configuration and workspace state...",
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Info);
+            }
+            else if (snapshot.Issues.Length == 0)
+            {
+                DataTableLubanInspectorUi.DrawStatusRow(
+                    "Configuration",
+                    "No reported issues",
+                    DataTableLubanInspectorTone.Ready);
+            }
+            else
+            {
+                for (int index = 0; index < snapshot.Issues.Length; index++)
+                {
+                    DataTableLubanAuthoringIssue issue = snapshot.Issues[index];
+                    DataTableLubanInspectorUi.DrawNotice(
+                        issue.Code,
+                        issue.Message,
+                        issue.Path,
+                        DataTableLubanInspectorUi.GetIssueTone(issue.Severity));
+                }
+            }
+
+            DataTableLubanInspectorUi.EndPanel();
+        }
+
+        private void DrawToolchain(DataTableLubanAuthoringSnapshot snapshot)
+        {
+            _showToolchain = DataTableLubanInspectorUi.DrawSection(
+                "Advanced Toolchain",
+                _showToolchain,
+                DataTableLubanInspectorUi.ToolchainColor,
+                string.IsNullOrEmpty(snapshot.Toolchain.State)
+                    ? "UNKNOWN"
+                    : snapshot.Toolchain.State.ToUpperInvariant(),
+                IsReadyValue(snapshot.Toolchain.State, "ready")
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Warning);
+            if (!_showToolchain)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            DataTableLubanInspectorUi.DrawNotice(
+                "READ-ONLY PROJECTION",
+                "These values are a read-only projection of build_config.ini and the latest pipeline inspection.",
+                detail: null,
+                tone: DataTableLubanInspectorTone.Info);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Source Root",
+                snapshot.SourceRoot,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Configuration SHA-256",
+                Abbreviate(snapshot.ConfigurationSha256, 20),
+                DataTableLubanInspectorTone.Neutral,
+                snapshot.ConfigurationSha256);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "CodeGen Project",
+                snapshot.Toolchain.CodegenProjectPath,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Luban Configuration",
+                snapshot.Toolchain.LubanConfigurationPath,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Luban Executable",
+                snapshot.Toolchain.LubanExecutablePath,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Host",
+                snapshot.Toolchain.UseDotNetHost ? "dotnet" : "native executable",
+                DataTableLubanInspectorTone.Info);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Version",
+                snapshot.Toolchain.ConfiguredVersion,
+                DataTableLubanInspectorTone.Neutral);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Tool Identity",
+                snapshot.Toolchain.LubanIdentityStatus,
+                IsReadyValue(snapshot.Toolchain.LubanIdentityStatus, "approved")
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Warning);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Source Identity",
+                snapshot.Toolchain.SourceFingerprintStatus,
+                IsReadyValue(snapshot.Toolchain.SourceFingerprintStatus, "current")
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Warning);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Schema SHA-256",
+                Abbreviate(snapshot.Toolchain.SchemaSha256, 20),
+                DataTableLubanInspectorTone.Neutral,
+                snapshot.Toolchain.SchemaSha256);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Configured Luban SHA",
+                Abbreviate(snapshot.Toolchain.ConfiguredSha256, 20),
+                DataTableLubanInspectorTone.Neutral,
+                snapshot.Toolchain.ConfiguredSha256);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Actual Luban SHA",
+                string.IsNullOrEmpty(snapshot.Toolchain.ActualSha256) &&
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? "Deferred"
+                    : Abbreviate(snapshot.Toolchain.ActualSha256, 20),
+                string.IsNullOrEmpty(snapshot.Toolchain.ActualSha256) &&
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? DataTableLubanInspectorTone.Busy
+                    : DataTableLubanInspectorTone.Neutral,
+                snapshot.Toolchain.ActualSha256);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Configured Source",
+                Abbreviate(snapshot.Toolchain.ConfiguredSourceFingerprint, 20),
+                DataTableLubanInspectorTone.Neutral,
+                snapshot.Toolchain.ConfiguredSourceFingerprint);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Actual Source",
+                string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? "Deferred"
+                    : Abbreviate(snapshot.Toolchain.ActualSourceFingerprint, 20),
+                string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? DataTableLubanInspectorTone.Busy
+                    : DataTableLubanInspectorTone.Neutral,
+                snapshot.Toolchain.ActualSourceFingerprint);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Process Timeout",
+                snapshot.ProcessTimeoutSeconds > 0
+                    ? snapshot.ProcessTimeoutSeconds + " seconds"
+                    : "Unknown",
+                DataTableLubanInspectorTone.Neutral);
+            DataTableLubanInspectorUi.DrawReadOnlyPath(
+                "Generation Receipt",
+                snapshot.Output.ReceiptPath,
+                showReveal: true);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Generation",
+                string.IsNullOrEmpty(snapshot.Output.Generation) &&
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? "Deferred"
+                    : snapshot.Output.Generation,
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
+                    ? DataTableLubanInspectorTone.Busy
+                    : DataTableLubanInspectorTone.Neutral,
+                snapshot.Output.Generation);
+            if (string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal))
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "VALIDATION DEFERRED",
+                    "Deep toolchain and receipt validation is deferred while a writer owns the publication transaction. Existing files are shown only as sampled facts.",
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Info);
+            }
+
+            if (snapshot.Transaction.LockExists)
+            {
+                DataTableLubanInspectorUi.DrawReadOnlyPath(
+                    "Writer Lock",
+                    snapshot.Transaction.LockPath,
+                    showReveal: true);
+                DataTableLubanInspectorUi.DrawStatusRow(
+                    "Writer Process",
+                    snapshot.Transaction.WriterProcessId > 0
+                        ? snapshot.Transaction.WriterProcessId +
+                          (snapshot.Transaction.WriterProcessAlive ? " (alive)" : " (not alive)")
+                        : "Unknown",
+                    snapshot.Transaction.WriterProcessAlive
+                        ? DataTableLubanInspectorTone.Busy
+                        : DataTableLubanInspectorTone.Warning);
+            }
+
+            DataTableLubanInspectorUi.EndPanel();
+        }
+
+        private void DrawActions(
+            DataTableLubanSettings settings,
+            DataTableLubanAuthoringSnapshot snapshot,
+            bool running)
+        {
+            bool inspecting = DataTableLubanAuthoringCoordinator.IsInspecting;
+            string actionStatus = running
+                ? "RUNNING"
+                : inspecting
+                    ? "INSPECTING"
+                    : snapshot.Transaction.RecoveryRequired || snapshot.CanRecover
+                        ? "RECOVERY"
+                        : snapshot.CanGenerate && snapshot.CanCheck
+                            ? "READY"
+                            : snapshot.CanCheck
+                                ? "CHECK ONLY"
+                                : "BLOCKED";
+            DataTableLubanInspectorTone actionTone = running || inspecting
+                ? DataTableLubanInspectorTone.Busy
+                : snapshot.Transaction.RecoveryRequired || snapshot.CanRecover
+                    ? DataTableLubanInspectorTone.Error
+                    : snapshot.CanGenerate && snapshot.CanCheck
+                        ? DataTableLubanInspectorTone.Ready
+                        : snapshot.CanCheck
+                            ? DataTableLubanInspectorTone.Warning
+                            : DataTableLubanInspectorTone.Error;
+            _showActions = DataTableLubanInspectorUi.DrawSection(
+                "Pipeline Actions",
+                _showActions,
+                snapshot.Transaction.RecoveryRequired
+                    ? new Color(0.70f, 0.30f, 0.22f)
+                    : DataTableLubanInspectorUi.ActionColor,
+                actionStatus,
+                actionTone);
+            if (!_showActions)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            if (running)
+            {
+                string operation = DataTableLubanAuthoringCoordinator.IsOperationInProgress
+                    ? DataTableLubanAuthoringCoordinator.CurrentOperation.ToString()
+                    : "External pipeline operation";
+                DataTableLubanInspectorUi.DrawStatusRow(
+                    "Operation",
+                    operation,
+                    DataTableLubanInspectorTone.Busy);
+                string phase = DataTableLubanAuthoringCoordinator.IsPreflightInProgress
+                    ? "Preflight Inspection"
+                    : DataTableLubanAuthoringCoordinator.RunnerPhase.ToString();
+                DataTableLubanInspectorUi.DrawStatusRow(
+                    "Phase",
+                    phase,
+                    DataTableLubanAuthoringCoordinator.RunnerPhase ==
+                    DataTableLubanRunnerPhase.CancellationRequested
+                        ? DataTableLubanInspectorTone.Warning
+                        : DataTableLubanInspectorTone.Busy);
+                if (!string.IsNullOrEmpty(DataTableLubanAuthoringCoordinator.RunnerProfileName))
+                {
+                    DataTableLubanInspectorUi.DrawStatusRow(
+                        "Profile",
+                        DataTableLubanAuthoringCoordinator.RunnerProfileName,
+                        DataTableLubanInspectorTone.Neutral);
+                }
+
+                int processId = DataTableLubanAuthoringCoordinator.RunnerProcessId;
+                if (processId > 0)
+                {
+                    DataTableLubanInspectorUi.DrawStatusRow(
+                        "Process ID",
+                        processId.ToString(),
+                        DataTableLubanInspectorTone.Neutral);
+                }
+
+                long started = DataTableLubanAuthoringCoordinator.OperationStartedUtcTicks;
+                if (started > 0)
+                {
+                    TimeSpan elapsed = DateTime.UtcNow - new DateTime(started, DateTimeKind.Utc);
+                    DataTableLubanInspectorUi.DrawStatusRow(
+                        "Elapsed",
+                        elapsed.TotalSeconds.ToString("0") + " seconds",
+                        DataTableLubanInspectorTone.Busy);
+                }
+
+                using (new EditorGUI.DisabledScope(!DataTableLubanAuthoringCoordinator.CanCancel))
+                {
+                    if (GUILayout.Button("Request Safe Cancellation", GUILayout.Height(28f)))
+                    {
+                        DataTableLubanAuthoring.CancelActiveOperation();
+                    }
+                }
+
+                DataTableLubanInspectorUi.DrawNotice(
+                    "CANCELLATION",
+                    "Cancellation is cooperative and may be deferred until publication commits or rolls back safely.",
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Info);
+                DrawAuthoringError();
+                DataTableLubanInspectorUi.EndPanel();
+                return;
+            }
+
+            if (snapshot.Transaction.RecoveryRequired || snapshot.CanRecover)
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "RECOVERY REQUIRED",
+                    "A retained transaction must be recovered before generation can continue. Recovery uses the exact run ID and configuration identity reported by the writer lock.",
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Error);
+                DataTableLubanInspectorUi.DrawStatusRow(
+                    "Recovery Run",
+                    Abbreviate(snapshot.Transaction.RunId, 16),
+                    DataTableLubanInspectorTone.Error,
+                    snapshot.Transaction.RunId);
+                if (DataTableLubanInspectorUi.DrawPrimaryButton(
+                        new GUIContent("Recover Transaction"),
+                        snapshot.CanRecover && !DataTableLubanAuthoringCoordinator.IsInspecting))
+                {
+                    DataTableLubanAuthoring.Recover(settings);
+                }
+
+                if (!snapshot.CanRecover || inspecting)
+                {
+                    DataTableLubanInspectorUi.DrawNotice(
+                        "ACTION BLOCKED",
+                        GetActionBlocker(snapshot, inspecting),
+                        detail: null,
+                        tone: DataTableLubanInspectorTone.Warning);
+                }
+
+                DataTableLubanInspectorUi.DrawReadOnlyPath(
+                    "Transaction",
+                    snapshot.Transaction.TransactionPath,
+                    showReveal: true);
+                DrawAuthoringError();
+                DataTableLubanInspectorUi.EndPanel();
+                return;
+            }
+
+            if (DataTableLubanInspectorUi.DrawPrimaryButton(
+                    new GUIContent(
+                        "Generate " + settings.SelectedProfileName,
+                        "Reinspect, generate an isolated candidate, and publish changed files transactionally."),
+                    snapshot.CanGenerate && !inspecting))
+            {
+                DataTableLubanAuthoring.Generate(settings);
+            }
+
+            DataTableLubanDualButtonLayout pipelineActions =
+                DataTableLubanInspectorUi.GetDualButtonLayout(26f);
+            using (new EditorGUI.DisabledScope(!snapshot.CanCheck || inspecting))
+            {
+                if (GUI.Button(pipelineActions.FirstRect, "Check Generated Output"))
+                {
+                    DataTableLubanAuthoring.Check(settings);
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(inspecting))
+            {
+                if (GUI.Button(pipelineActions.SecondRect, "Refresh Status"))
+                {
+                    DataTableLubanAuthoring.RefreshStatus(settings);
+                }
+            }
+
+            if (!snapshot.CanGenerate || !snapshot.CanCheck || inspecting)
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "ACTION BLOCKED",
+                    GetActionBlocker(snapshot, inspecting),
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Warning);
+            }
+
+            DrawAuthoringError();
+
+            DataTableLubanInspectorUi.EndPanel();
+        }
+
+        private static void DrawAuthoringError()
+        {
+            if (!string.IsNullOrEmpty(DataTableLubanAuthoringCoordinator.AuthoringError))
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "AUTHORING ERROR",
+                    DataTableLubanAuthoringCoordinator.AuthoringError,
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Error);
+            }
+        }
+
+        private void DrawLastOperation()
+        {
+            if (!DataTableLubanAuthoringCoordinator.HasLastResult)
+            {
+                return;
+            }
+
+            DataTableLubanRunResult result = DataTableLubanAuthoringCoordinator.LastResult;
+            _showLastResult = DataTableLubanInspectorUi.DrawSection(
+                "Last Operation",
+                _showLastResult,
+                result.Success
+                    ? DataTableLubanInspectorUi.SafetyColor
+                    : new Color(0.70f, 0.30f, 0.22f),
+                result.Success ? "SUCCEEDED" : result.RecoveryRequired ? "RECOVERY" : "FAILED",
+                result.Success
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Error);
+            if (!_showLastResult)
+            {
+                return;
+            }
+
+            DataTableLubanInspectorUi.BeginPanel();
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Exit Code",
+                result.ExitCode.ToString(),
+                result.Success
+                    ? DataTableLubanInspectorTone.Ready
+                    : DataTableLubanInspectorTone.Error);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Duration",
+                result.DurationMilliseconds + " ms",
+                DataTableLubanInspectorTone.Neutral);
+            DataTableLubanInspectorUi.DrawStatusRow(
+                "Output Capture",
+                result.OutputTruncated ? "Truncated" : "Complete",
+                result.OutputTruncated
+                    ? DataTableLubanInspectorTone.Warning
+                    : DataTableLubanInspectorTone.Ready);
+            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                DataTableLubanInspectorUi.DrawNotice(
+                    "OPERATION ERROR",
+                    result.ErrorMessage,
+                    detail: null,
+                    tone: DataTableLubanInspectorTone.Error);
+            }
+
+            _showOutput = EditorGUILayout.Foldout(
+                _showOutput,
+                "Captured stdout / stderr",
+                true);
+            if (_showOutput)
+            {
+                DrawCapturedOutput("stdout", result.StandardOutput);
+                DrawCapturedOutput("stderr", result.StandardError);
+            }
+
+            if (GUILayout.Button("Copy Diagnostics"))
+            {
+                EditorGUIUtility.systemCopyBuffer = BuildDiagnosticsText(result);
+            }
+
+            DataTableLubanInspectorUi.EndPanel();
+        }
+
+        private static void DrawQuickStart(
+            DataTableLubanSettings settings,
+            DataTableLubanAuthoringSnapshot snapshot)
+        {
+            EditorGUILayout.Space(5f);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Quick Start", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                "1. Approve the pinned Luban artifact.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "2. Resolve validation issues.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "3. Generate the selected profile.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "4. Check the published output.",
+                EditorStyles.wordWrappedMiniLabel);
+            DataTableLubanDualButtonLayout quickStartActions =
+                DataTableLubanInspectorUi.GetDualButtonLayout(EditorGUIUtility.singleLineHeight);
+            if (GUI.Button(quickStartActions.FirstRect, "Open Package Guide"))
+            {
+                OpenPackageGuide(settings);
+            }
+
+            using (new EditorGUI.DisabledScope(!File.Exists(snapshot.ConfigurationPath)))
+            {
+                if (GUI.Button(quickStartActions.SecondRect, "Reveal Configuration"))
+                {
+                    EditorUtility.RevealInFinder(snapshot.ConfigurationPath);
+                }
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private static void DrawMultipleSelection()
+        {
+            DataTableLubanInspectorUi.DrawHero(
+                "Luban Data Pipeline",
+                "Multiple settings assets selected",
+                "BLOCKED",
+                DataTableLubanInspectorTone.Error);
+            DataTableLubanInspectorUi.DrawNotice(
+                "MULTIPLE SETTINGS ASSETS",
+                "Exactly one DataTableLubanSettings asset is authoritative. Multi-object editing is disabled; select the authoritative asset individually.",
+                detail: null,
+                tone: DataTableLubanInspectorTone.Error);
+        }
+
+        private void DrawContractFailure()
+        {
+            DataTableLubanInspectorUi.DrawHero(
+                "Inspector Contract Failure",
+                "Authoring is disabled until every serialized field has an explicit owner.",
+                "BLOCKED",
+                DataTableLubanInspectorTone.Error);
+            DataTableLubanInspectorUi.DrawNotice(
+                "INSPECTOR CONTRACT FAILURE",
+                _contractError,
+                detail: null,
+                tone: DataTableLubanInspectorTone.Error);
+        }
+
+        private static void DrawSerializedToggleLeft(
+            SerializedProperty property,
+            GUIContent label)
+        {
+            Rect rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
+            EditorGUI.BeginProperty(rect, label, property);
+            bool previousMixedValue = EditorGUI.showMixedValue;
+            try
+            {
+                EditorGUI.showMixedValue = property.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                bool value = EditorGUI.ToggleLeft(rect, label, property.boolValue);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    property.boolValue = value;
+                }
+            }
+            finally
+            {
+                EditorGUI.showMixedValue = previousMixedValue;
+                EditorGUI.EndProperty();
+            }
+        }
+
+        private static bool BrowseConfiguration(SerializedProperty property)
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string current = projectRoot;
+            try
+            {
+                string configured = Path.GetFullPath(Path.Combine(
+                    projectRoot,
+                    property.stringValue ?? string.Empty));
+                current = File.Exists(configured)
+                    ? Path.GetDirectoryName(configured)
+                    : Directory.Exists(Path.GetDirectoryName(configured))
+                        ? Path.GetDirectoryName(configured)
+                        : projectRoot;
+            }
+            catch (Exception exception) when (DataTableLubanRunner.IsRecoverableRunnerException(exception))
+            {
+                current = projectRoot;
+            }
+
+            string selected = EditorUtility.OpenFilePanel(
+                "Select DataTable build_config.ini",
+                current,
+                "ini");
             if (string.IsNullOrEmpty(selected))
             {
+                return false;
+            }
+
+            if (!string.Equals(
+                    Path.GetFileName(selected),
+                    "build_config.ini",
+                    StringComparison.Ordinal))
+            {
+                EditorUtility.DisplayDialog(
+                    "Invalid Pipeline Configuration",
+                    "Select a file named exactly build_config.ini.",
+                    "OK");
+                return false;
+            }
+
+            string repositoryRoot = Path.GetFullPath(Path.Combine(projectRoot, ".."));
+            string fullPath = Path.GetFullPath(selected);
+            if (!IsContained(repositoryRoot, fullPath))
+            {
+                EditorUtility.DisplayDialog(
+                    "Invalid Pipeline Configuration",
+                    "The configuration must remain inside the repository root.",
+                    "OK");
+                return false;
+            }
+
+            property.stringValue = MakeRelativePath(projectRoot, fullPath);
+            return true;
+        }
+
+        private static string MakeRelativePath(string baseDirectory, string fullPath)
+        {
+            var baseUri = new Uri(EnsureTrailingSeparator(Path.GetFullPath(baseDirectory)));
+            var fileUri = new Uri(Path.GetFullPath(fullPath));
+            return Uri.UnescapeDataString(baseUri.MakeRelativeUri(fileUri).ToString())
+                .Replace('\\', '/');
+        }
+
+        private static bool IsContained(string root, string path)
+        {
+            string prefix = EnsureTrailingSeparator(Path.GetFullPath(root));
+            StringComparison comparison = Application.platform == RuntimePlatform.WindowsEditor
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return path.StartsWith(prefix, comparison);
+        }
+
+        private static string EnsureTrailingSeparator(string value)
+        {
+            return value.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? value
+                : value + Path.DirectorySeparatorChar;
+        }
+
+        private static void DrawCapturedOutput(string label, string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
                 return;
             }
 
-            _lubanProjectDir.stringValue = MakeProjectRelativePath(request.ProjectRoot, selected);
-            serializedObject.ApplyModifiedProperties();
-            RefreshValidationCache();
+            string rendered = value.Length <= MaximumRenderedOutputCharacters
+                ? value
+                : value.Substring(0, MaximumRenderedOutputCharacters) +
+                  "\n... Inspector preview truncated; use Copy Diagnostics for the retained output.";
+            DataTableLubanInspectorUi.DrawReadOnlyPreview(label, rendered, 54f);
         }
 
-        private void RevealSettingsAsset()
+        private static string BuildDiagnosticsText(DataTableLubanRunResult result)
         {
-            var path = AssetDatabase.GetAssetPath(target);
-            if (!string.IsNullOrEmpty(path))
-            {
-                EditorUtility.RevealInFinder(path);
-            }
+            var builder = new StringBuilder(1024);
+            builder.Append("Success: ").AppendLine(result.Success.ToString())
+                .Append("ExitCode: ").AppendLine(result.ExitCode.ToString())
+                .Append("DurationMilliseconds: ").AppendLine(result.DurationMilliseconds.ToString())
+                .Append("Cancelled: ").AppendLine(result.Cancelled.ToString())
+                .Append("TimedOut: ").AppendLine(result.TimedOut.ToString())
+                .Append("RecoveryRequired: ").AppendLine(result.RecoveryRequired.ToString())
+                .Append("RecoveryRunId: ").AppendLine(result.RecoveryRunId)
+                .Append("Error: ").AppendLine(result.ErrorMessage)
+                .AppendLine("stdout:")
+                .AppendLine(result.StandardOutput)
+                .AppendLine("stderr:")
+                .Append(result.StandardError);
+            return builder.ToString();
         }
 
-        private void OpenProjectDirectory()
+        private static void OpenPackageGuide(DataTableLubanSettings settings)
         {
-            var request = GetCachedRequest();
-            if (Directory.Exists(request.WorkingDirectory))
+            string packageRoot = DataTableLubanToolProjectLocator.GetPackageAssetRoot(settings);
+            string readmePath = string.IsNullOrEmpty(packageRoot)
+                ? string.Empty
+                : packageRoot + "/README.md";
+            UnityEngine.Object readme = string.IsNullOrEmpty(readmePath)
+                ? null
+                : AssetDatabase.LoadMainAssetAtPath(readmePath);
+            if (readme != null)
             {
-                EditorUtility.RevealInFinder(request.WorkingDirectory);
+                AssetDatabase.OpenAsset(readme);
                 return;
             }
 
             EditorUtility.DisplayDialog(
-                "Directory Not Found",
-                "The directory does not exist:\n" + request.WorkingDirectory,
+                "DataTable Package Guide",
+                "The package README could not be located from the settings script.",
                 "OK");
         }
 
-        private void StartLubanBuild()
+        private void HandleCoordinatorChanged()
         {
-            if (_runInProgress)
-            {
-                return;
-            }
-
-            _runCancellation?.Dispose();
-            _runCancellation = new CancellationTokenSource();
-            _runInProgress = true;
             Repaint();
-            RunLubanBuildAsync((DataTableLubanSettings)target, _runCancellation).Forget();
         }
 
-        private async UniTask RunLubanBuildAsync(
-            DataTableLubanSettings settings,
-            CancellationTokenSource cancellationOwner)
+        private void RepaintWhileActive()
         {
-            try
+            if (DataTableLubanAuthoringCoordinator.IsInspecting ||
+                DataTableLubanAuthoringCoordinator.IsOperationInProgress ||
+                DataTableLubanRunner.IsRunning)
             {
-                var result = await DataTableLubanRunner.RunWithResultAsync(
-                    settings,
-                    cancellationOwner.Token);
-                if (!result.Success && !result.Cancelled)
+                Repaint();
+            }
+        }
+
+        private static bool IsReadyValue(string value, string expected)
+        {
+            return string.Equals(value, expected, StringComparison.Ordinal);
+        }
+
+        private static DataTableLubanInspectorTone GetOutputTone(string state)
+        {
+            if (string.Equals(state, "current", StringComparison.Ordinal))
+            {
+                return DataTableLubanInspectorTone.Ready;
+            }
+
+            if (string.Equals(state, "unavailable", StringComparison.Ordinal))
+            {
+                return DataTableLubanInspectorTone.Busy;
+            }
+
+            if (string.Equals(state, "missing", StringComparison.Ordinal) ||
+                string.Equals(state, "drifted", StringComparison.Ordinal))
+            {
+                return DataTableLubanInspectorTone.Warning;
+            }
+
+            return string.IsNullOrEmpty(state)
+                ? DataTableLubanInspectorTone.Neutral
+                : DataTableLubanInspectorTone.Error;
+        }
+
+        private static string GetActionBlocker(
+            DataTableLubanAuthoringSnapshot snapshot,
+            bool inspecting)
+        {
+            if (inspecting)
+            {
+                return "Pipeline actions are disabled while the authoritative status inspection is running.";
+            }
+
+            if (snapshot == null)
+            {
+                return "No authoritative pipeline status is available.";
+            }
+
+            for (var index = 0; index < snapshot.Issues.Length; index++)
+            {
+                DataTableLubanAuthoringIssue issue = snapshot.Issues[index];
+                if (issue.Severity == DataTableLubanIssueSeverity.Error ||
+                    issue.Severity == DataTableLubanIssueSeverity.Warning)
                 {
-                    EditorUtility.DisplayDialog(
-                        "Luban Build Failed",
-                        DataTableLubanRunner.BuildFailureDialogMessage(result),
-                        "OK");
+                    return "[" + issue.Code + "] " + issue.Message;
                 }
             }
-            catch (OperationCanceledException) when (cancellationOwner.IsCancellationRequested)
-            {
-                // Inspector shutdown owns this cancellation; it is not a build failure.
-            }
-            catch (Exception exception) when (
-                exception is not OutOfMemoryException &&
-                exception is not AccessViolationException)
-            {
-                Log.Error(exception, "Unexpected Luban settings build failure.");
-            }
-            finally
-            {
-                if (ReferenceEquals(_runCancellation, cancellationOwner))
-                {
-                    _runInProgress = false;
-                    _runCancellation.Dispose();
-                    _runCancellation = null;
-                }
 
-                if (this != null && _editorEnabled)
-                {
-                    RefreshValidationCache();
-                    Repaint();
-                }
+            if (!string.IsNullOrEmpty(snapshot.InspectionError))
+            {
+                return snapshot.InspectionError;
             }
+
+            return "The latest inspection did not authorize this action. Refresh status for current details.";
         }
 
-        private static void DrawPropertyIfPresent(SerializedProperty property, GUIContent label)
+        private static string Abbreviate(string value, int maximumCharacters)
         {
-            if (property != null)
+            if (string.IsNullOrEmpty(value) || value.Length <= maximumCharacters)
             {
-                EditorGUILayout.PropertyField(property, label);
-            }
-        }
-
-        private SerializedProperty[] FindExtensionProperties()
-        {
-            var properties = new System.Collections.Generic.List<SerializedProperty>();
-            var iterator = serializedObject.GetIterator();
-            var enterChildren = true;
-            while (iterator.NextVisible(enterChildren))
-            {
-                enterChildren = false;
-                if (IsBaseProperty(iterator.propertyPath))
-                {
-                    continue;
-                }
-
-                properties.Add(iterator.Copy());
+                return value ?? string.Empty;
             }
 
-            return properties.ToArray();
-        }
-
-        private static bool IsBaseProperty(string propertyPath)
-        {
-            return propertyPath == "m_Script" ||
-                   propertyPath == "LubanProjectDir" ||
-                   propertyPath == "LubanScriptName" ||
-                   propertyPath == "LubanScriptArguments" ||
-                   propertyPath == "LubanTimeoutSeconds" ||
-                   propertyPath == "RefreshAssetsAfterLubanBuild";
-        }
-
-        private static void DrawButtonRow(
-            string leftLabel,
-            Action leftAction,
-            string rightLabel,
-            Action rightAction)
-        {
-            var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-            var leftRect = rect;
-            leftRect.width = (rect.width - ButtonGap) * 0.5f;
-
-            var rightRect = rect;
-            rightRect.xMin = leftRect.xMax + ButtonGap;
-
-            if (GUI.Button(leftRect, leftLabel))
-            {
-                leftAction();
-            }
-
-            if (GUI.Button(rightRect, rightLabel))
-            {
-                rightAction();
-            }
-        }
-
-        private static string[] FindBuildScripts(string directory)
-        {
-            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
-            {
-                return Array.Empty<string>();
-            }
-
-            try
-            {
-                var batFiles = Directory.GetFiles(directory, "*.bat", SearchOption.TopDirectoryOnly);
-                var shFiles = Directory.GetFiles(directory, "*.sh", SearchOption.TopDirectoryOnly);
-                var scripts = new string[batFiles.Length + shFiles.Length];
-                for (int i = 0; i < batFiles.Length; i++)
-                {
-                    scripts[i] = Path.GetFileName(batFiles[i]);
-                }
-
-                for (int i = 0; i < shFiles.Length; i++)
-                {
-                    scripts[batFiles.Length + i] = Path.GetFileName(shFiles[i]);
-                }
-
-                Array.Sort(scripts, StringComparer.OrdinalIgnoreCase);
-                return scripts;
-            }
-            catch (IOException)
-            {
-                return Array.Empty<string>();
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Array.Empty<string>();
-            }
-        }
-
-        private static string[] FindSettingsAssetPaths()
-        {
-            var guids = AssetDatabase.FindAssets("t:DataTableLubanSettings");
-            if (guids.Length == 0)
-            {
-                return Array.Empty<string>();
-            }
-
-            var paths = new string[guids.Length];
-            for (int i = 0; i < guids.Length; i++)
-            {
-                paths[i] = AssetDatabase.GUIDToAssetPath(guids[i]);
-            }
-
-            Array.Sort(paths, StringComparer.Ordinal);
-            return paths;
-        }
-
-        private static string MakeProjectRelativePath(string projectRoot, string selectedPath)
-        {
-            try
-            {
-                var root = EnsureTrailingSeparator(Path.GetFullPath(projectRoot));
-                var fullPath = Path.GetFullPath(selectedPath);
-                var comparison = Path.DirectorySeparatorChar == '\\'
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
-
-                if (fullPath.StartsWith(root, comparison))
-                {
-                    var relative = fullPath.Substring(root.Length);
-                    return string.IsNullOrEmpty(relative) ? "." : relative.Replace('\\', '/');
-                }
-
-                return fullPath.Replace('\\', '/');
-            }
-            catch (ArgumentException)
-            {
-                return selectedPath.Replace('\\', '/');
-            }
-            catch (NotSupportedException)
-            {
-                return selectedPath.Replace('\\', '/');
-            }
-        }
-
-        private static string EnsureTrailingSeparator(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-            {
-                return string.Empty;
-            }
-
-            var last = path[path.Length - 1];
-            if (last == Path.DirectorySeparatorChar || last == Path.AltDirectorySeparatorChar)
-            {
-                return path;
-            }
-
-            return path + Path.DirectorySeparatorChar;
-        }
-
-        private int ComputeTargetHash()
-        {
-            var settings = (DataTableLubanSettings)target;
-            unchecked
-            {
-                var hash = 17;
-                hash = hash * 31 + (settings.LubanProjectDir == null ? 0 : settings.LubanProjectDir.GetHashCode());
-                hash = hash * 31 + (settings.LubanScriptName == null ? 0 : settings.LubanScriptName.GetHashCode());
-                hash = hash * 31 + (settings.LubanScriptArguments == null ? 0 : settings.LubanScriptArguments.GetHashCode());
-                hash = hash * 31 + settings.LubanTimeoutSeconds;
-                hash = hash * 31 + (settings.RefreshAssetsAfterLubanBuild ? 1 : 0);
-                return hash;
-            }
-        }
-    }
-
-    internal enum DataTableStatusKind
-    {
-        Info,
-        Success,
-        Warning,
-        Error
-    }
-
-    internal static class DataTableInspectorUiUtility
-    {
-        private const float HeaderHorizontalPadding = 4f;
-        private const float HeaderArrowWidth = 13f;
-        private const float StatusBadgeWidth = 70f;
-        private const float StatusHeight = 19f;
-
-        private static readonly Vector3[] TrianglePoints = new Vector3[3];
-        private static readonly Color FoldoutBorderColor = new Color(0f, 0f, 0f, 0.20f);
-        private static readonly Color StatusInfoColor = new Color(0.35f, 0.42f, 0.50f);
-        private static readonly Color StatusSuccessColor = new Color(0.24f, 0.55f, 0.30f);
-        private static readonly Color StatusWarningColor = new Color(0.70f, 0.48f, 0.18f);
-        private static readonly Color StatusErrorColor = new Color(0.66f, 0.25f, 0.22f);
-        private static readonly Color FoldoutTriangleColor = new Color(0.90f, 0.90f, 0.90f, 0.95f);
-
-        private static GUIStyle _foldoutLabelStyle;
-        private static GUIStyle _statusLabelStyle;
-        private static GUIStyle _statusNameStyle;
-        private static GUIStyle _statusValueStyle;
-
-        public static bool DrawFoldoutHeader(string title, bool foldout, Color expandedColor, Color collapsedColor)
-        {
-            EnsureStyles();
-
-            var rect = EditorGUILayout.GetControlRect(false, 22f);
-            var backgroundColor = foldout ? expandedColor : collapsedColor;
-            EditorGUI.DrawRect(rect, backgroundColor);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), FoldoutBorderColor);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), FoldoutBorderColor);
-
-            var arrowRect = new Rect(
-                rect.x + HeaderHorizontalPadding,
-                rect.y + 2f,
-                HeaderArrowWidth,
-                rect.height - 4f);
-
-            var labelRect = new Rect(
-                arrowRect.xMax + 1f,
-                rect.y,
-                rect.width - (arrowRect.xMax - rect.x) - HeaderHorizontalPadding - 1f,
-                rect.height);
-
-            DrawFoldoutTriangle(arrowRect, foldout);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-
-            return foldout;
-        }
-
-        public static void DrawStatusRow(string label, string value, DataTableStatusKind statusKind)
-        {
-            EnsureStyles();
-
-            var rect = EditorGUILayout.GetControlRect(false, StatusHeight);
-            var badgeRect = new Rect(rect.x, rect.y + 2f, StatusBadgeWidth, rect.height - 4f);
-            var nameRect = new Rect(
-                badgeRect.xMax + 6f,
-                rect.y,
-                104f,
-                rect.height);
-            var valueRect = new Rect(
-                nameRect.xMax + 4f,
-                rect.y,
-                Mathf.Max(0f, rect.xMax - nameRect.xMax - 4f),
-                rect.height);
-
-            EditorGUI.DrawRect(badgeRect, GetStatusColor(statusKind));
-            EditorGUI.LabelField(badgeRect, GetStatusText(statusKind), _statusLabelStyle);
-            EditorGUI.LabelField(nameRect, label, _statusNameStyle);
-            EditorGUI.LabelField(valueRect, value, _statusValueStyle);
-        }
-
-        private static void EnsureStyles()
-        {
-            if (_foldoutLabelStyle != null)
-            {
-                return;
-            }
-
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleLeft
-            };
-
-            _statusLabelStyle = new GUIStyle(EditorStyles.miniBoldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 10
-            };
-
-            _statusNameStyle = new GUIStyle(EditorStyles.miniLabel)
-            {
-                fontStyle = FontStyle.Bold,
-                wordWrap = false,
-                alignment = TextAnchor.MiddleLeft
-            };
-
-            _statusValueStyle = new GUIStyle(EditorStyles.miniLabel)
-            {
-                wordWrap = false,
-                alignment = TextAnchor.MiddleLeft
-            };
-        }
-
-        private static Color GetStatusColor(DataTableStatusKind statusKind)
-        {
-            switch (statusKind)
-            {
-                case DataTableStatusKind.Success:
-                    return StatusSuccessColor;
-                case DataTableStatusKind.Warning:
-                    return StatusWarningColor;
-                case DataTableStatusKind.Error:
-                    return StatusErrorColor;
-                default:
-                    return StatusInfoColor;
-            }
-        }
-
-        private static string GetStatusText(DataTableStatusKind statusKind)
-        {
-            switch (statusKind)
-            {
-                case DataTableStatusKind.Success:
-                    return "OK";
-                case DataTableStatusKind.Warning:
-                    return "WARN";
-                case DataTableStatusKind.Error:
-                    return "ERROR";
-                default:
-                    return "INFO";
-            }
-        }
-
-        private static void DrawFoldoutTriangle(Rect rect, bool expanded)
-        {
-            var center = rect.center;
-            if (expanded)
-            {
-                TrianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
-                TrianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
-                TrianglePoints[2] = new Vector3(center.x, center.y + 3f);
-            }
-            else
-            {
-                TrianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
-                TrianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
-                TrianglePoints[2] = new Vector3(center.x + 3f, center.y);
-            }
-
-            Handles.BeginGUI();
-            var previousColor = Handles.color;
-            Handles.color = FoldoutTriangleColor;
-            Handles.DrawAAConvexPolygon(TrianglePoints);
-            Handles.color = previousColor;
-            Handles.EndGUI();
+            return value.Substring(0, maximumCharacters) + "...";
         }
     }
 }

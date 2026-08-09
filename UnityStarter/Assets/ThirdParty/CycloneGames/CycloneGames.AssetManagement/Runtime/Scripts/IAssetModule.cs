@@ -295,12 +295,20 @@ namespace CycloneGames.AssetManagement.Runtime
 		void WaitForAsyncComplete();
 	}
 
+	/// <summary>
+	/// Caller-owned asset lease. Package-created leases clear their backend ownership only after
+	/// disposal succeeds; if disposal throws, call Dispose again on the main thread to retry.
+	/// </summary>
 	public interface IAssetHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
 	{
 		TAsset Asset { get; }
 		UnityEngine.Object AssetObject { get; }
 	}
 
+	/// <summary>
+	/// Caller-owned bulk-asset lease with the same retryable disposal contract as
+	/// <see cref="IAssetHandle{TAsset}"/>.
+	/// </summary>
 	public interface IAllAssetsHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
 	{
 		IReadOnlyList<TAsset> Assets { get; }
@@ -384,6 +392,7 @@ namespace CycloneGames.AssetManagement.Runtime
 	/// <summary>
 	/// Handle for raw file operations. Raw files are non-compressed files suitable for JSON, text, binary data, etc.
 	/// Thread-safe for read operations after loading completes. Dispose must be called on the main thread.
+	/// Package-created leases retain their backend ownership if disposal throws; retry Dispose on the main thread.
 	/// </summary>
 	public interface IRawFileHandle : IOperation, IDisposable
 	{
@@ -399,7 +408,9 @@ namespace CycloneGames.AssetManagement.Runtime
 		string ReadText();
 
 		/// <summary>
-		/// Reads the file contents as bytes. Returns null if not loaded or error occurred.
+		/// Reads the file contents as a caller-owned byte-array snapshot. Returns null if not loaded
+		/// or an error occurred. A successful call must not expose provider-owned mutable storage;
+		/// the caller may retain or mutate the returned array after this handle is disposed.
 		/// Thread-safe: Can be called from any thread after IsDone is true.
 		/// </summary>
 		byte[] ReadBytes();

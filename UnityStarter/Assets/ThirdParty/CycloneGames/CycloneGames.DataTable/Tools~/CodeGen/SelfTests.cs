@@ -34,14 +34,20 @@ namespace CycloneGames.DataTable.CodeGen
                 {
                     new ConstantEntry("SAFE_NAME", "Value\u2028Tail", "Comment\r\nInjected"),
                 };
-                string generated = BuildConstantsFile(
-                    "Game.Config",
-                    "SafeNames",
-                    "table.xlsx\r\nnamespace Injected",
-                    "Scope\u2029public class Injected",
-                    entries,
-                    "en",
-                    "\n");
+                string generated;
+                using (var generatedWriter = new StringWriter())
+                {
+                    WriteConstantsFile(
+                        generatedWriter,
+                        "Game.Config",
+                        "SafeNames",
+                        "table.xlsx\r\nnamespace Injected",
+                        "Scope\u2029public class Injected",
+                        entries,
+                        "en",
+                        "\n");
+                    generated = generatedWriter.ToString();
+                }
                 AssertContains(generated, "Source table: table.xlsx namespace Injected", "source comment normalization");
                 AssertContains(generated, "Scope: Scope public class Injected", "scope comment normalization");
                 AssertContains(generated, "/// Comment Injected", "XML documentation line normalization");
@@ -63,54 +69,7 @@ namespace CycloneGames.DataTable.CodeGen
                 AssertRejects(() => ValidateOwnedRelativePath("Scopes/CON.cs"), "reserved owned-output filename");
                 AssertRejects(() => ValidateOwnedRelativePath("Scopes/Name?.cs"), "wildcard owned-output path");
                 AssertRejects(() => ValidateOwnedRelativePath("Scop\u200Bes/Names.cs"), "format-character owned-output path");
-                AssertArgumentRejects(
-                    () => ToolArguments.Parse(new[] { "--validate-onli", "true" }),
-                    "unknown generation argument");
-                AssertArgumentRejects(
-                    () => ToolArguments.Parse(new[] { "--validate-only", "--validate-only" }),
-                    "duplicate validate-only argument");
-
-                var configuredColumns = new HashSet<string>(StringComparer.Ordinal)
-                {
-                    "name",
-                    "comment",
-                    "enabled",
-                    "scope",
-                };
-                ValidateConfiguredColumns(
-                    configuredColumns,
-                    "name",
-                    "comment",
-                    "enabled",
-                    "scope",
-                    "self-test workbook");
-                AssertRejects(
-                    () => ValidateConfiguredColumns(
-                        configuredColumns,
-                        "missing_name",
-                        "comment",
-                        "enabled",
-                        "scope",
-                        "self-test workbook"),
-                    "missing configured workbook column");
-
-                Dictionary<string, string> sparseRow = XlsxWorkbook.MaterializeDeclaredRow(
-                    new Dictionary<int, string>
-                    {
-                        { 1, "Sword" },
-                        { 4096, "ignored undeclared cell" },
-                    },
-                    new Dictionary<int, string>
-                    {
-                        { 1, "name" },
-                        { 2, "comment" },
-                        { 3, "enabled" },
-                    });
-                if (sparseRow.Count != 1 || sparseRow["name"] != "Sword")
-                {
-                    throw new InvalidOperationException(
-                        "Self-test failed: sparse workbook rows materialized missing or undeclared cells.");
-                }
+                RunStreamingAndTransactionSelfTests();
 
                 string[] stalePaths = CalculateStaleOwnedRelativePaths(
                     new[] { "GameplayTagNames.cs", "Scopes/OldNames.cs" },
@@ -173,20 +132,6 @@ namespace CycloneGames.DataTable.CodeGen
                     action();
                 }
                 catch (InvalidOperationException)
-                {
-                    return;
-                }
-
-                throw new InvalidOperationException("Self-test failed to reject " + description + ".");
-            }
-
-            private static void AssertArgumentRejects(Action action, string description)
-            {
-                try
-                {
-                    action();
-                }
-                catch (ArgumentException)
                 {
                     return;
                 }
