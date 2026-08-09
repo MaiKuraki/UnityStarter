@@ -2,8 +2,7 @@
     "name": "CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.DataTable.Core",
-        "CycloneGames.Logging.Core"
+        "CycloneGames.DataTable.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

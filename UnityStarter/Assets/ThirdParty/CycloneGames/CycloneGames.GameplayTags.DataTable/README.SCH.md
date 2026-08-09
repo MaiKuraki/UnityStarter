@@ -26,7 +26,7 @@ CycloneGames.GameplayTags.DataTable 将 DataTable row 桥接到 GameplayTags 注
 - **定义 source** 将表格行映射为权威标签注册，包含名称、描述、flags 和启用状态。
 - **引用 source** 从玩法行中的一个或多个字段枚举标签名称。
 - **Luban/Excel 集成**，支持生成行类型的显式 key selector。
-- **DataTableCatalog** 组合与 `DataTableRegistry` 发布。
+- **DataTableCatalog** 组合与实例级 `DataTableStore` generation 发布。
 - **协调重载**，失败时支持回滚。
 
 ## 架构
@@ -115,7 +115,7 @@ GameplayTag fireball = GameplayTagManager.RequestTag("Ability.Fireball");
 | `GameplayTagDataTableReferenceSource<TRow>` | 枚举每条玩法 row 中一个或多个字段引用的 tag name |
 | `GameplayTagRuntimePlatform` | 向 GameplayTags 注册具名 project source |
 | `DataTableCatalog` | 将一组强类型 table 组成一个不可变 catalog |
-| `DataTableRegistry` | 可选的进程级 catalog 发布点 |
+| `DataTableStore` / `DataTableReader` | 可选地发布带版本的 Catalog generation，并把 consumer 固定到一个 snapshot |
 
 定义 row 与引用 row 的职责不同。定义 row 持有标签元数据；引用 row 仅报告某个标签名称正在被使用。要求标签集合封闭的项目应在注册前校验每个引用都能在定义表中解析。
 
@@ -200,7 +200,17 @@ catalogBuilder.Add<IDataTableRows<AbilityRow>>(abilityTable);
 DataTableCatalog catalog = catalogBuilder.Build();
 
 GameplayTagManager.InitializeIfNeeded();
-DataTableRegistry.Publish(catalog);
+using var store = new DataTableStore(revisionSequenceFloor: 0);
+using DataTableReader reader = store.RegisterReader();
+using var candidate = new DataTableCandidate(
+    catalog,
+    new DataTableRevision(sequence: 1, id: contentSha256));
+
+DataTablePublishResult result = store.TryPublish(candidate, expectedGeneration: 0);
+if (!result.IsCommitted)
+    throw new InvalidOperationException($"Catalog publication rejected: {result.Status}");
+
+reader.Refresh(); // 只能在没有操作继续使用旧 snapshot 的安全点执行
 ```
 
 ### Source 顺序
@@ -227,15 +237,21 @@ Source 按 ordinal name 顺序处理。使用数字前缀：
 4. 基于 candidate table 创建 definition source 与 reference source。
 5. 使用被替换 source 的稳定名称注册每个 candidate source。
 6. 调用 `GameplayTagManager.ReloadTags()`。
-7. 发布 candidate DataTable catalog。
-8. 更新 composition owner 的 active generation。
-9. 等待旧 generation 的 reader 全部结束后再释放。
+7. 使用 candidate 工作开始前捕获的 DataTable generation 调用 `TryPublish`。
+8. 发布被拒绝时，恢复上一组 tag source 并再次 reload tags；DataTable candidate 仍归调用方。
+9. 发布提交成功时，在协调后的安全点刷新每个 DataTable reader。
+10. 恢复 dependent consumer。最后一个 reader 离开后，Store 释放 retired backing owner。
 
 Tag reload 失败时回滚：
 
 ```csharp
+long expectedDataTableGeneration = _dataTableStore.Metadata.Generation;
 IGameplayTagSource previousDefinitionSource = _activeDefinitionSource;
-IGameplayTagSource nextDefinitionSource = candidate.DefinitionSource;
+IGameplayTagSource nextDefinitionSource = BuildDefinitionSource(candidateCatalog);
+using var tableCandidate = new DataTableCandidate(
+    candidateCatalog,
+    trustedRevision,
+    candidateResourceOwner);
 
 GameplayTagRuntimePlatform.RegisterProjectTagSource(nextDefinitionSource);
 try
@@ -248,17 +264,29 @@ catch
         GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
     else
         GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
-    candidate.Dispose();
     throw;
 }
 
-DataTableRegistry.Publish(candidate.Catalog);
-RetireAfterReadersComplete(_activeGeneration);
-_activeGeneration = candidate;
+DataTablePublishResult publish = _dataTableStore.TryPublish(
+    tableCandidate,
+    expectedDataTableGeneration);
+if (!publish.IsCommitted)
+{
+    if (previousDefinitionSource != null)
+        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+    else
+        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+
+    GameplayTagManager.ReloadTags();
+    HandleRejectedTableCandidate(publish);
+    return;
+}
+
+RequestDataTableReaderRefreshAtSafePoint();
 _activeDefinitionSource = nextDefinitionSource;
 ```
 
-`GameplayTagManager.ReloadTags()` 和 `DataTableRegistry.Publish()` 是两次独立发布。如果 consumer 不能观察到不同 generation 的 tag 与 table，应在重载期间暂停相关 reader。
+`GameplayTagManager.ReloadTags()` 与 `DataTableStore.TryPublish()` 仍是两个独立 publication seam，双方都无法让另一方原子化。Consumer 不能观察到不同 generation 的 tag 与 table 时，应在两个状态转换期间暂停 dependent consumer。把 `Superseded` 与 `NonMonotonicRevision` 当作正常拒绝状态，并在恢复 consumer 前还原上一组 tag source。`OutOfMemoryException` 等进程级 fatal exception 属于 fail-stop 条件，不是普通 rollback 分支。
 
 ### 所有权与生命周期
 
@@ -266,9 +294,10 @@ Adapter 会借用 row：
 
 - `DataTable` 复制顶层输入数组但不深复制 row object 或 nested collection。
 - `DataTableCatalog` 不持有或 Dispose table instance。
-- `DataTableRegistry.Reset()` 只移除已发布引用，不 Dispose retired generation。
+- Caller-owned `DataTableCandidate` 在发布提交前拥有可选 backing resource；发布被拒绝不会转移所有权。
+- Candidate 提交后，其 owner 归 `DataTableStore`；每个 `DataTableReader` 会固定一个 generation，直到 Refresh 或 Dispose。
 
-注册和 reload 期间保持 row、nested tag collection 和任何 backing resource 稳定。仅在 generation 不再发布且全部 reader 完成后释放资源。
+注册和 reload 期间保持 row、nested tag collection 和任何 backing resource 稳定。不得让借用的 `DataTableSnapshot` 跨越 `DataTableReader.Refresh()` 继续存活。最终 reader 状态转换可能在其调用线程触发退役，因此 thread-affine backing resource 需要 owner-thread disposal adapter。
 
 ## 性能与内存
 

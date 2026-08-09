@@ -24,16 +24,6 @@ namespace CycloneGames.DataTable
                 NullDataTableDiagnostics.Instance);
         }
 
-        public static IDataTableDiagnostics Replace(IDataTableDiagnostics diagnostics)
-        {
-            if (diagnostics == null)
-            {
-                throw new ArgumentNullException(nameof(diagnostics));
-            }
-
-            return Interlocked.Exchange(ref s_current, diagnostics);
-        }
-
         /// <summary>
         /// Atomically replaces the process diagnostics only while the expected instance remains installed.
         /// </summary>

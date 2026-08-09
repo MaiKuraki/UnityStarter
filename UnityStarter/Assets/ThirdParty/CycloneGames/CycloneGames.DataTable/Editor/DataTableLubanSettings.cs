@@ -1,301 +1,202 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using CycloneGames.Logging;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
 namespace CycloneGames.DataTable.Unity.Editor
 {
-    /// <summary>
-    /// Project-visible settings for the Luban-based DataTable generation workflow.
-    /// </summary>
     [CreateAssetMenu(
-        menuName = "CycloneGames/DataTable/Luban Settings",
+        menuName = "CycloneGames/DataTable/Luban Pipeline Settings",
         fileName = "DataTableLubanSettings")]
-    public class DataTableLubanSettings : ScriptableObject
+    public sealed class DataTableLubanSettings : ScriptableObject
     {
-        private static readonly LogChannel Log = DataTableEditorLog.SettingsChannel;
-
-        private const string DefaultAssetDir = "Assets/Editor/DataTable";
-        private const string DefaultAssetName = "DataTableLubanSettings.asset";
-
-        /// <summary>
-        /// Safe fallback used by existing assets whose serialized timeout is zero or negative.
-        /// </summary>
-        public const int DefaultLubanTimeoutSeconds = 300;
-
-        private static readonly Dictionary<Type, DataTableLubanSettings> CachedSettings =
-            new Dictionary<Type, DataTableLubanSettings>(4);
-
-        /// <summary>
-        /// Path to the Luban project directory, relative to the Unity project root.
-        /// Use "../" when the Luban project lives next to the Unity project folder.
-        /// </summary>
-        [Tooltip("Luban project directory, relative to the Unity project root. Use '../' to go above the Unity project folder.")]
-        public string LubanProjectDir = "../DataTable/Luban";
-
-        /// <summary>
-        /// Name of the Luban code-generation script without file extension.
-        /// The runner appends .bat on Windows and .sh on macOS/Linux.
-        /// </summary>
-        [Tooltip("Luban script name without extension (.bat/.sh appended automatically).")]
-        public string LubanScriptName = "gen_code_bin_to_project_lazyload";
-
-        /// <summary>
-        /// Optional command-line arguments passed after the generated script path.
-        /// </summary>
-        [Tooltip("Optional command-line arguments appended after the Luban script path.")]
-        public string LubanScriptArguments;
-
-        /// <summary>
-        /// Maximum seconds to wait for the external process. Zero or negative uses the safe default.
-        /// </summary>
-        [Min(1)]
-        [Tooltip("Maximum seconds to wait for the external process. Zero or negative uses the 300-second safe default for existing assets.")]
-        public int LubanTimeoutSeconds = DefaultLubanTimeoutSeconds;
-
-        /// <summary>
-        /// Whether to call AssetDatabase.Refresh() after a successful Luban run.
-        /// </summary>
-        [Tooltip("Automatically refresh the AssetDatabase after a successful Luban build.")]
-        public bool RefreshAssetsAfterLubanBuild = true;
-
-        /// <summary>
-        /// Discover and return the default DataTableLubanSettings asset.
-        /// </summary>
-        public static DataTableLubanSettings GetOrCreate()
+        private enum LoadStatus
         {
-            return GetOrCreate<DataTableLubanSettings>();
+            Loaded,
+            Missing,
+            Ambiguous,
+            Invalid,
         }
 
-        /// <summary>
-        /// Discover and return a settings asset of the requested type.
-        /// External projects can derive from DataTableLubanSettings and call this from custom tooling.
-        /// </summary>
-        public static TSettings GetOrCreate<TSettings>()
-            where TSettings : DataTableLubanSettings
+        public const int CurrentSchemaVersion = 1;
+        public const int DefaultMaximumCapturedOutputCharacters = 1024 * 1024;
+        public const string DefaultBuildConfigurationPath = "../DataTable/Luban/build_config.ini";
+        public const string DefaultProfileName = "client";
+        public const string DefaultAssetPath = "Assets/Editor/DataTable/DataTableLubanSettings.asset";
+
+        [SerializeField]
+        [HideInInspector]
+        private int schemaVersion = CurrentSchemaVersion;
+
+        [SerializeField]
+        [Tooltip("Path to build_config.ini, relative to the Unity project root.")]
+        private string buildConfigurationPath = DefaultBuildConfigurationPath;
+
+        [SerializeField]
+        [Tooltip("Default named [profile.<name>] section used by the Unity Editor.")]
+        private string defaultProfileName = DefaultProfileName;
+
+        [SerializeField]
+        [Tooltip("Refresh the AssetDatabase after a successful generate or recovery operation.")]
+        private bool refreshAssetsAfterSuccess = true;
+
+        [SerializeField]
+        [Range(4096, 16 * 1024 * 1024)]
+        [Tooltip("Maximum combined stdout and stderr characters retained by an Editor operation.")]
+        private int maximumCapturedOutputCharacters = DefaultMaximumCapturedOutputCharacters;
+
+        public int SchemaVersion => schemaVersion;
+        public string BuildConfigurationPath => buildConfigurationPath ?? string.Empty;
+        public string SelectedProfileName => defaultProfileName ?? string.Empty;
+        public bool RefreshAssetsAfterSuccess => refreshAssetsAfterSuccess;
+        public int MaximumCapturedOutputCharacters => maximumCapturedOutputCharacters;
+
+        internal string ResolveBuildConfigurationPath()
         {
-            var type = typeof(TSettings);
-            if (CachedSettings.TryGetValue(type, out var cached) &&
-                cached != null &&
-                AssetDatabase.Contains(cached))
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(
+                unityProjectRoot,
+                buildConfigurationPath ?? string.Empty));
+        }
+
+        internal static string[] FindAssetPaths()
+        {
+            return AssetDatabase.FindAssets("t:DataTableLubanSettings")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(static path => !string.IsNullOrEmpty(path))
+                .OrderBy(static path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        public static bool TryLoad(out DataTableLubanSettings settings, out string error)
+        {
+            return Load(out settings, out error) == LoadStatus.Loaded;
+        }
+
+        private static LoadStatus Load(out DataTableLubanSettings settings, out string error)
+        {
+            string[] paths = FindAssetPaths();
+            if (paths.Length == 0)
             {
-                return (TSettings)cached;
+                settings = null;
+                error =
+                    "No DataTableLubanSettings asset exists. Create one explicitly with " +
+                    "Tools > CycloneGames > DataTable > Create Default Settings.";
+                return LoadStatus.Missing;
             }
 
-            var guids = FindSettingsGuids(type);
-            if (guids.Length == 0)
+            if (paths.Length != 1)
             {
-                var created = CreateDefault<TSettings>();
-                CachedSettings[type] = created;
-                return created;
+                settings = null;
+                error = "Exactly one DataTableLubanSettings asset is required. Found:\n" +
+                        string.Join("\n", paths);
+                return LoadStatus.Ambiguous;
             }
 
-            if (guids.Length > 1)
-            {
-                LogDuplicateSettingsWarning(type, guids);
-            }
-
-            var assetPath = AssetDatabase.GUIDToAssetPath(guids[0]);
-            var settings = AssetDatabase.LoadAssetAtPath<TSettings>(assetPath);
+            settings = AssetDatabase.LoadAssetAtPath<DataTableLubanSettings>(paths[0]);
             if (settings == null)
             {
-                Log.Error(
-                    $"[DataTable] {type.Name} GUID resolved to '{assetPath}' but the asset could not be loaded. " +
-                    "Creating a default config as fallback.");
-                settings = CreateDefault<TSettings>();
+                error = "The DataTableLubanSettings asset could not be loaded: " + paths[0];
+                return LoadStatus.Invalid;
             }
 
-            CachedSettings[type] = settings;
+            error = string.Empty;
+            return LoadStatus.Loaded;
+        }
+
+        public static DataTableLubanSettings GetRequired()
+        {
+            if (!TryLoad(out DataTableLubanSettings settings, out string error))
+            {
+                throw new InvalidOperationException(error);
+            }
+
             return settings;
         }
 
-        /// <summary>
-        /// Invalidate every cached settings reference.
-        /// </summary>
-        public static void InvalidateCache()
+        [MenuItem("Tools/CycloneGames/DataTable/Create Default Settings", priority = 2110)]
+        public static DataTableLubanSettings CreateDefaultAsset()
         {
-            CachedSettings.Clear();
+            try
+            {
+                return CreateDefaultAssetCore();
+            }
+            catch (Exception exception) when (DataTableLubanRunner.IsRecoverableRunnerException(exception))
+            {
+                DataTableEditorDiagnostics.PublishException(
+                    DataTableDiagnosticLevel.Error,
+                    exception,
+                    "DataTable Luban settings asset creation failed at '" +
+                    DefaultAssetPath + "'.");
+                throw;
+            }
         }
 
-        /// <summary>
-        /// Current default settings asset path on disk, or null if not yet resolved.
-        /// </summary>
-        public static string AssetPath => GetAssetPath<DataTableLubanSettings>();
-
-        /// <summary>
-        /// Current settings asset path for the requested derived settings type.
-        /// </summary>
-        public static string GetAssetPath<TSettings>()
-            where TSettings : DataTableLubanSettings
+        private static DataTableLubanSettings CreateDefaultAssetCore()
         {
-            var settings = GetOrCreate<TSettings>();
-            return settings == null ? null : AssetDatabase.GetAssetPath(settings);
-        }
+            LoadStatus status = Load(out DataTableLubanSettings existing, out string error);
+            if (status == LoadStatus.Loaded)
+            {
+                Selection.activeObject = existing;
+                EditorGUIUtility.PingObject(existing);
+                DataTableEditorDiagnostics.Publish(
+                    DataTableDiagnosticLevel.Info,
+                    "DataTable Luban settings already exists at '" +
+                    AssetDatabase.GetAssetPath(existing) + "'.");
+                return existing;
+            }
 
-        /// <summary>
-        /// Derived settings can override this to redirect project-root resolution without replacing the runner.
-        /// </summary>
-        public virtual string GetProjectRoot()
-        {
-            return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-        }
+            if (status != LoadStatus.Missing)
+            {
+                throw new InvalidOperationException(error);
+            }
 
-        /// <summary>
-        /// Derived settings can override this to use custom Luban project paths or profiles.
-        /// </summary>
-        public virtual string GetLubanProjectDir()
-        {
-            return LubanProjectDir;
-        }
+            EnsureAssetDirectory(Path.GetDirectoryName(DefaultAssetPath)?.Replace('\\', '/'));
+            if (AssetDatabase.LoadMainAssetAtPath(DefaultAssetPath) != null)
+            {
+                throw new InvalidOperationException(
+                    "Default settings path is already occupied by another asset: " + DefaultAssetPath);
+            }
 
-        /// <summary>
-        /// Derived settings can override this to select different Luban generation scripts per platform or build target.
-        /// </summary>
-        public virtual string GetLubanScriptName()
-        {
-            return LubanScriptName;
-        }
-
-        /// <summary>
-        /// Derived settings can override this to provide dynamic Luban CI/build-profile arguments.
-        /// </summary>
-        public virtual string GetLubanScriptArguments()
-        {
-            return LubanScriptArguments;
-        }
-
-        /// <summary>
-        /// Derived settings can override this to use a custom Luban script extension.
-        /// </summary>
-        public virtual string GetLubanScriptExtension()
-        {
-            return Application.platform == RuntimePlatform.WindowsEditor ? ".bat" : ".sh";
-        }
-
-        /// <summary>
-        /// Derived settings can override this to control Luban post-build asset refresh policy.
-        /// </summary>
-        public virtual bool ShouldRefreshAssetsAfterLubanBuild()
-        {
-            return RefreshAssetsAfterLubanBuild;
-        }
-
-        /// <summary>
-        /// Derived settings can override this to supply a Luban timeout from a custom profile.
-        /// </summary>
-        public virtual int GetLubanTimeoutMilliseconds()
-        {
-            var timeoutSeconds = LubanTimeoutSeconds <= 0
-                ? DefaultLubanTimeoutSeconds
-                : LubanTimeoutSeconds;
-
-            return timeoutSeconds >= int.MaxValue / 1000
-                ? int.MaxValue
-                : timeoutSeconds * 1000;
-        }
-
-        /// <summary>
-        /// Derived settings can override this to build a custom request while still using the default runner.
-        /// </summary>
-        public virtual DataTableLubanRunRequest CreateLubanRunRequest()
-        {
-            return DataTableLubanRunner.CreateRequest(this);
-        }
-
-        private static TSettings CreateDefault<TSettings>()
-            where TSettings : DataTableLubanSettings
-        {
-            EnsureDirectoryExists(DefaultAssetDir);
-
-            var settings = CreateInstance<TSettings>();
-            var assetName = typeof(TSettings) == typeof(DataTableLubanSettings)
-                ? DefaultAssetName
-                : typeof(TSettings).Name + ".asset";
-            var path = AssetDatabase.GenerateUniqueAssetPath(
-                Path.Combine(DefaultAssetDir, assetName).Replace('\\', '/'));
-
-            AssetDatabase.CreateAsset(settings, path);
+            var settings = CreateInstance<DataTableLubanSettings>();
+            AssetDatabase.CreateAsset(settings, DefaultAssetPath);
             Undo.RegisterCreatedObjectUndo(settings, "Create DataTable Luban Settings");
-            AssetDatabase.SaveAssets();
-
-            Log.Info(
-                $"[DataTable] No {typeof(TSettings).Name} found. Created default settings at:\n" +
-                $"  {path}\n" +
-                "You can move this asset anywhere under Assets/.");
-
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssetIfDirty(settings);
+            Selection.activeObject = settings;
+            EditorGUIUtility.PingObject(settings);
+            DataTableEditorDiagnostics.Publish(
+                DataTableDiagnosticLevel.Info,
+                "DataTable Luban settings created and saved at '" +
+                DefaultAssetPath + "'.");
             return settings;
         }
 
-        private static string[] FindSettingsGuids(Type settingsType)
+        private void OnValidate()
         {
-            var query = "t:" + settingsType.Name;
-            var guids = AssetDatabase.FindAssets(query);
-            if (guids.Length == 0 && settingsType == typeof(DataTableLubanSettings))
-            {
-                guids = AssetDatabase.FindAssets("t:DataTableLubanSettings");
-            }
-
-            if (guids.Length <= 1)
-            {
-                return guids;
-            }
-
-            var paths = new List<string>(guids.Length);
-            for (int i = 0; i < guids.Length; i++)
-            {
-                var path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                var asset = AssetDatabase.LoadAssetAtPath<DataTableLubanSettings>(path);
-                if (asset != null && settingsType.IsInstanceOfType(asset))
-                {
-                    paths.Add(path);
-                }
-            }
-
-            paths.Sort(StringComparer.Ordinal);
-
-            var sortedGuids = new string[paths.Count];
-            for (int i = 0; i < paths.Count; i++)
-            {
-                sortedGuids[i] = AssetDatabase.AssetPathToGUID(paths[i]);
-            }
-
-            return sortedGuids;
+            schemaVersion = CurrentSchemaVersion;
+            maximumCapturedOutputCharacters = Mathf.Clamp(
+                maximumCapturedOutputCharacters,
+                4096,
+                16 * 1024 * 1024);
         }
 
-        private static void LogDuplicateSettingsWarning(Type settingsType, string[] guids)
+        private static void EnsureAssetDirectory(string path)
         {
-            var message = $"[DataTable] Found {guids.Length} {settingsType.Name} assets. Using the first one:";
-            for (int i = 0; i < guids.Length; i++)
-            {
-                message += "\n  " + AssetDatabase.GUIDToAssetPath(guids[i]);
-            }
-
-            Log.Warning(message + "\nRemove duplicates or use a project-specific settings type.");
-        }
-
-        private static void EnsureDirectoryExists(string dir)
-        {
-            if (string.IsNullOrEmpty(dir) || AssetDatabase.IsValidFolder(dir))
+            if (string.IsNullOrEmpty(path) || AssetDatabase.IsValidFolder(path))
             {
                 return;
             }
 
-            if (dir == "Assets")
+            string parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
+            EnsureAssetDirectory(parent);
+            string folderName = Path.GetFileName(path);
+            string guid = AssetDatabase.CreateFolder(parent ?? "Assets", folderName);
+            if (string.IsNullOrEmpty(guid))
             {
-                return;
+                throw new InvalidOperationException("Failed to create settings directory: " + path);
             }
-
-            var parent = Path.GetDirectoryName(dir)?.Replace('\\', '/');
-            var folder = Path.GetFileName(dir);
-
-            if (!string.IsNullOrEmpty(parent) && !AssetDatabase.IsValidFolder(parent))
-            {
-                EnsureDirectoryExists(parent);
-            }
-
-            AssetDatabase.CreateFolder(parent ?? "Assets", folder);
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Luban;
 using NUnit.Framework;
 using LubanIntegration = CycloneGames.DataTable.Unity.Integrations.Luban;
@@ -8,14 +9,15 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.Luban
     public sealed class LubanDataTableIntegrationTests
     {
         [Test]
-        public void Create_CopiesPayloadBeforeReturningItToGeneratedTableFactory()
+        public void Decode_CopiesPayloadBeforeReturningItToGeneratedTableFactory()
         {
             byte[] source = { 3, 7, 11, 19 };
             var provider = new ArrayBytesProvider(source);
 
-            ByteBuf buffer = LubanIntegration.LubanDataTableSetFactory.Create(
+            ByteBuf buffer = LubanIntegration.LubanDataTableDecoder.Decode(
                 provider,
-                getBytes => getBytes("items"));
+                getBytes => getBytes("items"),
+                DataTableLoadLimits.Default);
 
             source[0] = 255;
 
@@ -24,7 +26,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.Luban
         }
 
         [Test]
-        public void Create_RejectsAggregatePayloadsBeyondConfiguredBudget()
+        public void Decode_RejectsAggregatePayloadsBeyondConfiguredBudget()
         {
             var provider = new ArrayBytesProvider(new byte[] { 1, 2, 3, 4 });
             var limits = new DataTableLoadLimits(
@@ -35,7 +37,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.Luban
                 maxTableNameLength: 32);
 
             Assert.Throws<InvalidOperationException>(() =>
-                LubanIntegration.LubanDataTableSetFactory.Create(
+                LubanIntegration.LubanDataTableDecoder.Decode(
                     provider,
                     getBytes =>
                     {
@@ -46,18 +48,19 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.Luban
         }
 
         [Test]
-        public void Create_RejectsPayloadCallbackAfterFactoryReturns()
+        public void Decode_RejectsPayloadCallbackAfterFactoryReturns()
         {
             var provider = new ArrayBytesProvider(new byte[] { 1 });
             Func<string, ByteBuf> escapedCallback = null;
 
-            LubanIntegration.LubanDataTableSetFactory.Create(
+            LubanIntegration.LubanDataTableDecoder.Decode(
                 provider,
                 getBytes =>
                 {
                     escapedCallback = getBytes;
                     return getBytes("items");
-                });
+                },
+                DataTableLoadLimits.Default);
 
             Assert.That(escapedCallback, Is.Not.Null);
             Assert.Throws<InvalidOperationException>(() => escapedCallback("items"));
@@ -74,13 +77,32 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.Luban
                 maxRowsPerTable: 1,
                 maxTableNameLength: 8);
 
-            ByteBuf buffer = LubanIntegration.LubanDataTableSetFactory.CreateOwnedByteBuf(
+            ByteBuf buffer = LubanIntegration.LubanDataTableDecoder.CreateOwnedByteBuf(
                 provider,
                 "items.bytes",
                 limits);
 
             Assert.That(provider.LastRequestedName, Is.EqualTo("items"));
             Assert.That(buffer.CopyData(), Is.EqualTo(new byte[] { 5 }));
+        }
+
+        [Test]
+        public void Decode_CancellationBetweenPayloadRequests_StopsCandidateBuild()
+        {
+            var provider = new ArrayBytesProvider(new byte[] { 1, 2, 3, 4 });
+            using var cancellation = new CancellationTokenSource();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                LubanIntegration.LubanDataTableDecoder.Decode(
+                    provider,
+                    getBytes =>
+                    {
+                        getBytes("first");
+                        cancellation.Cancel();
+                        return getBytes("second");
+                    },
+                    DataTableLoadLimits.Default,
+                    cancellation.Token));
         }
 
         private sealed class ArrayBytesProvider : IDataTableBytesProvider

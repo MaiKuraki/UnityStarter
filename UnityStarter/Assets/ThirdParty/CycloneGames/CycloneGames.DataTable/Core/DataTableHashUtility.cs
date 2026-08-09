@@ -6,6 +6,7 @@ namespace CycloneGames.DataTable
 {
     public static class DataTableHashUtility
     {
+        private const int MAX_RAW_SHA256_TEXT_LENGTH = 128;
         private static readonly char[] HexChars =
         {
             '0', '1', '2', '3', '4', '5', '6', '7',
@@ -54,7 +55,8 @@ namespace CycloneGames.DataTable
 
         public static bool Sha256Matches(ReadOnlyMemory<byte> bytes, string expectedSha256Hex)
         {
-            if (string.IsNullOrWhiteSpace(expectedSha256Hex))
+            string normalizedExpectedHash = NormalizeSha256Hex(expectedSha256Hex);
+            if (normalizedExpectedHash.Length == 0)
             {
                 return false;
             }
@@ -62,12 +64,20 @@ namespace CycloneGames.DataTable
             string actualHash = ComputeSha256Hex(bytes);
             return string.Equals(
                 actualHash,
-                NormalizeSha256Hex(expectedSha256Hex),
+                normalizedExpectedHash,
                 StringComparison.Ordinal);
         }
 
         public static string NormalizeSha256Hex(string value)
         {
+            if (value != null && value.Length > MAX_RAW_SHA256_TEXT_LENGTH)
+            {
+                throw new ArgumentException(
+                    $"SHA-256 text exceeds the pre-normalization limit of " +
+                    $"{MAX_RAW_SHA256_TEXT_LENGTH} characters.",
+                    nameof(value));
+            }
+
             return string.IsNullOrWhiteSpace(value)
                 ? string.Empty
                 : value.Trim().ToLowerInvariant();

@@ -14,13 +14,15 @@ namespace CycloneGames.DataTable
         public const long DEFAULT_MAX_TOTAL_BYTES = 512L * 1024L * 1024L;
         public const int DEFAULT_MAX_ROWS_PER_TABLE = 2_000_000;
         public const int DEFAULT_MAX_TABLE_NAME_LENGTH = 256;
+        public const int DEFAULT_MAX_LOCATION_LENGTH = 2048;
 
         public static readonly DataTableLoadLimits Default = new DataTableLoadLimits(
             DEFAULT_MAX_TABLE_COUNT,
             DEFAULT_MAX_BYTES_PER_TABLE,
             DEFAULT_MAX_TOTAL_BYTES,
             DEFAULT_MAX_ROWS_PER_TABLE,
-            DEFAULT_MAX_TABLE_NAME_LENGTH);
+            DEFAULT_MAX_TABLE_NAME_LENGTH,
+            DEFAULT_MAX_LOCATION_LENGTH);
 
         public DataTableLoadLimits(int maxTableCount, int maxBytesPerTable, long maxTotalBytes)
             : this(
@@ -28,7 +30,8 @@ namespace CycloneGames.DataTable
                 maxBytesPerTable,
                 maxTotalBytes,
                 DEFAULT_MAX_ROWS_PER_TABLE,
-                DEFAULT_MAX_TABLE_NAME_LENGTH)
+                DEFAULT_MAX_TABLE_NAME_LENGTH,
+                DEFAULT_MAX_LOCATION_LENGTH)
         {
         }
 
@@ -37,7 +40,8 @@ namespace CycloneGames.DataTable
             int maxBytesPerTable,
             long maxTotalBytes,
             int maxRowsPerTable,
-            int maxTableNameLength)
+            int maxTableNameLength,
+            int maxLocationLength = DEFAULT_MAX_LOCATION_LENGTH)
         {
             if (maxTableCount <= 0)
             {
@@ -79,11 +83,20 @@ namespace CycloneGames.DataTable
                     "Maximum table-name length must be greater than zero.");
             }
 
+            if (maxLocationLength <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxLocationLength),
+                    maxLocationLength,
+                    "Maximum data-table location length must be greater than zero.");
+            }
+
             MaxTableCount = maxTableCount;
             MaxBytesPerTable = maxBytesPerTable;
             MaxTotalBytes = maxTotalBytes;
             MaxRowsPerTable = maxRowsPerTable;
             MaxTableNameLength = maxTableNameLength;
+            MaxLocationLength = maxLocationLength;
         }
 
         public int MaxTableCount { get; }
@@ -96,12 +109,15 @@ namespace CycloneGames.DataTable
 
         public int MaxTableNameLength { get; }
 
+        public int MaxLocationLength { get; }
+
         public bool IsValid =>
             MaxTableCount > 0 &&
             MaxBytesPerTable > 0 &&
             MaxTotalBytes >= MaxBytesPerTable &&
             MaxRowsPerTable > 0 &&
-            MaxTableNameLength > 0;
+            MaxTableNameLength > 0 &&
+            MaxLocationLength > 0;
 
         public void EnsureValid(string parameterName = null)
         {
@@ -164,6 +180,32 @@ namespace CycloneGames.DataTable
             }
         }
 
+        public string NormalizeTableName(string tableName, string dataExtension = ".bytes")
+        {
+            EnsureValid();
+            return DataTableNameUtility.NormalizeTableName(
+                tableName,
+                MaxTableNameLength,
+                dataExtension);
+        }
+
+        public void ValidateLocation(string location)
+        {
+            EnsureValid();
+            if (location != null && location.Length > MaxLocationLength)
+            {
+                throw new InvalidOperationException(
+                    $"Data-table location exceeds the configured limit. " +
+                    $"Length={location.Length}, Limit={MaxLocationLength}.");
+            }
+        }
+
+        public string NormalizeLocation(string location)
+        {
+            EnsureValid();
+            return DataTableNameUtility.NormalizePath(location, MaxLocationLength);
+        }
+
         public void ValidateTotalBytes(long totalBytes)
         {
             EnsureValid();
@@ -180,7 +222,8 @@ namespace CycloneGames.DataTable
                    MaxBytesPerTable == other.MaxBytesPerTable &&
                    MaxTotalBytes == other.MaxTotalBytes &&
                    MaxRowsPerTable == other.MaxRowsPerTable &&
-                   MaxTableNameLength == other.MaxTableNameLength;
+                   MaxTableNameLength == other.MaxTableNameLength &&
+                   MaxLocationLength == other.MaxLocationLength;
         }
 
         public override bool Equals(object obj)
@@ -197,6 +240,7 @@ namespace CycloneGames.DataTable
                 hashCode = (hashCode * 397) ^ MaxTotalBytes.GetHashCode();
                 hashCode = (hashCode * 397) ^ MaxRowsPerTable;
                 hashCode = (hashCode * 397) ^ MaxTableNameLength;
+                hashCode = (hashCode * 397) ^ MaxLocationLength;
                 return hashCode;
             }
         }

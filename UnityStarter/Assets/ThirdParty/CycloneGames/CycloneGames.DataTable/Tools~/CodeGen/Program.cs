@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 
 namespace CycloneGames.DataTable.CodeGen
 {
@@ -38,6 +39,7 @@ namespace CycloneGames.DataTable.CodeGen
                     }
 
                     StringConstantGenerator.RunSelfTests();
+                    DataTablePipeline.RunSelfTests();
                     Console.WriteLine("[DataTable.CodeGen] Self-tests passed.");
                     return 0;
                 }
@@ -55,9 +57,29 @@ namespace CycloneGames.DataTable.CodeGen
                     return 0;
                 }
 
-                ToolArguments arguments = ToolArguments.Parse(args);
-                StringConstantGenerator.Run(arguments);
-                return 0;
+                if (args.Length == 0 ||
+                    !string.Equals(args[0], "pipeline", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        "Only the transactional pipeline interface is supported. " +
+                        "Use 'pipeline generate', 'pipeline check', 'pipeline recover', or 'pipeline inspect'.");
+                }
+
+                using var cancellation = new CancellationTokenSource();
+                ConsoleCancelEventHandler handler = (_, eventArgs) =>
+                {
+                    eventArgs.Cancel = true;
+                    cancellation.Cancel();
+                };
+                Console.CancelKeyPress += handler;
+                try
+                {
+                    return DataTablePipeline.Run(args.Skip(1).ToArray(), cancellation.Token);
+                }
+                finally
+                {
+                    Console.CancelKeyPress -= handler;
+                }
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
@@ -69,8 +91,10 @@ namespace CycloneGames.DataTable.CodeGen
         private static void PrintUsage()
         {
             Console.WriteLine("CycloneGames.DataTable.CodeGen");
-            Console.WriteLine("Required: --config <file> --luban-conf <file> --data-dir <dir> --target <name> --code-output <dir>");
-            Console.WriteLine("Optional: --line-ending <crlf|lf> --validate-only");
+            Console.WriteLine("pipeline generate --config <file> [--profile <name>]");
+            Console.WriteLine("pipeline check --config <file> [--profile <name>]");
+            Console.WriteLine("pipeline recover --config <file> --run-id <id>");
+            Console.WriteLine("pipeline inspect --config <file> --profile <name> --format json");
             Console.WriteLine("Focused safety checks: --self-test");
         }
 
@@ -81,7 +105,8 @@ namespace CycloneGames.DataTable.CodeGen
                    not AppDomainUnloadedException and
                    not BadImageFormatException and
                    not CannotUnloadAppDomainException and
-                   not StackOverflowException;
+                   not StackOverflowException and
+                   not ThreadAbortException;
         }
     }
 }

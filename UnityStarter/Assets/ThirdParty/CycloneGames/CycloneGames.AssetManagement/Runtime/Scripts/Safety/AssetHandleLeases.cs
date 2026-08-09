@@ -52,6 +52,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             private IAssetHandle<TAsset> _handle;
             private readonly UniTask _task;
+            private int _disposeState;
 
             public AssetHandleLease(IAssetHandle<TAsset> handle, CancellationToken cancellationToken)
             {
@@ -88,7 +89,7 @@ namespace CycloneGames.AssetManagement.Runtime
             public void Dispose()
             {
                 AssetRuntimeGuard.EnsureMainThread();
-                Interlocked.Exchange(ref _handle, null)?.Dispose();
+                DisposeRetainingOnFailure(ref _handle, ref _disposeState);
             }
 
             public bool TryGetBackend<TBackend>(out TBackend backend) where TBackend : class
@@ -112,6 +113,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             private IAllAssetsHandle<TAsset> _handle;
             private readonly UniTask _task;
+            private int _disposeState;
 
             public AllAssetsHandleLease(IAllAssetsHandle<TAsset> handle, CancellationToken cancellationToken)
             {
@@ -147,7 +149,7 @@ namespace CycloneGames.AssetManagement.Runtime
             public void Dispose()
             {
                 AssetRuntimeGuard.EnsureMainThread();
-                Interlocked.Exchange(ref _handle, null)?.Dispose();
+                DisposeRetainingOnFailure(ref _handle, ref _disposeState);
             }
 
             private IAllAssetsHandle<TAsset> GetHandle()
@@ -163,6 +165,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             private IRawFileHandle _handle;
             private readonly UniTask _task;
+            private int _disposeState;
 
             public RawFileHandleLease(IRawFileHandle handle, CancellationToken cancellationToken)
             {
@@ -208,7 +211,7 @@ namespace CycloneGames.AssetManagement.Runtime
             public void Dispose()
             {
                 AssetRuntimeGuard.EnsureMainThread();
-                Interlocked.Exchange(ref _handle, null)?.Dispose();
+                DisposeRetainingOnFailure(ref _handle, ref _disposeState);
             }
 
             private IRawFileHandle GetHandle()
@@ -217,6 +220,46 @@ namespace CycloneGames.AssetManagement.Runtime
                     nameof(RawFileHandleLease));
                 ThrowIfBackendDisposed(handle, nameof(RawFileHandleLease));
                 return handle;
+            }
+        }
+
+        private static void DisposeRetainingOnFailure<THandle>(
+            ref THandle handle,
+            ref int disposeState)
+            where THandle : class, IDisposable
+        {
+            const int ACTIVE = 0;
+            const int DISPOSING = 1;
+            const int DISPOSED = 2;
+
+            int observedState = Volatile.Read(ref disposeState);
+            if (observedState == DISPOSED ||
+                Interlocked.CompareExchange(ref disposeState, DISPOSING, ACTIVE) != ACTIVE)
+            {
+                // Disposal is main-thread-affine. A DISPOSING observation can therefore only be
+                // re-entrant; the outer call owns completion and must not release twice.
+                return;
+            }
+
+            THandle current = Volatile.Read(ref handle);
+            if (current == null)
+            {
+                Volatile.Write(ref disposeState, DISPOSED);
+                return;
+            }
+
+            try
+            {
+                current.Dispose();
+                Interlocked.CompareExchange(ref handle, null, current);
+                Volatile.Write(ref disposeState, DISPOSED);
+            }
+            catch
+            {
+                // Retain the exact backend lease so an owner can retry a recoverable cleanup
+                // failure. Clearing before Dispose would permanently lose that ownership edge.
+                Volatile.Write(ref disposeState, ACTIVE);
+                throw;
             }
         }
 

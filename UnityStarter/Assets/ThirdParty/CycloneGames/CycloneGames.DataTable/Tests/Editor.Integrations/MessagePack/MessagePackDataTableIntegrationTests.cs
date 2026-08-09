@@ -59,7 +59,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
             };
             byte[] payload = MessagePackSerializer.Serialize(rows, Options);
 
-            DataTable<TestRow> table = MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+            DataTable<TestRow> table = MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                 payload,
                 Options,
                 Security,
@@ -82,7 +82,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
             payload[payload.Length - 1] = 0xc0;
 
             Assert.Throws<InvalidDataException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     payload,
                     Options,
                     Security,
@@ -99,11 +99,31 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
             Buffer.BlockCopy(encoded, 0, truncated, 0, truncated.Length);
 
             Assert.Throws<InvalidDataException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     truncated,
                     Options,
                     Security,
                     Limits));
+        }
+
+        [TestCase(MessagePackCompression.Lz4Block)]
+        [TestCase(MessagePackCompression.Lz4BlockArray)]
+        public void Build_RejectsCompressedOptionsBeforeDeserialization(
+            MessagePackCompression compression)
+        {
+            MessagePackSerializerOptions compressedOptions = Options.WithCompression(compression);
+            byte[] payload = MessagePackSerializer.Serialize(
+                new[] { new TestRow { Id = 1, Name = "one" } },
+                compressedOptions);
+
+            ArgumentException exception = Assert.Throws<ArgumentException>(() =>
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
+                    payload,
+                    compressedOptions,
+                    Security,
+                    Limits));
+
+            Assert.That(exception.ParamName, Is.EqualTo("options"));
         }
 
         [Test]
@@ -123,7 +143,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
                 .WithMaximumDecompressedSize(1);
 
             Assert.Throws<InvalidOperationException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     payload,
                     Options,
                     security,
@@ -140,7 +160,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
             cancellation.Cancel();
 
             Assert.Throws<OperationCanceledException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     payload,
                     Options,
                     Security,
@@ -166,7 +186,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
                 maxTableNameLength: 32);
 
             Assert.Throws<InvalidDataException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     payload,
                     Options,
                     Security,
@@ -181,7 +201,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack
                 Options);
 
             Assert.Throws<ArgumentException>(() =>
-                MessagePackIntegration.MessagePackConfigProvider.Build<TestRow>(
+                MessagePackIntegration.MessagePackDataTableDecoder.Build<TestRow>(
                     payload,
                     Options,
                     MessagePackSecurity.TrustedData,
