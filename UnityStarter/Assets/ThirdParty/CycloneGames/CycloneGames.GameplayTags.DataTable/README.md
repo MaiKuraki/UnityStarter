@@ -26,7 +26,7 @@ Use this module when gameplay configuration lives in generated tables (including
 - **Definition sources** map table rows to authoritative tag registrations with name, description, flags, and enabled state.
 - **Reference sources** enumerate tag names from one or more fields in gameplay rows.
 - **Luban/Excel integration** with explicit key selectors for generated row types.
-- **DataTableCatalog** composition and `DataTableRegistry` publication.
+- **DataTableCatalog** composition and instance-owned `DataTableStore` generation publication.
 - **Coordinated reload** with rollback on failure.
 
 ## Architecture
@@ -115,7 +115,7 @@ Register every startup source before the first call to `InitializeIfNeeded()`.
 | `GameplayTagDataTableReferenceSource<TRow>` | Enumerates tag names referenced by fields in each gameplay row |
 | `GameplayTagRuntimePlatform` | Registers named project sources with GameplayTags |
 | `DataTableCatalog` | Groups typed tables into one immutable catalog |
-| `DataTableRegistry` | Optionally publishes one catalog process-wide |
+| `DataTableStore` / `DataTableReader` | Optionally publish versioned Catalog generations and pin a consumer to one snapshot |
 
 Definition and reference rows serve different purposes. A definition row owns tag metadata. A reference row reports that a tag name is used. Projects that require a closed vocabulary should validate every reference against the definition table before registration.
 
@@ -200,7 +200,17 @@ catalogBuilder.Add<IDataTableRows<AbilityRow>>(abilityTable);
 DataTableCatalog catalog = catalogBuilder.Build();
 
 GameplayTagManager.InitializeIfNeeded();
-DataTableRegistry.Publish(catalog);
+using var store = new DataTableStore(revisionSequenceFloor: 0);
+using DataTableReader reader = store.RegisterReader();
+using var candidate = new DataTableCandidate(
+    catalog,
+    new DataTableRevision(sequence: 1, id: contentSha256));
+
+DataTablePublishResult result = store.TryPublish(candidate, expectedGeneration: 0);
+if (!result.IsCommitted)
+    throw new InvalidOperationException($"Catalog publication rejected: {result.Status}");
+
+reader.Refresh(); // only at a point where no operation uses the old snapshot
 ```
 
 ### Source Ordering
@@ -227,15 +237,21 @@ Build and validate a complete candidate before modifying active sources:
 4. Create definition and reference sources over the candidate tables.
 5. Register each candidate source with the stable name of the source it replaces.
 6. Call `GameplayTagManager.ReloadTags()`.
-7. Publish the candidate DataTable catalog.
-8. Update the composition owner's active generation.
-9. Release the retired generation only after its readers have completed.
+7. Call `TryPublish` with the DataTable generation captured before candidate work began.
+8. If publication is rejected, restore the previous tag sources and reload tags again; the DataTable candidate remains caller-owned.
+9. If publication commits, refresh each DataTable reader at a coordinated safe point.
+10. Resume dependent consumers. The Store releases the retired backing owner after its final reader leaves.
 
 On tag reload failure, roll back:
 
 ```csharp
+long expectedDataTableGeneration = _dataTableStore.Metadata.Generation;
 IGameplayTagSource previousDefinitionSource = _activeDefinitionSource;
-IGameplayTagSource nextDefinitionSource = candidate.DefinitionSource;
+IGameplayTagSource nextDefinitionSource = BuildDefinitionSource(candidateCatalog);
+using var tableCandidate = new DataTableCandidate(
+    candidateCatalog,
+    trustedRevision,
+    candidateResourceOwner);
 
 GameplayTagRuntimePlatform.RegisterProjectTagSource(nextDefinitionSource);
 try
@@ -248,17 +264,29 @@ catch
         GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
     else
         GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
-    candidate.Dispose();
     throw;
 }
 
-DataTableRegistry.Publish(candidate.Catalog);
-RetireAfterReadersComplete(_activeGeneration);
-_activeGeneration = candidate;
+DataTablePublishResult publish = _dataTableStore.TryPublish(
+    tableCandidate,
+    expectedDataTableGeneration);
+if (!publish.IsCommitted)
+{
+    if (previousDefinitionSource != null)
+        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+    else
+        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+
+    GameplayTagManager.ReloadTags();
+    HandleRejectedTableCandidate(publish);
+    return;
+}
+
+RequestDataTableReaderRefreshAtSafePoint();
 _activeDefinitionSource = nextDefinitionSource;
 ```
 
-`GameplayTagManager.ReloadTags()` and `DataTableRegistry.Publish()` are separate publications. Pause dependent readers during reload if a consumer must never observe tags and tables from different generations.
+`GameplayTagManager.ReloadTags()` and `DataTableStore.TryPublish()` remain two separate publication seams; neither can make the other atomic. Pause dependent consumers around both transitions when they must never observe tags and tables from different generations. Treat `Superseded` and `NonMonotonicRevision` as expected rejection statuses and restore the previous tag source before resuming. Process-fatal exceptions such as `OutOfMemoryException` are fail-stop conditions, not a normal rollback branch.
 
 ### Ownership and Lifetime
 
@@ -266,9 +294,10 @@ Adapters borrow their rows:
 
 - `DataTable` copies the top-level input array but does not deep-clone row objects or nested collections.
 - `DataTableCatalog` does not own or dispose its table instances.
-- `DataTableRegistry.Reset()` removes the published reference but does not dispose the retired generation.
+- A caller-owned `DataTableCandidate` owns its optional backing resource until publication commits; rejected publication does not transfer ownership.
+- A committed candidate's owner belongs to `DataTableStore`. Each `DataTableReader` pins one generation until it refreshes or disposes.
 
-Keep rows, nested tag collections, and any backing resource stable during registration and reload. Dispose resources only after the generation is no longer published and all readers have completed.
+Keep rows, nested tag collections, and any backing resource stable during registration and reload. Do not retain a borrowed `DataTableSnapshot` across `DataTableReader.Refresh()`. Thread-affine backing resources require an owner-thread disposal adapter because the final reader transition may trigger retirement on its calling thread.
 
 ## Performance and Memory
 

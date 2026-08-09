@@ -8,17 +8,21 @@ namespace CycloneGames.DataTable
             long totalBytes,
             bool isSealed,
             bool isClosed,
+            bool isReleaseComplete,
             DataTableLoadLimits limits,
             long releasedPayloadCount,
-            long releasedBytes)
+            long releasedBytes,
+            long clearedBytes)
         {
             PayloadCount = payloadCount;
             TotalBytes = totalBytes;
             IsSealed = isSealed;
             IsClosed = isClosed;
+            IsReleaseComplete = isReleaseComplete;
             Limits = limits;
             ReleasedPayloadCount = releasedPayloadCount;
             ReleasedBytes = releasedBytes;
+            ClearedBytes = clearedBytes;
         }
 
         public int PayloadCount { get; }
@@ -29,36 +33,14 @@ namespace CycloneGames.DataTable
 
         public bool IsClosed { get; }
 
+        public bool IsReleaseComplete { get; }
+
         public DataTableLoadLimits Limits { get; }
 
         public long ReleasedPayloadCount { get; }
 
         public long ReleasedBytes { get; }
-    }
 
-    /// <summary>Result of one bounded release pass over a closed payload cache.</summary>
-    public readonly struct DataTableBytesCacheReleaseResult
-    {
-        internal DataTableBytesCacheReleaseResult(
-            int workConsumed,
-            long releasedBytes,
-            int remainingPayloadCount,
-            long remainingBytes)
-        {
-            WorkConsumed = workConsumed;
-            ReleasedBytes = releasedBytes;
-            RemainingPayloadCount = remainingPayloadCount;
-            RemainingBytes = remainingBytes;
-        }
-
-        public int WorkConsumed { get; }
-
-        public long ReleasedBytes { get; }
-
-        public int RemainingPayloadCount { get; }
-
-        public long RemainingBytes { get; }
-
-        public bool HasMorePayloads => RemainingPayloadCount > 0;
+        public long ClearedBytes { get; }
     }
 }

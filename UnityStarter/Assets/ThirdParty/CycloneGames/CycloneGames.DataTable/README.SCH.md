@@ -1,77 +1,148 @@
 # CycloneGames.DataTable
 
-[English | 简体中文](README.md)
+[English](./README.md) | 简体中文
 
-CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag、技能数值、成长曲线、本地化文本——加载为不可变表快照，按键 O(1) 查询。每次加载的数据量由 `DataTableLoadLimits` 控制，每份数据在任何人读取前都经过 SHA-256 manifest 校验。核心程序集不含 `UnityEngine` 依赖；Luban 和 MessagePack 适配器放在独立的集成程序集中。
+CycloneGames.DataTable 是面向 Unity、纯 C# Host、工具和服务器的强类型不可变配置数据底座。它把载荷获取、解码、业务校验和发布拆成独立环节，产品可以自选数据来源与序列化格式，Gameplay 代码不必和这些实现耦合。Core assembly 不依赖 `UnityEngine`。
+
+本文档是方案设计与 Runtime API 的参考。事务化 Luban 构建管线见 [DataTable/Luban 构建手册](../../../../../DataTable/Luban/README.SCH.md)。
 
 ## 目录
 
-- [概述](#概述)
+- [从这里开始](#从这里开始)
 - [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
+- [五分钟 Core 教程](#五分钟-core-教程)
+- [构建概览](#构建概览)
+- [Runtime 加载管线](#runtime-加载管线)
+- [所有权与生命周期](#所有权与生命周期)
+- [性能与平台注意事项](#性能与平台注意事项)
+- [安全与持久化](#安全与持久化)
+- [扩展点](#扩展点)
 - [故障排查](#故障排查)
+- [验证](#验证)
+- [API 导航](#api-导航)
 
-## 概述
+## 从这里开始
 
-`DataTable<TKey, TRow>` 保存按源排序的行数据。`DataTableCatalog` 把强类型表组合成一个快照。`DataTableRegistry` 提供进程级原子发布入口。可变游戏状态、存档事务、网络同步、数据库查询和特定 schema 的业务规则，各自归各自的系统管。
+### 模块解决什么问题
 
-### 主要特性
+DataTable 面向按来源顺序排列、以读取为主的配置：物品定义、能力参数、成长曲线、本地化元数据、生成式 schema table 等。它提供：
 
-- **不可变表快照**：保持源顺序的 row 和期望 `O(1)` 查询。
-- **强类型 Catalog**：按准确 contract type 组合多个表。
-- **进程级原子发布**：通过 `DataTableRegistry`，支持 volatile snapshot 读取。
-- **有界 payload 加载**：通过 `DataTableBytesCache` 与 `DataTableLoadLimits`。
-- **完整性元数据**：通过 `DataTableManifest`（schema 版本、必需表、字节长度、SHA-256）。
-- **AOT-safe 注册**：通过显式 `TableDescriptor<TTableSet>` 注册生成表集合，无运行时反射。
-- **Luban 与 MessagePack adapter**：与纯 C# Core assembly 隔离。
-- **Unity Editor 集成**：`DataTableLubanSettings`、自定义 Inspector 和带安全保护的 Luban 进程 Runner。
-- **纯 Core 诊断**：使用模块本地 port，在 Core 外通过可选 `CycloneGames.Logging` adapter 接入统一管线；library assembly 不直接使用 Unity 或 Console 日志 API。
+- 结构不可变、`O(1)` key 查询的 `DataTable<TKey, TRow>`；
+- 以精确 contract type 为索引的 `DataTableCatalog` snapshot；
+- 载荷 limit、可移植名称、location、manifest、长度与 SHA-256 校验；
+- 不依赖 Runtime 反射的生成表注册；
+- 带 reader 固定与延迟资源退役的版本化 `DataTableStore` 发布；
+- 相互独立的 Luban、MessagePack、AssetManagement 与 Logging integration。
+
+可变游戏状态、存档、网络复制、数据库查询、schema 特定业务规则、签名与产品信任策略都不在本模块范围内。DataTable 也不会自动读取文件，更不会替生成输出挑选 Runtime Provider。
+
+### 在三个轴上组合方案
+
+三个轴相互独立。每一行选择一项；diagnostics 是可选的正交能力。
+
+| 轴 | 可选项 | 决策内容 |
+| --- | --- | --- |
+| 1. 获取 | 已物化 row；`DataTableBytesCache`；自定义 `IDataTableBytesProvider`；AssetManagement integration | 字节位于何处、由哪个线程持有、怎样结束其生命周期。 |
+| 2. 解码 | 不需要 decoder；Luban；MessagePack；自定义 decoder | 哪种载荷格式转换为强类型 row 或生成 table set。 |
+| 3. 发布 | 直接组合 `DataTableCatalog`；`DataTableStore` + `DataTableReader` | Consumer 使用固定 catalog，还是显式切换 generation。 |
+
+常见组合：
+
+| 场景 | 获取 | 解码 | 发布 |
+| --- | --- | --- | --- |
+| 小型固定项目 | 手写或生成的 row array | 无 | 直接注入一个 catalog。 |
+| Luban Client 配置 | 产品 Provider 或有界 cache | Luban integration | 是否需要 reload 决定使用直接 catalog 或 Store。 |
+| MessagePack 配置 | 产品 Provider 或有界 cache | MessagePack integration | 直接 catalog 或 Store。 |
+| Unity asset package | AssetManagement TextAsset 或 raw-file loader | Luban、MessagePack 或产品 decoder | asset handle 需要随 generation 退役时通常使用 Store。 |
+| Server 或测试 Host | 文件系统、网络或内存自定义 Provider | Host 可用的任意纯 C# decoder | 直接 catalog 或由实例持有的 Store。 |
+
+### 当前 assembly 与启用状态
+
+下表来自当前 asmdef、package manifest、本地 package 和编译约束。增加 asmdef 引用无法补足未满足的 `defineConstraints` 或 `versionDefines` 条件。
+
+| Assembly | 当前状态 | 引用与启用规则 |
+| --- | --- | --- |
+| `CycloneGames.DataTable.Core` | 可用 | 纯 C#、`noEngineReferences: true`、`autoReferenced: true`。 |
+| `CycloneGames.DataTable.Unity.Editor` | Editor 中可用 | 引用 Core 和 UniTask；`autoReferenced: false`。当前项目 manifest 包含 UniTask。 |
+| `CycloneGames.DataTable.Integrations.Logging` | 可用，按需启用 | 引用 Core 和本地 `CycloneGames.Logging.Core`；`autoReferenced: false`。 |
+| `CycloneGames.DataTable.Integrations.Logging.Editor` | Editor 中可用 | 自动引用的 Editor bootstrap。仅在 DataTable diagnostics sink 未被占用时安装 Logging adapter。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | 当前 checkout 未启用 | 需要 `[1.2.0,2.0.0)` 范围内的 `com.code-philosophy.luban`，使 Unity 生成 `LUBAN`；当前 manifest 不含该 package。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | 当前 checkout 未启用 | 需要 `[3.1.8,4.0.0)` 范围内的 `com.github.messagepack-csharp`，使 Unity 生成 `MESSAGEPACK`，并引用 `MessagePack.dll`；当前 package 和 binary 均不存在。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | 当前 asset-style 布局中未启用 | 需要从 UPM package ID `com.cyclone-games.asset-management` 生成 `CYCLONE_ASSET_MANAGEMENT`。目标模块位于 `Assets` 下，其 `package.json` 不会激活这条 `versionDefines`。 |
+
+不要通过 PlayerSettings scripting symbol 掩盖未启用的 integration。把依赖安装或放置到 assembly 级启用规则成立的位置，或者直接基于 Core 实现产品 Provider。
 
 ## 架构
 
-| 程序集 | 命名空间 | 职责 |
-| --- | --- | --- |
-| `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、本地 diagnostics 和 Scope。纯 C#，启用 `noEngineReferences: true`，且不引用 Logging。 |
-| `CycloneGames.DataTable.Integrations.Logging` | `CycloneGames.DataTable` | 从 `IDataTableDiagnostics` 到 `CycloneGames.Logging` 的可选纯 C# bridge；`autoReferenced: false`。 |
-| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和异步外部进程执行。仅 Editor；依赖 UniTask。 |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | 有界的 Luban `ByteBuf` 创建和生成表集合构造。 |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | 有界的 MessagePack 行数组解码。 |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | 可选的 UniTask `TextAsset` 和 raw-file payload loader；在 asset-style 安装方式下不参与编译。 |
-
-Core 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
-
-Core 自己持有 `IDataTableDiagnostics`/`NullDataTableDiagnostics` 契约、`DataTableDiagnosticCategories.Root` 和进程级 `DataTableDiagnostics` 替换点，不引用 `ILogWriter`、`LogChannel` 或 Unity。`DataTableLogWriterAdapter` 是接入共享管线的可选 adapter。非 Core 的日志生产 assembly 继续把 channel 构造收敛到 `DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`。`DataTableCoreDiagnostics` 是 Core 唯一的故障隔离边界；普通 sink 异常不能改变业务控制流，而 `OutOfMemoryException` 会有意继续传播。
-
-这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.data-table` package root 还包含非 Core assembly，因此声明 `com.cyclone-games.logging` 以及 Editor runner 所需的 UniTask 版本；若要只安装 Core 且完全不产生这些 package dependency，仍需后续进行物理 Core package 拆分。
+### 端到端数据路径
 
 ```mermaid
 flowchart LR
-    A[生成行或 payload 字节] --> B[应用限制并校验完整性]
-    B --> C[解码并校验行数据]
-    C --> D[构建强类型 DataTable]
-    D --> E[构建候选 DataTableCatalog]
-    E --> F[校验跨表引用]
-    F --> G[注入 Catalog 或原子发布]
-    G --> H[只读游戏逻辑消费者]
+    subgraph Build["构建时"]
+        S["Defines 与 workbooks"] --> P["事务化 Luban 管线"]
+        C["build_config.ini 与 luban.conf"] --> P
+        P --> GC["生成 C#"]
+        P --> GB["生成载荷与 receipt"]
+    end
 
-    classDef input fill:#dbeafe,stroke:#2563eb,color:#172554
-    classDef validation fill:#fef3c7,stroke:#d97706,color:#451a03
+    subgraph Runtime["Runtime 组合"]
+        BP["IDataTableBytesProvider"] --> MV["Limits 与 manifest 校验"]
+        MV --> DE["Luban、MessagePack 或自定义解码"]
+        DE --> BV["产品业务校验"]
+        BV --> CA["DataTableCatalog"]
+        CA --> DI["直接 DI"]
+        CA --> CD["DataTableCandidate"]
+        CD --> ST["DataTableStore"]
+        ST --> RD["DataTableReader"]
+    end
+
+    GC --> DE
+    GB --> BP
+
+    classDef source fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef guard fill:#fef3c7,stroke:#d97706,color:#451a03
     classDef snapshot fill:#dcfce7,stroke:#16a34a,color:#052e16
-    class A input
-    class B,C,F validation
-    class D,E,G,H snapshot
+    class S,C,GC,GB,BP source
+    class P,MV,DE,BV guard
+    class CA,DI,CD,ST,RD snapshot
 ```
 
-构造、解码、Hash 和校验属于冷路径工作。游戏逻辑从已经发布的 Table 或 Catalog 中读取数据。
+构建时生成与 Runtime 加载是两套独立契约。管线产出代码与载荷文件；Runtime composition root 决定载荷如何获取、认证、解码、校验、发布和退役。
 
-## 快速上手
+### Generation 与 reader 生命周期
 
-在消费者 asmdef 中加入 `CycloneGames.DataTable.Core`。纯 C# 消费者不需要 Unity Runtime assembly。
+```mermaid
+stateDiagram-v2
+    [*] --> CallerOwned: 创建已校验 candidate
+    CallerOwned --> Published: TryPublish committed
+    CallerOwned --> CallerOwned: superseded 或 non-monotonic
+    CallerOwned --> Disposed: caller dispose
+    Published --> Latest: Store 持有 candidate 资源
+    Latest --> Retired: 发布新 generation 或 reset
+    Retired --> Released: 最后一个固定 reader 离开
+    Released --> [*]
+
+    state Latest {
+        [*] --> ReaderPinned
+        ReaderPinned --> ReaderPinned: 稳态读取
+        ReaderPinned --> NewGeneration: 在安全点 Refresh
+    }
+```
+
+发布成功会消费 candidate；被拒绝时 candidate 仍归 caller。发布不会移动现有 reader，`Refresh()` 才是切换 generation 的边界。已退役的 generation 要等最后一个固定 reader 离开才释放 resource owner。
+
+### Core 边界
+
+- Core 包含 table、catalog、limit、manifest、byte cache、生成 descriptor、Store/Reader 发布、名称、location、hash 与模块内 diagnostics。
+- Core 不引用 Unity、Logging、Luban、MessagePack、AssetManagement、DI container 或 service locator。
+- Integration assembly 向内依赖 Core；Core 永远不依赖 integration。
+- 不使用 Runtime 类型发现。生成模型通过显式 `DataTableGeneratedTableCollector.TableDescriptor<TTableSet>` 进入 catalog。
+
+## 五分钟 Core 教程
+
+### 1. 引用 Core
+
+使用 asmdef 的 Consumer 增加 Core assembly：
 
 ```json
 {
@@ -81,9 +152,9 @@ flowchart LR
 }
 ```
 
-### 定义整数键行
+### 2. 定义 row 并构建 table
 
-主键为 `int` 时实现 `IDataRow`。发布后的行值应保持不可变。
+`IDataRow` 是 `int` key 的便捷 contract。已发布 row 的值和引用对象要保持不可变。
 
 ```csharp
 using CycloneGames.DataTable;
@@ -101,11 +172,7 @@ public sealed class ItemRow : IDataRow
     public string Name { get; }
     public int MaxStack { get; }
 }
-```
 
-### 构建表
-
-```csharp
 var items = new DataTable<ItemRow>(new[]
 {
     new ItemRow(1001, "Health Potion", 20),
@@ -113,136 +180,110 @@ var items = new DataTable<ItemRow>(new[]
 });
 ```
 
-构造函数会复制源数组、保留行顺序并建立 key-to-index Dictionary。遇到 null row、null key 或重复 key 时，构造会失败。
+Array constructor 会复制来源、保留 row 顺序并构建 key-to-index dictionary。Null row、null key、重复 key 或 row count 超限都会使构建失败。
 
-### 查询行
-
-```csharp
-ItemRow healthPotion = items.Get(1001);
-
-if (items.TryGet(1002, out ItemRow manaPotion))
-{
-    UseItem(manaPotion);
-}
-
-ItemRow missing = items.GetOrDefault(9999); // 对这个 class row 返回 null
-
-for (int i = 0; i < items.Count; i++)
-{
-    ItemRow row = items.All[i];
-    RegisterItem(row);
-}
-```
-
-当缺少 key 代表数据契约错误时使用 `Get`，找不到时会抛出 `KeyNotFoundException`。可选查询使用 `TryGet`。只有在 `default(TRow)` 对该行类型含义明确时才使用 `GetOrDefault`。
-
-## 核心概念
-
-### 自定义键类型与生成模型
-
-Row 不必实现 DataTable interface。当生成模型无法修改，或 key 不是 `int` 时，传入 key selector。
+当 row 无法实现 `IDataRow<TKey>` 时，传入 selector 和 comparer：
 
 ```csharp
-using System;
-using CycloneGames.DataTable;
-
-public sealed class LocalizedTextRow
-{
-    public LocalizedTextRow(string key, string text)
-    {
-        Key = key;
-        Text = text;
-    }
-
-    public string Key { get; }
-    public string Text { get; }
-}
-
 var texts = new DataTable<string, LocalizedTextRow>(
-    new[]
-    {
-        new LocalizedTextRow("ui.play", "Play"),
-        new LocalizedTextRow("ui.quit", "Quit"),
-    },
+    decodedRows,
     static row => row.Key,
     StringComparer.Ordinal);
 ```
 
-应明确选择 key 的等价语义：
-
-- 使用能跨越序列化和内容重建保持稳定的整数、枚举、GUID 或字符串值；
-- 大小写敏感的标识符使用 `StringComparer.Ordinal`；
-- 只有内容契约明确规定标识符不区分大小写时才使用 `StringComparer.OrdinalIgnoreCase`；
-- 持久化内容 key 不使用文化相关比较、Unity object identity 或临时 runtime handle。
-
-Key selector 只在构造时对每一行执行一次，不会在每次查询时执行。
-
-### 行存储与所有权
-
-`DataTable<TKey, TRow>` 在结构上不可变：构造后不能添加、删除或替换行。`All` 按源顺序提供只读 view，查询 Dictionary 保存的是整数行索引，不会在 Dictionary 中保存第二份 row 值。
-
-结构不可变不等于深拷贝 row object。Class row 及其引用的每个可变对象必须在 Table 生命周期内保持不变。调用方提供的 comparer 也必须能安全地支持并发读取。
-
-根据源数据所有权选择构造 API：
-
-| API | 源数据处理 | 推荐用途 |
-| --- | --- | --- |
-| `new DataTable(... array ...)` | 复制数组 | 调用方继续持有源数组时的安全默认方式。 |
-| `new DataTable(... list ...)` | 把 List 元素复制到自有数组 | 已有 `List<TRow>` 的安全默认方式。 |
-| `FromEnumerable` | 物化一次，并应用行数限制 | 流式或计算产生的冷路径输入。 |
-| `FromOwnedArray` | 不复制，直接接管数组 | Decoder 生成且不存在其他可写 alias 的数组。 |
+### 3. 查询并组合 table
 
 ```csharp
-ItemRow[] decodedRows = DecodeAndValidateItems();
+ItemRow required = items.Get(1001);
 
-DataTable<ItemRow> items = DataTable<ItemRow>.FromOwnedArray(
-    decodedRows,
-    limits);
+if (items.TryGet(1002, out ItemRow optional))
+{
+    Use(optional);
+}
 
-decodedRows = null; // 所有权已经转移到 Table
-```
-
-`FromOwnedArray` 成功后，任何代码都不能再修改转移的数组。所有权转移只作用于数组容器；其中引用的 class instance 仍需遵守产品的不可变 row 契约。
-
-### Catalog 与发布
-
-`DataTableCatalog` 使用准确的 contract type 组合一组相关表。应先完成整个 Catalog，再把它暴露给游戏系统。
-
-```csharp
-DataTable<ItemRow> items = BuildItems();
-DataTable<string, PriceRow> prices = new DataTable<string, PriceRow>(
-    DecodePrices(),
-    static row => row.ItemCode,
-    StringComparer.Ordinal);
-
-DataTableCatalog catalog = new DataTableCatalogBuilder(limits, capacity: 2)
+var catalog = new DataTableCatalogBuilder(capacity: 1)
     .Add<IDataTable<ItemRow>>(items)
-    .Add<IDataTable<string, PriceRow>>(prices)
     .Build();
 
-ValidateItemReferences(catalog);
-```
-
-Catalog 按传给 `Add` 的准确类型查询。读取时必须使用同一个 contract type：
-
-```csharp
 IDataTable<ItemRow> itemTable = catalog.Get<IDataTable<ItemRow>>();
-
-if (catalog.TryGet<IDataTable<string, PriceRow>>(out var priceTable))
-{
-    ShowPrice(priceTable.Get("potion.health"));
-}
 ```
 
-`DataTableCatalogBuilder` 只能消费一次。`Build()` 会把内部 map 转交给不可变 Catalog，此后对 Builder 的操作都会失败。Contract type 重复、null entry、实例类型不兼容，或表数量超过 `DataTableLoadLimits.MaxTableCount`，都会在 Catalog 创建前失败。
+Key 或 contract 不存在时 `Get` 抛出 `KeyNotFoundException`，`TryGet` 是非抛出路径。Catalog 以传给 `Add` 的精确 contract type 查询；一次性 builder 在 `Build()` 后不能复用。
 
-进程级发布使用 `DataTableRegistry.Publish(catalog)` 原子替换整个 Catalog。一次跨多表操作只读取一次 `Current`——即使随后发布了另一代，已经捕获的引用仍保持内部一致。诊断信息可以记录 `Generation`。`Reset()` 只移除进程级引用，不会 Dispose Table 或 backing resource。
+### 4. 选择直接组合或发布
 
-## 使用指南
+一个 catalog 在整个 scope 内固定不变时，直接注入 `DataTableCatalog`。需要以完整已校验 generation 替换旧 generation、同时让现有 Consumer 在固定 snapshot 上收尾时，使用 `DataTableStore`。不要只为了拿到全局访问而给固定配置加 Store；Store 必须显式构造和持有。
 
-### 有界 payload 加载
+## 构建概览
 
-为一组内容创建统一的限制配置。数值应来自真实生成内容、重载峰值内存测量和最低支持硬件档位。
+### 当前初始配置状态
+
+仓库包含事务化管线、launcher、`build_config.ini`、`luban.conf`，以及一个选择 profile `client` 的 `UnityStarter/Assets/Editor/DataTable/DataTableLubanSettings.asset`。当前 checkout 不包含 `DataTable/Luban/Defines`、`DataTable/Luban/Datas`、经批准的 Luban executable/DLL 或生成输出根。`build_config.ini` 中的 Luban identity 与 source fingerprint 字段仍是占位值，也不存在 generation receipt。补齐这些输入并审查 identity 之前，generation 保持 fail closed。
+
+### 规范输入
+
+| 输入 | 用途 |
+| --- | --- |
+| `<repo-root>/DataTable/Luban/Defines/` | Luban schema 定义。 |
+| `<repo-root>/DataTable/Luban/Datas/` | Workbooks，包括 `__tables__.xlsx`、`__beans__.xlsx` 和 `__enums__.xlsx`。 |
+| `<repo-root>/DataTable/Luban/luban.conf` | Group、schema file、target、manager name 和 top module。 |
+| `<repo-root>/DataTable/Luban/build_config.ini` | 已批准工具 identity、template、CodeGen 设置和输出 profile。 |
+| `<repo-root>/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/` | 事务化管线与 string-constant generator。 |
+
+已配置的 group 是 Client 使用的 `c`、Server 使用的 `s`，以及 `all` target 使用的 `c+s`。所有 target 的 manager 都是 `Tables`，top module 都是 `UnityStarter.GameConfig`。
+
+### 事务化生成
+
+正常顺序如下：
+
+1. 对所选 profile 执行 `inspect`，并以 `canGenerate`、`canCheck` 和 `canRecover` 作为操作依据。
+2. 校验 config、必需 workbook、输出 containment、tool hash、Luban hash 和 source fingerprint。
+3. 取得单 writer lock 并捕获 live-output baseline。
+4. 只在 transaction candidate 目录运行 Luban 和 string-constant generation。
+5. 要求至少一个 code file 和一个 data file，然后 hash candidate 并创建 generation receipt。
+6. 使用 journal 和 backup 仅发布有变化的文件。移除 transaction evidence 前必须验证 commit 或 rollback。
+7. 运行 `check`，将 receipt 与 live code/data 的精确文件集合和 hash 比较。`check` 不运行 Luban，也不重写 receipt。
+
+不要手工删除 `.cyclonegames-datatable-writer.lock` 或 `.cyclonegames-datatable-transactions`。先执行 `inspect`，仅在 `canRecover` 为 true 时执行 `recover --run-id <id>`。
+
+### Profile 与 Runtime Provider 对齐
+
+Profile output path 与 Runtime Provider 是两个独立决策。生成 C# 和生成 bytes 面向不同 Consumer。
+
+| Profile | Code output | Data output | Runtime 对齐方式 |
+| --- | --- | --- | --- |
+| `client` | `UnityStarter/Assets/UnityStarter/Scripts/Generated/DataTable/` | `UnityStarter/Assets/StreamingAssets/DataTable/` | Unity 编译 C#。Core 没有 StreamingAssets loader；产品必须使用平台适用的 I/O 填充 cache/custom Provider。AssetManagement 不会自动消费该目录。 |
+| `server` | `DataTable/Luban/Generated/Server/Code/` | `DataTable/Luban/Generated/Server/Data/` | 将两个 root 与 Server artifact 打包，并提供 Host 特定的获取实现。 |
+| `all` | `DataTable/Luban/Generated/All/Code/` | `DataTable/Luban/Generated/All/Data/` | 用于组合的 `c+s` target；使用显式 Host Provider。 |
+
+使用 AssetManagement 时，必须把生成载荷导入或路由到其 package 持有的 location，并让 `IDataTableLocationResolver` 解析到相同位置。DataTable AssetManagement integration 必须同时处于启用状态；它在当前 asset-style checkout 中未启用。
+
+### Editor 与 CLI 入口
+
+Editor assembly 提供：
+
+- `Tools > CycloneGames > DataTable > Create Default Settings`；
+- 同一菜单下的 `Open Settings`、`Generate`、`Check` 与 `Recover`；
+- 可见 settings asset，默认指向 `../DataTable/Luban/build_config.ini` 与 profile `client`。
+
+使用 Editor 操作时，项目中必须恰好存在一个已保存的 `DataTableLubanSettings` asset；仅使用 CLI/CI 时不需要。Generate 与 Recover 成功后可以刷新 AssetDatabase，Check 不刷新。
+
+Windows 下从仓库根目录运行：
+
+```powershell
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat generate --profile client
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat check --profile client
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat recover --run-id <32-hex-run-id>
+```
+
+macOS 或 Linux 使用 `.sh` launcher 和相同参数。`inspect`、`generate`、`check` 必须提供 `--profile`；`recover` 接收 run ID，不接收 profile。全部配置键、exit code、transaction state 与 CI workflow 见 [Luban 构建手册](../../../../../DataTable/Luban/README.SCH.md)。
+
+## Runtime 加载管线
+
+按以下顺序执行。把业务校验或 manifest 检查移到发布之后，会暴露不完整或不可信的 generation。
+
+### 1. 定义经过测量的 limit
 
 ```csharp
 var limits = new DataTableLoadLimits(
@@ -250,478 +291,328 @@ var limits = new DataTableLoadLimits(
     maxBytesPerTable: 8 * 1024 * 1024,
     maxTotalBytes: 64L * 1024 * 1024,
     maxRowsPerTable: 250_000,
-    maxTableNameLength: 96);
+    maxTableNameLength: 96,
+    maxLocationLength: 256);
 ```
 
-`DataTableLoadLimits.Default` 是较宽松的 fail-fast guardrail。正式产品通常应在每个不可信或内存敏感边界采用更严格的配置。
+`DataTableLoadLimits.Default` 允许 4,096 个 table、每表 64 MiB、总计 512 MiB、每表 2,000,000 个 row、table name 256 个 UTF-16 code unit、location 2,048 个。它们是宽泛的 fail-fast guardrail，不是生产预算。应根据生成内容测量结果和最低支持硬件收紧这些值。
 
-把 payload 保存到有界 Cache：
+### 2. 获取并校验载荷
 
-```csharp
-using var payloadCache = new DataTableBytesCache(
-    limits,
-    capacity: 16,
-    dataExtension: ".bytes",
-    clearBytesOnDispose: false);
+`IDataTableBytesProvider` 返回借用的 `ReadOnlyMemory<byte>`。该 memory 只在 Provider 声明的生命周期内有效。manifest 需要证明不存在未知载荷时，还应实现 `IDataTableBytesInventory`。
 
-payloadCache.Add("Items", itemPayload);       // 复制 ReadOnlyMemory<byte>
-payloadCache.AddOwned("Prices", priceBytes); // 转移 byte[] 所有权
-priceBytes = null;
+#### 对齐输出与 Provider location
 
-payloadCache.Seal();
+构建输出、AssetManagement runtime location、resolver 结果与可选 manifest `Location` 必须描述同一个 payload。获取方案要显式选定：
 
-ReadOnlyMemory<byte> bytes = payloadCache.GetBytes("Items.bytes");
-```
+| 来源或 package | Provider 方案 | Location 契约 | 分配边界 |
+| --- | --- | --- | --- |
+| `StreamingAssets/DataTable` | 产品持有的平台异步 I/O 生成 owned `byte[]`，再通过 `DataTableBytesCache.AddOwned` 转移。 | 使用生成的相对文件名。Core 没有 StreamingAssets Provider。 | I/O layer 在 `AddOwned` 应用 DataTable admission limit 前已经分配 array。平台可提供长度时，产品 I/O layer 应先做 size preflight。 |
+| Resources `TextAsset` | 通过 Resources package 使用 `AssetManagementDataTableBytesLoader`。 | Location 相对 `Resources/` folder，且省略扩展名。使用 `DataTableLocationResolver(..., dataExtension: "")`；manifest location 必须遵守同一规则。 | Unity/Provider 先加载 asset，`TextAsset.bytes` 在 DataTable 校验前创建第一个 byte array。 |
+| Addressables `TextAsset` | 通过 Addressables package 使用 `AssetManagementDataTableBytesLoader`。 | Resolver 或 manifest location 必须与 authoring 的 Addressables address 完全一致，包括是否包含扩展名。 | Provider asset allocation 发生在 DataTable admission 前。 |
+| YooAsset `TextAsset` | 通过 YooAsset package 使用 `AssetManagementDataTableBytesLoader`。 | Resolver 或 manifest location 必须与 YooAsset runtime location 完全一致。 | Provider asset allocation 发生在 DataTable admission 前。 |
+| YooAsset raw file | 使用 `AssetManagementDataTableRawFileBytesLoader`。 | Resolver 或 manifest location 必须与 raw-file runtime location 完全一致。 | `IRawFileHandle.ReadBytes()` 在 DataTable 校验并转移到私有 cache 前返回一个 caller-owned defensive copy。 |
 
-Table name 会被规范化，因此 `Items` 和 `Items.bytes` 指向同一项。Cache identity 不区分大小写，防止两个 entry 在不区分大小写的文件系统上落到同一个原生路径。`Add` 和 `Set` 会复制 payload。`AddOwned` 和 `SetOwned` 避免复制，但要求调用方独占数组所有权。`Seal()` 会禁止修改。Cache 不提供自动淘汰策略；所有 reader 停止后，应 Dispose 对应内容 Scope。
+Android 与 WebGL 上不能把 StreamingAssets 当普通 filesystem directory 用。应使用平台支持的异步 URI/archive/web 获取方式，应用上游 size 与 timeout policy，再把完成的 owned bytes 转移进 `DataTableBytesCache`。DataTable limit 属于 admission limit：它能把超限结果挡在 DataTable cache 和 decoder 之外，但无法撤销 Provider 的首次分配、下载、解压或 Unity asset load。
 
-### Manifest 校验
+当前 Resources、Addressables、YooAsset 的 Provider contract 都支持普通 `TextAsset` 加载。Raw loading 需要 `IAssetRawFileLoader`；这三个 Provider 中只有 YooAsset 实现它。Raw loader 会拒绝缺少该 capability 的 package，也不回退到 TextAsset，所以 Resources 和 Addressables 走 TextAsset loader。
 
-在解码 payload 前使用带版本的 Manifest：
+#### AssetManagement TextAsset 骨架
+
+以下骨架使用 Resources location。只有当精确 Addressables 或 YooAsset runtime address 要求时，才调整 base directory 与 extension。
 
 ```csharp
 var manifest = new DataTableManifest(
-    schemaVersion: 3,
-    entries: new[]
-    {
-        new DataTableManifestEntry(
-            tableName: "Items",
-            location: "Config/Items.bytes",
-            expectedByteLength: itemPayload.Length,
-            sha256Hex: expectedItemsSha256,
-            required: true),
-        new DataTableManifestEntry(
-            tableName: "Prices",
-            location: "Config/Prices.bytes",
-            expectedByteLength: pricePayloadLength,
-            sha256Hex: expectedPricesSha256,
-            required: true),
-    },
-    limits,
+    schemaVersion: 1,
+    entries: manifestEntries,
+    limits: limits,
     requireKnownTables: true);
 
-manifest.EnsureSchemaVersionSupported(minimumVersion: 3, maximumVersion: 3);
-manifest.ValidateRequiredTables(payloadCache);
-manifest.ValidateBytes("Items", payloadCache.GetBytes("Items"));
-manifest.ValidateBytes("Prices", payloadCache.GetBytes("Prices"));
+manifest.EnsureSchemaVersionSupported(1, 1);
+
+var locations = new DataTableLocationResolver(
+    baseDirectory: "Config/DataTable",
+    dataExtension: "", // Resources runtime location 省略文件扩展名。
+    limits: limits);
+
+using var loader = new AssetManagementDataTableBytesLoader(
+    assetPackage,
+    new DataTableAssetLoadContext(
+        bucket: "Config.DataTable.Client",
+        owner: "DataTableBootstrap"),
+    locations,
+    enableEditorFileFallback: false,
+    initialCapacity: manifest.Entries.Count,
+    manifest: manifest,
+    limits: limits);
+
+await loader.LoadAsync(tableNames, cancellationToken);
+
+// 在当前 owner-thread scope dispose loader 前，将它作为
+// IDataTableBytesProvider 完成 manifest/decode/catalog 工作。
 ```
 
-`ValidateRequiredTables` 检查必需项是否存在。`ValidateBytes` 应用已配置的字节限制，并校验 entry 的预期长度和 SHA-256。SHA-256 用于标识内容和检测损坏；来自不可信来源的内容还需要经过认证的签名和由产品负责的信任策略。
+两个 AssetManagement loader 都由 main thread 持有，每个实例只允许一个 in-flight load。每次 load 复制完 bytes 后释放 Provider handle。handle disposal 失败时，loader 会保留该精确 handle 并阻止下一次 load；在 owner thread 检查 `HasPendingHandleDisposal` 并调用 `RetryPendingHandleDisposal()`。`Dispose()` 会退役 loader 的 handle 与私有 byte cache，但不会清理 AssetManagement bucket 或销毁 package。bucket 命名、共享、`Clear`/`ClearHierarchy` 时机和 package shutdown 由产品负责；需要独立清理 DataTable 内容时，优先使用专用 bucket。
 
-Entry 未设置 `Sha256Hex` 时跳过 Hash 校验。`DataTableHashUtility.Sha256Matches` 要求预期 Hash 非空；预期值缺失时返回 `false`。
+该 integration 在当前 checkout 中未启用。只有 AssetManagement integration assembly 的依赖与 capability 条件满足、且 Consumer 引用了该 assembly，骨架才能编译。
 
-### 资源生命周期
-
-生成表或 row view 依赖可 Dispose 的 payload owner 时，使用 `DataTableSetScope`：
+向 AssetManagement loader 传入 manifest 后，它的 list `LoadAsync` 会在内部校验每个 payload 与最终 inventory，不要重复 hash 同一批 payload。对于不自行负责 manifest 校验的 custom Provider 或 cache，按下面的顺序执行：
 
 ```csharp
-var scope = new DataTableSetScope(
-    root: generatedTables,
-    catalog: catalog,
-    resourceOwner: payloadCache);
-
-IDataTable<ItemRow> items = scope.Get<IDataTable<ItemRow>>();
-
-// 所有 reader 停止后：
-scope.Dispose();
-```
-
-Scope 只 Dispose 显式传入的 `resourceOwner`。它会清除自身对 root 和 Catalog 的引用，但不会推断任意 Table instance 的所有权。发布的 row 或生成 view 仍可能访问 backing memory 时，不得 Dispose 对应 owner。
-
-### Luban 集成
-
-在 composition assembly 中引用 `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban`。`com.code-philosophy.luban` package 必须满足 Integration asmdef 声明的版本范围。
-
-准备有界的 `IDataTableBytesProvider`，再创建 Luban 生成的 root：
-
-```csharp
-using CycloneGames.DataTable.Unity.Integrations.Luban;
-
-cfg.Tables generatedTables = LubanDataTableSetFactory.Create(
-    payloadCache,
-    getBytes => new cfg.Tables(getBytes),
-    limits);
-```
-
-Callback 只在同步 factory call 期间、且仅在调用线程上有效。每个请求的 payload 都会复制到私有 `Luban.ByteBuf` 数组中，因此生成 parser 可以保留 buffer，而不会借用可写的 Cache memory。
-
-生成 parser 直接接收单个 `ByteBuf` 时：
-
-```csharp
-Luban.ByteBuf itemBuffer = LubanDataTableSetFactory.CreateOwnedByteBuf(
-    payloadCache,
-    "Items",
-    limits);
-```
-
-Catalog 发布前，应校验生成数据的行数、范围、稳定 ID 和跨表引用。完整的管线设置、Windows/macOS/Linux 生成命令、输出所有权和恢复操作见 [Luban 指南](../../../../../DataTable/Luban/README.SCH.md)。
-
-### MessagePack 集成
-
-引用 `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack`。Unity client package、`MessagePack.dll`、Annotations 和 Analyzer 应保持匹配版本；IL2CPP/AOT 使用 source-generated row formatter。
-
-定义 MessagePack row contract：
-
-```csharp
-using CycloneGames.DataTable;
-using MessagePack;
-
-[MessagePackObject]
-public sealed class PackedItemRow : IDataRow
+for (int i = 0; i < manifest.Entries.Count; i++)
 {
-    [Key(0)]
-    public int Id { get; set; }
-
-    [Key(1)]
-    public string Name { get; set; }
+    DataTableManifestEntry entry = manifest.Entries[i];
+    if (bytesProvider.TryGetBytes(entry.TableName, out ReadOnlyMemory<byte> bytes))
+    {
+        manifest.ValidatePayload(entry.TableName, bytes);
+    }
 }
+
+manifest.ValidateInventory(bytesProvider);
 ```
 
-使用显式 resolver 和安全设置解码顶层 row array：
+每个已获取 payload 都应在解码前调用一次 `ValidatePayload`。它应用单表 limit，并校验已配置的长度与 SHA-256。随后 `ValidateInventory` 校验 required presence、table count、aggregate bytes、Provider consistency 与未知名称，不会再次 hash 每个 payload。`RequireKnownTables=true` 要求 Provider 支持 inventory。
+
+### 3. 使用已启用 integration 或产品 decoder 解码
+
+Luban 同步消费生成 factory：
 
 ```csharp
-using System.Threading;
-using CycloneGames.DataTable.Unity.Integrations.MessagePack;
-using MessagePack;
-using MessagePack.Resolvers;
+TTableSet tableSet = LubanDataTableDecoder.Decode(
+    bytesProvider,
+    lubanLoader => createGeneratedTableSet(lubanLoader),
+    limits,
+    cancellationToken);
+```
 
-MessagePackSerializerOptions options =
-    MessagePackSerializerOptions.Standard.WithResolver(StandardResolver.Instance);
+Callback 只在 factory 调用期间、当前调用线程上同步有效。Adapter 会规范化并限制每次请求，限制 aggregate bytes 与 table count，并在创建 `ByteBuf` 前把每个请求的 payload 复制到私有存储。生成 parser 内部的任意分配它无法限制。
 
-MessagePackSecurity security = MessagePackSecurity.UntrustedData
-    .WithMaximumObjectGraphDepth(64)
-    .WithMaximumDecompressedSize(limits.MaxBytesPerTable);
+MessagePack 以显式 options 和 security 构建未压缩的顶层 row array：
 
-DataTable<PackedItemRow> items = MessagePackConfigProvider.Build<PackedItemRow>(
-    itemPayload,
-    options,
+```csharp
+DataTable<ItemRow> items = MessagePackDataTableDecoder.Build<ItemRow>(
+    bytes,
+    serializerOptions,
     security,
     limits,
-    CancellationToken.None);
+    cancellationToken);
 ```
 
-Adapter 要求有界的 untrusted-data policy，在物化 row 前校验 payload 大小和顶层数组数量，观察 cancellation，并拒绝损坏、截断或带尾随字节的数据。它只使用传给 `Build` 的 options；resolver composition 应在调用点显式配置。
+MessagePack adapter 要求 `MessagePackCompression.None`，拒绝损坏、截断或带 trailing data 的 bytes，预检顶层 row count，并要求 decompressed-size limit 为正数且不大于 `MaxBytesPerTable`。IL2CPP/AOT 使用 source-generated resolver 与 formatter。
 
-自定义 key 使用带 key selector 和 comparer 的 `Build<TKey, TRow>`。Decoder 已经独占一个完成校验的 `TRow[]` 时，使用 `BuildRows` 把数组直接转移给 Table。
+这些示例只有在对应 integration assembly 已启用并被引用时才能编译。当前 checkout 中 Luban 与 MessagePack integration 都未启用。
 
-### Unity Editor 与 Luban 生成
+### 4. 校验产品规则
 
-通过 `Assets > Create > CycloneGames > DataTable > Luban Settings` 创建 `DataTableLubanSettings`，或者执行 `Tools > CycloneGames > DataTable > Run Luban Build`。如果设置资产不存在，Runner 会在 `Assets/Editor/DataTable/DataTableLubanSettings.asset` 创建。每个设置类型应保留一个权威设置资产。
+序列化成功不等于业务有效。创建 candidate 前要校验全部产品 invariant，包括：
 
-| 字段 | 含义 |
+- table key 未表达的 key 范围与语义唯一性；
+- 必需的跨表引用；
+- enum 与 feature flag 组合；
+- 数值范围、顺序与互斥字段；
+- 产品持有的 content version、signature 与 authorization policy。
+
+校验必须针对完整 candidate set 完成。reader 需要一致 generation 时，不要逐表发布。
+
+### 5. 构建 catalog 与 candidate
+
+对生成 table set 显式注册精确 contract：
+
+```csharp
+DataTableCatalog catalog = DataTableGeneratedTableCollector.CreateCatalog(
+    tableSet,
+    descriptors,
+    new DataTableBuildContext(limits, cancellationToken));
+
+ValidateBusinessRules(catalog);
+
+using var candidate = new DataTableCandidate(
+    catalog,
+    new DataTableRevision(sequence, contentIdentity),
+    backingResourceOwner);
+```
+
+`descriptors` 是 `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`。Collector 在调用任何 getter 前会 snapshot 并校验所有 descriptor，拒绝重复 contract，不做反射发现。Revision sequence 必须大于零并严格超过 Store 已接受的 high-water mark。Identity 使用稳定且非空的值，例如已经认证的 content-release ID。
+
+可选 `backingResourceOwner` 必须被独占持有。Thread-affine owner 要包装进显式 dispatch adapter。
+
+### 6. 发布与读取
+
+```csharp
+DataTableStoreMetadata before = store.Metadata;
+DataTablePublishResult result = store.TryPublish(candidate, before.Generation);
+
+if (!result.IsCommitted)
+{
+    HandleRejectedCandidate(result.Status);
+    return; // using 会 dispose 仍由 caller 持有的 candidate
+}
+
+// 长期存活的 subsystem 只注册一次。
+using DataTableReader reader = store.RegisterReader();
+IDataTable<ItemRow> currentItems = reader.Get<IDataTable<ItemRow>>();
+```
+
+`Committed` 把 candidate 所有权转移给 Store。`Superseded` 与 `NonMonotonicRevision` 保持 caller ownership。Commit 后注册的 reader 立即固定该 generation；现有 reader 在安全点调用以下方法前停留在旧 generation：
+
+```csharp
+if (reader.Refresh())
+{
+    RebuildDerivedRuntimeState(reader);
+}
+```
+
+不要让一个 reader 上的读取与它的 `Refresh()` 或 `Dispose()` 竞争。不同并发 execution context 应各自持有 reader。`TryReset` 发布空、未初始化的 generation，但不会降低 revision high-water mark。
+
+## 所有权与生命周期
+
+### Table 与 catalog
+
+- Array 与 list constructor 复制来源 row；`FromEnumerable` 在 row-count guard 下物化一次。
+- `FromOwnedArray` 不复制 array，转移所有权。成功后任何 writable alias 都不得再修改它。
+- 结构不可变不会 deep clone class row 或其引用对象；content owner 必须保持这些对象不可变。
+- `All` 是按来源顺序排列的 `IReadOnlyList`。`AsSpan()` 是无分配的借用同步 view；不要保存它，也不要跨越 `await`、`yield`、reader refresh 或 disposal。
+- `DataTableCatalog` 不持有 table resource。backing lifetime 由直接 composition scope 或 Store generation 持有。
+
+### Byte cache 生命周期
+
+`DataTableBytesCache` 是单 owner 的有界 Provider 与 inventory：
+
+- `Add` 与 `Set` 复制 bytes；`AddOwned` 与 `SetOwned` 转移 `byte[]`。
+- 名称经规范化后用 `OrdinalIgnoreCase` 比较。
+- `Seal()` 禁止继续修改，并启用协调读取。
+- Cache 没有 eviction policy。
+- `Close()` 是 O(1)，拒绝后续读取/修改，开始只向前的释放流程。
+- `ReleaseStep()` 只能在 close 后调用，并遵守 payload-count 与可选 byte-clearing budget。
+- `Dispose()` 同步释放剩余内容。
+
+```csharp
+payloadCache.Close();
+
+var releaseBudget = new DataTableBytesCacheReleaseBudget(
+    maxPayloads: 16,
+    maxBytesToClear: 256L * 1024L);
+
+DataTableBytesCacheReleaseResult release;
+do
+{
+    release = payloadCache.ReleaseStep(in releaseBudget);
+}
+while (!release.IsComplete);
+```
+
+启用 byte clearing 时，一个大 array 可能跨多次调用。清零能降低从该 managed buffer 恢复数据的可能性，但抹不掉已有副本、native buffer、crash dump 或 Runtime 内部数据。
+
+### Store 关闭
+
+先停止 writer 与新 request、dispose reader，再 dispose Store。Resource-owner disposal failure 会被保留；检查 `FailedRetirementCount`，并在允许的线程调用 `RetryFailedRetirements()`。Store disposal 阻止新注册与发布，但已注册 reader 会继续持有固定 generation，直到离开。
+
+## 性能与平台注意事项
+
+- 构建、hash、decode、业务校验、发布、refresh 与 retirement 都属于 cold path。
+- 成功 dictionary read 为 `O(1)`，且不会有意分配。已注册 reader 的稳态读取与 no-op refresh 也不会有意分配。
+- 对经过测量的整表热扫描，`AsSpan()` 是具体 table 的首选 API。
+- Cold reload 可能同时保留 source bytes、decoder copy、decompressed data、row object、key-index dictionary 与新旧 generation。Size limit 不能替代峰值内存分析。
+- `DataTableBuildContext` 以 2 的幂次间隔采样 cancellation，默认每 1,024 个 row 一次。间隔越小取消延迟越低，越大检查越少。
+- 只有 row object 与 comparer 同样不可变且线程安全时，已发布不可变 table 才能安全并发读取。
+- Unity object 与 AssetManagement loader 具有 main-thread affinity。Luban factory request 在 owner thread 同步执行。
+- IL2CPP 与 stripping 使用 generated serializer 与显式 table descriptor。必须验证精确 Player backend；Editor 或静态分析不能证明 AOT 行为。
+- WebGL 不能依赖后台线程或直接 filesystem 访问 `StreamingAssets`。使用平台适用的异步获取，并为同步 decode 工作设置预算。
+
+## 安全与持久化
+
+文件、远程配置、patch、mod、命令行选择与用户控制的路径都应视为不可信输入。在昂贵操作前限制 payload count、bytes、row、名称、location、decompression、parser depth、string、diagnostics 与处理时间。可移植名称规范化会拒绝 rooted path、traversal、空 segment、control/surrogate/format character、平台无效字符与 reserved name。
+
+SHA-256 检测损坏与标识内容，不提供认证。远程 manifest 与 payload identity 必须先经产品持有的 signature 与 trust policy 认证，再发布。不要记录完整恶意 payload 或 secret。
+
+Core 不写文件，也不使用 `EditorPrefs`、`PlayerPrefs` 或 `SessionState`。需要持久化的东西都是显式 artifact：
+
+| Artifact | Owner、生命周期与 Git 策略 |
 | --- | --- |
-| `LubanProjectDir` | 相对于 Unity 项目根目录的 Luban 目录。默认指向 `../DataTable/Luban`。 |
-| `LubanScriptName` | 不带扩展名的脚本名。Runner 在 Windows 添加 `.bat`，在 macOS/Linux 添加 `.sh`。 |
-| `LubanScriptArguments` | 附加到生成命令的可选参数。 |
-| `LubanTimeoutSeconds` | 外部进程最长执行时间；无效的序列化值回退为 300 秒。 |
-| `RefreshAssetsAfterLubanBuild` | 只在成功执行后调用 `AssetDatabase.Refresh()`。 |
+| `DataTable/Luban/Defines`、`Datas`、`luban.conf`、`build_config.ini` | 来源和已审查的生成配置；通常纳入版本控制。 |
+| 生成 C# 与 payload root | 可重建管线输出。产品决定由 Git 提交还是在 CI 生成；不得手工编辑带 receipt 的输出。 |
+| `.cyclonegames-datatable-generation-receipt.json` | 管线持有的证明，位于 profile code-output root；必须与生成文件保持一致。 |
+| `.cyclonegames-datatable-writer.lock` 与 `.cyclonegames-datatable-transactions` | 位于 `DataTable/Luban` 下的可恢复临时状态；Git 忽略，只能通过管线命令管理。 |
+| `DataTableLubanSettings.asset` | 显式 Unity 项目 authoring asset；恰好一个已保存 asset 是 Editor invocation preference 的规范来源。 |
+| Runtime Provider/cache state | 当前 composition 或 content generation 持有的内存；不持久化。 |
+| Trusted revision-sequence floor | 产品持有、传给 Store constructor 的 anti-rollback 状态；Core 不负责持久化。 |
 
-Inspector 会显示解析后的路径和校验状态，并提供 refresh、reveal、validate 和 build 操作。Inspector 与 menu 运行使用 `RunWithResultAsync` 并保持 Editor 响应。启动任务的 Inspector 持有自己的 cancellation token 并显示 **Cancel Luban Build**；其他 Inspector 只报告全局 busy 状态，不取消不属于自己的任务。`RunWithResult` 继续作为 CI 和 programmatic batch 的同步入口。启动脚本前会校验项目根目录、工作目录、脚本路径、参数和 timeout。Standard output 和 standard error 会写入有界结果。
+## 扩展点
 
-Runner 在 Editor 内只允许一个 writer。Process start、wait、timeout、kill 和 output-reader join 在 worker 执行；request 创建、`Application`/`AssetDatabase` 访问、Unity logging 与 Inspector finalization 在主线程执行。Cancellation 以 `Cancelled=true` 返回，不抛出异常；只有确认直接持有的 shell process 已终止后才释放 single-writer gate。运行时支持 `Process.Kill(bool)` 时，Runner 会请求终止 process tree；旧 Mono runtime 只能 fallback 到终止直接持有的 shell，shell 退出并不能证明全部 descendant 都已停止。因此，wrapper 残留的目录 writer lock 是跨进程 fail-closed 恢复边界。Timeout 或 cancellation 后如果无法建立安全状态，应停止全部 Generator descendant、检查 writer lock 和生成输出、完成恢复，然后重启 Editor，再执行下一次生成。Domain reload 与 Editor quitting 保留全局 best-effort cancellation。需要派生生成配置的项目可以继承 `DataTableLubanSettings` 并覆盖其 virtual method，包括 `CreateLubanRunRequest()`，无需修改本 Package。
+### 自定义 Provider
 
-## 进阶主题
+bytes 来自产品 service、network cache、encrypted container、server filesystem 或其他 asset system 时，实现 `IDataTableBytesProvider`。返回借用只读 memory，记录 owner thread 与有效窗口，分配前执行 limit，并显式关闭。仅当 `Count` 与 indexed name 在校验期间稳定、完整、唯一且为 `O(1)` 时，才增加 `IDataTableBytesInventory`。
 
-### AOT-safe 生成表集合注册
+### 自定义 decoder
 
-Generator 生成一个包含多个 Table property 的 root object 时，使用显式 descriptor。请把示例中的生成类型和属性替换为项目 Generator 实际输出的名称。
+自定义 decoder 放在 Core 之外。接收 `IDataTableBytesProvider`、`DataTableLoadLimits` 与 `CancellationToken`；分配前校验 envelope；消费完整 payload；拒绝 trailing data；返回不可变 row 或生成 table set。不要通过 Core public contract 暴露第三方 serializer type。
 
-```csharp
-using CycloneGames.DataTable;
+### 生成 table 注册
 
-var descriptors = new[]
-{
-    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
-        typeof(MyGeneratedItemTable),
-        static tables => tables.Items),
-    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
-        typeof(MyGeneratedPriceTable),
-        static tables => tables.Prices),
-};
+在生成代码或 composition code 中创建显式 `DataTableGeneratedTableCollector.TableDescriptor<TTableSet>`。这让 IL2CPP 行为确定，也让 optional table 在代码审查中可见。Descriptor contract type 必须是引用类型，同一精确 type 只能出现一次。
 
-DataTableCatalog generatedCatalog =
-    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
-```
+### Diagnostics
 
-Descriptor array 明确指定 Catalog contract type 和 property accessor。该路径不会扫描 runtime assembly，也不使用反射发现，便于 IL2CPP 和 managed stripping 下保持明确的注册图。
+Core 默认使用静默的 `NullDataTableDiagnostics`。Host 可通过 owner-checked `DataTableDiagnostics.TryInstall`/`TryReset` 安装 process sink，也可以向 Store 注入显式 `DataTableDiagnosticChannel`。可选 `DataTableLogWriterAdapter` 桥接 CycloneGames.Logging。普通 sink exception 与 DataTable control flow 隔离；`OutOfMemoryException` 继续传播。
 
-### 生产加载与热重载
+### 相关组合
 
-一套完整的重载顺序如下：
-
-1. 使用产品级 `DataTableLoadLimits` 创建候选 payload owner。
-2. 加载必需 payload，并拒绝缺失、空、超限或未知项。
-3. 校验 Manifest schema、字节长度、Hash 和内容信任状态。
-4. 把全部 Table 解码为候选 generation。
-5. 校验字段、稳定 ID、范围、唯一性和跨表引用。
-6. 构建一个 `DataTableCatalog`。
-7. 把 Catalog 注入新的 composition scope，或调用 `DataTableRegistry.Publish`。
-8. 等待上一代数据的 reader 全部退出。
-9. Dispose 上一代的 backing resource。
-
-发布前任何步骤失败，都应丢弃候选数据，并保持 active generation 不变。Registry 不追踪 reader lease，因此资源退役必须由应用协调。
-
-### 显式注入 vs. 进程级发布
-
-消费者具有明确 owner 和生命周期时，通过构造函数传入 Catalog：
-
-```csharp
-public sealed class ItemService
-{
-    private readonly IDataTable<ItemRow> _items;
-
-    public ItemService(DataTableCatalog catalog)
-    {
-        _items = catalog.Get<IDataTable<ItemRow>>();
-    }
-
-    public ItemRow GetItem(int id) => _items.Get(id);
-}
-```
-
-这种方式同时支持直接构造和任意 DI composition root；Core 不依赖具体容器。只有在应用明确需要一个进程级 Catalog generation 时才使用 `DataTableRegistry`。
-
-## 常见场景
-
-### 运行时物品与价格查询
-
-游戏系统需要按不同 key 查询物品定义和价格。构建两份表，组合成 Catalog，注入到 service：
-
-```csharp
-public sealed class ShopService
-{
-    private readonly IDataTable<ItemRow> _items;
-    private readonly IDataTable<string, PriceRow> _prices;
-
-    public ShopService(DataTableCatalog catalog)
-    {
-        _items = catalog.Get<IDataTable<ItemRow>>();
-        _prices = catalog.Get<IDataTable<string, PriceRow>>();
-    }
-
-    public int GetSellPrice(int itemId)
-    {
-        ItemRow item = _items.Get(itemId);
-        return _prices.Get(item.Name).SoftCurrency;
-    }
-}
-```
-
-两次查询都期望 `O(1)`。Catalog 捕获一个内部一致的快照——即使随后发布了另一代，这个 service 仍读取它构造时的快照。
-
-### 字符串 key 的本地化
-
-本地化系统使用字符串 key（`"ui.play"`、`"ui.quit"`）而非整数 ID：
-
-```csharp
-DataTable<string, LocalizedTextRow> texts = new DataTable<string, LocalizedTextRow>(
-    LoadLocalizedRows(),
-    static row => row.Key,
-    StringComparer.Ordinal);
-
-public string Localize(string key)
-{
-    return texts.TryGet(key, out LocalizedTextRow row) ? row.Text : key;
-}
-```
-
-`StringComparer.Ordinal` 提供大小写敏感的标识符匹配。Key selector 只在构造时执行一次；查询时不会再次调用。
-
-### Catalog 原子热替换
-
-在线游戏下载新内容 generation，需要不重启就替换 Catalog。在加载 owner 上构建候选 generation，校验后原子发布：
-
-```csharp
-public async Task ReloadContentAsync(byte[] manifestBytes, CancellationToken ct)
-{
-    DataTableBytesCache candidateCache = LoadPayloads(manifestBytes, ct);
-    DataTableManifest manifest = ParseManifest(manifestBytes, candidateCache);
-    manifest.ValidateRequiredTables(candidateCache);
-
-    DataTableCatalog candidateCatalog = await BuildCatalogAsync(candidateCache, manifest, ct);
-    ValidateCrossTableReferences(candidateCatalog);
-
-    DataTableRegistry.Publish(candidateCatalog);
-
-    // 上一代 reader 全部退出后：
-    _previousCache?.Dispose();
-    _previousCache = candidateCache;
-}
-```
-
-`DataTableRegistry.Publish` 原子替换整个 Catalog；在替换前捕获 `Current` 的 reader 仍看到上一个快照。应用负责协调上一代 backing resource 的退役。
-
-### 无反射注册生成表集合
-
-代码生成器产出一个 `cfg.Tables` root，包含强类型 Table property。用显式 descriptor 注册，让注册图在 IL2CPP 与 managed stripping 下保持明确：
-
-```csharp
-var descriptors = new[]
-{
-    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
-        typeof(cfg.TbItem),
-        static tables => tables.TbItem),
-    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
-        typeof(cfg.TbPrice),
-        static tables => tables.TbPrice),
-};
-
-DataTableCatalog catalog =
-    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
-```
-
-不进行 runtime assembly 扫描或反射发现。
-
-## 性能与内存
-
-| 操作 | 运行时特征 |
-| --- | --- |
-| 构造完成后的成功 `Get`、`GetOrDefault`、`TryGet` | 期望 `O(1)` Dictionary 查询，无托管分配。 |
-| Key 缺失时调用 `Get` | 创建并抛出 `KeyNotFoundException`；不应作为常规热路径控制流。 |
-| `All[index]` | 通过只读 view 进行 `O(1)` 访问。 |
-| Table 构造 | 冷路径；除非转移所有权，否则复制数组，并分配 row view 和 key index。 |
-| Catalog 强类型查询 | 期望 `O(1)` 的 Type-keyed Dictionary 查询。 |
-| Registry 读取 | Volatile snapshot 读取，不使用 reader lock。 |
-| Registry 发布 | 串行 writer 路径；分配 state object。只有已安装 Core sink 接受 `Info` 时才构造诊断文本。 |
-| 字节 Cache 查询 | 加载路径，包含名称规范化和 Dictionary 查询。 |
-| Hash、Manifest 校验与解码 | 冷路径；分配和处理成本取决于后端。 |
-
-计算重载峰值内存时，应包含所有同时存活的部分：
-
-```text
-源 payload
-+ Cache 自有 payload
-+ Adapter 副本、解压和 Decoder scratch memory
-+ Row array 与 Row 引用的 Object
-+ Key-to-index Dictionary
-+ 发布期间重叠的旧 Generation 与候选 Generation
-```
-
-只有能证明所有权时才使用 `FromOwnedArray` 和 `AddOwned`；节省一次复制不应以可写 alias 或 Dispose 后访问风险为代价。Cache 应跟随内容 generation 建立 Scope，不应在进程级永久保留全部 payload。对于大型 value-type row，应把行值复制成本纳入 Profile。只有代表性 Benchmark 证明它是主要瓶颈时，才增加专用访问 API。性能预算应记录 row 形状、key 类型、命中与未命中分布、表规模、后端、Unity scripting backend、目标硬件、预热方式和 GC 测量窗口。
-
-### 线程与生命周期规则
-
-- 在游戏热路径之外，由一个加载 owner 构造 Table、Catalog、Manifest 和 Cache。
-- Row、引用对象和 comparer 保持不可变时，已发布的 Table 与 Catalog 可以并发读取。
-- `DataTableCatalogBuilder` 和未 Seal 的 `DataTableBytesCache` 是单 owner 可变对象。
-- `Seal()` 禁止 Cache 修改，但它本身不是内存发布屏障。
-- 不得让 `Dispose()` 与 Cache reader，或依赖该 owner 的 Table view 并发执行。
-- `DataTableRegistry` 串行化 writer，并向 reader 暴露 volatile immutable snapshot。
-- Luban payload 请求同步执行，并留在 factory owner thread。
-- Unity object 和 AssetManagement loader 遵循 Unity main-thread affinity。
-
-线程安全来自已发布不可变快照及其所有权协议。它不会让可变 row object 或第三方 parser state 自动具备并发安全性。
-
-### 平台指南
-
-- **Windows、Linux、macOS：** 使用 Luban 指南中的平台生成 wrapper。Table identity 必须同时兼容大小写敏感和不敏感文件系统。
-- **IL2CPP 与 managed stripping：** 使用 source-generated serializer 和显式 `TableDescriptor<TTableSet>` 注册。只对后端确实要求保留的生成类型配置 preservation。
-- **iOS 与 Android：** 在 source buffer、adapter copy、解压、解码 row、index Dictionary 和 generation overlap 同时存在时，测量冷加载耗时与峰值内存。
-- **WebGL：** 不依赖后台线程。把同步解码工作和托管内存峰值控制在经过测量的帧预算或 Loading Screen 预算内。
-- **Dedicated Server：** Server composition 只引用 Core 和纯 C# adapter，排除 Unity Asset Loading 和 Editor assembly。
-- **主机平台：** 使用平台持有者工具链验证原生依赖导入、文件名规则、内存限制、AOT 行为和认证要求。
-
-每个支持的 scripting backend 和平台配置都应执行 clean Player build 与代表性内容测试。Editor 结果适合开发阶段检查，但不能替代目标 Runtime Profile。
-
-### 安全、持久化与日志
-
-文件、远程配置、补丁、Mod 和命令行选择的内容都应视为不可信输入。应限制 payload 字节、总字节、行数、表数、解压、嵌套集合、递归深度、字符串、处理时间和诊断数量。发布前校验稳定 ID、数值范围、引用、schema 版本、权限和签名。
-
-Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
-
-| 数据 | Owner 与生命周期 |
-| --- | --- |
-| Workbook、schema 与 Generator 配置 | 纳入版本控制的内容源。 |
-| 生成 C# 与二进制 payload | 可重建的内容管线输出；按产品管线决定提交或发布。 |
-| Manifest 与 schema version | 与匹配的 payload 一起版本化和发布。 |
-| `DataTableLubanSettings.asset` | 可见的 Unity 项目配置；保留一个权威资产。 |
-| Runtime byte cache | 由 Runtime 内容 Scope 持有，在 reader 退役后 Dispose。 |
-
-Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategories.Root`。`DataTableDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。默认 `NullDataTableDiagnostics` 保持静默。纯 C# host 可以通过 `DataTableDiagnostics.TryInstall`/`Replace` 安装自己的 sink。owner 使用 `TryReplace(expected, replacement)` 完成原子 handoff，或使用 `TryReset(expected)` 安全释放，因此不会清除另一个 composition root 后续安装的替代项。使用共享管线的 host 则从可选 integration assembly 安装 `DataTableLogWriterAdapter.Ambient`。adapter 会隔离普通 `ILogWriter` 异常并保留 out-of-memory 的传播行为。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
-
-`DataTableRegistry.Publish` 提交后发生的普通 diagnostic sink failure 属于 best-effort，不会回滚，也不会让已完成的 publish 表现为失败。诊断输出应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
-
-## 故障排查
-
-| 现象 | 可能原因 | 解决方法 |
+| 组件 | 当前契约 | 不可见内容 |
 | --- | --- | --- |
-| 构造函数报告重复 key | 两行共享同一 key | 修正内容源或 key selector；一个 Table 内每个 key 必须唯一 |
-| `Get<TTable>()` 找不到 Catalog entry | Contract type 不正确 | 使用 `DataTableCatalogBuilder.Add<TTable>` 注册时的准确 contract type 查询 |
-| `DataTableRegistry.Get<TTable>()` 返回 `null` | 未发布 Catalog，或缺少 contract | 确认包含该 contract 的完整 Catalog 已经发布；检查 `IsInitialized`/`Generation` |
-| 大小写不同的名称被 Cache 报告为已存在 | 不区分大小写的 identity | 使用一个规范且可移植的 Table identity；Cache 和 Manifest identity 不区分大小写 |
-| 加载后修改 Cache 时抛出异常 | Cache 已 Seal | 为新的内容 generation 创建新的候选 Cache |
-| Manifest 拒绝 payload | Schema、长度或 Hash 不匹配 | 检查 schema version、规范化 Table name、预期字节长度、SHA-256 和发布版本 |
-| Luban callback 报告线程或生命周期错误 | Callback 被保存或离线程调度 | 所有生成 payload 请求都必须在 `LubanDataTableSetFactory.Create` 内同步调用；不能保存或调度 Callback |
-| MessagePack 拒绝 security policy | 安全边界不足 | 从 `MessagePackSecurity.UntrustedData` 开始，保持抗 Hash 碰撞，并把解压大小限制到 `MaxBytesPerTable` |
-| MessagePack 无法解码 row | Payload 形状错误或缺少 formatter | 确认 payload 是顶层 `TRow[]`、row formatter 已生成，并且显式 resolver 包含它 |
-| Luban Inspector 报告路径无效 | 目录或脚本配置错误 | 校验相对 Unity 项目的目录、平台脚本扩展名、脚本是否存在，以及设置资产是否唯一 |
-| Timeout 后 Luban 执行仍处于 blocked | 持有的 shell 未退出，或无法确认 descendant 已终止 | 停止全部 Generator descendant，检查 `.cyclonegames-datatable-writer.lock` 和输出，恢复目录，然后重启 Unity |
-| 重载内存高于 Cache Total | Generation 重叠和 Decoder scratch | Profile payload source、copy、解压、decoder object、row object、Dictionary 和新旧 generation overlap |
+| `CycloneGames.GameplayTags.DataTable` | 消费 Core `IDataTableRows<TRow>` 或 `IReadOnlyList<TRow>`。File I/O 和 decoding 仍由产品 composition root 负责。 | 不绑定 Luban、MessagePack、AssetManagement 或其他 decoder。 |
+| `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | 将 Core `IDataTable<TRow>` 或 lookup delegate 适配为 level-value provider、modifier calculation 和 attribute initialization。该 assembly 为 opt-in 且 `autoReferenced: false`。 | 不负责 payload acquisition、decode 或 publication；其 UPM `versionDefines` 条件不会被当前 asset-style DataTable checkout 激活。 |
+| MemoryGovernance DataTable companion | 只操作 caller 显式传入并持有的 `DataTableBytesCache`，使用其 memory snapshot 和 bounded close/release contract。Caller 保持所有权并协调 reader quiescence。 | 无法发现 AssetManagement loader 私有 cache、decoded row 或 `DataTableStore` 保留的 generation。 |
 
 ## 验证
 
-### Core 与 Integration 测试
+### Core 与 integration 测试
 
-通过 Unity Test Runner 或项目的 batchmode test 入口运行以下 EditMode test assembly：
+通过 Unity Test Runner 或仓库 batchmode 入口运行以下 EditMode assembly：
 
-- `CycloneGames.DataTable.Tests.Editor`
-- `CycloneGames.DataTable.Tests.Editor.Tools.Luban`，覆盖 async validation、cancellation 与主线程 finalization 契约
-- 启用 Luban 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.Luban`
-- 启用 MessagePack 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack`
-- `CycloneGames.DataTable.Tests.Performance`
+- `CycloneGames.DataTable.Tests.Editor`；
+- `CycloneGames.DataTable.Tests.Editor.Tools.Luban`；
+- 包含 Logging bridge 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.Logging`；
+- 仅在 Luban 启用时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.Luban`；
+- 仅在 MessagePack 启用时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack`；
+- 仅在 AssetManagement 启用时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.AssetManagement`；
+- 满足 performance-test package 条件时运行 `CycloneGames.DataTable.Tests.Performance`。
 
-产品测试还应加入重复和缺失 key、异常 payload、数量超限、schema 不匹配、跨表引用失败、取消、重载回滚和 backing owner 退役等 fixture。
+### CodeGen 工具
 
-### Generator 验证
+在 `<repo-root>/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen` 下运行，确保发现固定的 `global.json`：
 
-生成内容前校验配置，执行对应平台 wrapper，检查执行摘要，并在提交前审核生成差异。Wrapper 命令和恢复流程见 [Luban 指南](../../../../../DataTable/Luban/README.SCH.md)。Package 内 CodeGen 工具的构建与自测试步骤见 [Tools~/CodeGen/README.SCH.md](./Tools~/CodeGen/README.SCH.md)。
+```powershell
+dotnet build --configuration Release
+dotnet format --verify-no-changes --no-restore
+dotnet run --configuration Release --no-build -- --self-test
+```
 
-### Player 验证
+工具面向 `net8.0`、使用 C# 12、无 NuGet package dependency，并固定 SDK `10.0.302`、禁用 roll-forward。缺少该精确 SDK 的机器无法执行工具验证。
 
-对每个支持的构建配置执行：
+### Pipeline 与 Player
 
-1. 从 clean checkout 构建；
-2. 验证 asmdef 条件和 serializer 注册；
-3. 加载最小、典型和最大规模的代表性内容；
-4. 记录冷加载时间、峰值内存、保留内存和热查询分配；
-5. 覆盖损坏、缺失、取消和回滚路径；
-6. 使用 shipping scripting backend 和 managed stripping 重复验证。
+1. 运行 `inspect`，并要求目标 action flag 为 true。
+2. 运行 `generate`，审查生成文件和 receipt 的变化，再运行 `check`。
+3. 打开 Unity，要求 clean compilation 和相关 EditMode test 通过。
+4. 在目标 Player 加载最小、代表性和最大内容。
+5. 覆盖损坏、缺失、取消、superseded、non-monotonic、rollback、reader quiescence 和 disposal retry 路径。
+6. 使用 shipping scripting backend 与 stripping 设置测量 cold-load 时间、峰值/保留内存和稳态分配。
+
+当前 checkout 在补齐缺失来源输入与经批准的 Luban identity 前无法通过 pipeline generation。CLI、Editor、Player、IL2CPP、stripping 与平台验证应分别标记为 `Passed`、`Failed`、`Not run` 或 `Not applicable`。
 
 ## API 导航
 
-| 类型 | 主要用途 |
+| 区域 | 主要 API |
 | --- | --- |
-| `IDataRow<TKey>` / `IDataRow` | 手写或生成 row 可选实现的稳定主键 contract。 |
-| `IDataTableRows<TRow>` | 最小、按源顺序读取的只读 row view。 |
-| `IDataTable<TKey, TRow>` / `IDataTable<TRow>` | 只读 keyed table contract。 |
-| `DataTable<TKey, TRow>` / `DataTable<TRow>` | 不可变 row storage 与 key-to-index 查询。 |
-| `DataTableLoadLimits` | 显式的表数、字节、行数和名称预算。 |
-| `DataTableCatalog` | 不可变 Type-indexed table snapshot。 |
-| `DataTableCatalogBuilder` | 一次性的候选 Catalog 构造器。 |
-| `DataTableRegistry` | 可选的进程级原子发布入口。 |
-| `DataTableGeneratedTableCollector` | AOT-safe 生成表集合收集。 |
-| `IDataTableBytesProvider` | 借用只读 payload 的访问 contract。 |
-| `DataTableBytesCache` | 有界的物化 payload array owner。 |
-| `DataTableManifest` / `DataTableManifestEntry` | Schema、存在性、字节长度、位置和 SHA-256 元数据。 |
-| `DataTableHashUtility` | SHA-256 计算、规范化和严格匹配。 |
-| `DataTableNameUtility` | 可移植的 Table name、扩展名和路径规范化。 |
-| `DataTableLocationResolver` | 构造可移植相对 Location。 |
-| `DataTableSetScope` | 管理生成 root、Catalog 和可选 backing owner 生命周期。 |
-| `IDataTableDiagnostics` / `DataTableDiagnostics` | Core 本地诊断契约与可替换进程 sink。 |
-| `DataTableLogWriterAdapter` | 接入 `CycloneGames.Logging` 的可选 adapter。 |
-| `LubanDataTableSetFactory` | 创建有界且私有持有的 Luban buffer。 |
-| `MessagePackConfigProvider` | 有界 MessagePack row array 解码和 Table 构造。 |
-| `DataTableLubanSettings` | 可见的 Unity Editor 生成设置。 |
-| `DataTableLubanRunner` | 经过校验的单 writer 外部生成进程。 |
+| Row 与查询 | `IDataRow<TKey>`、`IDataRow`、`IDataTableRows<TRow>`、`IDataTable<TKey,TRow>`、`DataTable<TKey,TRow>` |
+| 构建预算 | `DataTableLoadLimits`、`DataTableBuildContext` |
+| Catalog | `DataTableCatalog`、`DataTableCatalogBuilder`、`DataTableGeneratedTableCollector`、`DataTableGeneratedTableCollector.TableDescriptor<TTableSet>` |
+| 发布 | `DataTableRevision`、`DataTableCandidate`、`DataTableStore`、`DataTableStoreMetadata`、`DataTablePublishResult`、`DataTableReader`、`DataTableSnapshot` |
+| Payload | `IDataTableBytesProvider`、`IDataTableBytesInventory`、`DataTableBytesCache`、`DataTableBytesCacheReleaseBudget`、`DataTableBytesCacheMemorySnapshot` |
+| 完整性与 Location | `DataTableManifest`、`DataTableManifestEntry`、`DataTableHashUtility`、`DataTableNameUtility`、`IDataTableLocationResolver`、`DataTableLocationResolver` |
+| Diagnostics | `IDataTableDiagnostics`、`DataTableDiagnostics`、`DataTableDiagnosticChannel`、`DataTableLogWriterAdapter` |
+| 解码 | `LubanDataTableDecoder`、`MessagePackDataTableDecoder` |
+| Unity 获取 | `AssetManagementDataTableBytesLoader`、`AssetManagementDataTableRawFileBytesLoader`、`DataTableAssetLoadContext` |
+| Unity authoring | `DataTableLubanSettings` 与 `Tools > CycloneGames > DataTable` |
 
-## 相关文档
-
-- [Luban 目录与生成教程](../../../../../DataTable/Luban/README.SCH.md)
-- [DataTable CodeGen 教程](./Tools~/CodeGen/README.SCH.md)
-- [GameplayTags DataTable 集成](../CycloneGames.GameplayTags.DataTable/README.SCH.md)
-
-## 有界缓存释放
-
-`DataTableBytesCache.GetMemorySnapshot()` 在不检查 payload 内容的前提下，报告显式 owner 的 payload count、total bytes、lifecycle flag、配置 limit 与累计 release counter。`BeginBoundedDispose()` 会关闭 admission，之后 `ReleaseClosedPayloadsStep(maxWork)` 每次最多清除 `maxWork` 个 closed payload。
-
-释放严格限定为 lifecycle-only：open 或仅 sealed 的 cache 都不符合条件，有界 dispose 绝不会清空 live table data。Owner 仍负责启动 dispose，并持续执行有界步骤直至完成；外部 scheduler 可以观测进度，但不会取得 cache ownership。
+相关 integration：[CycloneGames.GameplayTags.DataTable](../CycloneGames.GameplayTags.DataTable/README.SCH.md) 与 [CycloneGames.GameplayAbilities](../CycloneGames.GameplayAbilities/README.SCH.md)。

@@ -1,77 +1,148 @@
 # CycloneGames.DataTable
 
-[English | 简体中文](README.SCH.md)
+English | [简体中文](./README.SCH.md)
 
-CycloneGames.DataTable loads typed configuration data — item definitions, gameplay tags, ability stats, progression curves, localization metadata — as immutable table snapshots indexed for O(1) key lookup. Every payload is bounded by `DataTableLoadLimits` and verified against a SHA-256 manifest before anyone reads it. The core assembly has no `UnityEngine` dependency; Luban and MessagePack adapters handle serialization in separate integration assemblies.
+CycloneGames.DataTable is a typed, immutable configuration-data layer for Unity, pure C# hosts, tools, and servers. It keeps payload acquisition, decoding, business validation, and publication as separate concerns, so a product can pick its own data source and serialization format without coupling gameplay code to them. The Core assembly has no `UnityEngine` dependency.
+
+This README is the solution-design and runtime reference. The transactional Luban build pipeline is documented in the [DataTable/Luban build handbook](../../../../../DataTable/Luban/README.md).
 
 ## Table of Contents
 
-- [Overview](#overview)
+- [Start Here](#start-here)
 - [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
+- [Five-Minute Core Tutorial](#five-minute-core-tutorial)
+- [Build Overview](#build-overview)
+- [Runtime Loading Pipeline](#runtime-loading-pipeline)
+- [Ownership and Lifetime](#ownership-and-lifetime)
+- [Performance and Platform Notes](#performance-and-platform-notes)
+- [Security and Persistence](#security-and-persistence)
+- [Extension Points](#extension-points)
 - [Troubleshooting](#troubleshooting)
+- [Validation](#validation)
+- [API Navigation](#api-navigation)
 
-## Overview
+## Start Here
 
-`DataTable<TKey, TRow>` stores source-ordered rows. `DataTableCatalog` groups typed tables into one snapshot. `DataTableRegistry` provides atomic process-wide publication. Mutable game state, save transactions, network replication, database queries, and schema-specific business rules live in their own systems.
+### What the module solves
 
-### Key Features
+DataTable targets source-ordered, read-mostly configuration: item definitions, ability parameters, progression curves, localization metadata, or generated schema tables. It provides:
 
-- **Immutable table snapshots** with source-ordered rows and expected `O(1)` key lookup.
-- **Typed catalogs** grouping multiple tables under exact contract types.
-- **Atomic process-wide publication** via `DataTableRegistry` with volatile snapshot reads.
-- **Bounded payload loading** through `DataTableBytesCache` and `DataTableLoadLimits`.
-- **Integrity metadata** via `DataTableManifest` (schema version, required tables, byte length, SHA-256).
-- **AOT-safe registration** of generated table sets via explicit `TableDescriptor<TTableSet>` — no runtime reflection.
-- **Luban and MessagePack adapters** isolated from the pure C# Core assembly.
-- **Unity Editor integration** with `DataTableLubanSettings`, custom Inspector, and a guarded external-process runner.
-- **Pure Core diagnostics** through a module-local port, with an optional `CycloneGames.Logging` adapter outside Core and no direct Unity or console API in library assemblies.
+- structurally immutable `DataTable<TKey, TRow>` instances with `O(1)` key lookup;
+- `DataTableCatalog` snapshots keyed by the exact contract type;
+- payload limits, portable names, locations, manifests, lengths, and SHA-256 checks;
+- generated-table registration that never relies on runtime reflection;
+- versioned `DataTableStore` publication with pinned readers and delayed resource retirement;
+- Luban, MessagePack, AssetManagement, and Logging integrations, each isolated in its own assembly.
+
+Mutable game state, saves, network replication, database queries, schema-specific business rules, signatures, and product trust policy stay outside this module. DataTable also never reads files on its own and never picks a runtime Provider for generated output.
+
+### Compose the solution on three axes
+
+The three axes are independent. Choose one entry from each row; diagnostics are an optional fourth dimension.
+
+| Axis | Choices | Decision |
+| --- | --- | --- |
+| 1. Acquire | Already materialized rows; `DataTableBytesCache`; a custom `IDataTableBytesProvider`; AssetManagement integration | Where bytes live, which thread owns them, and how their lifetime is closed. |
+| 2. Decode | No decoder; Luban; MessagePack; a custom decoder | Which payload format becomes typed rows or a generated table set. |
+| 3. Publish | Direct `DataTableCatalog` composition; `DataTableStore` plus `DataTableReader` | Whether consumers need one fixed catalog or explicit generation changes. |
+
+Common combinations:
+
+| Use case | Acquire | Decode | Publish |
+| --- | --- | --- | --- |
+| Small fixed project | Handwritten or generated row arrays | None | Inject one catalog directly. |
+| Luban client configuration | Product Provider or bounded cache | Luban integration | Direct catalog or Store, depending on reload requirements. |
+| MessagePack configuration | Product Provider or bounded cache | MessagePack integration | Direct catalog or Store. |
+| Unity asset package | AssetManagement TextAsset or raw-file loader | Luban, MessagePack, or a product decoder | Usually Store when asset handles must retire with a generation. |
+| Server or test host | Filesystem, network, or in-memory custom Provider | Any pure C# decoder available to that host | Direct catalog or one instance-owned Store. |
+
+### Current assembly and activation status
+
+The status below comes from the current asmdefs, package manifest, local packages, and compiler constraints. Adding an asmdef reference does not satisfy an unmet `defineConstraints` or `versionDefines` condition.
+
+| Assembly | Current status | Reference and activation rule |
+| --- | --- | --- |
+| `CycloneGames.DataTable.Core` | Available | Pure C#, `noEngineReferences: true`, `autoReferenced: true`. |
+| `CycloneGames.DataTable.Unity.Editor` | Available in Editor | References Core and UniTask; `autoReferenced: false`. The current project manifest contains UniTask. |
+| `CycloneGames.DataTable.Integrations.Logging` | Available, opt-in | References Core and the local `CycloneGames.Logging.Core`; `autoReferenced: false`. |
+| `CycloneGames.DataTable.Integrations.Logging.Editor` | Available in Editor | Auto-referenced Editor bootstrap. It installs the Logging adapter only when the DataTable diagnostics sink is unclaimed. |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | Inactive in this checkout | Requires `com.code-philosophy.luban` in `[1.2.0,2.0.0)` so Unity emits `LUBAN`; that package is not present in the current manifest. |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | Inactive in this checkout | Requires `com.github.messagepack-csharp` in `[3.1.8,4.0.0)` so Unity emits `MESSAGEPACK`, and references `MessagePack.dll`; neither package nor binary is present. |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | Inactive in the current asset-style layout | Requires `CYCLONE_ASSET_MANAGEMENT` emitted from UPM package ID `com.cyclone-games.asset-management`. The target module exists under `Assets`, where its `package.json` does not activate this `versionDefines` entry. |
+
+Do not add a PlayerSettings scripting symbol to hide an inactive integration. Install or place the dependency so the assembly-level activation rule holds, or implement a product Provider against Core.
 
 ## Architecture
 
-| Assembly | Namespace | Responsibility |
-| --- | --- | --- |
-| `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Tables, catalogs, registry, limits, manifests, hashes, byte cache, locations, local diagnostics, scopes. Pure C# with `noEngineReferences: true` and no Logging reference. |
-| `CycloneGames.DataTable.Integrations.Logging` | `CycloneGames.DataTable` | Optional pure C# bridge from `IDataTableDiagnostics` to `CycloneGames.Logging`; `autoReferenced: false`. |
-| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`, custom Inspector, request validation, asynchronous external-process execution. Editor only; requires UniTask. |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | Bounded Luban `ByteBuf` creation and generated table-set construction. |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | Bounded MessagePack row-array decoding. |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | Optional UniTask-based `TextAsset` and raw-file payload loaders; inactive in the asset-style installation. |
-
-Core is auto-referenced. Editor and integration assemblies use `autoReferenced: false`; a consumer asmdef must reference each assembly it actually uses. Luban and MessagePack integrations also require their declared packages and version constraints to be satisfied. The asset-style AssetManagement module does not generate the UPM `versionDefines` capability required by its DataTable integration, so that integration remains inactive — adding an asmdef reference alone does not enable it.
-
-Core owns the `IDataTableDiagnostics`/`NullDataTableDiagnostics` contract, `DataTableDiagnosticCategories.Root`, and the process-level `DataTableDiagnostics` replacement point. It does not reference `ILogWriter`, `LogChannel`, or Unity. `DataTableLogWriterAdapter` is the optional adapter to the shared pipeline. Non-Core logging-producing assemblies continue to centralize channel construction in `DataTableEditorLog`, `DataTableAssetManagementLog`, or `DataTableMessagePackLog`. `DataTableCoreDiagnostics` is the single failure-isolating boundary used by Core; ordinary sink exceptions cannot change business control flow, while `OutOfMemoryException` deliberately propagates.
-
-This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.data-table` package root also contains non-Core assemblies and therefore declares `com.cyclone-games.logging` and the UniTask version required by its Editor runner. Installing only Core without those package dependencies requires a future physical Core package split.
+### End-to-end data path
 
 ```mermaid
 flowchart LR
-    A[Generated rows or payload bytes] --> B[Apply limits and integrity checks]
-    B --> C[Decode and validate rows]
-    C --> D[Build typed DataTable instances]
-    D --> E[Build candidate DataTableCatalog]
-    E --> F[Validate cross-table references]
-    F --> G[Inject catalog or publish atomically]
-    G --> H[Read-only gameplay consumers]
+    subgraph Build["Build time"]
+        S["Defines and workbooks"] --> P["Transactional Luban pipeline"]
+        C["build_config.ini and luban.conf"] --> P
+        P --> GC["Generated C#"]
+        P --> GB["Generated payloads and receipt"]
+    end
 
-    classDef input fill:#dbeafe,stroke:#2563eb,color:#172554
-    classDef validation fill:#fef3c7,stroke:#d97706,color:#451a03
+    subgraph Runtime["Runtime composition"]
+        BP["IDataTableBytesProvider"] --> MV["Limits and manifest validation"]
+        MV --> DE["Luban, MessagePack, or custom decode"]
+        DE --> BV["Product business validation"]
+        BV --> CA["DataTableCatalog"]
+        CA --> DI["Direct DI"]
+        CA --> CD["DataTableCandidate"]
+        CD --> ST["DataTableStore"]
+        ST --> RD["DataTableReader"]
+    end
+
+    GC --> DE
+    GB --> BP
+
+    classDef source fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef guard fill:#fef3c7,stroke:#d97706,color:#451a03
     classDef snapshot fill:#dcfce7,stroke:#16a34a,color:#052e16
-    class A input
-    class B,C,F validation
-    class D,E,G,H snapshot
+    class S,C,GC,GB,BP source
+    class P,MV,DE,BV guard
+    class CA,DI,CD,ST,RD snapshot
 ```
 
-Construction, decoding, hashing, and validation are cold-path work. Gameplay code reads from an already published table or catalog.
+Build-time generation and runtime loading are separate contracts. The pipeline creates code and payload files; the runtime composition root decides how payloads are acquired, authenticated, decoded, validated, published, and retired.
 
-## Quick Start
+### Generation and reader lifetime
 
-Add `CycloneGames.DataTable.Core` to the consuming asmdef. Pure C# consumers do not need the Unity Runtime assembly.
+```mermaid
+stateDiagram-v2
+    [*] --> CallerOwned: create validated candidate
+    CallerOwned --> Published: TryPublish committed
+    CallerOwned --> CallerOwned: superseded or non-monotonic
+    CallerOwned --> Disposed: caller disposes
+    Published --> Latest: store owns candidate resources
+    Latest --> Retired: a newer generation is published or reset
+    Retired --> Released: final pinned reader leaves
+    Released --> [*]
+
+    state Latest {
+        [*] --> ReaderPinned
+        ReaderPinned --> ReaderPinned: steady-state reads
+        ReaderPinned --> NewGeneration: Refresh at a safe point
+    }
+```
+
+A successful publication consumes the candidate. A rejected publication leaves it caller-owned. Publication never moves an existing reader; `Refresh()` is the generation boundary. A retired generation releases its resource owner only after its final pinned reader leaves.
+
+### Core boundaries
+
+- Core contains tables, catalogs, limits, manifests, byte caching, generated descriptors, Store/Reader publication, names, locations, hashes, and module-local diagnostics.
+- Core does not reference Unity, Logging, Luban, MessagePack, AssetManagement, a DI container, or a service locator.
+- Integration assemblies depend inward on Core. Core never depends on an integration.
+- Runtime type discovery is not used. Generated models enter a catalog through explicit `DataTableGeneratedTableCollector.TableDescriptor<TTableSet>` values.
+
+## Five-Minute Core Tutorial
+
+### 1. Reference Core
+
+For an asmdef-based consumer, add the Core assembly:
 
 ```json
 {
@@ -81,9 +152,9 @@ Add `CycloneGames.DataTable.Core` to the consuming asmdef. Pure C# consumers do 
 }
 ```
 
-### Define an integer-keyed row
+### 2. Define a row and build a table
 
-Implement `IDataRow` when the primary key is an `int`. Keep published row values immutable.
+`IDataRow` is the convenience contract for an `int` key. Keep published row values and referenced objects immutable.
 
 ```csharp
 using CycloneGames.DataTable;
@@ -101,11 +172,7 @@ public sealed class ItemRow : IDataRow
     public string Name { get; }
     public int MaxStack { get; }
 }
-```
 
-### Build a table
-
-```csharp
 var items = new DataTable<ItemRow>(new[]
 {
     new ItemRow(1001, "Health Potion", 20),
@@ -113,136 +180,110 @@ var items = new DataTable<ItemRow>(new[]
 });
 ```
 
-The constructor copies the source array, preserves its row order, and builds a key-to-index dictionary. Construction rejects a null row, a null key, or a duplicate key.
+The array constructor copies the source, preserves row order, and builds a key-to-index dictionary. A null row, null key, duplicate key, or row-count violation fails construction.
 
-### Query rows
-
-```csharp
-ItemRow healthPotion = items.Get(1001);
-
-if (items.TryGet(1002, out ItemRow manaPotion))
-{
-    UseItem(manaPotion);
-}
-
-ItemRow missing = items.GetOrDefault(9999); // null for this class row
-
-for (int i = 0; i < items.Count; i++)
-{
-    ItemRow row = items.All[i];
-    RegisterItem(row);
-}
-```
-
-Use `Get` when a missing key is a data-contract failure — it throws `KeyNotFoundException` when absent. Use `TryGet` for expected optional lookup. Use `GetOrDefault` only when `default(TRow)` has an unambiguous meaning for the row type.
-
-## Core Concepts
-
-### Custom key types and generated models
-
-A row does not need to implement a DataTable interface. Pass a key selector when the generated model cannot be changed or when the key type is not `int`.
+For rows that cannot implement `IDataRow<TKey>`, pass a selector and comparer:
 
 ```csharp
-using System;
-using CycloneGames.DataTable;
-
-public sealed class LocalizedTextRow
-{
-    public LocalizedTextRow(string key, string text)
-    {
-        Key = key;
-        Text = text;
-    }
-
-    public string Key { get; }
-    public string Text { get; }
-}
-
 var texts = new DataTable<string, LocalizedTextRow>(
-    new[]
-    {
-        new LocalizedTextRow("ui.play", "Play"),
-        new LocalizedTextRow("ui.quit", "Quit"),
-    },
+    decodedRows,
     static row => row.Key,
     StringComparer.Ordinal);
 ```
 
-Select key semantics explicitly:
-
-- use stable integer, enum, GUID, or string values that survive serialization and content rebuilds;
-- use `StringComparer.Ordinal` for case-sensitive identifiers;
-- use `StringComparer.OrdinalIgnoreCase` only when the content contract defines identifiers as case-insensitive;
-- do not use culture-sensitive comparison, Unity object identity, or transient runtime handles as persistent content keys.
-
-The key selector runs once per row during construction, not on every lookup.
-
-### Row storage and ownership
-
-`DataTable<TKey, TRow>` is structurally immutable: rows cannot be added, removed, or replaced after construction. `All` exposes a read-only view in source order, while the lookup dictionary stores integer row indices rather than a second copy of each row.
-
-Structural immutability does not deep-clone row objects. A class row and every mutable object it references must remain unchanged for the table lifetime. A comparer supplied by the caller must also remain safe for concurrent reads.
-
-Choose the construction API according to source ownership:
-
-| API | Source handling | Recommended use |
-| --- | --- | --- |
-| `new DataTable(... array ...)` | Copies the array | Safe default when the caller retains the source. |
-| `new DataTable(... list ...)` | Copies list elements into an owned array | Safe default for an existing `List<TRow>`. |
-| `FromEnumerable` | Materializes once with a row-count guard | Streaming or computed cold-path input. |
-| `FromOwnedArray` | Takes the array without copying | Decoder-produced array with no remaining writable aliases. |
+### 3. Query and group tables
 
 ```csharp
-ItemRow[] decodedRows = DecodeAndValidateItems();
+ItemRow required = items.Get(1001);
 
-DataTable<ItemRow> items = DataTable<ItemRow>.FromOwnedArray(
-    decodedRows,
-    limits);
+if (items.TryGet(1002, out ItemRow optional))
+{
+    Use(optional);
+}
 
-decodedRows = null; // ownership has moved to the table
-```
-
-After a successful `FromOwnedArray` call, no code may modify the transferred array. Ownership transfer applies to the array container; referenced class instances still follow the product's immutable-row contract.
-
-### Catalogs and publication
-
-`DataTableCatalog` groups related tables under exact contract types. Build the full catalog before making it visible to gameplay systems.
-
-```csharp
-DataTable<ItemRow> items = BuildItems();
-DataTable<string, PriceRow> prices = new DataTable<string, PriceRow>(
-    DecodePrices(),
-    static row => row.ItemCode,
-    StringComparer.Ordinal);
-
-DataTableCatalog catalog = new DataTableCatalogBuilder(limits, capacity: 2)
+var catalog = new DataTableCatalogBuilder(capacity: 1)
     .Add<IDataTable<ItemRow>>(items)
-    .Add<IDataTable<string, PriceRow>>(prices)
     .Build();
 
-ValidateItemReferences(catalog);
-```
-
-Catalog lookup uses the exact type passed to `Add`. Retrieve the same contract type:
-
-```csharp
 IDataTable<ItemRow> itemTable = catalog.Get<IDataTable<ItemRow>>();
-
-if (catalog.TryGet<IDataTable<string, PriceRow>>(out var priceTable))
-{
-    ShowPrice(priceTable.Get("potion.health"));
-}
 ```
 
-`DataTableCatalogBuilder` is one-shot. `Build()` transfers its internal map to the immutable catalog; subsequent builder operations fail. Duplicate contract types, null entries, incompatible instances, and a table count beyond `DataTableLoadLimits.MaxTableCount` fail before a catalog is created.
+`Get` throws `KeyNotFoundException` when a key or contract is absent; `TryGet` is the non-throwing path. Catalog lookup uses the exact contract type supplied to `Add`, and the one-shot builder cannot be reused after `Build()`.
 
-For process-wide publication, `DataTableRegistry.Publish(catalog)` swaps the whole catalog atomically. Capture `Current` once for a multi-table operation — a captured reference remains internally consistent even if another generation is published later. `Generation` can be recorded in diagnostics. `Reset()` removes the process-wide reference; it does not dispose tables or backing resources.
+### 4. Choose direct composition or publication
 
-## Usage Guide
+Inject `DataTableCatalog` directly when one catalog lives for the whole scope. Use `DataTableStore` when a complete validated generation must replace another while existing consumers finish against their pinned snapshot. Do not add Store to a fixed configuration only to obtain global access; it is constructed and owned explicitly.
 
-### Bounded payload loading
+## Build Overview
 
-Create one limit profile for a content set. Values should come from actual generated content, reload peak-memory measurements, and the lowest supported hardware tier.
+### Current bootstrap state
+
+The repository contains the transactional pipeline, launchers, `build_config.ini`, `luban.conf`, and one `UnityStarter/Assets/Editor/DataTable/DataTableLubanSettings.asset` selecting profile `client`. The current checkout does not contain `DataTable/Luban/Defines`, `DataTable/Luban/Datas`, the approved Luban executable/DLL, or generated output roots. The Luban identity and source-fingerprint fields in `build_config.ini` are placeholders, and there is no generation receipt. Generation fails closed until those inputs and reviewed identities are supplied.
+
+### Authoritative inputs
+
+| Input | Purpose |
+| --- | --- |
+| `<repo-root>/DataTable/Luban/Defines/` | Luban schema definitions. |
+| `<repo-root>/DataTable/Luban/Datas/` | Workbooks, including `__tables__.xlsx`, `__beans__.xlsx`, and `__enums__.xlsx`. |
+| `<repo-root>/DataTable/Luban/luban.conf` | Groups, schema files, targets, manager name, and top module. |
+| `<repo-root>/DataTable/Luban/build_config.ini` | Approved tool identity, templates, CodeGen settings, and output profiles. |
+| `<repo-root>/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/` | Transactional pipeline and string-constant generator. |
+
+The configured groups are `c` for client, `s` for server, and `c+s` for the `all` target. All targets use manager `Tables` and top module `UnityStarter.GameConfig`.
+
+### Transactional generation
+
+The normal order is:
+
+1. Run `inspect` for the chosen profile and use `canGenerate`, `canCheck`, and `canRecover` as the authority.
+2. Validate the config, required workbooks, output containment, tool hash, Luban hash, and source fingerprint.
+3. Acquire the single writer lock and capture the live-output baseline.
+4. Run Luban and string-constant generation only into a transaction candidate directory.
+5. Require at least one code file and one data file, then hash the candidate and create a generation receipt.
+6. Publish only changed files with a journal and backups. Verify commit or rollback before removing transaction evidence.
+7. Run `check` to compare the receipt with the exact live code/data file sets and hashes. `check` does not run Luban or rewrite the receipt.
+
+Do not manually delete `.cyclonegames-datatable-writer.lock` or `.cyclonegames-datatable-transactions`. Run `inspect` first, then `recover --run-id <id>` only when `canRecover` is true.
+
+### Profiles and runtime Provider alignment
+
+The profile output path and the runtime Provider are independent decisions. Generated C# and generated bytes serve different consumers.
+
+| Profile | Code output | Data output | Runtime alignment |
+| --- | --- | --- | --- |
+| `client` | `UnityStarter/Assets/UnityStarter/Scripts/Generated/DataTable/` | `UnityStarter/Assets/StreamingAssets/DataTable/` | Unity compiles the C#. Core has no StreamingAssets loader; the product must use platform-appropriate I/O to populate a cache/custom Provider. AssetManagement does not consume this directory automatically. |
+| `server` | `DataTable/Luban/Generated/Server/Code/` | `DataTable/Luban/Generated/Server/Data/` | Package both roots with the server artifact and provide host-specific acquisition. |
+| `all` | `DataTable/Luban/Generated/All/Code/` | `DataTable/Luban/Generated/All/Data/` | Intended for the combined `c+s` target; use an explicit host Provider. |
+
+To use AssetManagement, generated payloads must be imported or routed into locations owned by its package, and `IDataTableLocationResolver` must resolve those same locations. The DataTable AssetManagement integration must also be active; it is inactive in the current asset-style checkout.
+
+### Editor and CLI entry points
+
+The Editor assembly provides:
+
+- `Tools > CycloneGames > DataTable > Create Default Settings`;
+- `Open Settings`, `Generate`, `Check`, and `Recover` under the same menu;
+- a visible settings asset whose defaults point to `../DataTable/Luban/build_config.ini` and profile `client`.
+
+Exactly one saved `DataTableLubanSettings` asset is required when using the Editor operations. CLI/CI-only workflows do not require it. Generate and Recover may refresh AssetDatabase after success; Check does not.
+
+From the repository root on Windows:
+
+```powershell
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat generate --profile client
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat check --profile client
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat recover --run-id <32-hex-run-id>
+```
+
+Use the `.sh` launcher with the same arguments on macOS or Linux. `--profile` is required for `inspect`, `generate`, and `check`; `recover` accepts a run ID and no profile. See the [Luban build handbook](../../../../../DataTable/Luban/README.md) for every configuration key, exit code, transaction state, and CI workflow.
+
+## Runtime Loading Pipeline
+
+Work through the stages in this order. Moving business validation or manifest checks after publication exposes a partial or untrusted generation.
+
+### 1. Define measured limits
 
 ```csharp
 var limits = new DataTableLoadLimits(
@@ -250,478 +291,328 @@ var limits = new DataTableLoadLimits(
     maxBytesPerTable: 8 * 1024 * 1024,
     maxTotalBytes: 64L * 1024 * 1024,
     maxRowsPerTable: 250_000,
-    maxTableNameLength: 96);
+    maxTableNameLength: 96,
+    maxLocationLength: 256);
 ```
 
-`DataTableLoadLimits.Default` is a broad fail-fast guardrail. A shipping product should normally use a tighter profile at each untrusted or memory-sensitive boundary.
+`DataTableLoadLimits.Default` allows 4,096 tables, 64 MiB per table, 512 MiB total, 2,000,000 rows per table, 256 UTF-16 code units per table name, and 2,048 per location. These are broad fail-fast guardrails, not production budgets. Set tighter values from generated-content measurements and the lowest supported hardware tier.
 
-Store payloads in a bounded cache:
+### 2. Acquire and validate payloads
 
-```csharp
-using var payloadCache = new DataTableBytesCache(
-    limits,
-    capacity: 16,
-    dataExtension: ".bytes",
-    clearBytesOnDispose: false);
+`IDataTableBytesProvider` returns borrowed `ReadOnlyMemory<byte>`. The memory remains valid only for the Provider's documented lifetime. Implement `IDataTableBytesInventory` as well when a manifest must prove that no unknown payload exists.
 
-payloadCache.Add("Items", itemPayload);       // copies ReadOnlyMemory<byte>
-payloadCache.AddOwned("Prices", priceBytes); // transfers the byte[]
-priceBytes = null;
+#### Match output and Provider locations
 
-payloadCache.Seal();
+The build output, AssetManagement runtime location, resolver result, and optional manifest `Location` must describe the same payload. Choose the acquisition recipe explicitly:
 
-ReadOnlyMemory<byte> bytes = payloadCache.GetBytes("Items.bytes");
-```
+| Source or package | Provider recipe | Location contract | Allocation boundary |
+| --- | --- | --- | --- |
+| `StreamingAssets/DataTable` | Product-owned platform-asynchronous I/O produces an owned `byte[]`, then transfers it with `DataTableBytesCache.AddOwned`. | Use the generated relative file name. Core has no StreamingAssets Provider. | The I/O layer allocates the array before `AddOwned` applies DataTable admission limits. Preflight size in the product I/O layer when the platform exposes it. |
+| Resources `TextAsset` | `AssetManagementDataTableBytesLoader` through a Resources package. | Location is relative to a `Resources/` folder and omits the file extension. Use `DataTableLocationResolver(..., dataExtension: "")`; a manifest location must follow the same rule. | Unity/Provider loads the asset and `TextAsset.bytes` creates the first byte array before DataTable validates it. |
+| Addressables `TextAsset` | `AssetManagementDataTableBytesLoader` through an Addressables package. | The resolver or manifest location must equal the authored Addressables address, including or omitting an extension exactly as that address does. | Provider asset allocation occurs before DataTable admission. |
+| YooAsset `TextAsset` | `AssetManagementDataTableBytesLoader` through a YooAsset package. | The resolver or manifest location must equal the YooAsset runtime location. | Provider asset allocation occurs before DataTable admission. |
+| YooAsset raw file | `AssetManagementDataTableRawFileBytesLoader`. | The resolver or manifest location must equal the raw-file runtime location. | `IRawFileHandle.ReadBytes()` returns a caller-owned defensive copy before DataTable validates and transfers it into its private cache. |
 
-Table names are normalized, so both `Items` and `Items.bytes` address the same entry. Cache identity is case-insensitive to prevent two entries from collapsing to one native path on case-insensitive file systems. `Add` and `Set` copy the payload. `AddOwned` and `SetOwned` avoid the copy and require exclusive array ownership. `Seal()` prevents mutation. The cache has no automatic eviction policy; dispose the owning content scope when its readers have stopped.
+On Android and WebGL, StreamingAssets must not be treated as an ordinary filesystem directory. Use the platform's supported asynchronous URI/archive/web acquisition, apply upstream size and timeout policy, then transfer the completed owned bytes into `DataTableBytesCache`. DataTable limits are admission limits: they keep an oversized result out of the DataTable cache and decoder, but cannot undo a Provider's first allocation, download, decompression, or Unity asset load.
 
-### Manifest validation
+Normal `TextAsset` loading is available through the current Resources, Addressables, and YooAsset Provider contracts. Raw loading requires `IAssetRawFileLoader`; among those three Providers, only YooAsset implements it. The raw loader rejects a package without that capability and does not fall back to TextAsset, so Resources and Addressables stick to the TextAsset loader.
 
-Use a versioned manifest before decoding payloads:
+#### AssetManagement TextAsset skeleton
+
+The following skeleton uses a Resources location. Change the base directory and extension only when the exact Addressables or YooAsset runtime address requires it.
 
 ```csharp
 var manifest = new DataTableManifest(
-    schemaVersion: 3,
-    entries: new[]
-    {
-        new DataTableManifestEntry(
-            tableName: "Items",
-            location: "Config/Items.bytes",
-            expectedByteLength: itemPayload.Length,
-            sha256Hex: expectedItemsSha256,
-            required: true),
-        new DataTableManifestEntry(
-            tableName: "Prices",
-            location: "Config/Prices.bytes",
-            expectedByteLength: pricePayloadLength,
-            sha256Hex: expectedPricesSha256,
-            required: true),
-    },
-    limits,
+    schemaVersion: 1,
+    entries: manifestEntries,
+    limits: limits,
     requireKnownTables: true);
 
-manifest.EnsureSchemaVersionSupported(minimumVersion: 3, maximumVersion: 3);
-manifest.ValidateRequiredTables(payloadCache);
-manifest.ValidateBytes("Items", payloadCache.GetBytes("Items"));
-manifest.ValidateBytes("Prices", payloadCache.GetBytes("Prices"));
+manifest.EnsureSchemaVersionSupported(1, 1);
+
+var locations = new DataTableLocationResolver(
+    baseDirectory: "Config/DataTable",
+    dataExtension: "", // Resources runtime locations omit the file extension.
+    limits: limits);
+
+using var loader = new AssetManagementDataTableBytesLoader(
+    assetPackage,
+    new DataTableAssetLoadContext(
+        bucket: "Config.DataTable.Client",
+        owner: "DataTableBootstrap"),
+    locations,
+    enableEditorFileFallback: false,
+    initialCapacity: manifest.Entries.Count,
+    manifest: manifest,
+    limits: limits);
+
+await loader.LoadAsync(tableNames, cancellationToken);
+
+// Use loader as IDataTableBytesProvider for manifest/decode/catalog work
+// before this owner-thread scope disposes it.
 ```
 
-`ValidateRequiredTables` checks presence. `ValidateBytes` applies the configured byte limit and the entry's expected length and SHA-256 value. SHA-256 identifies content and detects corruption; content received from an untrusted source also needs an authenticated signature and a product-owned trust policy.
+Both AssetManagement loaders are main-thread-owned and allow one in-flight load per instance. Each load releases its Provider handle after copying the bytes. If handle disposal fails, the loader retains that exact handle and blocks another load; inspect `HasPendingHandleDisposal` and call `RetryPendingHandleDisposal()` on the owner thread. The loader's `Dispose()` retires its handles and private byte cache, but does not clear the AssetManagement bucket or destroy the package. The product owns bucket naming, sharing, `Clear`/`ClearHierarchy` timing, and package shutdown; prefer a dedicated bucket when DataTable content must be cleared independently.
 
-An entry without `Sha256Hex` skips hash validation. `DataTableHashUtility.Sha256Matches` requires a non-empty expected hash and returns `false` when the expected value is absent.
+This integration is inactive in the current checkout. The skeleton compiles only after the AssetManagement integration assembly's dependency and capability conditions are satisfied and the consumer references that assembly.
 
-### Resource lifetime
-
-Use `DataTableSetScope` when generated tables or row views depend on a disposable payload owner:
+When a manifest is passed to an AssetManagement loader, its list `LoadAsync` validates every payload and the final inventory internally. Do not hash the same payloads again. For a custom Provider or cache that does not own manifest validation, use the sequence below:
 
 ```csharp
-var scope = new DataTableSetScope(
-    root: generatedTables,
-    catalog: catalog,
-    resourceOwner: payloadCache);
-
-IDataTable<ItemRow> items = scope.Get<IDataTable<ItemRow>>();
-
-// After every reader has stopped:
-scope.Dispose();
-```
-
-The scope disposes only the supplied `resourceOwner`. It clears references to its root and catalog but does not infer ownership of arbitrary table instances. Do not dispose a backing owner while published rows or generated views can still access its memory.
-
-### Luban integration
-
-Reference `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` from the composition assembly. The `com.code-philosophy.luban` package must satisfy the integration asmdef's declared version range.
-
-Prepare a bounded `IDataTableBytesProvider`, then create the generated Luban root:
-
-```csharp
-using CycloneGames.DataTable.Unity.Integrations.Luban;
-
-cfg.Tables generatedTables = LubanDataTableSetFactory.Create(
-    payloadCache,
-    getBytes => new cfg.Tables(getBytes),
-    limits);
-```
-
-The callback is valid only during the synchronous factory call and on the calling thread. Each requested payload is copied into a private `Luban.ByteBuf` array, allowing the generated parser to retain its buffer without borrowing writable cache memory.
-
-For a generated parser that accepts one `ByteBuf` directly:
-
-```csharp
-Luban.ByteBuf itemBuffer = LubanDataTableSetFactory.CreateOwnedByteBuf(
-    payloadCache,
-    "Items",
-    limits);
-```
-
-Validate generated row counts, ranges, stable IDs, and cross-table references before catalog publication. Full pipeline setup, Windows/macOS/Linux generation commands, output ownership, and recovery procedures are documented in the [Luban guide](../../../../../DataTable/Luban/README.md).
-
-### MessagePack integration
-
-Reference `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack`. Keep the Unity client package, `MessagePack.dll`, annotations, and analyzer on matching versions, and use source-generated row formatters for IL2CPP/AOT.
-
-Define a MessagePack row contract:
-
-```csharp
-using CycloneGames.DataTable;
-using MessagePack;
-
-[MessagePackObject]
-public sealed class PackedItemRow : IDataRow
+for (int i = 0; i < manifest.Entries.Count; i++)
 {
-    [Key(0)]
-    public int Id { get; set; }
-
-    [Key(1)]
-    public string Name { get; set; }
+    DataTableManifestEntry entry = manifest.Entries[i];
+    if (bytesProvider.TryGetBytes(entry.TableName, out ReadOnlyMemory<byte> bytes))
+    {
+        manifest.ValidatePayload(entry.TableName, bytes);
+    }
 }
+
+manifest.ValidateInventory(bytesProvider);
 ```
 
-Deserialize a top-level row array with explicit resolver and security settings:
+Call `ValidatePayload` once for each acquired payload before decoding. It applies the per-table limit and checks configured length and SHA-256. `ValidateInventory` then checks required presence, table count, aggregate bytes, Provider consistency, and unknown names; it deliberately does not rehash every payload. `RequireKnownTables=true` requires an inventory-capable Provider.
+
+### 3. Decode with an active integration or product decoder
+
+Luban consumes a generated factory synchronously:
 
 ```csharp
-using System.Threading;
-using CycloneGames.DataTable.Unity.Integrations.MessagePack;
-using MessagePack;
-using MessagePack.Resolvers;
+TTableSet tableSet = LubanDataTableDecoder.Decode(
+    bytesProvider,
+    lubanLoader => createGeneratedTableSet(lubanLoader),
+    limits,
+    cancellationToken);
+```
 
-MessagePackSerializerOptions options =
-    MessagePackSerializerOptions.Standard.WithResolver(StandardResolver.Instance);
+The callback is valid only synchronously, on the calling thread, and during the factory call. The adapter normalizes and bounds each request, enforces aggregate byte and table-count limits, and copies every requested payload into private storage before creating `ByteBuf`. It cannot bound arbitrary allocations performed inside generated parsers.
 
-MessagePackSecurity security = MessagePackSecurity.UntrustedData
-    .WithMaximumObjectGraphDepth(64)
-    .WithMaximumDecompressedSize(limits.MaxBytesPerTable);
+MessagePack builds an uncompressed top-level row array with explicit options and security:
 
-DataTable<PackedItemRow> items = MessagePackConfigProvider.Build<PackedItemRow>(
-    itemPayload,
-    options,
+```csharp
+DataTable<ItemRow> items = MessagePackDataTableDecoder.Build<ItemRow>(
+    bytes,
+    serializerOptions,
     security,
     limits,
-    CancellationToken.None);
+    cancellationToken);
 ```
 
-The adapter requires a bounded untrusted-data policy, validates payload size and the top-level array count before row materialization, observes cancellation, and rejects corrupt, truncated, or trailing bytes. It uses only the options supplied to `Build`; configure resolver composition explicitly at the call site.
+The MessagePack adapter requires `MessagePackCompression.None`, rejects corrupt, truncated, or trailing bytes, preflights the top-level row count, and requires a positive decompressed-size limit no larger than `MaxBytesPerTable`. Use a source-generated resolver and formatters for IL2CPP/AOT.
 
-For custom keys, call `Build<TKey, TRow>` with a key selector and comparer. When a decoder already owns a validated `TRow[]`, call `BuildRows` to transfer that array directly into a table.
+These snippets compile only when their integration assembly is active and referenced. In the current checkout, neither Luban nor MessagePack integration is active.
 
-### Unity Editor and Luban generation
+### 4. Validate product rules
 
-Create `DataTableLubanSettings` from `Assets > Create > CycloneGames > DataTable > Luban Settings`, or run `Tools > CycloneGames > DataTable > Run Luban Build`. If no settings asset exists, the runner creates one under `Assets/Editor/DataTable/DataTableLubanSettings.asset`. Keep one authoritative settings asset per settings type.
+Serialization success is not business validity. Before constructing a candidate, validate all product invariants, including:
 
-| Field | Meaning |
+- key ranges and semantic uniqueness not represented by the table key;
+- required cross-table references;
+- enum and feature-flag combinations;
+- numeric ranges, ordering, and mutually exclusive fields;
+- content version, signature, and authorization policy owned by the product.
+
+Validation must finish against the complete candidate set. Do not publish one table at a time when readers require a coherent generation.
+
+### 5. Build a catalog and candidate
+
+For generated sets, register exact contracts explicitly:
+
+```csharp
+DataTableCatalog catalog = DataTableGeneratedTableCollector.CreateCatalog(
+    tableSet,
+    descriptors,
+    new DataTableBuildContext(limits, cancellationToken));
+
+ValidateBusinessRules(catalog);
+
+using var candidate = new DataTableCandidate(
+    catalog,
+    new DataTableRevision(sequence, contentIdentity),
+    backingResourceOwner);
+```
+
+`descriptors` is an `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`. The collector snapshots and validates all descriptors before invoking any getter, rejects duplicate contracts, and performs no reflection discovery. A revision sequence must be greater than zero and strictly exceed the Store's accepted high-water mark. Use a stable non-empty identity such as an authenticated content-release ID.
+
+The optional `backingResourceOwner` must be exclusively owned. Wrap thread-affine owners in an explicit dispatch adapter.
+
+### 6. Publish and read
+
+```csharp
+DataTableStoreMetadata before = store.Metadata;
+DataTablePublishResult result = store.TryPublish(candidate, before.Generation);
+
+if (!result.IsCommitted)
+{
+    HandleRejectedCandidate(result.Status);
+    return; // using disposes the still caller-owned candidate
+}
+
+// A long-lived subsystem registers once.
+using DataTableReader reader = store.RegisterReader();
+IDataTable<ItemRow> currentItems = reader.Get<IDataTable<ItemRow>>();
+```
+
+`Committed` transfers candidate ownership to the Store. `Superseded` and `NonMonotonicRevision` leave it caller-owned. A reader registered after the commit pins that generation immediately. An existing reader remains on its old generation until a safe point calls:
+
+```csharp
+if (reader.Refresh())
+{
+    RebuildDerivedRuntimeState(reader);
+}
+```
+
+Do not race reads performed through one reader with that reader's `Refresh()` or `Dispose()`. Separate concurrent execution contexts should own separate readers. `TryReset` publishes an empty uninitialized generation but does not lower the revision high-water mark.
+
+## Ownership and Lifetime
+
+### Tables and catalogs
+
+- Array and list constructors copy source rows. `FromEnumerable` materializes once with a row-count guard.
+- `FromOwnedArray` transfers the array without a copy. After success, no writable alias may mutate it.
+- Structural immutability does not deep-clone class rows or objects they reference; the content owner keeps them immutable.
+- `All` is a source-ordered `IReadOnlyList`. `AsSpan()` is an allocation-free borrowed synchronous view; never store it or carry it across `await`, `yield`, reader refresh, or disposal.
+- `DataTableCatalog` does not own table resources. The direct composition scope or Store generation owns their backing lifetime.
+
+### Byte cache lifecycle
+
+`DataTableBytesCache` is a single-owner bounded Provider and inventory:
+
+- `Add` and `Set` copy bytes; `AddOwned` and `SetOwned` transfer a `byte[]`.
+- Names are normalized and compared with `OrdinalIgnoreCase`.
+- `Seal()` prevents further mutation and enables coordinated reads.
+- The cache has no eviction policy.
+- `Close()` is O(1), rejects further reads/mutation, and starts forward-only release.
+- `ReleaseStep()` is valid only after close and obeys payload-count and optional byte-clearing budgets.
+- `Dispose()` synchronously releases the remainder.
+
+```csharp
+payloadCache.Close();
+
+var releaseBudget = new DataTableBytesCacheReleaseBudget(
+    maxPayloads: 16,
+    maxBytesToClear: 256L * 1024L);
+
+DataTableBytesCacheReleaseResult release;
+do
+{
+    release = payloadCache.ReleaseStep(in releaseBudget);
+}
+while (!release.IsComplete);
+```
+
+When byte clearing is enabled, one large array can span multiple calls. Clearing reduces recoverability from that managed buffer but cannot erase existing copies, native buffers, crash dumps, or runtime internals.
+
+### Store shutdown
+
+Stop writers, stop new requests, dispose readers, then dispose the Store. A resource-owner disposal failure is retained; inspect `FailedRetirementCount` and call `RetryFailedRetirements()` on an allowed thread. Store disposal prevents new registration and publication, but already registered readers keep their pinned generation until they leave.
+
+## Performance and Platform Notes
+
+- Construction, hashing, decoding, business validation, publication, refresh, and retirement are cold-path work.
+- Successful dictionary reads are `O(1)` and do not intentionally allocate. A registered reader's steady-state reads and no-op refreshes do not intentionally allocate.
+- `AsSpan()` is the preferred concrete-table API for measured hot full-table scans.
+- A cold reload can simultaneously retain source bytes, decoder copies, decompressed data, row objects, key-index dictionaries, and old/new generations. Size limits do not replace peak-memory profiling.
+- `DataTableBuildContext` samples cancellation every power-of-two interval, 1,024 rows by default. Smaller intervals improve cancellation latency; larger intervals reduce checks.
+- Published immutable tables are safe for concurrent reads only when row objects and comparers are also immutable/thread-safe.
+- Unity objects and AssetManagement loaders have main-thread affinity. Luban factory requests remain synchronous on their owner thread.
+- For IL2CPP and stripping, use generated serializers and explicit table descriptors. Validate the exact Player backend; Editor or static analysis does not prove AOT behavior.
+- WebGL must not depend on background threads or direct filesystem access to `StreamingAssets`. Use platform-appropriate asynchronous acquisition and budget synchronous decode work.
+
+## Security and Persistence
+
+Treat files, remote configuration, patches, mods, command-line selections, and user-controlled paths as untrusted. Bound payload count, bytes, rows, names, locations, decompression, parser depth, strings, diagnostics, and processing time before expensive work. Portable name normalization rejects rooted paths, traversal, empty segments, control/surrogate/format characters, platform-invalid characters, and reserved names.
+
+SHA-256 detects corruption and identifies content; it is not authentication. Authenticate remotely supplied manifests and payload identities with a product-owned signature and trust policy before publication. Never log complete hostile payloads or secrets.
+
+Core writes no files and uses no `EditorPrefs`, `PlayerPrefs`, or `SessionState`. Persistence is always explicit:
+
+| Artifact | Owner, lifecycle, and Git policy |
 | --- | --- |
-| `LubanProjectDir` | Luban directory relative to the Unity project root. The default points to `../DataTable/Luban`. |
-| `LubanScriptName` | Script name without extension. The runner appends `.bat` on Windows and `.sh` on macOS/Linux. |
-| `LubanScriptArguments` | Optional arguments appended to the generation command. |
-| `LubanTimeoutSeconds` | Maximum external-process duration; invalid serialized values fall back to 300 seconds. |
-| `RefreshAssetsAfterLubanBuild` | Calls `AssetDatabase.Refresh()` only after a successful run. |
+| `DataTable/Luban/Defines`, `Datas`, `luban.conf`, `build_config.ini` | Source and reviewed generation configuration; normally version controlled. |
+| Generated C# and payload roots | Rebuildable pipeline output. The product decides whether build artifacts are committed or produced in CI; never hand-edit receipted output. |
+| `.cyclonegames-datatable-generation-receipt.json` | Pipeline-owned proof stored in the profile code-output root; keep it aligned with its generated files. |
+| `.cyclonegames-datatable-writer.lock` and `.cyclonegames-datatable-transactions` | Recoverable temporary state below `DataTable/Luban`; ignored by Git and managed only through pipeline commands. |
+| `DataTableLubanSettings.asset` | Explicit Unity project authoring asset; exactly one saved asset is authoritative for Editor invocation preferences. |
+| Runtime Provider/cache state | Memory owned by the current composition or content generation; not persistent. |
+| Trusted revision-sequence floor | Product-owned anti-rollback state supplied to the Store constructor; Core does not persist it. |
 
-The Inspector shows resolved paths and validation status and provides refresh, reveal, validate, and build actions. Inspector and menu runs use `RunWithResultAsync` and keep the Editor responsive. The Inspector that starts a run owns its cancellation token and exposes **Cancel Luban Build**; other Inspector instances report the global busy state without cancelling a run they do not own. `RunWithResult` remains synchronous for CI and programmatic batch entry points. Script execution validates the project root, working directory, script path, arguments, and timeout before starting the process. Standard output and standard error are captured into a bounded result.
+## Extension Points
 
-The runner permits one in-Editor writer. Process start, wait, timeout, kill, and output-reader join run on a worker; request creation, `Application`/`AssetDatabase` access, Unity logging, and Inspector finalization run on the main thread. Cancellation returns `Cancelled=true` instead of throwing and does not release the single-writer gate unless termination of the directly owned shell process is confirmed. On runtimes that support `Process.Kill(bool)`, the runner requests process-tree termination. Older Mono runtimes fall back to killing only the directly owned shell; shell exit does not prove that every descendant stopped. The wrapper's residual directory lock is therefore the cross-process fail-closed recovery boundary. If timeout or cancellation cannot establish a safe state, stop all generator descendants, inspect the directory lock and generated output, complete recovery, and restart the Editor before starting another run. Domain reload and Editor quitting retain global best-effort cancellation. Projects with derived generation profiles can subclass `DataTableLubanSettings` and override its virtual methods, including `CreateLubanRunRequest()`, without modifying this package.
+### Custom Provider
 
-## Advanced Topics
+Implement `IDataTableBytesProvider` when bytes come from a product service, network cache, encrypted container, server filesystem, or another asset system. Return borrowed read-only memory, document the owner thread and validity window, enforce limits before allocation, and make closure explicit. Add `IDataTableBytesInventory` only when `Count` and indexed names are stable, complete, unique, and `O(1)` during validation.
 
-### AOT-safe generated table-set registration
+### Custom decoder
 
-Use explicit descriptors when a generator produces one root object containing several table properties. Replace the example generated types and properties with the names emitted by the project's generator.
+Keep a custom decoder outside Core. Accept an `IDataTableBytesProvider`, `DataTableLoadLimits`, and `CancellationToken`; validate the envelope before allocation; consume the entire payload; reject trailing data; and return immutable rows or a generated set. Do not expose third-party serializer types through Core public contracts.
 
-```csharp
-using CycloneGames.DataTable;
+### Generated table registration
 
-var descriptors = new[]
-{
-    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
-        typeof(MyGeneratedItemTable),
-        static tables => tables.Items),
-    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
-        typeof(MyGeneratedPriceTable),
-        static tables => tables.Prices),
-};
+Create explicit `DataTableGeneratedTableCollector.TableDescriptor<TTableSet>` values in generated or composition code. This keeps IL2CPP behavior deterministic and makes optional tables visible in code review. The descriptor contract type must be a reference type and each exact type may appear once.
 
-DataTableCatalog generatedCatalog =
-    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
-```
+### Diagnostics
 
-The descriptor array defines the exact catalog contract type and property accessor. This path performs no runtime assembly scan or reflection-based discovery, making the registration graph explicit for IL2CPP and managed stripping.
+Core defaults to silent `NullDataTableDiagnostics`. A host can install a process sink with owner-checked `DataTableDiagnostics.TryInstall`/`TryReset`, or inject an explicit `DataTableDiagnosticChannel` into a Store. The optional `DataTableLogWriterAdapter` bridges to CycloneGames.Logging. Ordinary sink exceptions are isolated from DataTable control flow; `OutOfMemoryException` propagates.
 
-### Production loading and hot reload
+### Related composition
 
-A complete reload sequence is:
-
-1. Allocate a candidate payload owner with product-specific `DataTableLoadLimits`.
-2. Load required payloads and reject missing, empty, oversized, or unknown entries.
-3. Validate manifest schema, byte lengths, hashes, and content trust.
-4. Decode every table into a candidate generation.
-5. Validate row fields, stable IDs, ranges, uniqueness, and cross-table references.
-6. Build one `DataTableCatalog`.
-7. Inject the catalog into a new composition scope or call `DataTableRegistry.Publish`.
-8. Wait until readers of the previous generation have finished.
-9. Dispose the previous generation's backing resources.
-
-Any failure before publication should discard the candidate and leave the active generation unchanged. Resource retirement must be coordinated by the application because the registry does not track reader leases.
-
-### Explicit injection vs. process-wide publication
-
-Pass the catalog through constructors when the consumer has a clear owner and lifetime:
-
-```csharp
-public sealed class ItemService
-{
-    private readonly IDataTable<ItemRow> _items;
-
-    public ItemService(DataTableCatalog catalog)
-    {
-        _items = catalog.Get<IDataTable<ItemRow>>();
-    }
-
-    public ItemRow GetItem(int id) => _items.Get(id);
-}
-```
-
-This works with direct construction and with any DI composition root; Core has no container dependency. Use `DataTableRegistry` only when the application provides one process-wide catalog generation.
-
-## Common Scenarios
-
-### Item and price lookup at runtime
-
-A gameplay system needs to look up item definitions and prices by different keys. Build both tables, compose them into a catalog, and inject the catalog into the service:
-
-```csharp
-public sealed class ShopService
-{
-    private readonly IDataTable<ItemRow> _items;
-    private readonly IDataTable<string, PriceRow> _prices;
-
-    public ShopService(DataTableCatalog catalog)
-    {
-        _items = catalog.Get<IDataTable<ItemRow>>();
-        _prices = catalog.Get<IDataTable<string, PriceRow>>();
-    }
-
-    public int GetSellPrice(int itemId)
-    {
-        ItemRow item = _items.Get(itemId);
-        return _prices.Get(item.Name).SoftCurrency;
-    }
-}
-```
-
-Both lookups are expected `O(1)`. The catalog captures a single internally consistent snapshot — even if another generation is published later, this service continues to read the snapshot it was constructed with.
-
-### Localization with string keys
-
-A localization system uses string keys (`"ui.play"`, `"ui.quit"`) instead of integer IDs:
-
-```csharp
-DataTable<string, LocalizedTextRow> texts = new DataTable<string, LocalizedTextRow>(
-    LoadLocalizedRows(),
-    static row => row.Key,
-    StringComparer.Ordinal);
-
-public string Localize(string key)
-{
-    return texts.TryGet(key, out LocalizedTextRow row) ? row.Text : key;
-}
-```
-
-`StringComparer.Ordinal` gives case-sensitive identifier matching. The key selector runs once per row during construction; lookup does not invoke it again.
-
-### Atomic catalog hot-swap
-
-A live game downloads a new content generation and needs to swap the catalog without restarting. Build the candidate generation on a loading owner, validate it, then publish atomically:
-
-```csharp
-public async Task ReloadContentAsync(byte[] manifestBytes, CancellationToken ct)
-{
-    DataTableBytesCache candidateCache = LoadPayloads(manifestBytes, ct);
-    DataTableManifest manifest = ParseManifest(manifestBytes, candidateCache);
-    manifest.ValidateRequiredTables(candidateCache);
-
-    DataTableCatalog candidateCatalog = await BuildCatalogAsync(candidateCache, manifest, ct);
-    ValidateCrossTableReferences(candidateCatalog);
-
-    DataTableRegistry.Publish(candidateCatalog);
-
-    // After readers of the previous generation finish:
-    _previousCache?.Dispose();
-    _previousCache = candidateCache;
-}
-```
-
-`DataTableRegistry.Publish` swaps the whole catalog atomically; readers that captured `Current` before the swap continue to see the previous snapshot. The application coordinates retirement of the previous backing resources.
-
-### Generated table set without reflection
-
-A code generator emits a `cfg.Tables` root containing typed table properties. Register them with explicit descriptors so the registration graph is preserved under IL2CPP and managed stripping:
-
-```csharp
-var descriptors = new[]
-{
-    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
-        typeof(cfg.TbItem),
-        static tables => tables.TbItem),
-    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
-        typeof(cfg.TbPrice),
-        static tables => tables.TbPrice),
-};
-
-DataTableCatalog catalog =
-    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
-```
-
-No runtime assembly scan or reflection-based discovery is performed.
-
-## Performance and Memory
-
-| Operation | Runtime characteristics |
-| --- | --- |
-| Successful `Get`, `GetOrDefault`, `TryGet` after construction | Expected `O(1)` dictionary lookup with no intentional managed allocation. |
-| Missing-key `Get` | Creates and throws `KeyNotFoundException`; use outside normal hot-path control flow. |
-| `All[index]` | `O(1)` access through a read-only view. |
-| Table construction | Cold path; array copy unless ownership is transferred, plus row view and key-index allocation. |
-| Catalog typed lookup | Expected `O(1)` type-keyed dictionary lookup. |
-| Registry read | Volatile snapshot read without a reader lock. |
-| Registry publication | Serialized writer path; allocates a state object. Diagnostic text is constructed only when the installed Core sink accepts `Info`. |
-| Byte cache lookup | Loading path with name normalization and dictionary lookup. |
-| Hashing, manifest validation, decoding | Cold path; backend-specific allocation and processing cost. |
-
-Estimate reload peak memory from all simultaneously live components:
-
-```text
-source payloads
-+ cache-owned payloads
-+ adapter copies, decompression, and decoder scratch memory
-+ row arrays and referenced row objects
-+ key-to-index dictionaries
-+ old and candidate generations during publication
-```
-
-Use `FromOwnedArray` and `AddOwned` only when ownership is provable; a saved copy is not worth a writable alias or use-after-dispose risk. Keep caches scoped to a content generation instead of retaining every payload process-wide. For large value-type rows, include row-copy cost in profiling. Add specialized access only when representative benchmarks identify it as a material bottleneck. Performance budgets should record row shape, key type, hit/miss distribution, table size, backend, Unity scripting backend, target hardware, warm-up method, and GC measurement window.
-
-### Threading and lifetime rules
-
-- Construct tables, catalogs, manifests, and caches on one loading owner outside gameplay hot paths.
-- Published table and catalog reads may run concurrently when rows, referenced objects, and comparers are immutable.
-- `DataTableCatalogBuilder` and unsealed `DataTableBytesCache` are single-owner mutable objects.
-- `Seal()` prevents cache mutation; it is not a memory-publication barrier by itself.
-- Do not race `Dispose()` with cache readers or table views that depend on the disposed owner.
-- `DataTableRegistry` serializes writers and exposes a volatile immutable snapshot to readers.
-- Luban payload requests are synchronous and remain on the factory owner thread.
-- Unity objects and AssetManagement loaders follow Unity main-thread affinity.
-
-Thread safety belongs to the published immutable snapshot and its ownership protocol. It does not make mutable row objects or third-party parser state safe for concurrent access.
-
-### Platform guidance
-
-- **Windows, Linux, macOS:** use the platform generation wrapper documented in the Luban guide. Keep table identities portable across case-sensitive and case-insensitive file systems.
-- **IL2CPP and managed stripping:** use source-generated serializers and explicit `TableDescriptor<TTableSet>` registration. Preserve only generated backend types that require it.
-- **iOS and Android:** measure cold-load duration and peak memory with source buffers, adapter copies, decompression, decoded rows, index dictionaries, and generation overlap present.
-- **WebGL:** do not rely on background threads. Keep synchronous decode work and peak managed memory within a measured frame/loading-screen budget.
-- **Dedicated Server:** reference Core and pure C# adapters from the server composition; exclude Unity asset-loading and Editor assemblies.
-- **Console platforms:** validate native dependency import, file-name rules, memory limits, AOT behavior, and platform certification requirements with the platform holder's toolchain.
-
-Run clean Player builds and representative content tests for every supported scripting backend and platform profile. Editor results are useful for development but are not a substitute for target-runtime profiling.
-
-### Security, persistence, and logging
-
-Treat files, remote configuration, patches, mods, and command-line-selected content as untrusted input. Bound payload bytes, total bytes, row counts, table counts, decompression, nested collections, recursion depth, strings, processing time, and diagnostics. Validate stable IDs, value ranges, references, schema versions, permissions, and signatures before publication.
-
-Core performs no file writes and does not use `EditorPrefs` or `PlayerPrefs`.
-
-| Data | Owner and lifecycle |
-| --- | --- |
-| Workbook, schema, and generator configuration | Version-controlled content source. |
-| Generated C# and binary payloads | Rebuildable content-pipeline output; commit or publish according to the product pipeline. |
-| Manifest and schema version | Version and publish together with matching payloads. |
-| `DataTableLubanSettings.asset` | Visible Unity project configuration; keep one authoritative asset. |
-| Runtime byte cache | Owned by a runtime content scope and disposed after readers retire. |
-
-Core diagnostics use `IDataTableDiagnostics` with `DataTableDiagnosticCategories.Root`. `DataTableDiagnosticLevel` has the stable shared shape `Trace`, `Debug`, `Info`, `Warning`, `Error`, `Fatal`, and `None`, with numeric values matching `LogSeverity`; `None` and unknown values are never emitted. The default `NullDataTableDiagnostics` is silent. A pure C# host can install its own sink with `DataTableDiagnostics.TryInstall`/`Replace`. Owners use `TryReplace(expected, replacement)` for atomic handoff or `TryReset(expected)` for owner-safe release, so they cannot erase a replacement installed by another composition root. A host using the shared pipeline installs `DataTableLogWriterAdapter.Ambient` from the optional integration assembly. The adapter isolates ordinary `ILogWriter` failures and preserves out-of-memory propagation. The standalone `Tools~/CodeGen` executable keeps `System.Console` for command output because that is its user-facing CLI protocol rather than library diagnostics.
-
-An ordinary diagnostic sink failure after `DataTableRegistry.Publish` commits is best-effort and cannot roll back or make the completed publish appear to fail. Diagnostic output should include table identity, generation, stage, limits, and failure category, but not secrets or complete hostile payloads.
-
-## Troubleshooting
-
-| Symptom | Likely cause | Resolution |
+| Component | Current contract | What it does not see |
 | --- | --- | --- |
-| Constructor reports a duplicate key | Two rows share the same key | Correct the content source or key selector; every key must be unique within one table |
-| `Get<TTable>()` cannot find a catalog entry | Wrong contract type | Retrieve the exact contract type used by `DataTableCatalogBuilder.Add<TTable>` |
-| `DataTableRegistry.Get<TTable>()` returns `null` | Catalog not published, or missing contract | Ensure a complete catalog containing that contract has been published; inspect `IsInitialized`/`Generation` |
-| Cache reports an existing table for a differently cased name | Case-insensitive identity | Use one canonical portable table identity; cache and manifest identities are case-insensitive |
-| Cache mutation throws after loading | Cache is sealed | Create a new candidate cache for a new content generation |
-| Manifest rejects a payload | Schema, length, or hash mismatch | Check schema version, normalized table name, expected byte length, SHA-256, and release identity |
-| Luban callback throws for thread or lifetime | Callback stored or dispatched off-thread | Invoke every generated payload request synchronously inside `LubanDataTableSetFactory.Create`; do not store or dispatch the callback |
-| MessagePack rejects the security policy | Insufficient security bounds | Start with `MessagePackSecurity.UntrustedData`, keep collision-resistant hashing enabled, bound decompressed size to `MaxBytesPerTable` |
-| MessagePack cannot deserialize a row | Wrong payload shape or missing formatter | Confirm the payload is a top-level `TRow[]`, the row formatter was generated, and the explicit resolver contains it |
-| Luban Inspector reports an invalid path | Misconfigured directory or script | Validate the Unity-project-relative directory, platform script extension, script existence, and unique settings asset |
-| Luban run remains blocked after timeout | The owned shell did not exit, or descendant termination is uncertain | Stop all generator descendants, inspect `.cyclonegames-datatable-writer.lock` and outputs, recover the directory, then restart Unity |
-| Reload memory is higher than the cache total | Overlapping generations and decoder scratch | Profile payload sources, copies, decompression, decoder objects, row objects, dictionaries, and old/new generation overlap |
+| `CycloneGames.GameplayTags.DataTable` | Consumes Core `IDataTableRows<TRow>` or `IReadOnlyList<TRow>` values. File I/O and decoding remain in the product composition root. | It does not bind to Luban, MessagePack, AssetManagement, or another decoder. |
+| `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | Adapts Core `IDataTable<TRow>` values or lookup delegates into level-value providers, modifier calculations, and attribute initialization. The assembly is opt-in and `autoReferenced: false`. | It does not acquire, decode, or publish payloads. Its UPM `versionDefines` condition is not activated by this asset-style DataTable checkout. |
+| MemoryGovernance DataTable companion | Operates only on a caller-owned `DataTableBytesCache` supplied explicitly, using its memory snapshot and bounded close/release contract. The caller retains ownership and coordinates reader quiescence. | It cannot discover an AssetManagement loader's private cache, decoded rows, or generations retained by `DataTableStore`. |
 
 ## Validation
 
 ### Core and integration tests
 
-Run these EditMode test assemblies from Unity Test Runner or the project's batchmode test entry point:
+Run these EditMode assemblies through Unity Test Runner or the repository batchmode entry point:
 
-- `CycloneGames.DataTable.Tests.Editor`
-- `CycloneGames.DataTable.Tests.Editor.Tools.Luban` for async validation, cancellation, and main-thread finalization contracts
-- `CycloneGames.DataTable.Tests.Editor.Integrations.Luban` when Luban is enabled
-- `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack` when MessagePack is enabled
-- `CycloneGames.DataTable.Tests.Performance`
+- `CycloneGames.DataTable.Tests.Editor`;
+- `CycloneGames.DataTable.Tests.Editor.Tools.Luban`;
+- `CycloneGames.DataTable.Tests.Editor.Integrations.Logging` when the Logging bridge is included;
+- `CycloneGames.DataTable.Tests.Editor.Integrations.Luban` only when Luban is active;
+- `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack` only when MessagePack is active;
+- `CycloneGames.DataTable.Tests.Editor.Integrations.AssetManagement` only when AssetManagement is active;
+- `CycloneGames.DataTable.Tests.Performance` when the performance-test package condition is satisfied.
 
-Add product fixtures for duplicate and missing keys, malformed payloads, excessive counts, schema mismatch, cross-table reference failure, cancellation, reload rollback, and backing-owner retirement.
+### CodeGen tool
 
-### Generator validation
+Run from `<repo-root>/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen` so the pinned `global.json` is discovered:
 
-Validate the directory before generating content, run the platform wrapper, inspect its summary, and review generated changes before committing. The wrapper commands and recovery procedure are in the [Luban guide](../../../../../DataTable/Luban/README.md). The package-local CodeGen tool provides its own build and self-test instructions in [Tools~/CodeGen/README.md](./Tools~/CodeGen/README.md).
+```powershell
+dotnet build --configuration Release
+dotnet format --verify-no-changes --no-restore
+dotnet run --configuration Release --no-build -- --self-test
+```
 
-### Player validation
+The tool targets `net8.0`, uses C# 12, has no NuGet package dependency, and pins SDK `10.0.302` with roll-forward disabled. A machine without that exact SDK cannot run the tool validation.
 
-For each supported build profile:
+### Pipeline and Player
 
-1. build from a clean checkout;
-2. verify asmdef conditions and serializer registration;
-3. load representative minimum, typical, and maximum content sets;
-4. record cold-load time, peak memory, retained memory, and hot lookup allocations;
-5. exercise corrupt, missing, cancelled, and rollback paths;
-6. repeat with managed stripping and the shipping scripting backend.
+1. Run `inspect` and require the intended action flag to be true.
+2. Run `generate`, review the changed generated files and receipt, then run `check`.
+3. Open Unity and require clean compilation plus the relevant EditMode tests.
+4. Load minimum, representative, and maximum content in the target Player.
+5. Exercise corrupt, missing, canceled, superseded, non-monotonic, rollback, reader-quiescence, and disposal-retry paths.
+6. Measure cold-load time, peak and retained memory, and steady-state allocations with the shipping scripting backend and stripping settings.
+
+The current checkout cannot pass pipeline generation until the missing source inputs and approved Luban identities are supplied. Report CLI, Editor, Player, IL2CPP, stripping, and platform validation separately as `Passed`, `Failed`, `Not run`, or `Not applicable`.
 
 ## API Navigation
 
-| Type | Primary use |
+| Area | Primary APIs |
 | --- | --- |
-| `IDataRow<TKey>` / `IDataRow` | Optional stable primary-key contract for generated or handwritten rows. |
-| `IDataTableRows<TRow>` | Minimal source-ordered read-only row view. |
-| `IDataTable<TKey, TRow>` / `IDataTable<TRow>` | Read-only keyed table contract. |
-| `DataTable<TKey, TRow>` / `DataTable<TRow>` | Immutable row storage and key-to-index lookup. |
-| `DataTableLoadLimits` | Explicit table-count, byte, row, and name budgets. |
-| `DataTableCatalog` | Immutable type-indexed table snapshot. |
-| `DataTableCatalogBuilder` | One-shot candidate catalog construction. |
-| `DataTableRegistry` | Optional process-wide atomic publication. |
-| `DataTableGeneratedTableCollector` | AOT-safe generated table-set collection. |
-| `IDataTableBytesProvider` | Borrowed read-only payload access contract. |
-| `DataTableBytesCache` | Bounded owner of materialized payload arrays. |
-| `DataTableManifest` / `DataTableManifestEntry` | Schema, presence, byte-length, location, and SHA-256 metadata. |
-| `DataTableHashUtility` | SHA-256 computation, normalization, and strict matching. |
-| `DataTableNameUtility` | Portable table-name, extension, and path normalization. |
-| `DataTableLocationResolver` | Portable relative location construction. |
-| `DataTableSetScope` | Generated root, catalog, and optional backing-owner lifetime. |
-| `IDataTableDiagnostics` / `DataTableDiagnostics` | Core-local diagnostic contract and replaceable process sink. |
-| `DataTableLogWriterAdapter` | Optional adapter to `CycloneGames.Logging`. |
-| `LubanDataTableSetFactory` | Bounded, privately owned Luban buffer creation. |
-| `MessagePackConfigProvider` | Bounded MessagePack row-array decoding and table construction. |
-| `DataTableLubanSettings` | Project-visible Unity Editor generation settings. |
-| `DataTableLubanRunner` | Validated single-writer external generation process. |
+| Rows and lookup | `IDataRow<TKey>`, `IDataRow`, `IDataTableRows<TRow>`, `IDataTable<TKey,TRow>`, `DataTable<TKey,TRow>` |
+| Construction budgets | `DataTableLoadLimits`, `DataTableBuildContext` |
+| Catalogs | `DataTableCatalog`, `DataTableCatalogBuilder`, `DataTableGeneratedTableCollector`, `DataTableGeneratedTableCollector.TableDescriptor<TTableSet>` |
+| Publication | `DataTableRevision`, `DataTableCandidate`, `DataTableStore`, `DataTableStoreMetadata`, `DataTablePublishResult`, `DataTableReader`, `DataTableSnapshot` |
+| Payloads | `IDataTableBytesProvider`, `IDataTableBytesInventory`, `DataTableBytesCache`, `DataTableBytesCacheReleaseBudget`, `DataTableBytesCacheMemorySnapshot` |
+| Integrity and locations | `DataTableManifest`, `DataTableManifestEntry`, `DataTableHashUtility`, `DataTableNameUtility`, `IDataTableLocationResolver`, `DataTableLocationResolver` |
+| Diagnostics | `IDataTableDiagnostics`, `DataTableDiagnostics`, `DataTableDiagnosticChannel`, `DataTableLogWriterAdapter` |
+| Decoding | `LubanDataTableDecoder`, `MessagePackDataTableDecoder` |
+| Unity acquisition | `AssetManagementDataTableBytesLoader`, `AssetManagementDataTableRawFileBytesLoader`, `DataTableAssetLoadContext` |
+| Unity authoring | `DataTableLubanSettings` and `Tools > CycloneGames > DataTable` |
 
-## Related Documentation
-
-- [Luban directory and generation tutorial](../../../../../DataTable/Luban/README.md)
-- [DataTable CodeGen tutorial](./Tools~/CodeGen/README.md)
-- [GameplayTags DataTable integration](../CycloneGames.GameplayTags.DataTable/README.md)
-
-## Bounded Cache Disposal
-
-`DataTableBytesCache.GetMemorySnapshot()` reports the explicitly owned payload count, total bytes, lifecycle flags, configured limits, and cumulative release counters without inspecting payload content. `BeginBoundedDispose()` closes admission, after which `ReleaseClosedPayloadsStep(maxWork)` clears at most `maxWork` closed payloads per call.
-
-Release is lifecycle-only: an open or merely sealed cache is not eligible, and bounded disposal never clears live table data. The owner remains responsible for starting disposal and continuing bounded steps until complete; external schedulers may observe progress but do not acquire cache ownership.
+Related integrations: [CycloneGames.GameplayTags.DataTable](../CycloneGames.GameplayTags.DataTable/README.md) and [CycloneGames.GameplayAbilities](../CycloneGames.GameplayAbilities/README.md).

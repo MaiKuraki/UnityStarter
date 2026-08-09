@@ -1,109 +1,164 @@
 # HybridCLR Build Integration
 
-The HybridCLR integration compiles hot-update assemblies, publishes runtime DLL assets transactionally, and protects incremental hot-update builds with a Player release baseline. The generic `hot-update` step reaches it only through `IHotUpdateBuildAdapter`, and the adapter reaches optional vendor packages only through reflection. Removing those packages therefore creates neither a core compile-time dependency nor a vendor branch in orchestration code.
+The HybridCLR integration implements the generic `hot-update` provider contract. It compiles configured hot-update assemblies, publishes runtime DLL and AOT metadata inputs transactionally, and manages the Release baseline required by safe Incremental jobs.
 
-## Responsibilities
+> **Current checkout:** HybridCLR is not installed in `Packages/manifest.json`. The adapter and configuration compile through a reflection boundary, but no HybridCLR toolchain or target Player has been executed in this checkout. Local reference source is static API evidence only.
 
-- `HybridCLRBuilder` isolates supported HybridCLR editor APIs and copies generated DLLs.
-- `HybridCLRGenerationTransaction` protects third-party generated inputs and nested-Player scratch state.
-- `HybridCLROutputTransaction` publishes the runtime hot-update and AOT metadata directories below `Assets`.
-- `HybridCLRReleaseBaselineTransaction` publishes the durable AOT input used by later incremental hot-update builds.
-- `HybridCLRBuildAdapter` owns HybridCLR requirements, validation, execution, output claims, and Player compatibility checks.
-- `HybridCLRBuildConfig` selects standard HybridCLR output. `HybridCLRObfuzBuildConfig` selects the explicit combined provider; no serialized mode toggle or handwritten provider ID exists.
+## Responsibilities and boundaries
 
-The integration does not install HybridCLR, initialize its native toolchain, choose hot-update assemblies automatically, or upload release artifacts.
+| Component | Responsibility |
+| --- | --- |
+| `HybridCLRBuildConfig` | Typed authoring for assemblies and build-exclusive output folders |
+| `HybridCLRBuildAdapter` | Availability, preflight, output claims, execution, and Player-consumer compatibility |
+| `HybridCLRBuilder` | Reflection boundary around supported HybridCLR Editor commands |
+| `HybridCLRGenerationTransaction` | Protects vendor generation inputs and temporary nested-Player state |
+| `HybridCLROutputTransaction` | Stages and restores runtime DLL/AOT output folders below `Assets` |
+| `HybridCLRReleaseBaselineTransaction` | Stages, publishes, restores, and recovers durable Release baselines |
 
-The authoring catalog exposes the standard provider only when the required HybridCLR editor API is present. It exposes the combined provider only when the HybridCLR, Obfuz, and Obfuz4HybridCLR editor APIs are all present. Missing prerequisites leave the core pipeline compilable and make the unavailable provider non-selectable instead of deferring the error until execution.
+The integration does not install HybridCLR, initialize its native toolchain, choose project assemblies automatically, upload outputs, or implement the runtime DLL loader.
 
-## Clean and Incremental Semantics
+The provider catalog requires `HybridCLR.Editor.Commands.PrebuildCommand`. If that API is absent, the core module still compiles and an existing selected configuration fails Preflight.
+
+## Setup and authoring
+
+1. Install and lock a compatible HybridCLR package.
+2. Run the vendor initialization and platform provisioning appropriate to the current Unity version.
+3. Configure the target for IL2CPP and save HybridCLR project settings.
+4. Create `CycloneGames/Build/Hot Update/HybridCLR` through BuildData or the Project menu.
+5. Drag at least one project-owned asmdef below `Assets/` into `Hot Update Assemblies`.
+6. Drag two different project folders below `Assets/` into the Hot Update DLL and AOT DLL output fields.
+7. Assign the configuration to the `hot-update` invocation, select incrementality, and save all authoring assets.
+8. Run Workspace Health and Preflight before invoking the provider.
+
+Package asmdefs are rejected. The two output folders must be different and non-overlapping. Any existing non-empty folder must carry valid `.buildpipeline-owner.json` evidence; Build never assumes that arbitrary files are disposable.
+
+## Clean execution
 
 ```mermaid
 flowchart LR
-  C["Clean hot-update"] --> G["HybridCLR GenerateAll"]
-  G --> O["Transactional runtime outputs"]
-  P["Release Player directly depends on hot-update"] --> B["Stage release baseline"]
-  O --> T["Shared terminal publication barrier"]
-  B --> T
-  T -->|"all steps succeed"| K["Commit Player, outputs, and baseline"]
-  T -->|"failure"| R["Restore pre-run state"]
-  I["Incremental hot-update"] --> V["Validate exact release baseline"]
-  V --> D["Compile hot DLLs only"]
-  V --> A["Copy AOT input only from baseline"]
+    P["Clean preflight"] --> G["PrebuildCommand.GenerateAll"]
+    G --> H["Stage hot-update .dll.bytes"]
+    G --> A["Stage AOT .dll.bytes"]
+    H --> C["Optional content consumer"]
+    A --> C
+    H --> T["Shared terminal barrier"]
+    A --> T
+    T -->|"success"| K["Commit Assets outputs"]
+    T -->|"failure"| R["Restore exact previous outputs"]
 ```
 
-A `Clean` invocation always performs full HybridCLR generation. It publishes a release baseline only when all of these conditions are true:
+Clean stages selected hot-update assemblies, `HotUpdate.bytes`, stripped AOT assemblies, and `AOT.bytes`. It temporarily activates the staged `Assets` folders so an explicitly dependent content invocation can package them.
 
-1. the request is a Release build (`Debug Build` is disabled);
-2. a selected and applicable `player` invocation directly declares the hot-update invocation as a dependency;
-3. every pipeline step and every deferred publication reaches the shared terminal commit decision.
+The output transaction remains pending until every selected build step and deferred publication reaches the same terminal commit decision. A later content or Player failure restores the old output folders.
 
-A Clean hot-update-only recipe, a Development Player, or a Player that reaches hot-update only through a transitive dependency never creates or replaces a release baseline.
+## Release baseline eligibility
 
-An `Incremental` invocation compiles hot-update DLLs only. It never reads the current HybridCLR stripped-AOT output directory. Before compilation, and again immediately before use, it requires a complete baseline whose manifest and DLL hashes match the current request. Missing, corrupt, mismatched, or modified evidence fails preflight.
+Clean output alone is not an Incremental baseline. A baseline is staged only when all of these are true:
 
-`HybridCLRBuildConfig` supports Clean and Incremental. `HybridCLRObfuzBuildConfig` is a separate provider and rejects Incremental because the installed Obfuz4HybridCLR API consumes an implicit stripped-AOT directory instead of an explicit validated input. Its Clean mode remains supported.
+1. the request is Release, not Development;
+2. the HybridCLR invocation is Clean;
+3. exactly one selected Player invocation directly depends on it;
+4. the complete pipeline succeeds.
 
-The generic step permits multiple hot-update invocations, but the current HybridCLR editor API owns one process-global generation session. The HybridCLR adapters therefore reject a run containing more than one HybridCLR-family invocation during preflight. This constraint belongs to the provider, not to the core step.
+The standard Full Player preset supplies the direct `hot-update -> player` edge. Hot Update Only, Content + Hot Update, Development Player, and transitive-only Player consumption do not publish a baseline.
 
-## Baseline Identity and Storage
-
-Baselines are stored below the configured Build Root:
+Baselines use:
 
 ```text
 <BuildRoot>/.buildpipeline/baselines/hybridclr/
-  <BuildTarget>/
-    <ScriptingBackend>/
-      <release-key>/
-        baseline.json
-        AOT/
-          *.dll
+  <BuildTarget>/<ScriptingBackend>/<release-key>/
+    baseline.json
+    AOT/
+      *.dll
 ```
 
-The release key is a SHA-256 identity derived from the application identifier, application version, and hot-update invocation ID. Target and backend directory segments prevent cross-platform reuse.
+The release key derives from application identifier, application version, and hot-update invocation ID. The manifest additionally binds target/backend, exact Unity version, HybridCLR package identity, authoring and vendor-settings hashes, AOT-relevant Player settings, hot-update assembly inventory, source provenance, and the exact AOT DLL inventory.
 
-`baseline.json` uses the current `formatVersion` contract and records:
+Changing application version or invocation ID selects a different release key. Changing any compatibility input invalidates the prior baseline for the request.
 
-- application, invocation, target, backend, Release configuration, and explicit Player-consumer identity;
-- Unity version and HybridCLR assembly identity;
-- hashes for `HybridCLRBuildConfig`, HybridCLR project settings, and AOT-relevant Player settings;
-- the configured hot-update assembly inventory;
-- every AOT DLL file name, byte length, and SHA-256;
-- source build/version-control provenance and a checksum covering the manifest.
+## Incremental execution
 
-The compatibility fingerprint includes the selected API compatibility level, managed stripping level, IL2CPP compiler configuration, engine-code stripping, unsafe-code setting, and normalized scripting defines. Any known compatibility change requires a new successful Clean Release Player build.
+Incremental is Release-only. It performs this sequence:
 
-## CI Artifact Flow
+1. resolve the expected baseline from current request identity;
+2. require exactly `baseline.json` and the `AOT` directory;
+3. validate manifest checksum, compatibility fields, inventory count, portable file names, lengths, and SHA-256 hashes;
+4. call `CompileDllCommand.CompileDll(target)` for hot-update DLLs only;
+5. publish those hot DLL outputs with AOT metadata sourced from the validated baseline.
 
-For a release Player job, archive both the Player/content artifacts and the matching baseline directory. For a later hot-update-only job, restore the baseline at the same Build Root path before invoking the incremental recipe. Do not synthesize `baseline.json`, copy only selected AOT DLLs, or use a baseline from another application version, target, backend, Unity version, configuration, or hot-update invocation.
+The adapter never consumes the current global stripped-AOT folder as an Incremental substitute. Missing, modified, mismatched, or incomplete evidence fails closed.
 
-The Build Root is explicit project configuration and may be relocated by the normal build profile/CI options. The integration does not read environment variables, `EditorPrefs`, or scripting-define symbols to locate a baseline.
+## Recipe guidance
 
-## Persistence and Recovery
-
-| Data | Location | Lifecycle | Safe deletion |
+| Goal | Recommended recipe | Incrementality | Baseline effect |
 | --- | --- | --- | --- |
-| Release baseline | `<BuildRoot>/.buildpipeline/baselines/hybridclr/...` | Durable release artifact; replace only after a successful terminal release build | Yes, but incremental hot-update builds then fail until a new Clean Release Player build succeeds |
-| Baseline transaction journal | `<UnityProject>/.buildpipeline/transactions/hybridclr-release-baseline/` | Temporary durable recovery evidence | Delete only through Build Workspace recovery |
-| Runtime DLL outputs | Configured build-exclusive folders below `Assets` | Transactionally replaced build input | Use the owning output transaction/recovery workflow |
+| Produce a release Player and future baseline | Full Player, Release | Clean | Publishes baseline after terminal success |
+| Build new content with fresh HybridCLR inputs but no Player | Content + Hot Update | Clean | Does not publish baseline |
+| Publish only fresh hot-update outputs | Hot Update Only | Clean | Does not publish baseline |
+| Compile hot-update DLLs against an archived release | Hot Update Only or focused/exact hot invocation | Incremental | Consumes existing baseline |
+| Development Player | Full Player, Development | Clean | Never publishes or consumes a Release baseline |
 
-If Unity or the CI process terminates during publication, the workspace health check blocks the next normal build. Run the explicit Build Workspace recovery command. Recovery follows the shared terminal decision: it commits a baseline selected by the terminal barrier or restores the exact previous baseline otherwise. Unknown files, path escapes, reparse points, unbounded inventories, and competing writes fail closed.
+Keep the invocation ID stable across Release and later Incremental jobs.
 
-## Common Failures
+## Provider limits
 
-- **Baseline missing:** run a Clean Release recipe with a Player invocation that directly depends on the hot-update invocation.
-- **Unity/backend/target/configuration mismatch:** rebuild and release the Player; do not bypass the mismatch.
-- **AOT hash mismatch:** treat the baseline as corrupt and restore it from the release artifact store, or produce a new release Player.
-- **Recovery required:** use Build Workspace recovery before retrying or switching target platforms.
-- **HybridCLR API unavailable:** install and provision a compatible package; the core module remains compilable without it.
-- **Incremental Obfuz rejected:** use Clean, or upgrade the adapter when the installed API can accept the validated baseline AOT directory explicitly.
+The generic hot-update step permits multiple providers, but current HybridCLR Editor APIs own one process-global generation session and output set. A selected run containing more than one HybridCLR-family invocation is rejected, including standard HybridCLR plus HybridCLR + Obfuz.
 
-## Validation
+The current API cannot accept the Player's invocation-local extra compiler defines for per-build `ENABLE_CHEAT`. HybridCLR + Player + Cheat mode is rejected rather than modifying global scripting defines. A Hot Update Only run does not consume the Player Cheat request.
 
-Minimum validation after changing this integration:
+`HybridCLRObfuzBuildConfig` is a separate provider. It shares Clean output transactions but rejects Incremental because the audited Obfuz4HybridCLR API cannot consume an explicit validated baseline AOT directory. See the [combined-provider manual](../HybridCLRObfuz/README.md).
 
-1. compile `Build.Pipeline.Editor` and `Build.Pipeline.Tests.Editor`;
-2. run `HotUpdateBuildAdapterTests`, `HybridCLRReleaseBaselineTests`, `HybridCLROutputTransactionTests`, and `HybridCLRGenerationTransactionTests` in EditMode;
-3. run the complete Build EditMode test assembly;
-4. produce a Clean Release Player for each supported target and archive its baseline;
-5. restore that baseline in a clean CI workspace and run an incremental hot-update-only build;
-6. verify that a modified manifest, DLL, Unity version, backend, target, or build configuration is rejected.
+## CI artifact flow
+
+Release job:
+
+1. provision the exact HybridCLR package, settings, platform SDK, and generated native data;
+2. run a Clean Release Full Player build;
+3. archive Player/content outputs and the complete matching baseline directory;
+4. archive the terminal pipeline result manifest.
+
+Incremental job:
+
+1. restore the complete baseline to the same configured Build Root;
+2. preserve target/backend/release-key layout;
+3. reproduce application version, invocation ID, Unity version, package identity, settings, and AOT-relevant Player configuration;
+4. run a Release Incremental hot-update-only or focused invocation;
+5. archive the published hot-update outputs and result evidence.
+
+Do not synthesize a baseline, move it to an unconfigured environment-variable path, or reuse it across targets. Upload and deployment remain external CI stages.
+
+## Persistence and recovery
+
+| Data | Location | Lifecycle |
+| --- | --- | --- |
+| Runtime hot/AOT outputs | Configured build-exclusive folders below `Assets` | Transactionally staged and restored |
+| Release baseline | `<BuildRoot>/.buildpipeline/baselines/hybridclr/...` | Durable release artifact |
+| Generation journal | `.buildpipeline/transactions/hybridclr-generation/` | Durable interruption evidence |
+| Output journal | `.buildpipeline/transactions/hybridclr/` | Durable interruption evidence |
+| Baseline journal | `.buildpipeline/transactions/hybridclr-release-baseline/` | Durable interruption evidence |
+
+After a hard interruption, Workspace Health blocks the next normal build. Run explicit recovery before retrying or switching target. Do not manually delete journals or ownership markers.
+
+Deleting a committed baseline is recoverable by a new qualifying Clean Release Player build, but Incremental jobs remain unavailable until that build succeeds.
+
+## Validation boundary
+
+Relevant EditMode tests cover adapter validation, output transactions, generation transactions, and baseline compatibility rules. They do not prove IL2CPP, AOT metadata loading, managed stripping, runtime hot-update execution, platform SDK integration, or a clean-agent Player build.
+
+Release qualification requires the exact optional package set and, for every supported target:
+
+1. a Clean Release Full Player build;
+2. archived baseline restoration in a clean CI workspace;
+3. a Release Incremental hot-update build;
+4. negative checks showing that modified DLLs, settings, Unity version, target, backend, and build configuration are rejected.
+
+## Related documentation and source
+
+- [Build Foundation](../../../../README.md)
+- `HybridCLRBuildConfig.cs`
+- `HybridCLRBuildAdapter.cs`
+- `HybridCLRBuilder.cs`
+- `HybridCLRGenerationTransaction.cs`
+- `HybridCLROutputTransaction.cs`
+- `HybridCLRReleaseBaseline.cs`
+- `HybridCLRReleaseBaselineTransaction.cs`

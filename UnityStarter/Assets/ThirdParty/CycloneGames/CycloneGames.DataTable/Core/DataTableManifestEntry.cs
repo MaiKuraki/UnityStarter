@@ -17,9 +17,12 @@ namespace CycloneGames.DataTable
             string location = null,
             int expectedByteLength = UNKNOWN_BYTE_LENGTH,
             string sha256Hex = null,
-            bool required = true)
+            bool required = true,
+            DataTableLoadLimits? limits = null)
         {
-            string normalizedTableName = DataTableNameUtility.NormalizeTableName(tableName);
+            DataTableLoadLimits effectiveLimits = limits ?? DataTableLoadLimits.Default;
+            effectiveLimits.EnsureValid(nameof(limits));
+            string normalizedTableName = effectiveLimits.NormalizeTableName(tableName);
             if (string.IsNullOrEmpty(normalizedTableName))
             {
                 throw new ArgumentException("Table name is null or empty.", nameof(tableName));
@@ -33,6 +36,11 @@ namespace CycloneGames.DataTable
                     "Expected byte length must be -1 or greater.");
             }
 
+            if (expectedByteLength >= 0)
+            {
+                effectiveLimits.ValidatePayloadLength(normalizedTableName, expectedByteLength);
+            }
+
             string normalizedSha256 = DataTableHashUtility.NormalizeSha256Hex(sha256Hex);
             if (!string.IsNullOrEmpty(normalizedSha256) &&
                 !IsSha256Hex(normalizedSha256))
@@ -43,7 +51,7 @@ namespace CycloneGames.DataTable
             }
 
             TableName = normalizedTableName;
-            Location = DataTableNameUtility.NormalizePath(location);
+            Location = effectiveLimits.NormalizeLocation(location);
             ExpectedByteLength = expectedByteLength;
             Sha256Hex = normalizedSha256;
             Required = required;

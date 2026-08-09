@@ -29,6 +29,23 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Dispose_WhenBackendFails_RetainsLeaseForExplicitRetry()
+        {
+            var backend = new RecordingHandle(disposeFailures: 1);
+            IAssetHandle<Texture2D> lease = AssetHandleLeases.Create(backend);
+
+            Assert.Throws<InvalidOperationException>(() => lease.Dispose());
+            Assert.AreEqual(1, backend.DisposeCallCount);
+            Assert.DoesNotThrow(() => _ = lease.Asset);
+
+            lease.Dispose();
+            lease.Dispose();
+
+            Assert.AreEqual(2, backend.DisposeCallCount);
+            Assert.Throws<ObjectDisposedException>(() => _ = lease.Asset);
+        }
+
+        [Test]
         public void Caller_Cancellation_Does_Not_Release_Shared_Backend()
         {
             var backend = new RecordingHandle(completed: false);
@@ -269,9 +286,11 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         {
             private readonly SingleContinuationSource _providerCompletion;
             private readonly UniTask _task;
+            private int _disposeFailuresRemaining;
 
-            public RecordingHandle(bool completed = true)
+            public RecordingHandle(bool completed = true, int disposeFailures = 0)
             {
+                _disposeFailuresRemaining = disposeFailures;
                 _providerCompletion = new SingleContinuationSource();
                 _task = AssetOperationBroadcast.Create(_providerCompletion.Task);
                 if (completed)
@@ -305,6 +324,11 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             public void Dispose()
             {
                 DisposeCallCount++;
+                if (_disposeFailuresRemaining > 0)
+                {
+                    _disposeFailuresRemaining--;
+                    throw new InvalidOperationException("Synthetic backend disposal failure.");
+                }
             }
         }
 

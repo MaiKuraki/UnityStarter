@@ -133,7 +133,7 @@ Application lifetime
 
 ### Handle、取消与线程模型
 
-Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。Lease Dispose 幂等。Dispose 后访问会抛出 `ObjectDisposedException`。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
+Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。成功的 Lease Dispose 幂等，之后访问会抛出 `ObjectDisposedException`。如果后端 Dispose 抛出异常，Lease 会保留该确切后端所有权边，并要求调用方在主线程重试 `Dispose()`；不会先清空引用，再把清理失败静默转化为泄漏。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
 
 `WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 与 YooAsset 对每个 pending 操作都拒绝它；terminal 调用是 no-op。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
 
@@ -143,7 +143,7 @@ Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。L
 
 调用方可见的 canceled 并不能证明 provider 已物理终止。当 package 或 module 退役使 pending 的自有操作取消时，adapter 会继续观察其 provider/adapter 尾任务。Package 成功销毁只有在全部保留尾任务排空后才完成，包括迟到的成功、取消或已观察失败。之后到达的 provider 结果不能覆盖已经发布的公开 canceled 状态。普通 `ISceneHandle.Dispose` 被刻意排除在权威退役之外：它只释放调用方 wrapper 所有权，既不取消 load，也不 unload scene。
 
-Unity object、provider API、缓存 mutation、handle dispose、scene 操作、module/package 生命周期与维护编排都受主线程约束。允许的 worker-thread 工作很窄：已完成的 `IRawFileHandle.ReadText` 与 `ReadBytes` 读取、telemetry ring-buffer 操作，以及支持平台上产品调度的纯文件哈希。不要从后台任务调用 Unity object 属性、provider handle、`Dispose` 或缓存 mutation。
+Unity object、provider API、缓存 mutation、handle dispose、scene 操作、module/package 生命周期与维护编排都受主线程约束。允许的 worker-thread 工作很窄：已完成的 `IRawFileHandle.ReadText` 与 `ReadBytes` 读取、telemetry ring-buffer 操作，以及支持平台上产品调度的纯文件哈希。每次成功的 `ReadBytes()` 调用都会返回 caller-owned 的可变快照，该快照在 handle dispose 后仍然有效；应保留这份快照，避免再次申请整份复制。不要从后台任务调用 Unity object 属性、provider handle、`Dispose` 或缓存 mutation。
 
 ### 能力协商
 

@@ -24,7 +24,12 @@ namespace CycloneGames.DataTable
             TRow[] rows,
             Func<TRow, TKey> keySelector,
             IEqualityComparer<TKey> comparer = null)
-            : this(rows, keySelector, DataTableLoadLimits.Default, comparer, takeOwnership: false)
+            : this(
+                rows,
+                keySelector,
+                new DataTableBuildContext(DataTableLoadLimits.Default),
+                comparer,
+                takeOwnership: false)
         {
         }
 
@@ -33,7 +38,21 @@ namespace CycloneGames.DataTable
             Func<TRow, TKey> keySelector,
             DataTableLoadLimits limits,
             IEqualityComparer<TKey> comparer = null)
-            : this(rows, keySelector, limits, comparer, takeOwnership: false)
+            : this(
+                rows,
+                keySelector,
+                new DataTableBuildContext(limits),
+                comparer,
+                takeOwnership: false)
+        {
+        }
+
+        public DataTable(
+            TRow[] rows,
+            Func<TRow, TKey> keySelector,
+            DataTableBuildContext context,
+            IEqualityComparer<TKey> comparer = null)
+            : this(rows, keySelector, context, comparer, takeOwnership: false)
         {
         }
 
@@ -43,9 +62,11 @@ namespace CycloneGames.DataTable
             Func<TRow, TKey> keySelector,
             IEqualityComparer<TKey> comparer = null)
             : this(
-                MaterializeOwned(rows, DataTableLoadLimits.Default),
+                MaterializeOwned(
+                    rows,
+                    new DataTableBuildContext(DataTableLoadLimits.Default)),
                 keySelector,
-                DataTableLoadLimits.Default,
+                new DataTableBuildContext(DataTableLoadLimits.Default),
                 comparer,
                 takeOwnership: true)
         {
@@ -56,14 +77,33 @@ namespace CycloneGames.DataTable
             Func<TRow, TKey> keySelector,
             DataTableLoadLimits limits,
             IEqualityComparer<TKey> comparer = null)
-            : this(MaterializeOwned(rows, limits), keySelector, limits, comparer, takeOwnership: true)
+            : this(
+                MaterializeOwned(rows, new DataTableBuildContext(limits)),
+                keySelector,
+                new DataTableBuildContext(limits),
+                comparer,
+                takeOwnership: true)
+        {
+        }
+
+        public DataTable(
+            List<TRow> rows,
+            Func<TRow, TKey> keySelector,
+            DataTableBuildContext context,
+            IEqualityComparer<TKey> comparer = null)
+            : this(
+                MaterializeOwned(rows, context),
+                keySelector,
+                context,
+                comparer,
+                takeOwnership: true)
         {
         }
 
         protected DataTable(
             TRow[] rows,
             Func<TRow, TKey> keySelector,
-            DataTableLoadLimits limits,
+            DataTableBuildContext context,
             IEqualityComparer<TKey> comparer,
             bool takeOwnership)
         {
@@ -77,8 +117,9 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(keySelector));
             }
 
-            limits.EnsureValid(nameof(limits));
-            limits.ValidateRowCount(typeof(TRow).FullName, rows.Length);
+            context.EnsureValid(nameof(context));
+            context.Limits.ValidateRowCount(typeof(TRow).FullName, rows.Length);
+            context.ThrowIfCancellationRequested(0);
 
             _rows = takeOwnership ? rows : (TRow[])rows.Clone();
             _rowsView = Array.AsReadOnly(_rows);
@@ -86,16 +127,23 @@ namespace CycloneGames.DataTable
                 ? new Dictionary<TKey, int>(_rows.Length)
                 : new Dictionary<TKey, int>(_rows.Length, comparer);
 
+            // Hoist generic nullability checks out of the row loop. This avoids a potential box
+            // per row for value-type rows or keys on runtimes that do not eliminate generic
+            // `is null` boxing as aggressively as the desktop JIT.
+            bool rowCanBeNull = default(TRow) is null;
+            bool keyCanBeNull = default(TKey) is null;
+
             for (int i = 0; i < _rows.Length; i++)
             {
+                context.ThrowIfCancellationRequested(i);
                 TRow row = _rows[i];
-                if (row is null)
+                if (rowCanBeNull && row is null)
                 {
                     throw new ArgumentException($"Row at index {i} is null.", nameof(rows));
                 }
 
                 TKey key = keySelector(row);
-                if (key is null)
+                if (keyCanBeNull && key is null)
                 {
                     throw new ArgumentException($"Row at index {i} has a null key.", nameof(rows));
                 }
@@ -107,6 +155,8 @@ namespace CycloneGames.DataTable
                         nameof(rows));
                 }
             }
+
+            context.CancellationToken.ThrowIfCancellationRequested();
         }
 
         /// <summary>
@@ -121,7 +171,7 @@ namespace CycloneGames.DataTable
             return new DataTable<TKey, TRow>(
                 rows,
                 keySelector,
-                DataTableLoadLimits.Default,
+                new DataTableBuildContext(DataTableLoadLimits.Default),
                 comparer,
                 takeOwnership: true);
         }
@@ -132,7 +182,21 @@ namespace CycloneGames.DataTable
             DataTableLoadLimits limits,
             IEqualityComparer<TKey> comparer = null)
         {
-            return new DataTable<TKey, TRow>(rows, keySelector, limits, comparer, takeOwnership: true);
+            return new DataTable<TKey, TRow>(
+                rows,
+                keySelector,
+                new DataTableBuildContext(limits),
+                comparer,
+                takeOwnership: true);
+        }
+
+        public static DataTable<TKey, TRow> FromOwnedArray(
+            TRow[] rows,
+            Func<TRow, TKey> keySelector,
+            DataTableBuildContext context,
+            IEqualityComparer<TKey> comparer = null)
+        {
+            return new DataTable<TKey, TRow>(rows, keySelector, context, comparer, takeOwnership: true);
         }
 
         /// <summary>Materializes an enumerable once and takes ownership of the resulting array.</summary>
@@ -146,7 +210,9 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(rows));
             }
 
-            TRow[] ownedRows = MaterializeOwned(rows, DataTableLoadLimits.Default);
+            TRow[] ownedRows = MaterializeOwned(
+                rows,
+                new DataTableBuildContext(DataTableLoadLimits.Default));
             return FromOwnedArray(ownedRows, keySelector, comparer);
         }
 
@@ -161,8 +227,23 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(rows));
             }
 
-            TRow[] ownedRows = MaterializeOwned(rows, limits);
+            TRow[] ownedRows = MaterializeOwned(rows, new DataTableBuildContext(limits));
             return FromOwnedArray(ownedRows, keySelector, limits, comparer);
+        }
+
+        public static DataTable<TKey, TRow> FromEnumerable(
+            IEnumerable<TRow> rows,
+            Func<TRow, TKey> keySelector,
+            DataTableBuildContext context,
+            IEqualityComparer<TKey> comparer = null)
+        {
+            if (rows == null)
+            {
+                throw new ArgumentNullException(nameof(rows));
+            }
+
+            TRow[] ownedRows = MaterializeOwned(rows, context);
+            return FromOwnedArray(ownedRows, keySelector, context, comparer);
         }
 
         public TRow Get(TKey id)
@@ -197,23 +278,38 @@ namespace CycloneGames.DataTable
 
         public IReadOnlyList<TRow> All => _rowsView;
 
+        /// <summary>
+        /// Returns an allocation-free read-only span over rows in source order. The span is
+        /// borrowed from this immutable table and must not escape its synchronous call scope.
+        /// Prefer this API for hot full-table scans; enumerating <see cref="All"/> through an
+        /// interface may allocate an enumerator on some runtimes.
+        /// </summary>
+        public ReadOnlySpan<TRow> AsSpan()
+        {
+            return _rows;
+        }
+
         public int Count => _rows.Length;
 
         protected static TRow[] MaterializeOwned(
             IEnumerable<TRow> rows,
-            DataTableLoadLimits limits)
+            DataTableBuildContext context)
         {
             if (rows == null)
             {
                 throw new ArgumentNullException(nameof(rows));
             }
 
-            limits.EnsureValid(nameof(limits));
+            context.EnsureValid(nameof(context));
+            DataTableLoadLimits limits = context.Limits;
+            context.ThrowIfCancellationRequested(0);
 
             if (rows is TRow[] array)
             {
                 limits.ValidateRowCount(typeof(TRow).FullName, array.Length);
-                return array.Length == 0 ? Array.Empty<TRow>() : (TRow[])array.Clone();
+                TRow[] owned = array.Length == 0 ? Array.Empty<TRow>() : (TRow[])array.Clone();
+                context.CancellationToken.ThrowIfCancellationRequested();
+                return owned;
             }
 
             if (rows is ICollection<TRow> collection)
@@ -227,12 +323,14 @@ namespace CycloneGames.DataTable
 
                 var owned = new TRow[count];
                 collection.CopyTo(owned, 0);
+                context.CancellationToken.ThrowIfCancellationRequested();
                 return owned;
             }
 
             var materialized = new List<TRow>();
             foreach (TRow row in rows)
             {
+                context.ThrowIfCancellationRequested(materialized.Count);
                 if (materialized.Count >= limits.MaxRowsPerTable)
                 {
                     throw new InvalidOperationException(
@@ -242,6 +340,8 @@ namespace CycloneGames.DataTable
 
                 materialized.Add(row);
             }
+
+            context.CancellationToken.ThrowIfCancellationRequested();
 
             return materialized.Count == 0 ? Array.Empty<TRow>() : materialized.ToArray();
         }
@@ -263,6 +363,14 @@ namespace CycloneGames.DataTable
         {
         }
 
+        public DataTable(
+            TRow[] rows,
+            DataTableBuildContext context,
+            IEqualityComparer<int> comparer = null)
+            : base(rows, GetId, context, comparer)
+        {
+        }
+
         public DataTable(List<TRow> rows, IEqualityComparer<int> comparer = null)
             : base(rows, GetId, comparer)
         {
@@ -276,12 +384,20 @@ namespace CycloneGames.DataTable
         {
         }
 
+        public DataTable(
+            List<TRow> rows,
+            DataTableBuildContext context,
+            IEqualityComparer<int> comparer = null)
+            : base(rows, GetId, context, comparer)
+        {
+        }
+
         private DataTable(
             TRow[] rows,
-            DataTableLoadLimits limits,
+            DataTableBuildContext context,
             IEqualityComparer<int> comparer,
             bool takeOwnership)
-            : base(rows, GetId, limits, comparer, takeOwnership)
+            : base(rows, GetId, context, comparer, takeOwnership)
         {
         }
 
@@ -291,7 +407,7 @@ namespace CycloneGames.DataTable
         {
             return new DataTable<TRow>(
                 rows,
-                DataTableLoadLimits.Default,
+                new DataTableBuildContext(DataTableLoadLimits.Default),
                 comparer,
                 takeOwnership: true);
         }
@@ -301,7 +417,19 @@ namespace CycloneGames.DataTable
             DataTableLoadLimits limits,
             IEqualityComparer<int> comparer = null)
         {
-            return new DataTable<TRow>(rows, limits, comparer, takeOwnership: true);
+            return new DataTable<TRow>(
+                rows,
+                new DataTableBuildContext(limits),
+                comparer,
+                takeOwnership: true);
+        }
+
+        public static DataTable<TRow> FromOwnedArray(
+            TRow[] rows,
+            DataTableBuildContext context,
+            IEqualityComparer<int> comparer = null)
+        {
+            return new DataTable<TRow>(rows, context, comparer, takeOwnership: true);
         }
 
         public static DataTable<TRow> FromEnumerable(
@@ -313,7 +441,9 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(rows));
             }
 
-            TRow[] ownedRows = MaterializeOwned(rows, DataTableLoadLimits.Default);
+            TRow[] ownedRows = MaterializeOwned(
+                rows,
+                new DataTableBuildContext(DataTableLoadLimits.Default));
             return FromOwnedArray(ownedRows, comparer);
         }
 
@@ -327,8 +457,22 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(rows));
             }
 
-            TRow[] ownedRows = MaterializeOwned(rows, limits);
+            TRow[] ownedRows = MaterializeOwned(rows, new DataTableBuildContext(limits));
             return FromOwnedArray(ownedRows, limits, comparer);
+        }
+
+        public static DataTable<TRow> FromEnumerable(
+            IEnumerable<TRow> rows,
+            DataTableBuildContext context,
+            IEqualityComparer<int> comparer = null)
+        {
+            if (rows == null)
+            {
+                throw new ArgumentNullException(nameof(rows));
+            }
+
+            TRow[] ownedRows = MaterializeOwned(rows, context);
+            return FromOwnedArray(ownedRows, context, comparer);
         }
 
         private static int GetId(TRow row)

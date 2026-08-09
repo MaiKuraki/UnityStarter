@@ -1,109 +1,164 @@
 # HybridCLR 构建集成
 
-HybridCLR 集成负责编译热更新程序集、以事务方式发布 Runtime DLL 资产，并通过 Player Release Baseline 保护增量热更新构建。通用 `hot-update` step 只通过 `IHotUpdateBuildAdapter` 访问本集成，adapter 再通过反射访问可选 vendor package。因此，移除这些 package 不会让 core 产生编译期依赖，也不会让 orchestration code 出现 vendor 分支。
+HybridCLR Integration 实现通用 `hot-update` Provider Contract。它编译配置的热更新程序集，事务化发布 Runtime DLL 与 AOT Metadata 输入，并管理安全 Incremental Job 所需的 Release Baseline。
 
-## 职责边界
+> **当前 checkout：** `Packages/manifest.json` 未安装 HybridCLR。Adapter 与配置通过反射边界保持可编译，但本 checkout 没有执行 HybridCLR 工具链或目标 Player。本地参考源码只属于静态 API 证据。
 
-- `HybridCLRBuilder` 隔离受支持的 HybridCLR Editor API，并复制生成的 DLL。
-- `HybridCLRGenerationTransaction` 保护第三方生成输入与嵌套 Player 的临时状态。
-- `HybridCLROutputTransaction` 发布 `Assets` 下的 Runtime 热更新 DLL 与 AOT metadata 目录。
-- `HybridCLRReleaseBaselineTransaction` 发布后续增量热更新使用的持久 AOT 输入。
-- `HybridCLRBuildAdapter` 拥有 HybridCLR requirements、验证、执行、output claim 与 Player compatibility check。
-- `HybridCLRBuildConfig` 选择标准 HybridCLR 输出；`HybridCLRObfuzBuildConfig` 选择明确的组合 provider。系统不存在序列化 mode toggle 或手写 provider ID。
+## 职责与边界
 
-本集成不负责安装 HybridCLR、初始化原生工具链、自动选择热更新程序集或上传发布产物。
+| 组件 | 职责 |
+| --- | --- |
+| `HybridCLRBuildConfig` | 程序集与 Build 独占输出目录的强类型 Authoring |
+| `HybridCLRBuildAdapter` | Availability、Preflight、Output Claim、Execution 与 Player Consumer Compatibility |
+| `HybridCLRBuilder` | 支持的 HybridCLR Editor Command 反射边界 |
+| `HybridCLRGenerationTransaction` | 保护 Vendor Generation 输入和临时 Nested-Player 状态 |
+| `HybridCLROutputTransaction` | 暂存并恢复 `Assets` 下 Runtime DLL/AOT 输出目录 |
+| `HybridCLRReleaseBaselineTransaction` | 暂存、发布、恢复与修复持久 Release Baseline |
 
-Authoring catalog 仅在所需 HybridCLR Editor API 存在时显示标准 provider；只有 HybridCLR、Obfuz 与 Obfuz4HybridCLR 三组 Editor API 全部存在时才显示组合 provider。缺少前置包时 Core Pipeline 仍可编译，且不可用 provider 会在配置阶段变为不可选，而不是把错误推迟到执行阶段。
+Integration 不负责安装 HybridCLR、初始化 Native Toolchain、自动选择项目程序集、上传输出或实现 Runtime DLL Loader。
 
-## Clean 与 Incremental 语义
+Provider Catalog 要求 `HybridCLR.Editor.Commands.PrebuildCommand`。缺少该 API 时，Core Module 仍可编译，已有选中配置会在 Preflight 失败。
+
+## 配置步骤
+
+1. 安装并锁定兼容 HybridCLR 包。
+2. 按当前 Unity 版本执行 Vendor Initialization 与 Platform Provisioning。
+3. 将 Target 配置为 IL2CPP，并保存 HybridCLR Project Settings。
+4. 通过 BuildData 或 Project 菜单创建 `CycloneGames/Build/Hot Update/HybridCLR`。
+5. 把 `Assets/` 下至少一个项目自有 asmdef 拖入 `Hot Update Assemblies`。
+6. 把 `Assets/` 下两个不同项目目录拖入 Hot Update DLL 与 AOT DLL Output 字段。
+7. 将配置分配给 `hot-update` invocation，选择 Incrementality，并保存所有 Authoring Asset。
+8. 调用 Provider 前运行 Workspace Health 与 Preflight。
+
+Package asmdef 会被拒绝。两个输出目录必须不同且互不重叠。已有非空目录必须带合法 `.buildpipeline-owner.json` 证据；Build 不会假设任意文件都可删除。
+
+## Clean 执行
 
 ```mermaid
 flowchart LR
-  C["Clean hot-update"] --> G["HybridCLR GenerateAll"]
-  G --> O["事务化 Runtime 输出"]
-  P["Release Player 直接依赖 hot-update"] --> B["暂存 Release Baseline"]
-  O --> T["共享 terminal publication barrier"]
-  B --> T
-  T -->|"所有步骤成功"| K["提交 Player、输出与 Baseline"]
-  T -->|"失败"| R["恢复构建前状态"]
-  I["Incremental hot-update"] --> V["验证完全匹配的 Release Baseline"]
-  V --> D["仅编译热更新 DLL"]
-  V --> A["AOT 输入只取自 Baseline"]
+    P["Clean Preflight"] --> G["PrebuildCommand.GenerateAll"]
+    G --> H["暂存热更新 .dll.bytes"]
+    G --> A["暂存 AOT .dll.bytes"]
+    H --> C["可选 Content Consumer"]
+    A --> C
+    H --> T["共享 Terminal Barrier"]
+    A --> T
+    T -->|"成功"| K["提交 Assets 输出"]
+    T -->|"失败"| R["精确恢复旧输出"]
 ```
 
-`Clean` invocation 始终执行完整 HybridCLR 生成。只有同时满足以下条件时才会发布 Release Baseline：
+Clean 暂存所选热更新程序集、`HotUpdate.bytes`、stripped AOT 程序集和 `AOT.bytes`。它会临时激活暂存的 `Assets` 目录，使显式依赖它的 Content invocation 可以打包。
 
-1. 请求是 Release 构建，即未启用 `Debug Build`；
-2. 已选且适用的 `player` invocation 直接将该 hot-update invocation 声明为依赖；
-3. 所有 Pipeline 步骤与所有延迟发布都到达共享 terminal commit decision。
+Output Transaction 会保持 Pending，直到所有选中 Build Step 与 Deferred Publication 达到同一个 Terminal Commit Decision。后续 Content 或 Player 失败都会恢复旧输出目录。
 
-Clean 的 hot-update-only Recipe、Development Player，或仅通过传递依赖接触 hot-update 的 Player，都不会创建或替换 Release Baseline。
+## Release Baseline 资格
 
-`Incremental` invocation 只编译热更新 DLL，绝不会读取当前 HybridCLR stripped-AOT 输出目录。编译前以及实际使用前都会要求一个完整 Baseline，并验证 manifest 与所有 DLL hash 是否匹配当前请求。证据缺失、损坏、不匹配或被修改都会使预检失败。
+Clean 输出本身不是 Incremental Baseline。只有同时满足以下条件才暂存 Baseline：
 
-`HybridCLRBuildConfig` 支持 Clean 与 Incremental。`HybridCLRObfuzBuildConfig` 是独立 provider；它会拒绝 Incremental，因为已安装的 Obfuz4HybridCLR API 使用隐式 stripped-AOT 目录，无法接收显式验证后的输入，其 Clean 模式仍受支持。
+1. 请求是 Release，不是 Development；
+2. HybridCLR invocation 为 Clean；
+3. 恰好一个选中 Player invocation 直接依赖它；
+4. 整个 Pipeline 成功。
 
-通用 step 允许多个 hot-update invocation，但当前 HybridCLR Editor API 只拥有一个 process-global generation session。因此，只要同一次 run 包含多个 HybridCLR-family invocation，HybridCLR adapter 就会在 preflight 明确拒绝。这项限制属于 provider，而不是 core step。
+标准 Full Player Preset 提供 `hot-update -> player` 直接边。Hot Update Only、Content + Hot Update、Development Player 和仅传递依赖的 Player 都不发布 Baseline。
 
-## Baseline 标识与存储
-
-Baseline 位于配置的 Build Root 下：
+Baseline 路径为：
 
 ```text
 <BuildRoot>/.buildpipeline/baselines/hybridclr/
-  <BuildTarget>/
-    <ScriptingBackend>/
-      <release-key>/
-        baseline.json
-        AOT/
-          *.dll
+  <BuildTarget>/<ScriptingBackend>/<release-key>/
+    baseline.json
+    AOT/
+      *.dll
 ```
 
-Release key 是由 application identifier、application version 与 hot-update invocation ID 派生的 SHA-256 标识。Target 与 backend 目录层级会阻止跨平台复用。
+Release Key 由 Application Identifier、Application Version 与 Hot Update Invocation ID 派生。Manifest 还会绑定 Target/Backend、精确 Unity Version、HybridCLR Package Identity、Authoring 与 Vendor Settings Hash、AOT 相关 Player Settings、热更新程序集清单、Source Provenance 和精确 AOT DLL Inventory。
 
-`baseline.json` 使用当前 `formatVersion` 契约，并记录：
+改变 Application Version 或 Invocation ID 会选择不同 Release Key。任何兼容性输入改变都会让旧 Baseline 不再适用于当前请求。
 
-- application、invocation、target、backend、Release configuration 与显式 Player consumer 标识；
-- Unity 版本与 HybridCLR assembly 标识；
-- `HybridCLRBuildConfig`、HybridCLR project settings 和 AOT 相关 Player settings 的 hash；
-- 配置的热更新程序集清单；
-- 每个 AOT DLL 的文件名、字节长度与 SHA-256；
-- source build/version-control provenance，以及覆盖整个 manifest 的 checksum。
+## Incremental 执行
 
-兼容性 fingerprint 包含 API compatibility level、managed stripping level、IL2CPP compiler configuration、engine-code stripping、unsafe-code 设置与规范化后的 scripting defines。任何已知兼容性变化都要求重新成功构建 Clean Release Player。
+Incremental 只允许 Release。流程如下：
 
-## CI 产物流程
+1. 根据当前请求身份解析预期 Baseline；
+2. 要求目录中恰好包含 `baseline.json` 与 `AOT` 目录；
+3. 验证 Manifest Checksum、兼容性字段、Inventory 数量、可移植文件名、长度和 SHA-256；
+4. 只对热更新 DLL 调用 `CompileDllCommand.CompileDll(target)`；
+5. 使用已验证 Baseline 的 AOT Metadata 发布这些 Hot DLL 输出。
 
-Release Player Job 必须同时归档 Player/content 产物和对应 Baseline 目录。后续 hot-update-only Job 必须先把 Baseline 恢复到相同 Build Root 路径，再运行 Incremental Recipe。不要手工生成 `baseline.json`、只复制部分 AOT DLL，也不要使用来自其他 application version、target、backend、Unity version、configuration 或 hot-update invocation 的 Baseline。
+Adapter 绝不会把当前全局 stripped-AOT 目录当作 Incremental 替代。证据缺失、修改、不匹配或不完整都会 fail closed。
 
-Build Root 是显式项目配置，也可以由正常的 Build Profile/CI 参数调整。本集成不会通过环境变量、`EditorPrefs` 或 scripting-define symbols 定位 Baseline。
+## Recipe 指南
+
+| 目标 | 推荐 Recipe | Incrementality | Baseline 效果 |
+| --- | --- | --- | --- |
+| 生成 Release Player 与未来 Baseline | Full Player，Release | Clean | Terminal Success 后发布 Baseline |
+| 使用新 HybridCLR 输入构建 Content，但不构建 Player | Content + Hot Update | Clean | 不发布 Baseline |
+| 仅发布新 Hot Update 输出 | Hot Update Only | Clean | 不发布 Baseline |
+| 基于已归档 Release 编译 Hot Update DLL | Hot Update Only 或 Focused/Exact Hot Invocation | Incremental | 消费已有 Baseline |
+| Development Player | Full Player，Development | Clean | 不发布也不消费 Release Baseline |
+
+Release 与后续 Incremental Job 必须保持 Invocation ID 稳定。
+
+## Provider 限制
+
+通用 Hot Update Step 允许多个 Provider，但当前 HybridCLR Editor API 只拥有一个进程全局 Generation Session 与 Output Set。选中的 Run 只要包含多个 HybridCLR-family invocation 就会被拒绝，包括 Standard HybridCLR 与 HybridCLR + Obfuz 的组合。
+
+当前 API 无法接收 Player 每次构建的 invocation-local extra compiler defines，因而不能安全处理 `ENABLE_CHEAT`。HybridCLR + Player + Cheat Mode 会被拒绝，而不是修改全局 Scripting Define。Hot Update Only 不消费 Player Cheat 请求。
+
+`HybridCLRObfuzBuildConfig` 是独立 Provider。它共享 Clean Output Transaction，但因经审计 Obfuz4HybridCLR API 无法消费显式验证 Baseline AOT 目录而拒绝 Incremental。参见[组合 Provider 手册](../HybridCLRObfuz/README.SCH.md)。
+
+## CI Artifact 流程
+
+Release Job：
+
+1. Provision 精确 HybridCLR 包、Settings、Platform SDK 与 Generated Native Data；
+2. 运行 Clean Release Full Player Build；
+3. 归档 Player/Content 输出与完整匹配 Baseline 目录；
+4. 归档终局 Pipeline Result Manifest。
+
+Incremental Job：
+
+1. 把完整 Baseline 恢复到同一个配置 Build Root；
+2. 保持 Target/Backend/Release-Key 布局；
+3. 重现 Application Version、Invocation ID、Unity Version、Package Identity、Settings 与 AOT 相关 Player Configuration；
+4. 运行 Release Incremental Hot-Update-Only 或 Focused Invocation；
+5. 归档已发布 Hot Update 输出与 Result Evidence。
+
+不要手工合成 Baseline，不要移动到未配置的环境变量路径，也不要跨 Target 复用。Upload 与 Deployment 仍属于外部 CI Stage。
 
 ## 持久化与恢复
 
-| 数据 | 位置 | 生命周期 | 是否可安全删除 |
-| --- | --- | --- | --- |
-| Release Baseline | `<BuildRoot>/.buildpipeline/baselines/hybridclr/...` | 持久 Release 产物；只在 terminal release build 成功后替换 | 可以，但 Incremental 热更新会失败，直到新的 Clean Release Player 成功 |
-| Baseline transaction journal | `<UnityProject>/.buildpipeline/transactions/hybridclr-release-baseline/` | 临时持久恢复证据 | 只能通过 Build Workspace recovery 删除 |
-| Runtime DLL 输出 | 配置的 `Assets` 下 build-exclusive 目录 | 以事务方式替换的构建输入 | 使用对应 output transaction/recovery 工作流 |
+| 数据 | 位置 | 生命周期 |
+| --- | --- | --- |
+| Runtime Hot/AOT 输出 | 配置的 `Assets` 下 Build 独占目录 | 事务化暂存与恢复 |
+| Release Baseline | `<BuildRoot>/.buildpipeline/baselines/hybridclr/...` | 持久 Release Artifact |
+| Generation Journal | `.buildpipeline/transactions/hybridclr-generation/` | 持久中断证据 |
+| Output Journal | `.buildpipeline/transactions/hybridclr/` | 持久中断证据 |
+| Baseline Journal | `.buildpipeline/transactions/hybridclr-release-baseline/` | 持久中断证据 |
 
-如果 Unity 或 CI 进程在发布期间终止，Workspace Health 检查会阻止下一次正常构建。此时应运行显式 Build Workspace recovery。Recovery 会遵守共享 terminal decision：terminal barrier 已选择提交时完成 Baseline，否则恢复完全一致的旧 Baseline。未知文件、路径逃逸、reparse point、超出预算的清单与竞争写入都会 fail closed。
+进程硬中断后，Workspace Health 会阻止下一次正常构建。Retry 或切换 Target 前必须显式 Recovery。不要手工删除 Journal 或 Ownership Marker。
 
-## 常见失败
+删除已提交 Baseline 后可以通过新的合格 Clean Release Player Build 重建，但在成功前 Incremental Job 不可用。
 
-- **Baseline 缺失：** 运行 Clean Release Recipe，并让 Player invocation 直接依赖 hot-update invocation。
-- **Unity/backend/target/configuration 不匹配：** 重新构建并发布 Player，不要绕过不匹配。
-- **AOT hash 不匹配：** 将 Baseline 视为损坏；从 Release artifact store 恢复，或生成新的 Release Player。
-- **需要 Recovery：** 重试或切换目标平台之前先运行 Build Workspace recovery。
-- **HybridCLR API 不可用：** 安装并 provision 兼容包；缺少该包时核心模块仍可编译。
-- **Incremental Obfuz 被拒绝：** 使用 Clean；或在已安装 API 能显式接收验证后的 Baseline AOT 目录时升级 adapter。
+## 验证边界
 
-## 验证
+相关 EditMode Test 覆盖 Adapter Validation、Output Transaction、Generation Transaction 与 Baseline Compatibility Rule。它们不证明 IL2CPP、AOT Metadata 加载、Managed Stripping、Runtime 热更新执行、Platform SDK Integration 或 Clean-Agent Player Build。
 
-修改本集成后的最小验证步骤：
+Release Qualification 需要使用精确 Optional Package 集，并为每个支持 Target 执行：
 
-1. 编译 `Build.Pipeline.Editor` 与 `Build.Pipeline.Tests.Editor`；
-2. 在 EditMode 中运行 `HotUpdateBuildAdapterTests`、`HybridCLRReleaseBaselineTests`、`HybridCLROutputTransactionTests` 与 `HybridCLRGenerationTransactionTests`；
-3. 运行完整 Build EditMode test assembly；
-4. 为每个支持的 target 生成 Clean Release Player，并归档其 Baseline；
-5. 在干净 CI workspace 恢复该 Baseline，再运行 Incremental hot-update-only 构建；
-6. 验证修改 manifest、DLL、Unity 版本、backend、target 或 build configuration 时都会被拒绝。
+1. Clean Release Full Player Build；
+2. 在干净 CI Workspace 中恢复归档 Baseline；
+3. Release Incremental Hot Update Build；
+4. 负向检查，证明修改 DLL、Settings、Unity Version、Target、Backend 与 Build Configuration 都会被拒绝。
+
+## 相关文档与源码
+
+- [Build 构建底座](../../../../README.SCH.md)
+- `HybridCLRBuildConfig.cs`
+- `HybridCLRBuildAdapter.cs`
+- `HybridCLRBuilder.cs`
+- `HybridCLRGenerationTransaction.cs`
+- `HybridCLROutputTransaction.cs`
+- `HybridCLRReleaseBaseline.cs`
+- `HybridCLRReleaseBaselineTransaction.cs`

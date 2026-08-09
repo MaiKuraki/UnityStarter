@@ -6,16 +6,24 @@ namespace CycloneGames.DataTable.CodeGen
 {
     internal static partial class Program
     {
-        private sealed class PendingOutput
+        private sealed class StagedOutput
         {
-            public PendingOutput(string outputPath, string content)
+            public StagedOutput(
+                string outputPath,
+                string stagedPath,
+                string sha256,
+                long byteLength)
             {
                 OutputPath = outputPath;
-                Content = content;
+                StagedPath = stagedPath;
+                Sha256 = sha256;
+                ByteLength = byteLength;
             }
 
             public string OutputPath { get; }
-            public string Content { get; }
+            public string StagedPath { get; }
+            public string Sha256 { get; }
+            public long ByteLength { get; }
         }
 
         private sealed class OwnedOutputPlan
@@ -53,16 +61,6 @@ namespace CycloneGames.DataTable.CodeGen
             public string ConstantName { get; }
             public string Value { get; }
             public string Comment { get; }
-        }
-
-        private static string GetRequired(Dictionary<string, string> row, string columnName, string rowName)
-        {
-            if (!row.TryGetValue(columnName, out string? value) || string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException($"Row '{rowName}' is missing required column: {columnName}");
-            }
-
-            return value.Trim();
         }
 
         private static string GetOptional(Dictionary<string, string> values, string key, string defaultValue = "")
