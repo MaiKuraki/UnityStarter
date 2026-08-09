@@ -1,10 +1,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
-using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.DataTable.Tests.Editor
@@ -16,22 +15,20 @@ namespace CycloneGames.DataTable.Tests.Editor
         [SetUp]
         public void SetUp()
         {
-            _previousDiagnostics = DataTableDiagnostics.Replace(NullDataTableDiagnostics.Instance);
-            DataTableRegistry.Reset();
+            _previousDiagnostics = DataTableDiagnostics.Current;
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(
+                _previousDiagnostics,
+                NullDataTableDiagnostics.Instance));
         }
 
         [TearDown]
         public void TearDown()
         {
-            try
-            {
-                DataTableRegistry.Reset();
-            }
-            finally
-            {
-                DataTableDiagnostics.Replace(_previousDiagnostics ?? NullDataTableDiagnostics.Instance);
-                _previousDiagnostics = null;
-            }
+            IDataTableDiagnostics current = DataTableDiagnostics.Current;
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(
+                current,
+                _previousDiagnostics ?? NullDataTableDiagnostics.Instance));
+            _previousDiagnostics = null;
         }
 
         [Test]
@@ -61,6 +58,42 @@ namespace CycloneGames.DataTable.Tests.Editor
 
             Assert.AreSame(row, table.Get(7));
             Assert.IsFalse(table.All is TestRow[]);
+        }
+
+        [Test]
+        public void AsSpan_ProvidesAllocationFreeSourceOrderScan()
+        {
+            var first = new TestRow { Id = 7 };
+            var second = new TestRow { Id = 3 };
+            var table = new DataTable<TestRow>(new[] { first, second });
+
+            ReadOnlySpan<TestRow> rows = table.AsSpan();
+            Assert.AreEqual(2, rows.Length);
+            Assert.AreSame(first, rows[0]);
+            Assert.AreSame(second, rows[1]);
+
+            // Warm generic span helpers and tiered JIT call sites before sampling. Unity Mono
+            // normally needs fewer iterations, while CoreCLR may promote this loop later.
+            for (int i = 0; i < 10_000; i++)
+            {
+                _ = table.AsSpan()[0];
+            }
+
+            TestRow sink = null;
+            long allocatedBytes = -1;
+            for (int sample = 0; sample < 2; sample++)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 100_000; i++)
+                {
+                    sink = table.AsSpan()[i & 1];
+                }
+
+                allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+
+            Assert.AreEqual(0, allocatedBytes);
+            GC.KeepAlive(sink);
         }
 
         [Test]
@@ -192,88 +225,542 @@ namespace CycloneGames.DataTable.Tests.Editor
         }
 
         [Test]
-        public void Registry_PublishesWholeCatalogSnapshotsToConcurrentReaders()
+        public void Store_PublishesWholeSnapshotsToConcurrentReader()
         {
             DataTableCatalog first = CreatePairCatalog(1);
-            DataTableCatalog second = CreatePairCatalog(2);
-            DataTableRegistry.Publish(first);
-            Exception readerFailure = null;
-
-            var reader = new Thread(() =>
+            using (var store = new DataTableStore())
+            using (var firstCandidate = new DataTableCandidate(first, CreateRevision(1)))
             {
-                try
+                Assert.IsTrue(store.TryPublish(firstCandidate, expectedGeneration: 0).IsCommitted);
+                using (DataTableReader reader = store.RegisterReader())
                 {
-                    for (int i = 0; i < 100_000; i++)
+                    Exception readerFailure = null;
+                    var readerThread = new Thread(() =>
                     {
-                        DataTableCatalog snapshot = DataTableRegistry.Current;
-                        int left = snapshot.Get<PairLeft>().Version;
-                        int right = snapshot.Get<PairRight>().Version;
-                        if (left != right)
+                        try
                         {
-                            throw new InvalidOperationException($"Observed mixed catalog versions: {left}/{right}.");
+                            for (int i = 0; i < 100_000; i++)
+                            {
+                                reader.Refresh();
+                                DataTableSnapshot snapshot = reader.Snapshot;
+                                int left = snapshot.Get<PairLeft>().Version;
+                                int right = snapshot.Get<PairRight>().Version;
+                                if (left != right)
+                                {
+                                    throw new InvalidOperationException(
+                                        $"Observed mixed table generations: {left}/{right}.");
+                                }
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            readerFailure = exception;
+                        }
+                    });
+
+                    readerThread.Start();
+                    long expectedGeneration = store.Generation;
+                    for (int i = 0; i < 2_000; i++)
+                    {
+                        int version = (i & 1) == 0 ? 2 : 1;
+                        using (var candidate = new DataTableCandidate(
+                            CreatePairCatalog(version),
+                            CreateRevision(i + 2)))
+                        {
+                            Assert.IsTrue(store.TryPublish(candidate, expectedGeneration).IsCommitted);
+                            expectedGeneration++;
                         }
                     }
-                }
-                catch (Exception exception)
-                {
-                    readerFailure = exception;
-                }
-            });
 
-            reader.Start();
-            for (int i = 0; i < 2_000; i++)
-            {
-                DataTableRegistry.Publish((i & 1) == 0 ? second : first);
+                    Assert.IsTrue(
+                        readerThread.Join(5_000),
+                        "Concurrent data-table reader did not finish within the test budget.");
+                    Assert.IsNull(readerFailure);
+                    Assert.IsTrue(store.IsInitialized);
+                    Assert.Greater(store.Generation, 0);
+                }
             }
-
-            Assert.IsTrue(reader.Join(5_000), "Concurrent registry reader did not finish within the test budget.");
-            Assert.IsNull(readerFailure);
-            Assert.IsTrue(DataTableRegistry.IsInitialized);
-            Assert.Greater(DataTableRegistry.Generation, 0);
         }
 
         [Test]
-        public void Registry_ResetDoesNotDisposePublishedResources()
+        public void Store_RetiresOwnerOnlyAfterEveryReaderLeavesTheGeneration()
         {
-            var owner = new CountingDisposable();
-            var scope = new DataTableSetScope(new object(), CreatePairCatalog(1), owner);
-            DataTableRegistry.Publish(scope.Catalog);
+            var firstOwner = new CountingDisposable();
+            var secondOwner = new CountingDisposable();
+            var store = new DataTableStore();
+            using (var firstCandidate = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                firstOwner))
+            {
+                Assert.IsTrue(store.TryPublish(firstCandidate, expectedGeneration: 0).IsCommitted);
+            }
 
-            DataTableRegistry.Reset();
+            DataTableReader firstReader = store.RegisterReader();
+            DataTableReader secondReader = store.RegisterReader();
+            Assert.AreEqual(2, store.ActiveReaderCount);
+            using (var secondCandidate = new DataTableCandidate(
+                CreatePairCatalog(2),
+                CreateRevision(2),
+                secondOwner))
+            {
+                Assert.IsTrue(store.TryPublish(secondCandidate, expectedGeneration: 1).IsCommitted);
+            }
 
-            Assert.AreEqual(0, owner.DisposeCount);
-            Assert.IsFalse(DataTableRegistry.IsInitialized);
-            scope.Dispose();
-            scope.Dispose();
-            Assert.AreEqual(1, owner.DisposeCount);
+            Assert.AreEqual(0, firstOwner.DisposeCount);
+            Assert.IsTrue(firstReader.Refresh());
+            Assert.AreEqual(0, firstOwner.DisposeCount);
+
+            secondReader.Dispose();
+            secondReader.Dispose();
+            Assert.AreEqual(1, store.ActiveReaderCount);
+            Assert.AreEqual(1, firstOwner.DisposeCount);
+
+            store.Dispose();
+            Assert.AreEqual(0, secondOwner.DisposeCount);
+            Assert.AreEqual(2, firstReader.Get<PairLeft>().Version);
+            Assert.Throws<ObjectDisposedException>(() => firstReader.Refresh());
+
+            firstReader.Dispose();
+            Assert.AreEqual(0, store.ActiveReaderCount);
+            Assert.AreEqual(1, secondOwner.DisposeCount);
         }
 
         [TestCase(DiagnosticFailurePoint.IsEnabled)]
         [TestCase(DiagnosticFailurePoint.Write)]
-        public void Registry_Publish_RemainsSuccessfulWhenInstalledDiagnosticsThrowsAfterCommit(
+        public void Store_Publish_RemainsSuccessfulWhenInstalledDiagnosticsThrowsAfterCommit(
             DiagnosticFailurePoint failurePoint)
         {
             DataTableCatalog catalog = CreatePairCatalog(42);
-            DataTableDiagnostics.Replace(new ThrowingDataTableDiagnostics(failurePoint));
-
-            Assert.DoesNotThrow(() => DataTableRegistry.Publish(catalog));
-
-            Assert.IsTrue(DataTableRegistry.IsInitialized);
-            Assert.AreSame(catalog, DataTableRegistry.Current);
-            Assert.AreEqual(42, DataTableRegistry.Current.Get<PairLeft>().Version);
+            var diagnostics = new ThrowingDataTableDiagnostics(failurePoint);
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(
+                NullDataTableDiagnostics.Instance,
+                diagnostics));
+            using (var store = new DataTableStore())
+            using (var candidate = new DataTableCandidate(catalog, CreateRevision(42)))
+            {
+                Assert.DoesNotThrow(() => Assert.IsTrue(store.TryPublish(candidate, 0).IsCommitted));
+                using (DataTableReader reader = store.RegisterReader())
+                {
+                    Assert.IsTrue(reader.IsInitialized);
+                    Assert.AreSame(catalog, reader.Snapshot.Catalog);
+                    Assert.AreEqual(42, reader.Get<PairLeft>().Version);
+                }
+            }
         }
 
         [Test]
-        public void Registry_Publish_PropagatesOutOfMemoryAfterCommittedDiagnosticsBoundary()
+        public void Store_ExplicitDiagnosticChannel_DoesNotDependOnAmbientSink()
         {
-            DataTableCatalog catalog = CreatePairCatalog(43);
-            DataTableDiagnostics.Replace(
-                new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.OutOfMemory));
+            var ambient = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.OutOfMemory);
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(
+                NullDataTableDiagnostics.Instance,
+                ambient));
+            DataTableDiagnosticChannel isolated = DataTableDiagnosticChannel.Create(
+                "CycloneGames.DataTable.Isolated",
+                NullDataTableDiagnostics.Instance);
 
-            Assert.Throws<OutOfMemoryException>(() => DataTableRegistry.Publish(catalog));
+            using (var store = new DataTableStore(0, isolated))
+            using (var candidate = new DataTableCandidate(CreatePairCatalog(3), CreateRevision(3)))
+            {
+                Assert.DoesNotThrow(() => Assert.IsTrue(store.TryPublish(candidate, 0).IsCommitted));
+            }
+        }
 
-            Assert.IsTrue(DataTableRegistry.IsInitialized);
-            Assert.AreSame(catalog, DataTableRegistry.Current);
+        [Test]
+        public void Store_RejectsStalePublicationWithoutTakingCandidateOwnership()
+        {
+            var publishedOwner = new CountingDisposable();
+            var staleOwner = new CountingDisposable();
+            using (var store = new DataTableStore())
+            using (var published = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                publishedOwner))
+            using (var stale = new DataTableCandidate(
+                CreatePairCatalog(2),
+                CreateRevision(2),
+                staleOwner))
+            {
+                Assert.IsTrue(store.TryPublish(published, 0).IsCommitted);
+                DataTablePublishResult staleResult = store.TryPublish(stale, 0);
+                Assert.AreEqual(DataTablePublishStatus.Superseded, staleResult.Status);
+                Assert.AreEqual(1, staleResult.ObservedGeneration);
+                Assert.IsTrue(stale.IsCallerOwned);
+                Assert.IsFalse(stale.IsCommitted);
+                Assert.AreEqual(0, staleOwner.DisposeCount);
+
+                stale.Dispose();
+                Assert.AreEqual(1, staleOwner.DisposeCount);
+            }
+
+            Assert.AreEqual(1, publishedOwner.DisposeCount);
+        }
+
+        [Test]
+        public void Store_ConcurrentPublishAllowsOnlyOneExpectedGenerationWinner()
+        {
+            var firstOwner = new CountingDisposable();
+            var secondOwner = new CountingDisposable();
+            var store = new DataTableStore();
+            var first = new DataTableCandidate(CreatePairCatalog(1), CreateRevision(1), firstOwner);
+            var second = new DataTableCandidate(CreatePairCatalog(2), CreateRevision(2), secondOwner);
+            var start = new ManualResetEventSlim(initialState: false);
+            DataTablePublishResult firstResult = default;
+            DataTablePublishResult secondResult = default;
+            Exception firstFailure = null;
+            Exception secondFailure = null;
+
+            var firstPublisher = new Thread(() =>
+            {
+                try
+                {
+                    start.Wait();
+                    firstResult = store.TryPublish(first, expectedGeneration: 0);
+                }
+                catch (Exception exception)
+                {
+                    firstFailure = exception;
+                }
+            });
+            var secondPublisher = new Thread(() =>
+            {
+                try
+                {
+                    start.Wait();
+                    secondResult = store.TryPublish(second, expectedGeneration: 0);
+                }
+                catch (Exception exception)
+                {
+                    secondFailure = exception;
+                }
+            });
+
+            firstPublisher.Start();
+            secondPublisher.Start();
+            start.Set();
+            Assert.IsTrue(firstPublisher.Join(5_000));
+            Assert.IsTrue(secondPublisher.Join(5_000));
+
+            Assert.IsNull(firstFailure);
+            Assert.IsNull(secondFailure);
+            Assert.AreNotEqual(firstResult.IsCommitted, secondResult.IsCommitted);
+            Assert.AreEqual(
+                DataTablePublishStatus.Superseded,
+                firstResult.IsCommitted ? secondResult.Status : firstResult.Status);
+            Assert.AreEqual(1, store.Generation);
+            Assert.AreNotEqual(first.IsCallerOwned, second.IsCallerOwned);
+
+            first.Dispose();
+            second.Dispose();
+            store.Dispose();
+            start.Dispose();
+            Assert.AreEqual(1, firstOwner.DisposeCount);
+            Assert.AreEqual(1, secondOwner.DisposeCount);
+        }
+
+        [Test]
+        public void Store_ResetRetiresThePreviousOwnerAfterReaderRefresh()
+        {
+            var owner = new CountingDisposable();
+            using (var store = new DataTableStore())
+            using (var candidate = new DataTableCandidate(
+                CreatePairCatalog(7),
+                CreateRevision(7),
+                owner))
+            {
+                Assert.IsTrue(store.TryPublish(candidate, 0).IsCommitted);
+                using (DataTableReader reader = store.RegisterReader())
+                {
+                    Assert.IsTrue(store.TryReset(1).IsCommitted);
+                    Assert.AreEqual(0, owner.DisposeCount);
+                    Assert.IsTrue(reader.IsInitialized);
+                    Assert.AreEqual(7, reader.Get<PairLeft>().Version);
+
+                    Assert.IsTrue(reader.Refresh());
+                    Assert.IsFalse(reader.IsInitialized);
+                    Assert.AreEqual(2, reader.Generation);
+                    Assert.IsFalse(reader.Revision.IsPublishable);
+                    Assert.AreEqual(0, reader.Revision.Sequence);
+                    Assert.AreEqual(1, owner.DisposeCount);
+                }
+            }
+        }
+
+        [Test]
+        public void Store_SteadyStateReaderReadsAndNoOpRefreshDoNotAllocateAfterWarmup()
+        {
+            using (var store = new DataTableStore())
+            using (var candidate = new DataTableCandidate(CreatePairCatalog(9), CreateRevision(9)))
+            {
+                Assert.IsTrue(store.TryPublish(candidate, 0).IsCommitted);
+                using (DataTableReader reader = store.RegisterReader())
+                {
+                    for (int i = 0; i < 100; i++)
+                    {
+                        reader.TryGet(out PairLeft _);
+                        _ = reader.Snapshot;
+                        reader.Refresh();
+                    }
+
+                    PairLeft sink = null;
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int i = 0; i < 100_000; i++)
+                    {
+                        reader.TryGet(out sink);
+                        _ = reader.Snapshot;
+                        reader.Refresh();
+                    }
+
+                    long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                    GC.KeepAlive(sink);
+                    Assert.AreEqual(0, allocatedBytes);
+                }
+            }
+        }
+
+        [Test]
+        public void Store_DisposalFailureAfterRetirementDoesNotUndoPublication()
+        {
+            var throwingOwner = new ThrowOnceDisposable();
+            using (var store = new DataTableStore())
+            using (var first = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                throwingOwner))
+            using (var second = new DataTableCandidate(CreatePairCatalog(2), CreateRevision(2)))
+            {
+                Assert.IsTrue(store.TryPublish(first, 0).IsCommitted);
+                Assert.DoesNotThrow(() => Assert.IsTrue(store.TryPublish(second, 1).IsCommitted));
+                Assert.AreEqual(1, throwingOwner.DisposeCount);
+                Assert.AreEqual(1, store.FailedRetirementCount);
+                using (DataTableReader reader = store.RegisterReader())
+                {
+                    Assert.AreEqual(2, reader.Get<PairLeft>().Version);
+                }
+
+                Assert.AreEqual(0, store.RetryFailedRetirements());
+                Assert.AreEqual(2, throwingOwner.DisposeCount);
+                Assert.AreEqual(0, store.FailedRetirementCount);
+            }
+        }
+
+        [Test]
+        public void Store_FailedRetirementDoesNotRetainTheRetiredTableGraph()
+        {
+            var owner = new ThrowOnceDisposable();
+            using (var store = new DataTableStore())
+            {
+                WeakReference retiredTable = PublishThenFailRetirement(store, owner);
+
+                Assert.AreEqual(1, store.FailedRetirementCount);
+                CollectGarbage();
+                Assert.IsFalse(
+                    retiredTable.IsAlive,
+                    "The retry boundary must retain the failed resource owner, not its retired catalog.");
+                Assert.AreEqual(0, store.RetryFailedRetirements());
+                Assert.AreEqual(2, owner.DisposeCount);
+                GC.KeepAlive(store);
+            }
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        public void Store_FatalRetryRetainsTheCurrentAndRemainingOwners(int fatalRetryIndex)
+        {
+            var firstOwner = new RetryScriptDisposable(throwOutOfMemoryOnSecondAttempt: false);
+            var secondOwner = new RetryScriptDisposable(throwOutOfMemoryOnSecondAttempt: false);
+            var thirdOwner = new RetryScriptDisposable(throwOutOfMemoryOnSecondAttempt: false);
+            RetryScriptDisposable[] retryOrder = { thirdOwner, secondOwner, firstOwner };
+            retryOrder[fatalRetryIndex].ThrowOutOfMemoryOnSecondAttempt = true;
+
+            using (var store = new DataTableStore())
+            using (var first = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                firstOwner))
+            using (var second = new DataTableCandidate(
+                CreatePairCatalog(2),
+                CreateRevision(2),
+                secondOwner))
+            using (var third = new DataTableCandidate(
+                CreatePairCatalog(3),
+                CreateRevision(3),
+                thirdOwner))
+            using (var current = new DataTableCandidate(CreatePairCatalog(4), CreateRevision(4)))
+            {
+                Assert.IsTrue(store.TryPublish(first, expectedGeneration: 0).IsCommitted);
+                Assert.IsTrue(store.TryPublish(second, expectedGeneration: 1).IsCommitted);
+                Assert.IsTrue(store.TryPublish(third, expectedGeneration: 2).IsCommitted);
+                Assert.IsTrue(store.TryPublish(current, expectedGeneration: 3).IsCommitted);
+                Assert.AreEqual(3, store.FailedRetirementCount);
+
+                Assert.Throws<OutOfMemoryException>(() => store.RetryFailedRetirements());
+                Assert.AreEqual(3 - fatalRetryIndex, store.FailedRetirementCount);
+                for (int i = 0; i < retryOrder.Length; i++)
+                {
+                    Assert.AreEqual(i <= fatalRetryIndex ? 2 : 1, retryOrder[i].DisposeCount);
+                }
+
+                Assert.AreEqual(0, store.RetryFailedRetirements());
+                for (int i = 0; i < retryOrder.Length; i++)
+                {
+                    Assert.AreEqual(i == fatalRetryIndex ? 3 : 2, retryOrder[i].DisposeCount);
+                }
+            }
+        }
+
+        [Test]
+        public void Store_FatalRetryDuringDisposeDefersTheDetachedCurrentOwner()
+        {
+            var failedOwner = new RetryScriptDisposable(throwOutOfMemoryOnSecondAttempt: true);
+            var currentOwner = new CountingDisposable();
+            var store = new DataTableStore();
+            using (var failed = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                failedOwner))
+            using (var current = new DataTableCandidate(
+                CreatePairCatalog(2),
+                CreateRevision(2),
+                currentOwner))
+            {
+                Assert.IsTrue(store.TryPublish(failed, expectedGeneration: 0).IsCommitted);
+                Assert.IsTrue(store.TryPublish(current, expectedGeneration: 1).IsCommitted);
+                Assert.AreEqual(1, store.FailedRetirementCount);
+
+                Assert.Throws<OutOfMemoryException>(() => store.Dispose());
+                Assert.IsTrue(store.IsDisposed);
+                Assert.AreEqual(2, store.FailedRetirementCount);
+                Assert.AreEqual(0, currentOwner.DisposeCount);
+
+                Assert.DoesNotThrow(() => store.Dispose());
+                Assert.AreEqual(0, store.FailedRetirementCount);
+                Assert.AreEqual(3, failedOwner.DisposeCount);
+                Assert.AreEqual(1, currentOwner.DisposeCount);
+            }
+        }
+
+        [Test]
+        public void Store_ResetResultCapturesRevisionWatermarkAtItsCommitPoint()
+        {
+            var store = new DataTableStore();
+            var reentrantCandidate = new DataTableCandidate(
+                CreatePairCatalog(2),
+                CreateRevision(2));
+            DataTablePublishResult reentrantResult = default;
+            var owner = new ReentrantDisposable(() =>
+            {
+                reentrantResult = store.TryPublish(reentrantCandidate, expectedGeneration: 2);
+            });
+
+            using (store)
+            using (reentrantCandidate)
+            using (var first = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                owner))
+            {
+                Assert.IsTrue(store.TryPublish(first, expectedGeneration: 0).IsCommitted);
+
+                DataTablePublishResult resetResult = store.TryReset(expectedGeneration: 1);
+
+                Assert.IsTrue(resetResult.IsCommitted);
+                Assert.AreEqual(2, resetResult.ObservedGeneration);
+                Assert.AreEqual(
+                    1,
+                    resetResult.ObservedRevisionSequence,
+                    "A reset result must not mix in a later reentrant publication's watermark.");
+                Assert.IsTrue(reentrantResult.IsCommitted);
+                Assert.AreEqual(3, store.Metadata.Generation);
+                Assert.AreEqual(2, store.Metadata.RevisionSequenceHighWatermark);
+            }
+        }
+
+        [Test]
+        public void Candidate_RetainsOwnerForRetryWhenCallerDisposalFails()
+        {
+            var owner = new ThrowOnceDisposable();
+            var candidate = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                owner);
+
+            Assert.Throws<InvalidOperationException>(() => candidate.Dispose());
+            Assert.IsTrue(candidate.HasDisposeFailure);
+            Assert.IsTrue(candidate.OwnsResources);
+            Assert.IsFalse(candidate.IsDisposed);
+            Assert.Throws<InvalidOperationException>(() => _ = candidate.Catalog);
+
+            Assert.DoesNotThrow(() => candidate.Dispose());
+            Assert.IsFalse(candidate.HasDisposeFailure);
+            Assert.IsFalse(candidate.OwnsResources);
+            Assert.IsTrue(candidate.IsDisposed);
+            Assert.AreEqual(2, owner.DisposeCount);
+        }
+
+        [Test]
+        public void Store_RejectsReplayAndRollbackAcrossReset()
+        {
+            using (var store = new DataTableStore(revisionSequenceFloor: 5))
+            using (var baselineReplay = new DataTableCandidate(CreatePairCatalog(5), CreateRevision(5)))
+            using (var accepted = new DataTableCandidate(CreatePairCatalog(6), CreateRevision(6)))
+            using (var replay = new DataTableCandidate(CreatePairCatalog(6), CreateRevision(6)))
+            using (var rollback = new DataTableCandidate(CreatePairCatalog(4), CreateRevision(4)))
+            using (var postResetRollback = new DataTableCandidate(CreatePairCatalog(5), CreateRevision(5)))
+            {
+                DataTablePublishResult floorResult = store.TryPublish(baselineReplay, 0);
+                Assert.AreEqual(DataTablePublishStatus.NonMonotonicRevision, floorResult.Status);
+                Assert.IsTrue(baselineReplay.IsCallerOwned);
+
+                Assert.IsTrue(store.TryPublish(accepted, 0).IsCommitted);
+                DataTableStoreMetadata acceptedMetadata = store.Metadata;
+                Assert.AreEqual(1, acceptedMetadata.Generation);
+                Assert.AreEqual(6, acceptedMetadata.Revision.Sequence);
+                Assert.AreEqual(6, acceptedMetadata.RevisionSequenceHighWatermark);
+
+                Assert.AreEqual(
+                    DataTablePublishStatus.NonMonotonicRevision,
+                    store.TryPublish(replay, 1).Status);
+                Assert.AreEqual(
+                    DataTablePublishStatus.NonMonotonicRevision,
+                    store.TryPublish(rollback, 1).Status);
+
+                Assert.IsTrue(store.TryReset(1).IsCommitted);
+                DataTableStoreMetadata resetMetadata = store.Metadata;
+                Assert.IsFalse(resetMetadata.IsInitialized);
+                Assert.AreEqual(2, resetMetadata.Generation);
+                Assert.AreEqual(6, resetMetadata.RevisionSequenceHighWatermark);
+                Assert.AreEqual(
+                    DataTablePublishStatus.NonMonotonicRevision,
+                    store.TryPublish(postResetRollback, 2).Status);
+            }
+        }
+
+        [Test]
+        public void Store_InvokesRetirementOwnerOutsideTransitionLock()
+        {
+            var store = new DataTableStore();
+            var reentrantOwner = new ReentrantDisposable(() =>
+            {
+                DataTableStoreMetadata metadata = store.Metadata;
+                using (DataTableReader reader = store.RegisterReader())
+                {
+                    Assert.AreEqual(metadata.Generation, reader.Generation);
+                }
+            });
+
+            using (store)
+            using (var first = new DataTableCandidate(
+                CreatePairCatalog(1),
+                CreateRevision(1),
+                reentrantOwner))
+            using (var second = new DataTableCandidate(CreatePairCatalog(2), CreateRevision(2)))
+            {
+                Assert.IsTrue(store.TryPublish(first, 0).IsCommitted);
+                Assert.DoesNotThrow(() => Assert.IsTrue(store.TryPublish(second, 1).IsCommitted));
+                Assert.AreEqual(1, reentrantOwner.DisposeCount);
+            }
         }
 
         [Test]
@@ -282,7 +769,9 @@ namespace CycloneGames.DataTable.Tests.Editor
             var owner = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
             var other = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
             var replacement = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
-            DataTableDiagnostics.Replace(owner);
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(
+                NullDataTableDiagnostics.Instance,
+                owner));
 
             Assert.IsFalse(DataTableDiagnostics.TryReplace(other, replacement));
             Assert.AreSame(owner, DataTableDiagnostics.Current);
@@ -296,65 +785,6 @@ namespace CycloneGames.DataTable.Tests.Editor
             Assert.IsTrue(DataTableDiagnostics.TryReset(replacement));
             Assert.AreSame(NullDataTableDiagnostics.Instance, DataTableDiagnostics.Current);
             Assert.Throws<ArgumentNullException>(() => DataTableDiagnostics.TryReset(null));
-        }
-
-        [TestCase(DataTableDiagnosticLevel.Trace, LogSeverity.Trace)]
-        [TestCase(DataTableDiagnosticLevel.Debug, LogSeverity.Debug)]
-        [TestCase(DataTableDiagnosticLevel.Info, LogSeverity.Info)]
-        [TestCase(DataTableDiagnosticLevel.Warning, LogSeverity.Warning)]
-        [TestCase(DataTableDiagnosticLevel.Error, LogSeverity.Error)]
-        [TestCase(DataTableDiagnosticLevel.Fatal, LogSeverity.Fatal)]
-        public void LogWriterAdapter_MapsEveryOutputLevelExactly(
-            DataTableDiagnosticLevel level,
-            LogSeverity expectedSeverity)
-        {
-            var writer = new ProbeLogWriter();
-            var adapter = new DataTableLogWriterAdapter(writer);
-
-            adapter.Write(level, DataTableDiagnosticCategories.Root, "message");
-
-            Assert.AreEqual(1, writer.CallCount);
-            Assert.AreEqual(expectedSeverity, writer.LastSeverity);
-        }
-
-        [TestCase(DataTableDiagnosticLevel.None)]
-        [TestCase((DataTableDiagnosticLevel)byte.MaxValue)]
-        public void LogWriterAdapter_DropsNonOutputAndUnknownLevels(DataTableDiagnosticLevel level)
-        {
-            var writer = new ProbeLogWriter();
-            var adapter = new DataTableLogWriterAdapter(writer);
-
-            Assert.IsFalse(adapter.IsEnabled(level, DataTableDiagnosticCategories.Root));
-            Assert.DoesNotThrow(() =>
-                adapter.Write(level, DataTableDiagnosticCategories.Root, "message"));
-            Assert.DoesNotThrow(() =>
-                adapter.WriteException(
-                    level,
-                    DataTableDiagnosticCategories.Root,
-                    new InvalidOperationException("diagnostic")));
-            Assert.AreEqual(0, writer.CallCount);
-        }
-
-        [Test]
-        public void LogWriterAdapter_IsolatesOrdinaryWriterFailures()
-        {
-            var writer = new ProbeLogWriter(throwOnCall: true);
-            var adapter = new DataTableLogWriterAdapter(writer);
-
-            Assert.IsFalse(adapter.IsEnabled(
-                DataTableDiagnosticLevel.Info,
-                DataTableDiagnosticCategories.Root));
-            Assert.DoesNotThrow(() =>
-                adapter.Write(
-                    DataTableDiagnosticLevel.Info,
-                    DataTableDiagnosticCategories.Root,
-                    "message"));
-            Assert.DoesNotThrow(() =>
-                adapter.WriteException(
-                    DataTableDiagnosticLevel.Error,
-                    DataTableDiagnosticCategories.Root,
-                    new InvalidOperationException("diagnostic")));
-            Assert.AreEqual(3, writer.CallCount);
         }
 
         [Test]
@@ -421,7 +851,7 @@ namespace CycloneGames.DataTable.Tests.Editor
             var cache = new DataTableBytesCache(
                 new DataTableLoadLimits(2, 4, 8),
                 capacity: 1,
-                clearBytesOnDispose: true);
+                clearBytesOnRelease: true);
             cache.AddOwned("owned", owned);
             cache.Seal();
 
@@ -432,7 +862,8 @@ namespace CycloneGames.DataTable.Tests.Editor
 
             cache.Dispose();
             CollectionAssert.AreEqual(new byte[] { 0, 0, 0 }, owned);
-            Assert.IsTrue(cache.IsDisposed);
+            Assert.IsTrue(cache.IsClosed);
+            Assert.IsTrue(cache.IsReleaseComplete);
             Assert.Throws<ObjectDisposedException>(() => cache.GetBytes("owned"));
         }
 
@@ -487,6 +918,31 @@ namespace CycloneGames.DataTable.Tests.Editor
         }
 
         [Test]
+        public void LoadLimits_RejectRawNamesAndLocationsBeforeNormalizationBudgetsAreExceeded()
+        {
+            var limits = new DataTableLoadLimits(
+                maxTableCount: 2,
+                maxBytesPerTable: 4,
+                maxTotalBytes: 8,
+                maxRowsPerTable: 4,
+                maxTableNameLength: 8,
+                maxLocationLength: 16);
+
+            Assert.Throws<ArgumentException>(() =>
+                limits.NormalizeTableName(new string('a', 15)));
+            Assert.Throws<ArgumentException>(() =>
+                limits.NormalizeLocation(new string('a', 17)));
+            Assert.Throws<ArgumentException>(() =>
+                DataTableNameUtility.NormalizeDataExtension(
+                    new string('x', DataTableNameUtility.DEFAULT_MAX_DATA_EXTENSION_LENGTH + 1)));
+            Assert.Throws<ArgumentException>(() =>
+                new DataTableManifestEntry(
+                    "items",
+                    location: new string('a', 17),
+                    limits: limits));
+        }
+
+        [Test]
         public void Manifest_DefensivelyCopiesEntriesAndEnforcesSchemaLimitsAndHash()
         {
             byte[] bytes = { 1, 2, 3 };
@@ -501,9 +957,9 @@ namespace CycloneGames.DataTable.Tests.Editor
 
             Assert.AreEqual("items", manifest.Entries[0].TableName);
             Assert.IsFalse(manifest.Entries is DataTableManifestEntry[]);
-            manifest.ValidateBytes("items", bytes);
-            Assert.Throws<InvalidOperationException>(() => manifest.ValidateBytes("items", new byte[] { 1, 2 }));
-            Assert.Throws<InvalidOperationException>(() => manifest.ValidateBytes("unknown", new byte[] { 1 }));
+            manifest.ValidatePayload("items", bytes);
+            Assert.Throws<InvalidOperationException>(() => manifest.ValidatePayload("items", new byte[] { 1, 2 }));
+            Assert.Throws<InvalidOperationException>(() => manifest.ValidatePayload("unknown", new byte[] { 1 }));
             Assert.DoesNotThrow(() => manifest.EnsureSchemaVersionSupported(1, 2));
             Assert.Throws<NotSupportedException>(() => manifest.EnsureSchemaVersionSupported(1, 1));
         }
@@ -522,15 +978,71 @@ namespace CycloneGames.DataTable.Tests.Editor
         }
 
         [Test]
-        public void Manifest_ValidatesRequiredPayloadPresence()
+        public void Manifest_ValidatesRequiredPayloadPresenceAndKnownInventory()
         {
-            var manifest = new DataTableManifest(new DataTableManifestEntry("required"));
+            var manifest = new DataTableManifest(
+                schemaVersion: 1,
+                entries: new[] { new DataTableManifestEntry("required") },
+                limits: DataTableLoadLimits.Default,
+                requireKnownTables: true);
             using (var cache = new DataTableBytesCache())
             {
-                Assert.Throws<InvalidOperationException>(() => manifest.ValidateRequiredTables(cache));
+                Assert.Throws<InvalidOperationException>(() => manifest.ValidateInventory(cache));
                 cache.Add("required", new byte[] { 1 });
-                Assert.DoesNotThrow(() => manifest.ValidateRequiredTables(cache));
+                Assert.DoesNotThrow(() => manifest.ValidateInventory(cache));
+                cache.Add("unknown", new byte[] { 2 });
+                Assert.Throws<InvalidOperationException>(() => manifest.ValidateInventory(cache));
             }
+        }
+
+        [Test]
+        public void Manifest_KnownOnlyModeRejectsProvidersWithoutInventory()
+        {
+            byte[] payload = { 1 };
+            var manifest = new DataTableManifest(
+                schemaVersion: 1,
+                entries: new[] { new DataTableManifestEntry("required", expectedByteLength: 1) },
+                limits: DataTableLoadLimits.Default,
+                requireKnownTables: true);
+            var provider = new SinglePayloadProvider("required", payload);
+
+            manifest.ValidatePayload("required", payload);
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => manifest.ValidateInventory(provider));
+            StringAssert.Contains(nameof(IDataTableBytesInventory), exception.Message);
+        }
+
+        [Test]
+        public void Manifest_InventoryValidationEnforcesAggregatePayloadBudget()
+        {
+            var manifestLimits = new DataTableLoadLimits(2, 4, 4);
+            var cacheLimits = new DataTableLoadLimits(2, 4, 8);
+            var manifest = new DataTableManifest(
+                schemaVersion: 1,
+                entries: Array.Empty<DataTableManifestEntry>(),
+                limits: manifestLimits,
+                requireKnownTables: false);
+            using (var cache = new DataTableBytesCache(cacheLimits, capacity: 2))
+            {
+                cache.AddOwned("a", new byte[] { 1, 2, 3 });
+                cache.AddOwned("b", new byte[] { 4, 5, 6 });
+
+                Assert.Throws<InvalidOperationException>(() => manifest.ValidateInventory(cache));
+            }
+        }
+
+        [Test]
+        public void Manifest_ReentrantSourceMutationCannotProducePartialSnapshot()
+        {
+            var entries = new ShrinkingManifestEntries(
+                new DataTableManifestEntry("first"),
+                new DataTableManifestEntry("second"));
+
+            Assert.Throws<IndexOutOfRangeException>(() =>
+                new DataTableManifest(
+                    schemaVersion: 1,
+                    entries: entries,
+                    limits: DataTableLoadLimits.Default));
         }
 
         private static DataTableCatalog CreatePairCatalog(int version)
@@ -539,6 +1051,40 @@ namespace CycloneGames.DataTable.Tests.Editor
                 .Add(new PairLeft(version))
                 .Add(new PairRight(version))
                 .Build();
+        }
+
+        private static DataTableRevision CreateRevision(long sequence)
+        {
+            return new DataTableRevision(sequence, "revision-" + sequence);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static WeakReference PublishThenFailRetirement(
+            DataTableStore store,
+            ThrowOnceDisposable owner)
+        {
+            var retiredTable = new RetentionProbeTable();
+            var retiredTableReference = new WeakReference(retiredTable);
+            DataTableCatalog catalog = new DataTableCatalogBuilder(1)
+                .Add(retiredTable)
+                .Build();
+
+            using (var first = new DataTableCandidate(catalog, CreateRevision(1), owner))
+            using (var second = new DataTableCandidate(CreatePairCatalog(2), CreateRevision(2)))
+            {
+                Assert.IsTrue(store.TryPublish(first, expectedGeneration: 0).IsCommitted);
+                Assert.IsTrue(store.TryPublish(second, expectedGeneration: 1).IsCommitted);
+            }
+
+            return retiredTableReference;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void CollectGarbage()
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
         }
 
         private sealed class TestRow : IDataRow
@@ -622,13 +1168,81 @@ namespace CycloneGames.DataTable.Tests.Editor
             public int Version { get; }
         }
 
+        private sealed class RetentionProbeTable
+        {
+        }
+
         private sealed class CountingDisposable : IDisposable
         {
-            public int DisposeCount { get; private set; }
+            private int _disposeCount;
+
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
 
             public void Dispose()
             {
-                DisposeCount++;
+                Interlocked.Increment(ref _disposeCount);
+            }
+        }
+
+        private sealed class ThrowOnceDisposable : IDisposable
+        {
+            private int _disposeCount;
+
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+            public void Dispose()
+            {
+                if (Interlocked.Increment(ref _disposeCount) == 1)
+                {
+                    throw new InvalidOperationException("Expected first resource-owner disposal failure.");
+                }
+            }
+        }
+
+        private sealed class RetryScriptDisposable : IDisposable
+        {
+            private int _disposeCount;
+
+            public RetryScriptDisposable(bool throwOutOfMemoryOnSecondAttempt)
+            {
+                ThrowOutOfMemoryOnSecondAttempt = throwOutOfMemoryOnSecondAttempt;
+            }
+
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+            public bool ThrowOutOfMemoryOnSecondAttempt { get; set; }
+
+            public void Dispose()
+            {
+                int attempt = Interlocked.Increment(ref _disposeCount);
+                if (attempt == 1)
+                {
+                    throw new InvalidOperationException("Expected initial resource-owner disposal failure.");
+                }
+
+                if (attempt == 2 && ThrowOutOfMemoryOnSecondAttempt)
+                {
+                    throw new OutOfMemoryException("Expected fatal resource-owner retry failure.");
+                }
+            }
+        }
+
+        private sealed class ReentrantDisposable : IDisposable
+        {
+            private readonly Action _disposeAction;
+            private int _disposeCount;
+
+            public ReentrantDisposable(Action disposeAction)
+            {
+                _disposeAction = disposeAction;
+            }
+
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+            public void Dispose()
+            {
+                Interlocked.Increment(ref _disposeCount);
+                _disposeAction();
             }
         }
 
@@ -697,67 +1311,83 @@ namespace CycloneGames.DataTable.Tests.Editor
                 throw new InvalidOperationException("Expected diagnostic sink failure.");
         }
 
-        private sealed class ProbeLogWriter : ILogWriter
+        private sealed class SinglePayloadProvider : IDataTableBytesProvider
         {
-            private readonly bool _throwOnCall;
+            private readonly string _tableName;
+            private readonly ReadOnlyMemory<byte> _payload;
 
-            public ProbeLogWriter(bool throwOnCall = false)
+            public SinglePayloadProvider(string tableName, ReadOnlyMemory<byte> payload)
             {
-                _throwOnCall = throwOnCall;
+                _tableName = tableName;
+                _payload = payload;
             }
 
-            public int CallCount { get; private set; }
-
-            public LogSeverity LastSeverity { get; private set; }
-
-            public bool IsEnabled(LogSeverity severity, string category)
+            public ReadOnlyMemory<byte> GetBytes(string tableName)
             {
-                Record(severity);
-                return true;
-            }
-
-            public void Write(
-                LogSeverity severity,
-                string category,
-                string message,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "") => Record(severity);
-
-            public void Write(
-                LogSeverity severity,
-                string category,
-                Action<StringBuilder> messageBuilder,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "") => Record(severity);
-
-            public void Write<TState>(
-                LogSeverity severity,
-                string category,
-                TState state,
-                Action<TState, StringBuilder> messageBuilder,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "") => Record(severity);
-
-            public void WriteException(
-                LogSeverity severity,
-                string category,
-                Exception exception,
-                string message = null,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "") => Record(severity);
-
-            private void Record(LogSeverity severity)
-            {
-                CallCount++;
-                LastSeverity = severity;
-                if (_throwOnCall)
+                if (TryGetBytes(tableName, out ReadOnlyMemory<byte> bytes))
                 {
-                    throw new InvalidOperationException("Expected writer failure.");
+                    return bytes;
                 }
+
+                throw new KeyNotFoundException(tableName);
+            }
+
+            public bool TryGetBytes(string tableName, out ReadOnlyMemory<byte> bytes)
+            {
+                if (string.Equals(tableName, _tableName, StringComparison.OrdinalIgnoreCase))
+                {
+                    bytes = _payload;
+                    return true;
+                }
+
+                bytes = default;
+                return false;
+            }
+        }
+
+        private sealed class ShrinkingManifestEntries : IReadOnlyList<DataTableManifestEntry>
+        {
+            private readonly DataTableManifestEntry[] _entries;
+            private int _count;
+
+            public ShrinkingManifestEntries(params DataTableManifestEntry[] entries)
+            {
+                _entries = entries;
+                _count = entries.Length;
+            }
+
+            public int Count => _count;
+
+            public DataTableManifestEntry this[int index]
+            {
+                get
+                {
+                    if ((uint)index >= (uint)_count)
+                    {
+                        throw new IndexOutOfRangeException();
+                    }
+
+                    DataTableManifestEntry entry = _entries[index];
+                    if (index == 0)
+                    {
+                        _count = 1;
+                    }
+
+                    return entry;
+                }
+            }
+
+            public IEnumerator<DataTableManifestEntry> GetEnumerator()
+            {
+                for (int i = 0; i < _count; i++)
+                {
+                    yield return this[i];
+                }
+            }
+
+            IEnumerator IEnumerable.GetEnumerator()
+            {
+                return GetEnumerator();
             }
         }
 

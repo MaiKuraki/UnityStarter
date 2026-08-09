@@ -42,10 +42,7 @@ namespace CycloneGames.DataTable.CodeGen
                 }
 
                 EnsureDistinctConfiguredTables(configuredTables);
-                Dictionary<string, PendingOutput> pendingOutputs =
-                    new Dictionary<string, PendingOutput>(StringComparer.OrdinalIgnoreCase);
-                long pendingOutputCharacters = 0;
-
+                using var outputSession = new OwnedOutputSession(arguments.CodeOutputDir, arguments.ValidateOnly);
                 if (configuredTables.Length > 0)
                 {
                     string valueColumn = GetOptional(buildConfig, "string_constant_value_column", DEFAULT_VALUE_COLUMN);
@@ -67,12 +64,14 @@ namespace CycloneGames.DataTable.CodeGen
                         : "\r\n";
 
                     LubanTarget target = LubanConf.ReadTarget(arguments.LubanConfPath, arguments.Target);
-                    Dictionary<string, Dictionary<string, string>> tableRows = ReadTableDeclarations(arguments.DataDir);
+                    Dictionary<string, string> tableInputs = ReadTableDeclarations(
+                        arguments.DataDir,
+                        configuredTables);
                     for (int i = 0; i < configuredTables.Length; i++)
                     {
                         GenerateTableConstants(
                             configuredTables[i],
-                            tableRows,
+                            tableInputs,
                             target,
                             arguments,
                             valueColumn,
@@ -81,23 +80,21 @@ namespace CycloneGames.DataTable.CodeGen
                             scopeColumn,
                             generatedCommentLanguage,
                             lineEnding,
-                            pendingOutputs,
-                            ref pendingOutputCharacters);
+                            outputSession);
                     }
                 }
 
-                ValidatePendingOutputBudget(pendingOutputs);
-                OwnedOutputPlan ownedOutputPlan = BuildOwnedOutputPlan(arguments.CodeOutputDir, pendingOutputs);
+                OwnedOutputPlan ownedOutputPlan = outputSession.BuildPlan();
                 if (arguments.ValidateOnly)
                 {
                     Console.WriteLine(
-                        $"[DataTable.CodeGen] Validation completed. {pendingOutputs.Count} file(s) would be generated, " +
+                        $"[DataTable.CodeGen] Validation completed. {outputSession.Count} file(s) would be generated, " +
                         $"{ownedOutputPlan.ExistingStaleOutputPaths.Length} stale owned .cs file(s) would be deleted, " +
                         $"and {ownedOutputPlan.MissingStaleRegistrationCount} missing stale registration(s) would be pruned.");
                     return;
                 }
 
-                CommitOutputs(arguments.CodeOutputDir, pendingOutputs, ownedOutputPlan);
+                outputSession.Commit(ownedOutputPlan);
             }
 
             private static void EnsureDistinctConfiguredTables(string[] configuredTables)
@@ -112,34 +109,20 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
-            private static Dictionary<string, Dictionary<string, string>> ReadTableDeclarations(string dataDir)
+            private static Dictionary<string, string> ReadTableDeclarations(
+                string dataDir,
+                IReadOnlyCollection<string> configuredTables)
             {
                 string tableSchemaPath = Path.Combine(dataDir, TABLES_SCHEMA_FILE);
-                Dictionary<string, string>[] rows = XlsxWorkbook.ReadRows(tableSchemaPath);
-                Dictionary<string, Dictionary<string, string>> tableRows =
-                    new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
-
-                for (int i = 0; i < rows.Length; i++)
-                {
-                    Dictionary<string, string> row = rows[i];
-                    if (row.TryGetValue(FULL_NAME_COLUMN, out string? fullName) &&
-                        !string.IsNullOrWhiteSpace(fullName))
-                    {
-                        string normalizedName = fullName.Trim();
-                        if (!tableRows.TryAdd(normalizedName, row))
-                        {
-                            throw new InvalidOperationException(
-                                $"Duplicate table declaration '{normalizedName}' in {TABLES_SCHEMA_FILE}.");
-                        }
-                    }
-                }
-
-                return tableRows;
+                var visitor = new TableDeclarationVisitor(configuredTables);
+                var projection = new XlsxWorkbook.ColumnProjection(FULL_NAME_COLUMN, INPUT_COLUMN);
+                XlsxWorkbook.VisitRows(tableSchemaPath, projection, visitor);
+                return visitor.InputByTable;
             }
 
             private static void GenerateTableConstants(
                 string tableFullName,
-                Dictionary<string, Dictionary<string, string>> tableRows,
+                Dictionary<string, string> tableInputs,
                 LubanTarget target,
                 ToolArguments arguments,
                 string valueColumn,
@@ -148,15 +131,14 @@ namespace CycloneGames.DataTable.CodeGen
                 string scopeColumn,
                 string generatedCommentLanguage,
                 string lineEnding,
-                Dictionary<string, PendingOutput> pendingOutputs,
-                ref long pendingOutputCharacters)
+                OwnedOutputSession outputSession)
             {
-                if (!tableRows.TryGetValue(tableFullName, out Dictionary<string, string>? tableRow))
+                if (!tableInputs.TryGetValue(tableFullName, out string? inputFile))
                 {
-                    throw new InvalidOperationException($"String constant table is not declared in {TABLES_SCHEMA_FILE}: {tableFullName}");
+                    throw new InvalidOperationException(
+                        $"String constant table is not declared in {TABLES_SCHEMA_FILE}: {tableFullName}");
                 }
 
-                string inputFile = GetRequired(tableRow, INPUT_COLUMN, tableFullName);
                 string workbookPath = ResolveContainedFile(arguments.DataDir, inputFile, "table workbook");
                 string tableNamespace = GetNamespacePart(tableFullName);
                 string tableName = GetNamePart(tableFullName);
@@ -164,25 +146,24 @@ namespace CycloneGames.DataTable.CodeGen
                 string classNameBase = InferConstantClassNameBase(tableName);
                 ValidateNamespaceIdentifier(namespaceName, $"generated namespace for table '{tableFullName}'");
 
-                Dictionary<string, string>[] dataRows = XlsxWorkbook.ReadRows(
-                    workbookPath,
-                    out HashSet<string> dataColumns);
-                ValidateConfiguredColumns(
-                    dataColumns,
-                    valueColumn,
-                    commentColumn,
-                    enabledColumn,
-                    scopeColumn,
-                    workbookPath);
-                Dictionary<string, List<ConstantEntry>> entriesByScope = CollectEntriesByScope(
-                    dataRows,
-                    valueColumn,
-                    commentColumn,
-                    enabledColumn,
-                    scopeColumn);
+                var columns = new ProjectionColumns();
+                int valueIndex = columns.AddRequired(valueColumn, "value");
+                int commentIndex = columns.AddOptional(commentColumn);
+                int enabledIndex = columns.AddOptional(enabledColumn);
+                int scopeIndex = columns.AddOptional(scopeColumn);
+                var visitor = new ConstantCollectionVisitor(
+                    valueIndex,
+                    commentIndex,
+                    enabledIndex,
+                    scopeIndex);
+                XlsxWorkbook.ColumnProjection projection = columns.Build();
+                XlsxWorkbook.VisitRows(workbookPath, projection, visitor);
+                Dictionary<string, List<ConstantEntry>> entriesByScope = visitor.EntriesByScope;
                 Dictionary<string, string> scopeByClassName = new Dictionary<string, string>(StringComparer.Ordinal);
 
-                foreach (KeyValuePair<string, List<ConstantEntry>> scopePair in entriesByScope.OrderBy(static item => item.Key, StringComparer.Ordinal))
+                foreach (KeyValuePair<string, List<ConstantEntry>> scopePair in entriesByScope.OrderBy(
+                             static item => item.Key,
+                             StringComparer.Ordinal))
                 {
                     string scope = scopePair.Key;
                     string className = CreateClassName(classNameBase, scope);
@@ -195,146 +176,30 @@ namespace CycloneGames.DataTable.CodeGen
                     }
 
                     scopeByClassName.Add(className, scope);
-                    string outputPath = ResolveContainedOutputPath(arguments.CodeOutputDir, Path.Combine(
+                    string outputPath = ResolveContainedOutputPath(
                         arguments.CodeOutputDir,
-                        tableNamespace.Replace('.', Path.DirectorySeparatorChar),
-                        className + ".cs"));
-
-                    string content = BuildConstantsFile(
-                        namespaceName,
-                        className,
-                        inputFile,
-                        scope,
-                        scopePair.Value,
-                        generatedCommentLanguage,
-                        lineEnding);
-
-                    if (pendingOutputs.TryGetValue(outputPath, out PendingOutput? existingOutput))
-                    {
-                        throw new InvalidOperationException(
-                            "Generated output path collision (case-insensitive for cross-platform safety):\n" +
-                            $"  Existing: {existingOutput.OutputPath}\n" +
-                            $"  New     : {outputPath}");
-                    }
-
-                    if (pendingOutputs.Count >= MAX_OWNED_OUTPUT_FILES)
-                    {
-                        throw new InvalidOperationException(
-                            $"Generated output count would exceed the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
-                    }
-
-                    long nextTotalCharacters = checked(pendingOutputCharacters + content.Length);
-                    if (nextTotalCharacters > MAX_TOTAL_GENERATED_CHARACTERS)
-                    {
-                        throw new InvalidOperationException(
-                            $"Generated output exceeds the total {MAX_TOTAL_GENERATED_CHARACTERS}-character budget.");
-                    }
-
-                    pendingOutputs.Add(outputPath, new PendingOutput(outputPath, content));
-                    pendingOutputCharacters = nextTotalCharacters;
-
-                    Console.WriteLine($"[DataTable.CodeGen] Prepared {scopePair.Value.Count} string constants: {outputPath}");
+                        Path.Combine(
+                            arguments.CodeOutputDir,
+                            tableNamespace.Replace('.', Path.DirectorySeparatorChar),
+                            className + ".cs"));
+                    outputSession.Stage(
+                        outputPath,
+                        writer => WriteConstantsFile(
+                            writer,
+                            namespaceName,
+                            className,
+                            inputFile,
+                            scope,
+                            scopePair.Value,
+                            generatedCommentLanguage,
+                            lineEnding));
+                    Console.WriteLine(
+                        $"[DataTable.CodeGen] Prepared {scopePair.Value.Count} string constants: {outputPath}");
                 }
             }
 
-            private static void ValidateConfiguredColumns(
-                ISet<string> columns,
-                string valueColumn,
-                string commentColumn,
-                string enabledColumn,
-                string scopeColumn,
-                string workbookPath)
-            {
-                RequireConfiguredColumn(columns, valueColumn, "value", workbookPath);
-                RequireConfiguredColumn(columns, commentColumn, "comment", workbookPath);
-                RequireConfiguredColumn(columns, enabledColumn, "enabled", workbookPath);
-                RequireConfiguredColumn(columns, scopeColumn, "scope", workbookPath);
-            }
-
-            private static void RequireConfiguredColumn(
-                ISet<string> columns,
-                string columnName,
-                string role,
-                string workbookPath)
-            {
-                if (string.IsNullOrEmpty(columnName))
-                {
-                    return;
-                }
-
-                if (!columns.Contains(columnName))
-                {
-                    throw new InvalidOperationException(
-                        $"Configured {role} column '{columnName}' is missing from the ##var header: {workbookPath}");
-                }
-            }
-
-            private static Dictionary<string, List<ConstantEntry>> CollectEntriesByScope(
-                Dictionary<string, string>[] rows,
-                string valueColumn,
-                string commentColumn,
-                string enabledColumn,
-                string scopeColumn)
-            {
-                Dictionary<string, List<ConstantEntry>> entriesByScope =
-                    new Dictionary<string, List<ConstantEntry>>(StringComparer.Ordinal);
-                Dictionary<string, HashSet<string>> constantNamesByScope =
-                    new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-
-                for (int i = 0; i < rows.Length; i++)
-                {
-                    Dictionary<string, string> row = rows[i];
-                    if (!row.TryGetValue(valueColumn, out string? value) ||
-                        string.IsNullOrWhiteSpace(value))
-                    {
-                        continue;
-                    }
-
-                    if (row.TryGetValue(enabledColumn, out string? enabledValue) &&
-                        !IsEnabled(enabledValue))
-                    {
-                        continue;
-                    }
-
-                    string scope = string.Empty;
-                    if (!string.IsNullOrEmpty(scopeColumn) &&
-                        row.TryGetValue(scopeColumn, out string? scopeValue))
-                    {
-                        scope = scopeValue.Trim();
-                    }
-
-                    string constantName = ToConstantName(value.Trim(), scope);
-                    if (!constantNamesByScope.TryGetValue(scope, out HashSet<string>? constantNames))
-                    {
-                        if (constantNamesByScope.Count >= MAX_OWNED_OUTPUT_FILES)
-                        {
-                            throw new InvalidOperationException(
-                                $"Generated scope count exceeds the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
-                        }
-
-                        constantNames = new HashSet<string>(StringComparer.Ordinal);
-                        constantNamesByScope.Add(scope, constantNames);
-                    }
-
-                    if (!constantNames.Add(constantName))
-                    {
-                        throw new InvalidOperationException($"Duplicate generated constant name in scope '{scope}': {constantName}");
-                    }
-
-                    if (!entriesByScope.TryGetValue(scope, out List<ConstantEntry>? entries))
-                    {
-                        entries = new List<ConstantEntry>();
-                        entriesByScope.Add(scope, entries);
-                    }
-
-                    row.TryGetValue(commentColumn, out string? comment);
-                    entries.Add(new ConstantEntry(constantName, value.Trim(), comment ?? string.Empty));
-                }
-
-                return entriesByScope;
-            }
-
-            private static string BuildConstantsFile(
+            private static void WriteConstantsFile(
+                TextWriter writer,
                 string namespaceName,
                 string className,
                 string inputFile,
@@ -348,37 +213,29 @@ namespace CycloneGames.DataTable.CodeGen
                 bool useChineseHeader = IsChineseGeneratedCommentLanguage(generatedCommentLanguage);
                 string safeInputFile = NormalizeGeneratedCommentText(inputFile);
                 string safeScope = NormalizeGeneratedCommentText(scope);
-                var builder = new StringBuilder(4096, MAX_GENERATED_FILE_CHARACTERS);
+
                 void AddLine(string line)
                 {
-                    long nextLength = (long)builder.Length + line.Length + lineEnding.Length;
-                    if (nextLength > MAX_GENERATED_FILE_CHARACTERS)
-                    {
-                        throw new InvalidOperationException(
-                            $"Generated file for class '{className}' exceeds the " +
-                            $"{MAX_GENERATED_FILE_CHARACTERS}-character limit.");
-                    }
-
-                    builder.Append(line);
-                    builder.Append(lineEnding);
+                    writer.Write(line);
+                    writer.Write(lineEnding);
                 }
 
                 AddLine("//------------------------------------------------------------------------------");
                 AddLine("// <auto-generated>");
                 AddLine(useChineseHeader
-                    ? "//     此文件由 CycloneGames.DataTable.CodeGen 自动生成。"
+                    ? "//     \u6b64\u6587\u4ef6\u7531 CycloneGames.DataTable.CodeGen \u81ea\u52a8\u751f\u6210\u3002"
                     : "//     This file is generated by CycloneGames.DataTable.CodeGen.");
                 AddLine(useChineseHeader
-                    ? $"//     来源表：{safeInputFile}"
+                    ? $"//     \u6765\u6e90\u8868\uff1a{safeInputFile}"
                     : $"//     Source table: {safeInputFile}");
 
                 if (!string.IsNullOrEmpty(scope))
                 {
-                    AddLine(useChineseHeader ? $"//     分类：{safeScope}" : $"//     Scope: {safeScope}");
+                    AddLine(useChineseHeader ? $"//     \u5206\u7ec4\uff1a{safeScope}" : $"//     Scope: {safeScope}");
                 }
 
                 AddLine(useChineseHeader
-                    ? "//     重新执行 DataTable 生成时，本文件的手动修改会丢失。"
+                    ? "//     \u91cd\u65b0\u8fd0\u884c DataTable \u751f\u6210\u65f6\uff0c\u672c\u6587\u4ef6\u7684\u624b\u52a8\u4fee\u6539\u4f1a\u4e22\u5931\u3002"
                     : "//     Manual changes will be lost when DataTable generation runs again.");
                 AddLine("// </auto-generated>");
                 AddLine("//------------------------------------------------------------------------------");
@@ -405,8 +262,173 @@ namespace CycloneGames.DataTable.CodeGen
 
                 AddLine("    }");
                 AddLine("}");
+            }
 
-                return builder.ToString();
+            private sealed class TableDeclarationVisitor : XlsxWorkbook.IRowVisitor
+            {
+                private readonly HashSet<string> _requestedTables;
+
+                public TableDeclarationVisitor(IEnumerable<string> requestedTables)
+                {
+                    _requestedTables = new HashSet<string>(requestedTables, StringComparer.Ordinal);
+                    InputByTable = new Dictionary<string, string>(StringComparer.Ordinal);
+                }
+
+                public Dictionary<string, string> InputByTable { get; }
+
+                public void Visit(in XlsxWorkbook.ProjectedRow row)
+                {
+                    string fullName = row.GetValue(0).Trim();
+                    if (fullName.Length == 0 || !_requestedTables.Contains(fullName))
+                    {
+                        return;
+                    }
+
+                    string input = row.GetValue(1).Trim();
+                    if (input.Length == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Row '{fullName}' is missing required column: {INPUT_COLUMN}");
+                    }
+
+                    if (!InputByTable.TryAdd(fullName, input))
+                    {
+                        throw new InvalidOperationException(
+                            $"Duplicate table declaration '{fullName}' in {TABLES_SCHEMA_FILE}.");
+                    }
+                }
+            }
+
+            private sealed class ConstantCollectionVisitor : XlsxWorkbook.IRowVisitor
+            {
+                private readonly int _valueIndex;
+                private readonly int _commentIndex;
+                private readonly int _enabledIndex;
+                private readonly int _scopeIndex;
+                private readonly Dictionary<string, HashSet<string>> _constantNamesByScope =
+                    new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+                private readonly Dictionary<string, string> _retainedStrings =
+                    new Dictionary<string, string>(StringComparer.Ordinal);
+
+                public ConstantCollectionVisitor(
+                    int valueIndex,
+                    int commentIndex,
+                    int enabledIndex,
+                    int scopeIndex)
+                {
+                    _valueIndex = valueIndex;
+                    _commentIndex = commentIndex;
+                    _enabledIndex = enabledIndex;
+                    _scopeIndex = scopeIndex;
+                    EntriesByScope = new Dictionary<string, List<ConstantEntry>>(StringComparer.Ordinal);
+                }
+
+                public Dictionary<string, List<ConstantEntry>> EntriesByScope { get; }
+
+                public void Visit(in XlsxWorkbook.ProjectedRow row)
+                {
+                    string value = row.GetValue(_valueIndex);
+                    if (string.IsNullOrWhiteSpace(value))
+                    {
+                        return;
+                    }
+
+                    if (_enabledIndex >= 0 &&
+                        row.HasValue(_enabledIndex) &&
+                        !IsEnabled(row.GetValue(_enabledIndex)))
+                    {
+                        return;
+                    }
+
+                    string scope = _scopeIndex >= 0
+                        ? Retain(row.GetValue(_scopeIndex).Trim())
+                        : string.Empty;
+                    string normalizedValue = Retain(value.Trim());
+                    string constantName = ToConstantName(normalizedValue, scope);
+                    if (!_constantNamesByScope.TryGetValue(scope, out HashSet<string>? constantNames))
+                    {
+                        if (_constantNamesByScope.Count >= MAX_OWNED_OUTPUT_FILES)
+                        {
+                            throw new InvalidOperationException(
+                                $"Generated scope count exceeds the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
+                        }
+
+                        constantNames = new HashSet<string>(StringComparer.Ordinal);
+                        _constantNamesByScope.Add(scope, constantNames);
+                    }
+
+                    if (!constantNames.Add(constantName))
+                    {
+                        throw new InvalidOperationException(
+                            $"Duplicate generated constant name in scope '{scope}': {constantName}");
+                    }
+
+                    if (!EntriesByScope.TryGetValue(scope, out List<ConstantEntry>? entries))
+                    {
+                        entries = new List<ConstantEntry>();
+                        EntriesByScope.Add(scope, entries);
+                    }
+
+                    string comment = _commentIndex >= 0
+                        ? Retain(row.GetValue(_commentIndex))
+                        : string.Empty;
+                    entries.Add(new ConstantEntry(constantName, normalizedValue, comment));
+                }
+
+                private string Retain(string value)
+                {
+                    if (value.Length == 0)
+                    {
+                        return string.Empty;
+                    }
+
+                    if (_retainedStrings.TryGetValue(value, out string? retained))
+                    {
+                        return retained;
+                    }
+
+                    _retainedStrings.Add(value, value);
+                    return value;
+                }
+            }
+
+            private sealed class ProjectionColumns
+            {
+                private readonly List<string> _names = new List<string>();
+
+                public int AddRequired(string name, string role)
+                {
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        throw new InvalidOperationException($"Configured {role} column cannot be empty.");
+                    }
+
+                    return Add(name);
+                }
+
+                public int AddOptional(string name)
+                {
+                    return string.IsNullOrEmpty(name) ? -1 : Add(name);
+                }
+
+                public XlsxWorkbook.ColumnProjection Build()
+                {
+                    return new XlsxWorkbook.ColumnProjection(_names.ToArray());
+                }
+
+                private int Add(string name)
+                {
+                    for (int i = 0; i < _names.Count; i++)
+                    {
+                        if (string.Equals(_names[i], name, StringComparison.Ordinal))
+                        {
+                            return i;
+                        }
+                    }
+
+                    _names.Add(name);
+                    return _names.Count - 1;
+                }
             }
 
             private static string InferConstantClassNameBase(string tableName)

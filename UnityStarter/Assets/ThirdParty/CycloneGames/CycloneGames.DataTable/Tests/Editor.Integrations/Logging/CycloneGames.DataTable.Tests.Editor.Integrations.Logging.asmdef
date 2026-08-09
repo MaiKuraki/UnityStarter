@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.DataTable.Tests.Editor.Integrations.Logging",
+    "rootNamespace": "CycloneGames.DataTable.Tests.Editor.Integrations.Logging",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.DataTable.Integrations.Logging",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

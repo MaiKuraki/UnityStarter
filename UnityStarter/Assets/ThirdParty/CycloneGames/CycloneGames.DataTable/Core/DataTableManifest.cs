@@ -45,21 +45,31 @@ namespace CycloneGames.DataTable
             }
 
             limits.EnsureValid(nameof(limits));
-            limits.ValidateTableCount(entries.Count);
+            int entryCount = entries.Count;
+            limits.ValidateTableCount(entryCount);
+
+            // Freeze the caller-owned list before validation. Indexers are allowed to execute
+            // arbitrary code; rereading Count during the loop could otherwise accept a partially
+            // initialized manifest when a re-entrant list shrinks itself.
+            var entrySnapshot = new DataTableManifestEntry[entryCount];
+            for (int i = 0; i < entrySnapshot.Length; i++)
+            {
+                entrySnapshot[i] = entries[i];
+            }
 
             SchemaVersion = schemaVersion;
             RequireKnownTables = requireKnownTables;
             Limits = limits;
-            _entries = new DataTableManifestEntry[entries.Count];
+            _entries = entrySnapshot;
             _entriesView = Array.AsReadOnly(_entries);
             _entriesByTableName = new Dictionary<string, DataTableManifestEntry>(
-                entries.Count,
+                entryCount,
                 StringComparer.OrdinalIgnoreCase);
 
             long knownRequiredBytes = 0;
-            for (int i = 0; i < entries.Count; i++)
+            for (int i = 0; i < _entries.Length; i++)
             {
-                DataTableManifestEntry entry = entries[i];
+                DataTableManifestEntry entry = _entries[i];
                 if (string.IsNullOrEmpty(entry.TableName))
                 {
                     throw new ArgumentException(
@@ -68,6 +78,7 @@ namespace CycloneGames.DataTable
                 }
 
                 limits.ValidateTableName(entry.TableName);
+                limits.ValidateLocation(entry.Location);
 
                 if (entry.HasExpectedByteLength)
                 {
@@ -78,8 +89,6 @@ namespace CycloneGames.DataTable
                         limits.ValidateTotalBytes(knownRequiredBytes);
                     }
                 }
-
-                _entries[i] = entry;
                 try
                 {
                     _entriesByTableName.Add(entry.TableName, entry);
@@ -123,38 +132,43 @@ namespace CycloneGames.DataTable
 
         public bool TryGetEntry(string tableName, out DataTableManifestEntry entry)
         {
-            string normalizedName = DataTableNameUtility.NormalizeTableName(tableName);
-            Limits.ValidateTableName(normalizedName);
+            string normalizedName = Limits.NormalizeTableName(tableName);
             return _entriesByTableName.TryGetValue(normalizedName, out entry);
         }
 
         public DataTableManifestEntry GetEntry(string tableName)
         {
-            if (TryGetEntry(tableName, out DataTableManifestEntry entry))
+            string normalizedName = Limits.NormalizeTableName(tableName);
+            if (_entriesByTableName.TryGetValue(normalizedName, out DataTableManifestEntry entry))
             {
                 return entry;
             }
 
             throw new KeyNotFoundException(
-                $"Data-table manifest does not contain table: {DataTableNameUtility.NormalizeTableName(tableName)}");
+                $"Data-table manifest does not contain table: {normalizedName}");
         }
 
-        public void ValidateBytes(string tableName, byte[] bytes)
+        /// <summary>
+        /// Validates one payload before it becomes part of a candidate payload set.
+        /// </summary>
+        public void ValidatePayload(string tableName, byte[] bytes)
         {
             if (bytes == null)
             {
                 throw new ArgumentNullException(nameof(bytes));
             }
 
-            ValidateBytes(tableName, new ReadOnlyMemory<byte>(bytes));
+            ValidatePayload(tableName, new ReadOnlyMemory<byte>(bytes));
         }
 
-        public void ValidateBytes(string tableName, ReadOnlyMemory<byte> bytes)
+        /// <summary>
+        /// Validates one payload before it becomes part of a candidate payload set.
+        /// </summary>
+        public void ValidatePayload(string tableName, ReadOnlyMemory<byte> bytes)
         {
-            string normalizedName = DataTableNameUtility.NormalizeTableName(tableName);
-            Limits.ValidateTableName(normalizedName);
+            string normalizedName = Limits.NormalizeTableName(tableName);
             Limits.ValidatePayloadLength(normalizedName, bytes.Length);
-            if (!TryGetEntry(normalizedName, out DataTableManifestEntry entry))
+            if (!_entriesByTableName.TryGetValue(normalizedName, out DataTableManifestEntry entry))
             {
                 if (RequireKnownTables)
                 {
@@ -165,10 +179,17 @@ namespace CycloneGames.DataTable
                 return;
             }
 
-            ValidateBytes(entry, bytes, Limits);
+            ValidatePayload(entry, bytes, Limits);
         }
 
-        public void ValidateRequiredTables(IDataTableBytesProvider bytesProvider)
+        /// <summary>
+        /// Validates the topology and aggregate budgets of an already payload-validated set.
+        /// This method does not recompute content hashes, so each payload must first pass
+        /// <see cref="ValidatePayload(string, ReadOnlyMemory{byte})"/> exactly once while being
+        /// acquired. Inventory traversal is allocation-free when the provider exposes
+        /// <see cref="IDataTableBytesInventory"/>.
+        /// </summary>
+        public void ValidateInventory(IDataTableBytesProvider bytesProvider)
         {
             if (bytesProvider == null)
             {
@@ -189,24 +210,59 @@ namespace CycloneGames.DataTable
                         $"Required data table is not loaded: {entry.TableName}");
                 }
             }
+
+            if (!(bytesProvider is IDataTableBytesInventory inventory))
+            {
+                if (RequireKnownTables)
+                {
+                    throw new InvalidOperationException(
+                        $"A manifest with {nameof(RequireKnownTables)} enabled requires a payload " +
+                        $"provider that implements {nameof(IDataTableBytesInventory)}.");
+                }
+
+                return;
+            }
+
+            int payloadCount = inventory.Count;
+            Limits.ValidateTableCount(payloadCount);
+            long totalBytes = 0;
+            for (int i = 0; i < payloadCount; i++)
+            {
+                string tableName = Limits.NormalizeTableName(inventory.GetTableName(i));
+                if (RequireKnownTables && !_entriesByTableName.ContainsKey(tableName))
+                {
+                    throw new InvalidOperationException(
+                        $"Data-table manifest does not contain payload inventory entry: {tableName}");
+                }
+
+                if (!bytesProvider.TryGetBytes(tableName, out ReadOnlyMemory<byte> bytes))
+                {
+                    throw new InvalidOperationException(
+                        $"Data-table payload inventory is inconsistent with its provider: {tableName}");
+                }
+
+                Limits.ValidatePayloadLength(tableName, bytes.Length);
+                totalBytes = checked(totalBytes + bytes.Length);
+                Limits.ValidateTotalBytes(totalBytes);
+            }
         }
 
-        public static void ValidateBytes(DataTableManifestEntry entry, byte[] bytes)
+        public static void ValidatePayload(DataTableManifestEntry entry, byte[] bytes)
         {
             if (bytes == null)
             {
                 throw new ArgumentNullException(nameof(bytes));
             }
 
-            ValidateBytes(entry, new ReadOnlyMemory<byte>(bytes), DataTableLoadLimits.Default);
+            ValidatePayload(entry, new ReadOnlyMemory<byte>(bytes), DataTableLoadLimits.Default);
         }
 
-        public static void ValidateBytes(DataTableManifestEntry entry, ReadOnlyMemory<byte> bytes)
+        public static void ValidatePayload(DataTableManifestEntry entry, ReadOnlyMemory<byte> bytes)
         {
-            ValidateBytes(entry, bytes, DataTableLoadLimits.Default);
+            ValidatePayload(entry, bytes, DataTableLoadLimits.Default);
         }
 
-        public static void ValidateBytes(
+        public static void ValidatePayload(
             DataTableManifestEntry entry,
             ReadOnlyMemory<byte> bytes,
             DataTableLoadLimits limits)

@@ -3,7 +3,6 @@ using System.IO;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.Logging;
 #if UNITY_EDITOR
 using UnityEngine;
 #endif
@@ -60,7 +59,8 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
 
     internal static class DataTableAssetLoaderUtility
     {
-        private static readonly LogChannel Log = DataTableAssetManagementLog.Channel;
+        private static readonly DataTableDiagnosticChannel Diagnostics =
+            DataTableAssetManagementDiagnostics.Channel;
 
         public static int CaptureOwnerThread()
         {
@@ -105,16 +105,10 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             string tableName,
             Exception exception)
         {
-            try
-            {
-                Log.Error(
-                    exception,
-                    $"{ownerName} suppressed a handle cleanup failure to preserve the primary load exception. Table={tableName}.");
-            }
-            catch (Exception)
-            {
-                // Cleanup diagnostics are best-effort and must not replace the primary failure.
-            }
+            Diagnostics.TryWriteException(
+                DataTableDiagnosticLevel.Error,
+                exception,
+                $"{ownerName} suppressed a handle cleanup failure to preserve the primary load exception. Table={tableName}.");
         }
 
         public static bool IsRecoverableException(Exception exception)
@@ -202,9 +196,58 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
             StringComparison comparison = GetPathComparison();
             string assetsPrefix = assetsRoot + Path.DirectorySeparatorChar;
 
-            return candidatePath.StartsWith(assetsPrefix, comparison)
-                ? candidatePath
-                : string.Empty;
+            if (!candidatePath.StartsWith(assetsPrefix, comparison) ||
+                ContainsReparsePoint(assetsRoot, candidatePath))
+            {
+                return string.Empty;
+            }
+
+            return candidatePath;
+        }
+
+        private static bool ContainsReparsePoint(string assetsRoot, string candidatePath)
+        {
+            if (IsExistingReparsePoint(assetsRoot))
+            {
+                return true;
+            }
+
+            for (int i = assetsRoot.Length + 1; i <= candidatePath.Length; i++)
+            {
+                bool atEnd = i == candidatePath.Length;
+                if (!atEnd &&
+                    candidatePath[i] != Path.DirectorySeparatorChar &&
+                    candidatePath[i] != Path.AltDirectorySeparatorChar)
+                {
+                    continue;
+                }
+
+                string partialPath = candidatePath.Substring(0, i);
+                if (IsExistingReparsePoint(partialPath))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsExistingReparsePoint(string path)
+        {
+            if (!File.Exists(path) && !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                // The optional fallback is fail-closed when containment cannot be inspected.
+                return true;
+            }
         }
 
         private static StringComparison GetPathComparison()
@@ -216,5 +259,90 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
 #endif
         }
 #endif
+    }
+
+    /// <summary>
+    /// Owns at most one provider handle whose release has not completed. The handle reference is
+    /// cleared only after Dispose succeeds, so recoverable cleanup failures remain explicitly
+    /// retryable instead of becoming an unobservable provider leak.
+    /// </summary>
+    internal sealed class DataTableAssetHandleRetirement
+    {
+        private IDisposable _pendingHandle;
+        private string _pendingTableName;
+        private bool _disposeInProgress;
+
+        public bool HasPending => _pendingHandle != null;
+
+        public void DisposeOrRetain(
+            IDisposable handle,
+            string ownerName,
+            string tableName,
+            bool suppressRecoverableFailure)
+        {
+            if (handle == null)
+            {
+                return;
+            }
+
+            if (_pendingHandle != null && !ReferenceEquals(_pendingHandle, handle))
+            {
+                throw new InvalidOperationException(
+                    $"{ownerName} cannot retire another handle while a failed release is pending. " +
+                    $"PendingTable={_pendingTableName ?? "<unknown>"}, Table={tableName ?? "<unknown>"}");
+            }
+
+            if (_disposeInProgress)
+            {
+                // Cleanup is owner-thread-affine, so this can only be a callback re-entering the
+                // same retirement. The outermost attempt alone may clear retained ownership.
+                return;
+            }
+
+            _pendingHandle = handle;
+            _pendingTableName = tableName;
+            _disposeInProgress = true;
+            try
+            {
+                handle.Dispose();
+                _pendingHandle = null;
+                _pendingTableName = null;
+            }
+            catch (Exception exception) when (
+                suppressRecoverableFailure &&
+                DataTableAssetLoaderUtility.IsRecoverableException(exception))
+            {
+                DataTableAssetLoaderUtility.LogSuppressedCleanupFailure(
+                    ownerName,
+                    tableName,
+                    exception);
+            }
+            catch (Exception exception) when (DataTableAssetLoaderUtility.IsRecoverableException(exception))
+            {
+                throw new InvalidOperationException(
+                    $"{ownerName} could not release its provider handle. " +
+                    $"Table={tableName ?? "<unknown>"}. Call RetryPendingHandleDisposal on the owner thread.",
+                    exception);
+            }
+            finally
+            {
+                _disposeInProgress = false;
+            }
+        }
+
+        public void Retry(string ownerName)
+        {
+            IDisposable pendingHandle = _pendingHandle;
+            if (pendingHandle == null)
+            {
+                return;
+            }
+
+            DisposeOrRetain(
+                pendingHandle,
+                ownerName,
+                _pendingTableName,
+                suppressRecoverableFailure: false);
+        }
     }
 }

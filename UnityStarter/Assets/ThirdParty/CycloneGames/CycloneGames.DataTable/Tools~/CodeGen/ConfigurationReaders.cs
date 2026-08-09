@@ -99,7 +99,11 @@ namespace CycloneGames.DataTable.CodeGen
 
                     string key = line.Substring(0, separatorIndex).Trim();
                     string value = line.Substring(separatorIndex + 1).Trim();
-                    values[key] = value;
+                    if (!values.TryAdd(key, value))
+                    {
+                        throw new InvalidOperationException(
+                            $"Build configuration contains duplicate key '{key}' at line {lineNumber}.");
+                    }
                 }
 
                 return values;

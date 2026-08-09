@@ -28,11 +28,14 @@ namespace CycloneGames.DataTable.Tests.Performance
         private DataTable<string, NamedPerfRow> _namedTable;
         private DataTable<WidePerfRow> _wideTable;
         private DataTableCatalog _catalog;
+        private DataTableStore _store;
+        private DataTableReader _reader;
         private PerfRow _rowSink;
         private NamedPerfRow _namedRowSink;
         private WidePerfRow _wideRowSink;
         private DataTable<PerfRow> _tableSink;
         private object _objectSink;
+        private float _floatSink;
         private int _distributedCursor;
         private int _mixedCursor;
 
@@ -46,14 +49,24 @@ namespace CycloneGames.DataTable.Tests.Performance
                 .Add(_largeTable)
                 .Add(_namedTable)
                 .Build();
-            DataTableRegistry.Reset();
-            DataTableRegistry.Publish(_catalog);
+            _store = new DataTableStore();
+            using (var candidate = new DataTableCandidate(
+                _catalog,
+                new DataTableRevision(1, "performance-baseline")))
+            {
+                Assert.IsTrue(_store.TryPublish(candidate, expectedGeneration: 0).IsCommitted);
+            }
+
+            _reader = _store.RegisterReader();
         }
 
         [OneTimeTearDown]
         public void OneTimeTearDown()
         {
-            DataTableRegistry.Reset();
+            _reader?.Dispose();
+            _reader = null;
+            _store?.Dispose();
+            _store = null;
         }
 
         [Test, Performance]
@@ -156,9 +169,20 @@ namespace CycloneGames.DataTable.Tests.Performance
         }
 
         [Test, Performance]
-        public void ReadPublishedCatalog()
+        public void ScanOneHundredThousandRows_WithReadOnlySpan()
         {
-            Measure.Method(ReadRegistry)
+            Measure.Method(ScanRowsWithSpan)
+                .WarmupCount(WarmupCount)
+                .MeasurementCount(MeasurementCount)
+                .IterationsPerMeasurement(1)
+                .GC()
+                .Run();
+        }
+
+        [Test, Performance]
+        public void ReadPublishedStoreReader()
+        {
+            Measure.Method(ReadStoreReader)
                 .WarmupCount(WarmupCount)
                 .MeasurementCount(MeasurementCount)
                 .IterationsPerMeasurement(LookupIterations)
@@ -177,8 +201,10 @@ namespace CycloneGames.DataTable.Tests.Performance
                 LookupMixedInt();
                 LookupEqualContentString();
                 LookupWideRow();
+                ReadSpanTail();
                 ReadCatalog();
-                ReadRegistry();
+                ReadStoreReader();
+                _reader.Refresh();
             }
 
             long before = GC.GetAllocatedBytesForCurrentThread();
@@ -190,8 +216,10 @@ namespace CycloneGames.DataTable.Tests.Performance
                 LookupMixedInt();
                 LookupEqualContentString();
                 LookupWideRow();
+                ReadSpanTail();
                 ReadCatalog();
-                ReadRegistry();
+                ReadStoreReader();
+                _reader.Refresh();
             }
 
             long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -253,9 +281,27 @@ namespace CycloneGames.DataTable.Tests.Performance
             _catalog.TryGet(out _tableSink);
         }
 
-        private void ReadRegistry()
+        private void ReadStoreReader()
         {
-            DataTableRegistry.TryGet(out _tableSink);
+            _reader.TryGet(out _tableSink);
+        }
+
+        private void ReadSpanTail()
+        {
+            _rowSink = _largeTable.AsSpan()[LargeTableRowCount - 1];
+        }
+
+        private void ScanRowsWithSpan()
+        {
+            ReadOnlySpan<PerfRow> rows = _largeTable.AsSpan();
+            float sum = 0f;
+            for (int i = 0; i < rows.Length; i++)
+            {
+                sum += rows[i].Value;
+            }
+
+            _rowSink = rows[rows.Length - 1];
+            _floatSink = sum;
         }
 
         private static string GetNamedKey(NamedPerfRow row)

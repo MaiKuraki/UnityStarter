@@ -11,8 +11,45 @@ namespace CycloneGames.DataTable
     /// </summary>
     public static class DataTableNameUtility
     {
+        public const int DEFAULT_MAX_DATA_EXTENSION_LENGTH = 32;
+        public const int DEFAULT_MAX_PATH_LENGTH = 2048;
+
         public static string NormalizeTableName(string tableName, string dataExtension = ".bytes")
         {
+            return NormalizeTableName(
+                tableName,
+                DataTableLoadLimits.DEFAULT_MAX_TABLE_NAME_LENGTH,
+                dataExtension);
+        }
+
+        public static string NormalizeTableName(
+            string tableName,
+            int maxTableNameLength,
+            string dataExtension = ".bytes")
+        {
+            if (maxTableNameLength <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxTableNameLength),
+                    maxTableNameLength,
+                    "Maximum table-name length must be greater than zero.");
+            }
+
+            string normalizedExtension = NormalizeDataExtension(dataExtension);
+            int maximumRawLength = checked(maxTableNameLength + normalizedExtension.Length);
+            if (tableName == null)
+            {
+                throw new ArgumentException("A table name is required.", nameof(tableName));
+            }
+
+            if (tableName.Length > maximumRawLength)
+            {
+                throw new ArgumentException(
+                    $"Raw table name exceeds its pre-normalization limit. " +
+                    $"Length={tableName.Length}, Limit={maximumRawLength}.",
+                    nameof(tableName));
+            }
+
             if (string.IsNullOrWhiteSpace(tableName))
             {
                 throw new ArgumentException("A table name is required.", nameof(tableName));
@@ -27,8 +64,7 @@ namespace CycloneGames.DataTable
                     nameof(tableName));
             }
 
-            string normalizedExtension = NormalizeDataExtension(dataExtension);
-            string normalized = NormalizePath(trimmedName);
+            string normalized = NormalizePath(trimmedName, maximumRawLength);
             if (!string.IsNullOrEmpty(normalizedExtension) &&
                 normalized.EndsWith(normalizedExtension, StringComparison.OrdinalIgnoreCase))
             {
@@ -43,7 +79,15 @@ namespace CycloneGames.DataTable
                         nameof(tableName));
                 }
 
-                normalized = NormalizePath(normalized);
+                normalized = NormalizePath(normalized, maxTableNameLength);
+            }
+
+            if (normalized.Length > maxTableNameLength)
+            {
+                throw new ArgumentException(
+                    $"Normalized table name exceeds the configured limit. " +
+                    $"Length={normalized.Length}, Limit={maxTableNameLength}.",
+                    nameof(tableName));
             }
 
             return normalized;
@@ -51,6 +95,19 @@ namespace CycloneGames.DataTable
 
         public static string NormalizeDataExtension(string dataExtension)
         {
+            if (dataExtension == null)
+            {
+                return string.Empty;
+            }
+
+            if (dataExtension.Length > DEFAULT_MAX_DATA_EXTENSION_LENGTH)
+            {
+                throw new ArgumentException(
+                    $"Data extension exceeds the pre-normalization limit of " +
+                    $"{DEFAULT_MAX_DATA_EXTENSION_LENGTH} characters.",
+                    nameof(dataExtension));
+            }
+
             if (string.IsNullOrWhiteSpace(dataExtension))
             {
                 return string.Empty;
@@ -97,6 +154,32 @@ namespace CycloneGames.DataTable
 
         public static string NormalizePath(string value)
         {
+            return NormalizePath(value, DEFAULT_MAX_PATH_LENGTH);
+        }
+
+        public static string NormalizePath(string value, int maxPathLength)
+        {
+            if (maxPathLength <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxPathLength),
+                    maxPathLength,
+                    "Maximum path length must be greater than zero.");
+            }
+
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (value.Length > maxPathLength)
+            {
+                throw new ArgumentException(
+                    $"Path exceeds the pre-normalization limit. " +
+                    $"Length={value.Length}, Limit={maxPathLength}.",
+                    nameof(value));
+            }
+
             if (string.IsNullOrWhiteSpace(value))
             {
                 return string.Empty;
@@ -116,6 +199,13 @@ namespace CycloneGames.DataTable
 
             ValidatePortableCharacters(normalized, nameof(value), allowColon: false);
             normalized = normalized.Normalize(NormalizationForm.FormC);
+            if (normalized.Length > maxPathLength)
+            {
+                throw new ArgumentException(
+                    $"Normalized path exceeds the configured limit. " +
+                    $"Length={normalized.Length}, Limit={maxPathLength}.",
+                    nameof(value));
+            }
             ValidatePortableCharacters(normalized, nameof(value), allowColon: false);
 
             int segmentStart = 0;

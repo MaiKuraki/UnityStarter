@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -11,28 +12,14 @@ namespace CycloneGames.DataTable.CodeGen
     {
         private static partial class StringConstantGenerator
         {
-            private static void ValidatePendingOutputBudget(Dictionary<string, PendingOutput> pendingOutputs)
-            {
-                long totalCharacters = 0;
-                foreach (PendingOutput output in pendingOutputs.Values)
-                {
-                    totalCharacters = checked(totalCharacters + output.Content.Length);
-                    if (totalCharacters > MAX_TOTAL_GENERATED_CHARACTERS)
-                    {
-                        throw new InvalidOperationException(
-                            $"Generated output exceeds the total {MAX_TOTAL_GENERATED_CHARACTERS}-character budget.");
-                    }
-                }
-            }
-
             private static OwnedOutputPlan BuildOwnedOutputPlan(
                 string outputRoot,
-                Dictionary<string, PendingOutput> pendingOutputs)
+                IReadOnlyCollection<StagedOutput> stagedOutputs)
             {
-                if (pendingOutputs.Count > MAX_OWNED_OUTPUT_FILES)
+                if (stagedOutputs.Count > MAX_OWNED_OUTPUT_FILES)
                 {
                     throw new InvalidOperationException(
-                        $"Generated output count {pendingOutputs.Count} exceeds the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
+                        $"Generated output count {stagedOutputs.Count} exceeds the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
                 }
 
                 string manifestPath = ResolveContainedOutputPath(
@@ -47,7 +34,7 @@ namespace CycloneGames.DataTable.CodeGen
                 string[] previousRelativePaths = manifestExists
                     ? ReadOwnedOutputManifest(manifestPath)
                     : Array.Empty<string>();
-                string[] nextRelativePaths = pendingOutputs.Values
+                string[] nextRelativePaths = stagedOutputs
                     .Select(output => GetOwnedRelativePath(outputRoot, output.OutputPath))
                     .OrderBy(static path => path, StringComparer.Ordinal)
                     .ToArray();
@@ -444,162 +431,439 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
-            private static void CommitOutputs(
-                string outputRoot,
-                Dictionary<string, PendingOutput> pendingOutputs,
-                OwnedOutputPlan ownedOutputPlan)
+            private enum CommitFaultPoint
             {
-                if (pendingOutputs.Count == 0 &&
-                    ownedOutputPlan.ExistingStaleOutputPaths.Length == 0 &&
-                    !ownedOutputPlan.ManifestNeedsWrite)
+                AfterStaleOutputRemoved,
+                AfterOutputCommitted,
+                BeforeManifestCommitted,
+            }
+
+            private sealed class OwnedOutputSession : IDisposable
+            {
+                private static readonly Encoding Utf8NoBom = new UTF8Encoding(false, true);
+                private readonly string _outputRoot;
+                private readonly bool _validateOnly;
+                private readonly Dictionary<string, StagedOutput> _outputs =
+                    new Dictionary<string, StagedOutput>(StringComparer.OrdinalIgnoreCase);
+                private readonly Action<CommitFaultPoint, string>? _faultInjector;
+                private string? _stagingRoot;
+                private OwnedOutputPlan? _plan;
+                private long _totalCharacters;
+                private bool _createdOutputRoot;
+                private bool _planBuilt;
+                private bool _preserveStaging;
+                private bool _committed;
+                private bool _disposed;
+
+                public OwnedOutputSession(
+                    string outputRoot,
+                    bool validateOnly,
+                    Action<CommitFaultPoint, string>? faultInjector = null)
                 {
-                    return;
+                    _outputRoot = Path.GetFullPath(outputRoot);
+                    _validateOnly = validateOnly;
+                    _faultInjector = faultInjector;
                 }
 
-                Directory.CreateDirectory(outputRoot);
-                string stagingRoot = ResolveContainedOutputPath(
-                    outputRoot,
-                    Path.Combine(outputRoot, ".datatable-codegen-" + Guid.NewGuid().ToString("N")));
-                string stagedFilesRoot = Path.Combine(stagingRoot, "files");
-                string backupFilesRoot = Path.Combine(stagingRoot, "backup");
-                string stagedManifestPath = ResolveContainedOutputPath(
-                    stagingRoot,
-                    Path.Combine(stagingRoot, "manifest", OWNED_OUTPUT_MANIFEST_FILE));
-                var orderedOutputs = pendingOutputs.Values
-                    .OrderBy(static output => output.OutputPath, StringComparer.Ordinal)
-                    .ToArray();
-                var committed = new List<(string OutputPath, string BackupPath, bool HadOriginal)>(
-                    orderedOutputs.Length + ownedOutputPlan.ExistingStaleOutputPaths.Length + 1);
-                bool preserveStagingDirectory = true;
+                public int Count => _outputs.Count;
 
-                try
+                public void Stage(string outputPath, Action<TextWriter> writeContent)
                 {
-                    for (int i = 0; i < orderedOutputs.Length; i++)
+                    ThrowIfUnavailable();
+                    if (_planBuilt)
                     {
-                        PendingOutput output = orderedOutputs[i];
-                        string relativePath = GetOwnedRelativePath(outputRoot, output.OutputPath)
-                            .Replace('/', Path.DirectorySeparatorChar);
-                        string stagedPath = ResolveContainedOutputPath(
-                            stagedFilesRoot,
-                            Path.Combine(stagedFilesRoot, relativePath));
-                        string? stagedDirectory = Path.GetDirectoryName(stagedPath);
-                        if (!string.IsNullOrEmpty(stagedDirectory))
-                        {
-                            Directory.CreateDirectory(stagedDirectory);
-                        }
-
-                        File.WriteAllText(stagedPath, output.Content, new UTF8Encoding(false));
+                        throw new InvalidOperationException("Generated outputs cannot be staged after the plan is built.");
                     }
 
-                    if (ownedOutputPlan.ManifestNeedsWrite)
+                    ArgumentNullException.ThrowIfNull(writeContent);
+                    string validatedOutputPath = ResolveContainedOutputPath(_outputRoot, outputPath);
+                    if (_outputs.ContainsKey(validatedOutputPath))
                     {
-                        string? stagedManifestDirectory = Path.GetDirectoryName(stagedManifestPath);
-                        if (!string.IsNullOrEmpty(stagedManifestDirectory))
-                        {
-                            Directory.CreateDirectory(stagedManifestDirectory);
-                        }
-
-                        File.WriteAllText(
-                            stagedManifestPath,
-                            ownedOutputPlan.ManifestContent,
-                            new UTF8Encoding(false));
+                        throw new InvalidOperationException(
+                            "Generated output path collision (case-insensitive for cross-platform safety): " +
+                            validatedOutputPath);
                     }
 
-                    for (int i = 0; i < ownedOutputPlan.ExistingStaleOutputPaths.Length; i++)
+                    if (_outputs.Count >= MAX_OWNED_OUTPUT_FILES)
                     {
-                        string stalePath = ownedOutputPlan.ExistingStaleOutputPaths[i];
-                        string staleRelativePath = GetOwnedRelativePath(outputRoot, stalePath)
-                            .Replace('/', Path.DirectorySeparatorChar);
-                        string staleBackupPath = ResolveContainedOutputPath(
-                            backupFilesRoot,
-                            Path.Combine(backupFilesRoot, staleRelativePath));
-                        string? staleBackupDirectory = Path.GetDirectoryName(staleBackupPath);
-                        if (!string.IsNullOrEmpty(staleBackupDirectory))
-                        {
-                            Directory.CreateDirectory(staleBackupDirectory);
-                        }
-
-                        File.Move(stalePath, staleBackupPath);
-                        committed.Add((stalePath, staleBackupPath, true));
-                        Console.WriteLine("[DataTable.CodeGen] Removed stale owned output: " + stalePath);
+                        throw new InvalidOperationException(
+                            $"Generated output count would exceed the owned-output limit {MAX_OWNED_OUTPUT_FILES}.");
                     }
 
-                    for (int i = 0; i < orderedOutputs.Length; i++)
+                    string stagingRoot = EnsureStaging();
+                    string stagedFilesRoot = Path.Combine(stagingRoot, "files");
+                    string relativePath = GetOwnedRelativePath(_outputRoot, validatedOutputPath)
+                        .Replace('/', Path.DirectorySeparatorChar);
+                    string stagedPath = Path.GetFullPath(Path.Combine(stagedFilesRoot, relativePath));
+                    EnsureStrictChildPath(stagedFilesRoot, stagedPath, "staged generated output");
+                    string? stagedDirectory = Path.GetDirectoryName(stagedPath);
+                    if (!string.IsNullOrEmpty(stagedDirectory))
                     {
-                        PendingOutput output = orderedOutputs[i];
-                        string relativePath = GetOwnedRelativePath(outputRoot, output.OutputPath)
-                            .Replace('/', Path.DirectorySeparatorChar);
-                        string stagedPath = ResolveContainedOutputPath(
-                            stagedFilesRoot,
-                            Path.Combine(stagedFilesRoot, relativePath));
-                        string backupPath = ResolveContainedOutputPath(
-                            backupFilesRoot,
-                            Path.Combine(backupFilesRoot, relativePath));
-                        string? outputDirectory = Path.GetDirectoryName(output.OutputPath);
-                        if (!string.IsNullOrEmpty(outputDirectory))
+                        Directory.CreateDirectory(stagedDirectory);
+                    }
+
+                    try
+                    {
+                        long characterLength;
+                        using (var stream = new FileStream(
+                                   stagedPath,
+                                   FileMode.CreateNew,
+                                   FileAccess.Write,
+                                   FileShare.None,
+                                   65536,
+                                   FileOptions.SequentialScan))
+                        using (var streamWriter = new StreamWriter(stream, Utf8NoBom, 65536, leaveOpen: false))
+                        using (var writer = new BoundedTextWriter(
+                                   streamWriter,
+                                   MAX_GENERATED_FILE_CHARACTERS,
+                                   MAX_TOTAL_GENERATED_CHARACTERS - _totalCharacters))
                         {
-                            Directory.CreateDirectory(outputDirectory);
+                            writeContent(writer);
+                            writer.Flush();
+                            characterLength = writer.CharacterCount;
                         }
 
-                        bool hadOriginal = File.Exists(output.OutputPath);
-                        if (hadOriginal)
+                        var file = new FileInfo(stagedPath);
+                        string sha256 = ComputeSha256(stagedPath);
+                        var output = new StagedOutput(
+                            validatedOutputPath,
+                            stagedPath,
+                            sha256,
+                            file.Length);
+                        _outputs.Add(validatedOutputPath, output);
+                        _totalCharacters = checked(_totalCharacters + characterLength);
+                    }
+                    catch
+                    {
+                        TryDeleteFile(stagedPath);
+                        throw;
+                    }
+                }
+
+                public OwnedOutputPlan BuildPlan()
+                {
+                    ThrowIfUnavailable();
+                    if (!_planBuilt)
+                    {
+                        _plan = BuildOwnedOutputPlan(_outputRoot, _outputs.Values);
+                        _planBuilt = true;
+                    }
+
+                    return _plan!;
+                }
+
+                public void Commit(OwnedOutputPlan plan)
+                {
+                    ThrowIfUnavailable();
+                    ArgumentNullException.ThrowIfNull(plan);
+                    if (!_planBuilt || !ReferenceEquals(_plan, plan))
+                    {
+                        throw new InvalidOperationException("The commit plan does not belong to this frozen output session.");
+                    }
+
+                    if (_validateOnly)
+                    {
+                        throw new InvalidOperationException("A validation-only output session cannot commit.");
+                    }
+
+                    foreach (StagedOutput output in _outputs.Values)
+                    {
+                        if (!FileContentsEqual(output.StagedPath, output))
                         {
-                            string? backupDirectory = Path.GetDirectoryName(backupPath);
-                            if (!string.IsNullOrEmpty(backupDirectory))
+                            throw new InvalidOperationException(
+                                "Staged generated output changed after its hash receipt was recorded: " +
+                                output.OutputPath);
+                        }
+                    }
+
+                    StagedOutput[] changedOutputs = _outputs.Values
+                        .Where(static output => !FileContentsEqual(output.OutputPath, output))
+                        .OrderBy(static output => output.OutputPath, StringComparer.Ordinal)
+                        .ToArray();
+                    if (changedOutputs.Length == 0 &&
+                        plan.ExistingStaleOutputPaths.Length == 0 &&
+                        !plan.ManifestNeedsWrite)
+                    {
+                        _committed = true;
+                        return;
+                    }
+
+                    string stagingRoot = EnsureStaging();
+                    string backupFilesRoot = Path.Combine(stagingRoot, "backup");
+                    string stagedManifestPath = Path.Combine(
+                        stagingRoot,
+                        "manifest",
+                        OWNED_OUTPUT_MANIFEST_FILE);
+                    if (plan.ManifestNeedsWrite)
+                    {
+                        string? manifestDirectory = Path.GetDirectoryName(stagedManifestPath);
+                        if (!string.IsNullOrEmpty(manifestDirectory))
+                        {
+                            Directory.CreateDirectory(manifestDirectory);
+                        }
+
+                        File.WriteAllText(stagedManifestPath, plan.ManifestContent, Utf8NoBom);
+                    }
+
+                    var committed = new List<(string OutputPath, string BackupPath, bool HadOriginal)>(
+                        changedOutputs.Length + plan.ExistingStaleOutputPaths.Length + 1);
+                    try
+                    {
+                        for (int i = 0; i < plan.ExistingStaleOutputPaths.Length; i++)
+                        {
+                            string stalePath = plan.ExistingStaleOutputPaths[i];
+                            string relativePath = GetOwnedRelativePath(_outputRoot, stalePath)
+                                .Replace('/', Path.DirectorySeparatorChar);
+                            string backupPath = Path.GetFullPath(Path.Combine(backupFilesRoot, relativePath));
+                            EnsureStrictChildPath(backupFilesRoot, backupPath, "stale-output backup");
+                            CreateParentDirectory(backupPath);
+                            File.Move(stalePath, backupPath);
+                            committed.Add((stalePath, backupPath, true));
+                            _faultInjector?.Invoke(CommitFaultPoint.AfterStaleOutputRemoved, stalePath);
+                            Console.WriteLine("[DataTable.CodeGen] Removed stale owned output: " + stalePath);
+                        }
+
+                        for (int i = 0; i < changedOutputs.Length; i++)
+                        {
+                            StagedOutput output = changedOutputs[i];
+                            string relativePath = GetOwnedRelativePath(_outputRoot, output.OutputPath)
+                                .Replace('/', Path.DirectorySeparatorChar);
+                            string backupPath = Path.GetFullPath(Path.Combine(backupFilesRoot, relativePath));
+                            EnsureStrictChildPath(backupFilesRoot, backupPath, "generated-output backup");
+                            CreateParentDirectory(output.OutputPath);
+                            bool hadOriginal = File.Exists(output.OutputPath);
+                            if (hadOriginal)
                             {
-                                Directory.CreateDirectory(backupDirectory);
+                                CreateParentDirectory(backupPath);
+                                File.Move(output.OutputPath, backupPath);
                             }
 
-                            File.Move(output.OutputPath, backupPath);
+                            committed.Add((output.OutputPath, backupPath, hadOriginal));
+                            File.Move(output.StagedPath, output.OutputPath);
+                            _faultInjector?.Invoke(CommitFaultPoint.AfterOutputCommitted, output.OutputPath);
+                            Console.WriteLine("[DataTable.CodeGen] Committed: " + output.OutputPath);
                         }
 
-                        committed.Add((output.OutputPath, backupPath, hadOriginal));
-                        File.Move(stagedPath, output.OutputPath);
-
-                        Console.WriteLine("[DataTable.CodeGen] Committed: " + output.OutputPath);
-                    }
-
-                    if (ownedOutputPlan.ManifestNeedsWrite)
-                    {
-                        string manifestBackupPath = ResolveContainedOutputPath(
-                            backupFilesRoot,
-                            Path.Combine(backupFilesRoot, "manifest", OWNED_OUTPUT_MANIFEST_FILE));
-                        bool hadManifest = File.Exists(ownedOutputPlan.ManifestPath);
-                        if (hadManifest)
+                        if (plan.ManifestNeedsWrite)
                         {
-                            string? manifestBackupDirectory = Path.GetDirectoryName(manifestBackupPath);
-                            if (!string.IsNullOrEmpty(manifestBackupDirectory))
+                            _faultInjector?.Invoke(CommitFaultPoint.BeforeManifestCommitted, plan.ManifestPath);
+                            string manifestBackupPath = Path.Combine(
+                                backupFilesRoot,
+                                "manifest",
+                                OWNED_OUTPUT_MANIFEST_FILE);
+                            bool hadManifest = File.Exists(plan.ManifestPath);
+                            if (hadManifest)
                             {
-                                Directory.CreateDirectory(manifestBackupDirectory);
+                                CreateParentDirectory(manifestBackupPath);
+                                File.Move(plan.ManifestPath, manifestBackupPath);
                             }
 
-                            File.Move(ownedOutputPlan.ManifestPath, manifestBackupPath);
+                            CreateParentDirectory(plan.ManifestPath);
+                            committed.Add((plan.ManifestPath, manifestBackupPath, hadManifest));
+                            File.Move(stagedManifestPath, plan.ManifestPath);
+                            Console.WriteLine("[DataTable.CodeGen] Committed owned-output manifest: " + plan.ManifestPath);
                         }
 
-                        committed.Add((ownedOutputPlan.ManifestPath, manifestBackupPath, hadManifest));
-                        File.Move(stagedManifestPath, ownedOutputPlan.ManifestPath);
-                        Console.WriteLine("[DataTable.CodeGen] Committed owned-output manifest: " + ownedOutputPlan.ManifestPath);
+                        _committed = true;
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        string rollbackError = RollBackCommittedOutputs(committed);
+                        _preserveStaging = !string.IsNullOrEmpty(rollbackError);
+                        throw new InvalidOperationException(
+                            string.IsNullOrEmpty(rollbackError)
+                                ? "Code generation commit failed; previously committed files were restored."
+                                : "Code generation commit failed and rollback was incomplete. " +
+                                  $"Recovery files were preserved at '{stagingRoot}'. Details: {rollbackError}",
+                            exception);
+                    }
+                }
+
+                public void Dispose()
+                {
+                    if (_disposed)
+                    {
+                        return;
                     }
 
-                    preserveStagingDirectory = false;
-                }
-                catch (Exception exception) when (IsRecoverableException(exception))
-                {
-                    string rollbackError = RollBackCommittedOutputs(committed);
-                    preserveStagingDirectory = !string.IsNullOrEmpty(rollbackError);
-                    throw new InvalidOperationException(
-                        string.IsNullOrEmpty(rollbackError)
-                            ? "Code generation commit failed; previously committed files were restored."
-                            : "Code generation commit failed and rollback was incomplete. " +
-                              $"Recovery files were preserved at '{stagingRoot}'. Details: {rollbackError}",
-                        exception);
-                }
-                finally
-                {
-                    if (!preserveStagingDirectory)
+                    _disposed = true;
+                    if (_preserveStaging)
                     {
-                        TryDeleteStagingDirectory(outputRoot, stagingRoot);
+                        return;
                     }
+
+                    try
+                    {
+                        if (_stagingRoot != null && Directory.Exists(_stagingRoot))
+                        {
+                            Directory.Delete(_stagingRoot, recursive: true);
+                        }
+
+                        if (_createdOutputRoot && !_committed && Directory.Exists(_outputRoot))
+                        {
+                            Directory.Delete(_outputRoot, recursive: false);
+                        }
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        Console.Error.WriteLine(
+                            "[DataTable.CodeGen] Warning: failed to remove rebuildable staging directory: " +
+                            exception.Message);
+                    }
+                }
+
+                private string EnsureStaging()
+                {
+                    if (_stagingRoot != null)
+                    {
+                        return _stagingRoot;
+                    }
+
+                    if (_validateOnly)
+                    {
+                        _stagingRoot = Path.Combine(
+                            Path.GetTempPath(),
+                            "cyclonegames-datatable-codegen-" + Guid.NewGuid().ToString("N"));
+                    }
+                    else
+                    {
+                        _createdOutputRoot = !Directory.Exists(_outputRoot);
+                        Directory.CreateDirectory(_outputRoot);
+                        _stagingRoot = ResolveContainedOutputPath(
+                            _outputRoot,
+                            Path.Combine(_outputRoot, ".datatable-codegen-" + Guid.NewGuid().ToString("N")));
+                    }
+
+                    Directory.CreateDirectory(_stagingRoot);
+                    return _stagingRoot;
+                }
+
+                private void ThrowIfUnavailable()
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    if (_committed)
+                    {
+                        throw new InvalidOperationException("The owned-output session has already committed.");
+                    }
+                }
+
+                private static bool FileContentsEqual(string path, StagedOutput staged)
+                {
+                    if (!File.Exists(path))
+                    {
+                        return false;
+                    }
+
+                    var file = new FileInfo(path);
+                    return file.Length == staged.ByteLength &&
+                           string.Equals(ComputeSha256(path), staged.Sha256, StringComparison.Ordinal);
+                }
+
+                private static string ComputeSha256(string path)
+                {
+                    using var stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        65536,
+                        FileOptions.SequentialScan);
+                    return Convert.ToHexString(SHA256.HashData(stream));
+                }
+
+                private static void CreateParentDirectory(string path)
+                {
+                    string? directory = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                }
+
+                private static void TryDeleteFile(string path)
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                        {
+                            File.Delete(path);
+                        }
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        Console.Error.WriteLine(
+                            "[DataTable.CodeGen] Warning: failed to remove incomplete staged output: " +
+                            exception.Message);
+                    }
+                }
+            }
+
+            private sealed class BoundedTextWriter : TextWriter
+            {
+                private readonly TextWriter _inner;
+                private readonly long _maximumFileCharacters;
+                private readonly long _maximumRemainingCharacters;
+
+                public BoundedTextWriter(
+                    TextWriter inner,
+                    long maximumFileCharacters,
+                    long maximumRemainingCharacters)
+                {
+                    _inner = inner;
+                    _maximumFileCharacters = maximumFileCharacters;
+                    _maximumRemainingCharacters = maximumRemainingCharacters;
+                }
+
+                public override Encoding Encoding => _inner.Encoding;
+
+                public long CharacterCount { get; private set; }
+
+                public override void Write(char value)
+                {
+                    Charge(1);
+                    _inner.Write(value);
+                }
+
+                public override void Write(char[] buffer, int index, int count)
+                {
+                    Charge(count);
+                    _inner.Write(buffer, index, count);
+                }
+
+                public override void Write(string? value)
+                {
+                    int count = value?.Length ?? 0;
+                    Charge(count);
+                    _inner.Write(value);
+                }
+
+                public override void Write(ReadOnlySpan<char> buffer)
+                {
+                    Charge(buffer.Length);
+                    _inner.Write(buffer);
+                }
+
+                public override void Flush()
+                {
+                    _inner.Flush();
+                }
+
+                private void Charge(int count)
+                {
+                    long next = checked(CharacterCount + count);
+                    if (next > _maximumFileCharacters)
+                    {
+                        throw new InvalidOperationException(
+                            $"Generated file exceeds the {_maximumFileCharacters}-character limit.");
+                    }
+
+                    if (next > _maximumRemainingCharacters)
+                    {
+                        throw new InvalidOperationException(
+                            $"Generated output exceeds the total {MAX_TOTAL_GENERATED_CHARACTERS}-character budget.");
+                    }
+
+                    CharacterCount = next;
                 }
             }
 
@@ -652,24 +916,6 @@ namespace CycloneGames.DataTable.CodeGen
                 }
 
                 errors.Append(outputPath).Append(": ").Append(message);
-            }
-
-            private static void TryDeleteStagingDirectory(string outputRoot, string stagingRoot)
-            {
-                try
-                {
-                    string validatedStagingRoot = ResolveContainedOutputPath(outputRoot, stagingRoot);
-                    if (Directory.Exists(validatedStagingRoot))
-                    {
-                        Directory.Delete(validatedStagingRoot, true);
-                    }
-                }
-                catch (Exception exception) when (IsRecoverableException(exception))
-                {
-                    Console.Error.WriteLine(
-                        "[DataTable.CodeGen] Warning: failed to remove rebuildable staging directory: " +
-                        exception.Message);
-                }
             }
 
             private static string ResolveContainedFile(string rootDirectory, string relativePath, string description)
