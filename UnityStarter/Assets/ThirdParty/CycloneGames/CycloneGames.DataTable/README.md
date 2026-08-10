@@ -218,7 +218,7 @@ Inject `DataTableCatalog` directly when one catalog lives for the whole scope. U
 
 ### Current bootstrap state
 
-The repository contains the transactional pipeline, launchers, `build_config.ini`, `luban.conf`, and one `UnityStarter/Assets/Editor/DataTable/DataTableLubanSettings.asset` selecting profile `client`. The current checkout does not contain `DataTable/Luban/Defines`, `DataTable/Luban/Datas`, the approved Luban executable/DLL, or generated output roots. The Luban identity and source-fingerprint fields in `build_config.ini` are placeholders, and there is no generation receipt. Generation fails closed until those inputs and reviewed identities are supplied.
+The repository contains the transactional pipeline, launchers, `build_config.ini`, and `luban.conf`. It does not pre-create a `DataTableLubanSettings.asset`; projects that use the Unity Editor workflow create and save exactly one explicitly. The current checkout also does not contain `DataTable/Luban/Defines`, `DataTable/Luban/Datas`, the approved Luban executable/DLL, or generated output roots. The Luban identity and source-fingerprint fields in `build_config.ini` are placeholders, and there is no generation receipt. Generation fails closed until those inputs and reviewed identities are supplied.
 
 ### Authoritative inputs
 
@@ -264,7 +264,7 @@ The Editor assembly provides:
 
 - `Tools > CycloneGames > DataTable > Create Default Settings`;
 - `Open Settings`, `Generate`, `Check`, and `Recover` under the same menu;
-- a visible settings asset whose defaults point to `../DataTable/Luban/build_config.ini` and profile `client`.
+- creation of a visible settings asset whose defaults point to `../DataTable/Luban/build_config.ini` and profile `client`.
 
 Exactly one saved `DataTableLubanSettings` asset is required when using the Editor operations. CLI/CI-only workflows do not require it. Generate and Recover may refresh AssetDatabase after success; Check does not.
 

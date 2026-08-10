@@ -256,10 +256,15 @@ namespace CycloneGames.DataTable.Unity.Editor
                     : DataTableLubanInspectorTone.Warning);
             DataTableLubanInspectorUi.DrawStatusRow(
                 "Published Output",
-                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? "Deferred while writer is active"
-                    : snapshot.Output.State,
-                GetOutputTone(snapshot.Output.State));
+                GetPublishedOutputDisplayValue(
+                    snapshot.Output.State,
+                    snapshot.Transaction.State,
+                    snapshot.Transaction.RecoveryRequired,
+                    snapshot.IsInspectionPending),
+                GetOutputTone(
+                    snapshot.Output.State,
+                    snapshot.Transaction.State,
+                    snapshot.IsInspectionPending));
             DataTableLubanInspectorUi.DrawStatusRow(
                 "Transaction",
                 snapshot.Transaction.State,
@@ -506,6 +511,18 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         private void DrawToolchain(DataTableLubanAuthoringSnapshot snapshot)
         {
+            string unavailableDisplay = GetPublishedOutputDisplayValue(
+                snapshot.Output.State,
+                snapshot.Transaction.State,
+                snapshot.Transaction.RecoveryRequired,
+                snapshot.IsInspectionPending);
+            DataTableLubanInspectorTone unavailableTone = GetOutputTone(
+                snapshot.Output.State,
+                snapshot.Transaction.State,
+                snapshot.IsInspectionPending);
+            bool writerOwnsTransaction =
+                string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal) &&
+                string.Equals(snapshot.Transaction.State, "active", StringComparison.Ordinal);
             _showToolchain = DataTableLubanInspectorUi.DrawSection(
                 "Advanced Toolchain",
                 _showToolchain,
@@ -582,11 +599,11 @@ namespace CycloneGames.DataTable.Unity.Editor
                 "Actual Luban SHA",
                 string.IsNullOrEmpty(snapshot.Toolchain.ActualSha256) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? "Deferred"
+                    ? unavailableDisplay
                     : Abbreviate(snapshot.Toolchain.ActualSha256, 20),
                 string.IsNullOrEmpty(snapshot.Toolchain.ActualSha256) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? DataTableLubanInspectorTone.Busy
+                    ? unavailableTone
                     : DataTableLubanInspectorTone.Neutral,
                 snapshot.Toolchain.ActualSha256);
             DataTableLubanInspectorUi.DrawStatusRow(
@@ -598,11 +615,11 @@ namespace CycloneGames.DataTable.Unity.Editor
                 "Actual Source",
                 string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? "Deferred"
+                    ? unavailableDisplay
                     : Abbreviate(snapshot.Toolchain.ActualSourceFingerprint, 20),
                 string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? DataTableLubanInspectorTone.Busy
+                    ? unavailableTone
                     : DataTableLubanInspectorTone.Neutral,
                 snapshot.Toolchain.ActualSourceFingerprint);
             DataTableLubanInspectorUi.DrawStatusRow(
@@ -619,13 +636,13 @@ namespace CycloneGames.DataTable.Unity.Editor
                 "Generation",
                 string.IsNullOrEmpty(snapshot.Output.Generation) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? "Deferred"
+                    ? unavailableDisplay
                     : snapshot.Output.Generation,
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
-                    ? DataTableLubanInspectorTone.Busy
+                    ? unavailableTone
                     : DataTableLubanInspectorTone.Neutral,
                 snapshot.Output.Generation);
-            if (string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal))
+            if (writerOwnsTransaction)
             {
                 DataTableLubanInspectorUi.DrawNotice(
                     "VALIDATION DEFERRED",
@@ -897,10 +914,9 @@ namespace CycloneGames.DataTable.Unity.Editor
                     tone: DataTableLubanInspectorTone.Error);
             }
 
-            _showOutput = EditorGUILayout.Foldout(
+            _showOutput = DataTableLubanInspectorUi.DrawContainedFoldout(
                 _showOutput,
-                "Captured stdout / stderr",
-                true);
+                "Captured stdout / stderr");
             if (_showOutput)
             {
                 DrawCapturedOutput("stdout", result.StandardOutput);
@@ -1157,7 +1173,39 @@ namespace CycloneGames.DataTable.Unity.Editor
             return string.Equals(value, expected, StringComparison.Ordinal);
         }
 
-        private static DataTableLubanInspectorTone GetOutputTone(string state)
+        internal static string GetPublishedOutputDisplayValue(
+            string state,
+            string transactionState,
+            bool recoveryRequired,
+            bool inspectionPending)
+        {
+            if (!string.Equals(state, "unavailable", StringComparison.Ordinal))
+            {
+                return string.IsNullOrEmpty(state) ? "-" : state;
+            }
+
+            if (inspectionPending)
+            {
+                return "Pending inspection";
+            }
+
+            if (string.Equals(transactionState, "active", StringComparison.Ordinal))
+            {
+                return "Deferred while writer is active";
+            }
+
+            if (recoveryRequired)
+            {
+                return "Unavailable until recovery";
+            }
+
+            return "Unavailable until validation succeeds";
+        }
+
+        internal static DataTableLubanInspectorTone GetOutputTone(
+            string state,
+            string transactionState,
+            bool inspectionPending)
         {
             if (string.Equals(state, "current", StringComparison.Ordinal))
             {
@@ -1166,10 +1214,14 @@ namespace CycloneGames.DataTable.Unity.Editor
 
             if (string.Equals(state, "unavailable", StringComparison.Ordinal))
             {
-                return DataTableLubanInspectorTone.Busy;
+                return inspectionPending ||
+                       string.Equals(transactionState, "active", StringComparison.Ordinal)
+                    ? DataTableLubanInspectorTone.Busy
+                    : DataTableLubanInspectorTone.Warning;
             }
 
             if (string.Equals(state, "missing", StringComparison.Ordinal) ||
+                string.Equals(state, "stale", StringComparison.Ordinal) ||
                 string.Equals(state, "drifted", StringComparison.Ordinal))
             {
                 return DataTableLubanInspectorTone.Warning;

@@ -31,34 +31,19 @@ namespace CycloneGames.DataTable.CodeGen
                 },
                 StringComparer.Ordinal);
 
-            public static void Run(ToolArguments arguments)
+            public static void Run(
+                ToolArguments arguments,
+                StringConstantConfiguration configuration)
             {
-                Dictionary<string, string> buildConfig = IniFile.Read(arguments.ConfigPath);
-                string[] configuredTables = SplitList(GetOptional(buildConfig, "string_constant_tables"));
-                if (configuredTables.Length > MAX_CONFIGURED_TABLES)
+                if (configuration == null)
                 {
-                    throw new InvalidOperationException(
-                        $"Configured table count {configuredTables.Length} exceeds the limit {MAX_CONFIGURED_TABLES}.");
+                    throw new ArgumentNullException(nameof(configuration));
                 }
 
-                EnsureDistinctConfiguredTables(configuredTables);
+                string[] configuredTables = configuration.Tables;
                 using var outputSession = new OwnedOutputSession(arguments.CodeOutputDir, arguments.ValidateOnly);
                 if (configuredTables.Length > 0)
                 {
-                    string valueColumn = GetOptional(buildConfig, "string_constant_value_column", DEFAULT_VALUE_COLUMN);
-                    string commentColumn = GetOptionalAllowEmpty(
-                        buildConfig,
-                        "string_constant_comment_column",
-                        DEFAULT_COMMENT_COLUMN);
-                    string enabledColumn = GetOptionalAllowEmpty(
-                        buildConfig,
-                        "string_constant_enabled_column",
-                        DEFAULT_ENABLED_COLUMN);
-                    string scopeColumn = GetOptional(buildConfig, "string_constant_scope_column");
-                    string generatedCommentLanguage = GetOptional(
-                        buildConfig,
-                        "string_constant_generated_comment_language",
-                        DEFAULT_GENERATED_COMMENT_LANGUAGE);
                     string lineEnding = string.Equals(arguments.LineEnding, "lf", StringComparison.OrdinalIgnoreCase)
                         ? "\n"
                         : "\r\n";
@@ -74,11 +59,11 @@ namespace CycloneGames.DataTable.CodeGen
                             tableInputs,
                             target,
                             arguments,
-                            valueColumn,
-                            commentColumn,
-                            enabledColumn,
-                            scopeColumn,
-                            generatedCommentLanguage,
+                            configuration.ValueColumn,
+                            configuration.CommentColumn,
+                            configuration.EnabledColumn,
+                            configuration.ScopeColumn,
+                            configuration.GeneratedCommentLanguage,
                             lineEnding,
                             outputSession);
                     }
@@ -97,7 +82,7 @@ namespace CycloneGames.DataTable.CodeGen
                 outputSession.Commit(ownedOutputPlan);
             }
 
-            private static void EnsureDistinctConfiguredTables(string[] configuredTables)
+            internal static void EnsureDistinctConfiguredTables(string[] configuredTables)
             {
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 for (int i = 0; i < configuredTables.Length; i++)

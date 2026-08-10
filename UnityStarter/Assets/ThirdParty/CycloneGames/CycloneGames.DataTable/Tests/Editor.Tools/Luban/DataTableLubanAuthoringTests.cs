@@ -95,6 +95,23 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         }
 
         [Test]
+        public void InspectionProtocol_AcceptsRegenerableStaleOutputState()
+        {
+            string stale = BusyInspectionJson.Replace(
+                "\"state\":\"unavailable\",\"receiptPath\"",
+                "\"state\":\"stale\",\"receiptPath\"");
+
+            Assert.That(
+                DataTableLubanInspectionProtocol.TryParse(
+                    stale,
+                    out DataTableLubanInspectionDocument document,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(document.output.state, Is.EqualTo("stale"));
+        }
+
+        [Test]
         public void DirtyOrDuplicateSettings_BlockEveryOperation()
         {
             Assert.That(
@@ -504,6 +521,10 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         [Test]
         public void SaveSettings_ReportsWhenUnityLeavesTheAssetDirty()
         {
+            DataTableLubanAuthoringSnapshot previousSnapshot =
+                DataTableLubanAuthoringCoordinator.Snapshot;
+            string previousAuthoringError =
+                DataTableLubanAuthoringCoordinator.AuthoringError;
             var settings = ScriptableObject.CreateInstance<DataTableLubanSettings>();
             try
             {
@@ -518,8 +539,36 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             }
             finally
             {
-                UnityEngine.Object.DestroyImmediate(settings);
+                try
+                {
+                    RestoreCoordinatorProjection(previousSnapshot, previousAuthoringError);
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(settings);
+                }
             }
+        }
+
+        private static void RestoreCoordinatorProjection(
+            DataTableLubanAuthoringSnapshot snapshot,
+            string authoringError)
+        {
+            Type coordinatorType = typeof(DataTableLubanAuthoringCoordinator);
+            FieldInfo snapshotField = coordinatorType.GetField(
+                "_snapshot",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            FieldInfo authoringErrorField = coordinatorType.GetField(
+                "_authoringError",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            if (snapshotField == null || authoringErrorField == null)
+            {
+                throw new InvalidOperationException(
+                    "The DataTable Luban authoring test could not restore coordinator state.");
+            }
+
+            snapshotField.SetValue(null, snapshot);
+            authoringErrorField.SetValue(null, authoringError ?? string.Empty);
         }
 
         [Test]
@@ -542,6 +591,50 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             Assert.That(layout.ArrowRect.xMax, Is.LessThanOrEqualTo(layout.LabelRect.xMin));
             Assert.That(layout.LabelRect.xMax, Is.LessThanOrEqualTo(layout.BadgeRect.xMin));
             Assert.That(layout.BadgeRect.xMax, Is.LessThanOrEqualTo(header.xMax));
+        }
+
+        [TestCase(12f)]
+        [TestCase(24f)]
+        [TestCase(160f)]
+        [TestCase(400f)]
+        public void ContainedFoldoutRect_CompensatesHierarchyOutdent(float width)
+        {
+            var allocated = new Rect(20f, 10f, width, 18f);
+            const float foldoutPaddingLeft = 14f;
+            const float labelPaddingLeft = 2f;
+            const float hierarchyOutdent = foldoutPaddingLeft - labelPaddingLeft;
+            Assert.That(allocated.width, Is.GreaterThanOrEqualTo(hierarchyOutdent));
+
+            Rect input = DataTableLubanInspectorUi.CalculateContainedFoldoutInputRect(
+                allocated,
+                hierarchyMode: true,
+                foldoutPaddingLeft,
+                labelPaddingLeft);
+
+            Assert.That(input.xMin, Is.EqualTo(allocated.xMin + hierarchyOutdent));
+            Assert.That(input.xMax, Is.EqualTo(allocated.xMax));
+            Assert.That(input.width, Is.GreaterThanOrEqualTo(0f));
+            Assert.That(input.xMin - hierarchyOutdent, Is.GreaterThanOrEqualTo(allocated.xMin));
+        }
+
+        [Test]
+        public void ContainedFoldoutRect_DoesNotShiftWithoutHierarchyOutdent()
+        {
+            var allocated = new Rect(20f, 10f, 160f, 18f);
+
+            Rect hierarchyDisabled = DataTableLubanInspectorUi.CalculateContainedFoldoutInputRect(
+                allocated,
+                hierarchyMode: false,
+                foldoutPaddingLeft: 14f,
+                labelPaddingLeft: 2f);
+            Rect noPositiveOutdent = DataTableLubanInspectorUi.CalculateContainedFoldoutInputRect(
+                allocated,
+                hierarchyMode: true,
+                foldoutPaddingLeft: 2f,
+                labelPaddingLeft: 14f);
+
+            Assert.That(hierarchyDisabled, Is.EqualTo(allocated));
+            Assert.That(noPositiveOutdent, Is.EqualTo(allocated));
         }
 
         [TestCase(400f, (int)DataTableLubanHeroLayoutMode.Inline, true)]
@@ -674,6 +767,40 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
                     "Published Output",
                     "Deferred while writer is active"),
                 Is.True);
+        }
+
+        [Test]
+        public void PublishedOutputDisplay_DistinguishesUnavailableReasons()
+        {
+            Assert.That(
+                DataTableLubanSettingsEditor.GetPublishedOutputDisplayValue(
+                    "unavailable", "idle", false, true),
+                Is.EqualTo("Pending inspection"));
+            Assert.That(
+                DataTableLubanSettingsEditor.GetPublishedOutputDisplayValue(
+                    "unavailable", "active", false, false),
+                Is.EqualTo("Deferred while writer is active"));
+            Assert.That(
+                DataTableLubanSettingsEditor.GetPublishedOutputDisplayValue(
+                    "unavailable", "recovery-required", true, false),
+                Is.EqualTo("Unavailable until recovery"));
+            Assert.That(
+                DataTableLubanSettingsEditor.GetPublishedOutputDisplayValue(
+                    "unavailable", "idle", false, false),
+                Is.EqualTo("Unavailable until validation succeeds"));
+            Assert.That(
+                DataTableLubanSettingsEditor.GetPublishedOutputDisplayValue(
+                    "current", "idle", false, false),
+                Is.EqualTo("current"));
+
+            Assert.That(
+                DataTableLubanSettingsEditor.GetOutputTone(
+                    "unavailable", "idle", false),
+                Is.EqualTo(DataTableLubanInspectorTone.Warning));
+            Assert.That(
+                DataTableLubanSettingsEditor.GetOutputTone(
+                    "unavailable", "active", false),
+                Is.EqualTo(DataTableLubanInspectorTone.Busy));
         }
 
         [TestCase(400f, true, (int)DataTableLubanReadOnlyPathLayoutMode.Inline)]

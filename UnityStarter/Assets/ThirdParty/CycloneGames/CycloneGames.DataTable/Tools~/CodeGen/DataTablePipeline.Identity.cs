@@ -63,6 +63,9 @@ namespace CycloneGames.DataTable.CodeGen
 
             private static PipelineIdentity ValidateIdentity(PipelineConfiguration configuration)
             {
+                ValidateConfiguredDataDirectory(configuration);
+                ValidateConfiguredSchemaSources(configuration);
+                ValidateConfiguredTableInputs(configuration);
                 string sourceFingerprint = ComputeSourceFingerprint(configuration);
                 if (!IsSha256(configuration.SourceFingerprint) ||
                     !string.Equals(sourceFingerprint, configuration.SourceFingerprint, StringComparison.OrdinalIgnoreCase))
@@ -127,6 +130,267 @@ namespace CycloneGames.DataTable.CodeGen
                     sourceFingerprint,
                     schemaHash,
                     toolHash);
+            }
+
+            private static string[] ResolveConfiguredSchemaSources(
+                PipelineConfiguration configuration)
+            {
+                string[] relativePaths = LubanConf.ReadSchemaSources(
+                    configuration.LubanConfigurationPath);
+                var resolvedPaths = new string[relativePaths.Length];
+                for (int index = 0; index < relativePaths.Length; index++)
+                {
+                    string path = ResolveRelativePath(
+                        configuration.SourceRoot,
+                        relativePaths[index],
+                        "Luban schema source");
+                    if (!IsFingerprintBoundSource(configuration.SourceRoot, path))
+                    {
+                        throw new InvalidOperationException(
+                            "Luban schema sources must be inside Datas, Defines, or config so their " +
+                            "content is bound to the generation identity: " + relativePaths[index]);
+                    }
+
+                    resolvedPaths[index] = path;
+                }
+
+                return resolvedPaths;
+            }
+
+            private static string ResolveConfiguredDataDirectory(
+                PipelineConfiguration configuration)
+            {
+                string relativePath = LubanConf.ReadDataDirectory(
+                    configuration.LubanConfigurationPath);
+                string path = ResolveRelativePath(
+                    configuration.SourceRoot,
+                    relativePath,
+                    "Luban data directory");
+                if (!IsFingerprintBoundSource(configuration.SourceRoot, path))
+                {
+                    throw new InvalidOperationException(
+                        "Luban dataDir must be inside Datas, Defines, or config so every table input is " +
+                        "bound to the generation identity: " + relativePath);
+                }
+
+                return path;
+            }
+
+            private static void ValidateConfiguredDataDirectory(
+                PipelineConfiguration configuration)
+            {
+                string path = ResolveConfiguredDataDirectory(configuration);
+                if (!Directory.Exists(path))
+                {
+                    throw new DirectoryNotFoundException(
+                        "Configured Luban data directory not found: " + path);
+                }
+
+                AssertPhysicalContainedPath(
+                    path,
+                    configuration.SourceRoot,
+                    "Luban data directory",
+                    mustExist: true);
+            }
+
+            private static void ValidateConfiguredSchemaSources(
+                PipelineConfiguration configuration)
+            {
+                foreach (string path in ResolveConfiguredSchemaSources(configuration))
+                {
+                    if (!File.Exists(path) && !Directory.Exists(path))
+                    {
+                        throw new FileNotFoundException(
+                            "Configured Luban schema source not found.",
+                            path);
+                    }
+
+                    AssertPhysicalContainedPath(
+                        path,
+                        configuration.SourceRoot,
+                        "Luban schema source",
+                        mustExist: true);
+                }
+            }
+
+            private static void ValidateConfiguredTableInputs(
+                PipelineConfiguration configuration)
+            {
+                string dataDirectory = ResolveConfiguredDataDirectory(configuration);
+                if (!Directory.Exists(dataDirectory))
+                {
+                    throw new DirectoryNotFoundException(
+                        "Configured Luban data directory not found: " + dataDirectory);
+                }
+
+                AssertPhysicalContainedPath(
+                    dataDirectory,
+                    configuration.SourceRoot,
+                    "Luban data directory",
+                    mustExist: true);
+
+                string[] tableSchemaSources = LubanConf.ReadTableSchemaSources(
+                    configuration.LubanConfigurationPath);
+                var visitor = new TableInputManifestVisitor(
+                    configuration,
+                    dataDirectory);
+                foreach (string relativeSchemaPath in tableSchemaSources)
+                {
+                    string schemaPath = ResolveRelativePath(
+                        configuration.SourceRoot,
+                        relativeSchemaPath,
+                        "Luban table schema source");
+                    if (!IsFingerprintBoundSource(configuration.SourceRoot, schemaPath))
+                    {
+                        throw new InvalidOperationException(
+                            "Luban table schema sources must be identity-bound: " + relativeSchemaPath);
+                    }
+
+                    if (!File.Exists(schemaPath))
+                    {
+                        throw new FileNotFoundException(
+                            "Configured Luban table schema source is not a physical file.",
+                            schemaPath);
+                    }
+
+                    AssertPhysicalContainedPath(
+                        schemaPath,
+                        configuration.SourceRoot,
+                        "Luban table schema source",
+                        mustExist: true);
+                    var projection = new XlsxWorkbook.ColumnProjection("input");
+                    XlsxWorkbook.VisitRows(schemaPath, projection, visitor);
+                }
+            }
+
+            private static string ExtractLubanInputFilePath(string input)
+            {
+                int sheetSeparator = input.IndexOf('@');
+                if (sheetSeparator < 0)
+                {
+                    return input;
+                }
+
+                int lastPathSeparator = input.LastIndexOf('/', sheetSeparator);
+                int sheetNameStart = lastPathSeparator + 1;
+                if (string.IsNullOrWhiteSpace(input.Substring(
+                        sheetNameStart,
+                        sheetSeparator - sheetNameStart)))
+                {
+                    throw new InvalidOperationException(
+                        "Luban table input contains an empty @sheet selector: " + input);
+                }
+
+                string filePath = input.Substring(0, sheetNameStart) +
+                                  input.Substring(sheetSeparator + 1);
+                if (string.IsNullOrWhiteSpace(filePath))
+                {
+                    throw new InvalidOperationException(
+                        "Luban table input contains an empty file path after @sheet: " + input);
+                }
+
+                return filePath;
+            }
+
+            private sealed class TableInputManifestVisitor : XlsxWorkbook.IRowVisitor
+            {
+                private readonly PipelineConfiguration _configuration;
+                private readonly string _dataDirectory;
+                private readonly Dictionary<string, string> _portableCasingByPath =
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                private int _inputCount;
+
+                public TableInputManifestVisitor(
+                    PipelineConfiguration configuration,
+                    string dataDirectory)
+                {
+                    _configuration = configuration;
+                    _dataDirectory = dataDirectory;
+                }
+
+                public void Visit(in XlsxWorkbook.ProjectedRow row)
+                {
+                    string inputs = row.GetValue(0);
+                    int itemStart = 0;
+                    while (itemStart <= inputs.Length)
+                    {
+                        int separator = inputs.IndexOf(',', itemStart);
+                        int itemEnd = separator < 0 ? inputs.Length : separator;
+                        string input = inputs.Substring(itemStart, itemEnd - itemStart).Trim();
+                        if (input.Length != 0)
+                        {
+                            ValidateInput(input, row.RowIndex);
+                        }
+
+                        if (separator < 0)
+                        {
+                            break;
+                        }
+
+                        itemStart = separator + 1;
+                    }
+                }
+
+                private void ValidateInput(string input, int rowIndex)
+                {
+                    _inputCount++;
+                    if (_inputCount > PipelineMaximumFiles)
+                    {
+                        throw new InvalidOperationException(
+                            $"Luban table input manifest exceeds the {PipelineMaximumFiles}-entry limit: " +
+                            _configuration.LubanConfigurationPath);
+                    }
+
+                    string relativeFilePath = ExtractLubanInputFilePath(input);
+                    string path = ResolveRelativePath(
+                        _dataDirectory,
+                        relativeFilePath,
+                        $"Luban table input at row {rowIndex}");
+                    if (!IsFingerprintBoundSource(_configuration.SourceRoot, path))
+                    {
+                        throw new InvalidOperationException(
+                            "Luban table input is not bound to the generation identity: " + input);
+                    }
+
+                    string portablePath = Path.GetRelativePath(_dataDirectory, path).Replace('\\', '/');
+                    if (_portableCasingByPath.TryGetValue(portablePath, out string? existingPath) &&
+                        !string.Equals(existingPath, portablePath, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Luban table inputs contain a case-colliding file path: " + portablePath);
+                    }
+
+                    _portableCasingByPath[portablePath] = portablePath;
+                    if (!File.Exists(path))
+                    {
+                        throw new FileNotFoundException(
+                            $"Luban table input declared at row {rowIndex} was not found.",
+                            path);
+                    }
+
+                    AssertPhysicalContainedPath(
+                        path,
+                        _dataDirectory,
+                        $"Luban table input at row {rowIndex}",
+                        mustExist: true);
+                }
+            }
+
+            private static bool IsFingerprintBoundSource(
+                string sourceRoot,
+                string path)
+            {
+                foreach (string directoryName in new[] { "Datas", "Defines", "config" })
+                {
+                    string root = Path.GetFullPath(Path.Combine(sourceRoot, directoryName));
+                    if (string.Equals(path, root, GetPathComparison()) ||
+                        IsStrictPipelineChildPath(root, path))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             private static string ComputeSourceFingerprint(

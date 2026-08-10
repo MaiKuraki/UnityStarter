@@ -26,6 +26,7 @@ namespace CycloneGames.DataTable.CodeGen
                     TestStreamingProjection(root);
                     TestWorkbookFailures(root);
                     TestOutputChangedOnlyAndEncoding(root);
+                    TestUnownedOutputCollision(root);
                     TestOutputRollback(root);
                     TestStaleOutputRollback(root);
                     TestValidationDoesNotCreateOutput(root);
@@ -216,9 +217,13 @@ namespace CycloneGames.DataTable.CodeGen
             private static void TestOutputRollback(string root)
             {
                 string outputRoot = Path.Combine(root, "rollback");
-                Directory.CreateDirectory(outputRoot);
                 string outputPath = Path.Combine(outputRoot, "Names.cs");
-                File.WriteAllText(outputPath, "original\n", new UTF8Encoding(false));
+                using (var seed = new OwnedOutputSession(outputRoot, validateOnly: false))
+                {
+                    seed.Stage(outputPath, static writer => writer.Write("original\n"));
+                    seed.Commit(seed.BuildPlan());
+                }
+
                 bool faultInjected = false;
                 using (var session = new OwnedOutputSession(
                            outputRoot,
@@ -242,6 +247,32 @@ namespace CycloneGames.DataTable.CodeGen
                 }
 
                 AssertEqual("original\n", File.ReadAllText(outputPath), "transaction rollback content");
+            }
+
+            private static void TestUnownedOutputCollision(string root)
+            {
+                string outputRoot = Path.Combine(root, "unowned-collision");
+                Directory.CreateDirectory(outputRoot);
+                string outputPath = Path.Combine(outputRoot, "Names.cs");
+                File.WriteAllText(outputPath, "luban-owned\n", new UTF8Encoding(false));
+
+                using (var session = new OwnedOutputSession(outputRoot, validateOnly: false))
+                {
+                    session.Stage(outputPath, static writer => writer.Write("constant-projection\n"));
+                    ExpectWorkbookFailure(
+                        () => session.BuildPlan(),
+                        "an existing output that is absent from the prior owned-output manifest");
+                }
+
+                AssertEqual(
+                    "luban-owned\n",
+                    File.ReadAllText(outputPath),
+                    "unowned collision preservation");
+                if (File.Exists(Path.Combine(outputRoot, OWNED_OUTPUT_MANIFEST_FILE)))
+                {
+                    throw new InvalidOperationException(
+                        "Self-test failed: an unowned collision was adopted into a new manifest.");
+                }
             }
 
             private static void TestValidationDoesNotCreateOutput(string root)
