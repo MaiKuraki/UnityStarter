@@ -19,6 +19,10 @@ namespace CycloneGames.DataTable.CodeGen
             private const string ActiveLubanPendingFileName = "active-luban.pending";
             private const string ActiveLubanStageFileName = "active-luban.stage";
             private const int LockRecordMaximumBytes = 4096;
+            private const int LubanProcessOutputMaximumCharacters = 1024 * 1024;
+            private const int LubanStandardErrorOutputMaximumCharacters = 256 * 1024;
+            private const int LubanStandardOutputMaximumCharacters =
+                LubanProcessOutputMaximumCharacters - LubanStandardErrorOutputMaximumCharacters;
 
             private readonly struct RecordedProcessIdentity
             {
@@ -72,6 +76,84 @@ namespace CycloneGames.DataTable.CodeGen
                 public string Content { get; }
             }
 
+            private sealed class BoundedProcessOutputForwarder
+            {
+                private readonly object _syncRoot = new object();
+                private readonly int _maximumCharacters;
+                private int _forwardedCharacters;
+                private long _omittedCharacters;
+
+                public BoundedProcessOutputForwarder(int maximumCharacters)
+                {
+                    if (maximumCharacters <= 0)
+                    {
+                        throw new ArgumentOutOfRangeException(nameof(maximumCharacters));
+                    }
+
+                    _maximumCharacters = maximumCharacters;
+                }
+
+                public int MaximumCharacters => _maximumCharacters;
+
+                public int ForwardedCharacters
+                {
+                    get
+                    {
+                        lock (_syncRoot)
+                        {
+                            return _forwardedCharacters;
+                        }
+                    }
+                }
+
+                public long OmittedCharacters
+                {
+                    get
+                    {
+                        lock (_syncRoot)
+                        {
+                            return _omittedCharacters;
+                        }
+                    }
+                }
+
+                public bool WasTruncated
+                {
+                    get
+                    {
+                        lock (_syncRoot)
+                        {
+                            return _omittedCharacters != 0;
+                        }
+                    }
+                }
+
+                public int Reserve(int requestedCharacters)
+                {
+                    if (requestedCharacters < 0)
+                    {
+                        throw new ArgumentOutOfRangeException(nameof(requestedCharacters));
+                    }
+
+                    lock (_syncRoot)
+                    {
+                        int accepted = Math.Min(
+                            requestedCharacters,
+                            _maximumCharacters - _forwardedCharacters);
+                        _forwardedCharacters += accepted;
+                        int omitted = requestedCharacters - accepted;
+                        if (omitted != 0)
+                        {
+                            _omittedCharacters = _omittedCharacters > long.MaxValue - omitted
+                                ? long.MaxValue
+                                : _omittedCharacters + omitted;
+                        }
+
+                        return accepted;
+                    }
+                }
+            }
+
             private sealed class PipelineWriterLock : IDisposable
             {
                 private readonly string _ownerContent;
@@ -94,7 +176,10 @@ namespace CycloneGames.DataTable.CodeGen
                 private string ActiveLubanPendingPath => Path.Combine(Directory, ActiveLubanPendingFileName);
                 private string ActiveLubanStagePath => Path.Combine(Directory, ActiveLubanStageFileName);
 
-                public static PipelineWriterLock Acquire(PipelineConfiguration configuration, string runId)
+                public static PipelineWriterLock Acquire(
+                    PipelineConfiguration configuration,
+                    string runId,
+                    Action? afterAbsenceConfirmed = null)
                 {
                     string token = Guid.NewGuid().ToString("N");
                     string directory = configuration.LockDirectory;
@@ -104,7 +189,11 @@ namespace CycloneGames.DataTable.CodeGen
                             "Another DataTable pipeline writer is active, or a recovery lock remains: " + directory);
                     }
 
+                    afterAbsenceConfirmed?.Invoke();
+
                     string ownerPath = Path.Combine(directory, WriterOwnerFileName);
+                    bool ownerFileCreated = false;
+                    string ownerContent = string.Empty;
                     try
                     {
                         System.IO.Directory.CreateDirectory(directory);
@@ -121,28 +210,43 @@ namespace CycloneGames.DataTable.CodeGen
                         AssertPhysicalContainedPath(directory, configuration.SourceRoot, "writer lock", mustExist: true);
                         using Process currentProcess = Process.GetCurrentProcess();
                         RecordedProcessIdentity processIdentity = CaptureProcessIdentity(currentProcess);
-                        string ownerContent =
+                        ownerContent =
                             "schema=CycloneGames.DataTable.WriterLock\n" +
                             "version=2\n" +
                             "run_id=" + runId + "\n" +
                             "token=" + token + "\n" +
                             "process_id=" + processIdentity.ProcessId + "\n" +
                             "process_start_utc_ticks=" + processIdentity.StartTimeUtcTicks + "\n";
-                        using var stream = new FileStream(ownerPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                        byte[] bytes = Encoding.UTF8.GetBytes(ownerContent);
-                        stream.Write(bytes, 0, bytes.Length);
-                        stream.Flush(flushToDisk: true);
-                        return new PipelineWriterLock(directory, runId, token, ownerContent);
-                    }
-                    catch
-                    {
-                        if (File.Exists(ownerPath))
+                        using (var stream = new FileStream(
+                                   ownerPath,
+                                   FileMode.CreateNew,
+                                   FileAccess.Write,
+                                   FileShare.None))
                         {
-                            AssertNotReparsePoint(ownerPath, "failed writer-lock owner");
-                            File.Delete(ownerPath);
+                            ownerFileCreated = true;
+                            byte[] bytes = Encoding.UTF8.GetBytes(ownerContent);
+                            stream.Write(bytes, 0, bytes.Length);
+                            stream.Flush(flushToDisk: true);
                         }
 
-                        TryDeleteEmptyDirectory(directory);
+                        return new PipelineWriterLock(directory, runId, token, ownerContent);
+                    }
+                    catch (Exception exception)
+                    {
+                        if (ownerFileCreated &&
+                            TryDeleteFailedOwnerIfStillOwned(ownerPath, ownerContent))
+                        {
+                            TryDeleteEmptyDirectory(directory);
+                        }
+
+                        if (!ownerFileCreated && exception is IOException)
+                        {
+                            throw new InvalidOperationException(
+                                "Another DataTable pipeline writer won lock arbitration, or the writer lock " +
+                                "could not be created: " + directory,
+                                exception);
+                        }
+
                         throw;
                     }
 
@@ -339,6 +443,38 @@ namespace CycloneGames.DataTable.CodeGen
                         // The original acquisition error remains the useful failure.
                     }
                 }
+
+                private static bool TryDeleteFailedOwnerIfStillOwned(
+                    string ownerPath,
+                    string expectedContent)
+                {
+                    try
+                    {
+                        var info = new FileInfo(ownerPath);
+                        if (!info.Exists ||
+                            info.Length != Encoding.UTF8.GetByteCount(expectedContent) ||
+                            info.Length > LockRecordMaximumBytes)
+                        {
+                            return false;
+                        }
+
+                        AssertNotReparsePoint(ownerPath, "failed writer-lock owner");
+                        if (!string.Equals(
+                                File.ReadAllText(ownerPath, Encoding.UTF8),
+                                expectedContent,
+                                StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+
+                        File.Delete(ownerPath);
+                        return true;
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        return false;
+                    }
+                }
             }
 
             private static void RunLuban(
@@ -368,6 +504,7 @@ namespace CycloneGames.DataTable.CodeGen
                 using var process = new Process { StartInfo = startInfo };
                 writerLock.BeginActiveLubanLaunch();
                 bool processStarted = false;
+                bool identityCaptured = false;
                 bool identityRecorded = false;
                 RecordedProcessIdentity processIdentity = default;
                 try
@@ -379,9 +516,10 @@ namespace CycloneGames.DataTable.CodeGen
                     }
 
                     processStarted = true;
-                    processIdentity = CaptureProcessIdentity(process);
                     try
                     {
+                        processIdentity = CaptureProcessIdentity(process);
+                        identityCaptured = true;
                         writerLock.RecordActiveLubanProcess(processIdentity);
                         identityRecorded = true;
                     }
@@ -390,7 +528,8 @@ namespace CycloneGames.DataTable.CodeGen
                         try
                         {
                             KillProcessTree(process);
-                            writerLock.ClearActiveLubanEvidence(processIdentity);
+                            writerLock.ClearActiveLubanEvidence(
+                                identityCaptured ? processIdentity : null);
                         }
                         catch (Exception cleanupException) when (IsRecoverableException(cleanupException))
                         {
@@ -406,8 +545,18 @@ namespace CycloneGames.DataTable.CodeGen
                             identityException);
                     }
 
-                    Task stdout = PumpProcessStreamAsync(process.StandardOutput, Console.Out);
-                    Task stderr = PumpProcessStreamAsync(process.StandardError, Console.Error);
+                    var standardOutputForwarder = new BoundedProcessOutputForwarder(
+                        LubanStandardOutputMaximumCharacters);
+                    var standardErrorForwarder = new BoundedProcessOutputForwarder(
+                        LubanStandardErrorOutputMaximumCharacters);
+                    Task stdout = PumpProcessStreamAsync(
+                        process.StandardOutput,
+                        Console.Out,
+                        standardOutputForwarder);
+                    Task stderr = PumpProcessStreamAsync(
+                        process.StandardError,
+                        Console.Error,
+                        standardErrorForwarder);
                     long deadline = Stopwatch.GetTimestamp() +
                                     (long)configuration.ProcessTimeoutSeconds * Stopwatch.Frequency;
                     while (!process.WaitForExit(100))
@@ -415,20 +564,32 @@ namespace CycloneGames.DataTable.CodeGen
                         if (writerLock.IsCancellationRequested(cancellationToken))
                         {
                             KillProcessTree(process);
-                            WaitForProcessReaders(stdout, stderr);
+                            WaitForProcessReaders(
+                                stdout,
+                                stderr,
+                                standardOutputForwarder,
+                                standardErrorForwarder);
                             throw new OperationCanceledException("DataTable generation was cancelled before publication.");
                         }
 
                         if (Stopwatch.GetTimestamp() >= deadline)
                         {
                             KillProcessTree(process);
-                            WaitForProcessReaders(stdout, stderr);
+                            WaitForProcessReaders(
+                                stdout,
+                                stderr,
+                                standardOutputForwarder,
+                                standardErrorForwarder);
                             throw new TimeoutException(
                                 $"Luban exceeded the configured {configuration.ProcessTimeoutSeconds}-second timeout.");
                         }
                     }
 
-                    WaitForProcessReaders(stdout, stderr);
+                    WaitForProcessReaders(
+                        stdout,
+                        stderr,
+                        standardOutputForwarder,
+                        standardErrorForwarder);
                     if (process.ExitCode != 0)
                     {
                         throw new InvalidOperationException("Luban failed with exit code " + process.ExitCode + ".");
@@ -477,21 +638,47 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
-            private static async Task PumpProcessStreamAsync(StreamReader reader, TextWriter destination)
+            private static async Task PumpProcessStreamAsync(
+                TextReader reader,
+                TextWriter destination,
+                BoundedProcessOutputForwarder forwarder)
             {
                 char[] buffer = new char[4096];
                 int count;
                 while ((count = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) != 0)
                 {
-                    await destination.WriteAsync(buffer, 0, count).ConfigureAwait(false);
+                    int accepted = forwarder.Reserve(count);
+                    if (accepted != 0)
+                    {
+                        await destination.WriteAsync(buffer, 0, accepted).ConfigureAwait(false);
+                    }
                 }
             }
 
-            private static void WaitForProcessReaders(Task stdout, Task stderr)
+            private static void WaitForProcessReaders(
+                Task stdout,
+                Task stderr,
+                BoundedProcessOutputForwarder standardOutputForwarder,
+                BoundedProcessOutputForwarder standardErrorForwarder)
             {
                 if (!Task.WaitAll(new[] { stdout, stderr }, TimeSpan.FromSeconds(10)))
                 {
                     throw new InvalidOperationException("Timed out while draining Luban process output.");
+                }
+
+                if (standardOutputForwarder.WasTruncated || standardErrorForwarder.WasTruncated)
+                {
+                    Console.Error.WriteLine(
+                        "[DataTable.Pipeline] Luban output forwarding reached at least one partition of its " +
+                        LubanProcessOutputMaximumCharacters +
+                        "-character combined limit with a reserved stderr partition; stdout forwarded " +
+                        standardOutputForwarder.ForwardedCharacters + "/" +
+                        standardOutputForwarder.MaximumCharacters + " and omitted " +
+                        standardOutputForwarder.OmittedCharacters + ", stderr forwarded " +
+                        standardErrorForwarder.ForwardedCharacters + "/" +
+                        standardErrorForwarder.MaximumCharacters + " and omitted " +
+                        standardErrorForwarder.OmittedCharacters +
+                        " character(s). Both streams were fully drained.");
                 }
             }
 

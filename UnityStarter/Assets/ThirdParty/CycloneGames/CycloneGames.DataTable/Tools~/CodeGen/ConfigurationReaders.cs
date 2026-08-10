@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Text.Json;
 
 namespace CycloneGames.DataTable.CodeGen
@@ -54,60 +52,5 @@ namespace CycloneGames.DataTable.CodeGen
             }
         }
 
-        private static class IniFile
-        {
-            public static Dictionary<string, string> Read(string path)
-            {
-                ValidateFileSize(path, MAX_CONFIG_FILE_BYTES, "build configuration");
-                Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                using var reader = new StreamReader(
-                    path,
-                    new UTF8Encoding(false, true),
-                    true,
-                    4096);
-                int lineNumber = 0;
-                string? rawLine;
-                while ((rawLine = reader.ReadLine()) != null)
-                {
-                    lineNumber++;
-                    if (lineNumber > MAX_CONFIG_LINES)
-                    {
-                        throw new InvalidOperationException(
-                            $"Build configuration exceeds the {MAX_CONFIG_LINES}-line limit: {path}");
-                    }
-
-                    if (rawLine.Length > MAX_CONFIG_LINE_CHARACTERS)
-                    {
-                        throw new InvalidOperationException(
-                            $"Build configuration line {lineNumber} exceeds the {MAX_CONFIG_LINE_CHARACTERS}-character limit.");
-                    }
-
-                    string line = rawLine.Trim();
-                    if (line.Length == 0 ||
-                        line[0] == '#' ||
-                        line[0] == ';' ||
-                        line[0] == '[')
-                    {
-                        continue;
-                    }
-
-                    int separatorIndex = line.IndexOf('=');
-                    if (separatorIndex <= 0)
-                    {
-                        continue;
-                    }
-
-                    string key = line.Substring(0, separatorIndex).Trim();
-                    string value = line.Substring(separatorIndex + 1).Trim();
-                    if (!values.TryAdd(key, value))
-                    {
-                        throw new InvalidOperationException(
-                            $"Build configuration contains duplicate key '{key}' at line {lineNumber}.");
-                    }
-                }
-
-                return values;
-            }
-        }
     }
 }

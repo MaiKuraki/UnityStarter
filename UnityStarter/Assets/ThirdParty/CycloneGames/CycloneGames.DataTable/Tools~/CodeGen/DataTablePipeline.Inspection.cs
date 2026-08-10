@@ -1051,6 +1051,12 @@ namespace CycloneGames.DataTable.CodeGen
             {
                 unexpected = string.Empty;
                 error = string.Empty;
+                if (File.Exists(configuration.TransactionsRoot))
+                {
+                    error = "The transaction state root is occupied by a file instead of a directory.";
+                    return false;
+                }
+
                 if (!Directory.Exists(configuration.TransactionsRoot))
                 {
                     return false;

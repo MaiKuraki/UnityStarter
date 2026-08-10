@@ -8,7 +8,6 @@ namespace CycloneGames.DataTable.CodeGen
     {
         private sealed class ToolArguments
         {
-            public string ConfigPath { get; private init; } = string.Empty;
             public string LubanConfPath { get; private init; } = string.Empty;
             public string DataDir { get; private init; } = string.Empty;
             public string Target { get; private init; } = string.Empty;
@@ -17,7 +16,6 @@ namespace CycloneGames.DataTable.CodeGen
             public bool ValidateOnly { get; private init; }
 
             public static ToolArguments CreateForPipeline(
-                string configPath,
                 string lubanConfPath,
                 string dataDir,
                 string target,
@@ -26,7 +24,6 @@ namespace CycloneGames.DataTable.CodeGen
             {
                 var result = new ToolArguments
                 {
-                    ConfigPath = Path.GetFullPath(configPath),
                     LubanConfPath = Path.GetFullPath(lubanConfPath),
                     DataDir = Path.GetFullPath(dataDir),
                     Target = target,

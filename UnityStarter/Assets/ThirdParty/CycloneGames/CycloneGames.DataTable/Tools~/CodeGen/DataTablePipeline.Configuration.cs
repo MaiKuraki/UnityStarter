@@ -190,6 +190,7 @@ namespace CycloneGames.DataTable.CodeGen
                     string sourceFingerprint,
                     int processTimeoutSeconds,
                     string codegenProjectPath,
+                    StringConstantConfiguration stringConstants,
                     string customTemplateRoot,
                     string[] bridgeFiles,
                     Dictionary<string, PipelineProfile> profiles)
@@ -206,6 +207,7 @@ namespace CycloneGames.DataTable.CodeGen
                     SourceFingerprint = sourceFingerprint;
                     ProcessTimeoutSeconds = processTimeoutSeconds;
                     CodegenProjectPath = codegenProjectPath;
+                    StringConstants = stringConstants;
                     CustomTemplateRoot = customTemplateRoot;
                     BridgeFiles = bridgeFiles;
                     Profiles = profiles;
@@ -227,6 +229,7 @@ namespace CycloneGames.DataTable.CodeGen
                 public string SourceFingerprint { get; }
                 public int ProcessTimeoutSeconds { get; }
                 public string CodegenProjectPath { get; }
+                public StringConstantConfiguration StringConstants { get; }
                 public string CustomTemplateRoot { get; }
                 public string[] BridgeFiles { get; }
                 public Dictionary<string, PipelineProfile> Profiles { get; }
@@ -308,6 +311,24 @@ namespace CycloneGames.DataTable.CodeGen
                         repositoryRoot,
                         "CodeGen project",
                         mustExist: requireDependentInputs);
+                    string[] stringConstantTables = SplitList(GetOptionalValue(codegen, "string_constant_tables"));
+                    if (stringConstantTables.Length > MAX_CONFIGURED_TABLES)
+                    {
+                        throw new InvalidOperationException(
+                            $"Configured table count {stringConstantTables.Length} exceeds the limit {MAX_CONFIGURED_TABLES}.");
+                    }
+
+                    StringConstantGenerator.EnsureDistinctConfiguredTables(stringConstantTables);
+                    var stringConstants = new StringConstantConfiguration(
+                        stringConstantTables,
+                        GetOptionalValue(codegen, "string_constant_value_column", DEFAULT_VALUE_COLUMN),
+                        GetOptionalValueAllowEmpty(codegen, "string_constant_comment_column", DEFAULT_COMMENT_COLUMN),
+                        GetOptionalValueAllowEmpty(codegen, "string_constant_enabled_column", DEFAULT_ENABLED_COLUMN),
+                        GetOptionalValue(codegen, "string_constant_scope_column"),
+                        GetOptionalValue(
+                            codegen,
+                            "string_constant_generated_comment_language",
+                            DEFAULT_GENERATED_COMMENT_LANGUAGE));
 
                     string customTemplateValue = GetOptionalValue(templates, "custom_template_dir");
                     string customTemplateRoot = customTemplateValue.Length == 0
@@ -411,6 +432,7 @@ namespace CycloneGames.DataTable.CodeGen
                         RequireValue(luban, "source_fingerprint", "luban"),
                         timeoutSeconds,
                         codegenProjectPath,
+                        stringConstants,
                         customTemplateRoot,
                         bridgeFiles,
                         profiles);
@@ -530,9 +552,22 @@ namespace CycloneGames.DataTable.CodeGen
                 return value;
             }
 
-            private static string GetOptionalValue(Dictionary<string, string> values, string key)
+            private static string GetOptionalValue(
+                Dictionary<string, string> values,
+                string key,
+                string defaultValue = "")
             {
-                return values.TryGetValue(key, out string? value) ? value : string.Empty;
+                return values.TryGetValue(key, out string? value) && !string.IsNullOrWhiteSpace(value)
+                    ? value
+                    : defaultValue;
+            }
+
+            private static string GetOptionalValueAllowEmpty(
+                Dictionary<string, string> values,
+                string key,
+                string defaultValue = "")
+            {
+                return values.TryGetValue(key, out string? value) ? value : defaultValue;
             }
 
             private static string FindRepositoryRoot(string startDirectory)
@@ -642,7 +677,10 @@ namespace CycloneGames.DataTable.CodeGen
                     return Array.Empty<string>();
                 }
 
-                string[] results = value.Split(',').Select(static item => item.Trim()).ToArray();
+                string[] results = value
+                    .Split(new[] { ',', ';' }, StringSplitOptions.None)
+                    .Select(static item => item.Trim())
+                    .ToArray();
                 if (results.Length > maximumCount || results.Any(static item => item.Length == 0))
                 {
                     throw new InvalidOperationException(description + " exceeds its count limit or contains an empty item.");
