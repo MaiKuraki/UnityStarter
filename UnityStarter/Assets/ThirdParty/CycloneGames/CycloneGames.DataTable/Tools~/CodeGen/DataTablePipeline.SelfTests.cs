@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -60,6 +61,7 @@ namespace CycloneGames.DataTable.CodeGen
                         () => ValidatePortableRelativePath("CON/file.bin", "self-test"),
                         "reserved path");
 
+                    RunTrailingDirectorySeparatorContainmentSelfTest(temporaryRoot);
                     RunTransactionSelfTest(temporaryRoot);
                 }
                 finally
@@ -71,6 +73,37 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
+            private static void RunTrailingDirectorySeparatorContainmentSelfTest(
+                string temporaryRoot)
+            {
+                string approvedRoot = Path.Combine(temporaryRoot, "trailing-root");
+                string childDirectory = Path.Combine(approvedRoot, "nested");
+                string childFile = Path.Combine(childDirectory, "value.bin");
+                Directory.CreateDirectory(childDirectory);
+                File.WriteAllText(childFile, "value");
+
+                string approvedRootWithSeparator = approvedRoot + Path.DirectorySeparatorChar;
+                AssertPhysicalContainedPath(
+                    approvedRootWithSeparator,
+                    approvedRootWithSeparator,
+                    "self-test root with trailing separator",
+                    mustExist: true);
+                AssertPhysicalContainedPath(
+                    childFile,
+                    approvedRootWithSeparator,
+                    "self-test child below root with trailing separator",
+                    mustExist: true);
+                string sibling = Path.Combine(temporaryRoot, "trailing-root-sibling");
+                Directory.CreateDirectory(sibling);
+                AssertThrows<InvalidOperationException>(
+                    () => AssertPhysicalContainedPath(
+                        sibling,
+                        approvedRootWithSeparator,
+                        "self-test sibling beside root with trailing separator",
+                        mustExist: true),
+                    "sibling escape beside root with trailing separator");
+            }
+
             private static void RunTransactionSelfTest(string temporaryRoot)
             {
                 string repositoryRoot = Path.Combine(temporaryRoot, "repository");
@@ -80,11 +113,14 @@ namespace CycloneGames.DataTable.CodeGen
                     repositoryRoot,
                     "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable", "Tools~", "CodeGen");
                 Directory.CreateDirectory(sourceRoot);
+                Directory.CreateDirectory(Path.Combine(sourceRoot, "Datas"));
                 Directory.CreateDirectory(unityAssets);
                 Directory.CreateDirectory(toolRoot);
                 string toolProject = Path.Combine(toolRoot, "CycloneGames.DataTable.CodeGen.csproj");
                 File.WriteAllText(toolProject, "<Project />\n");
-                File.WriteAllText(Path.Combine(sourceRoot, "luban.conf"), "{}\n");
+                File.WriteAllText(
+                    Path.Combine(sourceRoot, "luban.conf"),
+                    "{\"schemaFiles\":[],\"dataDir\":\"Datas\"}\n");
                 string configurationPath = Path.Combine(sourceRoot, "build_config.ini");
                 string configurationText =
                     "[luban]\n" +
@@ -138,6 +174,7 @@ namespace CycloneGames.DataTable.CodeGen
 
                 PipelineConfiguration configuration = PipelineConfiguration.Load(configurationPath);
                 RunInspectionSelfTests(configuration, configurationPath);
+                RunConfiguredTableInputManifestSelfTest(configuration);
                 string namedCacheDirectory = Path.Combine(sourceRoot, "Datas", "cache");
                 Directory.CreateDirectory(namedCacheDirectory);
                 string namedCacheInput = Path.Combine(namedCacheDirectory, "input.txt");
@@ -170,6 +207,31 @@ namespace CycloneGames.DataTable.CodeGen
 
                 GenerationReceipt receipt = ReadAndValidateLiveReceipt(profile);
                 ValidateLiveOutputs(profile, receipt, identity, requireCurrentIdentity: true);
+                var staleIdentity = new PipelineIdentity(
+                    identity.LubanExecutablePath,
+                    identity.UseDotNetHost,
+                    identity.LubanHash,
+                    new string('e', 64),
+                    identity.SchemaHash,
+                    identity.ToolHash);
+                var staleIssues = new InspectionIssueCollector();
+                PipelineInspectionOutput staleOutput = InspectOutput(
+                    profile,
+                    staleIdentity,
+                    staleIssues);
+                if (staleOutput.State != "stale" || staleIssues.HasErrors ||
+                    staleIssues.ToArray().Count(static issue =>
+                        issue.Code == "OUTPUT_IDENTITY_STALE") != 1)
+                {
+                    throw new InvalidOperationException(
+                        "Pipeline inspection did not preserve intact output as regenerable stale output.");
+                }
+
+                RunStaleInspectionSnapshotGateSelfTest(
+                    configuration,
+                    configurationPath,
+                    configurationText);
+
                 if (File.ReadAllText(Path.Combine(profile.CodeOutputRoot, "generated.cs")) != "two" ||
                     File.GetLastWriteTimeUtc(stableDataPath) != stableTimestamp)
                 {
@@ -190,6 +252,223 @@ namespace CycloneGames.DataTable.CodeGen
                 RunFatalPublicationEvidenceSelfTest(configuration, profile, identity);
                 RunRollbackDetectsUnchangedDriftSelfTest(configuration, profile, identity);
                 RunRollbackSelfTest(configuration, profile, identity, receipt.Generation);
+            }
+
+            private static void RunStaleInspectionSnapshotGateSelfTest(
+                PipelineConfiguration configuration,
+                string configurationPath,
+                string configurationText)
+            {
+                byte[] originalConfiguration = File.ReadAllBytes(configurationPath);
+                string toolsDirectory = Path.Combine(configuration.RepositoryRoot, "Tools");
+                string lubanPath = Path.Combine(toolsDirectory, "Luban.dll");
+                string dataDirectory = Path.Combine(configuration.SourceRoot, "Datas");
+                string[] workbookPaths =
+                {
+                    Path.Combine(dataDirectory, "__tables__.xlsx"),
+                    Path.Combine(dataDirectory, "__beans__.xlsx"),
+                    Path.Combine(dataDirectory, "__enums__.xlsx"),
+                };
+                try
+                {
+                    Directory.CreateDirectory(toolsDirectory);
+                    File.WriteAllText(lubanPath, "pinned-luban-self-test");
+                    foreach (string workbookPath in workbookPaths)
+                    {
+                        File.WriteAllText(workbookPath, "schema-self-test");
+                    }
+
+                    string executableHash = ComputeFileSha256(lubanPath);
+                    string placeholderFingerprint = new string('0', 64);
+                    string pendingConfiguration = configurationText
+                        .Replace(
+                            "executable_sha256=" + new string('a', 64),
+                            "executable_sha256=" + executableHash,
+                            StringComparison.Ordinal)
+                        .Replace(
+                            "source_fingerprint=" + new string('b', 64),
+                            "source_fingerprint=" + placeholderFingerprint,
+                            StringComparison.Ordinal);
+                    File.WriteAllText(configurationPath, pendingConfiguration);
+                    PipelineConfiguration pending = PipelineConfiguration.Load(configurationPath);
+                    string approvedFingerprint = ComputeSourceFingerprint(
+                        pending,
+                        writeSummary: false);
+                    File.WriteAllText(
+                        configurationPath,
+                        pendingConfiguration.Replace(
+                            "source_fingerprint=" + placeholderFingerprint,
+                            "source_fingerprint=" + approvedFingerprint,
+                            StringComparison.Ordinal));
+                    PipelineConfiguration approved = PipelineConfiguration.Load(configurationPath);
+
+                    PipelineInspectionSnapshot snapshot = BuildInspectionSnapshot(
+                        approved,
+                        "client");
+                    if (snapshot.Status != "ready" || !snapshot.CanGenerate || snapshot.CanCheck ||
+                        snapshot.Output.State != "stale" || snapshot.Issues.Any(static issue =>
+                            issue.Severity == "error") ||
+                        snapshot.Issues.Count(static issue =>
+                            issue.Code == "OUTPUT_IDENTITY_STALE") != 1)
+                    {
+                        throw new InvalidOperationException(
+                            "End-to-end inspection did not allow generate and reject check for intact stale output.");
+                    }
+                }
+                finally
+                {
+                    File.WriteAllBytes(configurationPath, originalConfiguration);
+                    foreach (string workbookPath in workbookPaths)
+                    {
+                        if (File.Exists(workbookPath))
+                        {
+                            File.Delete(workbookPath);
+                        }
+                    }
+
+                    if (File.Exists(lubanPath))
+                    {
+                        File.Delete(lubanPath);
+                    }
+
+                    if (Directory.Exists(toolsDirectory) &&
+                        !Directory.EnumerateFileSystemEntries(toolsDirectory).Any())
+                    {
+                        Directory.Delete(toolsDirectory, recursive: false);
+                    }
+                }
+            }
+
+            private static void RunConfiguredTableInputManifestSelfTest(
+                PipelineConfiguration configuration)
+            {
+                string configurationPath = configuration.LubanConfigurationPath;
+                byte[] originalConfiguration = File.ReadAllBytes(configurationPath);
+                string dataDirectory = Path.Combine(configuration.SourceRoot, "Datas");
+                string tableSchemaPath = Path.Combine(dataDirectory, "__tables__.xlsx");
+                string firstInputPath = Path.Combine(dataDirectory, "First.xlsx");
+                string nestedDirectory = Path.Combine(dataDirectory, "Sub");
+                string nestedInputPath = Path.Combine(nestedDirectory, "Book.xlsx");
+                try
+                {
+                    Directory.CreateDirectory(nestedDirectory);
+                    File.WriteAllText(firstInputPath, "first");
+                    File.WriteAllText(nestedInputPath, "nested");
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[{\"fileName\":\"Datas/__tables__.xlsx\",\"type\":\"table\"}]," +
+                        "\"dataDir\":\"Datas\"}\n");
+                    CreateTableManifestWorkbook(
+                        tableSchemaPath,
+                        " First.xlsx, Sub/SheetA@Book.xlsx,Sub/SheetB@Book.xlsx, , ");
+                    ValidateConfiguredTableInputs(configuration);
+
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[{\"fileName\":\"Datas/__tables__.xlsx\",\"type\":\"\"}]," +
+                        "\"dataDir\":\"Datas\"}\n");
+                    AssertThrows<InvalidOperationException>(
+                        () => ValidateConfiguredTableInputs(configuration),
+                        "an untyped schema source that could bypass the bounded table-input manifest");
+                    PipelineInspectionSnapshot untyped = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(untyped, "TABLE_INPUT_DECLARATION_INVALID") ||
+                        untyped.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted an untyped Luban schema source.");
+                    }
+
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[{\"fileName\":\"Datas/__tables__.xlsx\",\"type\":\"table\"}]," +
+                        "\"dataDir\":\"Datas\"}\n");
+
+                    CreateTableManifestWorkbook(tableSchemaPath, "Missing.xlsx");
+                    AssertThrows<FileNotFoundException>(
+                        () => ValidateConfiguredTableInputs(configuration),
+                        "a missing table input declared by __tables__.xlsx");
+
+                    PipelineInspectionSnapshot missing = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(missing, "TABLE_INPUT_MISSING") || missing.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a missing table input manifest entry.");
+                    }
+
+                    CreateTableManifestWorkbook(tableSchemaPath, "Sub/Sheet@../../Outside.xlsx");
+                    AssertThrows<InvalidOperationException>(
+                        () => ValidateConfiguredTableInputs(configuration),
+                        "a table input traversal hidden behind a Luban sheet selector");
+                    PipelineInspectionSnapshot traversal = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(traversal, "TABLE_INPUT_DECLARATION_INVALID") ||
+                        traversal.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a traversing table input manifest entry.");
+                    }
+                }
+                finally
+                {
+                    File.WriteAllBytes(configurationPath, originalConfiguration);
+                    foreach (string path in new[] { tableSchemaPath, firstInputPath, nestedInputPath })
+                    {
+                        if (File.Exists(path))
+                        {
+                            File.Delete(path);
+                        }
+                    }
+
+                    if (Directory.Exists(nestedDirectory) &&
+                        !Directory.EnumerateFileSystemEntries(nestedDirectory).Any())
+                    {
+                        Directory.Delete(nestedDirectory, recursive: false);
+                    }
+                }
+            }
+
+            private static void CreateTableManifestWorkbook(string path, string input)
+            {
+                using var file = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+                using var archive = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: false);
+                WriteTableManifestArchiveEntry(
+                    archive,
+                    "xl/workbook.xml",
+                    "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                    "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\" /></sheets></workbook>");
+                WriteTableManifestArchiveEntry(
+                    archive,
+                    "xl/_rels/workbook.xml.rels",
+                    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                    "<Relationship Id=\"rId1\" " +
+                    "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" " +
+                    "Target=\"worksheets/sheet1.xml\" /></Relationships>");
+                WriteTableManifestArchiveEntry(
+                    archive,
+                    "xl/worksheets/sheet1.xml",
+                    "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>" +
+                    "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>##var</t></is></c>" +
+                    "<c r=\"B1\" t=\"inlineStr\"><is><t>input</t></is></c></row>" +
+                    "<row r=\"5\"><c r=\"A5\" t=\"inlineStr\"><is><t>demo.Table</t></is></c>" +
+                    "<c r=\"B5\" t=\"inlineStr\"><is><t>" + input +
+                    "</t></is></c></row></sheetData></worksheet>");
+            }
+
+            private static void WriteTableManifestArchiveEntry(
+                ZipArchive archive,
+                string name,
+                string content)
+            {
+                ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.Fastest);
+                using Stream stream = entry.Open();
+                using var writer = new StreamWriter(stream);
+                writer.Write(content);
             }
 
             private static void RunMultiProfileStringConstantConfigurationSelfTest(

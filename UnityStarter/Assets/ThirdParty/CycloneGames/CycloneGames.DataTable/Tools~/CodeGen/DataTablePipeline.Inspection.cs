@@ -230,7 +230,8 @@ namespace CycloneGames.DataTable.CodeGen
                     ? InspectOutput(selectedProfile, identity, issues)
                     : CreateDeferredInspectionOutput(selectedProfile, issues);
 
-                bool outputCanGenerate = output.State == "missing" || output.State == "current";
+                bool outputCanGenerate = output.State == "missing" || output.State == "current" ||
+                                         output.State == "stale";
                 bool canGenerate = selectedProfile != null && identity != null && transactionIdle &&
                                    outputCanGenerate && !issues.HasErrors;
                 bool canCheck = selectedProfile != null && identity != null && transactionIdle &&
@@ -328,6 +329,15 @@ namespace CycloneGames.DataTable.CodeGen
 
                 InspectBridgeFiles(configuration, issues);
                 bool workbooksReady = InspectRequiredWorkbooks(configuration, issues);
+                bool configuredDataDirectoryReady = InspectConfiguredDataDirectory(
+                    configuration,
+                    issues);
+                bool configuredSchemaSourcesReady = InspectConfiguredSchemaSources(
+                    configuration,
+                    issues);
+                bool configuredTableInputsReady = configuredDataDirectoryReady &&
+                                                  configuredSchemaSourcesReady &&
+                                                  InspectConfiguredTableInputs(configuration, issues);
 
                 string executablePath = configuration.LubanPath;
                 string expectedHash = configuration.LubanSha256;
@@ -512,7 +522,9 @@ namespace CycloneGames.DataTable.CodeGen
                 }
 
                 bool identityReady = result.CodegenProjectExists && result.LubanConfigurationExists &&
-                                     workbooksReady && result.LubanIdentityStatus == "approved" &&
+                                     workbooksReady && configuredDataDirectoryReady &&
+                                     configuredSchemaSourcesReady && configuredTableInputsReady &&
+                                     result.LubanIdentityStatus == "approved" &&
                                      result.SourceFingerprintStatus == "current" &&
                                      result.SchemaSha256.Length != 0 && toolHash.Length != 0 &&
                                      (configuration.CustomTemplateRoot.Length == 0 ||
@@ -569,6 +581,157 @@ namespace CycloneGames.DataTable.CodeGen
                 }
 
                 return ready;
+            }
+
+            private static bool InspectConfiguredSchemaSources(
+                PipelineConfiguration configuration,
+                InspectionIssueCollector issues)
+            {
+                if (!File.Exists(configuration.LubanConfigurationPath))
+                {
+                    return false;
+                }
+
+                string[] paths;
+                try
+                {
+                    paths = ResolveConfiguredSchemaSources(configuration);
+                }
+                catch (Exception exception) when (IsRecoverableException(exception))
+                {
+                    issues.Add(
+                        "SCHEMA_SOURCE_DECLARATION_INVALID",
+                        "error",
+                        "source",
+                        exception.Message,
+                        configuration.LubanConfigurationPath);
+                    return false;
+                }
+
+                bool ready = true;
+                foreach (string path in paths)
+                {
+                    if (!File.Exists(path) && !Directory.Exists(path))
+                    {
+                        ready = false;
+                        issues.Add(
+                            "SCHEMA_SOURCE_MISSING",
+                            "error",
+                            "source",
+                            "A schema source declared by luban.conf is missing.",
+                            path);
+                        continue;
+                    }
+
+                    try
+                    {
+                        AssertPhysicalContainedPath(
+                            path,
+                            configuration.SourceRoot,
+                            "Luban schema source",
+                            mustExist: true);
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        ready = false;
+                        issues.Add(
+                            "SCHEMA_SOURCE_INVALID",
+                            "error",
+                            "source",
+                            exception.Message,
+                            path);
+                    }
+                }
+
+                return ready;
+            }
+
+            private static bool InspectConfiguredDataDirectory(
+                PipelineConfiguration configuration,
+                InspectionIssueCollector issues)
+            {
+                if (!File.Exists(configuration.LubanConfigurationPath))
+                {
+                    return false;
+                }
+
+                string path;
+                try
+                {
+                    path = ResolveConfiguredDataDirectory(configuration);
+                }
+                catch (Exception exception) when (IsRecoverableException(exception))
+                {
+                    issues.Add(
+                        "DATA_DIRECTORY_DECLARATION_INVALID",
+                        "error",
+                        "source",
+                        exception.Message,
+                        configuration.LubanConfigurationPath);
+                    return false;
+                }
+
+                if (!Directory.Exists(path))
+                {
+                    issues.Add(
+                        "DATA_DIRECTORY_MISSING",
+                        "error",
+                        "source",
+                        "The dataDir declared by luban.conf does not exist or is not a directory.",
+                        path);
+                    return false;
+                }
+
+                try
+                {
+                    AssertPhysicalContainedPath(
+                        path,
+                        configuration.SourceRoot,
+                        "Luban data directory",
+                        mustExist: true);
+                    return true;
+                }
+                catch (Exception exception) when (IsRecoverableException(exception))
+                {
+                    issues.Add(
+                        "DATA_DIRECTORY_INVALID",
+                        "error",
+                        "source",
+                        exception.Message,
+                        path);
+                    return false;
+                }
+            }
+
+            private static bool InspectConfiguredTableInputs(
+                PipelineConfiguration configuration,
+                InspectionIssueCollector issues)
+            {
+                try
+                {
+                    ValidateConfiguredTableInputs(configuration);
+                    return true;
+                }
+                catch (FileNotFoundException exception)
+                {
+                    issues.Add(
+                        "TABLE_INPUT_MISSING",
+                        "error",
+                        "source",
+                        exception.Message,
+                        exception.FileName ?? configuration.LubanConfigurationPath);
+                    return false;
+                }
+                catch (Exception exception) when (IsRecoverableException(exception))
+                {
+                    issues.Add(
+                        "TABLE_INPUT_DECLARATION_INVALID",
+                        "error",
+                        "source",
+                        exception.Message,
+                        configuration.LubanConfigurationPath);
+                    return false;
+                }
             }
 
             private static void InspectBridgeFiles(
@@ -730,11 +893,13 @@ namespace CycloneGames.DataTable.CodeGen
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
-                    result.State = "drifted";
+                    result.State = "stale";
                     issues.Add(
-                        "OUTPUT_IDENTITY_DRIFT",
-                        "error",
+                        "OUTPUT_IDENTITY_STALE",
+                        "info",
                         "output",
+                        "Live output still matches its receipt but was generated with a previous approved " +
+                        "tool/source/schema identity. Generate this profile to publish the current identity. " +
                         exception.Message,
                         result.ReceiptPath);
                 }

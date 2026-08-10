@@ -629,8 +629,8 @@ namespace CycloneGames.DataTable.CodeGen
                 string description,
                 bool mustExist)
             {
-                string fullPath = Path.GetFullPath(path);
-                string fullRoot = Path.GetFullPath(approvedRoot);
+                string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                string fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(approvedRoot));
                 if (!string.Equals(fullPath, fullRoot, GetPathComparison()) &&
                     !IsStrictPipelineChildPath(fullRoot, fullPath))
                 {
