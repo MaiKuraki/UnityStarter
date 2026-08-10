@@ -18,6 +18,108 @@ namespace CycloneGames.DataTable.Unity.Editor
         Recover,
     }
 
+    internal sealed class DataTableAssetRefreshLease
+    {
+        private readonly Action _disallowAutoRefresh;
+        private readonly Action _allowAutoRefresh;
+        private bool _isHeld;
+        private long _ownerRunId;
+        private int _ownerThreadId;
+
+        public DataTableAssetRefreshLease(
+            Action disallowAutoRefresh,
+            Action allowAutoRefresh)
+        {
+            _disallowAutoRefresh = disallowAutoRefresh ??
+                                   throw new ArgumentNullException(nameof(disallowAutoRefresh));
+            _allowAutoRefresh = allowAutoRefresh ??
+                                throw new ArgumentNullException(nameof(allowAutoRefresh));
+        }
+
+        public bool IsHeld => _isHeld;
+
+        public long OwnerRunId => _ownerRunId;
+
+        public void Acquire(long ownerRunId)
+        {
+            ValidateOwnerRunId(ownerRunId);
+            if (_isHeld)
+            {
+                EnsureOwnerThread();
+                throw new InvalidOperationException(
+                    "AssetDatabase auto-refresh is already suspended by DataTable run " +
+                    _ownerRunId + ".");
+            }
+
+            int ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            _disallowAutoRefresh();
+            _ownerThreadId = ownerThreadId;
+            _ownerRunId = ownerRunId;
+            _isHeld = true;
+        }
+
+        public bool Release(long ownerRunId)
+        {
+            ValidateOwnerRunId(ownerRunId);
+            if (!_isHeld)
+            {
+                return false;
+            }
+
+            EnsureOwnerThread();
+            if (_ownerRunId != ownerRunId)
+            {
+                throw new InvalidOperationException(
+                    "DataTable run " + ownerRunId +
+                    " cannot release AssetDatabase auto-refresh owned by run " +
+                    _ownerRunId + ".");
+            }
+
+            _allowAutoRefresh();
+            ClearOwner();
+            return true;
+        }
+
+        public bool ReleaseForLifecycle(out long releasedRunId)
+        {
+            if (!_isHeld)
+            {
+                releasedRunId = 0;
+                return false;
+            }
+
+            EnsureOwnerThread();
+            releasedRunId = _ownerRunId;
+            _allowAutoRefresh();
+            ClearOwner();
+            return true;
+        }
+
+        private void EnsureOwnerThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "The AssetDatabase auto-refresh lease is confined to the thread that acquired it.");
+            }
+        }
+
+        private void ClearOwner()
+        {
+            _ownerThreadId = 0;
+            _ownerRunId = 0;
+            _isHeld = false;
+        }
+
+        private static void ValidateOwnerRunId(long ownerRunId)
+        {
+            if (ownerRunId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(ownerRunId));
+            }
+        }
+    }
+
     internal sealed class DataTableLubanProfile
     {
         public DataTableLubanProfile(
@@ -243,6 +345,10 @@ namespace CycloneGames.DataTable.Unity.Editor
     {
         private const int CancellationGraceMilliseconds = 30_000;
         private static readonly object ActiveProcessSync = new object();
+        private static readonly DataTableAssetRefreshLease AssetRefreshLease =
+            new DataTableAssetRefreshLease(
+                AssetDatabase.DisallowAutoRefresh,
+                AssetDatabase.AllowAutoRefresh);
         private static Process _activeProcess;
         private static DataTableLubanProfile _activeProfile;
         private static DataTableLubanOperation _activeOperation;
@@ -335,6 +441,12 @@ namespace CycloneGames.DataTable.Unity.Editor
                 throw new ArgumentException("Command must contain an immutable profile.", nameof(command));
             }
 
+            if (!TryRestorePendingAutoRefreshLease(command, out DataTableLubanRunResult restoreFailure))
+            {
+                RecordStandaloneResult(command, restoreFailure);
+                return restoreFailure;
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 DataTableLubanRunResult cancelled = CreateCancelledBeforeStart();
@@ -385,13 +497,17 @@ namespace CycloneGames.DataTable.Unity.Editor
                     command.Operation,
                     command.Profile,
                     0));
-            bool autoRefreshSuspended = false;
+            bool autoRefreshLeaseAcquired = false;
             DataTableLubanRunResult completedResult = default;
             bool hasCompletedResult = false;
             try
             {
-                AssetDatabase.DisallowAutoRefresh();
-                autoRefreshSuspended = true;
+                if (ShouldSuspendAutoRefresh(command.Operation))
+                {
+                    AssetRefreshLease.Acquire(runId);
+                    autoRefreshLeaseAcquired = true;
+                }
+
                 DataTableLubanRunResult result = await UniTask.RunOnThreadPool(
                     () => RunProcess(runId, command, startInfo, cancellationToken),
                     cancellationToken: CancellationToken.None);
@@ -419,11 +535,11 @@ namespace CycloneGames.DataTable.Unity.Editor
                 try
                 {
                     await UniTask.SwitchToMainThread();
-                    if (autoRefreshSuspended)
+                    if (autoRefreshLeaseAcquired)
                     {
                         try
                         {
-                            AssetDatabase.AllowAutoRefresh();
+                            AssetRefreshLease.Release(runId);
                         }
                         catch (Exception exception) when (IsRecoverableRunnerException(exception))
                         {
@@ -512,6 +628,55 @@ namespace CycloneGames.DataTable.Unity.Editor
                    command.Profile != null &&
                    command.Profile.RefreshAssetsAfterSuccess &&
                    command.Operation != DataTableLubanOperation.Check;
+        }
+
+        internal static bool ShouldSuspendAutoRefresh(DataTableLubanOperation operation)
+        {
+            return operation == DataTableLubanOperation.Generate ||
+                   operation == DataTableLubanOperation.Recover;
+        }
+
+        private static bool TryRestorePendingAutoRefreshLease(
+            DataTableLubanCommand command,
+            out DataTableLubanRunResult failure)
+        {
+            failure = default;
+            if (IsRunning || !AssetRefreshLease.IsHeld)
+            {
+                return true;
+            }
+
+            try
+            {
+                if (AssetRefreshLease.ReleaseForLifecycle(out long releasedRunId))
+                {
+                    DataTableEditorDiagnostics.Publish(
+                        DataTableDiagnosticLevel.Warning,
+                        BuildLifecycleMessage(
+                            "Restored pending AssetDatabase auto-refresh before accepting a new operation for prior run " +
+                            releasedRunId,
+                            command.Operation,
+                            command.Profile,
+                            0));
+                }
+
+                return true;
+            }
+            catch (Exception exception) when (IsRecoverableRunnerException(exception))
+            {
+                failure = CreateFailure(
+                    "A prior DataTable operation left AssetDatabase auto-refresh suspended, and the bounded " +
+                    "automatic restore attempt failed: " + exception.Message);
+                DataTableEditorDiagnostics.PublishException(
+                    DataTableDiagnosticLevel.Error,
+                    exception,
+                    BuildLifecycleMessage(
+                        "Pending AssetDatabase auto-refresh restore failed; no new operation was reserved",
+                        command.Operation,
+                        command.Profile,
+                        0));
+                return false;
+            }
         }
 
         internal static ProcessStartInfo CreateStartInfo(DataTableLubanCommand command)
@@ -798,7 +963,10 @@ namespace CycloneGames.DataTable.Unity.Editor
         {
             lock (ActiveProcessSync)
             {
-                if (_runReserved || _lifecycleShutdownRequested)
+                if (IsRunReservationBlocked(
+                        _runReserved,
+                        _lifecycleShutdownRequested,
+                        AssetRefreshLease.IsHeld))
                 {
                     runId = 0;
                     return false;
@@ -1198,51 +1366,104 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         internal static void RequestCancellationForShutdown()
         {
-            Process process;
-            DataTableLubanProfile profile;
-            DataTableLubanOperation operation;
-            bool processStarted;
+            Process process = null;
+            DataTableLubanProfile profile = null;
+            DataTableLubanOperation operation = DataTableLubanOperation.Check;
+            bool processStarted = false;
+            bool runReserved;
             lock (ActiveProcessSync)
             {
                 _lifecycleShutdownRequested = true;
-                if (!_runReserved)
+                runReserved = _runReserved;
+                if (runReserved)
+                {
+                    process = _activeProcess;
+                    profile = _activeProfile;
+                    operation = _activeOperation;
+                    processStarted = _activeProcessStarted;
+                }
+            }
+
+            try
+            {
+                if (!runReserved)
                 {
                     return;
                 }
 
-                process = _activeProcess;
-                profile = _activeProfile;
-                operation = _activeOperation;
-                processStarted = _activeProcessStarted;
-            }
+                if (process == null || !processStarted)
+                {
+                    DataTableEditorDiagnostics.Publish(
+                        DataTableDiagnosticLevel.Warning,
+                        BuildLifecycleMessage(
+                            "Editor shutdown or assembly reload prevented the reserved process from starting",
+                            operation,
+                            profile,
+                            0));
+                    return;
+                }
 
-            if (process == null || !processStarted)
+                int processId = GetProcessIdOrZero(process);
+                bool confirmed = TryTerminateProcessTree(
+                    process,
+                    2_000,
+                    out string errorMessage);
+                DataTableEditorDiagnostics.Publish(
+                    confirmed ? DataTableDiagnosticLevel.Warning : DataTableDiagnosticLevel.Error,
+                    BuildLifecycleMessage(
+                        confirmed
+                            ? "Editor shutdown or assembly reload terminated the active process tree"
+                            : "Editor shutdown or assembly reload could not confirm active process-tree termination: " +
+                              errorMessage,
+                        operation,
+                        profile,
+                        processId));
+            }
+            finally
             {
+                ReleaseAutoRefreshForLifecycle(operation, profile);
+            }
+        }
+
+        internal static bool IsRunReservationBlocked(
+            bool runReserved,
+            bool lifecycleShutdownRequested,
+            bool autoRefreshLeaseHeld)
+        {
+            return runReserved || lifecycleShutdownRequested || autoRefreshLeaseHeld;
+        }
+
+        private static void ReleaseAutoRefreshForLifecycle(
+            DataTableLubanOperation operation,
+            DataTableLubanProfile profile)
+        {
+            try
+            {
+                if (!AssetRefreshLease.ReleaseForLifecycle(out long releasedRunId))
+                {
+                    return;
+                }
+
                 DataTableEditorDiagnostics.Publish(
                     DataTableDiagnosticLevel.Warning,
                     BuildLifecycleMessage(
-                        "Editor shutdown or assembly reload prevented the reserved process from starting",
+                        "Editor shutdown or assembly reload restored AssetDatabase auto-refresh for run " +
+                        releasedRunId,
                         operation,
                         profile,
                         0));
-                return;
             }
-
-            int processId = GetProcessIdOrZero(process);
-            bool confirmed = TryTerminateProcessTree(
-                process,
-                2_000,
-                out string errorMessage);
-            DataTableEditorDiagnostics.Publish(
-                confirmed ? DataTableDiagnosticLevel.Warning : DataTableDiagnosticLevel.Error,
-                BuildLifecycleMessage(
-                    confirmed
-                        ? "Editor shutdown or assembly reload terminated the active process tree"
-                        : "Editor shutdown or assembly reload could not confirm active process-tree termination: " +
-                          errorMessage,
-                    operation,
-                    profile,
-                    processId));
+            catch (Exception exception) when (IsRecoverableRunnerException(exception))
+            {
+                DataTableEditorDiagnostics.PublishException(
+                    DataTableDiagnosticLevel.Error,
+                    exception,
+                    BuildLifecycleMessage(
+                        "Editor shutdown or assembly reload could not restore AssetDatabase auto-refresh",
+                        operation,
+                        profile,
+                        0));
+            }
         }
 
         /// <summary>

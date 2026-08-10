@@ -370,6 +370,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         {
             return string.Equals(value, "missing", StringComparison.Ordinal) ||
                    string.Equals(value, "current", StringComparison.Ordinal) ||
+                   string.Equals(value, "stale", StringComparison.Ordinal) ||
                    string.Equals(value, "invalid", StringComparison.Ordinal) ||
                    string.Equals(value, "drifted", StringComparison.Ordinal) ||
                    string.Equals(value, "unavailable", StringComparison.Ordinal);

@@ -118,6 +118,8 @@ namespace CycloneGames.DataTable.CodeGen
 
                 RunInspectionPlaceholderSelfTest(configurationPath);
                 RunInspectionMissingLubanConfigurationSelfTest(configurationPath);
+                RunInspectionConfiguredSchemaSourceSelfTest(configuration);
+                RunInspectionConfiguredDataDirectorySelfTest(configuration);
                 RunInspectionActiveWriterSelfTest(configuration);
                 RunInspectionRecoveryStateSelfTest(configuration);
                 RunInspectionIssueBoundSelfTest();
@@ -191,6 +193,158 @@ namespace CycloneGames.DataTable.CodeGen
                 finally
                 {
                     File.Move(displacedPath, lubanConfigurationPath);
+                }
+            }
+
+            private static void RunInspectionConfiguredSchemaSourceSelfTest(
+                PipelineConfiguration configuration)
+            {
+                string configurationPath = configuration.LubanConfigurationPath;
+                byte[] originalConfiguration = File.ReadAllBytes(configurationPath);
+                string definesPath = Path.Combine(configuration.SourceRoot, "Defines");
+                if (Directory.Exists(definesPath) || File.Exists(definesPath))
+                {
+                    throw new InvalidOperationException(
+                        "Configured schema-source self-test requires an unused Defines path.");
+                }
+
+                try
+                {
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[{\"fileName\":\"Defines\",\"type\":\"bean\"}]}\n");
+                    PipelineInspectionSnapshot missing = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(missing, "SCHEMA_SOURCE_MISSING") ||
+                        missing.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a missing declared Luban schema source.");
+                    }
+
+                    AssertThrows<FileNotFoundException>(
+                        () => ValidateConfiguredSchemaSources(configuration),
+                        "strict generation preflight with a missing declared schema source");
+
+                    Directory.CreateDirectory(definesPath);
+                    ValidateConfiguredSchemaSources(configuration);
+                    PipelineInspectionSnapshot present = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (HasInspectionIssue(present, "SCHEMA_SOURCE_MISSING") ||
+                        HasInspectionIssue(present, "SCHEMA_SOURCE_INVALID"))
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection rejected an existing contained Luban schema source.");
+                    }
+
+                    Directory.Delete(definesPath, recursive: false);
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[{\"fileName\":\"Other/schema.xlsx\",\"type\":\"bean\"}]}\n");
+                    PipelineInspectionSnapshot unbound = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(unbound, "SCHEMA_SOURCE_DECLARATION_INVALID") ||
+                        unbound.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a schema source outside identity-bound roots.");
+                    }
+
+                    AssertThrows<InvalidOperationException>(
+                        () => ValidateConfiguredSchemaSources(configuration),
+                        "strict generation preflight with an identity-unbound schema source");
+                }
+                finally
+                {
+                    if (Directory.Exists(definesPath))
+                    {
+                        Directory.Delete(definesPath, recursive: false);
+                    }
+
+                    File.WriteAllBytes(configurationPath, originalConfiguration);
+                }
+            }
+
+            private static void RunInspectionConfiguredDataDirectorySelfTest(
+                PipelineConfiguration configuration)
+            {
+                string configurationPath = configuration.LubanConfigurationPath;
+                byte[] originalConfiguration = File.ReadAllBytes(configurationPath);
+                try
+                {
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[],\"dataDir\":\"Datas\",\"dataDir\":\"Defines\"}\n");
+                    PipelineInspectionSnapshot duplicate = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(duplicate, "DATA_DIRECTORY_DECLARATION_INVALID") ||
+                        !HasInspectionIssue(duplicate, "SCHEMA_SOURCE_DECLARATION_INVALID") ||
+                        duplicate.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted duplicate Luban JSON properties.");
+                    }
+
+                    AssertThrows<InvalidOperationException>(
+                        () => LubanConf.ReadDataDirectory(configurationPath),
+                        "duplicate Luban JSON property");
+
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[],\"dataDir\":\"Other\"}\n");
+                    PipelineInspectionSnapshot unbound = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(unbound, "DATA_DIRECTORY_DECLARATION_INVALID") ||
+                        unbound.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a dataDir outside identity-bound roots.");
+                    }
+
+                    AssertThrows<InvalidOperationException>(
+                        () => ValidateConfiguredDataDirectory(configuration),
+                        "strict generation preflight with an identity-unbound data directory");
+
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[],\"dataDir\":\"Defines\"}\n");
+                    PipelineInspectionSnapshot missing = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (!HasInspectionIssue(missing, "DATA_DIRECTORY_MISSING") ||
+                        missing.CanGenerate)
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection accepted a missing Luban dataDir.");
+                    }
+
+                    AssertThrows<DirectoryNotFoundException>(
+                        () => ValidateConfiguredDataDirectory(configuration),
+                        "strict generation preflight with a missing data directory");
+
+                    File.WriteAllText(
+                        configurationPath,
+                        "{\"schemaFiles\":[],\"dataDir\":\"Datas\"}\n");
+                    ValidateConfiguredDataDirectory(configuration);
+                    PipelineInspectionSnapshot present = BuildInspectionSnapshot(
+                        configuration,
+                        "client");
+                    if (HasInspectionIssue(present, "DATA_DIRECTORY_DECLARATION_INVALID") ||
+                        HasInspectionIssue(present, "DATA_DIRECTORY_MISSING") ||
+                        HasInspectionIssue(present, "DATA_DIRECTORY_INVALID"))
+                    {
+                        throw new InvalidOperationException(
+                            "Pipeline inspection rejected the existing contained Luban dataDir.");
+                    }
+                }
+                finally
+                {
+                    File.WriteAllBytes(configurationPath, originalConfiguration);
                 }
             }
 

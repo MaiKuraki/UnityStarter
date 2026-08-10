@@ -49,6 +49,33 @@ namespace CycloneGames.DataTable.CodeGen
             public int MissingStaleRegistrationCount { get; }
         }
 
+        private sealed class StringConstantConfiguration
+        {
+            public StringConstantConfiguration(
+                string[] tables,
+                string valueColumn,
+                string commentColumn,
+                string enabledColumn,
+                string scopeColumn,
+                string generatedCommentLanguage)
+            {
+                Tables = tables ?? throw new ArgumentNullException(nameof(tables));
+                ValueColumn = valueColumn ?? throw new ArgumentNullException(nameof(valueColumn));
+                CommentColumn = commentColumn ?? throw new ArgumentNullException(nameof(commentColumn));
+                EnabledColumn = enabledColumn ?? throw new ArgumentNullException(nameof(enabledColumn));
+                ScopeColumn = scopeColumn ?? throw new ArgumentNullException(nameof(scopeColumn));
+                GeneratedCommentLanguage = generatedCommentLanguage ??
+                                           throw new ArgumentNullException(nameof(generatedCommentLanguage));
+            }
+
+            public string[] Tables { get; }
+            public string ValueColumn { get; }
+            public string CommentColumn { get; }
+            public string EnabledColumn { get; }
+            public string ScopeColumn { get; }
+            public string GeneratedCommentLanguage { get; }
+        }
+
         private readonly struct ConstantEntry
         {
             public ConstantEntry(string constantName, string value, string comment)

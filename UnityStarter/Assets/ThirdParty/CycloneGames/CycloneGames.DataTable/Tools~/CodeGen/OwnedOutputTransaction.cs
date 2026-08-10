@@ -39,6 +39,20 @@ namespace CycloneGames.DataTable.CodeGen
                     .OrderBy(static path => path, StringComparer.Ordinal)
                     .ToArray();
                 EnsureNoCaseCollidingOwnedPaths(nextRelativePaths, "generated output");
+                var previouslyOwnedPaths = new HashSet<string>(
+                    previousRelativePaths,
+                    StringComparer.Ordinal);
+                foreach (StagedOutput output in stagedOutputs)
+                {
+                    string relativePath = GetOwnedRelativePath(outputRoot, output.OutputPath);
+                    if ((File.Exists(output.OutputPath) || Directory.Exists(output.OutputPath)) &&
+                        !previouslyOwnedPaths.Contains(relativePath))
+                    {
+                        throw new InvalidOperationException(
+                            "Generated output collides with an existing path that is not owned by the prior manifest: " +
+                            relativePath);
+                    }
+                }
 
                 string[] staleRelativePaths = CalculateStaleOwnedRelativePaths(previousRelativePaths, nextRelativePaths);
                 var existingStalePaths = new List<string>(staleRelativePaths.Length);

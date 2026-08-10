@@ -239,6 +239,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         private static readonly GUIContent NoticeTitleContent = new GUIContent();
         private static readonly GUIContent NoticeMessageContent = new GUIContent();
         private static readonly GUIContent NoticeDetailContent = new GUIContent();
+        private static readonly GUIContent ContainedFoldoutContent = new GUIContent();
 
         internal static readonly Color SetupColor = new Color(0.18f, 0.48f, 0.76f);
         internal static readonly Color ProfileColor = new Color(0.34f, 0.39f, 0.70f);
@@ -613,6 +614,53 @@ namespace CycloneGames.DataTable.Unity.Editor
         {
             EditorGUILayout.Space(2f);
             EditorGUILayout.EndVertical();
+        }
+
+        internal static bool DrawContainedFoldout(
+            bool expanded,
+            string label,
+            string tooltip = null)
+        {
+            ContainedFoldoutContent.text = label;
+            ContainedFoldoutContent.tooltip = tooltip;
+            Rect allocatedRect = GUILayoutUtility.GetRect(
+                EditorGUIUtility.fieldWidth,
+                EditorGUIUtility.fieldWidth,
+                EditorGUIUtility.singleLineHeight,
+                EditorGUIUtility.singleLineHeight,
+                EditorStyles.foldout);
+            Rect inputRect = CalculateContainedFoldoutInputRect(
+                allocatedRect,
+                EditorGUIUtility.hierarchyMode,
+                EditorStyles.foldout.padding.left,
+                EditorStyles.label.padding.left);
+            return EditorGUI.Foldout(
+                inputRect,
+                expanded,
+                ContainedFoldoutContent,
+                true,
+                EditorStyles.foldout);
+        }
+
+        internal static Rect CalculateContainedFoldoutInputRect(
+            Rect allocatedRect,
+            bool hierarchyMode,
+            float foldoutPaddingLeft,
+            float labelPaddingLeft)
+        {
+            var result = new Rect(
+                allocatedRect.x,
+                allocatedRect.y,
+                Mathf.Max(0f, allocatedRect.width),
+                Mathf.Max(0f, allocatedRect.height));
+            if (!hierarchyMode || result.width <= 0f)
+            {
+                return result;
+            }
+
+            float hierarchyOutdent = Mathf.Max(0f, foldoutPaddingLeft - labelPaddingLeft);
+            result.xMin = Mathf.Min(result.xMax, result.xMin + hierarchyOutdent);
+            return result;
         }
 
         internal static void DrawStatusRow(

@@ -91,8 +91,8 @@ namespace CycloneGames.DataTable.CodeGen
         private static void PrintUsage()
         {
             Console.WriteLine("CycloneGames.DataTable.CodeGen");
-            Console.WriteLine("pipeline generate --config <file> [--profile <name>]");
-            Console.WriteLine("pipeline check --config <file> [--profile <name>]");
+            Console.WriteLine("pipeline generate --config <file> --profile <name>");
+            Console.WriteLine("pipeline check --config <file> --profile <name>");
             Console.WriteLine("pipeline recover --config <file> --run-id <id>");
             Console.WriteLine("pipeline inspect --config <file> --profile <name> --format json");
             Console.WriteLine("Focused safety checks: --self-test");

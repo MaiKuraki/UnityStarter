@@ -123,34 +123,73 @@ Definition and reference rows serve different purposes. A definition row owns ta
 
 ### Luban/Excel Definition Table
 
-| Field | Suggested type | Required | Meaning |
-| --- | --- | ---: | --- |
-| `id` | `int` | Yes | Stable DataTable key (not the tag identity) |
-| `name` | `string` | Yes | Hierarchical tag identity |
-| `description` | `string` | No | Developer-facing explanation |
-| `flags` | `int` or enum | Yes | `0` = `None`, `1` = `HideInEditor` |
-| `enabled` | `bool` | Yes | Controls registration participation |
+The repository schema generates `UnityStarter.GameConfig.GameplayTags.GameplayTagDefinitionData`. Its fields map to GameplayTags as follows:
+
+| Luban field | Generated member and type | Runtime contract |
+| --- | --- | --- |
+| `id` | `Id: int` | Stable table key; it is not the tag identity. |
+| `name` | `Name: string` | Hierarchical tag identity. |
+| `comment` | `Comment: string` | Developer-facing description passed to GameplayTags. |
+| `flags` | `Flags: string` | Exact symbolic value: `None` or `HideInEditor`. |
+| `enabled` | `Enabled: bool` | Controls registration participation. |
+| `scope` | `Scope: string` | Build-time grouping metadata; it is not registered as tag metadata. |
 
 Parent tags do not need separate rows. Registering `Ability.Elemental.Fire` creates missing `Ability` and `Ability.Elemental` parents, which consume registry capacity.
 
-Map generated rows with an explicit key selector:
-
 ```csharp
-Generated.GameplayTagRow[] generatedRows = LoadGeneratedGameplayTagRows();
+using System;
 
-var table = new DataTable<int, Generated.GameplayTagRow>(
-    generatedRows,
-    static row => row.Id,
-    limits);
+using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Integrations.DataTable;
 
-var source = new GameplayTagDataTableSource<Generated.GameplayTagRow>(
-    "00.GameplayTags.Definitions",
-    table,
-    static row => row.Name,
-    static row => row.Description,
-    static row => (GameplayTagFlags)row.Flags,
-    static row => row.Enabled);
+using UnityStarter.GameConfig;
+using UnityStarter.GameConfig.GameplayTags;
+
+internal static class GameplayTagDataTableComposition
+{
+    public static void Register(Tables tables)
+    {
+        if (tables == null)
+            throw new ArgumentNullException(nameof(tables));
+
+        var rows = tables.TbGameplayTagDefinition.DataList;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            GameplayTagDefinitionData row = rows[i];
+            if (row == null)
+                throw new InvalidOperationException($"Gameplay tag row {i} is null.");
+
+            ParseFlags(row.Flags, row.Name);
+        }
+
+        var source = new GameplayTagDataTableSource<GameplayTagDefinitionData>(
+            "00.GameplayTags.Definitions",
+            rows,
+            static row => row.Name,
+            static row => row.Comment,
+            static row => ParseFlags(row.Flags, row.Name),
+            static row => row.Enabled);
+
+        GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+    }
+
+    private static GameplayTagFlags ParseFlags(string value, string tagName)
+    {
+        switch (value)
+        {
+            case "None":
+                return GameplayTagFlags.None;
+            case "HideInEditor":
+                return GameplayTagFlags.HideInEditor;
+            default:
+                throw new InvalidOperationException(
+                    $"Gameplay tag '{tagName}' has unsupported flags '{value ?? "<null>"}'.");
+        }
+    }
+}
 ```
+
+Call `Register` after the generated `Tables` instance has been decoded and before `GameplayTagManager.InitializeIfNeeded()`. The generated rows are immutable, so the preflighted values cannot change between validation and registration.
 
 ### Reference Sources
 

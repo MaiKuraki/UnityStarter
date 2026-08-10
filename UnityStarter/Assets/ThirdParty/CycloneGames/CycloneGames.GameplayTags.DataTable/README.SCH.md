@@ -123,34 +123,73 @@ GameplayTag fireball = GameplayTagManager.RequestTag("Ability.Fireball");
 
 ### Luban/Excel 定义表
 
-| 字段 | 建议类型 | 必填 | 含义 |
-| --- | --- | ---: | --- |
-| `id` | `int` | 是 | 稳定的 DataTable key（不是标签 identity） |
-| `name` | `string` | 是 | 层级式标签 identity |
-| `description` | `string` | 否 | 面向开发者的说明 |
-| `flags` | `int` 或 enum | 是 | `0` = `None`，`1` = `HideInEditor` |
-| `enabled` | `bool` | 是 | 控制是否参与注册 |
+仓库 schema 生成 `UnityStarter.GameConfig.GameplayTags.GameplayTagDefinitionData`。其字段与 GameplayTags 的映射如下：
+
+| Luban 字段 | 生成成员与类型 | Runtime 契约 |
+| --- | --- | --- |
+| `id` | `Id: int` | 稳定的表 key；不是标签 identity。 |
+| `name` | `Name: string` | 层级式标签 identity。 |
+| `comment` | `Comment: string` | 传给 GameplayTags 的开发者说明。 |
+| `flags` | `Flags: string` | 精确符号值：`None` 或 `HideInEditor`。 |
+| `enabled` | `Enabled: bool` | 控制是否参与注册。 |
+| `scope` | `Scope: string` | 构建期分组元数据；不会注册为标签元数据。 |
 
 父标签不需要单独 row。注册 `Ability.Elemental.Fire` 时会创建缺失的 `Ability` 和 `Ability.Elemental` 父节点，这些节点会占用 registry capacity。
 
-映射生成行时使用显式 key selector：
-
 ```csharp
-Generated.GameplayTagRow[] generatedRows = LoadGeneratedGameplayTagRows();
+using System;
 
-var table = new DataTable<int, Generated.GameplayTagRow>(
-    generatedRows,
-    static row => row.Id,
-    limits);
+using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Integrations.DataTable;
 
-var source = new GameplayTagDataTableSource<Generated.GameplayTagRow>(
-    "00.GameplayTags.Definitions",
-    table,
-    static row => row.Name,
-    static row => row.Description,
-    static row => (GameplayTagFlags)row.Flags,
-    static row => row.Enabled);
+using UnityStarter.GameConfig;
+using UnityStarter.GameConfig.GameplayTags;
+
+internal static class GameplayTagDataTableComposition
+{
+    public static void Register(Tables tables)
+    {
+        if (tables == null)
+            throw new ArgumentNullException(nameof(tables));
+
+        var rows = tables.TbGameplayTagDefinition.DataList;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            GameplayTagDefinitionData row = rows[i];
+            if (row == null)
+                throw new InvalidOperationException($"Gameplay tag row {i} is null.");
+
+            ParseFlags(row.Flags, row.Name);
+        }
+
+        var source = new GameplayTagDataTableSource<GameplayTagDefinitionData>(
+            "00.GameplayTags.Definitions",
+            rows,
+            static row => row.Name,
+            static row => row.Comment,
+            static row => ParseFlags(row.Flags, row.Name),
+            static row => row.Enabled);
+
+        GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+    }
+
+    private static GameplayTagFlags ParseFlags(string value, string tagName)
+    {
+        switch (value)
+        {
+            case "None":
+                return GameplayTagFlags.None;
+            case "HideInEditor":
+                return GameplayTagFlags.HideInEditor;
+            default:
+                throw new InvalidOperationException(
+                    $"Gameplay tag '{tagName}' has unsupported flags '{value ?? "<null>"}'.");
+        }
+    }
+}
 ```
+
+在生成的 `Tables` 实例完成解码后、调用 `GameplayTagManager.InitializeIfNeeded()` 前执行 `Register`。生成 row 不可变，因此完成预检的值不会在校验与注册之间变化。
 
 ### 引用 source
 
