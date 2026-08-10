@@ -32,6 +32,7 @@ namespace CycloneGames.DataTable.CodeGen
                 try
                 {
                     PipelineProfile profile = configuration.GetProfile(command.ProfileName);
+                    EnsureNoPendingTransactions(configuration);
                     PipelineIdentity identity = ValidateIdentity(configuration);
                     writerLock.ThrowIfCancellationRequestedAtSafePoint(cancellationToken);
                     if (command.Operation == PipelineOperation.Check)
@@ -42,7 +43,6 @@ namespace CycloneGames.DataTable.CodeGen
                         return 0;
                     }
 
-                    EnsureNoPendingTransactions(configuration);
                     BaselineSnapshot baseline = CaptureBaseline(profile);
                     PipelineTransaction transaction = CreateTransaction(configuration, profile, runId);
                     var publicationSafety = new PublicationSafetyState();
@@ -146,6 +146,13 @@ namespace CycloneGames.DataTable.CodeGen
 
             private static void EnsureNoPendingTransactions(PipelineConfiguration configuration)
             {
+                if (File.Exists(configuration.TransactionsRoot))
+                {
+                    throw new InvalidOperationException(
+                        "The DataTable transaction state root is occupied by a file. Audit and remove or " +
+                        "relocate it before checking or generating: " + configuration.TransactionsRoot);
+                }
+
                 if (!Directory.Exists(configuration.TransactionsRoot))
                 {
                     return;
@@ -156,7 +163,7 @@ namespace CycloneGames.DataTable.CodeGen
                 if (pending != null)
                 {
                     throw new InvalidOperationException(
-                        "A prior DataTable transaction remains. Recover or audit it before generating: " + pending);
+                        "A prior DataTable transaction remains. Recover or audit it before checking or generating: " + pending);
                 }
             }
 
@@ -166,14 +173,23 @@ namespace CycloneGames.DataTable.CodeGen
                 PipelineTransaction transaction)
             {
                 ValidateTransactionRoots(transaction, "CodeGen input roots");
+                string ownedOutputManifest = Path.Combine(
+                    transaction.CandidateCodeRoot,
+                    OWNED_OUTPUT_MANIFEST_FILE);
+                if (File.Exists(ownedOutputManifest) || Directory.Exists(ownedOutputManifest))
+                {
+                    throw new InvalidOperationException(
+                        "Luban candidate output collides with the reserved CodeGen ownership manifest: " +
+                        ownedOutputManifest);
+                }
+
                 ToolArguments arguments = ToolArguments.CreateForPipeline(
-                    configuration.ConfigurationPath,
                     configuration.LubanConfigurationPath,
                     Path.Combine(configuration.SourceRoot, "Datas"),
                     profile.Name,
                     transaction.CandidateCodeRoot,
                     profile.LineEnding);
-                StringConstantGenerator.Run(arguments);
+                StringConstantGenerator.Run(arguments, configuration.StringConstants);
             }
 
             private static void CopyBridgeFiles(

@@ -4,7 +4,7 @@ English | [简体中文](./README.SCH.md)
 
 This directory is the repository-visible composition root for authoring and publishing Luban-generated DataTable code and binary payloads. This guide is the user-level source of truth for first setup, authoring, profiles, Unity Inspector operation, command-line operation, output assembly ownership, CI, transactions, and recovery. Runtime table APIs and provider composition are documented in the [CycloneGames.DataTable package guide](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.md).
 
-The checked-in fixture is fail-closed: `build_config.ini` contains `REPLACE_WITH_APPROVED_...` identity values, and the authoritative workbook set and approved Luban artifact may be absent. `inspect` therefore reports `status: "blocked"` and the Unity Inspector reports **SETUP REQUIRED** until the setup sequence below is completed. This is expected; do not bypass an issue by inventing a hash, deleting transaction evidence, or writing directly into a published output root.
+The workflow is fail-closed whenever `build_config.ini` still contains `REPLACE_WITH_APPROVED_...` identity values, a configured identity no longer matches its input, or required workbooks/artifacts are absent. A newly provisioned project may therefore begin with `status: "blocked"` and **SETUP REQUIRED** in the Unity Inspector. Always use the current `inspect` result as the readiness authority; do not bypass an issue by inventing a hash, deleting transaction evidence, or writing directly into a published output root.
 
 ## 1. System model
 
@@ -41,7 +41,7 @@ Run repository commands from `<repo-root>`. The scoped tool requires exactly the
 UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/global.json
 ```
 
-The current file pins .NET SDK `10.0.302` with roll-forward disabled. The project targets `net8.0` and C# 12. The launchers change into the CodeGen directory before `dotnet run`, so this scoped SDK selection applies without changing other repository tools.
+The current file pins .NET SDK `10.0.302` with roll-forward disabled. The project targets `net8.0` and C# 12. The launchers change into the CodeGen directory before `dotnet run`, so this scoped SDK select
 
 Prepare this logical layout:
 
@@ -55,8 +55,8 @@ Prepare this logical layout:
       __beans__.xlsx
       __enums__.xlsx
       <business workbooks referenced by __tables__.xlsx>
-    Defines/
-      <schema fragments used by luban.conf>
+    Defines/                    # optional; create only when declared by luban.conf
+      <external schema fragments>
     config/
       <additional project configuration, if used>
   Tools/DataTable/Luban/
@@ -105,7 +105,23 @@ When adding a target:
 4. Give it non-overlapping code/data output roots.
 5. Run `inspect`, review the new source fingerprint, approve it, then generate and check that profile.
 
-`schemaFiles` currently resolves `Defines`, `Datas/__tables__.xlsx`, `Datas/__beans__.xlsx`, and `Datas/__enums__.xlsx`. Business workbooks are declared by the table schema. Keep `luban.conf` and the workbooks in one reviewed change because both contribute to schema and source identities.
+`schemaFiles` currently resolves `Datas/__tables__.xlsx`, `Datas/__beans__.xlsx`, and `Datas/__enums__.xlsx`; it does not declare an external `Defines/` source. `dataDir` is `Datas`, and business workbooks declared by the table schema must stay below that identity-bound directory. Both `dataDir` and every declared schema source must be portable relative paths inside `Datas/`, `Defines/`, or `config/`, must physically exist, and must not traverse a symbolic link or reparse point. Duplicate or case-colliding JSON properties are rejected. `inspect` reports declaration, presence, and path-safety failures before generation is enabled, and strict generation repeats the same preflight before launching Luban. Keep `luban.conf` and the workbooks in one reviewed change because both contribute to schema and source identities.
+
+The pipeline safety profile requires every `schemaFiles` item to declare a non-empty `type`. Table manifests use an explicit `type: "table"` and an OOXML workbook such as `Datas/__tables__.xlsx`. Untyped XML schema sources are not accepted by this profile because pinned Luban can declare tables and their inputs inside mixed XML schema; supporting that format safely would require a separate bounded XML manifest reader. Use the explicit XLSX `table`, `bean`, and `enum` declarations shown in the checked-in configuration.
+
+Before `inspect` authorizes generation, CodeGen reads the `input` column of every explicitly typed table manifest with its bounded forward-only XLSX reader. The pinned Luban input grammar is:
+
+```text
+Common.xlsx, LiveOps@Events.xlsx, Tables/RegionEU@Events.xlsx
+```
+
+- Commas separate input entries; surrounding whitespace and empty entries are ignored.
+- A sheet selector precedes `@`. `LiveOps@Events.xlsx` reads sheet `LiveOps` from physical file `Events.xlsx`; `Tables/RegionEU@Events.xlsx` reads sheet `RegionEU` from `Tables/Events.xlsx`.
+- Every derived physical path is a portable relative path below `dataDir`. The file must exist, remain physically contained, and must not cross a symbolic link or reparse point.
+- Paths that differ only by case are rejected so one manifest has the same meaning on case-sensitive and case-insensitive file systems.
+- Because `dataDir` itself must be inside `Datas/`, `Defines/`, or `config/`, every accepted input file is included in the source fingerprint and generation identity.
+
+This preflight validates the input manifest and physical file identities; Luban remains responsible for validating the selected worksheet and table schema contents.
 
 ## 4. `build_config.ini`
 
@@ -146,6 +162,8 @@ Bridge files are copied, hash-verified, and receipted as candidate code content.
 | `string_constant_scope_column` | Empty by parser default; the fixture sets `scope`. An empty setting disables scope splitting; empty cells use the table's default constants class when a scope column is configured. |
 | `string_constant_generated_comment_language` | `en`; `zh`, `zh-CN`, `sch`, or `cn` selects a Simplified Chinese generated header. |
 
+The pipeline parses the sectioned configuration once and passes a typed `[codegen]` projection to the constant generator. Profile sections remain independent; repeated profile keys such as `code_output` are never flattened into the CodeGen settings namespace.
+
 ### `[profile.<name>]`
 
 | Key | Contract |
@@ -164,44 +182,117 @@ Code and data roots may not contain one another. No root may overlap a root in a
 | `server` | `DataTable/Luban/Generated/Server/Code/` | `DataTable/Luban/Generated/Server/Data/` | `lf` |
 | `all` | `DataTable/Luban/Generated/All/Code/` | `DataTable/Luban/Generated/All/Data/` | `lf` |
 
-Use the actual checked-in paths as the authority. If generated text is tracked, add an appropriate project-level `.gitattributes` rule for the generated source root so Git checkout settings do not rewrite a profile's exact EOL. The local `.gitattributes` already fixes `.ini`, `.md`, and `.sh` to LF and `.bat` to CRLF.
-
 ## 5. First setup: blocked to ready
 
 Complete these steps in order. Identity approval is a review action, not a command that should edit the configuration automatically.
+
+### 5.1 Prepare authoritative inputs
 
 1. Install the exact SDK from `Tools~/CodeGen/global.json`.
 2. Restore and review the three required schema workbooks, all referenced business workbooks, and any `Defines/` or `config/` inputs.
 3. Restore the approved `Luban.dll`. Either leave `windows_executable` empty for one cross-platform DLL identity, or restore and independently approve `Luban.exe`.
 4. Verify `luban.conf` targets and `[profile.<name>]` sections use the exact same names.
-5. Set `executable_version`, `executable_sha256`, and, when selected, `windows_executable_sha256`. Compute artifact hashes independently:
 
-   ```powershell
-   (Get-FileHash -LiteralPath Tools/DataTable/Luban/Luban.dll -Algorithm SHA256).Hash
-   (Get-FileHash -LiteralPath Tools/DataTable/Luban/Luban.exe -Algorithm SHA256).Hash
-   ```
+### 5.2 Obtain and pin the Luban identity
 
-   ```bash
-   sha256sum Tools/DataTable/Luban/Luban.dll
-   sha256sum Tools/DataTable/Luban/Luban.exe
-   ```
+The four identity fields have different authorities:
 
-6. Run the read-only inspection with `source_fingerprint` still set to its placeholder. After reviewing every listed source input and issue, copy `toolchain.actualSourceFingerprint` from the JSON into `source_fingerprint`:
+| Field | Authoritative value |
+| --- | --- |
+| `executable_version` | A reviewed release/build label from the artifact source or internal build record. File metadata is a convenience, not provenance proof. |
+| `executable_sha256` | The independently computed SHA-256 of the exact file configured by `luban_dll`. |
+| `windows_executable_sha256` | The independently computed SHA-256 of `windows_executable`; leave it empty when `windows_executable` is empty. |
+| `source_fingerprint` | The reviewed `toolchain.actualSourceFingerprint` produced by `inspect` after the first three fields and all source inputs are stable. |
 
-   ```bat
-   DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
-   ```
+On Windows, inspect the local assembly metadata and compare it with the approved release/build record. A project may use a readable `FileVersion` such as `4.11.0.0`, or a `ProductVersion` that also contains build metadata. The SHA-256, not this label, pins the exact bytes.
 
-   ```bash
-   bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
-   ```
+```powershell
+$dtLubanDllPath = "Tools/DataTable/Luban/Luban.dll"
+$dtLubanExePath = "Tools/DataTable/Luban/Luban.exe"
+$dtLubanInfo = (Get-Item -LiteralPath $dtLubanDllPath).VersionInfo
 
-7. Run the same inspection again. Continue only when `toolchain.lubanIdentityStatus` is `approved`, `toolchain.sourceFingerprintStatus` is `current`, blocking issues are resolved, and `canGenerate` is `true`.
-8. If the Unity Inspector will be used, keep exactly one saved settings asset as described below. The current checkout already contains the default asset. CLI/CI-only operation does not require this asset.
-9. Ensure both live output roots are absent/empty for their first publication. Do not place hand-written files or an `.asmdef` inside them.
-10. Run `generate --profile client`, then `check --profile client`, compile the generated assembly, and validate the target Player.
+$dtLubanInfo | Select-Object FileVersion, ProductVersion
+$dtDllHash = (Get-FileHash -LiteralPath $dtLubanDllPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$dtExeHash = (Get-FileHash -LiteralPath $dtLubanExePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-Changing any fingerprinted input changes `toolchain.actualSourceFingerprint`. Review the diff, update only the approved fingerprint, inspect again, then generate. A hash mismatch is evidence to resolve, not a value to suppress.
+"executable_version=$($dtLubanInfo.FileVersion)"
+"executable_sha256=$dtDllHash"
+"windows_executable_sha256=$dtExeHash"
+```
+
+On Linux, compute hashes with:
+
+```bash
+sha256sum Tools/DataTable/Luban/Luban.dll
+sha256sum Tools/DataTable/Luban/Luban.exe
+```
+
+On macOS, compute hashes with:
+
+```bash
+shasum -a 256 Tools/DataTable/Luban/Luban.dll
+shasum -a 256 Tools/DataTable/Luban/Luban.exe
+```
+
+Write the reviewed version label and hashes first, while leaving the source fingerprint placeholder in place:
+
+```ini
+executable_version=4.11.0.0
+executable_sha256=REPLACE_WITH_APPROVED_LUBAN_SHA256
+windows_executable_sha256=REPLACE_WITH_APPROVED_LUBAN_EXE_SHA256
+source_fingerprint=REPLACE_WITH_APPROVED_SOURCE_FINGERPRINT
+```
+
+### 5.3 Approve the source fingerprint with two inspections
+
+Run the read-only inspection after setting the version and artifact hashes:
+
+```bat
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
+```
+
+```bash
+bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
+```
+
+The first inspection is expected to report `blocked` while `source_fingerprint` is still a placeholder. This is the approval workflow, not a version-format failure. Review the complete `issues` list and these identity fields:
+
+```json
+{
+  "toolchain": {
+    "configuredVersion": "<reviewed-version-label>",
+    "configuredSha256": "<configured-selected-artifact-sha256>",
+    "actualSha256": "<actual-selected-artifact-sha256>",
+    "lubanIdentityStatus": "approved",
+    "actualSourceFingerprint": "<current-64-character-source-fingerprint>"
+  }
+}
+```
+
+Do not approve the fingerprint when the configured and actual artifact hashes differ, the selected artifact is unexpected, or another source-input change has not been reviewed. After approval, copy the exact `toolchain.actualSourceFingerprint` value into the configuration:
+
+```ini
+source_fingerprint=<current-64-character-source-fingerprint>
+```
+
+Run the same inspection a second time. Continue only when all of the following are true:
+
+- `status` is `ready`;
+- `canGenerate` is `true`;
+- `toolchain.lubanIdentityStatus` is `approved`;
+- `toolchain.sourceFingerprintStatus` is `current`;
+- `transaction.state` is `idle`;
+- no error-severity issue remains.
+
+`OUTPUT_NOT_GENERATED` is an informational issue before the first successful publication; it explains why `canCheck` is still `false`. It does not prevent the first Generate operation.
+
+`source_fingerprint` is not a normal hash of one file or a ZIP of the source directory. The pipeline builds a bounded, path-aware manifest and normalizes only the `source_fingerprint` value in `build_config.ini` to `<self>`. Consequently, copying the computed fingerprint into that field does not change the computed value, but changing `executable_version`, another configuration value, a configuration comment, a workbook, `luban.conf`, `Defines/`, `config/`, CodeGen source, or a custom template does. After any intentional change, review the diff and repeat the two-inspection approval flow. Never auto-accept a new fingerprint in a build script.
+
+### 5.4 Finish the first publication
+
+1. If the Unity Inspector will be used, create and keep exactly one saved settings asset as described below. 
+2. Ensure both live output roots are absent or empty for their first publication. Do not place hand-written files or an `.asmdef` inside them.
+3. Run `generate --profile client`, then `check --profile client`, compile the generated assembly, and validate the target Player.
 
 ## 6. Unity Inspector workflow
 
@@ -229,7 +320,7 @@ The Inspector is organized as a guided state machine:
 - **Pipeline Actions**: only operations authorized by the latest snapshot. Every action performs a fresh inspection before starting.
 - **Last Operation**: duration, exit code, truncation state, failure reason, stdout/stderr, and a copyable diagnostic bundle.
 
-Status refresh does not alter authoritative inputs, live roots, receipts, or recovery evidence. Because it invokes `dotnet run`, it may rebuild disposable `bin/` and `obj/` caches. Generate/recovery suspends AssetDatabase auto-refresh around the external operation and refreshes only after success when the saved setting allows it. Lifecycle diagnostics use category `CycloneGames.DataTable.Editor.Luban`.
+Status refresh does not alter authoritative inputs, live roots, receipts, or recovery evidence. Because it invokes `dotnet run`, it may rebuild disposable `bin/` and `obj/` caches. Generate and Recover hold a run-ID-owned, main-thread-confined AssetDatabase auto-refresh lease around the external operation; normal completion, assembly reload, and Editor shutdown all use the same idempotent release path. Check never suspends auto-refresh. If `AllowAutoRefresh` fails, the lease retains ownership and no new process can be reserved while it remains held; the next main-thread request makes one automatic restore attempt before reservation. A successful mutating operation refreshes assets only when the saved setting allows it. Lifecycle diagnostics use category `CycloneGames.DataTable.Editor.Luban`.
 
 ## 7. CLI contract and daily workflow
 
@@ -283,7 +374,7 @@ The document includes `issues`, discovered `profiles`, `selectedProfile`, `toolc
 
 ### `check`
 
-`check` acquires the same short-lived writer exclusion but does not run Luban or rewrite a receipt. It verifies current tool/source/schema identities, receipt schema and generation identity, exact code/data file sets, every receipted length/SHA-256, aggregate hashes, and the absence of unexpected non-`.meta` files. Before the first successful publication there is no receipt, so `canCheck` is false.
+`check` acquires the same short-lived writer exclusion but does not run Luban or rewrite a receipt. Before validating live output, it rejects any retained transaction evidence, matching the transaction-first inspection state. It then verifies current tool/source/schema identities, receipt schema and generation identity, exact code/data file sets, every receipted length/SHA-256, aggregate hashes, and the absence of unexpected non-`.meta` files. Before the first successful publication there is no receipt, so `canCheck` is false.
 
 ### `recover`
 
@@ -365,7 +456,7 @@ For `__tables__.xlsx`, CodeGen projects only `full_name` and `input` and retains
 
 The reader is forward-only. It uses a reusable row projection and a bounded shared-string spool/cache; visitors cannot retain borrowed row storage. Rows/cells must have increasing positive indices, references must match their row, and duplicate/out-of-order cells, duplicate projected columns, invalid shared-string indices, malformed XML, invalid identifiers, class/path collisions, and duplicate constants fail before publication.
 
-Generated constants use conservative ASCII C# identifiers, escaped values, single-line normalized headers/comments, UTF-8 without BOM, and the profile EOL. `.cyclonegames-datatable-codegen-manifest.json` owns only normalized generated `.cs` paths. Stale deletion is limited to registered files. Missing registrations are pruned; unrelated files and Unity `.meta` files are never adopted.
+Generated constants use conservative ASCII C# identifiers, escaped values, single-line normalized headers/comments, UTF-8 without BOM, and the profile EOL. `.cyclonegames-datatable-codegen-manifest.json` owns only normalized generated `.cs` paths. Stale deletion is limited to registered files. A generated target that already exists but is absent from the prior manifest is a collision and fails without changing or adopting that file. In the outer pipeline, Luban is also forbidden from producing the reserved CodeGen manifest path. Unity `.meta` files are never adopted.
 
 Important bounded inputs include: 1 MiB configuration, 1,024 configured constant tables, 64 MiB per workbook, 4,096 ZIP entries, 128 MiB total uncompressed ZIP content, 100,000 worksheet rows, 4,096 columns per row, 2,097,152 total worksheet cells, 500,000 shared strings, 65,536 characters per cell, 16 Mi characters per generated constant file, and 64 Mi characters across generated constant source. DTD processing, external XML resolution, external worksheet relationships, path traversal, rooted archive paths, and excessive compression ratios are rejected.
 
@@ -391,6 +482,8 @@ The published receipt is:
 ```text
 <code-output>/.cyclonegames-datatable-generation-receipt.json
 ```
+
+`owner.txt` is created with exclusive create semantics and is the lock arbitration point. A rejected contender never removes or rewrites another run's owner evidence. Only a run that can still prove the exact owner content and token may clean up its failed acquisition or release the lock.
 
 Before live mutation, the journal durably binds the run/profile, exact `build_config.ini` SHA-256, canonical output roots, candidate file identities, operations, and verified preimages. Publication writes only changed files. Replaced/stale preimages move to backup first. A recoverable failure applies reverse-order rollback and verifies the exact prior state.
 
@@ -463,6 +556,15 @@ Run one writer per profile/output set. Do not generate the same roots concurrent
 | Symptom/issue | Cause | Resolution |
 | --- | --- | --- |
 | `SCHEMA_WORKBOOK_MISSING` | A required `Datas/__*.xlsx` file is absent. | Restore and review all three schema workbooks, then inspect again. |
+| `SCHEMA_SOURCE_DECLARATION_INVALID` | A `schemaFiles.fileName` is malformed, duplicated, case-colliding, outside the identity-bound roots, or the array is invalid. | Correct `luban.conf`; keep schema sources under `Datas/`, `Defines/`, or `config/`, then inspect again. |
+| `SCHEMA_SOURCE_MISSING` | A path declared by `schemaFiles` does not exist. | Restore the authoritative source or remove the unused declaration; do not create an empty placeholder directory. |
+| `SCHEMA_SOURCE_INVALID` | A declared source traverses a symbolic link/reparse point or fails physical containment checks. | Restore it as a physical source below the approved root, then inspect again. |
+| `DATA_DIRECTORY_DECLARATION_INVALID` | `dataDir` is missing, malformed, outside the identity-bound roots, or `luban.conf` contains ambiguous duplicate JSON properties. | Set one portable relative `dataDir` below `Datas/`, `Defines/`, or `config/`, remove duplicate properties, then inspect again. |
+| `DATA_DIRECTORY_MISSING` | The declared `dataDir` does not exist as a directory. | Restore the authoritative directory or correct `dataDir`; do not approve a fingerprint until the source set is complete. |
+| `DATA_DIRECTORY_INVALID` | `dataDir` traverses a symbolic link/reparse point or fails physical containment checks. | Restore it as a physical directory below the approved source root, then inspect again. |
+| `TABLE_INPUT_MISSING` | A physical workbook derived from an `__tables__.xlsx` `input` entry is absent. | Restore the workbook below `dataDir`, or correct the comma-separated input/sheet selector; then inspect again. |
+| `TABLE_INPUT_DECLARATION_INVALID` | A table input escapes `dataDir`, traverses a reparse point, case-collides, exceeds a bound, uses malformed `Sheet@File` syntax, or an untyped schema source could bypass the XLSX manifest. | Use explicit typed XLSX schema declarations and portable contained input paths; remove the unsafe declaration, then inspect again. |
+| `OUTPUT_IDENTITY_STALE` | Live output is intact under its receipt but was generated from an older approved tool/source/schema identity. | Generate the selected profile, then run `check`; no manual output deletion is required. |
 | `LUBAN_EXECUTABLE_MISSING` | Selected Windows executable or fallback DLL is absent. | Restore the approved artifact or leave `windows_executable` empty and provide the approved DLL. |
 | `LUBAN_IDENTITY_PLACEHOLDER` | Version label/hash is not approved. | Verify artifact provenance and SHA-256, update the relevant identity fields, then inspect. |
 | `LUBAN_HASH_MISMATCH` | Selected file differs from its approved hash. | Quarantine the unexpected file; restore or explicitly review the intended artifact. |
@@ -487,7 +589,8 @@ When reporting a failure, include profile, inspection JSON, stable issue codes/p
 - Publication writes O(changed bytes), while candidate disk space must hold the complete new generation plus changed/stale preimages.
 - File counts and aggregate bytes use explicit limits and overflow-safe arithmetic.
 - Workbook XML is read forward-only; shared strings use a bounded temporary spool and small cache rather than a full XML object tree.
-- The Editor shares one bounded character budget across stdout and stderr and uses a bounded main-thread diagnostics queue.
+- The CLI forwards at most 1,048,576 Luban output characters in total: 786,432 for stdout and a reserved 262,144-character stderr diagnostic partition. It continues draining both streams after either partition is exhausted to avoid pipe deadlock, then reports forwarded and omitted counts once.
+- The Editor independently shares one configured captured-output budget across stdout and stderr and uses a bounded main-thread diagnostics queue.
 - Output paths, archive paths, source paths, symlinks/reparse points, XML entities, compression ratios, process duration, and process identity are validated at trust boundaries.
 - Exact peak memory, generation time, import time, and Player behavior remain workload/platform properties; measure them with production-size workbooks and target hardware.
 
@@ -515,4 +618,4 @@ Operational validation for every publishing profile:
 7. Focused DataTable Editor/integration tests pass.
 8. A target Player/IL2CPP build or the project's approved minimum platform validation passes.
 
-The self-test covers strict CLI/config parsing, XLSX bounds and malformed input, deterministic EOL/UTF-8, constant ownership, schema-v1 inspection, changed-only publication, receipts, rollback, configuration/output-root recovery binding, process identity, and retained fatal-publication recovery. It does not replace production workbook profiling or platform Player validation.
+The self-test covers strict CLI/config parsing, bounded table-input manifests (including comma-separated inputs and `Sheet@File` selectors), XLSX bounds and malformed input, deterministic EOL/UTF-8, constant ownership, schema-v1 inspection and stale-output action gates, changed-only publication, receipts, rollback, configuration/output-root recovery binding, process identity, and retained fatal-publication recovery. It does not replace production workbook profiling or platform Player validation.

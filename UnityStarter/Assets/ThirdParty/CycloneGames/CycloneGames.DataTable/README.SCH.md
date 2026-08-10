@@ -218,7 +218,7 @@ Key 或 contract 不存在时 `Get` 抛出 `KeyNotFoundException`，`TryGet` 是
 
 ### 当前初始配置状态
 
-仓库包含事务化管线、launcher、`build_config.ini`、`luban.conf`，以及一个选择 profile `client` 的 `UnityStarter/Assets/Editor/DataTable/DataTableLubanSettings.asset`。当前 checkout 不包含 `DataTable/Luban/Defines`、`DataTable/Luban/Datas`、经批准的 Luban executable/DLL 或生成输出根。`build_config.ini` 中的 Luban identity 与 source fingerprint 字段仍是占位值，也不存在 generation receipt。补齐这些输入并审查 identity 之前，generation 保持 fail closed。
+仓库包含事务化管线、launcher、`build_config.ini` 与 `luban.conf`。仓库不会预创建 `DataTableLubanSettings.asset`；使用 Unity Editor 工作流的项目需要显式创建并保存且只保存一个该资产。当前 checkout 同样不包含 `DataTable/Luban/Defines`、`DataTable/Luban/Datas`、经批准的 Luban executable/DLL 或生成输出根。`build_config.ini` 中的 Luban identity 与 source fingerprint 字段仍是占位值，也不存在 generation receipt。补齐这些输入并审查 identity 之前，generation 保持 fail closed。
 
 ### 规范输入
 
@@ -264,7 +264,7 @@ Editor assembly 提供：
 
 - `Tools > CycloneGames > DataTable > Create Default Settings`；
 - 同一菜单下的 `Open Settings`、`Generate`、`Check` 与 `Recover`；
-- 可见 settings asset，默认指向 `../DataTable/Luban/build_config.ini` 与 profile `client`。
+- 创建可见 settings asset，默认指向 `../DataTable/Luban/build_config.ini` 与 profile `client`。
 
 使用 Editor 操作时，项目中必须恰好存在一个已保存的 `DataTableLubanSettings` asset；仅使用 CLI/CI 时不需要。Generate 与 Recover 成功后可以刷新 AssetDatabase，Check 不刷新。
 

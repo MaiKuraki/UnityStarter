@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using CycloneGames.DataTable.Unity.Editor;
 using CycloneGames.DataTable.Unity.Editor.Logging;
@@ -103,6 +104,154 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
                     refreshProfile,
                     "0123456789abcdef0123456789abcdef"),
                 success));
+        }
+
+        [Test]
+        public void AutoRefreshSuspensionPolicy_IsLimitedToMutatingOperations()
+        {
+            Assert.IsTrue(DataTableLubanRunner.ShouldSuspendAutoRefresh(
+                DataTableLubanOperation.Generate));
+            Assert.IsFalse(DataTableLubanRunner.ShouldSuspendAutoRefresh(
+                DataTableLubanOperation.Check));
+            Assert.IsTrue(DataTableLubanRunner.ShouldSuspendAutoRefresh(
+                DataTableLubanOperation.Recover));
+        }
+
+        [Test]
+        public void AssetRefreshLease_NormalCompletion_ReleasesExactlyOnce()
+        {
+            int disallowCount = 0;
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => disallowCount++,
+                () => allowCount++);
+
+            lease.Acquire(7);
+
+            Assert.IsTrue(lease.IsHeld);
+            Assert.AreEqual(7, lease.OwnerRunId);
+            Assert.IsTrue(lease.Release(7));
+            Assert.IsFalse(lease.Release(7));
+            Assert.IsFalse(lease.IsHeld);
+            Assert.AreEqual(1, disallowCount);
+            Assert.AreEqual(1, allowCount);
+        }
+
+        [Test]
+        public void AssetRefreshLease_LifecycleThenFinally_ReleasesExactlyOnce()
+        {
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => { },
+                () => allowCount++);
+            lease.Acquire(11);
+
+            Assert.IsTrue(lease.ReleaseForLifecycle(out long releasedRunId));
+            Assert.AreEqual(11, releasedRunId);
+            Assert.IsFalse(lease.Release(11));
+            Assert.AreEqual(1, allowCount);
+        }
+
+        [Test]
+        public void AssetRefreshLease_DisallowFailure_DoesNotAllow()
+        {
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => throw new InvalidOperationException("Synthetic DisallowAutoRefresh failure."),
+                () => allowCount++);
+
+            Assert.Throws<InvalidOperationException>(() => lease.Acquire(13));
+            Assert.IsFalse(lease.IsHeld);
+            Assert.AreEqual(0, allowCount);
+            Assert.IsFalse(lease.Release(13));
+        }
+
+        [Test]
+        public void AssetRefreshLease_AllowFailureRetainsOwnerForRetry()
+        {
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => { },
+                () =>
+                {
+                    allowCount++;
+                    if (allowCount == 1)
+                    {
+                        throw new InvalidOperationException("Synthetic AllowAutoRefresh failure.");
+                    }
+                });
+            lease.Acquire(17);
+
+            Assert.Throws<InvalidOperationException>(() => lease.Release(17));
+            Assert.IsTrue(lease.IsHeld);
+            Assert.AreEqual(17, lease.OwnerRunId);
+            Assert.IsTrue(lease.Release(17));
+            Assert.IsFalse(lease.IsHeld);
+            Assert.AreEqual(2, allowCount);
+        }
+
+        [Test]
+        public void AssetRefreshLease_WrongRunIdCannotReleaseOwner()
+        {
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => { },
+                () => allowCount++);
+            lease.Acquire(19);
+
+            Assert.Throws<InvalidOperationException>(() => lease.Release(23));
+            Assert.IsTrue(lease.IsHeld);
+            Assert.AreEqual(19, lease.OwnerRunId);
+            Assert.AreEqual(0, allowCount);
+            Assert.IsTrue(lease.Release(19));
+        }
+
+        [Test]
+        public void AssetRefreshLease_CrossThreadReleaseIsRejected()
+        {
+            int allowCount = 0;
+            var lease = new DataTableAssetRefreshLease(
+                () => { },
+                () => allowCount++);
+            lease.Acquire(29);
+            Exception backgroundFailure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    lease.Release(29);
+                }
+                catch (Exception exception)
+                {
+                    backgroundFailure = exception;
+                }
+            });
+
+            thread.Start();
+            Assert.IsTrue(thread.Join(3000), "The cross-thread lease test did not complete.");
+            Assert.IsInstanceOf<InvalidOperationException>(backgroundFailure);
+            Assert.IsTrue(lease.IsHeld);
+            Assert.AreEqual(0, allowCount);
+            Assert.IsTrue(lease.Release(29));
+            Assert.AreEqual(1, allowCount);
+        }
+
+        [TestCase(false, false, false, false)]
+        [TestCase(true, false, false, true)]
+        [TestCase(false, true, false, true)]
+        [TestCase(false, false, true, true)]
+        public void RunReservationPolicy_BlocksActiveShutdownOrPendingRefreshLease(
+            bool runReserved,
+            bool lifecycleShutdownRequested,
+            bool autoRefreshLeaseHeld,
+            bool expected)
+        {
+            Assert.AreEqual(
+                expected,
+                DataTableLubanRunner.IsRunReservationBlocked(
+                    runReserved,
+                    lifecycleShutdownRequested,
+                    autoRefreshLeaseHeld));
         }
 
         [TestCase(true, false, false)]
@@ -230,6 +379,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         [UnityTest]
         public IEnumerator ExecuteAsync_PreCancelled_ReturnsStructuredCancellationOnMainThread()
         {
+            const long pendingLeaseRunId = 7_000_001;
             int mainThreadId = Thread.CurrentThread.ManagedThreadId;
             DataTableLubanProfile profile = CreateValidProfile();
             DataTableLubanCommand command = DataTableLubanCommand.Check(profile);
@@ -238,6 +388,13 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             IDataTableDiagnostics previous = DataTableDiagnostics.Current;
             var diagnostics = new RecordingDiagnostics();
             Assert.IsTrue(DataTableDiagnostics.TryReplace(previous, diagnostics));
+            FieldInfo leaseField = typeof(DataTableLubanRunner).GetField(
+                "AssetRefreshLease",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(leaseField);
+            var assetRefreshLease = (DataTableAssetRefreshLease)leaseField.GetValue(null);
+            Assert.IsFalse(assetRefreshLease.IsHeld);
+            assetRefreshLease.Acquire(pendingLeaseRunId);
 
             try
             {
@@ -253,6 +410,11 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             }
             finally
             {
+                if (assetRefreshLease.IsHeld)
+                {
+                    assetRefreshLease.Release(pendingLeaseRunId);
+                }
+
                 DataTableDiagnostics.TryReplace(diagnostics, previous);
             }
 
@@ -270,6 +432,10 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             Assert.AreEqual(DataTableLubanOperation.Check, state.Operation);
             Assert.AreEqual(profile.ProfileName, state.ProfileName);
             Assert.AreEqual(profile.BuildConfigurationPath, state.BuildConfigurationPath);
+            Assert.IsFalse(assetRefreshLease.IsHeld);
+            Assert.IsTrue(diagnostics.Messages.Exists(message =>
+                message.Contains("Restored pending AssetDatabase auto-refresh") &&
+                message.Contains(pendingLeaseRunId.ToString())));
             Assert.IsTrue(diagnostics.Messages.Exists(message =>
                 message.Contains("Operation=Check") &&
                 message.Contains("Profile=client") &&

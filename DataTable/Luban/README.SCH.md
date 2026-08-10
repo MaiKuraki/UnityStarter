@@ -4,7 +4,7 @@
 
 本目录是 Luban DataTable 代码与二进制数据的仓库可见配置、生成和发布入口。本指南是首次配置、数据制作、profile、Unity Inspector 操作、命令行操作、输出程序集归属、CI、事务与恢复的用户级规范文档。运行时表 API 与 Provider 组合详见 [CycloneGames.DataTable 包指南](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.SCH.md)。
 
-仓库内置配置采用失败关闭策略：`build_config.ini` 包含 `REPLACE_WITH_APPROVED_...` 身份占位值，权威工作簿集合与已批准 Luban 工件也可能尚未放入仓库。因此在完成下述配置前，`inspect` 会报告 `status: "blocked"`，Unity Inspector 会显示 **SETUP REQUIRED**。这是预期状态；不要通过编造哈希、删除事务证据或直接写入已发布输出根目录来绕过问题。
+当 `build_config.ini` 仍包含 `REPLACE_WITH_APPROVED_...` 身份占位值、已配置身份与输入不再一致，或必需工作簿/工件缺失时，工作流会失败关闭。新 provision 的项目因此可能从 `status: "blocked"` 和 Unity Inspector 的 **SETUP REQUIRED** 开始。始终以当前 `inspect` 结果作为 readiness 权威事实；不要通过编造哈希、删除事务证据或直接写入已发布输出根目录来绕过问题。
 
 ## 1. 系统模型
 
@@ -55,8 +55,8 @@ UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGe
       __beans__.xlsx
       __enums__.xlsx
       <由 __tables__.xlsx 引用的业务工作簿>
-    Defines/
-      <luban.conf 使用的 schema 片段>
+    Defines/                    # 可选；仅在 luban.conf 声明后创建
+      <外部 schema 片段>
     config/
       <项目使用的其他配置>
   Tools/DataTable/Luban/
@@ -105,7 +105,23 @@ UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGe
 4. 为其设置互不重叠的代码与数据输出根目录。
 5. 运行 `inspect`，评审新的 source fingerprint，批准后再对该 profile 执行 generate 与 check。
 
-`schemaFiles` 当前解析 `Defines`、`Datas/__tables__.xlsx`、`Datas/__beans__.xlsx` 与 `Datas/__enums__.xlsx`。业务工作簿由 table schema 声明。`luban.conf` 与工作簿都参与 schema 和 source 身份，应该在同一个已评审变更中维护。
+`schemaFiles` 当前解析 `Datas/__tables__.xlsx`、`Datas/__beans__.xlsx` 与 `Datas/__enums__.xlsx`，没有声明外部 `Defines/` source。`dataDir` 为 `Datas`，table schema 声明的业务工作簿必须保持在这个已绑定身份的目录下。`dataDir` 与每个已声明 schema source 都必须是 `Datas/`、`Defines/` 或 `config/` 内的 portable 相对路径，必须物理存在，且不得经过符号链接或 reparse point；重复或大小写冲突的 JSON property 会被拒绝。`inspect` 会在允许生成前报告声明、存在性和路径安全错误，strict generation 也会在启动 Luban 前重复同一 preflight。`luban.conf` 与工作簿都参与 schema 和 source 身份，应该在同一个已评审变更中维护。
+
+管线安全配置要求每个 `schemaFiles` 条目都声明非空 `type`。Table manifest 使用显式 `type: "table"` 与 `Datas/__tables__.xlsx` 这类 OOXML 工作簿。本配置不接受无类型 XML schema source，因为当前固定的 Luban 可以在混合 XML schema 中声明 table 及其 input；若要安全支持该格式，需要独立的有界 XML manifest reader。请使用仓库配置所示的显式 XLSX `table`、`bean` 与 `enum` 声明。
+
+`inspect` 允许生成前，CodeGen 会用有界 forward-only XLSX reader 读取每个显式 table manifest 的 `input` 列。当前固定 Luban 的 input grammar 为：
+
+```text
+Common.xlsx, LiveOps@Events.xlsx, Tables/RegionEU@Events.xlsx
+```
+
+- 逗号分隔 input 条目；条目前后空白与空条目会被忽略。
+- Sheet selector 位于 `@` 前。`LiveOps@Events.xlsx` 表示读取物理文件 `Events.xlsx` 的 `LiveOps` sheet；`Tables/RegionEU@Events.xlsx` 表示读取 `Tables/Events.xlsx` 的 `RegionEU` sheet。
+- 每个派生物理路径都必须是 `dataDir` 下的 portable 相对路径；文件必须存在、保持物理包含，且不得经过符号链接或 reparse point。
+- 仅大小写不同的路径会被拒绝，确保同一 manifest 在大小写敏感与不敏感文件系统上具有相同含义。
+- `dataDir` 本身必须位于 `Datas/`、`Defines/` 或 `config/` 中，因此每个已接受 input 文件都会计入 source fingerprint 与 generation identity。
+
+该 preflight 校验 input manifest 与物理文件身份；所选 worksheet 与 table schema 内容仍由 Luban 负责校验。
 
 ## 4. `build_config.ini`
 
@@ -146,6 +162,8 @@ Bridge 文件会被复制到 code candidate，并进行哈希校验和 receipt �
 | `string_constant_scope_column` | Parser 默认值为空，仓库配置为 `scope`。配置值为空时禁用 scope 拆分；配置 scope 列后，空单元格使用该表默认常量类。 |
 | `string_constant_generated_comment_language` | `en`；`zh`、`zh-CN`、`sch` 或 `cn` 选择简体中文生成文件头。 |
 
+管线只解析一次带 section 的配置，并将强类型 `[codegen]` 投影传给常量生成器。各 profile section 彼此独立；`code_output` 等重复 profile key 不会被扁平化到 CodeGen 设置命名空间。
+
 ### `[profile.<name>]`
 
 | Key | 契约 |
@@ -164,48 +182,119 @@ Bridge 文件会被复制到 code candidate，并进行哈希校验和 receipt �
 | `server` | `DataTable/Luban/Generated/Server/Code/` | `DataTable/Luban/Generated/Server/Data/` | `lf` |
 | `all` | `DataTable/Luban/Generated/All/Code/` | `DataTable/Luban/Generated/All/Data/` | `lf` |
 
-实际使用时以当前 checkout 的配置路径为准。若生成文本纳入版本控制，应针对生成源代码根目录添加合适的项目级 `.gitattributes` 规则，避免 Git checkout 设置改写 profile 的精确 EOL。本目录 `.gitattributes` 已将 `.ini`、`.md` 与 `.sh` 固定为 LF，将 `.bat` 固定为 CRLF。
-
 ## 5. 首次配置：从 blocked 到 ready
 
 严格按顺序完成以下步骤。身份审批是评审动作，不应由命令自动修改配置。
 
+### 5.1 准备权威输入
+
 1. 安装 `Tools~/CodeGen/global.json` 指定的精确 SDK。
 2. 恢复并评审三个必需 schema 工作簿、所有引用的业务工作簿，以及使用的 `Defines/`、`config/` 输入。
 3. 恢复已批准的 `Luban.dll`。可以将 `windows_executable` 置空以使用单一跨平台 DLL 身份，也可以恢复并独立批准 `Luban.exe`。
-4. 确认 `luban.conf` target 与 `[profile.<name>]` 使用完全相同的名称。
-5. 设置 `executable_version`、`executable_sha256`，以及被选中时的 `windows_executable_sha256`。独立计算工件 hash：
+4. 确认 `luban.conf` target 与 `[profile.<name>]` section 使用完全相同的名称。
 
-   ```powershell
-   (Get-FileHash -LiteralPath Tools/DataTable/Luban/Luban.dll -Algorithm SHA256).Hash
-   (Get-FileHash -LiteralPath Tools/DataTable/Luban/Luban.exe -Algorithm SHA256).Hash
-   ```
+### 5.2 获取并固定 Luban 身份
 
-   ```bash
-   sha256sum Tools/DataTable/Luban/Luban.dll
-   sha256sum Tools/DataTable/Luban/Luban.exe
-   ```
+四个身份字段具有不同的权威来源：
 
-6. 暂时保留 `source_fingerprint` 占位值并运行只读 inspection。评审列出的全部源输入与 issue 后，将 JSON 中的 `toolchain.actualSourceFingerprint` 复制到 `source_fingerprint`：
+| 字段 | 权威值来源 |
+| --- | --- |
+| `executable_version` | 来自工件来源或内部构建记录、经过评审的 release/build 标签。文件元数据只是读取便利，不能证明来源。 |
+| `executable_sha256` | 对 `luban_dll` 配置的精确文件独立计算得到的 SHA-256。 |
+| `windows_executable_sha256` | 对 `windows_executable` 独立计算得到的 SHA-256；`windows_executable` 为空时也保持为空。 |
+| `source_fingerprint` | 前三个字段和全部源输入稳定后，由 `inspect` 生成并经过评审的 `toolchain.actualSourceFingerprint`。 |
 
-   ```bat
-   DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
-   ```
+在 Windows 上，可以查看本地 assembly 元数据，并与已批准的 release/build 记录核对。项目可以使用 `4.11.0.0` 这样的可读 `FileVersion`，也可以使用包含 build metadata 的 `ProductVersion`。固定精确字节的是 SHA-256，而不是这个标签。
 
-   ```bash
-   bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
-   ```
+```powershell
+$dtLubanDllPath = "Tools/DataTable/Luban/Luban.dll"
+$dtLubanExePath = "Tools/DataTable/Luban/Luban.exe"
+$dtLubanInfo = (Get-Item -LiteralPath $dtLubanDllPath).VersionInfo
 
-7. 再次运行相同 inspection。只有当 `toolchain.lubanIdentityStatus` 为 `approved`、`toolchain.sourceFingerprintStatus` 为 `current`、阻塞 issue 全部解决且 `canGenerate` 为 `true` 时才能继续。
-8. 如果需要使用 Unity Inspector，按下一节说明确保存在且只存在一个已保存 settings asset；当前 checkout 已包含默认 asset。仅使用 CLI/CI 时不需要该 asset。
-9. 首次发布前确保两个 live output root 不存在或为空。不要在其中放置手写文件或 `.asmdef`。
-10. 依次执行 `generate --profile client` 与 `check --profile client`，然后编译生成程序集并验证目标 Player。
+$dtLubanInfo | Select-Object FileVersion, ProductVersion
+$dtDllHash = (Get-FileHash -LiteralPath $dtLubanDllPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$dtExeHash = (Get-FileHash -LiteralPath $dtLubanExePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-任何 fingerprint 输入发生变化都会改变 `toolchain.actualSourceFingerprint`。评审 diff，只更新已批准的 fingerprint，再次 inspect 后再生成。哈希不匹配是需要查明的证据，不是应该压制的值。
+"executable_version=$($dtLubanInfo.FileVersion)"
+"executable_sha256=$dtDllHash"
+"windows_executable_sha256=$dtExeHash"
+```
+
+在 Linux 上使用：
+
+```bash
+sha256sum Tools/DataTable/Luban/Luban.dll
+sha256sum Tools/DataTable/Luban/Luban.exe
+```
+
+在 macOS 上使用：
+
+```bash
+shasum -a 256 Tools/DataTable/Luban/Luban.dll
+shasum -a 256 Tools/DataTable/Luban/Luban.exe
+```
+
+先写入经过评审的版本标签和 hash，同时保留 source fingerprint 占位值：
+
+```ini
+executable_version=4.11.0.0
+executable_sha256=REPLACE_WITH_APPROVED_LUBAN_SHA256
+windows_executable_sha256=REPLACE_WITH_APPROVED_LUBAN_EXE_SHA256
+source_fingerprint=REPLACE_WITH_APPROVED_SOURCE_FINGERPRINT
+```
+
+### 5.3 通过两次 inspection 批准 source fingerprint
+
+设置版本和工件 hash 后，运行只读 inspection：
+
+```bat
+DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
+```
+
+```bash
+bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
+```
+
+`source_fingerprint` 仍是占位值时，第一次 inspection 按预期报告 `blocked`。这是审批工作流，不是版本格式错误。评审完整 `issues` 列表和以下身份字段：
+
+```json
+{
+  "toolchain": {
+    "configuredVersion": "<reviewed-version-label>",
+    "configuredSha256": "<configured-selected-artifact-sha256>",
+    "actualSha256": "<actual-selected-artifact-sha256>",
+    "lubanIdentityStatus": "approved",
+    "actualSourceFingerprint": "<current-64-character-source-fingerprint>"
+  }
+}
+```
+
+configured 与 actual 工件 hash 不同、选择的工件不符合预期，或者存在尚未评审的其他源输入变更时，不得批准 fingerprint。评审通过后，将精确的 `toolchain.actualSourceFingerprint` 复制到配置：
+
+```ini
+source_fingerprint=<current-64-character-source-fingerprint>
+```
+
+第二次运行相同 inspection。只有以下条件全部成立时才能继续：
+
+- `status` 为 `ready`；
+- `canGenerate` 为 `true`；
+- `toolchain.lubanIdentityStatus` 为 `approved`；
+- `toolchain.sourceFingerprintStatus` 为 `current`；
+- `transaction.state` 为 `idle`；
+- 不存在 error severity issue。
+
+首次成功发布前，`OUTPUT_NOT_GENERATED` 是信息类 issue，用于解释 `canCheck` 为什么仍为 `false`，不会阻止第一次 Generate。
+
+`source_fingerprint` 不是对单个文件或源码目录 ZIP 计算的普通 hash。管线会创建有界且感知路径的 manifest，并只把 `build_config.ini` 中 `source_fingerprint` 的值规范化为 `<self>`。因此，将计算结果复制到该字段不会再次改变计算值；修改 `executable_version`、其他配置值、配置注释、workbook、`luban.conf`、`Defines/`、`config/`、CodeGen 源码或 custom template 则会改变它。任何有意变更后都应评审 diff，并重复两次 inspection 审批流程。禁止在构建脚本中自动接受新的 fingerprint。
+
+### 5.4 完成首次发布
+
+1. 如果需要使用 Unity Inspector，按下一节说明创建并确保存在且只存在一个已保存 settings asset。
+2. 首次发布前确保两个 live output root 不存在或为空。不要在其中放置手写文件或 `.asmdef`。
+3. 依次执行 `generate --profile client` 与 `check --profile client`，然后编译生成程序集并验证目标 Player。
 
 ## 6. Unity Inspector 工作流
-
-当前 checkout 已有 settings asset 时直接使用它。项目尚无 settings asset 时，才使用以下任一入口创建且只创建一个：
 
 - `Assets > Create > CycloneGames > DataTable > Luban Pipeline Settings`；或
 - `Tools > CycloneGames > DataTable > Create Default Settings`。
@@ -229,7 +318,7 @@ Inspector 是按状态引导的工作流：
 - **Pipeline Actions**：只启用最新 snapshot 授权的操作；每次执行前都会重新 inspect。
 - **Last Operation**：时长、退出码、截断状态、失败原因、stdout/stderr 与可复制诊断包。
 
-状态刷新不会更改权威输入、live root、receipt 或恢复证据。由于它调用 `dotnet run`，可能重建可删除的 `bin/` 与 `obj/` cache。Generate/recovery 会在外部操作期间暂停 AssetDatabase 自动刷新，并仅在操作成功且已保存设置允许时刷新。生命周期诊断分类为 `CycloneGames.DataTable.Editor.Luban`。
+状态刷新不会更改权威输入、live root、receipt 或恢复证据。由于它调用 `dotnet run`，可能重建可删除的 `bin/` 与 `obj/` cache。Generate 与 Recover 会在外部操作期间持有绑定 run ID、限制在主线程的 AssetDatabase 自动刷新 lease；正常完成、assembly reload 与 Editor 退出共用同一个幂等释放路径。Check 不会暂停自动刷新。如果 `AllowAutoRefresh` 失败，lease 会保留 owner，只要它仍被持有就不会预留新进程；下一次主线程请求会在预留前执行一次自动恢复尝试。变更型操作成功后，只有已保存设置允许时才刷新资产。生命周期诊断分类为 `CycloneGames.DataTable.Editor.Luban`。
 
 ## 7. CLI 契约与日常流程
 
@@ -283,7 +372,7 @@ pipeline recover --config <file> --run-id <32-hex-run-id>
 
 ### `check`
 
-`check` 获取相同的短期 writer exclusion，但不会运行 Luban，也不会重写 receipt。它会验证当前 tool/source/schema 身份、receipt schema 与 generation 身份、精确代码/数据文件集合、每个 receipt 文件的长度/SHA-256、aggregate hash，以及不存在意外的非 `.meta` 文件。首次成功发布前没有 receipt，因此 `canCheck` 为 false。
+`check` 获取相同的短期 writer exclusion，但不会运行 Luban，也不会重写 receipt。在验证 live output 前，它会拒绝任何保留的 transaction 证据，从而与 transaction-first inspection 状态保持一致。随后它会验证当前 tool/source/schema 身份、receipt schema 与 generation 身份、精确代码/数据文件集合、每个 receipt 文件的长度/SHA-256、aggregate hash，以及不存在意外的非 `.meta` 文件。首次成功发布前没有 receipt，因此 `canCheck` 为 false。
 
 ### `recover`
 
@@ -365,7 +454,7 @@ UnityStarter/Assets/UnityStarter/Scripts/Generated/
 
 Reader 采用 forward-only 设计，使用可复用 row projection 与有界 shared-string spool/cache；visitor 不得保留借用的 row storage。row/cell index 必须为递增正数，引用必须与所属行一致。重复/乱序单元格、重复投影列、非法 shared-string index、畸形 XML、非法标识符、class/path 冲突与重复常量都会在发布前失败。
 
-生成常量使用保守 ASCII C# 标识符、转义后的值、规范化为单行的 header/comment、无 BOM UTF-8，以及 profile EOL。`.cyclonegames-datatable-codegen-manifest.json` 只拥有规范化的生成 `.cs` 相对路径。只会删除登记过的 stale 文件；缺失登记项会被修剪，不会接管无关文件与 Unity `.meta`。
+生成常量使用保守 ASCII C# 标识符、转义后的值、规范化为单行的 header/comment、无 BOM UTF-8，以及 profile EOL。`.cyclonegames-datatable-codegen-manifest.json` 只拥有规范化的生成 `.cs` 相对路径。只会删除登记过的 stale 文件。生成目标已经存在但未登记在之前 manifest 中时会被视为 collision；操作会失败，且不会更改或接管该文件。在外层管线中，Luban 同样不得生成预留的 CodeGen manifest 路径。Unity `.meta` 文件不会被接管。
 
 关键输入上限包括：配置文件 1 MiB、1,024 个常量表、单工作簿 64 MiB、4,096 个 ZIP entry、总未压缩 ZIP 内容 128 MiB、100,000 个 worksheet row、每行 4,096 列、总计 2,097,152 个 worksheet cell、500,000 个 shared string、每个 cell 65,536 字符、单个常量源文件 16 Mi 字符、全部常量源文件 64 Mi 字符。DTD、外部 XML 解析、外部 worksheet relationship、路径穿越、rooted archive path 与过高压缩比都会被拒绝。
 
@@ -391,6 +480,8 @@ DataTable/Luban/.cyclonegames-datatable-transactions/<run-id>/
 ```text
 <code-output>/.cyclonegames-datatable-generation-receipt.json
 ```
+
+`owner.txt` 使用排他创建语义，并作为 lock 仲裁点。被拒绝的 contender 不会删除或改写其他 run 的 owner 证据。只有仍能证明精确 owner 内容与 token 的 run 才能清理自身失败的获取或释放 lock。
 
 Live mutation 前，journal 会持久绑定 run/profile、精确 `build_config.ini` SHA-256、规范化输出根、candidate 文件身份、操作清单与已校验 preimage。发布仅写入变化文件。替换或 stale 文件的 preimage 会先移入 backup。可恢复失败会逆序 rollback，并校验精确之前状态。
 
@@ -463,6 +554,15 @@ Generate/check 后：
 | 现象/issue | 原因 | 解决方式 |
 | --- | --- | --- |
 | `SCHEMA_WORKBOOK_MISSING` | 缺少必需 `Datas/__*.xlsx`。 | 恢复并评审三个 schema 工作簿，再次 inspect。 |
+| `SCHEMA_SOURCE_DECLARATION_INVALID` | `schemaFiles.fileName` 格式错误、重复、存在大小写冲突、位于 identity-bound roots 之外，或数组无效。 | 修正 `luban.conf`；将 schema source 保持在 `Datas/`、`Defines/` 或 `config/` 下，再次 inspect。 |
+| `SCHEMA_SOURCE_MISSING` | `schemaFiles` 声明的路径不存在。 | 恢复权威 source 或删除未使用声明；不要创建空占位目录。 |
+| `SCHEMA_SOURCE_INVALID` | 声明的 source 经过符号链接/reparse point，或未通过物理 containment 校验。 | 将其恢复为批准根目录下的物理 source，再次 inspect。 |
+| `DATA_DIRECTORY_DECLARATION_INVALID` | `dataDir` 缺失、格式错误、位于 identity-bound roots 之外，或 `luban.conf` 包含有歧义的重复 JSON property。 | 设置一个位于 `Datas/`、`Defines/` 或 `config/` 下的 portable 相对 `dataDir`，移除重复 property，再次 inspect。 |
+| `DATA_DIRECTORY_MISSING` | 声明的 `dataDir` 不是一个存在的目录。 | 恢复权威目录或修正 `dataDir`；源集合完整前不要批准 fingerprint。 |
+| `DATA_DIRECTORY_INVALID` | `dataDir` 经过符号链接/reparse point，或未通过物理 containment 校验。 | 将其恢复为批准 source root 下的物理目录，再次 inspect。 |
+| `TABLE_INPUT_MISSING` | 从 `__tables__.xlsx` 的 `input` 条目派生出的物理工作簿不存在。 | 在 `dataDir` 下恢复工作簿，或修正逗号分隔 input/sheet selector，然后再次 inspect。 |
+| `TABLE_INPUT_DECLARATION_INVALID` | Table input 逃逸 `dataDir`、经过 reparse point、存在大小写冲突、超出限制、使用畸形 `Sheet@File` 语法，或无类型 schema source 可能绕过 XLSX manifest。 | 使用显式 typed XLSX schema 声明与 portable contained input 路径；移除不安全声明，然后再次 inspect。 |
+| `OUTPUT_IDENTITY_STALE` | live output 与其 receipt 完整一致，但来自较旧的已批准 tool/source/schema 身份。 | 生成所选 profile，再运行 `check`；无需手工删除输出。 |
 | `LUBAN_EXECUTABLE_MISSING` | 所选 Windows executable 或 fallback DLL 不存在。 | 恢复批准工件，或将 `windows_executable` 置空并提供批准 DLL。 |
 | `LUBAN_IDENTITY_PLACEHOLDER` | 版本标签/hash 未批准。 | 校验工件来源与 SHA-256，更新对应身份字段，再次 inspect。 |
 | `LUBAN_HASH_MISMATCH` | 所选文件与批准 hash 不同。 | 隔离意外文件；恢复批准工件，或显式评审预期工件。 |
@@ -487,7 +587,8 @@ Generate/check 后：
 - 发布只写 O(changed bytes)；candidate 磁盘空间必须容纳完整新 generation，以及变化/stale 文件的 preimage。
 - 文件数量与 aggregate byte 均有显式限制，并使用防溢出运算。
 - Workbook XML 使用 forward-only 读取；shared string 使用有界临时 spool 与小型 cache，不构建完整 XML object tree。
-- Editor 对 stdout/stderr 共享一个有界字符预算，并使用有界 main-thread diagnostics queue。
+- CLI 最多转发 1,048,576 个 Luban 输出字符：stdout 使用 786,432 个字符，stderr 保留独立的 262,144 字符诊断分区。任一分区耗尽后仍会继续 drain 两个流以避免 pipe deadlock，并在结束时只报告一次已转发与省略字符数。
+- Editor 独立地在 stdout/stderr 间共享一个已配置的 captured-output 预算，并使用有界 main-thread diagnostics queue。
 - Output path、archive path、source path、symlink/reparse point、XML entity、压缩比、进程时长与进程身份都在 trust boundary 校验。
 - 精确峰值内存、生成耗时、导入耗时与 Player 行为取决于 workload/platform；必须使用生产规模工作簿和目标硬件测量。
 
@@ -515,4 +616,4 @@ bash -n DataTable/Luban/gen_code_bin_to_project_lazyload.sh
 7. 聚焦 DataTable Editor/integration test 通过。
 8. 目标 Player/IL2CPP build 或项目批准的最小平台验证通过。
 
-Self-test 覆盖严格 CLI/config 解析、XLSX 限制与畸形输入、确定性 EOL/UTF-8、常量所有权、schema-v1 inspection、仅变更发布、receipt、rollback、配置/输出根 recovery 绑定、进程身份与保留的致命发布恢复。它不能替代生产工作簿 profiling 或目标平台 Player 验证。
+Self-test 覆盖严格 CLI/config 解析、有界 table-input manifest（包括逗号分隔 input 与 `Sheet@File` selector）、XLSX 限制与畸形输入、确定性 EOL/UTF-8、常量所有权、schema-v1 inspection 与 stale-output 操作 gate、仅变更发布、receipt、rollback、配置/输出根 recovery 绑定、进程身份与保留的致命发布恢复。它不能替代生产工作簿 profiling 或目标平台 Player 验证。
