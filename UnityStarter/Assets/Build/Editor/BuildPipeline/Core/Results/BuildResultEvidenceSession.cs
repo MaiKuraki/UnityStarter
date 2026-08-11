@@ -542,6 +542,7 @@ namespace Build.Pipeline.Editor
             RequireObject(manifest.detectedIdentity, "detectedIdentity", violations);
             RequireObject(manifest.effectiveIdentity, "effectiveIdentity", violations);
             RequireObject(manifest.ciIdentity, "ciIdentity", violations);
+            RequireObject(manifest.sourceWorkspace, "sourceWorkspace", violations);
             RequireArray(manifest.buildScenePaths, "buildScenePaths", violations);
             RequireArray(manifest.nonFatalFailures, "nonFatalFailures", violations);
             RequireArray(manifest.recipeInvocations, "recipeInvocations", violations);
@@ -653,6 +654,10 @@ namespace Build.Pipeline.Editor
                 manifest.cheatEnabled,
                 request.CheatEnabled,
                 "cheatEnabled",
+                violations);
+            ValidateSourceWorkspace(
+                manifest.sourceWorkspace,
+                BuildResultManifestWriter.CreateSourceWorkspaceEntry(request, version),
                 violations);
             RequireEqual(
                 manifest.playerPipelineCompatibilityRevision,
@@ -992,6 +997,31 @@ namespace Build.Pipeline.Editor
                     violations,
                     (manifest.ciIdentity.provider, "ciIdentity.provider"),
                     (manifest.ciIdentity.runId, "ciIdentity.runId"));
+            }
+
+            if (manifest.sourceWorkspace != null)
+            {
+                RequireNonEmptyStrings(
+                    violations,
+                    (manifest.sourceWorkspace.policy, "sourceWorkspace.policy"),
+                    (manifest.sourceWorkspace.overallStatus, "sourceWorkspace.overallStatus"),
+                    (manifest.sourceWorkspace.failureCode, "sourceWorkspace.failureCode"));
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.trackedChanges,
+                    "sourceWorkspace.trackedChanges",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.untrackedChanges,
+                    "sourceWorkspace.untrackedChanges",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.submodules,
+                    "sourceWorkspace.submodules",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.gitLfs,
+                    "sourceWorkspace.gitLfs",
+                    violations);
             }
 
             if (manifest.recipeInvocations != null)
@@ -1448,6 +1478,97 @@ namespace Build.Pipeline.Editor
                 (identity.sourceBranch, prefix + ".sourceBranch"),
                 (identity.sourceCommitCount, prefix + ".sourceCommitCount"),
                 (identity.sourceCommitDate, prefix + ".sourceCommitDate"));
+        }
+
+        private static void ValidateSourceWorkspace(
+            BuildResultManifestFormat.SourceWorkspaceEntry actual,
+            BuildResultManifestFormat.SourceWorkspaceEntry expected,
+            ICollection<string> violations)
+        {
+            if (actual == null || expected == null)
+            {
+                return;
+            }
+
+            RequireEqual(actual.policy, expected.policy, "sourceWorkspace.policy", violations);
+            RequireEqual(actual.required, expected.required, "sourceWorkspace.required", violations);
+            RequireEqual(
+                actual.overallStatus,
+                expected.overallStatus,
+                "sourceWorkspace.overallStatus",
+                violations);
+            RequireEqual(
+                actual.failureCode,
+                expected.failureCode,
+                "sourceWorkspace.failureCode",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.trackedChanges,
+                expected.trackedChanges,
+                "sourceWorkspace.trackedChanges",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.untrackedChanges,
+                expected.untrackedChanges,
+                "sourceWorkspace.untrackedChanges",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.submodules,
+                expected.submodules,
+                "sourceWorkspace.submodules",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.gitLfs,
+                expected.gitLfs,
+                "sourceWorkspace.gitLfs",
+                violations);
+        }
+
+        private static void ValidateWorkspaceComponent(
+            BuildResultManifestFormat.WorkspaceComponentEntry component,
+            string prefix,
+            ICollection<string> violations)
+        {
+            if (component == null)
+            {
+                violations.Add(prefix + " is missing");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(component.status))
+            {
+                violations.Add(prefix + ".status is missing");
+            }
+
+            if (component.changeCount < 0
+                || (!component.hasChangeCount && component.changeCount != 0))
+            {
+                violations.Add(prefix + ".changeCount is invalid");
+            }
+        }
+
+        private static void ValidateWorkspaceComponentEqual(
+            BuildResultManifestFormat.WorkspaceComponentEntry actual,
+            BuildResultManifestFormat.WorkspaceComponentEntry expected,
+            string prefix,
+            ICollection<string> violations)
+        {
+            if (actual == null || expected == null)
+            {
+                return;
+            }
+
+            RequireEqual(actual.status, expected.status, prefix + ".status", violations);
+            RequireEqual(
+                actual.hasChangeCount,
+                expected.hasChangeCount,
+                prefix + ".hasChangeCount",
+                violations);
+            RequireEqual(
+                actual.changeCount,
+                expected.changeCount,
+                prefix + ".changeCount",
+                violations);
         }
 
         private void Append(string phase, string message)

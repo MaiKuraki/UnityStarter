@@ -39,13 +39,16 @@ namespace Build.Pipeline.Tests.Editor
         [Test]
         public void Resolve_CapturesExactlyOneProviderSnapshot()
         {
+            VersionControlWorkspaceEvidence workspace = CreateWorkspace(
+                VersionControlWorkspaceComponentStatus.Clean);
             var provider = new FakeProvider(
                 new VersionControlMetadata(
                     "TestVcs",
                     "abcdef123456",
                     "42",
                     "main",
-                    "2026-08-02T00:00:00Z"));
+                    "2026-08-02T00:00:00Z",
+                    workspace));
 
             BuildVersionContext result = BuildVersionResolver.Resolve(
                 CreateRequest(batchMode: true, debugBuild: false),
@@ -57,6 +60,44 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(result.DetectedProviderId, Is.EqualTo("TestVcs"));
             Assert.That(result.EffectiveSourceRevision, Is.EqualTo("abcdef123456"));
             Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.VersionControl));
+            Assert.That(result.SourceWorkspace, Is.SameAs(workspace));
+        }
+
+        [Test]
+        public void SourceWorkspacePolicy_RequiredDirtyWorkspaceFailsWithOnlyAggregateEvidence()
+        {
+            VersionControlWorkspaceEvidence workspace = CreateWorkspace(
+                VersionControlWorkspaceComponentStatus.Dirty,
+                changeCount: 3);
+            BuildRequest request = CreateRequest(
+                batchMode: false,
+                debugBuild: false,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean);
+            BuildVersionContext version = CreateVersion(workspace);
+
+            BuildFailedException exception = Assert.Throws<BuildFailedException>(
+                () => BuildSourceWorkspacePolicy.EnsureAllowed(request, version));
+
+            StringAssert.Contains("tracked=Dirty(3)", exception.Message);
+            StringAssert.DoesNotContain("Assets/", exception.Message);
+            StringAssert.DoesNotContain("secret", exception.Message);
+        }
+
+        [Test]
+        public void SourceWorkspacePolicy_ExplicitDirtyDevelopmentExceptionAllowsUnknownWorkspace()
+        {
+            BuildRequest request = CreateRequest(
+                batchMode: false,
+                debugBuild: true,
+                sourceCleanlinessPolicy:
+                    BuildSourceCleanlinessPolicy.AllowDirtyDevelopment);
+            BuildVersionContext version = CreateVersion(
+                VersionControlWorkspaceEvidence.Unknown(
+                    VersionControlWorkspaceEvidence.CommandTimedOut));
+
+            Assert.DoesNotThrow(
+                () => BuildSourceWorkspacePolicy.EnsureAllowed(request, version));
+            Assert.That(request.RequireCleanSource, Is.False);
         }
 
         [Test]
@@ -210,7 +251,9 @@ namespace Build.Pipeline.Tests.Editor
         private static BuildRequest CreateRequest(
             bool batchMode,
             bool debugBuild,
-            BuildIdentityOverride identityOverride = null)
+            BuildIdentityOverride identityOverride = null,
+            BuildSourceCleanlinessPolicy sourceCleanlinessPolicy =
+                BuildSourceCleanlinessPolicy.RequireClean)
         {
             string projectRoot = Path.GetFullPath(
                 Path.Combine(Path.GetTempPath(), "BuildVersionResolverTests"));
@@ -242,7 +285,43 @@ namespace Build.Pipeline.Tests.Editor
                 steps: new[]
                 {
                     new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
-                });
+                },
+                sourceCleanlinessPolicy: sourceCleanlinessPolicy);
+        }
+
+        private static BuildVersionContext CreateVersion(
+            VersionControlWorkspaceEvidence workspace)
+        {
+            return new BuildVersionContext(
+                "1.0.0",
+                "1.0.0.42",
+                42,
+                "abcdef123456",
+                "42",
+                "main",
+                "2026-08-02T00:00:00Z",
+                "TestVcs",
+                sourceWorkspace: workspace);
+        }
+
+        private static VersionControlWorkspaceEvidence CreateWorkspace(
+            VersionControlWorkspaceComponentStatus trackedStatus,
+            int? changeCount = 0)
+        {
+            var tracked = new VersionControlWorkspaceComponentEvidence(
+                trackedStatus,
+                changeCount);
+            var clean = new VersionControlWorkspaceComponentEvidence(
+                VersionControlWorkspaceComponentStatus.Clean,
+                0);
+            var notApplicable = new VersionControlWorkspaceComponentEvidence(
+                VersionControlWorkspaceComponentStatus.NotApplicable,
+                0);
+            return new VersionControlWorkspaceEvidence(
+                tracked,
+                clean,
+                notApplicable,
+                notApplicable);
         }
 
         private sealed class FakeProvider : IVersionControlProvider

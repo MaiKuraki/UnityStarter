@@ -14,6 +14,13 @@ namespace Build.Pipeline.Editor
     {
         private const string VersionInfoFileName = RuntimeVersionInfoPathPolicy.AssetFileName;
 
+        private static readonly GUIContent SourceCleanlinessPolicyLabel = new GUIContent(
+            "Source Cleanliness Policy",
+            "Requires a verified clean source workspace. Release builds always require clean source; this policy can relax only Development builds.");
+        private static readonly GUIContent CheatBuildModeLabel = new GUIContent(
+            "Cheat Build Mode",
+            "Controls whether ENABLE_CHEAT is applied during player builds.");
+
         private SerializedProperty launchScene;
         private SerializedProperty additionalScenes;
         private SerializedProperty applicationVersion;
@@ -23,6 +30,7 @@ namespace Build.Pipeline.Editor
         private SerializedProperty applicationIdentifier;
         private SerializedProperty versionInfoAssetPath;
         private SerializedProperty recipeInvocations;
+        private SerializedProperty sourceCleanlinessPolicy;
         private SerializedProperty cheatBuildMode;
         private BuildDataInspectorContractReport inspectorContractReport;
 
@@ -82,6 +90,8 @@ namespace Build.Pipeline.Editor
                 BuildDataInspectorFieldNames.Profile.VersionInfoAssetPath);
             recipeInvocations = binding.GetRequired(
                 BuildDataInspectorFieldNames.Profile.RecipeInvocations);
+            sourceCleanlinessPolicy = binding.GetRequired(
+                BuildDataInspectorFieldNames.Profile.SourceCleanlinessPolicy);
             cheatBuildMode = binding.GetRequired(
                 BuildDataInspectorFieldNames.Profile.CheatBuildMode);
 
@@ -349,8 +359,15 @@ namespace Build.Pipeline.Editor
             }
 
             BuildInspectorUi.BeginPanel();
-            EditorGUILayout.PropertyField(cheatBuildMode);
+            BuildInspectorUi.DrawResponsivePropertyField(
+                sourceCleanlinessPolicy,
+                SourceCleanlinessPolicyLabel);
+            BuildInspectorUi.DrawResponsivePropertyField(
+                cheatBuildMode,
+                CheatBuildModeLabel,
+                SourceCleanlinessPolicyLabel);
             BuildInspectorUi.DrawMutedText(
+                "Release builds always require a verified clean source workspace. Allow Dirty Development is an explicit local-development exception only. " +
                 "Cheat Build Mode controls the per-build ENABLE_CHEAT symbol for the Player. " +
                 "Hot Update and Asset Content are independent recipe entries with their own configuration assets.");
             BuildInspectorUi.EndPanel();

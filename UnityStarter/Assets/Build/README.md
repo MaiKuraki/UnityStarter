@@ -52,7 +52,7 @@ Before authoring a build:
 3. Switch the Editor to the requested platform. The pipeline validates the active target but does not switch it during a transaction.
 4. Keep profiles and provider configurations as persistent, version-controlled main assets below `Assets/`.
 5. Save all vendor settings before preflight.
-6. Use a clean version-control workspace for release and CI builds.
+6. Use a clean version-control workspace for release and CI builds. The runner verifies this itself before any Unity or output mutation; an external CI guard is only an earlier diagnostic.
 
 ### Create a profile
 
@@ -84,7 +84,10 @@ The custom Inspector groups settings by responsibility and displays recipe, vali
 | `Product Name` | Product identity and default artifact name | Configure a portable filename even for content-only profiles |
 | `Application Identifier` | Player application identity | At least two dot-separated ASCII identifier segments |
 | `Runtime Version Info` | Temporary `VersionInfoData` destination | Exact project-relative `Assets/.../Resources/VersionInfoData.asset` path |
+| `Source Cleanliness Policy` | Version-control workspace gate | `Require Clean` is the safe default; `Allow Dirty Development` applies only to Development requests |
 | `Cheat Build Mode` | Per-build `ENABLE_CHEAT` request | Applied transactionally to the selected target; independent of HybridCLR authoring |
+
+Release requests always require verified-clean source, regardless of the saved policy. A Development request can proceed with dirty or unknown source only when the profile explicitly selects `Allow Dirty Development`. The enum value for `Require Clean` is zero, so existing serialized profiles that do not yet contain the field retain the safe behavior without an asset rewrite.
 
 The default runtime version destination is:
 
@@ -243,17 +246,18 @@ Player declares all three. Asset content declares none in the core and delegates
 ### Canonical runner lifecycle
 
 1. Establish command-line result evidence when using the CI entry point.
-2. Resolve the saved profile, selection, overrides, version, and provenance.
+2. Resolve the saved profile, selection, overrides, and immutable request.
 3. Acquire the project-wide OS lease and require an idle, recoverable workspace.
-4. Capture the ProjectSettings guard.
-5. Compile the graph and aggregate all applicable preflight errors.
-6. Install only the dynamic global-state and VersionInfo scopes required by selected invocations.
-7. Execute invocations serially and stop after the first applicable step failure.
-8. Restore Unity state and revalidate configuration provenance.
-9. Seal the execution context and validate result/publication capacity.
-10. Commit or roll back every deferred publication through one durable decision.
-11. Persist, read back, and contract-validate terminal evidence.
-12. Release the workspace lease.
+4. Capture the ProjectSettings guard and saved-recipe provenance.
+5. Resolve source identity plus the source-workspace snapshot, then enforce the cleanliness policy before Unity or output mutation.
+6. Compile the graph and aggregate all applicable preflight errors.
+7. Install only the dynamic global-state and VersionInfo scopes required by selected invocations.
+8. Execute invocations serially and stop after the first applicable step failure.
+9. Restore Unity state and revalidate configuration provenance.
+10. Seal the execution context and validate result/publication capacity.
+11. Commit or roll back every deferred publication through one durable decision.
+12. Persist, read back, and contract-validate terminal evidence.
+13. Release the workspace lease.
 
 Non-applicable or unexecuted later invocations are recorded as `Skipped`. Restoration, provenance, publication, and evidence failures are aggregated rather than replacing the original failure.
 
@@ -272,7 +276,7 @@ The barrier records `Prepared`, publishes every participant, then durably record
 
 Preflight captures invocation ID, step type, incrementality, dependencies, configuration path/GUID/file ID/type, asset digest, and dependency-object digest. The pipeline rechecks provenance before mutation, before each invocation, and before publication. Dirty or changed authoring fails closed.
 
-The result manifest records the compiled order, request identity, step outcomes, provider results, warnings, outputs, normalized failures, and source/CI identity. `formatVersion = 1` is the current contract of each owner-local durable document. It is not a `BuildData` migration schema and does not imply cross-version compatibility.
+The full result manifest records the compiled order, request identity, step outcomes, provider results, warnings, outputs, normalized failures, source/CI identity, and a redacted source-workspace snapshot. Result evidence uses `formatVersion = 2`. Version 1 result files remain historical artifacts only: the current reader rejects them and does not migrate or rewrite them. Transaction journals and ownership documents have independent owner-local versions; a matching numeric value does not imply schema compatibility. None of these versions is the `BuildData` authoring schema.
 
 ### Current architectural limits
 
@@ -638,7 +642,7 @@ Use one saved profile as the reviewed baseline and a short command for normal jo
 2. Use a clean checkout containing all saved profiles, configurations, package locks, and optional packages.
 3. Give every platform/profile matrix job a separate checkout, Library, output root, and artifact namespace.
 4. Provision vendor settings/generated code outside the build transaction.
-5. Run a source-control cleanliness guard before Unity creates output.
+5. Run a source-control cleanliness guard before Unity starts for faster feedback.
 
 Example PowerShell guard:
 
@@ -647,6 +651,8 @@ if (git status --porcelain) {
     throw "The CI checkout contains uncommitted or untracked files."
 }
 ```
+
+This shell check is defense in depth, not the release gate. The pipeline captures tracked, untracked, submodule, and Git LFS state using bounded non-interactive commands, then fails closed when required state is dirty or cannot be established.
 
 ### Canonical invocation and precedence
 
@@ -732,7 +738,11 @@ Normally pass only:
 -pipelineCiRunId 98122
 ```
 
-The source override group (`Provider`, `Revision`, `Branch`) and CI group (`Provider`, `RunId`) are each all-or-nothing. When Git is detectable, explicit values must match. Wrappers should use `git rev-parse --short=12 HEAD`, not the full hash. Use a complete non-Git source group only for a deliberately VCS-less exported workspace.
+The source override group (`Provider`, `Revision`, `Branch`) and CI group (`Provider`, `RunId`) are each all-or-nothing. When Git is detectable, explicit values must match. Wrappers should use `git rev-parse --short=12 HEAD`, not the full hash. Explicit identity does not waive source-workspace verification. A VCS-less export can run only as an explicitly relaxed local Development request; Release requires a supported provider that can prove cleanliness.
+
+The Git provider captures two matching porcelain-v2 snapshots around identity resolution, recursively inspects submodules, and queries bounded `git lfs status --json` without enumerating tracked paths. Command timeout, missing `git`/`git-lfs`, output-budget exhaustion, malformed output, non-zero command exit, or a changing snapshot produces a stable `failureCode` and `Unknown` state. Required-clean requests reject both `Dirty` and `Unknown`.
+
+The Perforce provider compares two bounded, read-only `p4 -ztag status` snapshots, which include opened and reconcile candidates, and separates supported tracked/untracked actions. Submodules and Git LFS are `NotApplicable`. Any non-zero exit, changing snapshot, error record, non-empty unrecognized tagged schema, timeout, or missing command produces `Unknown`, never an assumed clean state. Perforce installations and server versions must be qualified on the build agent before release use.
 
 The application version is exactly `major.minor.patch`; the package version appends the build number. Android restricts build numbers to `2100000000` or less.
 
@@ -902,6 +912,10 @@ Compatibility includes pipeline revision, Unity version, target/backend, output 
 ### Required result evidence
 
 The started marker is removed only after the terminal manifest is durably written, deserialized, validated, and the log is flushed. Evidence begins before option parsing, so early failures still attempt a terminal result.
+
+The full result schema v2 adds `sourceWorkspace` with `policy`, `required`, `overallStatus`, `failureCode`, and the `trackedChanges`, `untrackedChanges`, `submodules`, and `gitLfs` components. Each component has a stable `status` plus an optional aggregate count represented by `hasChangeCount` and `changeCount`. The manifest intentionally excludes changed paths, file contents, command lines, environment values, and stderr, so it cannot become a source or credential disclosure channel.
+
+The full manifest is validated against the frozen snapshot used by the runner. A `partial = true` early terminal manifest created before request or source capture omits `sourceWorkspace` because neither `policy` nor `required` is known; consumers must treat the missing field as `Unknown` and fail closed. A Runner terminal manifest whose request exists but whose workspace capture was unavailable records `Unknown/MetadataUnavailable`. Result schema v1 is not upgraded in place; archive it with the producing pipeline version and use only v2 for current automated decisions.
 
 An evidence failure has precedence. Artifacts may already be committed when a later manifest write fails; exit `2` still means the run is not publishable. Inspect output ownership, manifest/log, transaction root, and sidecars before retrying.
 
@@ -1201,6 +1215,7 @@ The synchronized Chinese manual is [README.SCH.md](README.SCH.md). The architect
 | Foreign/unowned output | Destination lacks matching owner | Use a new root or controlled migration; do not adopt implicitly |
 | Output overlap | Invocations claim same/ancestor roots | Separate roots or combine under one provider invocation |
 | Incremental requires Clean | Compatibility identity changed | Run Clean and separate platform caches |
+| Source workspace is Dirty/Unknown | Local changes, submodule/LFS state, missing VCS tool, timeout, output limit, malformed output, or changing snapshot | Preserve the manifest failure code; restore a verified-clean checkout/toolchain, or explicitly relax only a Development profile |
 | Exit `2` | Evidence cannot be persisted/confirmed | Preserve artifacts, fix disk/permission/capacity, inspect before retry |
 
 ### Failed build followed by platform switch

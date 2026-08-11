@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Build.Pipeline.Editor;
+using Build.VersionControl.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Build;
@@ -74,6 +75,19 @@ namespace Build.Pipeline.Tests.Editor
                 "effective-branch",
                 "2026-08-07T00:00:00Z",
                 "ci-override",
+                new VersionControlWorkspaceEvidence(
+                    new VersionControlWorkspaceComponentEvidence(
+                        VersionControlWorkspaceComponentStatus.Dirty,
+                        2),
+                    new VersionControlWorkspaceComponentEvidence(
+                        VersionControlWorkspaceComponentStatus.Dirty,
+                        1),
+                    new VersionControlWorkspaceComponentEvidence(
+                        VersionControlWorkspaceComponentStatus.Clean,
+                        0),
+                    new VersionControlWorkspaceComponentEvidence(
+                        VersionControlWorkspaceComponentStatus.NotApplicable,
+                        0)),
                 BuildIdentityOrigin.ExplicitOverride,
                 detectedCommitHash: "detected-revision",
                 detectedCommitCount: "41",
@@ -105,7 +119,7 @@ namespace Build.Pipeline.Tests.Editor
 
             ManifestDocument manifest = JsonUtility.FromJson<ManifestDocument>(
                 File.ReadAllText(manifestPath));
-            Assert.That(manifest.formatVersion, Is.EqualTo(1));
+            Assert.That(manifest.formatVersion, Is.EqualTo(2));
             Assert.That(manifest.target, Is.EqualTo(context.Request.Target.ToString()));
             Assert.That(
                 manifest.namedBuildTarget,
@@ -133,6 +147,13 @@ namespace Build.Pipeline.Tests.Editor
                 Is.EqualTo(BuildIdentityOrigin.ExplicitOverride.ToString()));
             Assert.That(manifest.ciIdentity.provider, Is.EqualTo("teamcity"));
             Assert.That(manifest.ciIdentity.runId, Is.EqualTo("build-42"));
+            Assert.That(manifest.sourceWorkspace.required, Is.True);
+            Assert.That(manifest.sourceWorkspace.overallStatus, Is.EqualTo("Dirty"));
+            Assert.That(manifest.sourceWorkspace.failureCode, Is.EqualTo("None"));
+            Assert.That(manifest.sourceWorkspace.trackedChanges.status, Is.EqualTo("Dirty"));
+            Assert.That(manifest.sourceWorkspace.trackedChanges.hasChangeCount, Is.True);
+            Assert.That(manifest.sourceWorkspace.trackedChanges.changeCount, Is.EqualTo(2));
+            Assert.That(manifest.sourceWorkspace.gitLfs.status, Is.EqualTo("NotApplicable"));
             Assert.That(
                 manifest.deleteDebugFiles,
                 Is.EqualTo(context.Request.DeleteDebugFiles));
@@ -450,7 +471,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     new ThrowingCompletionEventSink(),
                     sandboxRoot,
-                    () => false)
+                    () => false,
+                    BuildTestVersionResolver.ResolveClean)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);
@@ -472,6 +494,69 @@ namespace Build.Pipeline.Tests.Editor
             StringAssert.Contains(
                 "step-finished sink failure",
                 manifest.nonFatalFailures[0]);
+        }
+
+        [Test]
+        public void Runner_ReleaseDirtySource_FailsBeforeStepOrOutputMutationAndWritesTerminalEvidence()
+        {
+            BuildRequest request = CreateSandboxRequest();
+            var dirty = new VersionControlWorkspaceComponentEvidence(
+                VersionControlWorkspaceComponentStatus.Dirty,
+                2);
+            var clean = new VersionControlWorkspaceComponentEvidence(
+                VersionControlWorkspaceComponentStatus.Clean,
+                0);
+            var notApplicable = new VersionControlWorkspaceComponentEvidence(
+                VersionControlWorkspaceComponentStatus.NotApplicable,
+                0);
+            var workspace = new VersionControlWorkspaceEvidence(
+                dirty,
+                clean,
+                notApplicable,
+                notApplicable);
+            var sink = new CountingEventSink();
+
+            BuildRunResult result = new BuildPipelineRunner(
+                    sink,
+                    sandboxRoot,
+                    () => false,
+                    buildRequest => new BuildVersionContext(
+                        buildRequest.ApplicationVersion,
+                        buildRequest.ApplicationVersion + ".42",
+                        42,
+                        "0123456789ab",
+                        "42",
+                        "release",
+                        "2026-08-12T00:00:00Z",
+                        "Git",
+                        sourceWorkspace: workspace))
+                .Run(request);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Steps, Has.Count.EqualTo(1));
+            Assert.That(result.Steps[0].InvocationId, Is.EqualTo("preflight"));
+            Assert.That(result.Steps[0].Status, Is.EqualTo(BuildStepStatus.Failed));
+            StringAssert.Contains("requires a verified clean source workspace", result.Failure.ToString());
+            Assert.That(sink.RunStartedCount, Is.Zero);
+            Assert.That(sink.StepStartedCount, Is.Zero);
+            Assert.That(Directory.Exists(request.OutputDirectory), Is.False);
+            Assert.That(File.Exists(request.OutputPath), Is.False);
+            Assert.That(File.Exists(result.ResultManifestPath), Is.True);
+
+            ManifestDocument manifest = JsonUtility.FromJson<ManifestDocument>(
+                File.ReadAllText(result.ResultManifestPath));
+            Assert.That(manifest.formatVersion, Is.EqualTo(2));
+            Assert.That(manifest.succeeded, Is.False);
+            Assert.That(manifest.sourceWorkspace.policy, Is.EqualTo("RequireClean"));
+            Assert.That(manifest.sourceWorkspace.required, Is.True);
+            Assert.That(manifest.sourceWorkspace.overallStatus, Is.EqualTo("Dirty"));
+            Assert.That(manifest.sourceWorkspace.failureCode, Is.EqualTo("None"));
+            Assert.That(manifest.sourceWorkspace.trackedChanges.status, Is.EqualTo("Dirty"));
+            Assert.That(manifest.sourceWorkspace.trackedChanges.hasChangeCount, Is.True);
+            Assert.That(manifest.sourceWorkspace.trackedChanges.changeCount, Is.EqualTo(2));
+            Assert.That(manifest.sourceWorkspace.untrackedChanges.status, Is.EqualTo("Clean"));
+            Assert.That(manifest.sourceWorkspace.submodules.status, Is.EqualTo("NotApplicable"));
+            Assert.That(manifest.sourceWorkspace.gitLfs.status, Is.EqualTo("NotApplicable"));
         }
 
         [Test]
@@ -553,7 +638,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     sink,
                     sandboxRoot,
-                    () => false)
+                    () => false,
+                    BuildTestVersionResolver.ResolveClean)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);
@@ -591,7 +677,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     new NoOpEventSink(),
                     sandboxRoot,
-                    () => false)
+                    () => false,
+                    BuildTestVersionResolver.ResolveClean)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);
@@ -611,7 +698,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     new NoOpEventSink(),
                     sandboxRoot,
-                    () => false)
+                    () => false,
+                    BuildTestVersionResolver.ResolveClean)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);
@@ -634,7 +722,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
                         sandboxRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.False);
@@ -938,6 +1027,7 @@ namespace Build.Pipeline.Tests.Editor
             public BuildIdentityDocument effectiveIdentity = new BuildIdentityDocument();
             public string identityOrigin = string.Empty;
             public CiIdentityDocument ciIdentity = new CiIdentityDocument();
+            public SourceWorkspaceDocument sourceWorkspace = new SourceWorkspaceDocument();
             public string buildRoot = string.Empty;
             public string versionInfoAssetPath = string.Empty;
             public string[] buildScenePaths = Array.Empty<string>();
@@ -950,6 +1040,27 @@ namespace Build.Pipeline.Tests.Editor
             public string[] nonFatalFailures = Array.Empty<string>();
             public RecipeStepDocument[] recipeInvocations = Array.Empty<RecipeStepDocument>();
             public ContentDocument[] content = Array.Empty<ContentDocument>();
+        }
+
+        [Serializable]
+        private sealed class SourceWorkspaceDocument
+        {
+            public string policy = string.Empty;
+            public bool required = false;
+            public string overallStatus = string.Empty;
+            public string failureCode = string.Empty;
+            public WorkspaceComponentDocument trackedChanges = new WorkspaceComponentDocument();
+            public WorkspaceComponentDocument untrackedChanges = new WorkspaceComponentDocument();
+            public WorkspaceComponentDocument submodules = new WorkspaceComponentDocument();
+            public WorkspaceComponentDocument gitLfs = new WorkspaceComponentDocument();
+        }
+
+        [Serializable]
+        private sealed class WorkspaceComponentDocument
+        {
+            public string status = string.Empty;
+            public bool hasChangeCount = false;
+            public int changeCount = 0;
         }
 
         [Serializable]
@@ -1014,6 +1125,27 @@ namespace Build.Pipeline.Tests.Editor
                 System.Collections.Generic.IReadOnlyList<CompiledBuildStep> plan) { }
 
             public void StepStarted(BuildExecutionContext context, CompiledBuildStep step) { }
+            public void StepFinished(BuildExecutionContext context, BuildStepResult result) { }
+            public void RunFinished(BuildExecutionContext context, BuildRunResult result) { }
+        }
+
+        private sealed class CountingEventSink : IBuildEventSink
+        {
+            public int RunStartedCount { get; private set; }
+            public int StepStartedCount { get; private set; }
+
+            public void RunStarted(
+                BuildExecutionContext context,
+                IReadOnlyList<CompiledBuildStep> plan)
+            {
+                RunStartedCount++;
+            }
+
+            public void StepStarted(BuildExecutionContext context, CompiledBuildStep step)
+            {
+                StepStartedCount++;
+            }
+
             public void StepFinished(BuildExecutionContext context, BuildStepResult result) { }
             public void RunFinished(BuildExecutionContext context, BuildRunResult result) { }
         }

@@ -4,7 +4,7 @@ namespace Build.Pipeline.Editor
 {
     internal static class BuildResultManifestFormat
     {
-        internal const int CurrentVersion = 1;
+        internal const int CurrentVersion = 2;
 
         [Serializable]
         internal sealed class Document
@@ -31,6 +31,7 @@ namespace Build.Pipeline.Editor
             public BuildIdentityEntry effectiveIdentity;
             public string identityOrigin;
             public CiIdentityEntry ciIdentity;
+            public SourceWorkspaceEntry sourceWorkspace;
             public string buildRoot;
             public string outputPath;
             public string outputDirectory;
@@ -118,6 +119,27 @@ namespace Build.Pipeline.Editor
         {
             public string provider;
             public string runId;
+        }
+
+        [Serializable]
+        internal sealed class SourceWorkspaceEntry
+        {
+            public string policy;
+            public bool required;
+            public string overallStatus;
+            public string failureCode;
+            public WorkspaceComponentEntry trackedChanges;
+            public WorkspaceComponentEntry untrackedChanges;
+            public WorkspaceComponentEntry submodules;
+            public WorkspaceComponentEntry gitLfs;
+        }
+
+        [Serializable]
+        internal sealed class WorkspaceComponentEntry
+        {
+            public string status;
+            public bool hasChangeCount;
+            public int changeCount;
         }
     }
 }

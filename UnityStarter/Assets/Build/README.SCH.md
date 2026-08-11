@@ -130,7 +130,10 @@ Assets/Settings/Build/WindowsRelease.asset
 | `Product Name` | 产品名与默认 artifact 名称 | 包括 content-only Profile 在内都应配置 portable 文件名 |
 | `Application Identifier` | Android 与 Apple 通用 application identity | 至少两个以 `.` 分隔的 ASCII identifier segment |
 | `Runtime Version Info` | 临时 runtime `VersionInfoData` 目标 | 只用于 Player，并由 transaction 管理 |
+| `Source Cleanliness Policy` | 版本控制工作区门禁 | `Require Clean` 是安全默认值；`Allow Dirty Development` 只对 Development request 生效 |
 | `Cheat Build Mode` | 每次构建独立的 `ENABLE_CHEAT` 请求 | 在所选 Target 上事务化应用并于构建后恢复；与 HybridCLR 解耦 |
+
+Release request 无论保存的策略为何都必须验证源码工作区为干净。只有 Profile 显式选择 `Allow Dirty Development` 时，Development request 才能在 Dirty 或 Unknown 状态继续。`Require Clean` 的 enum 数值为零，因此尚未包含该字段的旧序列化 Profile 无需重写资产也会保持安全默认行为。
 
 `Runtime Version Info` 的默认路径是：
 
@@ -361,8 +364,9 @@ flowchart TD
     A["获取项目级 Workspace Lease"] --> B["要求 Editor 空闲且 Workspace 干净"]
     B --> C["捕获 ProjectSettings Guard"]
     C --> D["验证路径并捕获 Recipe Provenance"]
-    D --> E["解析源码、构建号和包版本身份"]
-    E --> F["编译 DAG 并汇总 Preflight 错误"]
+    D --> E["解析源码、工作区、构建号与包版本身份"]
+    E --> S["执行 Source Cleanliness 门禁"]
+    S --> F["编译 DAG 并汇总 Preflight 错误"]
     F --> G{"动态 Requirements"}
     G -->|"UnityGlobalState"| H["应用带 Journal 的全局状态"]
     G -->|"VersionInfoAsset"| I["临时安装 VersionInfoData"]
@@ -409,7 +413,7 @@ Publication barrier 先写入一个持久 `Prepared` decision，发布所有参�
 
 Preflight 捕获选中图及配置 provenance：invocation 身份、类型、incrementality、依赖、配置资产路径/GUID/file ID/type、资产摘要和依赖对象摘要。它会在状态修改前、每个 invocation 前以及 publication 前检查。脏资产或已变化的配置会 fail closed。
 
-Result Manifest 记录编译顺序、步骤结果、有效版本身份、Provider 结果、警告和规范化失败。`formatVersion = 1` 是当前持久化文档的格式契约，用于验证 Evidence 与 Journal；它不是 `BuildData` Authoring Schema，也不提供自动迁移。
+Full Result Manifest 记录编译顺序、步骤结果、有效版本身份、Provider 结果、警告、规范化失败和脱敏的源码工作区快照。结果证据使用 `formatVersion = 2`。Version 1 结果文件只作为历史制品保留；当前 Reader 会拒绝它们，不会迁移或原地重写。Transaction Journal 与 Ownership Document 使用各自独立的 owner-local 版本；相同数值不表示 schema 兼容。上述版本均不是 `BuildData` Authoring Schema。
 
 ### 当前架构限制
 
@@ -1191,7 +1195,7 @@ if (git status --porcelain) {
 }
 ```
 
-请在 Unity 创建构建证据或输出前执行守卫，或者直接使用新创建的干净 checkout。
+请在 Unity 创建构建证据或输出前执行守卫，或者直接使用新创建的干净 checkout。该 shell 检查只是提前反馈，不是 Release 门禁本身。Pipeline 会使用有界、非交互命令捕获 tracked、untracked、submodule 与 Git LFS 状态；要求干净时，只要状态为 Dirty 或无法确认就会 fail closed。
 
 ### 规范调用与优先级
 
@@ -1314,9 +1318,14 @@ CI 通常只覆盖 Build Number 与完整的 CI 来源对：
 
 源码覆盖组必须全有或全无：`-pipelineSourceProvider`、`-pipelineSourceRevision`、`-pipelineSourceBranch` 必须一起出现；CI 组同样必须成对出现。可检测 Git 时，显式源码身份必须等于检测快照。若外部脚本确需传入，应使用 `git rev-parse --short=12 HEAD` 计算 Revision，不能传完整 commit hash。
 
-只有刻意导出的无 VCS 工作区才使用完整源码组：
+Git Provider 会围绕身份解析捕获两次必须一致的 porcelain-v2 快照，递归检查 submodule，并直接查询有界的 `git lfs status --json`，不会枚举 LFS tracked path。命令超时、缺少 `git`/`git-lfs`、输出超预算、输出格式非法、命令非零退出或快照变化，都会产生稳定 `failureCode` 与 `Unknown` 状态。Required-clean request 会同时拒绝 `Dirty` 与 `Unknown`。
+
+Perforce Provider 会比较两次有界、只读的 `p4 -ztag status` 快照；该命令同时覆盖 opened file 与 reconcile candidate，再按受支持 action 区分 tracked/untracked。Submodule 与 Git LFS 为 `NotApplicable`。任何非零退出、快照变化、error record、非空但无法识别的 tagged schema、超时或命令缺失都会返回 `Unknown`，绝不会假定干净。Perforce 安装与 Server 版本必须先在 Release Agent 上完成验证。
+
+显式源码身份不会绕过工作区验证。无 VCS 导出只能用于显式放宽的本地 Development request；Release 必须使用能够证明工作区干净的受支持 Provider。若只是为 Development 导出保留身份，可使用完整源码组：
 
 ```text
+-pipelineDevelopment
 -pipelineBuildNumber 1204
 -pipelineSourceProvider ExportArchive
 -pipelineSourceRevision release-2026.08.09
@@ -1596,9 +1605,11 @@ Content 与 hot-update Provider 对各自输出根实现等价的 staging 和 re
 | `.buildpipeline/results/<runId>.log` | 有界的结构化事件日志 |
 | `.buildpipeline/results/<runId>.json` | 必需终态 manifest；早期失败为 partial，完成 Runner 调用后为 full |
 
-Started marker 只有在终态 manifest 持久写入、反序列化、契约验证且日志 flush 后才删除。终态证据记录 request 身份、target/backend、版本和 CI 身份、已选 recipe 与配置 provenance、编译后步骤结果、Provider package 结果、警告、输出路径及规范化失败。
+Started marker 只有在终态 manifest 持久写入、反序列化、契约验证且日志 flush 后才删除。Full terminal manifest 记录 request 身份、target/backend、版本和 CI 身份、已选 recipe 与配置 provenance、编译后步骤结果、Provider package 结果、警告、输出路径、规范化失败及源码工作区快照。
 
-`formatVersion = 1` 是每种持久化表示的当前验证契约，使 Reader 能拒绝不支持或已损坏的 Evidence。它不是 `BuildData` Authoring Schema，也不提供自动迁移。
+Full result schema v2 新增 `sourceWorkspace`，包含 `policy`、`required`、`overallStatus`、`failureCode`，以及 `trackedChanges`、`untrackedChanges`、`submodules`、`gitLfs` 四个 component。每个 component 记录稳定的 `status`，并用 `hasChangeCount` 与 `changeCount` 表达可选汇总数量。Manifest 刻意不记录变更路径、文件内容、命令行、环境变量或 stderr，避免形成源码或凭据泄露通道。
+
+Full manifest 会与 Runner 使用的冻结快照比对。在 request 或 source capture 之前创建的 `partial = true` early terminal manifest 会省略 `sourceWorkspace`，因为此时 `policy` 与 `required` 尚不可知；消费方必须把字段缺失视为 `Unknown` 并 fail closed。Request 已存在但工作区捕获不可用时，Runner terminal manifest 会记录 `Unknown/MetadataUnavailable`。当前 Reader 只接受 `formatVersion = 2`；version 1 不会自动迁移，应与生成它的 Pipeline 版本一起归档，且不得用于当前自动化决策。
 
 退出码：
 
@@ -1955,6 +1966,7 @@ Provider 是否可用仍取决于相应可选 assembly/package 是否已安装�
 | Product Identity | Company Name | 仅在已选 requirement 需要 Unity global/Player state 时应用 |
 | Product Identity | Product Name | 也用于默认 Player artifact 名称 |
 | Product Identity | Application Identifier | 按 Player application identifier 验证 |
+| Source Control | Source Cleanliness Policy | Release 始终要求 verified-clean；Development 只有显式选择 `Allow Dirty Development` 才可放宽 |
 | Player Options | Cheat Build Mode | 控制 Player 构建的 invocation-local `ENABLE_CHEAT` |
 | Build Recipe | Invocations | 稳定 ID、step type、强类型 config、incrementality 和依赖声明 |
 
@@ -2094,7 +2106,7 @@ Step 状态为 `Succeeded`、`Skipped` 和 `Failed`。
 | `2` | 结果证据失败 |
 | `3` | Workspace busy |
 
-Terminal Manifest 使用 `formatVersion = 1`。若干独立所有的 Journal 与 Ownership 格式也使用相同数值。每一个都是用于安全解析和恢复的严格当前文档契约；它不是通用 `BuildData` Schema，也不提供自动迁移。
+结果 evidence family 使用 `formatVersion = 2`。Version 1 result 只可作为历史制品保留，当前 Reader 会拒绝且不会迁移。Journal 与 Ownership 格式具有各自独立的当前契约；数值相同不代表互相兼容，也不代表通用 `BuildData` Schema。
 
 **核心预算**
 
@@ -2288,6 +2300,8 @@ Player Extension 不会切换持久化 Obfuz Settings。选中 Extension 时，`
 
 不完整的 Source/CI Group 会被拒绝；显式 Source Identity 与可检测仓库 Identity 不一致时也会被拒绝。
 
+如果 Manifest 的 `sourceWorkspace` 为 `Dirty` 或 `Unknown`，先查看稳定 `failureCode`，再恢复干净 checkout、可用 VCS 工具以及一致的 submodule/LFS 状态。不要在 Release Profile 中绕过门禁；只可在明确接受风险的 Development Profile 中选择 `Allow Dirty Development`。
+
 **Evidence 与磁盘错误**
 
 必需 Evidence 包含：
@@ -2298,7 +2312,7 @@ Player Extension 不会切换持久化 Obfuz Settings。选中 Extension 时，`
 <BuildRoot>/.buildpipeline/results/<run-id>.json
 ```
 
-Terminal Manifest 会经过容量检查、写入、重新读取，并与冻结的期望结果比较。Disk Full、Permission、Path Occupation、Serialization Capacity 或 Confirmation Failure 都会产生 Exit Code `2`。
+Terminal Manifest 会经过容量检查、写入、重新读取，并与冻结的期望结果比较。Disk Full、Permission、Path Occupation、Serialization Capacity 或 Confirmation Failure 都会产生 Exit Code `2`。源码工作区只记录状态、稳定 failure code 与汇总数量，不包含变更路径、文件内容、stderr、命令参数或凭据。
 
 如果 Terminal Evidence 在后期失败，Artifact 可能已经跨过 Publication Barrier。不能自动重建或覆盖。请保留 Output 与 Log，检查 Workspace Health；修复 Evidence Fault 后，再决定是否用新 Version 重新发布。
 

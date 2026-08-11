@@ -201,7 +201,8 @@ namespace Build.Pipeline.Editor
                 Application.isBatchMode,
                 applicationVersion,
                 identityOverride ?? throw new ArgumentNullException(nameof(identityOverride)),
-                invocations);
+                invocations,
+                buildData.SourceCleanlinessPolicy);
         }
 
         private static IReadOnlyList<BuildStepInvocation> ResolveStepInvocations(

@@ -14,17 +14,26 @@ namespace Build.Pipeline.Editor
         private const int MaximumBuildSceneCount = 1024;
         private readonly IBuildEventSink eventSink;
         private readonly Func<bool> isEditorBusy;
+        private readonly Func<BuildRequest, BuildVersionContext> versionResolver;
         private readonly string trustedProjectRoot;
 
         public BuildPipelineRunner(IBuildEventSink eventSink = null)
-            : this(eventSink, GetCurrentProjectRoot(), EditorBuildAvailabilityPolicy.IsBusy)
+            : this(
+                eventSink,
+                GetCurrentProjectRoot(),
+                EditorBuildAvailabilityPolicy.IsBusy,
+                BuildVersionResolver.Resolve)
         {
         }
 
         internal BuildPipelineRunner(
             IBuildEventSink eventSink,
             string trustedProjectRoot)
-            : this(eventSink, trustedProjectRoot, EditorBuildAvailabilityPolicy.IsBusy)
+            : this(
+                eventSink,
+                trustedProjectRoot,
+                EditorBuildAvailabilityPolicy.IsBusy,
+                BuildVersionResolver.Resolve)
         {
         }
 
@@ -32,10 +41,25 @@ namespace Build.Pipeline.Editor
             IBuildEventSink eventSink,
             string trustedProjectRoot,
             Func<bool> isEditorBusy)
+            : this(
+                eventSink,
+                trustedProjectRoot,
+                isEditorBusy,
+                BuildVersionResolver.Resolve)
+        {
+        }
+
+        internal BuildPipelineRunner(
+            IBuildEventSink eventSink,
+            string trustedProjectRoot,
+            Func<bool> isEditorBusy,
+            Func<BuildRequest, BuildVersionContext> versionResolver)
         {
             this.eventSink = eventSink ?? new ConsoleBuildEventSink();
             this.isEditorBusy = isEditorBusy
                 ?? throw new ArgumentNullException(nameof(isEditorBusy));
+            this.versionResolver = versionResolver
+                ?? throw new ArgumentNullException(nameof(versionResolver));
             this.trustedProjectRoot = Path.GetFullPath(
                     trustedProjectRoot
                     ?? throw new ArgumentNullException(nameof(trustedProjectRoot)))
@@ -121,7 +145,8 @@ namespace Build.Pipeline.Editor
                 context.SetRecipeProvenance(preflightProvenance.Entries);
                 preflightProvenance.ThrowIfInvalid();
                 recipeProvenance = preflightProvenance;
-                context.Version = BuildVersionResolver.Resolve(request);
+                context.Version = versionResolver(request);
+                BuildSourceWorkspacePolicy.EnsureAllowed(request, context.Version);
                 plan = BuildPlanCompiler.Compile(context);
                 requirements = ResolveRequirements(context, plan);
                 ValidatePlanRequirements(request, requirements);

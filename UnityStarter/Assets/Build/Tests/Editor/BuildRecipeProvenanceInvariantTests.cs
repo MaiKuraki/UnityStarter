@@ -110,7 +110,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     new NoOpEventSink(),
                     GetProjectRoot(),
-                    () => false)
+                    () => false,
+                    BuildTestVersionResolver.ResolveClean)
                 .Run(request);
             resultManifestPaths.Add(result.ResultManifestPath);
             return result;

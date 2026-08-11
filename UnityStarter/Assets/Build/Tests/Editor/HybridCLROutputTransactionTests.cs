@@ -532,7 +532,8 @@ namespace Build.Pipeline.Tests.Editor
             BuildRunResult result = new BuildPipelineRunner(
                     eventSink: new NoOpEventSink(),
                     trustedProjectRoot: projectRoot,
-                    isEditorBusy: () => false)
+                    isEditorBusy: () => false,
+                    versionResolver: BuildTestVersionResolver.ResolveClean)
                 .Run(request);
 
             Assert.That(result.Succeeded, Is.False);

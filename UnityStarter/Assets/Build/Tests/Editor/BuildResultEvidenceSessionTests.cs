@@ -62,7 +62,10 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(session.TerminalEvidenceConfirmed, Is.True);
             Assert.That(File.Exists(session.ManifestPath), Is.True);
             Assert.That(File.Exists(session.StartedMarkerPath), Is.False);
-            StringAssert.Contains("workspace-recovery", File.ReadAllText(session.ManifestPath));
+            string manifest = File.ReadAllText(session.ManifestPath);
+            StringAssert.Contains("workspace-recovery", manifest);
+            StringAssert.Contains("\"partial\": true", manifest);
+            StringAssert.DoesNotContain("\"sourceWorkspace\"", manifest);
         }
 
         [Test]
@@ -458,7 +461,8 @@ namespace Build.Pipeline.Tests.Editor
             var runner = new BuildPipelineRunner(
                 new NoOpEventSink(),
                 sandboxRoot,
-                () => false);
+                () => false,
+                BuildTestVersionResolver.ResolveClean);
 
             Assert.Throws<ArgumentException>(() => runner.Run(
                 request,
@@ -653,7 +657,7 @@ namespace Build.Pipeline.Tests.Editor
                 {
                     File.WriteAllText(
                         result.ResultManifestPath,
-                        "{\"formatVersion\":1,\"runId\":\"" + result.RunId + "\"}");
+                        "{\"formatVersion\":2,\"runId\":\"" + result.RunId + "\"}");
                     eventSink.RunFinished(context, result);
                     return;
                 }
@@ -682,8 +686,8 @@ namespace Build.Pipeline.Tests.Editor
                 {
                     json = ReplaceRequired(
                         json,
-                        "\"formatVersion\": 1",
-                        "\"formatVersion\": 2");
+                        "\"formatVersion\": 2",
+                        "\"formatVersion\": 1");
                 }
                 else if (ManifestMode == FakeManifestMode.Partial)
                 {

@@ -202,7 +202,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         evidence.CreateEventSink(),
                         projectRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request, evidence.RunId, evidence.ManifestPath);
 
                 Assert.That(result.Succeeded, Is.False);

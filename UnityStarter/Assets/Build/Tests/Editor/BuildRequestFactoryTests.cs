@@ -510,6 +510,33 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(request.DebugBuild, Is.EqualTo(debugBuild));
         }
 
+        [TestCase(BuildSourceCleanlinessPolicy.RequireClean, false, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.RequireClean, true, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyDevelopment, false, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyDevelopment, true, false)]
+        public void BuildRequest_RequireCleanSource_ReleaseCannotBeRelaxedAndDevelopmentRequiresOptIn(
+            BuildSourceCleanlinessPolicy policy,
+            bool debugBuild,
+            bool expected)
+        {
+            var serialized = new SerializedObject(buildData);
+            serialized.FindProperty("sourceCleanlinessPolicy").enumValueIndex = (int)policy;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            var extra = new List<string>();
+            if (debugBuild)
+            {
+                extra.Add(BuildCommandLineOptionNames.Development);
+            }
+
+            BuildRequest request = BuildRequestFactory.CreateForCommandLine(
+                buildData,
+                ParseCommandLine(extra.ToArray()));
+
+            Assert.That(request.SourceCleanlinessPolicy, Is.EqualTo(policy));
+            Assert.That(request.RequireCleanSource, Is.EqualTo(expected));
+        }
+
         private BuildRequest CreateCommandLineRequest(params string[] extraArguments)
         {
             return BuildRequestFactory.CreateForCommandLine(

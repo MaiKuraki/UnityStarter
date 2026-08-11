@@ -1022,6 +1022,7 @@ namespace Build.Pipeline.Editor
                 effectiveBranch,
                 metadata.CommitDate,
                 effectiveProvider,
+                metadata.Workspace,
                 hasExplicitIdentity
                     ? BuildIdentityOrigin.ExplicitOverride
                     : BuildIdentityOrigin.VersionControl,

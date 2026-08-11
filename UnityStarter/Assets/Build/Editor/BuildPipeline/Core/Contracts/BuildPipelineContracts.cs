@@ -204,6 +204,48 @@ namespace Build.Pipeline.Editor
             long? detectedBuildNumber = null,
             string ciProvider = null,
             string ciRunId = null)
+            : this(
+                applicationVersion,
+                packageVersion,
+                buildNumber,
+                commitHash,
+                commitCount,
+                branch,
+                commitDate,
+                providerId,
+                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable),
+                identityOrigin,
+                detectedCommitHash,
+                detectedCommitCount,
+                detectedBranch,
+                detectedCommitDate,
+                detectedProviderId,
+                detectedBuildNumber,
+                ciProvider,
+                ciRunId)
+        {
+        }
+
+        public BuildVersionContext(
+            string applicationVersion,
+            string packageVersion,
+            long buildNumber,
+            string commitHash,
+            string commitCount,
+            string branch,
+            string commitDate,
+            string providerId,
+            Build.VersionControl.Editor.VersionControlWorkspaceEvidence sourceWorkspace,
+            BuildIdentityOrigin identityOrigin = BuildIdentityOrigin.VersionControl,
+            string detectedCommitHash = null,
+            string detectedCommitCount = null,
+            string detectedBranch = null,
+            string detectedCommitDate = null,
+            string detectedProviderId = null,
+            long? detectedBuildNumber = null,
+            string ciProvider = null,
+            string ciRunId = null)
         {
             ApplicationVersion = applicationVersion ?? string.Empty;
             PackageVersion = packageVersion ?? string.Empty;
@@ -230,6 +272,9 @@ namespace Build.Pipeline.Editor
             DetectedBuildNumber = detectedBuildNumber;
             CiProvider = ciProvider ?? string.Empty;
             CiRunId = ciRunId ?? string.Empty;
+            SourceWorkspace = sourceWorkspace
+                ?? Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable);
         }
 
         public string ApplicationVersion { get; }
@@ -253,6 +298,7 @@ namespace Build.Pipeline.Editor
         public long? DetectedBuildNumber { get; }
         public string CiProvider { get; }
         public string CiRunId { get; }
+        public Build.VersionControl.Editor.VersionControlWorkspaceEvidence SourceWorkspace { get; }
     }
 
     public sealed class BuildRequest
@@ -281,6 +327,59 @@ namespace Build.Pipeline.Editor
             string applicationVersion,
             BuildIdentityOverride identityOverride,
             IReadOnlyList<BuildStepInvocation> steps)
+            : this(
+                companyName,
+                productName,
+                applicationIdentifier,
+                versionInfoAssetPath,
+                buildScenePaths,
+                cheatBuildMode,
+                target,
+                namedTarget,
+                scriptingBackend,
+                projectRoot,
+                buildRoot,
+                outputPath,
+                outputDirectory,
+                outputIsFolder,
+                deleteDebugFiles,
+                debugBuild,
+                exportAndroidProject,
+                allowExternalOutput,
+                cheatOverride,
+                batchMode,
+                applicationVersion,
+                identityOverride,
+                steps,
+                BuildSourceCleanlinessPolicy.RequireClean)
+        {
+        }
+
+        public BuildRequest(
+            string companyName,
+            string productName,
+            string applicationIdentifier,
+            string versionInfoAssetPath,
+            IReadOnlyList<string> buildScenePaths,
+            CheatBuildMode cheatBuildMode,
+            BuildTarget target,
+            NamedBuildTarget namedTarget,
+            ScriptingImplementation scriptingBackend,
+            string projectRoot,
+            string buildRoot,
+            string outputPath,
+            string outputDirectory,
+            bool outputIsFolder,
+            bool deleteDebugFiles,
+            bool debugBuild,
+            bool exportAndroidProject,
+            bool allowExternalOutput,
+            bool? cheatOverride,
+            bool batchMode,
+            string applicationVersion,
+            BuildIdentityOverride identityOverride,
+            IReadOnlyList<BuildStepInvocation> steps,
+            BuildSourceCleanlinessPolicy sourceCleanlinessPolicy)
         {
             CompanyName = companyName ?? string.Empty;
             ProductName = productName ?? string.Empty;
@@ -309,6 +408,18 @@ namespace Build.Pipeline.Editor
             ApplicationVersion = applicationVersion ?? throw new ArgumentNullException(nameof(applicationVersion));
             IdentityOverride = identityOverride ?? throw new ArgumentNullException(nameof(identityOverride));
             Steps = SnapshotSteps(steps, nameof(steps));
+            if (sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.RequireClean
+                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyDevelopment)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(sourceCleanlinessPolicy),
+                    sourceCleanlinessPolicy,
+                    "Source cleanliness policy must be RequireClean or AllowDirtyDevelopment.");
+            }
+
+            SourceCleanlinessPolicy = sourceCleanlinessPolicy;
+            RequireCleanSource = !debugBuild
+                || sourceCleanlinessPolicy == BuildSourceCleanlinessPolicy.RequireClean;
 
             var stepTypeIds = new string[Steps.Count];
             for (int index = 0; index < Steps.Count; index++)
@@ -342,6 +453,8 @@ namespace Build.Pipeline.Editor
         public bool BatchMode { get; }
         public string ApplicationVersion { get; }
         public BuildIdentityOverride IdentityOverride { get; }
+        public BuildSourceCleanlinessPolicy SourceCleanlinessPolicy { get; }
+        public bool RequireCleanSource { get; }
         public IReadOnlyList<BuildStepInvocation> Steps { get; }
         public IReadOnlyList<string> StepTypeIds { get; }
 
