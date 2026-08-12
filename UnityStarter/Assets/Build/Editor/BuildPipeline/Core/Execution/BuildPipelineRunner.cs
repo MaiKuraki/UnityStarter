@@ -285,6 +285,9 @@ namespace Build.Pipeline.Editor
                     request,
                     "terminal publication",
                     failure);
+                failure = RevalidateSourceWorkspaceForPublication(
+                    context,
+                    failure);
                 var provisionalResult = new BuildRunResult(
                     runId,
                     failure == null,
@@ -367,6 +370,155 @@ namespace Build.Pipeline.Editor
             return result;
         }
 
+        private Exception RevalidateSourceWorkspaceForPublication(
+            BuildExecutionContext context,
+            Exception failure)
+        {
+            if (failure != null || !context.Request.RequireCleanSource)
+            {
+                return failure;
+            }
+
+            bool terminalWorkspaceCaptured = false;
+            Exception qualificationFailure = null;
+            BuildSourceQualificationSuspensionScope suspension = null;
+            try
+            {
+                BuildVersionContext initial = context.Version
+                    ?? throw new InvalidOperationException(
+                        "The initial build source snapshot is unavailable.");
+                suspension = BuildSourceQualificationSuspensionScope.Begin(
+                    context.DeferredPublications);
+                BuildVersionContext terminal = versionResolver(context.Request)
+                    ?? throw new InvalidOperationException(
+                        "The terminal build source snapshot is unavailable.");
+                context.Version = initial.WithSourceWorkspace(terminal.SourceWorkspace);
+                terminalWorkspaceCaptured = true;
+                BuildSourceWorkspacePolicy.EnsureAllowed(context.Request, terminal);
+                ValidateSameSourceIdentity(initial, terminal);
+            }
+            catch (Exception exception)
+            {
+                qualificationFailure = exception;
+            }
+            finally
+            {
+                if (suspension != null)
+                {
+                    try
+                    {
+                        suspension.Dispose();
+                    }
+                    catch (Exception restorationFailure)
+                    {
+                        qualificationFailure = Combine(
+                            qualificationFailure,
+                            new InvalidOperationException(
+                                "Transaction-owned downstream inputs could not be restored after terminal source qualification.",
+                                restorationFailure));
+                    }
+                }
+            }
+
+            if (qualificationFailure == null)
+            {
+                return failure;
+            }
+
+            if (!terminalWorkspaceCaptured && context.Version != null)
+            {
+                context.Version = context.Version.WithSourceWorkspace(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                        Build.VersionControl.Editor.VersionControlWorkspaceEvidence.CommandFailed));
+            }
+
+            return Combine(
+                failure,
+                new InvalidOperationException(
+                    "Source workspace qualification changed before terminal publication. " +
+                    "No deferred build output was published.",
+                    qualificationFailure));
+        }
+
+        private static void ValidateSameSourceIdentity(
+            BuildVersionContext initial,
+            BuildVersionContext terminal)
+        {
+            EnsureSameSourceIdentityComponent(
+                "provider",
+                GetDetectedProvider(initial),
+                GetDetectedProvider(terminal),
+                StringComparison.OrdinalIgnoreCase);
+            EnsureSameSourceIdentityComponent(
+                "revision",
+                GetDetectedRevision(initial),
+                GetDetectedRevision(terminal),
+                StringComparison.OrdinalIgnoreCase);
+            EnsureSameSourceIdentityComponent(
+                "branch",
+                GetDetectedBranch(initial),
+                GetDetectedBranch(terminal),
+                StringComparison.Ordinal);
+            EnsureSameSourceIdentityComponent(
+                "commit count",
+                GetDetectedCommitCount(initial),
+                GetDetectedCommitCount(terminal),
+                StringComparison.Ordinal);
+            EnsureSameSourceIdentityComponent(
+                "commit date",
+                GetDetectedCommitDate(initial),
+                GetDetectedCommitDate(terminal),
+                StringComparison.Ordinal);
+        }
+
+        private static void EnsureSameSourceIdentityComponent(
+            string component,
+            string initial,
+            string terminal,
+            StringComparison comparison)
+        {
+            if (!string.Equals(initial, terminal, comparison))
+            {
+                throw new BuildFailedException(
+                    $"The detected source {component} changed while the build was running.");
+            }
+        }
+
+        private static string GetDetectedProvider(BuildVersionContext version)
+        {
+            return string.IsNullOrWhiteSpace(version.DetectedProviderId)
+                ? version.EffectiveSourceProvider
+                : version.DetectedProviderId;
+        }
+
+        private static string GetDetectedRevision(BuildVersionContext version)
+        {
+            return string.IsNullOrWhiteSpace(version.DetectedCommitHash)
+                ? version.EffectiveSourceRevision
+                : version.DetectedCommitHash;
+        }
+
+        private static string GetDetectedBranch(BuildVersionContext version)
+        {
+            return string.IsNullOrWhiteSpace(version.DetectedBranch)
+                ? version.EffectiveSourceBranch
+                : version.DetectedBranch;
+        }
+
+        private static string GetDetectedCommitCount(BuildVersionContext version)
+        {
+            return string.IsNullOrWhiteSpace(version.DetectedCommitCount)
+                ? version.CommitCount
+                : version.DetectedCommitCount;
+        }
+
+        private static string GetDetectedCommitDate(BuildVersionContext version)
+        {
+            return string.IsNullOrWhiteSpace(version.DetectedCommitDate)
+                ? version.CommitDate
+                : version.DetectedCommitDate;
+        }
+
         private static void NotifyTerminalEventSink(
             Action callback,
             string eventName)
@@ -409,6 +561,8 @@ namespace Build.Pipeline.Editor
                 throw new BuildFailedException(
                     $"Unsupported player build target '{request.Target}'.");
             }
+
+            BuildRequestFactory.ValidateLocalReleasePreviewRequest(request);
 
             NamedBuildTarget expectedNamedTarget =
                 BuildRequestFactory.GetNamedBuildTarget(request.Target);
@@ -1135,9 +1289,10 @@ namespace Build.Pipeline.Editor
 
         public void RunFinished(BuildExecutionContext context, BuildRunResult result)
         {
+            string outputLabel = result.Succeeded ? "Output" : "RequestedOutput";
             string message =
                 $"[BuildPipeline] Run {result.RunId} {(result.Succeeded ? "succeeded" : "failed")}. " +
-                $"Output='{result.OutputPath}', Result='{result.ResultManifestPath}'.";
+                $"{outputLabel}='{result.OutputPath}', Result='{result.ResultManifestPath}'.";
             if (result.Succeeded)
             {
                 UnityEngine.Debug.Log(message);

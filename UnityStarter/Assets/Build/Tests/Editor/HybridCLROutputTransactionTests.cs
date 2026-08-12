@@ -54,13 +54,13 @@ namespace Build.Pipeline.Tests.Editor
             using (HybridCLROutputTransaction transaction =
                    HybridCLROutputTransaction.Begin(projectRoot, targets))
             {
-                StageSingleArtifact(transaction, HybridCLRBuilder.HotUpdateOutputRole, "Game.dll.bytes", "hot-v1");
-                StageSingleArtifact(transaction, HybridCLRBuilder.AOTOutputRole, "mscorlib.dll.bytes", "aot-v1");
+                StageSingleArtifact(transaction, HybridCLRBuilder.HotUpdateOutputRole, "Game.dll.bytes", "hot-current");
+                StageSingleArtifact(transaction, HybridCLRBuilder.AOTOutputRole, "mscorlib.dll.bytes", "aot-current");
                 transaction.Commit();
             }
 
-            Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("hot-v1"));
-            Assert.That(File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")), Is.EqualTo("aot-v1"));
+            Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("hot-current"));
+            Assert.That(File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")), Is.EqualTo("aot-current"));
             Assert.That(
                 File.Exists(Path.Combine(hotUpdateDirectory, HybridCLROutputTransaction.OwnershipManifestFileName)),
                 Is.True);
@@ -71,7 +71,7 @@ namespace Build.Pipeline.Tests.Editor
             string manifest = File.ReadAllText(Path.Combine(
                 hotUpdateDirectory,
                 HybridCLROutputTransaction.OwnershipManifestFileName));
-            StringAssert.Contains("\"formatVersion\": 1", manifest);
+            StringAssert.Contains("\"documentType\": \"hybridclr-output-owner\"", manifest);
             StringAssert.Contains("\"transactionId\"", manifest);
             StringAssert.Contains("\"size\"", manifest);
             StringAssert.Contains("\"sha256\"", manifest);
@@ -82,20 +82,20 @@ namespace Build.Pipeline.Tests.Editor
         public void Commit_PreservesMetaForSameNamedArtifact()
         {
             HybridCLROutputTarget[] targets = CreateTargets();
-            SeedManagedOutputs(targets, "v1");
+            SeedManagedOutputs(targets, "original");
             string metaPath = Path.Combine(hotUpdateDirectory, "Game.dll.bytes.meta");
             string originalMeta = File.ReadAllText(metaPath);
 
             using (HybridCLROutputTransaction transaction =
                    HybridCLROutputTransaction.Begin(projectRoot, targets))
             {
-                StageSingleArtifact(transaction, HybridCLRBuilder.HotUpdateOutputRole, "Game.dll.bytes", "v2");
-                StageSingleArtifact(transaction, HybridCLRBuilder.AOTOutputRole, "mscorlib.dll.bytes", "v2");
+                StageSingleArtifact(transaction, HybridCLRBuilder.HotUpdateOutputRole, "Game.dll.bytes", "replacement");
+                StageSingleArtifact(transaction, HybridCLRBuilder.AOTOutputRole, "mscorlib.dll.bytes", "replacement");
                 transaction.Commit();
             }
 
             Assert.That(File.ReadAllText(metaPath), Is.EqualTo(originalMeta));
-            Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("v2"));
+            Assert.That(File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")), Is.EqualTo("replacement"));
         }
 
         [Test]
@@ -169,6 +169,91 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void SuspendForSourceQualification_RestoresOriginalThenResumesForPublication()
+        {
+            HybridCLROutputTarget[] targets = CreateTargets();
+            SeedManagedOutputs(targets, "old");
+            string originalHotMeta = File.ReadAllText(hotUpdateDirectory + ".meta");
+            HybridCLROutputTransaction transaction =
+                HybridCLROutputTransaction.Begin(projectRoot, targets);
+            try
+            {
+                StageOutputs(transaction, "new");
+                transaction.ActivateForDownstream();
+
+                using (transaction.SuspendForSourceQualification())
+                {
+                    Assert.That(
+                        File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                        Is.EqualTo("old"));
+                    Assert.That(
+                        File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")),
+                        Is.EqualTo("old"));
+                    Assert.That(
+                        File.ReadAllText(hotUpdateDirectory + ".meta"),
+                        Is.EqualTo(originalHotMeta));
+                    Assert.Throws<InvalidOperationException>(() => transaction.Publish());
+                }
+
+                Assert.That(
+                    File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                    Is.EqualTo("new"));
+                BuildPublicationBarrier barrier = BuildPublicationBarrier.Begin(
+                    projectRoot,
+                    "hybridclr-source-qualification",
+                    new IBuildDeferredPublication[] { transaction });
+                transaction.Publish();
+                barrier.CommitDecision();
+                transaction.Complete();
+                transaction.Dispose();
+                transaction = null;
+                barrier.Complete();
+            }
+            finally
+            {
+                transaction?.Dispose();
+            }
+
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                Is.EqualTo("new"));
+            Assert.That(
+                File.Exists(HybridCLROutputTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.False);
+        }
+
+        [Test]
+        public void SuspendForSourceQualification_AfterResumeFailurePathRestoresOriginal()
+        {
+            HybridCLROutputTarget[] targets = CreateTargets();
+            SeedManagedOutputs(targets, "old");
+
+            using (HybridCLROutputTransaction transaction =
+                   HybridCLROutputTransaction.Begin(projectRoot, targets))
+            {
+                StageOutputs(transaction, "new");
+                transaction.ActivateForDownstream();
+                using (transaction.SuspendForSourceQualification())
+                {
+                    Assert.That(
+                        File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                        Is.EqualTo("old"));
+                }
+
+                Assert.That(
+                    File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                    Is.EqualTo("new"));
+            }
+
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotUpdateDirectory, "Game.dll.bytes")),
+                Is.EqualTo("old"));
+            Assert.That(
+                File.ReadAllText(Path.Combine(aotDirectory, "mscorlib.dll.bytes")),
+                Is.EqualTo("old"));
+        }
+
+        [Test]
         public void Begin_NonEmptyDirectoryWithoutOwnershipManifest_FailsClosed()
         {
             Directory.CreateDirectory(hotUpdateDirectory);
@@ -186,7 +271,7 @@ namespace Build.Pipeline.Tests.Editor
         public void Begin_ManagedDirectoryWithUndeclaredFile_FailsClosed()
         {
             HybridCLROutputTarget[] targets = CreateTargets();
-            SeedManagedOutputs(targets, "v1");
+            SeedManagedOutputs(targets, "managed");
             string unknownFile = Path.Combine(hotUpdateDirectory, "README.txt");
             File.WriteAllText(unknownFile, "preserve");
 
@@ -527,7 +612,9 @@ namespace Build.Pipeline.Tests.Editor
                 steps: new[]
                 {
                     new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
 
             BuildRunResult result = new BuildPipelineRunner(
                     eventSink: new NoOpEventSink(),

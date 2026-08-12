@@ -15,7 +15,8 @@ namespace Build.Pipeline.Editor
     public enum BuildSourceCleanlinessPolicy
     {
         RequireClean = 0,
-        AllowDirtyDevelopment = 1
+        AllowDirtyDevelopment = 1,
+        AllowDirtyLocalRelease = 2
     }
 
     [Serializable]
@@ -156,7 +157,7 @@ namespace Build.Pipeline.Editor
         [Tooltip("Controls whether ENABLE_CHEAT is applied during player builds.")]
         [SerializeField] private CheatBuildMode cheatBuildMode = CheatBuildMode.Disabled;
 
-        [Tooltip("Requires a verified clean source workspace. Release builds always require clean source; this policy can relax only Development builds.")]
+        [Tooltip("Controls local interactive source qualification. Require Clean blocks dirty builds. Allow Dirty Development relaxes only Development. Allow Dirty Local Release also lets the Inspector Release action run an isolated, non-distributable Local Release Player. Batch-mode and qualified Release builds always require verified-clean source.")]
         [SerializeField] private BuildSourceCleanlinessPolicy sourceCleanlinessPolicy =
             BuildSourceCleanlinessPolicy.RequireClean;
 

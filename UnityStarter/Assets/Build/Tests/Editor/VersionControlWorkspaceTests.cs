@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Build.Pipeline.Editor;
 using Build.VersionControl.Editor;
@@ -152,6 +153,95 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void GitWorkspaceCapability_CapturesWithoutMetadataCommands()
+        {
+            var runner = new WorkspaceOnlyGitRunner(
+                firstStatus: string.Empty,
+                secondStatus: string.Empty);
+            IVersionControlProvider provider =
+                new VersionControlProviderGit(sandboxRoot, runner);
+
+            Assert.That(provider, Is.InstanceOf<IVersionControlWorkspaceProvider>());
+            VersionControlWorkspaceEvidence workspace =
+                ((IVersionControlWorkspaceProvider)provider).CaptureWorkspace(
+                    CancellationToken.None);
+
+            Assert.That(workspace.IsVerifiedClean, Is.True);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "status --porcelain=v2 -z --untracked-files=all --ignore-submodules=none",
+                    "submodule status --recursive",
+                    "lfs status --json",
+                    "status --porcelain=v2 -z --untracked-files=all --ignore-submodules=none"
+                },
+                runner.Commands);
+        }
+
+        [Test]
+        public void GitWorkspaceCapability_ChangingStatusFailsClosed()
+        {
+            var runner = new WorkspaceOnlyGitRunner(
+                firstStatus: string.Empty,
+                secondStatus: "? Assets/transient.asset\0");
+            var provider = (IVersionControlWorkspaceProvider)
+                new VersionControlProviderGit(sandboxRoot, runner);
+
+            VersionControlWorkspaceEvidence workspace = provider.CaptureWorkspace(
+                CancellationToken.None);
+
+            Assert.That(
+                workspace.OverallStatus,
+                Is.EqualTo(VersionControlWorkspaceComponentStatus.Unknown));
+            Assert.That(
+                workspace.FailureCode,
+                Is.EqualTo(VersionControlWorkspaceEvidence.IncoherentSnapshot));
+        }
+
+        [Test]
+        public void GitWorkspaceCapability_PreCancelled_DoesNotStartCommand()
+        {
+            var runner = new WorkspaceOnlyGitRunner(
+                firstStatus: string.Empty,
+                secondStatus: string.Empty);
+            var provider = (IVersionControlWorkspaceProvider)
+                new VersionControlProviderGit(sandboxRoot, runner);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                Assert.Throws<OperationCanceledException>(() =>
+                    provider.CaptureWorkspace(cancellation.Token));
+            }
+
+            Assert.That(runner.Commands, Is.Empty);
+        }
+
+        [Test]
+        public void GitWorkspaceCapability_CommandFailureReturnsUnknownWithoutDiagnosticLeak()
+        {
+            var runner = new WorkspaceOnlyGitRunner(
+                firstStatus: string.Empty,
+                secondStatus: string.Empty,
+                failOnStatusCall: 2,
+                failureCode: VersionControlWorkspaceEvidence.CommandTimedOut,
+                failureMessage: "workspace failure at C:\\sensitive\\project");
+            var provider = (IVersionControlWorkspaceProvider)
+                new VersionControlProviderGit(sandboxRoot, runner);
+            VersionControlWorkspaceEvidence workspace = null;
+
+            Assert.DoesNotThrow(() =>
+                workspace = provider.CaptureWorkspace(CancellationToken.None));
+
+            Assert.That(
+                workspace.OverallStatus,
+                Is.EqualTo(VersionControlWorkspaceComponentStatus.Unknown));
+            Assert.That(
+                workspace.FailureCode,
+                Is.EqualTo(VersionControlWorkspaceEvidence.CommandTimedOut));
+            StringAssert.DoesNotContain("sensitive", workspace.FailureCode);
+        }
+
+        [Test]
         public void WorkspaceEvidence_FailureCodePreventsVerifiedClean()
         {
             var clean = new VersionControlWorkspaceComponentEvidence(
@@ -172,11 +262,20 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void PublicContracts_PreserveLegacyConstructorSignatures()
+        public void PublicContracts_ExposeOneExplicitCurrentConstructor()
         {
-            Assert.That(HasPublicConstructorWithParameterCount(typeof(BuildRequest), 23), Is.True);
-            Assert.That(HasPublicConstructorWithParameterCount(typeof(BuildVersionContext), 17), Is.True);
-            Assert.That(HasPublicConstructorWithParameterCount(typeof(VersionControlMetadata), 5), Is.True);
+            Assert.That(typeof(BuildRequest).GetConstructors(), Has.Length.EqualTo(1));
+            Assert.That(typeof(BuildVersionContext).GetConstructors(), Has.Length.EqualTo(1));
+            Assert.That(typeof(VersionControlMetadata).GetConstructors(), Has.Length.EqualTo(1));
+            Assert.That(
+                typeof(BuildRequest).GetConstructors()[0].GetParameters()[24].ParameterType,
+                Is.EqualTo(typeof(BuildPurpose)));
+            Assert.That(
+                typeof(BuildVersionContext).GetConstructors()[0].GetParameters()[8].ParameterType,
+                Is.EqualTo(typeof(VersionControlWorkspaceEvidence)));
+            Assert.That(
+                typeof(VersionControlMetadata).GetConstructors()[0].GetParameters()[5].ParameterType,
+                Is.EqualTo(typeof(VersionControlWorkspaceEvidence)));
         }
 
         [Test]
@@ -262,6 +361,40 @@ namespace Build.Pipeline.Tests.Editor
                 metadata.Workspace.FailureCode,
                 Is.EqualTo(VersionControlWorkspaceEvidence.IncoherentSnapshot));
             Assert.That(runner.AllowedExitCodeOne, Is.False);
+        }
+
+        [Test]
+        public void PerforceWorkspaceCapability_CapturesWithoutMetadataCommands()
+        {
+            var runner = new WorkspaceOnlyPerforceRunner();
+            IVersionControlProvider provider =
+                new VersionControlProviderPerforce(sandboxRoot, runner);
+
+            Assert.That(provider, Is.InstanceOf<IVersionControlWorkspaceProvider>());
+            VersionControlWorkspaceEvidence workspace =
+                ((IVersionControlWorkspaceProvider)provider).CaptureWorkspace(
+                    CancellationToken.None);
+
+            Assert.That(workspace.IsVerifiedClean, Is.True);
+            CollectionAssert.AreEqual(
+                new[] { "-ztag status", "-ztag status" },
+                runner.Commands);
+        }
+
+        [Test]
+        public void PerforceWorkspaceCapability_PreCancelled_DoesNotStartCommand()
+        {
+            var runner = new WorkspaceOnlyPerforceRunner();
+            var provider = (IVersionControlWorkspaceProvider)
+                new VersionControlProviderPerforce(sandboxRoot, runner);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                Assert.Throws<OperationCanceledException>(() =>
+                    provider.CaptureWorkspace(cancellation.Token));
+            }
+
+            Assert.That(runner.Commands, Is.Empty);
         }
 
         [Test]
@@ -380,17 +513,62 @@ namespace Build.Pipeline.Tests.Editor
             }
         }
 
-        private static bool HasPublicConstructorWithParameterCount(Type type, int parameterCount)
+        private sealed class WorkspaceOnlyGitRunner : IVersionControlCommandRunner
         {
-            foreach (System.Reflection.ConstructorInfo constructor in type.GetConstructors())
+            private readonly string firstStatus;
+            private readonly string secondStatus;
+            private readonly int failOnStatusCall;
+            private readonly string failureCode;
+            private readonly string failureMessage;
+            private int statusCalls;
+
+            internal WorkspaceOnlyGitRunner(
+                string firstStatus,
+                string secondStatus,
+                int failOnStatusCall = 0,
+                string failureCode = null,
+                string failureMessage = null)
             {
-                if (constructor.GetParameters().Length == parameterCount)
-                {
-                    return true;
-                }
+                this.firstStatus = firstStatus ?? string.Empty;
+                this.secondStatus = secondStatus ?? string.Empty;
+                this.failOnStatusCall = failOnStatusCall;
+                this.failureCode = failureCode;
+                this.failureMessage = failureMessage;
             }
 
-            return false;
+            internal List<string> Commands { get; } = new List<string>();
+
+            public string Run(
+                string executable,
+                string arguments,
+                string workingDirectory,
+                IReadOnlyDictionary<string, string> environment,
+                int timeoutMilliseconds,
+                int maximumOutputCharacters,
+                bool allowExitCodeOne = false)
+            {
+                Commands.Add(arguments);
+                switch (arguments)
+                {
+                    case "status --porcelain=v2 -z --untracked-files=all --ignore-submodules=none":
+                        statusCalls++;
+                        if (statusCalls == failOnStatusCall)
+                        {
+                            throw new VersionControlCommandException(
+                                failureCode ?? VersionControlWorkspaceEvidence.CommandFailed,
+                                failureMessage ?? "workspace status failed");
+                        }
+
+                        return statusCalls == 1 ? firstStatus : secondStatus;
+                    case "submodule status --recursive":
+                        return string.Empty;
+                    case "lfs status --json":
+                        return "{\"files\":{}}";
+                    default:
+                        throw new InvalidOperationException(
+                            "Workspace-only Git capture invoked a metadata command.");
+                }
+            }
         }
 
         private sealed class ChangingPerforceRunner : IVersionControlCommandRunner
@@ -423,6 +601,30 @@ namespace Build.Pipeline.Tests.Editor
                     default:
                         throw new InvalidOperationException("Unexpected fake Perforce command.");
                 }
+            }
+        }
+
+        private sealed class WorkspaceOnlyPerforceRunner : IVersionControlCommandRunner
+        {
+            internal List<string> Commands { get; } = new List<string>();
+
+            public string Run(
+                string executable,
+                string arguments,
+                string workingDirectory,
+                IReadOnlyDictionary<string, string> environment,
+                int timeoutMilliseconds,
+                int maximumOutputCharacters,
+                bool allowExitCodeOne = false)
+            {
+                Commands.Add(arguments);
+                if (string.Equals(arguments, "-ztag status", StringComparison.Ordinal))
+                {
+                    return string.Empty;
+                }
+
+                throw new InvalidOperationException(
+                    "Workspace-only Perforce capture invoked a metadata command.");
             }
         }
     }

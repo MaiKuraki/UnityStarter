@@ -625,7 +625,9 @@ namespace Build.Pipeline.Tests.Editor
                         BuildStepTypeIds.Player,
                         BuildStepTypeIds.Player,
                         configuration)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
         }
 
         [PlayerBuildExtensionAdapterRegistration(
@@ -634,7 +636,7 @@ namespace Build.Pipeline.Tests.Editor
             ConfigurationType = typeof(FakePlayerExtensionConfiguration))]
         public sealed class FakePlayerExtensionAdapter : IPlayerBuildExtensionAdapter
         {
-            internal const string CompatibilityIdValue = "test-player-extension-v1";
+            internal const string CompatibilityIdValue = "test-player-extension";
             internal static int ConstructionCount { get; private set; }
 
             public FakePlayerExtensionAdapter()
@@ -663,12 +665,12 @@ namespace Build.Pipeline.Tests.Editor
 
         [PlayerBuildExtensionAdapterRegistration(
             DuplicatePlayerExtensionConfiguration.ProviderIdValue,
-            "duplicate-player-extension-a-v1",
+            "duplicate-player-extension-a",
             ConfigurationType = typeof(DuplicatePlayerExtensionConfiguration))]
         public sealed class DuplicatePlayerExtensionAdapterA : IPlayerBuildExtensionAdapter
         {
             public string ProviderId => DuplicatePlayerExtensionConfiguration.ProviderIdValue;
-            public string CompatibilityId => "duplicate-player-extension-a-v1";
+            public string CompatibilityId => "duplicate-player-extension-a";
             public IReadOnlyList<string> Validate(PlayerBuildExtensionRequest request) =>
                 Array.Empty<string>();
             public IDisposable BeginPlayerBuild(PlayerBuildExtensionRequest request) => null;
@@ -676,12 +678,12 @@ namespace Build.Pipeline.Tests.Editor
 
         [PlayerBuildExtensionAdapterRegistration(
             DuplicatePlayerExtensionConfiguration.ProviderIdValue,
-            "duplicate-player-extension-b-v1",
+            "duplicate-player-extension-b",
             ConfigurationType = typeof(DuplicatePlayerExtensionConfiguration))]
         public sealed class DuplicatePlayerExtensionAdapterB : IPlayerBuildExtensionAdapter
         {
             public string ProviderId => DuplicatePlayerExtensionConfiguration.ProviderIdValue;
-            public string CompatibilityId => "duplicate-player-extension-b-v1";
+            public string CompatibilityId => "duplicate-player-extension-b";
             public IReadOnlyList<string> Validate(PlayerBuildExtensionRequest request) =>
                 Array.Empty<string>();
             public IDisposable BeginPlayerBuild(PlayerBuildExtensionRequest request) => null;
@@ -697,14 +699,14 @@ namespace Build.Pipeline.Tests.Editor
 
         [PlayerBuildExtensionAdapterRegistration(
             CompatibilityMismatchPlayerExtensionConfiguration.ProviderIdValue,
-            "registered-adapter-v1",
+            "registered-adapter",
             ConfigurationType = typeof(CompatibilityMismatchPlayerExtensionConfiguration))]
         public sealed class CompatibilityMismatchPlayerExtensionAdapter :
             IPlayerBuildExtensionAdapter
         {
             public string ProviderId =>
                 CompatibilityMismatchPlayerExtensionConfiguration.ProviderIdValue;
-            public string CompatibilityId => "runtime-adapter-v2";
+            public string CompatibilityId => "different-runtime-adapter";
             public IReadOnlyList<string> Validate(PlayerBuildExtensionRequest request) =>
                 Array.Empty<string>();
             public IDisposable BeginPlayerBuild(PlayerBuildExtensionRequest request) => null;

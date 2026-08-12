@@ -47,7 +47,7 @@ If Obfuz is missing, the Player extension descriptor is unavailable and a select
 
 The marker intentionally has no serialized tuning fields. Obfuz rules and vendor options belong to the vendor-owned project settings; pipeline membership belongs to the marker asset. This separation makes selection reviewable in BuildData and avoids duplicating vendor configuration.
 
-Player extension provenance includes the stable provider ID `obfuz`, compatibility ID `obfuz-player-v1`, configuration asset path, GUID/local file ID, file hash, size, and Unity dependency hash. The marker must therefore remain a persistent main asset, not a transient object or sub-asset.
+Player extension provenance includes the stable provider ID `obfuz`, compatibility ID `obfuz-player`, configuration asset path, GUID/local file ID, file hash, size, and Unity dependency hash. The marker must therefore remain a persistent main asset, not a transient object or sub-asset.
 
 The Player extension list permits at most 64 entries and rejects duplicate provider IDs. Do not place secrets or keys in the marker asset; it has no secret-bearing contract.
 

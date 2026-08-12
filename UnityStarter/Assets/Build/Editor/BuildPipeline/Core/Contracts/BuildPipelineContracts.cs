@@ -195,47 +195,6 @@ namespace Build.Pipeline.Editor
             string branch,
             string commitDate,
             string providerId,
-            BuildIdentityOrigin identityOrigin = BuildIdentityOrigin.VersionControl,
-            string detectedCommitHash = null,
-            string detectedCommitCount = null,
-            string detectedBranch = null,
-            string detectedCommitDate = null,
-            string detectedProviderId = null,
-            long? detectedBuildNumber = null,
-            string ciProvider = null,
-            string ciRunId = null)
-            : this(
-                applicationVersion,
-                packageVersion,
-                buildNumber,
-                commitHash,
-                commitCount,
-                branch,
-                commitDate,
-                providerId,
-                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
-                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable),
-                identityOrigin,
-                detectedCommitHash,
-                detectedCommitCount,
-                detectedBranch,
-                detectedCommitDate,
-                detectedProviderId,
-                detectedBuildNumber,
-                ciProvider,
-                ciRunId)
-        {
-        }
-
-        public BuildVersionContext(
-            string applicationVersion,
-            string packageVersion,
-            long buildNumber,
-            string commitHash,
-            string commitCount,
-            string branch,
-            string commitDate,
-            string providerId,
             Build.VersionControl.Editor.VersionControlWorkspaceEvidence sourceWorkspace,
             BuildIdentityOrigin identityOrigin = BuildIdentityOrigin.VersionControl,
             string detectedCommitHash = null,
@@ -299,6 +258,37 @@ namespace Build.Pipeline.Editor
         public string CiProvider { get; }
         public string CiRunId { get; }
         public Build.VersionControl.Editor.VersionControlWorkspaceEvidence SourceWorkspace { get; }
+
+        internal BuildVersionContext WithSourceWorkspace(
+            Build.VersionControl.Editor.VersionControlWorkspaceEvidence sourceWorkspace)
+        {
+            return new BuildVersionContext(
+                ApplicationVersion,
+                PackageVersion,
+                BuildNumber,
+                CommitHash,
+                CommitCount,
+                Branch,
+                CommitDate,
+                ProviderId,
+                sourceWorkspace,
+                IdentityOrigin,
+                DetectedCommitHash,
+                DetectedCommitCount,
+                DetectedBranch,
+                DetectedCommitDate,
+                DetectedProviderId,
+                DetectedBuildNumber,
+                CiProvider,
+                CiRunId);
+        }
+    }
+
+    public enum BuildPurpose
+    {
+        Release = 0,
+        Development = 1,
+        LocalReleasePreview = 2
     }
 
     public sealed class BuildRequest
@@ -326,60 +316,9 @@ namespace Build.Pipeline.Editor
             bool batchMode,
             string applicationVersion,
             BuildIdentityOverride identityOverride,
-            IReadOnlyList<BuildStepInvocation> steps)
-            : this(
-                companyName,
-                productName,
-                applicationIdentifier,
-                versionInfoAssetPath,
-                buildScenePaths,
-                cheatBuildMode,
-                target,
-                namedTarget,
-                scriptingBackend,
-                projectRoot,
-                buildRoot,
-                outputPath,
-                outputDirectory,
-                outputIsFolder,
-                deleteDebugFiles,
-                debugBuild,
-                exportAndroidProject,
-                allowExternalOutput,
-                cheatOverride,
-                batchMode,
-                applicationVersion,
-                identityOverride,
-                steps,
-                BuildSourceCleanlinessPolicy.RequireClean)
-        {
-        }
-
-        public BuildRequest(
-            string companyName,
-            string productName,
-            string applicationIdentifier,
-            string versionInfoAssetPath,
-            IReadOnlyList<string> buildScenePaths,
-            CheatBuildMode cheatBuildMode,
-            BuildTarget target,
-            NamedBuildTarget namedTarget,
-            ScriptingImplementation scriptingBackend,
-            string projectRoot,
-            string buildRoot,
-            string outputPath,
-            string outputDirectory,
-            bool outputIsFolder,
-            bool deleteDebugFiles,
-            bool debugBuild,
-            bool exportAndroidProject,
-            bool allowExternalOutput,
-            bool? cheatOverride,
-            bool batchMode,
-            string applicationVersion,
-            BuildIdentityOverride identityOverride,
             IReadOnlyList<BuildStepInvocation> steps,
-            BuildSourceCleanlinessPolicy sourceCleanlinessPolicy)
+            BuildSourceCleanlinessPolicy sourceCleanlinessPolicy,
+            BuildPurpose purpose)
         {
             CompanyName = companyName ?? string.Empty;
             ProductName = productName ?? string.Empty;
@@ -408,18 +347,40 @@ namespace Build.Pipeline.Editor
             ApplicationVersion = applicationVersion ?? throw new ArgumentNullException(nameof(applicationVersion));
             IdentityOverride = identityOverride ?? throw new ArgumentNullException(nameof(identityOverride));
             Steps = SnapshotSteps(steps, nameof(steps));
+            if (purpose != BuildPurpose.Release
+                && purpose != BuildPurpose.Development
+                && purpose != BuildPurpose.LocalReleasePreview)
+            {
+                throw new ArgumentOutOfRangeException(nameof(purpose), purpose, null);
+            }
+
+            if (purpose == BuildPurpose.Release && debugBuild
+                || purpose == BuildPurpose.Development && !debugBuild
+                || purpose == BuildPurpose.LocalReleasePreview
+                   && (debugBuild || batchMode || exportAndroidProject || allowExternalOutput))
+            {
+                throw new ArgumentException(
+                    "Build purpose is incompatible with the requested build flags.",
+                    nameof(purpose));
+            }
+
+            Purpose = purpose;
             if (sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.RequireClean
-                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyDevelopment)
+                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyDevelopment
+                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(sourceCleanlinessPolicy),
                     sourceCleanlinessPolicy,
-                    "Source cleanliness policy must be RequireClean or AllowDirtyDevelopment.");
+                    "Source cleanliness policy must be RequireClean, AllowDirtyDevelopment, " +
+                    "or AllowDirtyLocalRelease.");
             }
 
             SourceCleanlinessPolicy = sourceCleanlinessPolicy;
-            RequireCleanSource = !debugBuild
-                || sourceCleanlinessPolicy == BuildSourceCleanlinessPolicy.RequireClean;
+            RequireCleanSource = BuildSourceWorkspacePolicy.RequiresVerifiedClean(
+                batchMode,
+                purpose,
+                sourceCleanlinessPolicy);
 
             var stepTypeIds = new string[Steps.Count];
             for (int index = 0; index < Steps.Count; index++)
@@ -454,7 +415,10 @@ namespace Build.Pipeline.Editor
         public string ApplicationVersion { get; }
         public BuildIdentityOverride IdentityOverride { get; }
         public BuildSourceCleanlinessPolicy SourceCleanlinessPolicy { get; }
+        public BuildPurpose Purpose { get; }
         public bool RequireCleanSource { get; }
+        public bool CanPublishReleaseBaseline =>
+            Purpose == BuildPurpose.Release && RequireCleanSource;
         public IReadOnlyList<BuildStepInvocation> Steps { get; }
         public IReadOnlyList<string> StepTypeIds { get; }
 
@@ -1394,6 +1358,19 @@ namespace Build.Pipeline.Editor
     public interface IBuildDownstreamInputPublication : IBuildDeferredPublication
     {
         void ActivateForDownstream();
+    }
+
+    /// <summary>
+    /// An activated downstream publication whose transaction-owned workspace
+    /// mutations can be hidden while the runner qualifies the source checkout.
+    /// The returned scope must restore the exact publication-ready state when
+    /// disposed. Implementations must fail closed when either state cannot be
+    /// proven and must retain durable recovery evidence across interruption.
+    /// </summary>
+    public interface IBuildSourceQualificationPublication
+        : IBuildDownstreamInputPublication
+    {
+        IDisposable SuspendForSourceQualification();
     }
 
     public interface IBuildEventSink

@@ -4,12 +4,13 @@ namespace Build.Pipeline.Editor
 {
     internal static class BuildResultManifestFormat
     {
-        internal const int CurrentVersion = 2;
+        internal const string DocumentType = "build-result";
+        internal const string StartedDocumentType = "build-run-started";
 
         [Serializable]
         internal sealed class Document
         {
-            public int formatVersion;
+            public string documentType;
             public string operation;
             public string runId;
             public bool succeeded;
@@ -21,6 +22,8 @@ namespace Build.Pipeline.Editor
             public string namedBuildTarget;
             public string scriptingBackend;
             public bool debugBuild;
+            public string buildPurpose;
+            public bool releaseBaselinePolicyEligible;
             public bool deleteDebugFiles;
             public bool exportAndroidProject;
             public bool allowExternalOutput;
@@ -39,7 +42,6 @@ namespace Build.Pipeline.Editor
             public string[] buildScenePaths;
             public string cheatBuildMode;
             public bool cheatEnabled;
-            public int playerPipelineCompatibilityRevision;
             public string playerExtensionFingerprint;
             public string failure;
             public string[] nonFatalFailures;

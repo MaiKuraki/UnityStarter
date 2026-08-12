@@ -55,7 +55,7 @@ namespace Build.Pipeline.Editor
     /// </summary>
     public sealed class BuildWorkspaceLease : IDisposable
     {
-        public const int MetadataFormatVersion = 1;
+        public const string MetadataDocumentType = "build-workspace-lease";
         public const int MaximumMetadataUtf8Bytes = 4 * 1024;
 
         private const long LockOffset = 0;
@@ -325,9 +325,9 @@ namespace Build.Pipeline.Editor
             DateTimeOffset startedUtc)
         {
             var builder = new StringBuilder(384);
-            builder.Append("{\"formatVersion\":")
-                .Append(MetadataFormatVersion.ToString(CultureInfo.InvariantCulture))
-                .Append(",\"runId\":");
+            builder.Append("{\"documentType\":");
+            AppendJsonString(builder, MetadataDocumentType);
+            builder.Append(",\"runId\":");
             AppendJsonString(builder, runId);
             builder.Append(",\"operation\":");
             AppendJsonString(builder, GetOperationName(operation));

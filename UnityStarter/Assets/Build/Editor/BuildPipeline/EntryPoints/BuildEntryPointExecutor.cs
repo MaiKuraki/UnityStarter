@@ -19,6 +19,10 @@ namespace Build.Pipeline.Editor
             bool debug,
             bool exportAndroidProject,
             IReadOnlyList<string> invocationIdsOverride);
+        BuildRequest CreateLocalReleasePreviewRequest(
+            BuildData profile,
+            BuildTarget target,
+            IReadOnlyList<string> invocationIdsOverride);
         BuildRunResult RunBuild(
             BuildRequest request,
             string runId,
@@ -65,6 +69,17 @@ namespace Build.Pipeline.Editor
                 target,
                 debug,
                 exportAndroidProject,
+                invocationIdsOverride);
+        }
+
+        public BuildRequest CreateLocalReleasePreviewRequest(
+            BuildData profile,
+            BuildTarget target,
+            IReadOnlyList<string> invocationIdsOverride)
+        {
+            return BuildRequestFactory.CreateLocalReleasePreview(
+                profile,
+                target,
                 invocationIdsOverride);
         }
 
@@ -206,6 +221,27 @@ namespace Build.Pipeline.Editor
             IReadOnlyList<string> invocationIdsOverride,
             IBuildEntryPointOperations operations)
         {
+            return ExecuteInteractive(
+                trustedProjectRoot,
+                resolveProfile,
+                target,
+                debug,
+                exportAndroidProject,
+                invocationIdsOverride,
+                localReleasePreview: false,
+                operations);
+        }
+
+        public static BuildEntryPointExecutionResult ExecuteInteractive(
+            string trustedProjectRoot,
+            Func<BuildData> resolveProfile,
+            BuildTarget target,
+            bool debug,
+            bool exportAndroidProject,
+            IReadOnlyList<string> invocationIdsOverride,
+            bool localReleasePreview,
+            IBuildEntryPointOperations operations)
+        {
             if (resolveProfile == null)
             {
                 throw new ArgumentNullException(nameof(resolveProfile));
@@ -226,12 +262,17 @@ namespace Build.Pipeline.Editor
                         ?? throw new InvalidOperationException(
                             "Build profile resolution returned no profile.");
                     stage = "request-factory";
-                    BuildRequest request = operations.CreateInteractiveRequest(
-                        profile,
-                        target,
-                        debug,
-                        exportAndroidProject,
-                        invocationIdsOverride)
+                    BuildRequest request = (localReleasePreview
+                            ? operations.CreateLocalReleasePreviewRequest(
+                                profile,
+                                target,
+                                invocationIdsOverride)
+                            : operations.CreateInteractiveRequest(
+                                profile,
+                                target,
+                                debug,
+                                exportAndroidProject,
+                                invocationIdsOverride))
                         ?? throw new InvalidOperationException(
                             "Interactive request creation returned no request.");
                     stage = "build-run";

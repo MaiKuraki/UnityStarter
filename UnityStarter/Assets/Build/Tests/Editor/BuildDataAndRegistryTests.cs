@@ -956,7 +956,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: applicationVersion,
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: invocations);
+                steps: invocations,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Development);
         }
 
         private static BuildExecutionContext CreatePlanContext(

@@ -633,7 +633,9 @@ namespace Build.Pipeline.Editor.Tests
                 "1",
                 "branch",
                 "2026-01-01T00:00:00Z",
-                "test");
+                "test",
+                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable));
 
             BuildFailedException first = Assert.Throws<BuildFailedException>(
                 () => BuildGlobalStateScope.CaptureAndApply(request, version));
@@ -697,7 +699,11 @@ namespace Build.Pipeline.Editor.Tests
                 steps: new[]
                 {
                     new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: !originalDevelopmentBuild
+                    ? BuildPurpose.Development
+                    : BuildPurpose.Release);
             var version = new BuildVersionContext(
                 applicationVersion,
                 applicationVersion + ".guard",
@@ -706,7 +712,9 @@ namespace Build.Pipeline.Editor.Tests
                 "0",
                 "guard",
                 "2026-01-01T00:00:00Z",
-                "test");
+                "test",
+                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable));
 
             BuildGlobalStateScope scope = BuildGlobalStateScope.CaptureAndApply(request, version);
             try
@@ -936,7 +944,9 @@ namespace Build.Pipeline.Editor.Tests
                 steps: new[]
                 {
                     new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
         }
 
         private static void WriteFile(string path, byte[] bytes, DateTime lastWriteTimeUtc)

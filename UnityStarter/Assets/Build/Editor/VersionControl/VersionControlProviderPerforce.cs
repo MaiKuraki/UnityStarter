@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Build.VersionControl.Editor
 {
-    internal sealed class VersionControlProviderPerforce : IVersionControlProvider
+    internal sealed class VersionControlProviderPerforce :
+        IVersionControlProvider,
+        IVersionControlWorkspaceProvider
     {
         private const string P4Executable = "p4";
         private const int ProcessTimeoutMilliseconds = 10000;
@@ -97,10 +100,18 @@ namespace Build.VersionControl.Editor
                 CaptureWorkspace());
         }
 
-        private VersionControlWorkspaceEvidence CaptureWorkspace()
+        public VersionControlWorkspaceEvidence CaptureWorkspace()
         {
+            return CaptureWorkspace(CancellationToken.None);
+        }
+
+        public VersionControlWorkspaceEvidence CaptureWorkspace(
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!TryRunP4Command(
                     "-ztag status",
+                    cancellationToken,
                     out string firstStatus,
                     out string firstFailure))
             {
@@ -109,6 +120,7 @@ namespace Build.VersionControl.Editor
 
             if (!TryRunP4Command(
                     "-ztag status",
+                    cancellationToken,
                     out string secondStatus,
                     out string secondFailure))
             {
@@ -288,11 +300,48 @@ namespace Build.VersionControl.Editor
             out string failureCode,
             bool allowExitCodeOne = false)
         {
+            return TryRunP4Command(
+                arguments,
+                CancellationToken.None,
+                out output,
+                out failureCode,
+                allowExitCodeOne);
+        }
+
+        private bool TryRunP4Command(
+            string arguments,
+            CancellationToken cancellationToken,
+            out string output,
+            out string failureCode,
+            bool allowExitCodeOne = false)
+        {
             try
             {
-                output = RunP4Command(arguments, allowExitCodeOne);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (commandRunner is ICancellableVersionControlCommandRunner cancellable)
+                {
+                    output = cancellable.Run(
+                        P4Executable,
+                        arguments,
+                        projectRoot,
+                        null,
+                        ProcessTimeoutMilliseconds,
+                        MaximumProcessOutputCharacters,
+                        allowExitCodeOne,
+                        cancellationToken);
+                }
+                else
+                {
+                    output = RunP4Command(arguments, allowExitCodeOne);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 failureCode = null;
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (VersionControlCommandException exception)
             {

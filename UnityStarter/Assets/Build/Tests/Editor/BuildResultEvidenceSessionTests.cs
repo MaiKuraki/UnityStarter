@@ -13,6 +13,35 @@ namespace Build.Pipeline.Tests.Editor
 {
     public sealed class BuildResultEvidenceSessionTests
     {
+        [Test]
+        public void CurrentJsonDocumentContract_RejectsAmbiguousOrUnknownInput()
+        {
+            Assert.DoesNotThrow(() => BuildJsonDocumentContract.Validate<ContractFixture>(
+                "{\"documentType\":\"test-document\",\"value\":1}",
+                "test-document",
+                "test document"));
+            Assert.Throws<InvalidOperationException>(() =>
+                BuildJsonDocumentContract.Validate<ContractFixture>(
+                    "{\"documentType\":\"test-document\",\"documentType\":\"test-document\",\"value\":1}",
+                    "test-document",
+                    "test document"));
+            Assert.Throws<InvalidOperationException>(() =>
+                BuildJsonDocumentContract.Validate<ContractFixture>(
+                    "{\"documentType\":\"test-document\",\"value\":1,\"unknown\":true}",
+                    "test-document",
+                    "test document"));
+            Assert.Throws<InvalidOperationException>(() =>
+                BuildJsonDocumentContract.Validate<ContractFixture>(
+                    "{/*comment*/\"documentType\":\"test-document\",\"value\":1}",
+                    "test-document",
+                    "test document"));
+            Assert.Throws<InvalidOperationException>(() =>
+                BuildJsonDocumentContract.Validate<ContractFixture>(
+                    "{\"documentType\":\"test-document\",\"value\":1}{}",
+                    "test-document",
+                    "test document"));
+        }
+
         private string sandboxRoot;
         private BuildData profile;
 
@@ -394,7 +423,7 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [TestCase(FakeManifestMode.Incomplete)]
-        [TestCase(FakeManifestMode.WrongFormat)]
+        [TestCase(FakeManifestMode.WrongDocumentType)]
         [TestCase(FakeManifestMode.WrongOutcome)]
         [TestCase(FakeManifestMode.Partial)]
         [TestCase(FakeManifestMode.MissingRequestField)]
@@ -500,7 +529,9 @@ namespace Build.Pipeline.Tests.Editor
                 steps: new[]
                 {
                     new BuildStepInvocation("player", BuildStepTypeIds.Player)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
         }
 
         public enum FakeFailureStage
@@ -513,11 +544,18 @@ namespace Build.Pipeline.Tests.Editor
             Recovery
         }
 
+        [Serializable]
+        private sealed class ContractFixture
+        {
+            public string documentType = string.Empty;
+            public int value = 0;
+        }
+
         public enum FakeManifestMode
         {
             Full,
             Incomplete,
-            WrongFormat,
+            WrongDocumentType,
             WrongOutcome,
             Partial,
             MissingRequestField,
@@ -580,6 +618,15 @@ namespace Build.Pipeline.Tests.Editor
                 BuildTarget target,
                 bool debug,
                 bool exportAndroidProject,
+                IReadOnlyList<string> invocationIdsOverride)
+            {
+                ThrowIf(FakeFailureStage.Factory);
+                return request;
+            }
+
+            public BuildRequest CreateLocalReleasePreviewRequest(
+                BuildData resolvedProfile,
+                BuildTarget target,
                 IReadOnlyList<string> invocationIdsOverride)
             {
                 ThrowIf(FakeFailureStage.Factory);
@@ -657,7 +704,7 @@ namespace Build.Pipeline.Tests.Editor
                 {
                     File.WriteAllText(
                         result.ResultManifestPath,
-                        "{\"formatVersion\":2,\"runId\":\"" + result.RunId + "\"}");
+                        "{\"documentType\":\"build-result\",\"runId\":\"" + result.RunId + "\"}");
                     eventSink.RunFinished(context, result);
                     return;
                 }
@@ -682,12 +729,12 @@ namespace Build.Pipeline.Tests.Editor
                 }
 
                 string json = File.ReadAllText(result.ResultManifestPath);
-                if (ManifestMode == FakeManifestMode.WrongFormat)
+                if (ManifestMode == FakeManifestMode.WrongDocumentType)
                 {
                     json = ReplaceRequired(
                         json,
-                        "\"formatVersion\": 2",
-                        "\"formatVersion\": 1");
+                        "\"documentType\": \"build-result\"",
+                        "\"documentType\": \"unsupported-build-result\"");
                 }
                 else if (ManifestMode == FakeManifestMode.Partial)
                 {

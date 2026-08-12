@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Build.VersionControl.Editor
 {
-    internal sealed class VersionControlProviderGit : IVersionControlProvider
+    internal sealed class VersionControlProviderGit :
+        IVersionControlProvider,
+        IVersionControlWorkspaceProvider
     {
         private const string GitExecutable = "git";
         private const int ProcessTimeoutMilliseconds = 10000;
@@ -63,6 +66,57 @@ namespace Build.VersionControl.Editor
             }
 
             return null;
+        }
+
+        public VersionControlWorkspaceEvidence CaptureWorkspace()
+        {
+            return CaptureWorkspace(CancellationToken.None);
+        }
+
+        public VersionControlWorkspaceEvidence CaptureWorkspace(
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryRunGitCommand(
+                        "status --porcelain=v2 -z --untracked-files=all --ignore-submodules=none",
+                        cancellationToken,
+                        out string statusBefore,
+                        out string firstFailure))
+                {
+                    return VersionControlWorkspaceEvidence.Unknown(
+                        firstFailure ?? VersionControlWorkspaceEvidence.CommandFailed);
+                }
+
+                VersionControlWorkspaceEvidence workspace = CaptureWorkspace(
+                    statusBefore,
+                    initialFailureCode: null,
+                    cancellationToken);
+                if (!TryRunGitCommand(
+                        "status --porcelain=v2 -z --untracked-files=all --ignore-submodules=none",
+                        cancellationToken,
+                        out string statusAfter,
+                        out string secondFailure))
+                {
+                    return VersionControlWorkspaceEvidence.Unknown(
+                        secondFailure ?? VersionControlWorkspaceEvidence.CommandFailed);
+                }
+
+                return string.Equals(statusBefore, statusAfter, StringComparison.Ordinal)
+                    ? workspace
+                    : VersionControlWorkspaceEvidence.Unknown(
+                        VersionControlWorkspaceEvidence.IncoherentSnapshot);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return VersionControlWorkspaceEvidence.Unknown(
+                    VersionControlWorkspaceEvidence.CommandFailed);
+            }
         }
 
         public VersionControlMetadata Capture()
@@ -149,7 +203,8 @@ namespace Build.VersionControl.Editor
 
         private VersionControlWorkspaceEvidence CaptureWorkspace(
             string statusOutput,
-            string initialFailureCode)
+            string initialFailureCode,
+            CancellationToken cancellationToken = default)
         {
             string failureCode = string.IsNullOrEmpty(initialFailureCode)
                 ? VersionControlWorkspaceEvidence.NoFailure
@@ -174,9 +229,12 @@ namespace Build.VersionControl.Editor
             }
 
             VersionControlWorkspaceComponentEvidence submodules =
-                CaptureSubmoduleStatus(submodulesFromStatus, ref failureCode);
+                CaptureSubmoduleStatus(
+                    submodulesFromStatus,
+                    ref failureCode,
+                    cancellationToken);
             VersionControlWorkspaceComponentEvidence gitLfs =
-                CaptureGitLfsStatus(ref failureCode);
+                CaptureGitLfsStatus(ref failureCode, cancellationToken);
             return new VersionControlWorkspaceEvidence(
                 tracked,
                 untracked,
@@ -187,10 +245,12 @@ namespace Build.VersionControl.Editor
 
         private VersionControlWorkspaceComponentEvidence CaptureSubmoduleStatus(
             VersionControlWorkspaceComponentEvidence statusEvidence,
-            ref string failureCode)
+            ref string failureCode,
+            CancellationToken cancellationToken)
         {
             if (!TryRunGitCommand(
                     "submodule status --recursive",
+                    cancellationToken,
                     out string output,
                     out string commandFailure))
             {
@@ -272,10 +332,12 @@ namespace Build.VersionControl.Editor
         }
 
         private VersionControlWorkspaceComponentEvidence CaptureGitLfsStatus(
-            ref string failureCode)
+            ref string failureCode,
+            CancellationToken cancellationToken)
         {
             if (!TryRunGitCommand(
                     "lfs status --json",
+                    cancellationToken,
                     out string status,
                     out string statusFailure))
             {
@@ -458,11 +520,46 @@ namespace Build.VersionControl.Editor
             out string output,
             out string failureCode)
         {
+            return TryRunGitCommand(
+                arguments,
+                CancellationToken.None,
+                out output,
+                out failureCode);
+        }
+
+        private bool TryRunGitCommand(
+            string arguments,
+            CancellationToken cancellationToken,
+            out string output,
+            out string failureCode)
+        {
             try
             {
-                output = RunGitCommand(arguments);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (commandRunner is ICancellableVersionControlCommandRunner cancellable)
+                {
+                    output = cancellable.Run(
+                        GitExecutable,
+                        arguments,
+                        projectRoot,
+                        environment,
+                        ProcessTimeoutMilliseconds,
+                        MaximumProcessOutputCharacters,
+                        false,
+                        cancellationToken);
+                }
+                else
+                {
+                    output = RunGitCommand(arguments);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 failureCode = null;
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (VersionControlCommandException exception)
             {

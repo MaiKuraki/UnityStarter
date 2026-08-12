@@ -84,10 +84,14 @@ The custom Inspector groups settings by responsibility and displays recipe, vali
 | `Product Name` | Product identity and default artifact name | Configure a portable filename even for content-only profiles |
 | `Application Identifier` | Player application identity | At least two dot-separated ASCII identifier segments |
 | `Runtime Version Info` | Temporary `VersionInfoData` destination | Exact project-relative `Assets/.../Resources/VersionInfoData.asset` path |
-| `Source Cleanliness Policy` | Version-control workspace gate | `Require Clean` is the safe default; `Allow Dirty Development` applies only to Development requests |
+| `Source Cleanliness Policy` | Version-control workspace qualification | `Require Clean` is the safe default; local exceptions never relax batch mode or qualified Release requests |
 | `Cheat Build Mode` | Per-build `ENABLE_CHEAT` request | Applied transactionally to the selected target; independent of HybridCLR authoring |
 
-Release requests always require verified-clean source, regardless of the saved policy. A Development request can proceed with dirty or unknown source only when the profile explicitly selects `Allow Dirty Development`. The enum value for `Require Clean` is zero, so existing serialized profiles that do not yet contain the field retain the safe behavior without an asset rewrite.
+Qualified Release and batch-mode requests always require verified-clean source, regardless of the saved policy. `Allow Dirty Development` permits only local interactive Development requests to continue with Dirty or Unknown source. `Allow Dirty Local Release` also permits local Development and lets the Inspector **Release** action route to the isolated Local Release Player described below when a qualified Release is blocked. It does not relax the formal Release request consumed by CI or direct entry points. The enum values are `Require Clean = 0`, `Allow Dirty Development = 1`, and `Allow Dirty Local Release = 2`; profiles without the field retain the safe default.
+
+The Inspector also exposes **Local Optimized Preview** for developers who need Release-like Player optimization while the checkout is changing. `Allow Dirty Local Release` reuses this same protected purpose behind the **Release (Local Dirty)** action. It runs exactly one Clean Player invocation with `DebugBuild = false`, forces output below `<BuildRoot>/LocalPreview`, records Dirty or Unknown source evidence, and is explicitly non-distributable. It cannot run from batch mode or the command line, export an Android project, use an external output, include content/hot-update/custom invocations, publish a HybridCLR release baseline, or reuse a formal Release Player output. A recipe that requires Content, Hot Update, custom steps, or Incremental Player output remains blocked until the workspace is clean.
+
+Qualification covers the containing version-control worktree, not only `Assets/`. Changes below sibling repository areas such as `Tools/` or `Docs/` therefore block a qualified Release by default. This conservative scope prevents the pipeline from claiming a reproducible repository revision without a machine-readable declaration of every build input.
 
 The default runtime version destination is:
 
@@ -130,12 +134,13 @@ When a base configuration is abstract, **Create** lists only concrete providers 
 
 ### Read readiness and save authoring
 
-- **Build Readiness** summarizes recipe, validation, workspace health, dirty authoring, and active target.
+- **Build Readiness** separately summarizes source qualification, build-transaction safety, recipe validation, dirty authoring, and active target.
 - **Compiled Summary** shows the recognized preset, expected outputs, and topologically compiled plan.
-- **Workspace Safety** reports `Clean`, `Busy`, `Recovery Required`, or `Blocked` from durable evidence.
+- **Source Qualification** asynchronously previews tracked, untracked, submodule, and Git LFS evidence without running VCS commands from IMGUI. Release, Development, and Local Optimized Preview decisions are shown independently.
+- **Build Transaction Safety** reports `Clean`, `Busy`, `Recovery Required`, or `Blocked` from durable transaction and lease evidence.
 - **Validation** reports scene, identity, package, provider, configuration, dependency, provenance, and output errors.
 
-Build actions remain disabled while Unity is compiling, updating assets, building a Player, the workspace is not clean, validation fails, or selected authoring assets are dirty.
+Release, Android export, and focused non-Development actions remain disabled until the cached preview is verified clean. Development can remain available only under the explicit local exception; an eligible Local Optimized Preview remains available because its Player-only output is isolated and non-distributable. A provider that does not implement the optional thread-safe preview capability is reported as `RUNNER CHECK` instead of being blocked by the Inspector. The preview is never authorization: the runner captures a fresh authoritative snapshot at preflight and revalidates protected builds again before any deferred publication is committed.
 
 Click **Save Build Authoring Assets** before an interactive build. This saves the profile and dirty configuration assets referenced by the saved selection; it does not silently save the entire project. A retained configuration selected only by a focused action may need to be saved explicitly with Unity's normal asset save command.
 
@@ -144,7 +149,8 @@ Click **Save Build Authoring Assets** before an interactive build. This saves th
 | Action | Membership |
 | --- | --- |
 | **Run Saved Recipe** | Every enabled invocation |
-| **Release** / **Development** | Saved recipe with the corresponding Player option policy |
+| **Release** / **Development** | Saved recipe with the corresponding Player option policy; under `Allow Dirty Local Release`, a blocked interactive Release becomes an isolated **Release (Local Dirty)** Player action |
+| **Local Optimized Preview** | Exactly one Clean Player invocation, Release-like optimization, isolated non-distributable output |
 | **Focused Output** | A standard non-Player subset without modifying the profile |
 | **Exact Invocation** | One invocation plus its transitive `Required` dependencies |
 
@@ -182,6 +188,12 @@ Without an explicit Player output override:
 
 ```text
 <BuildRoot>/<Platform>/<Release|Development>/<Artifact>
+```
+
+Local Optimized Preview always ignores external output overrides and uses:
+
+```text
+<BuildRoot>/LocalPreview/<Platform>/Release/<Artifact>
 ```
 
 Every command-line invocation attempts to write:
@@ -254,10 +266,11 @@ Player declares all three. Asset content declares none in the core and delegates
 7. Install only the dynamic global-state and VersionInfo scopes required by selected invocations.
 8. Execute invocations serially and stop after the first applicable step failure.
 9. Restore Unity state and revalidate configuration provenance.
-10. Seal the execution context and validate result/publication capacity.
-11. Commit or roll back every deferred publication through one durable decision.
-12. Persist, read back, and contract-validate terminal evidence.
-13. Release the workspace lease.
+10. For a protected Release/batch request, durably suspend transaction-owned downstream outputs, capture the terminal source snapshot, require the same revision and a verified-clean workspace, then restore those outputs exactly.
+11. Seal the execution context and validate result/publication capacity.
+12. Commit or roll back every deferred publication through one durable decision.
+13. Persist, read back, and contract-validate terminal evidence.
+14. Release the workspace lease.
 
 Non-applicable or unexecuted later invocations are recorded as `Skipped`. Restoration, provenance, publication, and evidence failures are aggregated rather than replacing the original failure.
 
@@ -270,13 +283,21 @@ The transaction has two distinct phases:
 
 `IBuildDownstreamInputPublication` can expose staged data reversibly to a later invocation, such as hot-update DLLs consumed by content or bundled packages consumed by Player. This does not commit the output early.
 
+An additive source-qualification capability can temporarily return such transaction-owned inputs to their exact pre-run state while the terminal VCS snapshot is captured, then restore the staged output before sealing and publication. The suspension is synchronous, journaled, identity-checked, and never implemented as a path/count exclusion from source evidence.
+
+HybridCLR composes this capability across both its final output transaction and its generation transaction: outputs suspend before generation inputs, while generation resumes before outputs. Exact file/tree identities and portable path-overlap checks prevent either transaction from hiding or taking ownership of unrelated checkout changes.
+
 The barrier records `Prepared`, publishes every participant, then durably records `Committed`. Recovery rolls back a `Prepared` decision and completes a `Committed` decision. It never infers a terminal decision from child state alone.
 
 ### Provenance and deterministic evidence
 
 Preflight captures invocation ID, step type, incrementality, dependencies, configuration path/GUID/file ID/type, asset digest, and dependency-object digest. The pipeline rechecks provenance before mutation, before each invocation, and before publication. Dirty or changed authoring fails closed.
 
-The full result manifest records the compiled order, request identity, step outcomes, provider results, warnings, outputs, normalized failures, source/CI identity, and a redacted source-workspace snapshot. Result evidence uses `formatVersion = 2`. Version 1 result files remain historical artifacts only: the current reader rejects them and does not migrate or rewrite them. Transaction journals and ownership documents have independent owner-local versions; a matching numeric value does not imply schema compatibility. None of these versions is the `BuildData` authoring schema.
+The full result manifest records the compiled order, request identity, build purpose, release-baseline policy eligibility, step outcomes, provider results, warnings, outputs, normalized failures, source/CI identity, and a redacted source-workspace snapshot.
+
+All Build-owned JSON uses one current-only document contract. Each document begins with an exact `documentType`, rejects duplicate or unknown members, comments, invalid token types, excessive depth, and trailing content, and additionally carries ownership checksums or tree identities where recovery or deletion authorization requires them. The pipeline contains no historical readers, numeric wire versions, automatic migration, or compatibility DTOs. An artifact that does not match the current contract is rejected without mutation.
+
+This policy applies only to Build-owned, reproducible state: results, journals, ownership markers, publication manifests, and release baselines. It does not replace application versions, package versions, source revisions, provider compatibility identities, or Unity's required `.meta` file format. Before updating the Build module, Workspace Health must be `Clean`; recover pending transactions and remove obsolete reproducible outputs with the checkout and ownership-aware tools that created them. If obsolete evidence remains after the update, the current pipeline rejects it without mutation. Return to the originating checkout to recover or clean it, or quarantine it only after an explicit ownership review, then perform a Clean build. Never reinterpret or adopt old artifacts in place.
 
 ### Current architectural limits
 
@@ -431,7 +452,7 @@ A successful content build does not prove that the Player includes the matching 
 4. Keep the Invocation ID stable because it participates in output paths, journals, provenance, and artifacts.
 5. Choose `Clean` or `Incremental` using the provider-specific rules.
 6. Save profile and configuration.
-7. Require Workspace Safety `Clean` and successful preflight.
+7. Require Source Qualification `Verified Clean`, Build Transaction Safety `Clean`, and successful preflight.
 8. Run Saved Recipe, Content Only, or Exact Invocation.
 
 ### Addressables
@@ -907,15 +928,15 @@ Player builds use an isolated sibling stage:
 - A non-empty unowned destination is rejected; an empty unowned directory may be adopted.
 - Ownership sidecar and journal support rollback/committed completion.
 
-Compatibility includes pipeline revision, Unity version, target/backend, output shape/name, product identity, Android export, debug/Cheat options, and Player-extension fingerprint. A mismatch requires Clean.
+Compatibility includes an automatically derived pipeline-implementation fingerprint, build purpose, Unity version, target/backend, output shape/name, product identity, Android export, debug/Cheat options, and Player-extension fingerprint. A mismatch requires Clean. The current ownership document binds this identity to the complete output tree and checksum. The ownership-aware full-clean tool accepts only that exact current document and rejects duplicate, unknown, malformed, or stale evidence.
 
 ### Required result evidence
 
 The started marker is removed only after the terminal manifest is durably written, deserialized, validated, and the log is flushed. Evidence begins before option parsing, so early failures still attempt a terminal result.
 
-The full result schema v2 adds `sourceWorkspace` with `policy`, `required`, `overallStatus`, `failureCode`, and the `trackedChanges`, `untrackedChanges`, `submodules`, and `gitLfs` components. Each component has a stable `status` plus an optional aggregate count represented by `hasChangeCount` and `changeCount`. The manifest intentionally excludes changed paths, file contents, command lines, environment values, and stderr, so it cannot become a source or credential disclosure channel.
+The full result document includes `buildPurpose`, `releaseBaselinePolicyEligible`, and the `sourceWorkspace` envelope. Baseline eligibility reports only whether the request purpose and source policy may participate in a formal Release baseline; it does not claim that a HybridCLR baseline was requested, produced, or durably published. Provider-specific publication evidence remains the authority for an actual baseline. `sourceWorkspace` contains `policy`, `required`, `overallStatus`, `failureCode`, and the `trackedChanges`, `untrackedChanges`, `submodules`, and `gitLfs` components. Each component has a stable `status` plus an optional aggregate count represented by `hasChangeCount` and `changeCount`. The manifest intentionally excludes changed paths, file contents, command lines, environment values, and stderr, so it cannot become a source or credential disclosure channel.
 
-The full manifest is validated against the frozen snapshot used by the runner. A `partial = true` early terminal manifest created before request or source capture omits `sourceWorkspace` because neither `policy` nor `required` is known; consumers must treat the missing field as `Unknown` and fail closed. A Runner terminal manifest whose request exists but whose workspace capture was unavailable records `Unknown/MetadataUnavailable`. Result schema v1 is not upgraded in place; archive it with the producing pipeline version and use only v2 for current automated decisions.
+The full manifest is validated against the frozen snapshot used by the runner. A `partial = true` early terminal manifest created before request or source capture omits `sourceWorkspace` because neither `policy` nor `required` is known; consumers must treat the missing field as `Unknown` and fail closed. A Runner terminal manifest whose request exists but whose workspace capture was unavailable records `Unknown/MetadataUnavailable`. Only the current `build-result` document contract is accepted for automated decisions.
 
 An evidence failure has precedence. Artifacts may already be committed when a later manifest write fails; exit `2` still means the run is not publishable. Inspect output ownership, manifest/log, transaction root, and sidecars before retrying.
 
@@ -1023,12 +1044,12 @@ A hot-update provider derives a typed configuration, registers exact provider/co
 ```csharp
 [PlayerBuildExtensionAdapterRegistration(
     "my-player-extension",
-    "my-player-extension-contract-v1",
+    "my-player-extension-contract",
     ConfigurationType = typeof(MyPlayerExtensionConfig))]
 public sealed class MyPlayerExtensionAdapter : IPlayerBuildExtensionAdapter
 {
     public string ProviderId => "my-player-extension";
-    public string CompatibilityId => "my-player-extension-contract-v1";
+    public string CompatibilityId => "my-player-extension-contract";
 
     public IReadOnlyList<string> Validate(PlayerBuildExtensionRequest request) =>
         Array.Empty<string>();
@@ -1157,6 +1178,7 @@ Android explicit packages end in `.apk` or `.aab`; project export is a directory
 | `Temp/BuildPipeline/Workspace/lease.*` | Reusable lock and diagnostic metadata |
 | `Assets/Build/Runtime/Resources/VersionInfoData.asset` | Default temporary Player input; restored/removed |
 | `<PlayerOutput>.buildpipeline-player-owner.json` | Player output ownership/compatibility sidecar |
+| `<BuildRoot>/LocalPreview` | Isolated, non-distributable Local Optimized Preview output; delete only through normal ownership-aware output handling |
 | `<BuildRoot>/.buildpipeline/baselines/hybridclr` | Pipeline-owned HybridCLR release baselines |
 
 Result history has no automatic pruning. Transaction state and ownership sidecars are not disposable caches.
@@ -1194,9 +1216,9 @@ The synchronized Chinese manual is [README.SCH.md](README.SCH.md). The architect
 ### Fast triage
 
 1. Stop additional Unity build processes using the same project.
-2. Read **Build Readiness** and **Workspace Safety**.
+2. Read **Build Readiness**, **Source Qualification**, and **Build Transaction Safety**.
 3. Preserve the Unity log and `.buildpipeline/results`.
-4. If status is not Clean, inspect Workspace Health.
+4. If Build Transaction Safety is not Clean, inspect Workspace Health. If Source Qualification is Dirty or Unknown, inspect the aggregate component counts and VCS failure code, then restore a clean worktree for Release/CI.
 5. Recover only through the Inspector or `-pipelineRecoverOnly`.
 6. Retry only after Clean and with the correct active target.
 7. Select invocation-level Clean when compatibility validation requires it.
@@ -1212,7 +1234,7 @@ The synchronized Chinese manual is [README.SCH.md](README.SCH.md). The architect
 | Cycle | Dependency loop | Remove/redirect an edge and inspect compiled plan |
 | Exit `3` | Live workspace lease | Find owner from metadata; never delete a live lock |
 | Recovery Required | Process stopped with active durable state | Run token-bound recovery |
-| Foreign/unowned output | Destination lacks matching owner | Use a new root or controlled migration; do not adopt implicitly |
+| Foreign/unowned output | Destination lacks matching owner | Use a new root or remove the output through an explicitly reviewed cleanup; do not adopt implicitly |
 | Output overlap | Invocations claim same/ancestor roots | Separate roots or combine under one provider invocation |
 | Incremental requires Clean | Compatibility identity changed | Run Clean and separate platform caches |
 | Source workspace is Dirty/Unknown | Local changes, submodule/LFS state, missing VCS tool, timeout, output limit, malformed output, or changing snapshot | Preserve the manifest failure code; restore a verified-clean checkout/toolchain, or explicitly relax only a Development profile |

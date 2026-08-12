@@ -110,6 +110,15 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
+            Entry caseAlias = entries.FirstOrDefault(candidate =>
+                PortablePathsEqual(candidate.Path, target));
+            if (caseAlias != null)
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR generation targets cannot differ only by path casing because " +
+                    $"the transaction must remain portable across filesystems: '{caseAlias.Path}' and '{target}'.");
+            }
+
             for (int index = 0; index < entries.Count; index++)
             {
                 Entry candidate = entries[index];
@@ -177,6 +186,16 @@ namespace Build.Pipeline.Editor
             return string.Equals(
                 Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.DirectorySeparatorChar == '\\'
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
+        }
+
+        private static bool PortablePathsEqual(string left, string right)
+        {
+            return string.Equals(
+                Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase);
         }
     }
@@ -193,7 +212,30 @@ namespace Build.Pipeline.Editor
         {
             AfterBackupMutationBeforeJournal,
             AfterCommittedJournalBeforeCleanup,
-            AfterRollbackTargetDisplacedBeforeRestore
+            AfterRollbackTargetDisplacedBeforeRestore,
+            AfterSuspendedTargetDisplacedBeforeRestore,
+            AfterResumeOriginalDisplacedBeforeGeneratedRestore
+        }
+
+        private sealed class SourceQualificationSuspension : IDisposable
+        {
+            private HybridCLRGenerationTransaction owner;
+            private readonly Func<CrashCheckpoint, string, bool> crashPredicate;
+
+            internal SourceQualificationSuspension(
+                HybridCLRGenerationTransaction owner,
+                Func<CrashCheckpoint, string, bool> crashPredicate)
+            {
+                this.owner = owner;
+                this.crashPredicate = crashPredicate;
+            }
+
+            public void Dispose()
+            {
+                HybridCLRGenerationTransaction current = owner;
+                owner = null;
+                current?.ResumeAfterSourceQualification(crashPredicate);
+            }
         }
 
         internal sealed class SimulatedProcessCrashException : Exception
@@ -207,7 +249,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public long sequence;
             public string transactionId;
             public string phase;
@@ -229,16 +271,40 @@ namespace Build.Pipeline.Editor
             public string mode;
             public string state;
             public bool originalExisted;
-            public long originalLength;
-            public long originalWriteUtcTicks;
-            public int originalAttributes;
-            public string originalSha256;
+            public PathIdentity originalIdentity;
+            public bool generatedIdentityCaptured;
+            public PathIdentity generatedIdentity;
+        }
+
+        [Serializable]
+        private sealed class PathIdentity
+        {
+            public string kind;
+            public long length;
+            public long writeUtcTicks;
+            public int attributes;
+            public string sha256;
+            public PathIdentityEntry[] entries;
+        }
+
+        [Serializable]
+        private sealed class PathIdentityEntry
+        {
+            public string path;
+            public string kind;
+            public long length;
+            public long writeUtcTicks;
+            public int attributes;
+            public string sha256;
         }
 
         internal const string StateRelativePath = ".buildpipeline/transactions/hybridclr-generation";
 
-        private const int JournalFormatVersion = 1;
+        private const string JournalDocumentType =
+            "hybridclr-generation-transaction";
         private const int MaximumOperationCount = 32;
+        private const int MaximumIdentityEntryCount = 100000;
+        private const long MaximumIdentityFileBytes = 4L * 1024L * 1024L * 1024L;
         private const long MaximumJournalBytes = 2L * 1024L * 1024L;
         private const string ActiveJournalFileName = "active.json";
         private const string LockFileName = "build.lock";
@@ -267,6 +333,7 @@ namespace Build.Pipeline.Editor
         private bool disposed;
         private bool preserveForRecovery;
         private bool restoredAssets;
+        private bool sourceQualificationSuspended;
 
         private HybridCLRGenerationTransaction(
             string projectRoot,
@@ -397,7 +464,7 @@ namespace Build.Pipeline.Editor
         internal void ValidateActive()
         {
             ThrowIfDisposed();
-            if (finished || committed
+            if (finished || committed || sourceQualificationSuspended
                 || !string.Equals(journal.phase, ActivePhase, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -409,6 +476,164 @@ namespace Build.Pipeline.Editor
                 preserveForRecovery = true;
                 throw new IOException(
                     "HybridCLR generation journal disappeared while the lease was active.");
+            }
+        }
+
+        private sealed class PathIdentityMismatchException : IOException
+        {
+            internal PathIdentityMismatchException(string message, Exception innerException = null)
+                : base(message, innerException)
+            {
+            }
+        }
+
+        internal void ValidateNoOutputTargetOverlap(
+            IReadOnlyList<HybridCLROutputTarget> outputTargets)
+        {
+            ValidateActive();
+            if (outputTargets == null)
+            {
+                throw new ArgumentNullException(nameof(outputTargets));
+            }
+
+            for (int outputIndex = 0; outputIndex < outputTargets.Count; outputIndex++)
+            {
+                HybridCLROutputTarget output = outputTargets[outputIndex]
+                    ?? throw new ArgumentException(
+                        "HybridCLR output targets cannot contain null entries.",
+                        nameof(outputTargets));
+                string outputRoot = Path.GetFullPath(output.FinalDirectory);
+                string outputRootMeta = outputRoot + ".meta";
+                for (int operationIndex = 0;
+                     operationIndex < journal.operations.Length;
+                     operationIndex++)
+                {
+                    string generationTarget = journal.operations[operationIndex].target;
+                    if (PathsOverlap(generationTarget, outputRoot)
+                        || PathsOverlap(generationTarget, outputRootMeta)
+                        || PathsOverlap(generationTarget + ".meta", outputRoot)
+                        || PathsOverlap(generationTarget + ".meta", outputRootMeta))
+                    {
+                        throw new InvalidOperationException(
+                            "HybridCLR generation and published output ownership overlap. " +
+                            $"Generation target '{generationTarget}' conflicts with output role '{output.Role}' at '{outputRoot}'.");
+                    }
+                }
+
+                string[] cleanupDirectories = journal.cleanupDirectories
+                    ?? Array.Empty<string>();
+                for (int cleanupIndex = 0;
+                     cleanupIndex < cleanupDirectories.Length;
+                     cleanupIndex++)
+                {
+                    string cleanup = cleanupDirectories[cleanupIndex];
+                    if (PathsOverlap(cleanup, outputRoot)
+                        || PathsOverlap(cleanup, outputRootMeta))
+                    {
+                        throw new InvalidOperationException(
+                            "HybridCLR generated-directory cleanup and published output ownership overlap. " +
+                            $"Cleanup target '{cleanup}' conflicts with output role '{output.Role}' at '{outputRoot}'.");
+                    }
+                }
+            }
+        }
+
+        internal IDisposable SuspendForSourceQualification()
+        {
+            return SuspendForSourceQualificationCore(crashPredicate: null);
+        }
+
+        internal IDisposable SuspendForSourceQualificationForTesting(
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            if (crashPredicate == null)
+            {
+                throw new ArgumentNullException(nameof(crashPredicate));
+            }
+
+            return SuspendForSourceQualificationCore(crashPredicate);
+        }
+
+        private IDisposable SuspendForSourceQualificationCore(
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            ValidateActive();
+            try
+            {
+                for (int index = 0; index < journal.operations.Length; index++)
+                {
+                    Operation operation = journal.operations[index];
+                    RequirePathIdentity(
+                        operation.backup,
+                        operation.originalIdentity,
+                        "generation backup before source qualification");
+                    operation.generatedIdentity = CapturePathIdentity(
+                        operation.target,
+                        "generated source-qualification state");
+                    operation.generatedIdentityCaptured = true;
+                }
+
+                // Generated identities must be durable before the first generated target is moved.
+                Persist();
+                ValidateActiveStateForSuspension(journal);
+            }
+            catch (Exception identityFailure)
+            {
+                preserveForRecovery = true;
+                throw new IOException(
+                    "HybridCLR source-qualification identity capture failed. The active journal and all filesystem evidence were preserved.",
+                    identityFailure);
+            }
+
+            try
+            {
+                journal.phase = RollingBackPhase;
+                Persist();
+                for (int index = journal.operations.Length - 1; index >= 0; index--)
+                {
+                    Operation operation = journal.operations[index];
+                    operation.state = RestorePendingState;
+                    Persist();
+                    SuspendOperation(operation, crashPredicate);
+                    operation.state = RestoredState;
+                    Persist();
+                }
+
+                CleanupGeneratedDirectories(journal);
+                ValidateOriginalState(journal);
+                journal.phase = RolledBackPhase;
+                Persist();
+                sourceQualificationSuspended = true;
+                return new SourceQualificationSuspension(this, crashPredicate);
+            }
+            catch (SimulatedProcessCrashException)
+            {
+                preserveForRecovery = true;
+                throw;
+            }
+            catch (PathIdentityMismatchException)
+            {
+                preserveForRecovery = true;
+                throw;
+            }
+            catch (Exception suspensionFailure)
+            {
+                try
+                {
+                    Rollback(crashPredicate: null);
+                    sourceQualificationSuspended = false;
+                }
+                catch (Exception rollbackFailure)
+                {
+                    preserveForRecovery = true;
+                    throw new AggregateException(
+                        "HybridCLR generation source-qualification suspension failed and durable rollback did not complete. " +
+                        $"Recovery state remains at '{activeJournalPath}'.",
+                        suspensionFailure,
+                        rollbackFailure);
+                }
+
+                throw;
             }
         }
 
@@ -514,6 +739,28 @@ namespace Build.Pipeline.Editor
 
         internal static bool RecoverPending(string projectRoot, out bool assetsChanged)
         {
+            return RecoverPendingCore(
+                projectRoot,
+                out assetsChanged,
+                crashPredicate: null);
+        }
+
+        internal static bool RecoverPendingForTesting(
+            string projectRoot,
+            out bool assetsChanged,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            return RecoverPendingCore(
+                projectRoot,
+                out assetsChanged,
+                crashPredicate);
+        }
+
+        private static bool RecoverPendingCore(
+            string projectRoot,
+            out bool assetsChanged,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
             assetsChanged = false;
             string project = NormalizeProjectRoot(projectRoot);
             string state = GetStateRoot(project);
@@ -547,8 +794,12 @@ namespace Build.Pipeline.Editor
                 recoveryLock = null;
 
                 BuildPublicationDecision decision = GetTerminalDecision(project);
-                if (string.Equals(value.phase, CommittedPhase, StringComparison.Ordinal)
-                    || decision == BuildPublicationDecision.Commit)
+                bool phaseCanCommit =
+                    string.Equals(value.phase, ActivePhase, StringComparison.Ordinal)
+                    || string.Equals(value.phase, CommittedPhase, StringComparison.Ordinal);
+                if (phaseCanCommit
+                    && (string.Equals(value.phase, CommittedPhase, StringComparison.Ordinal)
+                        || decision == BuildPublicationDecision.Commit))
                 {
                     if (!string.Equals(value.phase, CommittedPhase, StringComparison.Ordinal))
                     {
@@ -562,7 +813,7 @@ namespace Build.Pipeline.Editor
                 }
                 else
                 {
-                    transaction.Rollback(crashPredicate: null);
+                    transaction.Rollback(crashPredicate);
                     assetsChanged = value.touchesAssets;
                 }
 
@@ -611,9 +862,25 @@ namespace Build.Pipeline.Editor
                 Directory.CreateDirectory(Path.GetDirectoryName(operation.backup));
                 if (IsFileOperation(operation))
                 {
-                    File.Copy(operation.target, operation.backup, overwrite: false);
-                    ApplyOriginalFileMetadata(operation, operation.backup);
-                    EnsureOriginalFileIdentity(operation, operation.backup, "generation backup");
+                    // Move the exact source object into protected scratch first so Unix mode bits,
+                    // timestamps, ACL-visible attributes, and the inode's contents remain intact.
+                    File.Move(operation.target, operation.backup);
+                    RequirePathIdentity(
+                        operation.backup,
+                        operation.originalIdentity,
+                        "generation backup");
+                    if (string.Equals(
+                            operation.mode,
+                            HybridCLRGenerationPathMode.SnapshotFile.ToString(),
+                            StringComparison.Ordinal))
+                    {
+                        File.Copy(operation.backup, operation.target, overwrite: false);
+                        ApplyPathMetadata(operation.originalIdentity, operation.target);
+                        RequirePathIdentity(
+                            operation.target,
+                            operation.originalIdentity,
+                            "generation working file");
+                    }
                 }
                 else
                 {
@@ -627,12 +894,595 @@ namespace Build.Pipeline.Editor
                     }
                 }
 
+                RequirePathIdentity(
+                    operation.backup,
+                    operation.originalIdentity,
+                    "generation backup");
+
                 TriggerCrash(
                     crashPredicate,
                     CrashCheckpoint.AfterBackupMutationBeforeJournal,
                     operation.target);
                 operation.state = BackedUpState;
                 Persist();
+            }
+        }
+
+        private void SuspendOperation(
+            Operation operation,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            RequireScratchPathAbsent(operation.discard, "suspended generated state");
+            RequirePathIdentity(
+                operation.target,
+                operation.generatedIdentity,
+                "generated source-qualification state before suspension");
+            MovePathExact(
+                operation.target,
+                operation.discard,
+                operation.generatedIdentity,
+                "generated source-qualification state");
+
+            TriggerCrash(
+                crashPredicate,
+                CrashCheckpoint.AfterSuspendedTargetDisplacedBeforeRestore,
+                operation.target);
+
+            if (!operation.originalExisted)
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(operation.target));
+            MovePathExact(
+                operation.backup,
+                operation.target,
+                operation.originalIdentity,
+                "source-qualification original");
+        }
+
+        private void ResumeAfterSourceQualification(
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            ThrowIfDisposed();
+            if (!sourceQualificationSuspended
+                || finished
+                || committed
+                || !string.Equals(journal.phase, RolledBackPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR generation inputs are not suspended for source qualification.");
+            }
+
+            try
+            {
+                ValidateSuspendedState(journal);
+            }
+            catch (Exception identityFailure)
+            {
+                preserveForRecovery = true;
+                throw new IOException(
+                    "HybridCLR source-qualification state changed while suspended. Unknown evidence was preserved and automatic resume was refused.",
+                    identityFailure);
+            }
+
+            try
+            {
+                journal.phase = PreparedPhase;
+                Persist();
+                for (int index = 0; index < journal.operations.Length; index++)
+                {
+                    Operation operation = journal.operations[index];
+                    operation.state = operation.originalExisted
+                        ? BackupPendingState
+                        : PendingState;
+                    Persist();
+                    ResumeOperation(operation, crashPredicate);
+                    operation.state = operation.originalExisted
+                        ? BackedUpState
+                        : AbsentState;
+                    Persist();
+                }
+
+                journal.phase = ActivePhase;
+                Persist();
+                sourceQualificationSuspended = false;
+            }
+            catch (SimulatedProcessCrashException)
+            {
+                preserveForRecovery = true;
+                throw;
+            }
+            catch (PathIdentityMismatchException)
+            {
+                preserveForRecovery = true;
+                throw;
+            }
+            catch (Exception resumeFailure)
+            {
+                try
+                {
+                    Rollback(crashPredicate: null);
+                    sourceQualificationSuspended = false;
+                }
+                catch (Exception rollbackFailure)
+                {
+                    preserveForRecovery = true;
+                    throw new AggregateException(
+                        "HybridCLR generation source-qualification resume failed and durable rollback did not complete. " +
+                        $"Recovery state remains at '{activeJournalPath}'.",
+                        resumeFailure,
+                        rollbackFailure);
+                }
+
+                throw;
+            }
+        }
+
+        private void ResumeOperation(
+            Operation operation,
+            Func<CrashCheckpoint, string, bool> crashPredicate)
+        {
+            if (operation.originalExisted)
+            {
+                RequireScratchPathAbsent(operation.backup, "resumed generation backup");
+                MovePathExact(
+                    operation.target,
+                    operation.backup,
+                    operation.originalIdentity,
+                    "resumed source original");
+            }
+            else if (File.Exists(operation.target) || Directory.Exists(operation.target))
+            {
+                throw new IOException(
+                    $"HybridCLR source qualification created a target that was originally absent: '{operation.target}'.");
+            }
+
+            TriggerCrash(
+                crashPredicate,
+                CrashCheckpoint.AfterResumeOriginalDisplacedBeforeGeneratedRestore,
+                operation.target);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(operation.target));
+            MovePathExact(
+                operation.discard,
+                operation.target,
+                operation.generatedIdentity,
+                "resumed generated state");
+        }
+
+        private static void RequireScratchPathAbsent(string path, string description)
+        {
+            if (File.Exists(path) || Directory.Exists(path))
+            {
+                throw new IOException(
+                    $"HybridCLR {description} already exists: '{path}'.");
+            }
+        }
+
+        private static void RequireSafeDirectory(string path, string description)
+        {
+            if (!Directory.Exists(path) || File.Exists(path))
+            {
+                throw new DirectoryNotFoundException(
+                    $"HybridCLR {description} was not found: '{path}'.");
+            }
+
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException(
+                    $"HybridCLR {description} became a reparse point: '{path}'.");
+            }
+        }
+
+        private static void ValidateActiveStateForSuspension(Journal value)
+        {
+            for (int index = 0; index < value.operations.Length; index++)
+            {
+                Operation operation = value.operations[index];
+                RequirePathIdentity(
+                    operation.backup,
+                    operation.originalIdentity,
+                    "generation backup before source qualification");
+                RequirePathIdentity(
+                    operation.target,
+                    operation.generatedIdentity,
+                    "generated source-qualification state");
+                RequireScratchPathAbsent(
+                    operation.discard,
+                    "suspended generated state");
+            }
+        }
+
+        private static void ValidateSuspendedState(Journal value)
+        {
+            for (int index = 0; index < value.operations.Length; index++)
+            {
+                Operation operation = value.operations[index];
+                RequirePathIdentity(
+                    operation.target,
+                    operation.originalIdentity,
+                    "source-qualification original");
+                RequirePathIdentity(
+                    operation.discard,
+                    operation.generatedIdentity,
+                    "suspended generated state");
+                RequireScratchPathAbsent(
+                    operation.backup,
+                    "source-qualification generation backup");
+            }
+        }
+
+        private static void MovePathExact(
+            string source,
+            string destination,
+            PathIdentity expected,
+            string description)
+        {
+            RequirePathIdentity(source, expected, description + " source");
+            RequireScratchPathAbsent(destination, description + " destination");
+            if (expected == null)
+            {
+                return;
+            }
+
+            string parent = Path.GetDirectoryName(destination);
+            if (string.IsNullOrEmpty(parent))
+            {
+                throw new IOException(
+                    $"HybridCLR {description} destination has no parent: '{destination}'.");
+            }
+
+            Directory.CreateDirectory(parent);
+            if (string.Equals(expected.kind, "File", StringComparison.Ordinal))
+            {
+                File.Move(source, destination);
+            }
+            else
+            {
+                Directory.Move(source, destination);
+            }
+
+            RequirePathIdentity(destination, expected, description + " destination");
+        }
+
+        private static PathIdentity CapturePathIdentity(
+            string path,
+            string description)
+        {
+            bool fileExists = File.Exists(path);
+            bool directoryExists = Directory.Exists(path);
+            if (fileExists && directoryExists)
+            {
+                throw new IOException(
+                    $"HybridCLR {description} has an ambiguous filesystem kind: '{path}'.");
+            }
+
+            if (!fileExists && !directoryExists)
+            {
+                return null;
+            }
+
+            FileAttributes rootAttributes = File.GetAttributes(path);
+            if ((rootAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException(
+                    $"HybridCLR {description} cannot be a symbolic link or reparse point: '{path}'.");
+            }
+
+            if (fileExists)
+            {
+                var info = new FileInfo(path);
+                ValidateIdentityFileLength(info.Length, path, description);
+                return new PathIdentity
+                {
+                    kind = "File",
+                    length = info.Length,
+                    writeUtcTicks = info.LastWriteTimeUtc.Ticks,
+                    attributes = (int)info.Attributes,
+                    sha256 = ComputeFileSha256(path),
+                    entries = Array.Empty<PathIdentityEntry>()
+                };
+            }
+
+            var rootInfo = new DirectoryInfo(path);
+            var entries = new List<PathIdentityEntry>();
+            var pending = new Stack<string>();
+            pending.Push(path);
+            while (pending.Count > 0)
+            {
+                string directory = pending.Pop();
+                string[] children = Directory.GetFileSystemEntries(directory);
+                Array.Sort(children, FileSystemPathComparer);
+                for (int index = children.Length - 1; index >= 0; index--)
+                {
+                    string child = children[index];
+                    FileAttributes attributes = File.GetAttributes(child);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        throw new IOException(
+                            $"HybridCLR {description} contains a symbolic link or reparse point: '{child}'.");
+                    }
+
+                    bool isDirectory = (attributes & FileAttributes.Directory) != 0;
+                    string relative = GetIdentityRelativePath(path, child);
+                    if (isDirectory)
+                    {
+                        var info = new DirectoryInfo(child);
+                        entries.Add(new PathIdentityEntry
+                        {
+                            path = relative,
+                            kind = "Directory",
+                            length = 0,
+                            writeUtcTicks = info.LastWriteTimeUtc.Ticks,
+                            attributes = (int)info.Attributes,
+                            sha256 = string.Empty
+                        });
+                        pending.Push(child);
+                    }
+                    else
+                    {
+                        var info = new FileInfo(child);
+                        ValidateIdentityFileLength(info.Length, child, description);
+                        entries.Add(new PathIdentityEntry
+                        {
+                            path = relative,
+                            kind = "File",
+                            length = info.Length,
+                            writeUtcTicks = info.LastWriteTimeUtc.Ticks,
+                            attributes = (int)info.Attributes,
+                            sha256 = ComputeFileSha256(child)
+                        });
+                    }
+
+                    if (entries.Count > MaximumIdentityEntryCount)
+                    {
+                        throw new IOException(
+                            $"HybridCLR {description} exceeded the {MaximumIdentityEntryCount}-entry identity budget: '{path}'.");
+                    }
+                }
+            }
+
+            entries.Sort((left, right) =>
+                StringComparer.Ordinal.Compare(left.path, right.path));
+            return new PathIdentity
+            {
+                kind = "Directory",
+                length = 0,
+                writeUtcTicks = rootInfo.LastWriteTimeUtc.Ticks,
+                attributes = (int)rootInfo.Attributes,
+                sha256 = string.Empty,
+                entries = entries.ToArray()
+            };
+        }
+
+        private static void RequirePathIdentity(
+            string path,
+            PathIdentity expected,
+            string description)
+        {
+            PathIdentity actual;
+            try
+            {
+                actual = CapturePathIdentity(path, description);
+            }
+            catch (Exception exception) when (!(exception is PathIdentityMismatchException))
+            {
+                throw new PathIdentityMismatchException(
+                    $"HybridCLR {description} could not be identified exactly: '{path}'.",
+                    exception);
+            }
+
+            if (!PathIdentityEquals(actual, expected))
+            {
+                throw new PathIdentityMismatchException(
+                    $"HybridCLR {description} identity changed. Unknown content was preserved: '{path}'.");
+            }
+        }
+
+        private static void RequireOriginalIdentity(
+            Operation operation,
+            string path,
+            string description)
+        {
+            RequirePathIdentity(path, operation.originalIdentity, description);
+        }
+
+        private static bool TryPathIdentityMatches(
+            string path,
+            PathIdentity expected)
+        {
+            try
+            {
+                return PathIdentityEquals(
+                    CapturePathIdentity(path, "recovery candidate"),
+                    expected);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool PathIdentityEquals(PathIdentity left, PathIdentity right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (left == null || right == null
+                || !string.Equals(left.kind, right.kind, StringComparison.Ordinal)
+                || left.length != right.length
+                || left.writeUtcTicks != right.writeUtcTicks
+                || left.attributes != right.attributes
+                || !string.Equals(left.sha256, right.sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            PathIdentityEntry[] leftEntries = left.entries ?? Array.Empty<PathIdentityEntry>();
+            PathIdentityEntry[] rightEntries = right.entries ?? Array.Empty<PathIdentityEntry>();
+            if (leftEntries.Length != rightEntries.Length)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < leftEntries.Length; index++)
+            {
+                PathIdentityEntry first = leftEntries[index];
+                PathIdentityEntry second = rightEntries[index];
+                if (first == null || second == null
+                    || !string.Equals(first.path, second.path, StringComparison.Ordinal)
+                    || !string.Equals(first.kind, second.kind, StringComparison.Ordinal)
+                    || first.length != second.length
+                    || first.writeUtcTicks != second.writeUtcTicks
+                    || first.attributes != second.attributes
+                    || !string.Equals(first.sha256, second.sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void ValidatePathIdentityFormat(
+            PathIdentity identity,
+            bool allowNull,
+            string fieldName)
+        {
+            if (identity == null)
+            {
+                if (allowNull)
+                {
+                    return;
+                }
+
+                throw new InvalidDataException(
+                    $"HybridCLR generation journal is missing path identity '{fieldName}'.");
+            }
+
+            bool isFile = string.Equals(identity.kind, "File", StringComparison.Ordinal);
+            bool isDirectory = string.Equals(identity.kind, "Directory", StringComparison.Ordinal);
+            PathIdentityEntry[] entries = identity.entries ?? Array.Empty<PathIdentityEntry>();
+            if ((!isFile && !isDirectory)
+                || identity.writeUtcTicks <= 0
+                || identity.writeUtcTicks > DateTime.MaxValue.Ticks
+                || identity.attributes < 0
+                || (isFile
+                    && (identity.length < 0
+                        || identity.length > MaximumIdentityFileBytes
+                        || !IsSha256(identity.sha256)
+                        || entries.Length != 0))
+                || (isDirectory
+                    && (identity.length != 0
+                        || !string.IsNullOrEmpty(identity.sha256)
+                        || entries.Length > MaximumIdentityEntryCount)))
+            {
+                throw new InvalidDataException(
+                    $"HybridCLR generation journal path identity '{fieldName}' is invalid.");
+            }
+
+            string previousPath = null;
+            var uniquePaths = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < entries.Length; index++)
+            {
+                PathIdentityEntry entry = entries[index];
+                if (entry == null
+                    || string.IsNullOrWhiteSpace(entry.path)
+                    || Path.IsPathRooted(entry.path)
+                    || entry.path.IndexOf('\\') >= 0
+                    || entry.path.Split('/').Any(segment =>
+                        segment.Length == 0 || segment == "." || segment == "..")
+                    || !uniquePaths.Add(entry.path)
+                    || (previousPath != null
+                        && StringComparer.Ordinal.Compare(previousPath, entry.path) >= 0)
+                    || entry.writeUtcTicks <= 0
+                    || entry.writeUtcTicks > DateTime.MaxValue.Ticks
+                    || entry.attributes < 0)
+                {
+                    throw new InvalidDataException(
+                        $"HybridCLR generation journal path identity entry '{fieldName}[{index}]' is invalid.");
+                }
+
+                bool entryIsFile = string.Equals(entry.kind, "File", StringComparison.Ordinal);
+                bool entryIsDirectory = string.Equals(entry.kind, "Directory", StringComparison.Ordinal);
+                if ((!entryIsFile && !entryIsDirectory)
+                    || (entryIsFile
+                        && (entry.length < 0
+                            || entry.length > MaximumIdentityFileBytes
+                            || !IsSha256(entry.sha256)))
+                    || (entryIsDirectory
+                        && (entry.length != 0 || !string.IsNullOrEmpty(entry.sha256))))
+                {
+                    throw new InvalidDataException(
+                        $"HybridCLR generation journal path identity entry '{fieldName}[{index}]' has invalid metadata.");
+                }
+
+                previousPath = entry.path;
+            }
+        }
+
+        private static string GetIdentityRelativePath(string root, string path)
+        {
+            string prefix = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            string full = Path.GetFullPath(path);
+            if (!full.StartsWith(prefix, PathComparison))
+            {
+                throw new IOException(
+                    $"HybridCLR identity entry escaped its root: '{full}'.");
+            }
+
+            return full.Substring(prefix.Length).Replace('\\', '/');
+        }
+
+        private static void ValidateIdentityFileLength(
+            long length,
+            string path,
+            string description)
+        {
+            if (length < 0 || length > MaximumIdentityFileBytes)
+            {
+                throw new IOException(
+                    $"HybridCLR {description} file exceeds the {MaximumIdentityFileBytes}-byte identity budget: '{path}'.");
+            }
+        }
+
+        private static bool IsSha256(string value)
+        {
+            return value != null
+                   && value.Length == 64
+                   && value.All(Uri.IsHexDigit);
+        }
+
+        private static void ApplyPathMetadata(PathIdentity identity, string path)
+        {
+            if (identity == null)
+            {
+                return;
+            }
+
+            File.SetLastWriteTimeUtc(
+                path,
+                new DateTime(identity.writeUtcTicks, DateTimeKind.Utc));
+            File.SetAttributes(path, (FileAttributes)identity.attributes);
+        }
+
+        private static void ValidateDiscardedGeneratedState(Journal value)
+        {
+            for (int index = 0; index < value.operations.Length; index++)
+            {
+                Operation operation = value.operations[index];
+                if (operation.generatedIdentityCaptured)
+                {
+                    RequirePathIdentity(
+                        operation.discard,
+                        operation.generatedIdentity,
+                        "discarded generated recovery evidence");
+                }
             }
         }
 
@@ -658,6 +1508,7 @@ namespace Build.Pipeline.Editor
 
             CleanupGeneratedDirectories(journal);
             ValidateOriginalState(journal);
+            ValidateDiscardedGeneratedState(journal);
             journal.phase = RolledBackPhase;
             Persist();
             restoredAssets = journal.touchesAssets;
@@ -671,7 +1522,53 @@ namespace Build.Pipeline.Editor
         {
             if (!operation.originalExisted)
             {
-                DisplaceCurrentTarget(operation);
+                if (operation.generatedIdentityCaptured)
+                {
+                    if (operation.generatedIdentity == null)
+                    {
+                        RequirePathIdentity(
+                            operation.target,
+                            expected: null,
+                            "rollback originally-absent target");
+                        RequirePathIdentity(
+                            operation.discard,
+                            expected: null,
+                            "rollback originally-absent discard");
+                        return;
+                    }
+
+                    bool targetMatches = TryPathIdentityMatches(
+                        operation.target,
+                        operation.generatedIdentity);
+                    bool discardMatches = TryPathIdentityMatches(
+                        operation.discard,
+                        operation.generatedIdentity);
+                    if (targetMatches && !discardMatches)
+                    {
+                        MovePathExact(
+                            operation.target,
+                            operation.discard,
+                            operation.generatedIdentity,
+                            "rollback newly-generated state");
+                    }
+                    else if (!targetMatches && discardMatches)
+                    {
+                        RequirePathIdentity(
+                            operation.target,
+                            expected: null,
+                            "rollback originally-absent target");
+                    }
+                    else
+                    {
+                        throw new PathIdentityMismatchException(
+                            "HybridCLR rollback found ambiguous newly-generated state. Unknown evidence was preserved.");
+                    }
+                }
+                else
+                {
+                    DisplaceCurrentTarget(operation);
+                }
+
                 return;
             }
 
@@ -680,12 +1577,12 @@ namespace Build.Pipeline.Editor
                 : Directory.Exists(operation.backup);
             if (IsFileOperation(operation)
                 && File.Exists(operation.target)
-                && MatchesOriginalFile(operation, operation.target))
+                && backupExists == false)
             {
-                // The original file may still be intact when preparation stopped during a
-                // non-atomic copy. Prefer the proven original and leave any partial scratch
-                // backup for controlled terminal cleanup.
-                ApplyOriginalFileMetadata(operation, operation.target);
+                RequireOriginalIdentity(
+                    operation,
+                    operation.target,
+                    "restored generation file");
                 return;
             }
 
@@ -694,8 +1591,10 @@ namespace Build.Pipeline.Editor
                 if (!IsFileOperation(operation)
                     && Directory.Exists(operation.target))
                 {
-                    // Directory backups are restored through an atomic move. If the backup is gone
-                    // and the target is present, recovery previously completed that move.
+                    RequireOriginalIdentity(
+                        operation,
+                        operation.target,
+                        "restored generation directory");
                     return;
                 }
 
@@ -703,14 +1602,63 @@ namespace Build.Pipeline.Editor
                     $"HybridCLR generation backup is missing and the original target cannot be proven restored: '{operation.target}'.");
             }
 
-            if (IsFileOperation(operation))
+            RequireOriginalIdentity(
+                operation,
+                operation.backup,
+                "generation backup");
+            if (operation.generatedIdentityCaptured)
             {
-                // Never displace the current target until the scratch backup is proven complete.
-                // A process can terminate while File.Copy is still producing this file.
-                EnsureOriginalFileIdentity(operation, operation.backup, "generation backup");
-            }
+                if (operation.generatedIdentity == null)
+                {
+                    RequirePathIdentity(
+                        operation.target,
+                        expected: null,
+                        "rollback deleted generated target");
+                    RequirePathIdentity(
+                        operation.discard,
+                        expected: null,
+                        "rollback deleted generated discard");
+                }
+                else
+                {
+                    bool targetMatches = TryPathIdentityMatches(
+                        operation.target,
+                        operation.generatedIdentity);
+                    bool discardMatches = TryPathIdentityMatches(
+                        operation.discard,
+                        operation.generatedIdentity);
+                    if (targetMatches && !discardMatches)
+                    {
+                        MovePathExact(
+                            operation.target,
+                            operation.discard,
+                            operation.generatedIdentity,
+                            "rollback generated state");
+                    }
+                    else if (!targetMatches && discardMatches)
+                    {
+                        if (File.Exists(operation.target)
+                            || Directory.Exists(operation.target))
+                        {
+                            RequireOriginalIdentity(
+                                operation,
+                                operation.target,
+                                "already-restored original state");
+                            return;
+                        }
+                    }
 
-            DisplaceCurrentTarget(operation);
+                    if (targetMatches == discardMatches)
+                    {
+                        throw new PathIdentityMismatchException(
+                            "HybridCLR rollback found ambiguous generated/original state. Unknown evidence was preserved.");
+                    }
+                }
+            }
+            else
+            {
+                DisplaceCurrentTarget(operation);
+            }
             TriggerCrash(
                 crashPredicate,
                 CrashCheckpoint.AfterRollbackTargetDisplacedBeforeRestore,
@@ -719,8 +1667,10 @@ namespace Build.Pipeline.Editor
             if (IsFileOperation(operation))
             {
                 File.Move(operation.backup, operation.target);
-                EnsureOriginalFileIdentity(operation, operation.target, "restored generation file");
-                ApplyOriginalFileMetadata(operation, operation.target);
+                RequireOriginalIdentity(
+                    operation,
+                    operation.target,
+                    "restored generation file");
             }
             else
             {
@@ -824,12 +1774,17 @@ namespace Build.Pipeline.Editor
 
                 if (IsFileOperation(operation))
                 {
-                    EnsureOriginalFileIdentity(operation, operation.target, "rollback verification");
+                    RequireOriginalIdentity(
+                        operation,
+                        operation.target,
+                        "rollback verification");
                 }
-                else if (!Directory.Exists(operation.target))
+                else
                 {
-                    throw new DirectoryNotFoundException(
-                        $"HybridCLR generation rollback did not restore directory: '{operation.target}'.");
+                    RequireOriginalIdentity(
+                        operation,
+                        operation.target,
+                        "rollback directory verification");
                 }
             }
         }
@@ -866,17 +1821,11 @@ namespace Build.Pipeline.Editor
                     discard = Path.Combine(scratchRoot, "discard-" + index.ToString("D3", CultureInfo.InvariantCulture)),
                     mode = entry.Mode.ToString(),
                     state = PendingState,
-                    originalExisted = exists,
-                    originalSha256 = string.Empty
+                    originalExisted = exists
                 };
-                if (isFile && exists)
-                {
-                    FileInfo info = new FileInfo(entry.Path);
-                    operation.originalLength = info.Length;
-                    operation.originalWriteUtcTicks = info.LastWriteTimeUtc.Ticks;
-                    operation.originalAttributes = (int)info.Attributes;
-                    operation.originalSha256 = ComputeFileSha256(entry.Path);
-                }
+                operation.originalIdentity = exists
+                    ? CapturePathIdentity(entry.Path, "pre-generation original")
+                    : null;
 
                 operations[index] = operation;
                 touchesAssets |= BuildPathPolicy.IsStrictDescendant(assetsRoot, entry.Path);
@@ -897,7 +1846,7 @@ namespace Build.Pipeline.Editor
 
             return new Journal
             {
-                formatVersion = JournalFormatVersion,
+                documentType = JournalDocumentType,
                 sequence = 0,
                 transactionId = transactionId,
                 phase = PreparedPhase,
@@ -952,7 +1901,10 @@ namespace Build.Pipeline.Editor
             string stateRoot)
         {
             if (value == null
-                || value.formatVersion != JournalFormatVersion
+                || !string.Equals(
+                    value.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || value.sequence <= 0
                 || string.IsNullOrWhiteSpace(value.transactionId)
                 || value.transactionId.Length != 32
@@ -1002,6 +1954,29 @@ namespace Build.Pipeline.Editor
 
                 ValidateOperationState(value.phase, operation, index);
 
+                ValidatePathIdentityFormat(
+                    operation.originalIdentity,
+                    allowNull: true,
+                    $"operations[{index}].originalIdentity");
+                if (operation.originalExisted && operation.originalIdentity == null
+                    || !operation.originalExisted && operation.originalIdentity != null)
+                {
+                    throw new InvalidDataException(
+                        $"HybridCLR generation journal operation {index} has an original identity inconsistent with its pre-generation existence state.");
+                }
+
+                if (operation.generatedIdentityCaptured)
+                {
+                    ValidatePathIdentityFormat(
+                        operation.generatedIdentity,
+                        allowNull: true,
+                        $"operations[{index}].generatedIdentity");
+                }
+                else if (operation.generatedIdentity != null)
+                {
+                    throw new InvalidDataException(
+                        $"HybridCLR generation journal operation {index} has an uncommitted generated identity.");
+                }
                 ValidateConcreteTarget(projectRoot, stateRoot, operation.target, mode);
                 if (!targets.Add(Path.GetFullPath(operation.target)))
                 {
@@ -1047,6 +2022,10 @@ namespace Build.Pipeline.Editor
             Journal value;
             try
             {
+                BuildJsonDocumentContract.Validate<Journal>(
+                    json,
+                    JournalDocumentType,
+                    "HybridCLR generation journal");
                 value = JsonUtility.FromJson<Journal>(json);
             }
             catch (Exception exception)
@@ -1064,7 +2043,8 @@ namespace Build.Pipeline.Editor
 
             string expected = value.checksum;
             value.checksum = string.Empty;
-            string actual = ComputeSha256(Utf8WithoutBom.GetBytes(JsonUtility.ToJson(value, false)));
+            string actual = ComputeSha256(
+                Utf8WithoutBom.GetBytes(JsonUtility.ToJson(value, false)));
             value.checksum = expected;
             if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
             {
@@ -1072,7 +2052,47 @@ namespace Build.Pipeline.Editor
                     $"HybridCLR generation journal checksum mismatch: '{path}'.");
             }
 
+            NormalizeJsonUtilityNullIdentities(value);
+
             return value;
+        }
+
+        private static void NormalizeJsonUtilityNullIdentities(Journal value)
+        {
+            if (value?.operations == null)
+            {
+                return;
+            }
+
+            for (int index = 0; index < value.operations.Length; index++)
+            {
+                Operation operation = value.operations[index];
+                if (operation == null)
+                {
+                    continue;
+                }
+
+                if (IsEmptyPathIdentity(operation.originalIdentity))
+                {
+                    operation.originalIdentity = null;
+                }
+
+                if (IsEmptyPathIdentity(operation.generatedIdentity))
+                {
+                    operation.generatedIdentity = null;
+                }
+            }
+        }
+
+        private static bool IsEmptyPathIdentity(PathIdentity identity)
+        {
+            return identity != null
+                   && string.IsNullOrEmpty(identity.kind)
+                   && identity.length == 0
+                   && identity.writeUtcTicks == 0
+                   && identity.attributes == 0
+                   && string.IsNullOrEmpty(identity.sha256)
+                   && (identity.entries == null || identity.entries.Length == 0);
         }
 
         private void Persist()
@@ -1396,46 +2416,6 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private static void EnsureOriginalFileIdentity(
-            Operation operation,
-            string path,
-            string description)
-        {
-            if (!File.Exists(path) || Directory.Exists(path))
-            {
-                throw new FileNotFoundException(
-                    $"HybridCLR {description} is missing.",
-                    path);
-            }
-
-            var info = new FileInfo(path);
-            string sha256 = ComputeFileSha256(path);
-            if (info.Length != operation.originalLength
-                || !string.Equals(
-                    sha256,
-                    operation.originalSha256,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                throw new IOException(
-                    $"HybridCLR {description} does not match the pre-generation file: '{path}'.");
-            }
-        }
-
-        private static bool MatchesOriginalFile(Operation operation, string path)
-        {
-            if (!File.Exists(path) || Directory.Exists(path))
-            {
-                return false;
-            }
-
-            var info = new FileInfo(path);
-            return info.Length == operation.originalLength
-                   && string.Equals(
-                       ComputeFileSha256(path),
-                       operation.originalSha256,
-                       StringComparison.OrdinalIgnoreCase);
-        }
-
         private static bool IsKnownPhase(string phase)
         {
             return string.Equals(phase, PreparedPhase, StringComparison.Ordinal)
@@ -1493,12 +2473,6 @@ namespace Build.Pipeline.Editor
                 throw new InvalidDataException(
                     $"HybridCLR generation journal operation {index} is incomplete for rolled-back phase.");
             }
-        }
-
-        private static void ApplyOriginalFileMetadata(Operation operation, string path)
-        {
-            File.SetLastWriteTimeUtc(path, new DateTime(operation.originalWriteUtcTicks, DateTimeKind.Utc));
-            File.SetAttributes(path, (FileAttributes)operation.originalAttributes);
         }
 
         private static bool IsFileOperation(Operation operation)
@@ -1582,8 +2556,48 @@ namespace Build.Pipeline.Editor
             return string.Equals(
                 Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                PathComparison);
+        }
+
+        private static bool PathsOverlap(string left, string right)
+        {
+            return PortablePathsEqual(left, right)
+                   || PortableStrictDescendant(left, right)
+                   || PortableStrictDescendant(right, left);
+        }
+
+        private static bool PortablePathsEqual(string left, string right)
+        {
+            return string.Equals(
+                Path.GetFullPath(left).TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase);
         }
+
+        private static bool PortableStrictDescendant(string parent, string child)
+        {
+            string prefix = Path.GetFullPath(parent).TrimEnd(
+                                Path.DirectorySeparatorChar,
+                                Path.AltDirectorySeparatorChar)
+                            + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(child).StartsWith(
+                prefix,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static StringComparison PathComparison =>
+            Path.DirectorySeparatorChar == '\\'
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+        private static StringComparer FileSystemPathComparer =>
+            Path.DirectorySeparatorChar == '\\'
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
 
         private void ThrowIfDisposed()
         {

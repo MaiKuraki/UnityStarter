@@ -16,7 +16,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         internal const string PackageOutputKind = "PackageOutput";
         internal const string BundledPackageKind = "BundledPackage";
 
-        private const int MarkerFormatVersion = 1;
+        private const string MarkerDocumentType = "yooasset-publication-owner";
         private const int MaximumMarkerBytes = 64 * 1024;
         private const int MaximumIdentityEntries = 250000;
         private const int MaximumIdentityDepth = 64;
@@ -115,7 +115,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             ContentIdentity identity = ComputeContentIdentity(root);
             var marker = new PublicationMarker
             {
-                formatVersion = MarkerFormatVersion,
+                documentType = MarkerDocumentType,
                 owner = Owner,
                 kind = kind,
                 packageName = packageName,
@@ -260,14 +260,20 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             PublicationMarker marker;
             try
             {
-                marker = JsonUtility.FromJson<PublicationMarker>(File.ReadAllText(markerPath, Encoding.UTF8));
+                string json = File.ReadAllText(markerPath, Encoding.UTF8);
+                BuildJsonDocumentContract.Validate<PublicationMarker>(
+                    json,
+                    MarkerDocumentType,
+                    "YooAsset publication ownership marker");
+                marker = JsonUtility.FromJson<PublicationMarker>(json);
             }
             catch (Exception exception)
             {
                 throw new InvalidOperationException($"Build-owned publication marker is not valid JSON: '{markerPath}'.", exception);
             }
 
-            if (marker == null || marker.formatVersion != MarkerFormatVersion ||
+            if (marker == null ||
+                !string.Equals(marker.documentType, MarkerDocumentType, StringComparison.Ordinal) ||
                 !string.Equals(marker.owner, Owner, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"Build-owned publication marker has an unsupported owner or format: '{markerPath}'.");
@@ -497,7 +503,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private static string ComputeMarkerChecksum(PublicationMarker marker)
         {
             var builder = new StringBuilder();
-            AppendChecksumValue(builder, marker.formatVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, marker.documentType);
             AppendChecksumValue(builder, marker.owner);
             AppendChecksumValue(builder, marker.kind);
             AppendChecksumValue(builder, marker.packageName);
@@ -536,7 +542,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         [Serializable]
         private sealed class PublicationMarker
         {
-            public int formatVersion;
+            public string documentType;
             public string owner;
             public string kind;
             public string packageName;

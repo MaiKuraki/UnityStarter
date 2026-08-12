@@ -35,7 +35,7 @@ namespace Build.Pipeline.Editor
     /// <summary>
     /// Publishes all HybridCLR generated outputs as one durable, identity-checked transaction.
     /// </summary>
-    internal sealed class HybridCLROutputTransaction : IBuildDownstreamInputPublication
+    internal sealed class HybridCLROutputTransaction : IBuildSourceQualificationPublication
     {
         private sealed class OutputState
         {
@@ -46,7 +46,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public long sequence;
             public string transactionId;
             public string phase;
@@ -82,6 +82,24 @@ namespace Build.Pipeline.Editor
             internal Journal Value;
         }
 
+        private sealed class SourceQualificationSuspension : IDisposable
+        {
+            private HybridCLROutputTransaction owner;
+
+            internal SourceQualificationSuspension(
+                HybridCLROutputTransaction owner)
+            {
+                this.owner = owner;
+            }
+
+            public void Dispose()
+            {
+                HybridCLROutputTransaction current = owner;
+                owner = null;
+                current?.ResumeAfterSourceQualification();
+            }
+        }
+
         internal enum CrashCheckpoint
         {
             AfterBackupMoveBeforeJournal,
@@ -104,12 +122,11 @@ namespace Build.Pipeline.Editor
 
         internal const string OwnershipManifestFileName = HybridCLROutputOwnership.ManifestFileName;
         internal const string OwnershipIdentifier = HybridCLROutputOwnership.Owner;
-        internal const int OwnershipFormatVersion = HybridCLROutputOwnership.FormatVersion;
         internal const string PublicationId = "hot-update:hybridclr";
         internal const string StateRelativePath = ".buildpipeline/transactions/hybridclr";
         internal bool OutputsCommitted => committed;
 
-        private const int JournalFormatVersion = 1;
+        private const string JournalDocumentType = "hybridclr-output-transaction";
         private const string StateFolderName = "hybridclr";
         private const string LockFileName = "build.lock";
         private const string ActiveJournalFileName = "active.json";
@@ -152,6 +169,7 @@ namespace Build.Pipeline.Editor
         private readonly List<OutputState> outputs;
         private readonly FileStream outputLock;
         private bool activated;
+        private bool sourceQualificationSuspended;
         private bool committed;
         private bool finished;
         private bool disposed;
@@ -387,9 +405,87 @@ namespace Build.Pipeline.Editor
             ActivateCore(beforePublish: null, crashPredicate: null);
         }
 
+        public IDisposable SuspendForSourceQualification()
+        {
+            ThrowIfDisposed();
+            if (!activated
+                || sourceQualificationSuspended
+                || finished
+                || committed
+                || !string.Equals(
+                    journal.phase,
+                    AwaitingDecisionPhase,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs must be active at the terminal decision boundary before source qualification can suspend them.");
+            }
+
+            try
+            {
+                journal.phase = RollingBackPhase;
+                PersistJournal(journal, activeJournalPath, createNew: false);
+                for (int index = outputs.Count - 1; index >= 0; index--)
+                {
+                    RollbackOperation(
+                        journal,
+                        outputs[index].Operation,
+                        index,
+                        activeJournalPath,
+                        crashPredicate: null);
+                }
+
+                ValidateRolledBackOutputs(journal);
+                for (int index = 0; index < outputs.Count; index++)
+                {
+                    outputs[index].Operation.state = StagedState;
+                }
+
+                journal.phase = PreparedPhase;
+                PersistJournal(journal, activeJournalPath, createNew: false);
+                ValidateAllPreparedOutputs();
+                activated = false;
+                sourceQualificationSuspended = true;
+                return new SourceQualificationSuspension(this);
+            }
+            catch (Exception suspensionFailure)
+            {
+                try
+                {
+                    Rollback(
+                        journal,
+                        activeJournalPath,
+                        projectRoot,
+                        stateRoot,
+                        crashPredicate: null);
+                    activated = false;
+                    sourceQualificationSuspended = false;
+                    finished = true;
+                }
+                catch (Exception rollbackFailure)
+                {
+                    preserveStateForRecovery = true;
+                    throw new AggregateException(
+                        "HybridCLR source-qualification suspension failed and durable rollback did not complete. " +
+                        $"Recovery state remains at '{activeJournalPath}'.",
+                        suspensionFailure,
+                        rollbackFailure);
+                }
+
+                ExceptionDispatchInfo.Capture(suspensionFailure).Throw();
+                throw;
+            }
+        }
+
         public void Publish()
         {
             ThrowIfDisposed();
+            if (sourceQualificationSuspended)
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs cannot publish while source qualification has suspended them.");
+            }
+
             if (!activated)
             {
                 ActivateCore(beforePublish: null, crashPredicate: null);
@@ -415,6 +511,12 @@ namespace Build.Pipeline.Editor
             Func<CrashCheckpoint, string, bool> crashPredicate)
         {
             ThrowIfDisposed();
+            if (sourceQualificationSuspended)
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs must resume through their source-qualification scope.");
+            }
+
             if (finished || committed || activated)
             {
                 throw new InvalidOperationException("HybridCLR outputs have already been activated.");
@@ -473,6 +575,26 @@ namespace Build.Pipeline.Editor
 
                 ExceptionDispatchInfo.Capture(commitFailure).Throw();
             }
+        }
+
+        private void ResumeAfterSourceQualification()
+        {
+            ThrowIfDisposed();
+            if (!sourceQualificationSuspended
+                || activated
+                || finished
+                || committed
+                || !string.Equals(
+                    journal.phase,
+                    PreparedPhase,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "HybridCLR outputs are not suspended for source qualification.");
+            }
+
+            sourceQualificationSuspended = false;
+            ActivateCore(beforePublish: null, crashPredicate: null);
         }
 
         private void CompleteCore(
@@ -1481,7 +1603,7 @@ namespace Build.Pipeline.Editor
 
             var journal = new Journal
             {
-                formatVersion = JournalFormatVersion,
+                documentType = JournalDocumentType,
                 sequence = 0,
                 transactionId = transactionId,
                 phase = PreparedPhase,
@@ -1842,8 +1964,12 @@ namespace Build.Pipeline.Editor
             Journal recovered;
             try
             {
-                recovered = JsonUtility.FromJson<Journal>(
-                    new UTF8Encoding(false, true).GetString(bytes));
+                string json = new UTF8Encoding(false, true).GetString(bytes);
+                BuildJsonDocumentContract.Validate<Journal>(
+                    json,
+                    JournalDocumentType,
+                    "HybridCLR output transaction journal");
+                recovered = JsonUtility.FromJson<Journal>(json);
             }
             catch (Exception exception)
             {
@@ -1855,7 +1981,10 @@ namespace Build.Pipeline.Editor
             NormalizeJsonUtilityOptionalIdentities(recovered);
 
             if (recovered == null
-                || recovered.formatVersion != JournalFormatVersion
+                || !string.Equals(
+                    recovered.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || recovered.sequence <= 0
                 || !HybridCLROutputOwnership.IsTransactionId(recovered.transactionId)
                 || !IsKnownPhase(recovered.phase)
@@ -2162,7 +2291,7 @@ namespace Build.Pipeline.Editor
         private static string ComputeJournalChecksum(Journal value)
         {
             var builder = new StringBuilder(2048);
-            AppendChecksumValue(builder, value.formatVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.documentType);
             AppendChecksumValue(builder, value.sequence.ToString(CultureInfo.InvariantCulture));
             AppendChecksumValue(builder, value.transactionId);
             AppendChecksumValue(builder, value.phase);

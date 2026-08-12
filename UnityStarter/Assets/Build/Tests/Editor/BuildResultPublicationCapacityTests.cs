@@ -266,7 +266,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: "0.1.0",
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: steps);
+                steps: steps,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Development);
         }
 
         private static BuildRunResult CreateResult(

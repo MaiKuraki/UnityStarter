@@ -22,6 +22,19 @@ namespace Build.VersionControl.Editor
             bool allowExitCodeOne = false);
     }
 
+    internal interface ICancellableVersionControlCommandRunner
+    {
+        string Run(
+            string executable,
+            string arguments,
+            string workingDirectory,
+            IReadOnlyDictionary<string, string> environment,
+            int timeoutMilliseconds,
+            int maximumOutputCharacters,
+            bool allowExitCodeOne,
+            CancellationToken cancellationToken);
+    }
+
     internal sealed class VersionControlCommandException : InvalidOperationException
     {
         internal VersionControlCommandException(string failureCode, string message)
@@ -33,7 +46,9 @@ namespace Build.VersionControl.Editor
         public string FailureCode { get; }
     }
 
-    internal sealed class VersionControlCommandRunner : IVersionControlCommandRunner
+    internal sealed class VersionControlCommandRunner :
+        IVersionControlCommandRunner,
+        ICancellableVersionControlCommandRunner
     {
         private static readonly MethodInfo KillProcessTreeMethod = typeof(Process).GetMethod(
             "Kill",
@@ -51,6 +66,27 @@ namespace Build.VersionControl.Editor
             int maximumOutputCharacters,
             bool allowExitCodeOne = false)
         {
+            return Run(
+                executable,
+                arguments,
+                workingDirectory,
+                environment,
+                timeoutMilliseconds,
+                maximumOutputCharacters,
+                allowExitCodeOne,
+                CancellationToken.None);
+        }
+
+        public string Run(
+            string executable,
+            string arguments,
+            string workingDirectory,
+            IReadOnlyDictionary<string, string> environment,
+            int timeoutMilliseconds,
+            int maximumOutputCharacters,
+            bool allowExitCodeOne,
+            CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(executable))
             {
                 throw new ArgumentException("Command executable is required.", nameof(executable));
@@ -65,6 +101,8 @@ namespace Build.VersionControl.Editor
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumOutputCharacters));
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             var startInfo = new ProcessStartInfo
             {
@@ -115,13 +153,13 @@ namespace Build.VersionControl.Editor
                 int processWaitMilliseconds = RemainingMilliseconds(
                     stopwatch,
                     timeoutMilliseconds);
-                if (processWaitMilliseconds <= 0
-                    || !process.WaitForExit(processWaitMilliseconds))
+                if (!WaitForExit(process, processWaitMilliseconds, cancellationToken))
                 {
                     TryKill(process);
                     TryCloseReaders(process);
                     ObserveEventually(outputTask);
                     ObserveEventually(errorTask);
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw CreateFailure(
                         VersionControlWorkspaceEvidence.CommandTimedOut,
                         "Version-control command exceeded its time budget.");
@@ -133,12 +171,14 @@ namespace Build.VersionControl.Editor
                 if (!WaitForReaders(
                         outputTask,
                         errorTask,
-                        readerWaitMilliseconds))
+                        readerWaitMilliseconds,
+                        cancellationToken))
                 {
                     TryKill(process);
                     TryCloseReaders(process);
                     ObserveEventually(outputTask);
                     ObserveEventually(errorTask);
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw CreateFailure(
                         VersionControlWorkspaceEvidence.CommandTimedOut,
                         "Version-control command output did not close within its time budget.");
@@ -210,6 +250,19 @@ namespace Build.VersionControl.Editor
             Task errorTask,
             int timeoutMilliseconds)
         {
+            return WaitForReaders(
+                outputTask,
+                errorTask,
+                timeoutMilliseconds,
+                CancellationToken.None);
+        }
+
+        internal static bool WaitForReaders(
+            Task outputTask,
+            Task errorTask,
+            int timeoutMilliseconds,
+            CancellationToken cancellationToken)
+        {
             if (outputTask == null)
             {
                 throw new ArgumentNullException(nameof(outputTask));
@@ -226,8 +279,40 @@ namespace Build.VersionControl.Editor
             }
 
             return SpinWait.SpinUntil(
-                () => outputTask.IsCompleted && errorTask.IsCompleted,
-                timeoutMilliseconds);
+                () => cancellationToken.IsCancellationRequested
+                      || (outputTask.IsCompleted && errorTask.IsCompleted),
+                timeoutMilliseconds)
+                   && !cancellationToken.IsCancellationRequested;
+        }
+
+        private static bool WaitForExit(
+            Process process,
+            int timeoutMilliseconds,
+            CancellationToken cancellationToken)
+        {
+            if (timeoutMilliseconds <= 0)
+            {
+                return false;
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                int remaining = timeoutMilliseconds - (int)Math.Min(
+                    timeoutMilliseconds,
+                    stopwatch.ElapsedMilliseconds);
+                if (remaining <= 0)
+                {
+                    return process.HasExited;
+                }
+
+                if (process.WaitForExit(Math.Min(remaining, 100)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static int RemainingMilliseconds(

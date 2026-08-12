@@ -33,7 +33,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class OwnershipManifest
         {
-            public int formatVersion;
+            public string documentType;
             public string owner;
             public string role;
             public string transactionId;
@@ -51,7 +51,7 @@ namespace Build.Pipeline.Editor
 
         internal const string ManifestFileName = ".buildpipeline-owner.json";
         internal const string Owner = "Build.Pipeline.Editor.HybridCLR";
-        internal const int FormatVersion = 1;
+        internal const string DocumentType = "hybridclr-output-owner";
         internal const int MaximumArtifactCount = 4096;
         internal const int MaximumManagedFileCount = MaximumArtifactCount * 2 + 2;
         internal const int MaximumArtifactFileNameByteCount = 240;
@@ -150,7 +150,7 @@ namespace Build.Pipeline.Editor
             files.Sort((left, right) => StringComparer.Ordinal.Compare(left.path, right.path));
             var manifest = new OwnershipManifest
             {
-                formatVersion = FormatVersion,
+                documentType = DocumentType,
                 owner = Owner,
                 role = role,
                 transactionId = transactionId,
@@ -569,7 +569,10 @@ namespace Build.Pipeline.Editor
         {
             string manifestPath = Path.Combine(directory, ManifestFileName);
             OwnershipManifest manifest = ReadManifest(manifestPath);
-            if (manifest.formatVersion != FormatVersion
+            if (!string.Equals(
+                    manifest.documentType,
+                    DocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(manifest.owner, Owner, StringComparison.Ordinal)
                 || !string.Equals(manifest.role, expectedRole, StringComparison.Ordinal)
                 || !IsTransactionId(manifest.transactionId)
@@ -730,8 +733,13 @@ namespace Build.Pipeline.Editor
                     throw new InvalidDataException("Ownership manifest must use UTF-8 without BOM.");
                 }
 
-                return JsonUtility.FromJson<OwnershipManifest>(StrictUtf8.GetString(bytes))
-                    ?? throw new InvalidDataException("Ownership manifest JSON is empty.");
+                string json = StrictUtf8.GetString(bytes);
+                BuildJsonDocumentContract.Validate<OwnershipManifest>(
+                    json,
+                    DocumentType,
+                    "HybridCLR output ownership manifest");
+                return JsonUtility.FromJson<OwnershipManifest>(json)
+                       ?? throw new InvalidDataException("Ownership manifest JSON is empty.");
             }
             catch (Exception exception) when (!(exception is InvalidOperationException))
             {

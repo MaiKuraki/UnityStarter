@@ -28,8 +28,8 @@ namespace Build.Pipeline.Tests.Editor
             Directory.CreateDirectory(Path.Combine(projectRoot, "ProjectSettings"));
             Directory.CreateDirectory(buildRoot);
             Directory.CreateDirectory(aotSource);
-            WriteAOT("mscorlib.dll", "aot-v1");
-            WriteAOT("System.dll", "system-v1");
+            WriteAOT("mscorlib.dll", "aot-original");
+            WriteAOT("System.dll", "system-original");
         }
 
         [TearDown]
@@ -76,11 +76,11 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(Directory.Exists(baseline.AOTDirectory), Is.True);
             Assert.That(
                 File.ReadAllText(Path.Combine(baseline.AOTDirectory, "mscorlib.dll")),
-                Is.EqualTo("aot-v1"));
+                Is.EqualTo("aot-original"));
             string manifest = File.ReadAllText(Path.Combine(
                 baseline.Directory,
                 HybridCLRReleaseBaselineStore.ManifestFileName));
-            StringAssert.Contains("\"formatVersion\": 1", manifest);
+            StringAssert.Contains("\"documentType\": \"hybridclr-release-baseline\"", manifest);
             StringAssert.Contains("\"buildConfiguration\": \"Release\"", manifest);
             StringAssert.Contains("\"playerInvocationId\": \"player\"", manifest);
             StringAssert.Contains("\"sha256\"", manifest);
@@ -97,7 +97,7 @@ namespace Build.Pipeline.Tests.Editor
             HybridCLRReleaseBaselineExpectation expectation = PublishBaseline();
             File.WriteAllText(
                 Path.Combine(expectation.FinalDirectory, "AOT", "mscorlib.dll"),
-                "aot-v2");
+                "aot-tampered");
 
             InvalidDataException exception = Assert.Throws<InvalidDataException>(() =>
                 HybridCLRReleaseBaselineStore.ValidateAndResolve(expectation));
@@ -142,8 +142,8 @@ namespace Build.Pipeline.Tests.Editor
         public void Dispose_AfterPublish_RestoresExactPreviousBaseline()
         {
             HybridCLRReleaseBaselineExpectation expectation = PublishBaseline();
-            WriteAOT("mscorlib.dll", "aot-v2");
-            WriteAOT("System.dll", "system-v2");
+            WriteAOT("mscorlib.dll", "aot-replacement");
+            WriteAOT("System.dll", "system-replacement");
 
             using (HybridCLRReleaseBaselineTransaction transaction =
                    HybridCLRReleaseBaselineTransaction.Stage(
@@ -158,7 +158,7 @@ namespace Build.Pipeline.Tests.Editor
                         expectation.FinalDirectory,
                         "AOT",
                         "mscorlib.dll")),
-                    Is.EqualTo("aot-v2"));
+                    Is.EqualTo("aot-replacement"));
             }
 
             Assert.That(
@@ -166,7 +166,7 @@ namespace Build.Pipeline.Tests.Editor
                     expectation.FinalDirectory,
                     "AOT",
                     "mscorlib.dll")),
-                Is.EqualTo("aot-v1"));
+                Is.EqualTo("aot-original"));
             Assert.DoesNotThrow(() =>
                 HybridCLRReleaseBaselineStore.ValidateAndResolve(expectation));
         }
@@ -234,6 +234,20 @@ namespace Build.Pipeline.Tests.Editor
                 HybridCLRReleaseBaselineEligibility
                     .TryGetExplicitReleasePlayerConsumer(
                         development,
+                        hot,
+                        out _,
+                        out _),
+                Is.False);
+
+            BuildExecutionContext localPreview = CreateContext(
+                BuildPurpose.LocalReleasePreview,
+                hot,
+                directPlayer);
+            Assert.That(localPreview.Request.CanPublishReleaseBaseline, Is.False);
+            Assert.That(
+                HybridCLRReleaseBaselineEligibility
+                    .TryGetExplicitReleasePlayerConsumer(
+                        localPreview,
                         hot,
                         out _,
                         out _),
@@ -331,14 +345,26 @@ namespace Build.Pipeline.Tests.Editor
                 "42",
                 "main",
                 "2026-08-07T00:00:00Z",
-                "git");
+                "git",
+                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable));
         }
 
         private BuildExecutionContext CreateContext(
             bool debugBuild,
             params BuildStepInvocation[] invocations)
         {
+            return CreateContext(
+                debugBuild ? BuildPurpose.Development : BuildPurpose.Release,
+                invocations);
+        }
+
+        private BuildExecutionContext CreateContext(
+            BuildPurpose purpose,
+            params BuildStepInvocation[] invocations)
+        {
             string outputDirectory = Path.Combine(buildRoot, "Output");
+            bool debugBuild = purpose == BuildPurpose.Development;
             var request = new BuildRequest(
                 "TestCompany",
                 "TestProduct",
@@ -359,10 +385,12 @@ namespace Build.Pipeline.Tests.Editor
                 exportAndroidProject: false,
                 allowExternalOutput: false,
                 cheatOverride: null,
-                batchMode: true,
+                batchMode: purpose != BuildPurpose.LocalReleasePreview,
                 applicationVersion: "1.2.3",
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: invocations);
+                steps: invocations,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: purpose);
             var context = new BuildExecutionContext(
                 request,
                 "test-run",

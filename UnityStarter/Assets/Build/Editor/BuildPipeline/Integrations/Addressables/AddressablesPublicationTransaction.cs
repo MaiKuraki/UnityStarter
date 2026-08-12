@@ -96,7 +96,8 @@ namespace Build.Pipeline.Editor
         internal const string InstalledCheckpoint = "Installed";
         internal const string CommittedCheckpoint = "Committed";
 
-        private const int JournalFormatVersion = 1;
+        private const string JournalDocumentType =
+            "addressables-publication-transaction";
         private const int MaximumJournalBytes = 64 * 1024;
         private const string JournalOwner = "Build.Pipeline.AddressablesPublication";
         internal const string StateRootRelativePath = ".buildpipeline/transactions/addressables";
@@ -183,7 +184,7 @@ namespace Build.Pipeline.Editor
                 backup);
             var journal = new Journal
             {
-                formatVersion = JournalFormatVersion,
+                documentType = JournalDocumentType,
                 owner = JournalOwner,
                 invocationId = normalizedInvocationId,
                 transactionId = transactionId,
@@ -1155,6 +1156,10 @@ namespace Build.Pipeline.Editor
             Journal recovered;
             try
             {
+                BuildJsonDocumentContract.Validate<Journal>(
+                    json,
+                    JournalDocumentType,
+                    "Addressables publication journal");
                 recovered = JsonUtility.FromJson<Journal>(json);
             }
             catch (Exception exception)
@@ -1163,7 +1168,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (recovered == null
-                || recovered.formatVersion != JournalFormatVersion
+                || !string.Equals(
+                    recovered.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(recovered.owner, JournalOwner, StringComparison.Ordinal)
                 || !IsValidInvocationId(recovered.invocationId)
                 || string.IsNullOrWhiteSpace(recovered.transactionId)
@@ -1831,7 +1839,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string owner;
             public string invocationId;
             public string transactionId;
@@ -1866,7 +1874,10 @@ namespace Build.Pipeline.Editor
         internal const string ArtifactManifestFileName =
             AddressablesArtifactManifestFormat.FileName;
 
-        private const int OwnerFormatVersion = 1;
+        private const string OwnerDocumentType =
+            "addressables-publication-owner";
+        private const string StageOwnerDocumentType =
+            "addressables-publication-stage-owner";
         private const int MaximumOwnerBytes = 64 * 1024;
         private const int MaximumManifestBytes = 16 * 1024 * 1024;
         private const int MaximumEntries = 250000;
@@ -1893,7 +1904,7 @@ namespace Build.Pipeline.Editor
 
             var marker = new StageOwnerDocument
             {
-                formatVersion = OwnerFormatVersion,
+                documentType = StageOwnerDocumentType,
                 owner = StageOwnerIdentifier,
                 transactionId = transactionId,
                 checksum = string.Empty
@@ -1935,7 +1946,7 @@ namespace Build.Pipeline.Editor
                 "Addressables artifact manifest");
             var owner = new OwnerDocument
             {
-                formatVersion = OwnerFormatVersion,
+                documentType = OwnerDocumentType,
                 owner = OwnerIdentifier,
                 transactionId = transactionId,
                 manifestSha256 = ComputeSha256(manifestBytes)
@@ -2077,7 +2088,14 @@ namespace Build.Pipeline.Editor
                     manifestPath,
                     MaximumManifestBytes,
                     "Addressables artifact manifest");
-                owner = JsonUtility.FromJson<OwnerDocument>(DecodeStrictUtf8(ownerBytes, "Addressables ownership document"));
+                string ownerJson = DecodeStrictUtf8(
+                    ownerBytes,
+                    "Addressables ownership document");
+                BuildJsonDocumentContract.Validate<OwnerDocument>(
+                    ownerJson,
+                    OwnerDocumentType,
+                    "Addressables ownership document");
+                owner = JsonUtility.FromJson<OwnerDocument>(ownerJson);
                 manifest = AddressablesArtifactManifestFormat.Deserialize(
                     DecodeStrictUtf8(manifestBytes, "Addressables artifact manifest"),
                     $"Addressables artifact manifest '{manifestPath}'");
@@ -2091,7 +2109,10 @@ namespace Build.Pipeline.Editor
 
             string manifestHash = ComputeSha256(manifestBytes);
             if (owner == null
-                || owner.formatVersion != OwnerFormatVersion
+                || !string.Equals(
+                    owner.documentType,
+                    OwnerDocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(owner.owner, OwnerIdentifier, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(owner.transactionId)
                 || !Guid.TryParseExact(owner.transactionId, "N", out _)
@@ -2104,7 +2125,7 @@ namespace Build.Pipeline.Editor
             }
 
             if (string.IsNullOrWhiteSpace(manifest.buildTarget)
-                || string.IsNullOrWhiteSpace(manifest.contentVersion)
+                || string.IsNullOrWhiteSpace(manifest.contentIdentity)
                 || manifest.files == null
                 || manifest.files.Length == 0)
             {
@@ -2148,8 +2169,14 @@ namespace Build.Pipeline.Editor
             StageOwnerDocument marker;
             try
             {
-                marker = JsonUtility.FromJson<StageOwnerDocument>(
-                    DecodeStrictUtf8(markerBytes, "Addressables stage ownership marker"));
+                string markerJson = DecodeStrictUtf8(
+                    markerBytes,
+                    "Addressables stage ownership marker");
+                BuildJsonDocumentContract.Validate<StageOwnerDocument>(
+                    markerJson,
+                    StageOwnerDocumentType,
+                    "Addressables stage ownership marker");
+                marker = JsonUtility.FromJson<StageOwnerDocument>(markerJson);
             }
             catch (Exception exception)
             {
@@ -2159,7 +2186,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (marker == null
-                || marker.formatVersion != OwnerFormatVersion
+                || !string.Equals(
+                    marker.documentType,
+                    StageOwnerDocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(marker.owner, StageOwnerIdentifier, StringComparison.Ordinal)
                 || !string.Equals(marker.transactionId, transactionId, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(marker.checksum))
@@ -2676,7 +2706,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class OwnerDocument
         {
-            public int formatVersion;
+            public string documentType;
             public string owner;
             public string transactionId;
             public string manifestSha256;
@@ -2685,7 +2715,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class StageOwnerDocument
         {
-            public int formatVersion;
+            public string documentType;
             public string owner;
             public string transactionId;
             public string checksum;

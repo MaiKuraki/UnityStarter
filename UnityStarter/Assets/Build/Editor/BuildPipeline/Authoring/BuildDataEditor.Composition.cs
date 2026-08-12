@@ -16,7 +16,9 @@ namespace Build.Pipeline.Editor
 
         private static readonly GUIContent SourceCleanlinessPolicyLabel = new GUIContent(
             "Source Cleanliness Policy",
-            "Requires a verified clean source workspace. Release builds always require clean source; this policy can relax only Development builds.");
+            "Controls local interactive source qualification. Allow Dirty Local Release lets the " +
+            "Inspector Release action use an isolated, non-distributable Local Release Player when " +
+            "source is not clean. Batch-mode and qualified Release builds always require verified-clean source.");
         private static readonly GUIContent CheatBuildModeLabel = new GUIContent(
             "Cheat Build Mode",
             "Controls whether ENABLE_CHEAT is applied during player builds.");
@@ -47,7 +49,6 @@ namespace Build.Pipeline.Editor
         private string versionInfoTargetOccupationError;
         private BuildWorkspaceSnapshot workspaceSnapshot;
         private string workspaceInspectionError;
-        private double nextWorkspaceInspectionTime;
         private bool showAdvancedRecipe;
         private bool showAdvancedVersionInfo;
         private bool showReadiness = true;
@@ -56,6 +57,7 @@ namespace Build.Pipeline.Editor
         private bool showVersionAndOutput = true;
         private bool showProductIdentity;
         private bool showPlayerOptions;
+        private bool showSourceQualification = true;
         private bool showValidation = true;
         private bool showBuildActions = true;
         private bool showWorkspaceDetails;
@@ -99,6 +101,7 @@ namespace Build.Pipeline.Editor
             CreateAdditionalSceneList();
             CreateStepList();
             RefreshWorkspaceSnapshot();
+            InitializeSourceWorkspaceMonitor();
         }
 
         public override void OnInspectorGUI()
@@ -132,16 +135,22 @@ namespace Build.Pipeline.Editor
 
             BuildRecipeAnalysis preview = BuildRecipePresetCatalog.Analyze(
                 GetSerializedRecipeInvocations());
-            RefreshWorkspaceSnapshotIfRequired();
             RefreshVersionInfoTargetOccupation();
             IReadOnlyList<string> previewErrors = ValidateSerializedProfile(preview);
             IReadOnlyList<UnityEngine.Object> previewDirtyAssets =
                 BuildAuthoringAssetGuard.GetDirtyAssets((BuildData)target);
             bool editorBusy = IsEditorBusy();
+            bool localPreviewAvailable =
+                BuildRequestFactory.TryResolveLocalReleasePreviewSelection(
+                    (BuildData)target,
+                    out _,
+                    out _);
             BuildInspectorStatus overallStatus = GetOverallStatus(
                 previewErrors,
                 previewDirtyAssets,
-                editorBusy);
+                editorBusy,
+                preview.ProducesPlayer,
+                localPreviewAvailable);
             BuildInspectorUi.DrawInspectorTitle(
                 "Build Profile",
                 $"{GetRecipeDisplayName(preview)}  •  {EditorUserBuildSettings.activeBuildTarget}",
@@ -171,6 +180,7 @@ namespace Build.Pipeline.Editor
             {
                 DrawPlayerOptions();
             }
+            DrawSourceQualification();
             bool workspaceIsReady = DrawWorkspaceHealth();
 
             IReadOnlyList<string> errors = ValidateSerializedProfile(recipe);
@@ -360,14 +370,9 @@ namespace Build.Pipeline.Editor
 
             BuildInspectorUi.BeginPanel();
             BuildInspectorUi.DrawResponsivePropertyField(
-                sourceCleanlinessPolicy,
-                SourceCleanlinessPolicyLabel);
-            BuildInspectorUi.DrawResponsivePropertyField(
                 cheatBuildMode,
-                CheatBuildModeLabel,
-                SourceCleanlinessPolicyLabel);
+                CheatBuildModeLabel);
             BuildInspectorUi.DrawMutedText(
-                "Release builds always require a verified clean source workspace. Allow Dirty Development is an explicit local-development exception only. " +
                 "Cheat Build Mode controls the per-build ENABLE_CHEAT symbol for the Player. " +
                 "Hot Update and Asset Content are independent recipe entries with their own configuration assets.");
             BuildInspectorUi.EndPanel();
@@ -407,9 +412,13 @@ namespace Build.Pipeline.Editor
                     ? BuildInspectorTone.Ready
                     : BuildInspectorTone.Error);
             BuildInspectorUi.DrawStatusRow(
-                "Workspace",
+                "Build Transaction",
                 GetWorkspaceStatusLabel(),
                 GetWorkspaceTone());
+            BuildInspectorUi.DrawStatusRow(
+                "Source Workspace",
+                GetSourceWorkspaceStatusLabel(),
+                GetSourceWorkspaceTone());
             BuildInspectorUi.DrawStatusRow(
                 "Authoring",
                 dirtyAssets.Count == 0
@@ -470,7 +479,9 @@ namespace Build.Pipeline.Editor
         private BuildInspectorStatus GetOverallStatus(
             IReadOnlyList<string> errors,
             IReadOnlyList<UnityEngine.Object> dirtyAssets,
-            bool editorBusy)
+            bool editorBusy,
+            bool developmentActionAvailable,
+            bool localPreviewAvailable)
         {
             if (!string.IsNullOrEmpty(catalogError))
             {
@@ -503,6 +514,26 @@ namespace Build.Pipeline.Editor
             if (dirtyAssets.Count > 0)
             {
                 return new BuildInspectorStatus(BuildInspectorTone.Warning, "UNSAVED");
+            }
+
+            if (sourceWorkspaceCaptureTask != null)
+            {
+                return localPreviewAvailable
+                    ? new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL PREVIEW")
+                    : new BuildInspectorStatus(BuildInspectorTone.Busy, "CHECKING SOURCE");
+            }
+
+            if (!IsSourceWorkspacePreviewAllowed(debugBuild: false))
+            {
+                if (developmentActionAvailable
+                    && IsSourceWorkspacePreviewAllowed(debugBuild: true))
+                {
+                    return new BuildInspectorStatus(BuildInspectorTone.Warning, "DEV ONLY");
+                }
+
+                return localPreviewAvailable
+                    ? new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL PREVIEW")
+                    : new BuildInspectorStatus(BuildInspectorTone.Error, "SOURCE BLOCKED");
             }
 
             return new BuildInspectorStatus(BuildInspectorTone.Ready, "READY");

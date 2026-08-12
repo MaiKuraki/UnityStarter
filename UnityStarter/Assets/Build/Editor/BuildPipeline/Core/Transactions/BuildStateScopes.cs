@@ -946,7 +946,9 @@ namespace Build.Pipeline.Editor
             }
 
             BuildIdentityOverride identityOverride = request.IdentityOverride;
-            bool allowLocalDevelopmentFallback = !request.BatchMode && request.DebugBuild;
+            bool allowLocalFallback = !request.BatchMode
+                && (request.Purpose == BuildPurpose.Development
+                    || request.Purpose == BuildPurpose.LocalReleasePreview);
             VersionControlMetadata metadata = null;
             long detectedCommitCount = 0L;
             string detectionFailure = null;
@@ -981,10 +983,10 @@ namespace Build.Pipeline.Editor
                     return CreateExplicitVersionWithoutDetection(request, identityOverride);
                 }
 
-                if (allowLocalDevelopmentFallback
+                if (allowLocalFallback
                     && !identityOverride.HasSourceIdentity)
                 {
-                    return CreateLocalDevelopmentVersion(
+                    return CreateLocalVersion(
                         request,
                         identityOverride,
                         detectionFailure);
@@ -1036,13 +1038,18 @@ namespace Build.Pipeline.Editor
                 identityOverride.CiRunId);
         }
 
-        private static BuildVersionContext CreateLocalDevelopmentVersion(
+        private static BuildVersionContext CreateLocalVersion(
             BuildRequest request,
             BuildIdentityOverride identityOverride,
             string reason)
         {
+            bool localPreview = request.Purpose == BuildPurpose.LocalReleasePreview;
+            string displayName = localPreview
+                ? "Local Optimized Preview"
+                : "local Development";
             Debug.LogWarning(
-                "[BuildPipeline] Using explicit local Development version metadata. " + reason);
+                "[BuildPipeline] Using explicit " + displayName +
+                " version metadata. " + reason);
             const string CommitCount = "0";
             long buildNumber = identityOverride.BuildNumber ?? 1L;
             ValidateNativeBuildNumber(request.Target, buildNumber);
@@ -1050,12 +1057,16 @@ namespace Build.Pipeline.Editor
                 request.ApplicationVersion,
                 CreatePackageVersion(request.ApplicationVersion, buildNumber),
                 buildNumber,
-                "local",
+                localPreview ? "local-preview" : "local",
                 CommitCount,
-                "local-development",
+                localPreview ? "local-preview" : "local-development",
                 "unversioned",
-                "LocalDevelopment",
-                BuildIdentityOrigin.LocalDevelopment,
+                localPreview ? "LocalPreview" : "LocalDevelopment",
+                VersionControlWorkspaceEvidence.Unknown(
+                    VersionControlWorkspaceEvidence.MetadataUnavailable),
+                localPreview
+                    ? BuildIdentityOrigin.LocalPreview
+                    : BuildIdentityOrigin.LocalDevelopment,
                 ciProvider: identityOverride.CiProvider,
                 ciRunId: identityOverride.CiRunId);
         }
@@ -1077,6 +1088,8 @@ namespace Build.Pipeline.Editor
                 identityOverride.SourceBranch,
                 string.Empty,
                 identityOverride.SourceProvider,
+                VersionControlWorkspaceEvidence.Unknown(
+                    VersionControlWorkspaceEvidence.MetadataUnavailable),
                 BuildIdentityOrigin.ExplicitOverride,
                 ciProvider: identityOverride.CiProvider,
                 ciRunId: identityOverride.CiRunId);

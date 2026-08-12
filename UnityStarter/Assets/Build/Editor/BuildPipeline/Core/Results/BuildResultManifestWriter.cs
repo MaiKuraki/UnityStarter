@@ -201,7 +201,7 @@ namespace Build.Pipeline.Editor
                 BuildResultEvidencePolicy.CreateDiagnosticBudget();
             var manifest = new ManifestDocument
             {
-                formatVersion = BuildResultManifestFormat.CurrentVersion,
+                documentType = BuildResultManifestFormat.DocumentType,
                 operation = "build",
                 runId = provisionalResult.RunId,
                 succeeded = false,
@@ -215,6 +215,8 @@ namespace Build.Pipeline.Editor
                 namedBuildTarget = context.Request.NamedTarget.TargetName,
                 scriptingBackend = context.Request.ScriptingBackend.ToString(),
                 debugBuild = context.Request.DebugBuild,
+                buildPurpose = context.Request.Purpose.ToString(),
+                releaseBaselinePolicyEligible = context.Request.CanPublishReleaseBaseline,
                 deleteDebugFiles = context.Request.DeleteDebugFiles,
                 exportAndroidProject = context.Request.ExportAndroidProject,
                 allowExternalOutput = context.Request.AllowExternalOutput,
@@ -255,8 +257,6 @@ namespace Build.Pipeline.Editor
                 buildScenePaths = context.Request.BuildScenePaths.ToArray(),
                 cheatBuildMode = context.Request.CheatBuildMode.ToString(),
                 cheatEnabled = context.Request.CheatEnabled,
-                playerPipelineCompatibilityRevision =
-                    PlayerOutputTransaction.PlayerPipelineCompatibilityRevision,
                 playerExtensionFingerprint =
                     PlayerBuildExtensionFingerprint.ResolveForEvidence(context),
                 failure = string.Empty,

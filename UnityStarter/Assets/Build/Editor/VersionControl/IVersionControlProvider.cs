@@ -1,3 +1,5 @@
+using System.Threading;
+
 namespace Build.VersionControl.Editor
 {
     public enum VersionControlWorkspaceComponentStatus
@@ -160,23 +162,6 @@ namespace Build.VersionControl.Editor
             string commitHash,
             string commitCount,
             string branchName,
-            string commitDate)
-            : this(
-                providerId,
-                commitHash,
-                commitCount,
-                branchName,
-                commitDate,
-                VersionControlWorkspaceEvidence.Unknown(
-                    VersionControlWorkspaceEvidence.MetadataUnavailable))
-        {
-        }
-
-        public VersionControlMetadata(
-            string providerId,
-            string commitHash,
-            string commitCount,
-            string branchName,
             string commitDate,
             VersionControlWorkspaceEvidence workspace)
         {
@@ -196,6 +181,17 @@ namespace Build.VersionControl.Editor
         public string BranchName { get; }
         public string CommitDate { get; }
         public VersionControlWorkspaceEvidence Workspace { get; }
+    }
+
+    /// <summary>
+    /// Optional read-only workspace preview capability. Implementations must be
+    /// thread-safe, must not call Unity APIs, and must observe cancellation by
+    /// terminating any child process they own before throwing
+    /// <see cref="System.OperationCanceledException"/>.
+    /// </summary>
+    public interface IVersionControlWorkspaceProvider
+    {
+        VersionControlWorkspaceEvidence CaptureWorkspace(CancellationToken cancellationToken);
     }
 
     public interface IVersionControlProvider

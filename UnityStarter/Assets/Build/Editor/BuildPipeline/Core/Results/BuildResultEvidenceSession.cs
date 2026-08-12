@@ -303,7 +303,7 @@ namespace Build.Pipeline.Editor
                 BuildResultEvidencePolicy.NormalizeException(failure);
             var manifest = new EarlyTerminalManifest
             {
-                formatVersion = BuildResultManifestFormat.CurrentVersion,
+                documentType = BuildResultManifestFormat.DocumentType,
                 operation = Operation,
                 runId = RunId,
                 succeeded = succeeded,
@@ -487,21 +487,21 @@ namespace Build.Pipeline.Editor
                 succeeded = !expectedResult.Succeeded,
                 partial = true,
                 debugBuild = !terminalContext.Request.DebugBuild,
+                releaseBaselinePolicyEligible = !terminalContext.Request.CanPublishReleaseBaseline,
                 deleteDebugFiles = !terminalContext.Request.DeleteDebugFiles,
                 exportAndroidProject = !terminalContext.Request.ExportAndroidProject,
                 allowExternalOutput = !terminalContext.Request.AllowExternalOutput,
                 outputIsFolder = !terminalContext.Request.OutputIsFolder,
                 cheatEnabled = !terminalContext.Request.CheatEnabled,
-                playerPipelineCompatibilityRevision = -1,
                 playerExtensionFingerprint = "<invalid>"
             };
             DeserializeTerminalManifest(json, manifest, "full build");
 
             var violations = new List<string>();
             RequireEqual(
-                manifest.formatVersion,
-                BuildResultManifestFormat.CurrentVersion,
-                "formatVersion",
+                manifest.documentType,
+                BuildResultManifestFormat.DocumentType,
+                "documentType",
                 violations);
             RequireEqual(manifest.operation, "build", "operation", violations);
             RequireEqual(manifest.runId, RunId, "runId", violations);
@@ -600,6 +600,16 @@ namespace Build.Pipeline.Editor
                 violations);
             RequireEqual(manifest.debugBuild, request.DebugBuild, "debugBuild", violations);
             RequireEqual(
+                manifest.buildPurpose,
+                request.Purpose.ToString(),
+                "buildPurpose",
+                violations);
+            RequireEqual(
+                manifest.releaseBaselinePolicyEligible,
+                request.CanPublishReleaseBaseline,
+                "releaseBaselinePolicyEligible",
+                violations);
+            RequireEqual(
                 manifest.deleteDebugFiles,
                 request.DeleteDebugFiles,
                 "deleteDebugFiles",
@@ -660,11 +670,6 @@ namespace Build.Pipeline.Editor
                 BuildResultManifestWriter.CreateSourceWorkspaceEntry(request, version),
                 violations);
             RequireEqual(
-                manifest.playerPipelineCompatibilityRevision,
-                PlayerOutputTransaction.PlayerPipelineCompatibilityRevision,
-                "playerPipelineCompatibilityRevision",
-                violations);
-            RequireEqual(
                 manifest.playerExtensionFingerprint,
                 PlayerBuildExtensionFingerprint.ResolveForEvidence(terminalContext),
                 "playerExtensionFingerprint",
@@ -697,9 +702,9 @@ namespace Build.Pipeline.Editor
 
             var violations = new List<string>();
             RequireEqual(
-                manifest.formatVersion,
-                BuildResultManifestFormat.CurrentVersion,
-                "formatVersion",
+                manifest.documentType,
+                BuildResultManifestFormat.DocumentType,
+                "documentType",
                 violations);
             RequireEqual(manifest.operation, Operation, "operation", violations);
             RequireEqual(manifest.runId, RunId, "runId", violations);
@@ -807,6 +812,21 @@ namespace Build.Pipeline.Editor
         {
             try
             {
+                if (manifest is BuildResultManifestFormat.Document)
+                {
+                    BuildJsonDocumentContract.Validate<BuildResultManifestFormat.Document>(
+                        json,
+                        BuildResultManifestFormat.DocumentType,
+                        "Full build result manifest");
+                }
+                else if (manifest is EarlyTerminalManifest)
+                {
+                    BuildJsonDocumentContract.Validate<EarlyTerminalManifest>(
+                        json,
+                        BuildResultManifestFormat.DocumentType,
+                        "Early terminal build result manifest");
+                }
+
                 JsonUtility.FromJsonOverwrite(json, manifest);
             }
             catch (Exception exception)
@@ -833,8 +853,7 @@ namespace Build.Pipeline.Editor
             }
 
             throw new BuildResultEvidenceException(
-                $"Required {contractName} manifest violates format contract " +
-                $"{BuildResultManifestFormat.CurrentVersion}: " +
+                $"Required {contractName} manifest violates the current document contract: " +
                 string.Join("; ", violations) + $". Path: '{ManifestPath}'.");
         }
 
@@ -1804,7 +1823,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class StartedMarker
         {
-            public int formatVersion = BuildResultManifestFormat.CurrentVersion;
+            public string documentType = BuildResultManifestFormat.StartedDocumentType;
             public string operation;
             public string runId;
             public string startedUtc;
@@ -1816,7 +1835,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class EarlyTerminalManifest
         {
-            public int formatVersion;
+            public string documentType;
             public string operation;
             public string runId;
             public bool succeeded;
