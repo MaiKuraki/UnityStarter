@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
-using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
@@ -82,7 +81,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             GameMode instance = null;
             try
             {
-                instance = new DefaultUnityObjectSpawner().Create(definition.GameModeClass);
+                instance = new UnityActorLifetime().Create(definition.GameModeClass);
                 Assert.AreEqual(expectedGameMode.GetType(), instance.GetType());
                 Assert.AreNotSame(expectedGameMode, instance);
             }

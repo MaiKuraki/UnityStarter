@@ -90,6 +90,49 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
+        public void ActorWorldAccessors_DelegateToBoundWorld()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            Actor actor = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+
+            Assert.AreSame(testWorld.World, actor.GetWorld());
+            Assert.AreSame(testWorld.Instance, actor.GetGameInstance());
+            Assert.AreSame(testWorld.World.GameMode, actor.GetAuthGameMode());
+            Assert.AreSame(testWorld.World.GameMode, actor.GetAuthGameMode<GameMode>());
+            Assert.AreSame(testWorld.World.GameState, actor.GetGameState());
+            Assert.AreSame(testWorld.World.GameState, actor.GetGameState<GameState>());
+        }
+
+        [Test]
+        public void Possession_PublicTransactionIsNonVirtual_AndHooksRemainExtensible()
+        {
+            System.Reflection.MethodInfo possessMethod = typeof(Controller).GetMethod(
+                nameof(Controller.Possess),
+                new[] { typeof(Pawn) });
+            System.Reflection.MethodInfo unPossessMethod = typeof(Controller).GetMethod(
+                nameof(Controller.UnPossess),
+                Type.EmptyTypes);
+
+            Assert.IsNotNull(possessMethod);
+            Assert.IsNotNull(unPossessMethod);
+            Assert.IsFalse(possessMethod.IsVirtual);
+            Assert.IsFalse(unPossessMethod.IsVirtual);
+
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            HookTrackingController prefab = testWorld.CreateAuthoringActor<HookTrackingController>(
+                "HookTrackingControllerPrefab");
+            HookTrackingController controller = testWorld.World.SpawnActor(prefab);
+            Pawn pawn = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+            controller.Initialize(testWorld.World);
+
+            controller.Possess(pawn);
+            controller.UnPossess();
+
+            Assert.AreEqual(1, controller.PossessHookCount);
+            Assert.AreEqual(1, controller.UnPossessHookCount);
+        }
+
+        [Test]
         public void Possession_CommitsBothSidesBeforeCallbacks_WithoutLifetimeOwnership()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start();
@@ -182,12 +225,70 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start();
             Actor actor = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+            Controller controllerPrefab = testWorld.CreateAuthoringActor<Controller>("ControllerPrefab");
+            Controller controller = testWorld.World.SpawnActor(controllerPrefab);
+            controller.Initialize(testWorld.World);
+            Vector3 originalLocation = actor.GetActorLocation();
 
             Exception ownerException = CaptureThreadException(() => actor.SetOwner(null));
             Exception instigatorException = CaptureThreadException(() => actor.SetInstigator(null));
+            Exception transformException = CaptureThreadException(() => actor.SetActorLocation(Vector3.one));
+            Exception tagException = CaptureThreadException(() => actor.AddTag("WorkerThread"));
+            Exception damageStateException = CaptureThreadException(() => actor.SetCanBeDamaged(false));
+            Exception controllerException = CaptureThreadException(() => controller.SetIgnoreMoveInput(true));
 
             Assert.IsInstanceOf<InvalidOperationException>(ownerException);
             Assert.IsInstanceOf<InvalidOperationException>(instigatorException);
+            Assert.IsInstanceOf<InvalidOperationException>(transformException);
+            Assert.IsInstanceOf<InvalidOperationException>(tagException);
+            Assert.IsInstanceOf<InvalidOperationException>(damageStateException);
+            Assert.IsInstanceOf<InvalidOperationException>(controllerException);
+            Assert.AreEqual(originalLocation, actor.GetActorLocation());
+            Assert.IsFalse(actor.ActorHasTag("WorkerThread"));
+            Assert.IsTrue(actor.CanBeDamaged());
+            Assert.IsFalse(controller.IsMoveInputIgnored());
+        }
+
+        [Test]
+        public void WorldBoundActor_OwnerAndInstigatorRejectForeignActorWithoutMutation()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            Actor actor = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+            Actor sameWorldActor = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+            Actor foreignActor = CreateActor<Actor>("ForeignActor");
+
+            Assert.IsNull(foreignActor.GetWorld());
+            actor.SetOwner(sameWorldActor);
+            actor.SetInstigator(sameWorldActor);
+
+            Assert.Throws<InvalidOperationException>(() => actor.SetOwner(foreignActor));
+            Assert.Throws<InvalidOperationException>(() => actor.SetInstigator(foreignActor));
+            Assert.AreSame(sameWorldActor, actor.GetOwner());
+            Assert.AreSame(sameWorldActor, actor.GetInstigator());
+
+            Assert.DoesNotThrow(() => actor.SetOwner(null));
+            Assert.DoesNotThrow(() => actor.SetInstigator(null));
+        }
+
+        [Test]
+        public void WorldUnbind_ClearsOwnerAndInstigatorReferences()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+            Actor actor = testWorld.CreateAuthoringActor<Actor>("WorldBoundActor");
+            Actor owner = testWorld.CreateAuthoringActor<Actor>("Owner");
+            Actor instigator = testWorld.CreateAuthoringActor<Actor>("Instigator");
+            testWorld.StartWorld();
+
+            actor.SetOwner(owner);
+            actor.SetInstigator(instigator);
+            Assert.AreSame(owner, actor.GetOwner());
+            Assert.AreSame(instigator, actor.GetInstigator());
+
+            testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
+
+            Assert.IsNull(actor.GetWorld());
+            Assert.IsNull(actor.GetOwner());
+            Assert.IsNull(actor.GetInstigator());
         }
 
         private T CreateActor<T>(string name) where T : Actor
@@ -213,8 +314,24 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             });
 
             thread.Start();
-            thread.Join();
+            Assert.IsTrue(thread.Join(5000), "Worker thread did not finish within the test timeout.");
             return captured;
+        }
+
+        private sealed class HookTrackingController : Controller
+        {
+            public int PossessHookCount { get; private set; }
+            public int UnPossessHookCount { get; private set; }
+
+            protected override void OnPossess(Pawn newPawn)
+            {
+                PossessHookCount++;
+            }
+
+            protected override void OnUnPossess()
+            {
+                UnPossessHookCount++;
+            }
         }
     }
 }

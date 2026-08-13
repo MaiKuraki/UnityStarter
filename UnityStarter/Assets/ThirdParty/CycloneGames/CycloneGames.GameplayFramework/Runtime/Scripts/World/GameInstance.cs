@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
-using CycloneGames.Factory.Runtime;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 
@@ -61,9 +61,10 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public const int MaxLocalPlayers = 8;
 
-        private readonly IUnityObjectSpawner objectSpawner;
+        private readonly IActorLifetime actorLifetime;
         private readonly IWorldSettingsReferenceResolver referenceResolver;
         private readonly ISceneTransitionHandler sceneTransitionHandler;
+        private readonly WorldRuntimeLimits runtimeLimits;
         private readonly List<LocalPlayer> localPlayers;
         private readonly ReadOnlyCollection<LocalPlayer> localPlayerView;
         private readonly int ownerThreadId;
@@ -73,12 +74,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         private bool isDisposed;
 
         public GameInstance(
-            IUnityObjectSpawner objectSpawner,
+            IActorLifetime actorLifetime,
             int localPlayerCount = 1,
             IWorldSettingsReferenceResolver referenceResolver = null,
-            ISceneTransitionHandler sceneTransitionHandler = null)
+            ISceneTransitionHandler sceneTransitionHandler = null,
+            WorldRuntimeLimits runtimeLimits = null)
         {
-            this.objectSpawner = objectSpawner ?? throw new ArgumentNullException(nameof(objectSpawner));
+            this.actorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
             if (localPlayerCount < 0 || localPlayerCount > MaxLocalPlayers)
             {
                 throw new ArgumentOutOfRangeException(
@@ -89,6 +91,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             this.referenceResolver = referenceResolver;
             this.sceneTransitionHandler = sceneTransitionHandler;
+            this.runtimeLimits = runtimeLimits ?? WorldRuntimeLimits.Default;
             ownerThreadId = Thread.CurrentThread.ManagedThreadId;
             lifetimeCancellation = new CancellationTokenSource();
             localPlayers = new List<LocalPlayer>(localPlayerCount);
@@ -103,7 +106,10 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public IReadOnlyList<LocalPlayer> LocalPlayers => localPlayerView;
         public World CurrentWorld => currentWorld;
+        public WorldRuntimeLimits RuntimeLimits => runtimeLimits;
         public bool IsDisposed => isDisposed;
+
+        public World GetWorld() => currentWorld;
 
         /// <summary>
         /// Forwards one PlayerLoop phase to the active World. Composition roots that do not use
@@ -163,12 +169,13 @@ namespace CycloneGames.GameplayFramework.Runtime
 
                 var world = new World(
                     this,
-                    objectSpawner,
+                    actorLifetime,
                     pendingDefinition,
                     netMode,
                     gameSession,
                     sceneTransitionHandler,
-                    ownerThreadId);
+                    ownerThreadId,
+                    runtimeLimits);
 
                 // Ownership transfers to World only after construction succeeds.
                 pendingDefinition = null;

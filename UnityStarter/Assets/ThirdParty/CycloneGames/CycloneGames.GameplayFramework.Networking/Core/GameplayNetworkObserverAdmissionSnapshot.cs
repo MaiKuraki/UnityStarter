@@ -5,16 +5,16 @@ namespace CycloneGames.GameplayFramework.Networking
     {
         internal GameplayNetworkObserverAdmissionSnapshot(
             int observerCount,
-            int observerCapacity,
+            int maximumObserverCount,
             long rejectedAdmissionCount)
         {
             ObserverCount = observerCount;
-            ObserverCapacity = observerCapacity;
+            MaximumObserverCount = maximumObserverCount;
             RejectedAdmissionCount = rejectedAdmissionCount;
         }
 
         public int ObserverCount { get; }
-        public int ObserverCapacity { get; }
+        public int MaximumObserverCount { get; }
         public long RejectedAdmissionCount { get; }
     }
 }

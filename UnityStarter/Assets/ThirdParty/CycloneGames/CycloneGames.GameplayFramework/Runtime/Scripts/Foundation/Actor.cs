@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
-using Unity.Burst;
-using Unity.Mathematics;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -40,9 +39,6 @@ namespace CycloneGames.GameplayFramework.Runtime
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
 
-        public const int MaxActorTags = 64;
-        public const int MaxActorTagLength = 128;
-
         [SerializeField] private float initialLifeSpanSec;
         [SerializeField] private bool bCanBeDamaged = true;
         [SerializeField] private bool bHidden;
@@ -58,6 +54,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private double lifeSpanDeadline;
         private ActorLifecycleState lifecycleState = ActorLifecycleState.Constructed;
         private EndPlayReason endPlayReason;
+        private int stableInstanceId;
         private bool worldUnboundNotified;
         private bool actorTickEnabled;
         private bool actorTickStateInitialized;
@@ -73,6 +70,28 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool CanEverTick => PrimaryTickPhase != ActorTickPhase.None;
         public ActorTickPhase TickPhase => PrimaryTickPhase;
         public bool IsTickEnabledAtStart => StartWithTickEnabled;
+
+        public World GetWorld() => world;
+        public GameInstance GetGameInstance() => world?.GetGameInstance();
+        public GameMode GetAuthGameMode() => world?.GetAuthGameMode();
+        public T GetAuthGameMode<T>() where T : GameMode => world?.GetAuthGameMode<T>();
+        public GameState GetGameState() => world?.GetGameState();
+        public T GetGameState<T>() where T : GameState => world?.GetGameState<T>();
+
+        /// <summary>
+        /// Returns the Unity instance identifier captured while the Actor is alive. Destruction
+        /// bookkeeping uses the cached value because native Unity object access is no longer
+        /// valid once OnDestroy has begun.
+        /// </summary>
+        internal int GetStableInstanceId()
+        {
+            if (stableInstanceId == 0)
+            {
+                stableInstanceId = GetInstanceID();
+            }
+
+            return stableInstanceId;
+        }
 
         #region Primary tick
         /// <summary>
@@ -116,8 +135,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void SetActorTickPhase(ActorTickPhase phase)
         {
-            ValidateTickPhase(phase);
             world?.AssertOwnerThread();
+            ValidateTickPhase(phase);
             if (PrimaryTickPhase == phase)
             {
                 return;
@@ -214,6 +233,8 @@ namespace CycloneGames.GameplayFramework.Runtime
                 throw new InvalidOperationException("An Actor cannot own itself.");
             }
 
+            ValidateWorldRelationship(newOwner, world, "Owner");
+
             if (ReferenceEquals(owner, newOwner))
             {
                 return;
@@ -233,7 +254,26 @@ namespace CycloneGames.GameplayFramework.Runtime
         public void SetInstigator(Actor newInstigator)
         {
             world?.AssertOwnerThread();
+            ValidateWorldRelationship(newInstigator, world, "Instigator");
             instigator = newInstigator;
+        }
+
+        private static void ValidateWorldRelationship(Actor relatedActor, World expectedWorld, string relationship)
+        {
+            if (ReferenceEquals(relatedActor, null))
+            {
+                return;
+            }
+
+            if (relatedActor == null)
+            {
+                throw new InvalidOperationException($"{relationship} must be null or reference a live Actor.");
+            }
+
+            if (!ReferenceEquals(relatedActor.world, expectedWorld))
+            {
+                throw new InvalidOperationException($"{relationship} must be null or belong to the same World.");
+            }
         }
         #endregion
 
@@ -246,12 +286,27 @@ namespace CycloneGames.GameplayFramework.Runtime
         public Vector3 GetActorForwardVector() => transform.forward;
         public Vector3 GetActorRightVector() => transform.right;
         public Vector3 GetActorUpVector() => transform.up;
-        public void SetActorLocation(Vector3 newLocation) => transform.position = newLocation;
-        public void SetActorRotation(Quaternion newRotation) => transform.rotation = newRotation;
-        public void SetActorScale(Vector3 newScale) => transform.localScale = newScale;
+        public void SetActorLocation(Vector3 newLocation)
+        {
+            world?.AssertOwnerThread();
+            transform.position = newLocation;
+        }
+
+        public void SetActorRotation(Quaternion newRotation)
+        {
+            world?.AssertOwnerThread();
+            transform.rotation = newRotation;
+        }
+
+        public void SetActorScale(Vector3 newScale)
+        {
+            world?.AssertOwnerThread();
+            transform.localScale = newScale;
+        }
 
         public void SetActorLocationAndRotation(Vector3 newLocation, Quaternion newRotation)
         {
+            world?.AssertOwnerThread();
             transform.SetPositionAndRotation(newLocation, newRotation);
         }
         #endregion
@@ -275,6 +330,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetActorHiddenInGame(bool hidden)
         {
+            world?.AssertOwnerThread();
             ApplyActorHiddenInGame(hidden, forceRendererSync: false);
         }
 
@@ -335,6 +391,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool AddTag(string tag)
         {
+            world?.AssertOwnerThread();
             ValidateTag(tag);
             tags ??= new List<string>(4);
             if (ActorHasTag(tag))
@@ -342,9 +399,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            if (tags.Count >= MaxActorTags)
+            if (tags.Count >= ActorTagLimits.MaximumTagCount)
             {
-                throw new InvalidOperationException($"Actor tag capacity ({MaxActorTags}) was exceeded.");
+                throw new InvalidOperationException(
+                    $"Actor tag capacity ({ActorTagLimits.MaximumTagCount}) was exceeded.");
             }
 
             tags.Add(tag);
@@ -353,6 +411,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool RemoveTag(string tag)
         {
+            world?.AssertOwnerThread();
             return tags != null && tags.Remove(tag);
         }
 
@@ -377,12 +436,33 @@ namespace CycloneGames.GameplayFramework.Runtime
             return count;
         }
 
-        public void ReplaceTags(IReadOnlyList<string> replacement)
+        public int CopyTagsTo(Span<string> destination)
         {
-            int count = replacement?.Count ?? 0;
-            if (count > MaxActorTags)
+            int count = TagCount;
+            if (destination.Length < count)
             {
-                throw new ArgumentException($"At most {MaxActorTags} Actor tags are allowed.", nameof(replacement));
+                throw new ArgumentException(
+                    "Destination span is smaller than the Actor tag count.",
+                    nameof(destination));
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                destination[i] = tags[i];
+            }
+
+            return count;
+        }
+
+        public void ReplaceTags(ReadOnlySpan<string> replacement)
+        {
+            world?.AssertOwnerThread();
+            int count = replacement.Length;
+            if (count > ActorTagLimits.MaximumTagCount)
+            {
+                throw new ArgumentException(
+                    $"At most {ActorTagLimits.MaximumTagCount} Actor tags are allowed.",
+                    nameof(replacement));
             }
 
             // Validate the complete input before mutating the current tag set.
@@ -410,29 +490,41 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private static void ValidateTag(string tag)
         {
-            if (string.IsNullOrWhiteSpace(tag))
+            if (ActorTagLimits.TryValidate(tag, out ActorTagValidationResult result))
             {
-                throw new ArgumentException("Actor tags cannot be null, empty, or whitespace.", nameof(tag));
+                return;
             }
 
-            if (tag.Length > MaxActorTagLength)
+            switch (result)
             {
-                throw new ArgumentException(
-                    $"Actor tags cannot exceed {MaxActorTagLength} characters.",
-                    nameof(tag));
+                case ActorTagValidationResult.NullOrWhiteSpace:
+                    throw new ArgumentException(
+                        "Actor tags cannot be null, empty, or whitespace.",
+                        nameof(tag));
+                case ActorTagValidationResult.TooLong:
+                    throw new ArgumentException(
+                        $"Actor tags cannot exceed {ActorTagLimits.MaximumTagLength} characters.",
+                        nameof(tag));
+                default:
+                    throw new InvalidOperationException("Actor tag validation returned an invalid result.");
             }
         }
         #endregion
 
         #region Damage
         public bool CanBeDamaged() => bCanBeDamaged;
-        public void SetCanBeDamaged(bool value) => bCanBeDamaged = value;
+        public void SetCanBeDamaged(bool value)
+        {
+            world?.AssertOwnerThread();
+            bCanBeDamaged = value;
+        }
 
         public virtual float TakeDamage(
             float damageAmount,
             Controller eventInstigator = null,
             Actor damageCauser = null)
         {
+            world?.AssertOwnerThread();
             return TakeDamage(damageAmount, DamageEvent.MakeGenericDamage(), eventInstigator, damageCauser);
         }
 
@@ -442,6 +534,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             Controller eventInstigator = null,
             Actor damageCauser = null)
         {
+            world?.AssertOwnerThread();
             if (!bCanBeDamaged || damageAmount <= 0f || float.IsNaN(damageAmount) || float.IsInfinity(damageAmount))
             {
                 return 0f;
@@ -479,40 +572,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected virtual void ReceiveRadialDamage(float damage, DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
         #endregion
 
-        #region Orientation
-        public Vector3 GetOrientation()
-        {
-            float3 result = QuaternionToEulerXYZBurst(new quaternion(
-                transform.rotation.x,
-                transform.rotation.y,
-                transform.rotation.z,
-                transform.rotation.w));
-            return new Vector3(result.x, result.y, result.z);
-        }
-
-        public static Vector3 QuaternionToEulerXYZ(Quaternion rotation)
-        {
-            float3 result = QuaternionToEulerXYZBurst(new quaternion(rotation.x, rotation.y, rotation.z, rotation.w));
-            return new Vector3(result.x, result.y, result.z);
-        }
-
-        [BurstCompile]
-        public static float3 QuaternionToEulerXYZBurst(in quaternion q)
-        {
-            float pitch = math.degrees(math.atan2(
-                2f * q.value.x * q.value.w - 2f * q.value.y * q.value.z,
-                1f - 2f * q.value.x * q.value.x - 2f * q.value.z * q.value.z));
-            float yaw = math.degrees(math.atan2(
-                2f * q.value.y * q.value.w - 2f * q.value.x * q.value.z,
-                1f - 2f * q.value.y * q.value.y - 2f * q.value.z * q.value.z));
-            float roll = math.degrees(math.asin(math.clamp(
-                2f * q.value.x * q.value.y + 2f * q.value.z * q.value.w,
-                -1f,
-                1f)));
-            return new float3(pitch, yaw, roll);
-        }
-        #endregion
-
         #region Lifespan
         public float GetLifeSpan() => initialLifeSpanSec;
 
@@ -528,6 +587,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetLifeSpan(float newLifeSpan)
         {
+            world?.AssertOwnerThread();
             if (float.IsNaN(newLifeSpan) || float.IsInfinity(newLifeSpan) || newLifeSpan < 0f)
             {
                 throw new ArgumentOutOfRangeException(nameof(newLifeSpan));
@@ -597,6 +657,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         #region World and lifecycle
         public virtual void FellOutOfWorld()
         {
+            world?.AssertOwnerThread();
             if (world != null)
             {
                 world.DestroyActor(this, EndPlayReason.Destroyed);
@@ -639,6 +700,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 throw new InvalidOperationException("Actor already belongs to another World.");
             }
+
+            ValidateWorldRelationship(owner, targetWorld, "Owner");
+            ValidateWorldRelationship(instigator, targetWorld, "Instigator");
 
             if (lifecycleState == ActorLifecycleState.Ending ||
                 lifecycleState == ActorLifecycleState.Destroyed)
@@ -703,6 +767,8 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 finally
                 {
+                    owner = null;
+                    instigator = null;
                     world = null;
                     actorTickEnabled = false;
                     actorTickStateInitialized = false;

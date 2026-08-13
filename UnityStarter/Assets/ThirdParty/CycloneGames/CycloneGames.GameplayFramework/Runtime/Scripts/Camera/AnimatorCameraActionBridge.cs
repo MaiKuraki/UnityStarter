@@ -1,4 +1,3 @@
-using System.Globalization;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -13,8 +12,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     ///   PlayCameraAction(string actionKey)
     ///       — plays the named preset using the entry / map configuration.
     ///
-    ///   PlayCameraActionTimed(string "actionKey@duration")
-    ///       — plays with a runtime duration override (use '@' separator, e.g. "dodge@0.6").
+    ///   PlayCameraActionTimed(AnimationEvent animationEvent)
+    ///       — reads the action key from stringParameter and the duration from floatParameter.
     ///
     ///   StopCameraAction(string actionKey)
     ///       — stops all active instances of the named preset.
@@ -42,27 +41,19 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
 
         /// <summary>
-        /// Plays with a duration override encoded as "actionKey@seconds".
-        /// If the '@' separator is absent the key is used as-is with the configured duration.
+        /// Plays with the Animation Event stringParameter as the action key and floatParameter
+        /// as the duration override. A non-positive duration uses the configured duration.
         /// </summary>
-        public void PlayCameraActionTimed(string actionKeyAndDuration)
+        public void PlayCameraActionTimed(AnimationEvent animationEvent)
         {
-            if (string.IsNullOrEmpty(actionKeyAndDuration)) return;
-
-            int sep = actionKeyAndDuration.LastIndexOf('@');
-            if (sep < 0)
+            if (animationEvent == null || string.IsNullOrEmpty(animationEvent.stringParameter))
             {
-                actionBinding?.PlayAction(actionKeyAndDuration);
                 return;
             }
 
-            string key = actionKeyAndDuration.Substring(0, sep);
-            string durStr = actionKeyAndDuration.Substring(sep + 1);
-
-            if (float.TryParse(durStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float dur))
-                actionBinding?.PlayAction(key, dur);
-            else
-                actionBinding?.PlayAction(key);
+            actionBinding?.PlayAction(
+                animationEvent.stringParameter,
+                animationEvent.floatParameter);
         }
 
         /// <summary>Stops all active instances of the preset registered under <paramref name="actionKey"/>.</summary>

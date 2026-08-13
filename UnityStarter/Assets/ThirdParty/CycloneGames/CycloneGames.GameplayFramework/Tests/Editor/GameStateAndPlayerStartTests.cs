@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using NUnit.Framework;
 using UnityEngine;
@@ -37,12 +38,12 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             TestGameState gameState = CreateActor<TestGameState>("GameState");
 
-            Assert.IsFalse(gameState.TrySetMatchState(GameState.EMatchState.InProgress, out _));
-            Assert.IsTrue(gameState.TrySetMatchState(GameState.EMatchState.WaitingToStart, out _));
-            Assert.IsTrue(gameState.TrySetMatchState(GameState.EMatchState.InProgress, out _));
-            Assert.IsTrue(gameState.TrySetMatchState(GameState.EMatchState.WaitingPostMatch, out _));
+            Assert.IsFalse(gameState.TrySetMatchState(MatchState.InProgress, out _));
+            Assert.IsTrue(gameState.TrySetMatchState(MatchState.WaitingToStart, out _));
+            Assert.IsTrue(gameState.TrySetMatchState(MatchState.InProgress, out _));
+            Assert.IsTrue(gameState.TrySetMatchState(MatchState.WaitingPostMatch, out _));
             Assert.AreEqual(3, gameState.MatchStateChangeCount);
-            Assert.AreEqual(GameState.EMatchState.WaitingPostMatch, gameState.MatchState);
+            Assert.AreEqual(MatchState.WaitingPostMatch, gameState.MatchState);
         }
 
         [Test]
@@ -50,10 +51,10 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             ReentrantGameState gameState = CreateActor<ReentrantGameState>("ReentrantGameState");
 
-            Assert.IsTrue(gameState.TrySetMatchState(GameState.EMatchState.WaitingToStart, out _));
+            Assert.IsTrue(gameState.TrySetMatchState(MatchState.WaitingToStart, out _));
 
             Assert.IsFalse(gameState.ReentrantTransitionResult);
-            Assert.AreEqual(GameState.EMatchState.WaitingToStart, gameState.MatchState);
+            Assert.AreEqual(MatchState.WaitingToStart, gameState.MatchState);
         }
 
         [Test]
@@ -78,7 +79,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             public int MatchStateChangeCount { get; private set; }
 
-            protected override void OnMatchStateChanged(EMatchState oldState, EMatchState newState)
+            protected override void OnMatchStateChanged(MatchState oldState, MatchState newState)
             {
                 MatchStateChangeCount++;
             }
@@ -88,9 +89,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             public bool ReentrantTransitionResult { get; private set; }
 
-            protected override void OnMatchStateChanged(EMatchState oldState, EMatchState newState)
+            protected override void OnMatchStateChanged(MatchState oldState, MatchState newState)
             {
-                ReentrantTransitionResult = TrySetMatchState(EMatchState.Aborted, out _);
+                ReentrantTransitionResult = TrySetMatchState(MatchState.Aborted, out _);
             }
         }
     }

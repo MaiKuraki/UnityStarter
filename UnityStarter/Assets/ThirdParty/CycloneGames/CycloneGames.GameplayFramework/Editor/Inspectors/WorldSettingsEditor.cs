@@ -121,12 +121,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 InspectorUiUtility.DrawSectionHeader("Reference Strategy", "Choose Direct Reference for project-owned prefab assets, Asset Reference for CycloneGames.AssetManagement-backed loading, or Path for a custom address-based resource manager.", new Color(1f, 0.76f, 0.38f, 1f));
-                DrawReferenceEntry<GameMode>("GameMode", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true);
-                DrawReferenceEntry<PlayerController>("PlayerController", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true);
-                DrawReferenceEntry<Pawn>("Pawn", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true);
-                DrawReferenceEntry<PlayerState>("PlayerState", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, true);
-                DrawReferenceEntry<CameraManager>("CameraManager", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false);
-                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false);
+                DrawReferenceEntry<GameMode>("GameMode", "Class Prefab", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true);
+                DrawReferenceEntry<PlayerController>("PlayerController", "Default Class Prefab", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true);
+                DrawReferenceEntry<Pawn>("Pawn", "Default Class Prefab", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true);
+                DrawReferenceEntry<PlayerState>("PlayerState", "Default Class Prefab", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, true);
+                DrawReferenceEntry<CameraManager>("CameraManager", "Default Class Prefab", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false);
+                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", "Default Class Prefab", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false);
                 EditorGUILayout.EndVertical();
             }
 
@@ -195,6 +195,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private void DrawReferenceEntry<T>(
             string label,
+            string directFieldLabel,
             SerializedProperty sourceProp,
             SerializedProperty directReferenceProp,
             SerializedProperty assetLocationProp,
@@ -226,7 +227,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             if (source == WorldSettingsReferenceSource.DirectReference)
             {
-                DrawDirectPrefabField<T>(directReferenceProp);
+                DrawDirectPrefabField<T>(directReferenceProp, directFieldLabel);
             }
             else if (source == WorldSettingsReferenceSource.AssetReference)
             {
@@ -293,12 +294,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.HelpBox("Use Path mode for a custom address-based loader. Pass an IWorldSettingsReferenceResolver that supports PathLocation to GameInstance.", MessageType.Info);
         }
 
-        private static void DrawDirectPrefabField<T>(SerializedProperty directReferenceProp) where T : Component
+        private static void DrawDirectPrefabField<T>(
+            SerializedProperty directReferenceProp,
+            string fieldLabel) where T : Component
         {
             ReferenceValidationState state = GetDirectReferenceState(directReferenceProp);
             if (state == ReferenceValidationState.Unresolved)
             {
-                EditorGUILayout.PropertyField(directReferenceProp, new GUIContent("Prefab"));
+                EditorGUILayout.PropertyField(directReferenceProp, new GUIContent(fieldLabel));
                 return;
             }
 
@@ -307,7 +310,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             EditorGUI.BeginChangeCheck();
             GameObject selectedPrefab = (GameObject)EditorGUILayout.ObjectField(
-                "Prefab",
+                fieldLabel,
                 currentPrefab,
                 typeof(GameObject),
                 allowSceneObjects: false);

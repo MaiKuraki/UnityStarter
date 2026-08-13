@@ -1,5 +1,4 @@
 using CycloneGames.Logging;
-using Unity.Cinemachine;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -10,10 +9,17 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         [SerializeField] protected float DefaultFOV = 60.0f;
         [SerializeField] private float defaultBlendDuration = 0.15f;
-        [SerializeField] private CinemachineCamera bootstrapVirtualCamera;
-        [SerializeField] private CinemachineBrain bootstrapBrain;
+        [SerializeField] private CameraOutputBehaviour cameraOutput;
 
-        public CinemachineCamera ActiveVirtualCamera { get; private set; }
+        public ICameraOutput ActiveOutput { get; private set; }
+        public ICameraOutput ConfiguredOutput => IsOutputAlive(configuredOutput)
+            ? configuredOutput
+            : cameraOutput != null
+                ? cameraOutput
+                : null;
+        public UnityEngine.Object ActiveOutputObject => IsOutputAlive(ActiveOutput)
+            ? ActiveOutput.OutputObject
+            : null;
         public float DefaultBlendDuration => defaultBlendDuration;
         public bool HasExplicitFovOverride => hasExplicitFovOverride;
         public bool CameraStateDirty => cameraStateDirty;
@@ -25,7 +31,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         public Actor LastViewTarget => lastViewTarget;
         public CameraMode LastPrimaryMode => lastPrimaryMode;
         public CameraBlendState BlendState => blendState;
-        public CinemachineBrain ActiveBrain => activeBrain;
 
         private PlayerController PCOwner;
         public PlayerController OwnerController => PCOwner;
@@ -44,12 +49,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         private float pendingBlendDurationOverride;
         private bool isUpdatingCamera;
 
-        // Brain ownership is arbitrated by the explicit World scope.
-        private CinemachineBrain activeBrain;
-        private int activeBrainOwnershipId;
-        private CinemachineCamera targetSnapshotCamera;
-        private Transform previousFollowTarget;
-        private Transform previousLookAtTarget;
+        private ICameraOutput configuredOutput;
+        private int activeOutputOwnershipId;
+        private bool isTransitioningOutput;
 
         // Fixed-capacity array keeps registration allocation-free after construction.
         private const int MAX_POST_PROCESSORS = 16;
@@ -62,43 +64,53 @@ namespace CycloneGames.GameplayFramework.Runtime
             EnsureActorTickConfiguration();
         }
 
-        public virtual void SetActiveVirtualCamera(CinemachineCamera newActiveCamera)
+        /// <summary>
+        /// Selects a camera output supplied by authoring, manual composition, or DI. The output
+        /// is optional; a CameraManager without one still evaluates and exposes CameraPose state.
+        /// </summary>
+        public virtual void SetCameraOutput(ICameraOutput output, bool rebindImmediately = true)
         {
-            RestoreVirtualCameraTargets();
-            ActiveVirtualCamera = newActiveCamera;
-            if (ActiveVirtualCamera != null)
+            ThrowIfOutputTransitioning();
+            if (ReferenceEquals(ConfiguredOutput, output) &&
+                (!rebindImmediately || ReferenceEquals(ActiveOutput, output)))
             {
-                targetSnapshotCamera = ActiveVirtualCamera;
-                previousFollowTarget = ActiveVirtualCamera.Follow;
-                previousLookAtTarget = ActiveVirtualCamera.LookAt;
-                ActiveVirtualCamera.Follow = null;
-                ActiveVirtualCamera.LookAt = null;
+                return;
+            }
+
+            World?.AssertOwnerThread();
+            ReleaseActiveOutput();
+            configuredOutput = output;
+            cameraOutput = output as CameraOutputBehaviour;
+
+            if (rebindImmediately && IsInitialized && IsOutputAlive(output))
+            {
+                TryBindOutput(output);
             }
         }
 
         /// <summary>
-        /// Set the preferred CinemachineBrain for this manager.
-        /// Useful when CameraManager is instantiated at runtime and cannot serialize scene references.
+        /// Resolves the configured authoring output and binds it immediately. Returns false when
+        /// no output is configured or the backend cannot acquire its resource.
         /// </summary>
-        public virtual void SetBootstrapBrain(CinemachineBrain brain, bool rebindImmediately = true)
+        public virtual bool TryResolveAndBindOutput()
         {
-            bootstrapBrain = brain;
-            if (!rebindImmediately) return;
+            ICameraOutput output = ConfiguredOutput;
+            if (!IsOutputAlive(output))
+            {
+                CameraOutputBehaviour localOutput = GetComponent<CameraOutputBehaviour>();
+                if (localOutput == null)
+                {
+                    localOutput = GetComponentInChildren<CameraOutputBehaviour>(includeInactive: true);
+                }
 
-            // If explicit brain is null, fall back to runtime discovery.
-            BindBrain(bootstrapBrain != null ? bootstrapBrain : ResolveCinemachineBrain());
-        }
+                output = localOutput;
+                if (localOutput != null)
+                {
+                    cameraOutput = localOutput;
+                }
+            }
 
-        /// <summary>
-        /// Re-resolve a CinemachineBrain using current discovery rules and bind it immediately.
-        /// Returns false when no brain could be resolved.
-        /// </summary>
-        public virtual bool TryResolveAndBindBrain()
-        {
-            CinemachineBrain resolved = ResolveCinemachineBrain();
-            if (resolved == null) return false;
-
-            return BindBrain(resolved);
+            return IsOutputAlive(output) && TryBindOutput(output);
         }
 
         public virtual void SetFOV(float NewFOV)
@@ -110,10 +122,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             lockedFOV = NewFOV;
             hasExplicitFovOverride = true;
-            if (ActiveVirtualCamera != null)
-            {
-                ActiveVirtualCamera.Lens.FieldOfView = lockedFOV;
-            }
+            NotifyCameraStateChanged();
         }
 
         public virtual void ClearFOVOverride()
@@ -207,27 +216,29 @@ namespace CycloneGames.GameplayFramework.Runtime
             lockedFOV = DefaultFOV;
             hasExplicitFovOverride = false;
 
-            if (ActiveVirtualCamera == null)
+            if (!IsOutputAlive(ActiveOutput))
             {
-                if (bootstrapVirtualCamera != null)
+                ICameraOutput output = ConfiguredOutput;
+                if (!IsOutputAlive(output))
                 {
-                    SetActiveVirtualCamera(bootstrapVirtualCamera);
-                }
-                else
-                {
-                    // Discovery is a one-time cold-path fallback. Production composition should
-                    // assign explicit scene references when multiple cameras are present.
-                    CinemachineCamera[] cameras = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
-                    if (cameras != null && cameras.Length > 0)
+                    CameraOutputBehaviour localOutput = GetComponent<CameraOutputBehaviour>();
+                    if (localOutput == null)
                     {
-                        SetActiveVirtualCamera(cameras[0]);
+                        localOutput = GetComponentInChildren<CameraOutputBehaviour>(includeInactive: true);
+                    }
+
+                    output = localOutput;
+                    if (localOutput != null)
+                    {
+                        cameraOutput = localOutput;
                     }
                 }
-            }
 
-            // Resolve the Brain after the virtual camera has been selected so a configured
-            // camera hierarchy is preferred over global scene discovery.
-            BindBrain(ResolveCinemachineBrain());
+                if (IsOutputAlive(output))
+                {
+                    TryBindOutput(output);
+                }
+            }
 
             var currentViewTarget = PlayerController != null ? PlayerController.GetViewTarget() : null;
             PendingViewTargetTF = currentViewTarget != null ? currentViewTarget.transform : PlayerController?.transform;
@@ -237,103 +248,138 @@ namespace CycloneGames.GameplayFramework.Runtime
             SetActorTickEnabled(true);
         }
 
-        private bool BindBrain(CinemachineBrain newBrain)
+        private bool TryBindOutput(ICameraOutput output)
         {
-            if (ReferenceEquals(activeBrain, newBrain))
+            World?.AssertOwnerThread();
+            ThrowIfOutputTransitioning();
+            if (ReferenceEquals(ActiveOutput, output) &&
+                IsOutputAlive(output) &&
+                output.TryPrepare(out _, out _))
             {
-                return activeBrain != null;
+                return true;
             }
 
-            if (newBrain == null || World == null)
+            if (!IsOutputAlive(output) || World == null)
             {
                 return false;
             }
 
-            if (!World.TryAcquireCameraBrain(this, newBrain, out int newOwnershipId, out string error))
+            isTransitioningOutput = true;
+            try
             {
-                Log.Error(
-                    error,
-                    static (message, builder) =>
-                    {
-                        builder.Append("Camera brain ownership acquisition failed: ");
-                        builder.Append(message);
-                    });
-                return false;
-            }
-
-            int previousOwnershipId = activeBrainOwnershipId;
-            activeBrain = newBrain;
-            activeBrainOwnershipId = newOwnershipId;
-            if (previousOwnershipId != 0)
-            {
-                World.ReleaseCameraBrain(this, previousOwnershipId);
-            }
-
-            return true;
-        }
-
-        private void ReleaseActiveBrain()
-        {
-            World?.ReleaseCameraBrain(this, activeBrainOwnershipId);
-            activeBrainOwnershipId = 0;
-            activeBrain = null;
-        }
-
-        private CinemachineBrain ResolveCinemachineBrain()
-        {
-            if (bootstrapBrain != null)
-            {
-                return bootstrapBrain;
-            }
-
-            if (ActiveVirtualCamera != null)
-            {
-                CinemachineBrain vcamBrain = ActiveVirtualCamera.GetComponentInParent<CinemachineBrain>();
-                if (vcamBrain != null)
+                if (!output.TryPrepare(out UnityEngine.Object ownershipResource, out string error))
                 {
-                    return vcamBrain;
+                    Log.Error(
+                        error,
+                        static (message, builder) =>
+                        {
+                            builder.Append("Camera output preparation failed: ");
+                            builder.Append(message);
+                        });
+                    return false;
                 }
-            }
 
-            CinemachineBrain[] brains = FindObjectsByType<CinemachineBrain>(FindObjectsSortMode.None);
-            if (brains == null || brains.Length <= 0)
-            {
-                Log.Warning("No CinemachineBrain was found; camera output will not be driven.");
-                return null;
-            }
+                ReleaseActiveOutputCore();
+                if (!World.TryAcquireCameraOutput(
+                        this,
+                        output,
+                        ownershipResource,
+                        out int newOwnershipId,
+                        out error))
+                {
+                    Log.Error(
+                        error,
+                        static (message, builder) =>
+                        {
+                            builder.Append("Camera output ownership acquisition failed: ");
+                            builder.Append(message);
+                        });
+                    return false;
+                }
 
-            CinemachineBrain chosen = null;
-            for (int i = 0; i < brains.Length; i++)
-            {
-                CinemachineBrain brain = brains[i];
-                if (brain == null) continue;
-                if (!brain.isActiveAndEnabled) continue;
-                if (!brain.gameObject.activeInHierarchy) continue;
-
-                chosen = brain;
-                break;
-            }
-
-            if (chosen == null)
-            {
-                chosen = brains[0];
-            }
-
-            if (brains.Length > 1)
-            {
-                Log.Warning(
-                    (Count: brains.Length, Chosen: chosen),
-                    static (state, builder) =>
+                try
+                {
+                    if (!output.TryActivate(this, out error))
                     {
-                        builder.Append("Multiple CinemachineBrain instances were detected (");
-                        builder.Append(state.Count);
-                        builder.Append("); using '");
-                        builder.Append(state.Chosen.name);
-                        builder.Append("'. Assign Bootstrap Brain for deterministic binding.");
-                    });
+                        Log.Error(
+                            error,
+                            static (message, builder) =>
+                            {
+                                builder.Append("Camera output activation failed: ");
+                                builder.Append(message);
+                            });
+                        World.ReleaseCameraOutput(this, output, newOwnershipId);
+                        return false;
+                    }
+
+                    if (!IsOutputAlive(output) || ownershipResource == null)
+                    {
+                        try
+                        {
+                            output.Deactivate(this);
+                        }
+                        finally
+                        {
+                            World.ReleaseCameraOutput(this, output, newOwnershipId);
+                        }
+
+                        Log.Error("Camera output resources were destroyed during activation.");
+                        return false;
+                    }
+                }
+                catch
+                {
+                    World.ReleaseCameraOutput(this, output, newOwnershipId);
+                    throw;
+                }
+
+                ActiveOutput = output;
+                activeOutputOwnershipId = newOwnershipId;
+                return true;
+            }
+            finally
+            {
+                isTransitioningOutput = false;
+            }
+        }
+
+        private void ReleaseActiveOutput()
+        {
+            ThrowIfOutputTransitioning();
+            isTransitioningOutput = true;
+            try
+            {
+                ReleaseActiveOutputCore();
+            }
+            finally
+            {
+                isTransitioningOutput = false;
+            }
+        }
+
+        private void ReleaseActiveOutputCore()
+        {
+            ICameraOutput output = ActiveOutput;
+            int ownershipId = activeOutputOwnershipId;
+            ActiveOutput = null;
+            activeOutputOwnershipId = 0;
+            if (output == null)
+            {
+                return;
             }
 
-            return chosen;
+            try
+            {
+                output.Deactivate(this);
+            }
+            catch (System.Exception exception)
+            {
+                Log.Error(exception, $"Camera output '{output.DisplayName}' failed to deactivate.");
+            }
+            finally
+            {
+                World?.ReleaseCameraOutput(this, output, ownershipId);
+            }
         }
 
         public virtual void UpdateCamera(float deltaTime)
@@ -461,21 +507,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             hasCurrentPose = true;
 
             transform.SetPositionAndRotation(pose.Position, pose.Rotation);
-            if (ActiveVirtualCamera != null)
+            ICameraOutput output = ActiveOutput;
+            if (output == null)
             {
-                ActiveVirtualCamera.transform.SetPositionAndRotation(pose.Position, pose.Rotation);
-                ActiveVirtualCamera.Lens.FieldOfView = pose.Fov;
+                return;
             }
 
-            // Trigger Brain after writing the final virtual-camera pose so the Brain reads the
-            // current frame rather than a frame-behind value.
-            if (activeBrain != null)
+            try
             {
-                activeBrain.ManualUpdate();
+                output.ApplyPose(in pose);
             }
-            else if (!ReferenceEquals(activeBrain, null))
+            catch (System.Exception exception)
             {
-                ReleaseActiveBrain();
+                Log.Error(
+                    exception,
+                    $"Camera output '{output.DisplayName}' failed while applying a pose and was released.");
+                ReleaseActiveOutput();
             }
         }
 
@@ -536,18 +583,59 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected override void OnWorldUnbound(EndPlayReason reason)
         {
-            ReleaseActiveBrain();
-            RestoreVirtualCameraTargets();
-            ResetRuntimeState();
-            base.OnWorldUnbound(reason);
+            try
+            {
+                ReleaseActiveOutput();
+            }
+            finally
+            {
+                ResetRuntimeState();
+                base.OnWorldUnbound(reason);
+            }
         }
 
         protected override void OnDestroy()
         {
-            ReleaseActiveBrain();
-            RestoreVirtualCameraTargets();
-            ResetRuntimeState();
-            base.OnDestroy();
+            try
+            {
+                ReleaseActiveOutput();
+            }
+            finally
+            {
+                ResetRuntimeState();
+                base.OnDestroy();
+            }
+        }
+
+        internal void HandleCameraOutputDestroyed(ICameraOutput output)
+        {
+            if (isTransitioningOutput)
+            {
+                return;
+            }
+
+            if (!ReferenceEquals(ActiveOutput, output))
+            {
+                output?.Deactivate(this);
+                return;
+            }
+
+            ReleaseActiveOutput();
+        }
+
+        private void ThrowIfOutputTransitioning()
+        {
+            if (isTransitioningOutput)
+            {
+                throw new System.InvalidOperationException(
+                    "Camera output composition cannot change during an output transition callback.");
+            }
+        }
+
+        private static bool IsOutputAlive(ICameraOutput output)
+        {
+            return output != null &&
+                   (!(output is UnityEngine.Object unityObject) || unityObject != null);
         }
 
         private void ResetRuntimeState()
@@ -566,11 +654,11 @@ namespace CycloneGames.GameplayFramework.Runtime
             hasPendingBlendDurationOverride = false;
             pendingBlendDurationOverride = 0f;
             PCOwner = null;
-            ActiveVirtualCamera = null;
             IsInitialized = false;
             lockedFOV = DefaultFOV;
             blendState = default;
             isUpdatingCamera = false;
+            isTransitioningOutput = false;
         }
 
         private void EnsureActorTickConfiguration()
@@ -581,17 +669,5 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        private void RestoreVirtualCameraTargets()
-        {
-            if (targetSnapshotCamera != null)
-            {
-                targetSnapshotCamera.Follow = previousFollowTarget;
-                targetSnapshotCamera.LookAt = previousLookAtTarget;
-            }
-
-            targetSnapshotCamera = null;
-            previousFollowTarget = null;
-            previousLookAtTarget = null;
-        }
     }
 }

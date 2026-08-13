@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -45,7 +46,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         public GameModeLifecycleState ModeState => modeState;
         public IGameSession GetGameSession() => gameSession;
         public GameModeConfig GetGameModeConfig() => gameModeConfig;
-        public GameState GetGameState() => World?.GameState;
 
         public virtual void Initialize(World targetWorld, IGameSession session = null)
         {
@@ -100,7 +100,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             modeState = GameModeLifecycleState.Starting;
             InitializeGameState();
-            SetRequiredMatchState(GameState.EMatchState.WaitingToStart);
+            SetRequiredMatchState(MatchState.WaitingToStart);
 
             if (!World.IsDedicatedServer && localPlayers != null)
             {
@@ -126,7 +126,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
-            SetRequiredMatchState(GameState.EMatchState.InProgress);
+            SetRequiredMatchState(MatchState.InProgress);
             modeState = GameModeLifecycleState.Running;
         }
 
@@ -562,8 +562,11 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            HandleMatchHasStarted();
+            // Enter the notified state before invoking extension code. A callback may
+            // synchronously stop the World or throw after publishing external side effects;
+            // both paths must observe a committed start and emit the paired end notification.
             matchStartNotified = true;
+            HandleMatchHasStarted();
         }
 
         protected virtual void HandleMatchHasStarted()
@@ -642,23 +645,14 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private void InitializeGameState()
         {
-            GameState state = null;
             if (gameStateClass != null)
             {
-                state = World.SpawnActor(gameStateClass);
-            }
-            else
-            {
-                World.TryGetActor(out state);
-            }
-
-            if (state != null)
-            {
+                GameState state = World.SpawnActor(gameStateClass);
                 World.SetGameState(state);
             }
         }
 
-        private void SetRequiredMatchState(GameState.EMatchState matchState)
+        private void SetRequiredMatchState(MatchState matchState)
         {
             GameState state = GetGameState();
             if (state != null && !state.TrySetMatchState(matchState, out string error))
@@ -836,7 +830,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 if (matchStartNotified)
                 {
                     matchStartNotified = false;
-                    GetGameState()?.TrySetMatchState(GameState.EMatchState.WaitingPostMatch, out _);
+                    GetGameState()?.TrySetMatchState(MatchState.WaitingPostMatch, out _);
                     HandleMatchHasEnded();
                 }
             }

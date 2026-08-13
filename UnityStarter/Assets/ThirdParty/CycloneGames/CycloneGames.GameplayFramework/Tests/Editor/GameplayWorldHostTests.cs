@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.GameplayFramework.Runtime.Editor;
 using NUnit.Framework;
@@ -44,6 +45,61 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
                 Object.DestroyImmediate(hostObject);
             }
+        }
+
+        [Test]
+        public void Host_ExplicitComposition_AppliesImmutableWorldRuntimeLimits()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+            var hostObject = new GameObject("GameplayWorldHost");
+            GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+            AssignWorldSettings(host, testWorld.Settings);
+            var limits = new WorldRuntimeLimits(
+                maximumActorCount: 32,
+                initialActorCapacity: 8,
+                initialUpdateTickCapacity: 4,
+                initialFixedUpdateTickCapacity: 2,
+                initialLateUpdateTickCapacity: 2);
+            host.Configure(new GameplayWorldComposition(
+                new UnityActorLifetime(),
+                runtimeLimits: limits));
+
+            try
+            {
+                World world = host.StartWorldAsync().GetAwaiter().GetResult();
+
+                Assert.IsTrue(host.HasExplicitComposition);
+                Assert.AreSame(limits, host.Composition.RuntimeLimits);
+                Assert.AreSame(limits, host.GameInstance.RuntimeLimits);
+                Assert.AreSame(limits, world.RuntimeLimits);
+                ActorAdmissionSnapshot snapshot = world.GetActorAdmissionSnapshot();
+                Assert.AreEqual(32, snapshot.MaximumActorCount);
+                Assert.GreaterOrEqual(snapshot.AllocatedActorCapacity, snapshot.ActorCount);
+                Assert.Throws<System.InvalidOperationException>(() =>
+                    host.Configure(GameplayWorldComposition.CreateDefault()));
+            }
+            finally
+            {
+                if (host.IsRunning)
+                {
+                    host.StopWorldAsync().GetAwaiter().GetResult();
+                }
+
+                Object.DestroyImmediate(hostObject);
+            }
+        }
+
+        [Test]
+        public void WorldRuntimeLimits_CapInitialCapacityHintsToAdmissionLimit()
+        {
+            var limits = new WorldRuntimeLimits(maximumActorCount: 4);
+
+            Assert.AreEqual(4, limits.InitialActorCapacity);
+            Assert.AreEqual(4, limits.InitialUpdateTickCapacity);
+            Assert.AreEqual(4, limits.InitialFixedUpdateTickCapacity);
+            Assert.AreEqual(4, limits.InitialLateUpdateTickCapacity);
+            Assert.Throws<System.ArgumentOutOfRangeException>(() =>
+                new WorldRuntimeLimits(initialActorCapacity: -1));
         }
 
         [Test]

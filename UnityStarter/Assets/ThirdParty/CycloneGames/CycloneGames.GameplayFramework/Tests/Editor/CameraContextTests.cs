@@ -240,6 +240,39 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
+        public void CameraActionBinding_AwakePreallocatesConfiguredRuntimeBudgets()
+        {
+            ownerObject = new GameObject("Owner");
+            CameraActionBinding binding = ownerObject.AddComponent<CameraActionBinding>();
+            SetPrivateField(binding, "maxActiveActions", 24);
+            SetPrivateField(binding, "maxPooledModes", 20);
+            FieldInfo poolField = typeof(CameraActionBinding).GetField(
+                "modePool",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            object initialPool = poolField?.GetValue(binding);
+            MethodInfo awake = typeof(CameraActionBinding).GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.IsNotNull(poolField);
+            Assert.IsNotNull(awake);
+            awake.Invoke(binding, null);
+
+            object activeActions = typeof(CameraActionBinding)
+                .GetField("activeActions", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(binding);
+            object resizedPool = poolField.GetValue(binding);
+            Assert.IsNotNull(activeActions);
+            int activeCapacity = (int)activeActions.GetType()
+                .GetProperty("Capacity")
+                .GetValue(activeActions);
+
+            Assert.GreaterOrEqual(activeCapacity, 24);
+            Assert.IsNotNull(resizedPool);
+            Assert.AreNotSame(initialPool, resizedPool);
+        }
+
+        [Test]
         public void ResolveViewTarget_UsesPolicyAndManualOverride()
         {
             PlayerController owner = CreateOwner();

@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.GameplayFramework.Runtime;
+using System.Threading;
 using CycloneGames.Networking;
-using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Networking
 {
@@ -59,7 +58,7 @@ namespace CycloneGames.GameplayFramework.Networking
             bool includeOwner,
             bool requireAuthenticated)
         {
-            if (maxDistance < 0f)
+            if (maxDistance < 0f || float.IsNaN(maxDistance) || float.IsInfinity(maxDistance))
             {
                 throw new ArgumentOutOfRangeException(nameof(maxDistance));
             }
@@ -120,7 +119,6 @@ namespace CycloneGames.GameplayFramework.Networking
 
     public readonly struct NetworkedGameplayActor
     {
-        public readonly Actor Actor;
         public readonly uint NetworkId;
         public readonly int OwnerConnectionId;
         public readonly ulong OwnerPlayerId;
@@ -130,7 +128,6 @@ namespace CycloneGames.GameplayFramework.Networking
         public readonly NetworkVector3 InterestPosition;
 
         public NetworkedGameplayActor(
-            Actor actor,
             uint networkId,
             int ownerConnectionId,
             ulong ownerPlayerId,
@@ -139,7 +136,6 @@ namespace CycloneGames.GameplayFramework.Networking
             bool alwaysRelevant,
             NetworkVector3 interestPosition)
         {
-            Actor = actor;
             NetworkId = networkId;
             OwnerConnectionId = ownerConnectionId;
             OwnerPlayerId = ownerPlayerId;
@@ -149,37 +145,12 @@ namespace CycloneGames.GameplayFramework.Networking
             InterestPosition = interestPosition;
         }
 
-        public bool IsValid => NetworkId != 0u && InterestPosition.IsFinite();
+        public bool HasOwner => OwnerConnectionId > 0;
+        public bool IsValid => NetworkId != 0u && OwnerConnectionId >= 0 && InterestPosition.IsFinite();
 
         public NetworkInterestTarget ToInterestTarget()
         {
             return new NetworkInterestTarget(NetworkId, InterestPosition, InterestLayerMask, OwnerPlayerId, TeamId);
-        }
-
-        public static NetworkedGameplayActor FromActor(
-            Actor actor,
-            uint networkId,
-            int ownerConnectionId,
-            ulong ownerPlayerId = 0UL,
-            int teamId = 0,
-            uint interestLayerMask = uint.MaxValue,
-            bool alwaysRelevant = false)
-        {
-            if (actor == null)
-            {
-                throw new ArgumentNullException(nameof(actor));
-            }
-
-            Vector3 position = actor.GetActorLocation();
-            return new NetworkedGameplayActor(
-                actor,
-                networkId,
-                ownerConnectionId,
-                ownerPlayerId,
-                teamId,
-                interestLayerMask,
-                alwaysRelevant,
-                new NetworkVector3(position.x, position.y, position.z));
         }
     }
 
@@ -225,7 +196,11 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public bool CanSendOwnerInput(in GameplayNetworkAuthorityContext context, in NetworkedGameplayActor actor)
         {
-            return actor.IsValid && context.IsClient && context.LocalConnectionId == actor.OwnerConnectionId;
+            return actor.IsValid &&
+                   actor.HasOwner &&
+                   context.IsClient &&
+                   context.LocalConnectionId > 0 &&
+                   context.LocalConnectionId == actor.OwnerConnectionId;
         }
 
         public GameplayNetworkAuthorityRole GetRole(in GameplayNetworkAuthorityContext context, in NetworkedGameplayActor actor)
@@ -240,23 +215,57 @@ namespace CycloneGames.GameplayFramework.Networking
                 return GameplayNetworkAuthorityRole.ServerAuthority;
             }
 
-            if (context.IsClient && context.LocalConnectionId == actor.OwnerConnectionId)
+            if (context.IsClient &&
+                context.LocalConnectionId > 0 &&
+                actor.HasOwner &&
+                context.LocalConnectionId == actor.OwnerConnectionId)
             {
                 return GameplayNetworkAuthorityRole.AutonomousProxy;
             }
 
-            return GameplayNetworkAuthorityRole.SimulatedProxy;
+            return context.IsClient
+                ? GameplayNetworkAuthorityRole.SimulatedProxy
+                : GameplayNetworkAuthorityRole.None;
         }
     }
 
     public sealed class GameplayNetworkObserverResolver : IGameplayNetworkObserverResolver
     {
+        public const int MaximumSupportedResultCount = GameplayNetworkObserverRegistry.MaximumSupportedObserverCount;
+
+        private readonly HashSet<int> selectedConnectionIds;
+        private readonly int maximumResultCount;
+        private readonly int ownerThreadId;
+
+        public GameplayNetworkObserverResolver(
+            int initialCapacity = 16,
+            int maximumResultCount = MaximumSupportedResultCount)
+        {
+            if (maximumResultCount < 0 || maximumResultCount > MaximumSupportedResultCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumResultCount));
+            }
+
+            if (initialCapacity < 0 || initialCapacity > maximumResultCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(initialCapacity));
+            }
+
+            this.maximumResultCount = maximumResultCount;
+            ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            selectedConnectionIds = new HashSet<int>();
+            selectedConnectionIds.EnsureCapacity(initialCapacity);
+        }
+
+        public int MaximumResultCount => maximumResultCount;
+
         public int ResolveObservers(
             in GameplayReplicationContext context,
             IReadOnlyList<INetConnection> candidates,
             IGameplayNetworkObserverSource observerSource,
             IList<INetConnection> results)
         {
+            AssertOwnerThread();
             if (candidates == null)
             {
                 throw new ArgumentNullException(nameof(candidates));
@@ -268,16 +277,30 @@ namespace CycloneGames.GameplayFramework.Networking
             }
 
             results.Clear();
+            selectedConnectionIds.Clear();
 
-            if (!context.Target.IsValid || context.Policy.Visibility == GameplayReplicationVisibility.None)
+            if (maximumResultCount == 0 ||
+                !context.Target.IsValid ||
+                context.Policy.Visibility == GameplayReplicationVisibility.None)
             {
                 return 0;
             }
 
             for (int i = 0; i < candidates.Count; i++)
             {
+                if (results.Count >= maximumResultCount)
+                {
+                    break;
+                }
+
                 INetConnection connection = candidates[i];
-                if (connection == null || !connection.IsConnected)
+                if (connection == null)
+                {
+                    continue;
+                }
+
+                int connectionId = connection.ConnectionId;
+                if (connectionId <= 0 || !connection.IsConnected)
                 {
                     continue;
                 }
@@ -287,7 +310,12 @@ namespace CycloneGames.GameplayFramework.Networking
                     continue;
                 }
 
-                if (ShouldReplicateToConnection(context, connection, observerSource))
+                if (ShouldReplicateToConnection(
+                        context,
+                        connection,
+                        connectionId,
+                        observerSource) &&
+                    selectedConnectionIds.Add(connectionId))
                 {
                     results.Add(connection);
                 }
@@ -296,9 +324,19 @@ namespace CycloneGames.GameplayFramework.Networking
             return results.Count;
         }
 
+        private void AssertOwnerThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "GameplayNetworkObserverResolver must be accessed on its owning thread.");
+            }
+        }
+
         private static bool ShouldReplicateToConnection(
             in GameplayReplicationContext context,
             INetConnection connection,
+            int connectionId,
             IGameplayNetworkObserverSource observerSource)
         {
             if (context.Target.AlwaysRelevant || context.Policy.Visibility == GameplayReplicationVisibility.All)
@@ -306,7 +344,8 @@ namespace CycloneGames.GameplayFramework.Networking
                 return true;
             }
 
-            bool isOwner = context.Target.OwnerConnectionId == connection.ConnectionId;
+            bool isOwner = context.Target.HasOwner &&
+                           context.Target.OwnerConnectionId == connectionId;
             if (isOwner)
             {
                 return context.Policy.IncludeOwner || context.Policy.Visibility == GameplayReplicationVisibility.OwnerOnly;
@@ -317,12 +356,12 @@ namespace CycloneGames.GameplayFramework.Networking
                 case GameplayReplicationVisibility.OwnerOnly:
                     return false;
                 case GameplayReplicationVisibility.Team:
-                    return IsTeamObserver(context, connection, observerSource);
+                    return IsTeamObserver(context, connectionId, observerSource);
                 case GameplayReplicationVisibility.Area:
-                    return IsAreaObserver(context, connection, observerSource);
+                    return IsAreaObserver(context, connectionId, observerSource);
                 case GameplayReplicationVisibility.TeamOrArea:
-                    return IsTeamObserver(context, connection, observerSource) ||
-                           IsAreaObserver(context, connection, observerSource);
+                    return IsTeamObserver(context, connectionId, observerSource) ||
+                           IsAreaObserver(context, connectionId, observerSource);
                 default:
                     return false;
             }
@@ -330,7 +369,7 @@ namespace CycloneGames.GameplayFramework.Networking
 
         private static bool IsTeamObserver(
             in GameplayReplicationContext context,
-            INetConnection connection,
+            int connectionId,
             IGameplayNetworkObserverSource observerSource)
         {
             if (context.Target.TeamId == 0 || observerSource == null)
@@ -338,13 +377,13 @@ namespace CycloneGames.GameplayFramework.Networking
                 return false;
             }
 
-            return observerSource.TryGetObserver(connection.ConnectionId, out NetworkInterestObserver observer) &&
+            return observerSource.TryGetObserver(connectionId, out NetworkInterestObserver observer) &&
                    observer.TeamId == context.Target.TeamId;
         }
 
         private static bool IsAreaObserver(
             in GameplayReplicationContext context,
-            INetConnection connection,
+            int connectionId,
             IGameplayNetworkObserverSource observerSource)
         {
             if (context.Policy.MaxDistance <= 0f || observerSource == null)
@@ -352,7 +391,15 @@ namespace CycloneGames.GameplayFramework.Networking
                 return false;
             }
 
-            if (!observerSource.TryGetObserver(connection.ConnectionId, out NetworkInterestObserver observer))
+            if (!observerSource.TryGetObserver(connectionId, out NetworkInterestObserver observer))
+            {
+                return false;
+            }
+
+            if (!observer.Position.IsFinite() ||
+                observer.Radius <= 0f ||
+                float.IsNaN(observer.Radius) ||
+                float.IsInfinity(observer.Radius))
             {
                 return false;
             }
@@ -362,7 +409,7 @@ namespace CycloneGames.GameplayFramework.Networking
                 return false;
             }
 
-            float radius = context.Policy.MaxDistance;
+            float radius = Math.Min(context.Policy.MaxDistance, observer.Radius);
             return NetworkVector3.SqrDistance(observer.Position, context.Target.InterestPosition) <= radius * radius;
         }
     }

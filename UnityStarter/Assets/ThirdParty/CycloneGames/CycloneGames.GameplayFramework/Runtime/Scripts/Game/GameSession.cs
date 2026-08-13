@@ -1,233 +1,99 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using CycloneGames.GameplayFramework.Core;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    public enum PlayerLoginStatus : byte
-    {
-        Success = 0,
-        InvalidRequest = 1,
-        NotAuthoritative = 2,
-        WorldNotAcceptingPlayers = 3,
-        Rejected = 4,
-        AtCapacity = 5,
-        SpawnFailed = 6,
-        Cancelled = 7,
-    }
-
     /// <summary>
-    /// Bounded login input. Network adapters validate authentication and rate limits before
-    /// creating this request; GameSession validates framework-level size and capacity limits.
+    /// Unity-facing participant session. Stable membership and capacity rules are delegated to
+    /// ParticipantRoster while controller and PlayerState ownership remains in this facade.
     /// </summary>
-    public readonly struct PlayerLoginRequest
+    public sealed class GameSession : IGameSession
     {
-        public const int MaxPlayerNameLength = 64;
-        public const int MaxRemoteAddressLength = 256;
-        public const int MaxOptionsLength = 1024;
-
-        public PlayerLoginRequest(
-            int playerId,
-            string playerName,
-            bool isSpectator = false,
-            string remoteAddress = null,
-            string options = null,
-            bool isLocal = false)
+        private readonly struct RuntimeRosterEntry
         {
-            PlayerId = playerId;
-            PlayerName = playerName;
-            IsSpectator = isSpectator;
-            RemoteAddress = remoteAddress;
-            Options = options;
-            IsLocal = isLocal;
-        }
-
-        public int PlayerId { get; }
-        public string PlayerName { get; }
-        public bool IsSpectator { get; }
-        public string RemoteAddress { get; }
-        public string Options { get; }
-        public bool IsLocal { get; }
-
-        public bool TryValidate(out string error)
-        {
-            if (PlayerId < 0)
+            public RuntimeRosterEntry(
+                int participantId,
+                ParticipantCategory category,
+                PlayerState playerState)
             {
-                error = "PlayerId cannot be negative.";
-                return false;
-            }
-
-            if (PlayerName != null && PlayerName.Length > MaxPlayerNameLength)
-            {
-                error = $"PlayerName exceeds {MaxPlayerNameLength} characters.";
-                return false;
-            }
-
-            if (RemoteAddress != null && RemoteAddress.Length > MaxRemoteAddressLength)
-            {
-                error = $"RemoteAddress exceeds {MaxRemoteAddressLength} characters.";
-                return false;
-            }
-
-            if (Options != null && Options.Length > MaxOptionsLength)
-            {
-                error = $"Options exceeds {MaxOptionsLength} characters.";
-                return false;
-            }
-
-            if (IsLocal && !string.IsNullOrEmpty(RemoteAddress))
-            {
-                error = "A local login request cannot include a remote address.";
-                return false;
-            }
-
-            error = null;
-            return true;
-        }
-    }
-
-    public readonly struct PlayerLoginResult
-    {
-        private PlayerLoginResult(PlayerLoginStatus status, PlayerController playerController, string error)
-        {
-            Status = status;
-            PlayerController = playerController;
-            Error = error;
-        }
-
-        public PlayerLoginStatus Status { get; }
-        public PlayerController PlayerController { get; }
-        public string Error { get; }
-        public bool Succeeded => Status == PlayerLoginStatus.Success;
-
-        public static PlayerLoginResult Success(PlayerController playerController)
-        {
-            return new PlayerLoginResult(PlayerLoginStatus.Success, playerController, null);
-        }
-
-        public static PlayerLoginResult Failure(PlayerLoginStatus status, string error)
-        {
-            if (status == PlayerLoginStatus.Success)
-            {
-                throw new ArgumentException("A failure result cannot use Success status.", nameof(status));
-            }
-
-            return new PlayerLoginResult(status, null, error);
-        }
-    }
-
-    /// <summary>
-    /// Authoritative admission and roster boundary. Calls are serialized on the World owner
-    /// thread; network callbacks must marshal to that thread before invoking this contract.
-    /// </summary>
-    public interface IGameSession
-    {
-        int MaxPlayers { get; }
-        int MaxSpectators { get; }
-        int PlayerCount { get; }
-        int SpectatorCount { get; }
-
-        bool ApproveLogin(in PlayerLoginRequest request, out string errorMessage);
-        bool TryRegisterPlayer(PlayerController playerController, bool spectator, out string errorMessage);
-        bool ContainsPlayer(PlayerController playerController);
-        bool UnregisterPlayer(PlayerController playerController);
-        bool TrySetSpectatorStatus(PlayerController playerController, bool spectator, out string errorMessage);
-        void HandleMatchHasStarted();
-        void HandleMatchHasEnded();
-    }
-
-    /// <summary>
-    /// Identity-safe local roster implementation. It is intentionally not thread-safe because
-    /// World mutation has a single main-thread owner.
-    /// </summary>
-    public class GameSession : IGameSession
-    {
-        public const int MaxSupportedParticipants = 100_000;
-
-        private readonly struct RosterEntry
-        {
-            public RosterEntry(int playerId, bool spectator, PlayerState playerState)
-            {
-                PlayerId = playerId;
-                Spectator = spectator;
+                ParticipantId = participantId;
+                Category = category;
                 PlayerState = playerState;
             }
 
-            public int PlayerId { get; }
-            public bool Spectator { get; }
+            public int ParticipantId { get; }
+            public ParticipantCategory Category { get; }
             public PlayerState PlayerState { get; }
         }
 
-        private readonly Dictionary<PlayerController, RosterEntry> roster;
-        private readonly Dictionary<int, PlayerController> playersById;
-        private int playerCount;
-        private int spectatorCount;
+        private readonly ParticipantRoster participantRoster;
+        private readonly Dictionary<PlayerController, RuntimeRosterEntry> runtimeRoster;
+        private readonly int ownerThreadId;
 
         public GameSession(int maxPlayers = 16, int maxSpectators = 4)
         {
-            if (maxPlayers < 0 || maxPlayers > MaxSupportedParticipants)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxPlayers));
-            }
-
-            if (maxSpectators < 0 || maxSpectators > MaxSupportedParticipants)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxSpectators));
-            }
-
-            if ((long)maxPlayers + maxSpectators > MaxSupportedParticipants)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(maxSpectators),
-                    "Combined player and spectator capacity exceeds the supported limit.");
-            }
-
-            MaxPlayers = maxPlayers;
-            MaxSpectators = maxSpectators;
-            int initialCapacity = Math.Min(maxPlayers + maxSpectators, 64);
-            roster = new Dictionary<PlayerController, RosterEntry>(initialCapacity);
-            playersById = new Dictionary<int, PlayerController>(initialCapacity);
+            ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            participantRoster = new ParticipantRoster(maxPlayers, maxSpectators);
+            runtimeRoster = new Dictionary<PlayerController, RuntimeRosterEntry>(
+                Math.Min(maxPlayers + maxSpectators, 64));
         }
 
-        public int MaxPlayers { get; }
-        public int MaxSpectators { get; }
-        public int PlayerCount => playerCount;
-        public int SpectatorCount => spectatorCount;
-
-        public virtual bool ApproveLogin(in PlayerLoginRequest request, out string errorMessage)
+        public int MaxPlayers => participantRoster.MaximumPlayers;
+        public int MaxSpectators => participantRoster.MaximumSpectators;
+        public int PlayerCount
         {
+            get
+            {
+                AssertOwnerThread();
+                return participantRoster.PlayerCount;
+            }
+        }
+
+        public int SpectatorCount
+        {
+            get
+            {
+                AssertOwnerThread();
+                return participantRoster.SpectatorCount;
+            }
+        }
+
+        public bool ApproveLogin(in PlayerLoginRequest request, out string errorMessage)
+        {
+            AssertOwnerThread();
             if (!request.TryValidate(out errorMessage))
             {
                 return false;
             }
 
-            if (AtCapacity(request.IsSpectator))
+            ParticipantRegistrationResult result = participantRoster.EvaluateRegistration(
+                request.PlayerId,
+                ToCategory(request.IsSpectator));
+            if (result == ParticipantRegistrationResult.Success)
             {
-                errorMessage = request.IsSpectator ? "Spectator capacity reached." : "Player capacity reached.";
-                return false;
+                errorMessage = null;
+                return true;
             }
 
-            if (playersById.ContainsKey(request.PlayerId))
-            {
-                errorMessage = $"PlayerId {request.PlayerId} is already registered.";
-                return false;
-            }
-
-            errorMessage = null;
-            return true;
+            errorMessage = GetRegistrationError(result, request.PlayerId);
+            return false;
         }
 
-        public virtual bool TryRegisterPlayer(
+        public bool TryRegisterPlayer(
             PlayerController playerController,
             bool spectator,
             out string errorMessage)
         {
+            AssertOwnerThread();
             if (ReferenceEquals(playerController, null))
             {
                 errorMessage = "PlayerController is required.";
                 return false;
             }
 
-            if (roster.ContainsKey(playerController))
+            if (runtimeRoster.ContainsKey(playerController))
             {
                 errorMessage = "PlayerController is already registered.";
                 return false;
@@ -240,127 +106,266 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            int playerId = playerState.GetPlayerId();
-            if (playerId < 0 || playersById.ContainsKey(playerId))
-            {
-                errorMessage = $"PlayerId {playerId} is invalid or already registered.";
-                return false;
-            }
-
+            int participantId = playerState.GetPlayerId();
             if (playerState.IsIdentityLocked)
             {
                 errorMessage = "PlayerState is already registered in a GameSession.";
                 return false;
             }
 
-            if (AtCapacity(spectator))
+            ParticipantCategory category = ToCategory(spectator);
+            ParticipantRegistrationResult admission = participantRoster.EvaluateRegistration(
+                participantId,
+                category);
+            if (admission != ParticipantRegistrationResult.Success)
             {
-                errorMessage = spectator ? "Spectator capacity reached." : "Player capacity reached.";
+                errorMessage = GetRegistrationError(admission, participantId);
                 return false;
             }
 
-            playerState.SetIsSpectator(spectator);
-            playerState.LockIdentity(this, playerId);
+            bool previousSpectator = playerState.IsSpectator();
+            bool identityLocked = false;
+            bool coreRegistered = false;
+            bool runtimeRegistered = false;
             try
             {
-                roster.Add(playerController, new RosterEntry(playerId, spectator, playerState));
-                playersById.Add(playerId, playerController);
+                playerState.SetIsSpectator(spectator);
+                playerState.LockIdentity(this, participantId);
+                identityLocked = true;
+
+                ParticipantRegistrationResult registration = participantRoster.Register(
+                    participantId,
+                    category);
+                if (registration != ParticipantRegistrationResult.Success)
+                {
+                    playerState.UnlockIdentity(this);
+                    identityLocked = false;
+                    playerState.SetIsSpectator(previousSpectator);
+                    errorMessage = GetRegistrationError(registration, participantId);
+                    return false;
+                }
+
+                coreRegistered = true;
+                runtimeRoster.Add(
+                    playerController,
+                    new RuntimeRosterEntry(participantId, category, playerState));
+                runtimeRegistered = true;
+                errorMessage = null;
+                return true;
             }
             catch
             {
-                roster.Remove(playerController);
-                playersById.Remove(playerId);
-                playerState.UnlockIdentity(this);
+                RollbackRegistration(
+                    playerController,
+                    playerState,
+                    participantId,
+                    previousSpectator,
+                    identityLocked,
+                    coreRegistered,
+                    runtimeRegistered);
                 throw;
             }
-            if (spectator)
-            {
-                spectatorCount++;
-            }
-            else
-            {
-                playerCount++;
-            }
-
-            errorMessage = null;
-            return true;
         }
 
-        public virtual bool UnregisterPlayer(PlayerController playerController)
+        public bool UnregisterPlayer(PlayerController playerController)
         {
+            AssertOwnerThread();
             if (ReferenceEquals(playerController, null) ||
-                !roster.TryGetValue(playerController, out RosterEntry entry))
+                !runtimeRoster.TryGetValue(playerController, out RuntimeRosterEntry entry))
             {
                 return false;
             }
 
-            roster.Remove(playerController);
-            playersById.Remove(entry.PlayerId);
-            entry.PlayerState?.UnlockIdentity(this);
-            if (entry.Spectator)
+            ParticipantRemovalResult removal = participantRoster.Remove(entry.ParticipantId);
+            if (removal != ParticipantRemovalResult.Success)
             {
-                spectatorCount--;
-            }
-            else
-            {
-                playerCount--;
+                throw new InvalidOperationException(
+                    "Runtime and Core participant rosters are inconsistent.");
             }
 
-            return true;
+            runtimeRoster.Remove(playerController);
+            try
+            {
+                entry.PlayerState?.UnlockIdentity(this);
+                return true;
+            }
+            catch
+            {
+                ParticipantRegistrationResult registration = participantRoster.Register(
+                    entry.ParticipantId,
+                    entry.Category);
+                if (registration != ParticipantRegistrationResult.Success)
+                {
+                    throw new InvalidOperationException(
+                        "Participant roster rollback failed after identity unlock failure.");
+                }
+
+                runtimeRoster.Add(playerController, entry);
+                throw;
+            }
         }
 
-        public virtual bool TrySetSpectatorStatus(
+        public bool TrySetSpectatorStatus(
             PlayerController playerController,
             bool spectator,
             out string errorMessage)
         {
+            AssertOwnerThread();
             if (ReferenceEquals(playerController, null) ||
-                !roster.TryGetValue(playerController, out RosterEntry entry))
+                !runtimeRoster.TryGetValue(playerController, out RuntimeRosterEntry entry))
             {
                 errorMessage = "PlayerController is not registered.";
                 return false;
             }
 
-            if (entry.Spectator == spectator)
+            ParticipantCategory nextCategory = ToCategory(spectator);
+            ParticipantCategoryChangeResult result = participantRoster.ChangeCategory(
+                entry.ParticipantId,
+                nextCategory);
+            if (result == ParticipantCategoryChangeResult.Unchanged)
             {
                 errorMessage = null;
                 return true;
             }
 
-            if (AtCapacity(spectator))
+            if (result != ParticipantCategoryChangeResult.Success)
             {
-                errorMessage = spectator ? "Spectator capacity reached." : "Player capacity reached.";
+                errorMessage = GetCategoryChangeError(result);
                 return false;
             }
 
-            entry.PlayerState.SetRegisteredSpectatorStatus(this, spectator);
-            roster[playerController] = new RosterEntry(entry.PlayerId, spectator, entry.PlayerState);
-            if (spectator)
+            try
             {
-                playerCount--;
-                spectatorCount++;
+                entry.PlayerState.SetRegisteredSpectatorStatus(this, spectator);
+                runtimeRoster[playerController] = new RuntimeRosterEntry(
+                    entry.ParticipantId,
+                    nextCategory,
+                    entry.PlayerState);
+                errorMessage = null;
+                return true;
             }
-            else
+            catch
             {
-                spectatorCount--;
-                playerCount++;
-            }
+                ParticipantCategoryChangeResult rollback = participantRoster.ChangeCategory(
+                    entry.ParticipantId,
+                    entry.Category);
+                if (rollback != ParticipantCategoryChangeResult.Success)
+                {
+                    throw new InvalidOperationException(
+                        "Participant category rollback failed after Runtime state mutation failure.");
+                }
 
-            errorMessage = null;
-            return true;
+                if (entry.PlayerState.IsSpectator() !=
+                    (entry.Category == ParticipantCategory.Spectator))
+                {
+                    entry.PlayerState.SetRegisteredSpectatorStatus(
+                        this,
+                        entry.Category == ParticipantCategory.Spectator);
+                }
+                runtimeRoster[playerController] = entry;
+                throw;
+            }
         }
 
         public bool ContainsPlayer(PlayerController playerController)
         {
-            return !ReferenceEquals(playerController, null) && roster.ContainsKey(playerController);
+            AssertOwnerThread();
+            return !ReferenceEquals(playerController, null) && runtimeRoster.ContainsKey(playerController);
         }
 
         public bool AtCapacity(bool spectator)
         {
-            return spectator ? spectatorCount >= MaxSpectators : playerCount >= MaxPlayers;
+            AssertOwnerThread();
+            return participantRoster.AtCapacity(ToCategory(spectator));
         }
 
-        public virtual void HandleMatchHasStarted() { }
-        public virtual void HandleMatchHasEnded() { }
+        public void HandleMatchHasStarted()
+        {
+            AssertOwnerThread();
+        }
+
+        public void HandleMatchHasEnded()
+        {
+            AssertOwnerThread();
+        }
+
+        private void RollbackRegistration(
+            PlayerController playerController,
+            PlayerState playerState,
+            int participantId,
+            bool previousSpectator,
+            bool identityLocked,
+            bool coreRegistered,
+            bool runtimeRegistered)
+        {
+            if (runtimeRegistered)
+            {
+                runtimeRoster.Remove(playerController);
+            }
+
+            if (coreRegistered)
+            {
+                ParticipantRemovalResult removal = participantRoster.Remove(participantId);
+                if (removal != ParticipantRemovalResult.Success)
+                {
+                    throw new InvalidOperationException("Participant registration rollback failed.");
+                }
+            }
+
+            if (identityLocked)
+            {
+                playerState.UnlockIdentity(this);
+            }
+
+            playerState.SetIsSpectator(previousSpectator);
+        }
+
+        private static ParticipantCategory ToCategory(bool spectator)
+        {
+            return spectator ? ParticipantCategory.Spectator : ParticipantCategory.Player;
+        }
+
+        private void AssertOwnerThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "GameSession may only be accessed by its owner thread.");
+            }
+        }
+
+        private static string GetRegistrationError(
+            ParticipantRegistrationResult result,
+            int participantId)
+        {
+            switch (result)
+            {
+                case ParticipantRegistrationResult.InvalidParticipantId:
+                    return $"PlayerId {participantId} is invalid.";
+                case ParticipantRegistrationResult.AlreadyRegistered:
+                    return $"PlayerId {participantId} is already registered.";
+                case ParticipantRegistrationResult.PlayerCapacityReached:
+                    return "Player capacity reached.";
+                case ParticipantRegistrationResult.SpectatorCapacityReached:
+                    return "Spectator capacity reached.";
+                default:
+                    return "Participant registration failed.";
+            }
+        }
+
+        private static string GetCategoryChangeError(ParticipantCategoryChangeResult result)
+        {
+            switch (result)
+            {
+                case ParticipantCategoryChangeResult.NotRegistered:
+                    return "PlayerController is not registered.";
+                case ParticipantCategoryChangeResult.PlayerCapacityReached:
+                    return "Player capacity reached.";
+                case ParticipantCategoryChangeResult.SpectatorCapacityReached:
+                    return "Spectator capacity reached.";
+                default:
+                    return "Participant category change failed.";
+            }
+        }
     }
 }

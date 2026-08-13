@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using CycloneGames.Networking;
-using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Networking
 {
@@ -11,61 +11,40 @@ namespace CycloneGames.GameplayFramework.Networking
         /// Implementation safety ceiling for observers retained by one registry. Product
         /// interest-management budgets should normally be lower than this value.
         /// </summary>
-        public const int MaximumObserverCount = 65_536;
+        public const int MaximumSupportedObserverCount = 65_536;
 
         private readonly Dictionary<int, NetworkInterestObserver> _observers;
+        private readonly int _maximumObserverCount;
+        private readonly int _ownerThreadId;
         private long _rejectedObserverAdmissionCount;
 
-        public GameplayNetworkObserverRegistry(int capacity = 16)
+        public GameplayNetworkObserverRegistry(
+            int initialCapacity = 16,
+            int maximumObserverCount = MaximumSupportedObserverCount)
         {
-            if (capacity < 0 || capacity > MaximumObserverCount)
+            if (maximumObserverCount < 0 || maximumObserverCount > MaximumSupportedObserverCount)
             {
-                throw new ArgumentOutOfRangeException(nameof(capacity));
+                throw new ArgumentOutOfRangeException(nameof(maximumObserverCount));
             }
 
-            _observers = new Dictionary<int, NetworkInterestObserver>(capacity);
+            if (initialCapacity < 0 || initialCapacity > maximumObserverCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(initialCapacity));
+            }
+
+            _maximumObserverCount = maximumObserverCount;
+            _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            _observers = new Dictionary<int, NetworkInterestObserver>(initialCapacity);
         }
 
-        public int Count => _observers.Count;
-        public long RejectedObserverAdmissionCount => _rejectedObserverAdmissionCount;
-
-        public void SetObserver(
-            INetConnection connection,
-            Vector3 position,
-            float radius,
-            uint layerMask = uint.MaxValue,
-            int teamId = 0)
+        public int Count
         {
-            if (!TrySetObserver(connection, position, radius, layerMask, teamId))
-            {
-                throw CreateObserverCapacityException();
-            }
+            get { AssertOwnerThread(); return _observers.Count; }
         }
-
-        /// <summary>
-        /// Attempts to add or update an observer. Returns false only when a new observer would
-        /// exceed the implementation ceiling; updates remain valid at capacity.
-        /// </summary>
-        public bool TrySetObserver(
-            INetConnection connection,
-            Vector3 position,
-            float radius,
-            uint layerMask = uint.MaxValue,
-            int teamId = 0)
+        public int MaximumObserverCount => _maximumObserverCount;
+        public long RejectedObserverAdmissionCount
         {
-            if (connection == null)
-            {
-                throw new ArgumentNullException(nameof(connection));
-            }
-
-            return TrySetObserver(
-                connection.ConnectionId,
-                new NetworkVector3(position.x, position.y, position.z),
-                radius,
-                layerMask,
-                connection.PlayerId,
-                teamId,
-                connection);
+            get { AssertOwnerThread(); return _rejectedObserverAdmissionCount; }
         }
 
         public void SetObserver(
@@ -77,15 +56,16 @@ namespace CycloneGames.GameplayFramework.Networking
             int teamId = 0,
             INetConnection connection = null)
         {
+            AssertOwnerThread();
             if (!TrySetObserver(connectionId, position, radius, layerMask, playerId, teamId, connection))
             {
-                throw CreateObserverCapacityException();
+                throw CreateObserverLimitException();
             }
         }
 
         /// <summary>
         /// Attempts to add or update an observer. Returns false only for new admission at the
-        /// implementation ceiling.
+        /// configured product budget.
         /// </summary>
         public bool TrySetObserver(
             int connectionId,
@@ -96,7 +76,9 @@ namespace CycloneGames.GameplayFramework.Networking
             int teamId = 0,
             INetConnection connection = null)
         {
-            if (radius < 0f)
+            AssertOwnerThread();
+            ValidateConnectionId(connectionId);
+            if (radius < 0f || float.IsNaN(radius) || float.IsInfinity(radius))
             {
                 throw new ArgumentOutOfRangeException(nameof(radius));
             }
@@ -106,7 +88,7 @@ namespace CycloneGames.GameplayFramework.Networking
                 throw new ArgumentOutOfRangeException(nameof(position));
             }
 
-            if (!_observers.ContainsKey(connectionId) && _observers.Count >= MaximumObserverCount)
+            if (!_observers.ContainsKey(connectionId) && _observers.Count >= _maximumObserverCount)
             {
                 if (_rejectedObserverAdmissionCount < long.MaxValue)
                 {
@@ -129,19 +111,23 @@ namespace CycloneGames.GameplayFramework.Networking
         /// <summary>Returns an allocation-free O(1) observer admission snapshot.</summary>
         public GameplayNetworkObserverAdmissionSnapshot GetAdmissionSnapshot()
         {
+            AssertOwnerThread();
             return new GameplayNetworkObserverAdmissionSnapshot(
                 _observers.Count,
-                MaximumObserverCount,
+                _maximumObserverCount,
                 _rejectedObserverAdmissionCount);
         }
 
         public bool TryGetObserver(int connectionId, out NetworkInterestObserver observer)
         {
+            AssertOwnerThread();
+            ValidateConnectionId(connectionId);
             return _observers.TryGetValue(connectionId, out observer);
         }
 
         public bool Remove(INetConnection connection)
         {
+            AssertOwnerThread();
             if (connection == null)
             {
                 throw new ArgumentNullException(nameof(connection));
@@ -152,18 +138,40 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public bool Remove(int connectionId)
         {
+            AssertOwnerThread();
+            ValidateConnectionId(connectionId);
             return _observers.Remove(connectionId);
         }
 
         public void Clear()
         {
+            AssertOwnerThread();
             _observers.Clear();
         }
 
-        private static InvalidOperationException CreateObserverCapacityException()
+        private void AssertOwnerThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "GameplayNetworkObserverRegistry must be accessed on its owning thread.");
+            }
+        }
+
+        private static void ValidateConnectionId(int connectionId)
+        {
+            if (connectionId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(connectionId),
+                    "ConnectionId must be positive.");
+            }
+        }
+
+        private InvalidOperationException CreateObserverLimitException()
         {
             return new InvalidOperationException(
-                $"Observer capacity reached the implementation ceiling of {MaximumObserverCount}.");
+                $"Observer capacity reached the configured maximum of {_maximumObserverCount}.");
         }
     }
 }

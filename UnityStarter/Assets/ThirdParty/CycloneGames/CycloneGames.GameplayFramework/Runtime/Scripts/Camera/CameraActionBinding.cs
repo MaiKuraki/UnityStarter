@@ -55,7 +55,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         // Pool avoids one heap allocation per PlayPreset call.
         // Capacity 8 covers even the most action-dense frames without resizing.
-        private readonly Stack<PresetCameraMode> modePool = new Stack<PresetCameraMode>(8);
+        private Stack<PresetCameraMode> modePool = new Stack<PresetCameraMode>(8);
         private bool isStoppingAllActions;
 
         public int ActiveActionCount => activeActions.Count;
@@ -65,6 +65,19 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private void Awake()
         {
+            int activeCapacity = MaxActiveActions;
+            if (activeActions.Capacity < activeCapacity)
+            {
+                activeActions.Capacity = activeCapacity;
+            }
+
+            int poolCapacity = MaxPooledModes;
+            if (poolCapacity > 8 && modePool.Count == 0)
+            {
+                modePool = new Stack<PresetCameraMode>(poolCapacity);
+            }
+
+            actionMap?.Warmup();
             TryResolvePlayerController();
         }
 

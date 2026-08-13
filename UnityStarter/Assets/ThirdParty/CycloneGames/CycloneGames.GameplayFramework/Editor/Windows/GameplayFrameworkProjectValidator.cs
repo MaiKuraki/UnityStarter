@@ -170,11 +170,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     continue;
                 }
 
-                if (host.WorldSettings.UsesExternalReferences && host.GetType() == typeof(GameplayWorldHost))
+                if (host.WorldSettings.UsesExternalReferences)
                 {
                     issues.Add(new GameplayFrameworkValidationIssue(
-                        GameplayFrameworkValidationSeverity.Error,
-                        "GameplayWorldHost cannot resolve external WorldSettings locations without a project-specific resolver override.",
+                        GameplayFrameworkValidationSeverity.Warning,
+                        "GameplayWorldHost requires a GameplayWorldComposition with IWorldSettingsReferenceResolver before starting these external WorldSettings locations.",
                         host));
                 }
 

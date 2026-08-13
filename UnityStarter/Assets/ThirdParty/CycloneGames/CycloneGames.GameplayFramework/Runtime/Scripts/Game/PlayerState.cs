@@ -1,24 +1,9 @@
 using System;
-using System.Runtime.Serialization;
+using CycloneGames.GameplayFramework.Core;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    /// <summary>
-    /// Versioned, bounded DTO for persistence and network adapters. Restore accepts only the
-    /// current schema so adapters cannot silently interpret an incompatible payload.
-    /// </summary>
-    [DataContract]
-    public sealed class PlayerStateSnapshot
-    {
-        public const int CurrentSchemaVersion = 1;
-
-        [DataMember(Order = 1)] public int SchemaVersion { get; set; } = CurrentSchemaVersion;
-        [DataMember(Order = 2)] public string PlayerName { get; set; }
-        [DataMember(Order = 3)] public int PlayerId { get; set; }
-        [DataMember(Order = 4)] public bool IsSpectator { get; set; }
-    }
-
     /// <summary>
     /// Stable participant identity and shared state. It survives Pawn replacement but remains
     /// scoped to one World unless an explicit travel adapter copies a snapshot.
@@ -56,6 +41,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetPlayerName(string newName)
         {
+            World?.AssertOwnerThread();
             if (newName != null && newName.Length > PlayerLoginRequest.MaxPlayerNameLength)
             {
                 throw new ArgumentException(
@@ -71,6 +57,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetPlayerId(int newId)
         {
+            World?.AssertOwnerThread();
             if (newId < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(newId));
@@ -87,6 +74,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void LockIdentity(object owner, int expectedPlayerId)
         {
+            World?.AssertOwnerThread();
             if (owner == null)
             {
                 throw new ArgumentNullException(nameof(owner));
@@ -108,6 +96,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void UnlockIdentity(object owner)
         {
+            World?.AssertOwnerThread();
             if (identityLockOwner == null)
             {
                 return;
@@ -126,6 +115,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected internal void SetIsSpectator(bool spectator)
         {
+            World?.AssertOwnerThread();
             if (identityLockOwner != null && spectator != bIsSpectator)
             {
                 throw new InvalidOperationException(
@@ -137,6 +127,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void SetRegisteredSpectatorStatus(object owner, bool spectator)
         {
+            World?.AssertOwnerThread();
             if (identityLockOwner == null)
             {
                 throw new InvalidOperationException("PlayerState is not registered in a GameSession.");
@@ -151,59 +142,62 @@ namespace CycloneGames.GameplayFramework.Runtime
             bIsSpectator = spectator;
         }
 
-        public virtual void CopyProperties(PlayerState other)
+        public void CopyProperties(PlayerState other)
         {
+            World?.AssertOwnerThread();
             if (other == null)
             {
                 throw new ArgumentNullException(nameof(other));
             }
 
-            if (identityLockOwner != null && playerId != other.playerId)
+            other.World?.AssertOwnerThread();
+            PlayerStateSnapshot snapshot = other.CaptureSnapshot();
+            if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
+            {
+                throw new InvalidOperationException(
+                    $"Source PlayerState contains invalid snapshot data: {validationResult}.");
+            }
+
+            if (identityLockOwner != null && playerId != snapshot.PlayerId)
             {
                 throw new InvalidOperationException(
                     "PlayerId cannot change while the PlayerState is registered in a GameSession.");
             }
 
-            if (identityLockOwner != null && bIsSpectator != other.bIsSpectator)
+            if (identityLockOwner != null && bIsSpectator != snapshot.IsSpectator)
             {
                 throw new InvalidOperationException(
                     "Spectator status must be changed through the registered GameSession.");
             }
 
-            playerName = other.playerName;
-            playerId = other.playerId;
-            bIsSpectator = other.bIsSpectator;
+            playerName = snapshot.PlayerName;
+            playerId = snapshot.PlayerId;
+            bIsSpectator = snapshot.IsSpectator;
         }
 
-        public virtual PlayerStateSnapshot CaptureSnapshot()
+        public PlayerStateSnapshot CaptureSnapshot()
         {
-            return new PlayerStateSnapshot
-            {
-                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion,
-                PlayerName = playerName,
-                PlayerId = playerId,
-                IsSpectator = bIsSpectator,
-            };
+            World?.AssertOwnerThread();
+            return new PlayerStateSnapshot(playerName, playerId, bIsSpectator);
         }
 
-        public virtual bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
+        public bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
         {
-            if (snapshot == null)
+            World?.AssertOwnerThread();
+            if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
             {
-                error = "PlayerState snapshot is required.";
-                return false;
-            }
-
-            if (snapshot.SchemaVersion != PlayerStateSnapshot.CurrentSchemaVersion)
-            {
-                error = $"Unsupported PlayerState schema version {snapshot.SchemaVersion}.";
-                return false;
-            }
-
-            if (snapshot.PlayerId < 0)
-            {
-                error = "PlayerId cannot be negative.";
-                return false;
+                switch (validationResult)
+                {
+                    case PlayerStateSnapshotValidationResult.InvalidPlayerId:
+                        error = "PlayerId cannot be negative.";
+                        return false;
+                    case PlayerStateSnapshotValidationResult.PlayerNameTooLong:
+                        error = $"PlayerName exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.";
+                        return false;
+                    default:
+                        error = "PlayerState snapshot validation failed.";
+                        return false;
+                }
             }
 
             if (identityLockOwner != null && snapshot.PlayerId != playerId)
@@ -215,13 +209,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (identityLockOwner != null && snapshot.IsSpectator != bIsSpectator)
             {
                 error = "Spectator status must be changed through the registered GameSession.";
-                return false;
-            }
-
-            if (snapshot.PlayerName != null &&
-                snapshot.PlayerName.Length > PlayerLoginRequest.MaxPlayerNameLength)
-            {
-                error = $"PlayerName exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.";
                 return false;
             }
 

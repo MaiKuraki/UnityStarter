@@ -63,19 +63,26 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetInitialLocationAndRotation(Vector3 newLocation, Quaternion newRotation)
         {
+            World?.AssertOwnerThread();
             transform.position = newLocation;
             SetControlRotation(newRotation);
         }
 
-        public void SetStartSpot(Actor newStartSpot) => startSpot = newStartSpot;
+        public void SetStartSpot(Actor newStartSpot)
+        {
+            World?.AssertOwnerThread();
+            startSpot = newStartSpot;
+        }
+
         public Actor GetStartSpot() => startSpot;
 
         #region Pawn and possession
         public Pawn GetPawn() => pawn;
         public T GetPawn<T>() where T : Pawn => pawn as T;
 
-        public virtual void Possess(Pawn newPawn)
+        public void Possess(Pawn newPawn)
         {
+            World?.AssertOwnerThread();
             if (!TryPossess(newPawn, out string error))
             {
                 throw new InvalidOperationException(error);
@@ -258,7 +265,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        public virtual void UnPossess()
+        public void UnPossess()
         {
             World?.AssertOwnerThread();
             Pawn previousPawn = pawn;
@@ -358,6 +365,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         #region Control rotation and input suppression
         public virtual void SetControlRotation(Quaternion newRotation)
         {
+            World?.AssertOwnerThread();
             if (pawn != null)
             {
                 Vector3 euler = newRotation.eulerAngles;
@@ -373,22 +381,35 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetIgnoreMoveInput(bool ignore)
         {
+            World?.AssertOwnerThread();
             ignoreMoveInputCount = Mathf.Max(0, ignoreMoveInputCount + (ignore ? 1 : -1));
         }
 
-        public virtual void ResetIgnoreMoveInput() => ignoreMoveInputCount = 0;
+        public virtual void ResetIgnoreMoveInput()
+        {
+            World?.AssertOwnerThread();
+            ignoreMoveInputCount = 0;
+        }
+
         public virtual bool IsMoveInputIgnored() => ignoreMoveInputCount > 0;
 
         public virtual void SetIgnoreLookInput(bool ignore)
         {
+            World?.AssertOwnerThread();
             ignoreLookInputCount = Mathf.Max(0, ignoreLookInputCount + (ignore ? 1 : -1));
         }
 
-        public virtual void ResetIgnoreLookInput() => ignoreLookInputCount = 0;
+        public virtual void ResetIgnoreLookInput()
+        {
+            World?.AssertOwnerThread();
+            ignoreLookInputCount = 0;
+        }
+
         public virtual bool IsLookInputIgnored() => ignoreLookInputCount > 0;
 
         public virtual void ResetIgnoreInputFlags()
         {
+            World?.AssertOwnerThread();
             ResetIgnoreMoveInput();
             ResetIgnoreLookInput();
         }

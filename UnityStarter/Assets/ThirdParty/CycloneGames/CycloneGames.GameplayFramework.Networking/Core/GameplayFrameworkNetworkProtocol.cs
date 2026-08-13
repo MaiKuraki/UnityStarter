@@ -82,7 +82,7 @@ namespace CycloneGames.GameplayFramework.Networking
                     MsgActorMigrationState,
                     ACTOR_MIGRATION_STATE_SCHEMA_V1,
                     NetworkChannel.Reliable,
-                    NetworkConstants.DefaultMaxPayloadSize * 4)
+                    ActorMigrationNetworkingExtensions.MaximumEncodedSize)
                 .AddMessage(
                     "DamageRequestMessage:v1",
                     MsgDamageRequest,

@@ -1,6 +1,5 @@
 using System;
 using System.Threading;
-using CycloneGames.Factory.Runtime;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -19,13 +18,12 @@ namespace CycloneGames.GameplayFramework.Runtime
     }
 
     /// <summary>
-    /// Unity composition root for one GameInstance and its active World. Projects that need
-    /// external asset loading, scene navigation, or a custom session override the narrow
-    /// creation methods; projects with a DI composition root may use GameInstance directly.
+    /// Unity composition root for one GameInstance and its active World. Manual bootstrap and
+    /// DI containers provide the same explicit GameplayWorldComposition before startup.
     /// </summary>
     [DefaultExecutionOrder(-10000)]
     [DisallowMultipleComponent]
-    public class GameplayWorldHost : MonoBehaviour
+    public sealed class GameplayWorldHost : MonoBehaviour
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
 
@@ -37,7 +35,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         private GameInstance gameInstance;
         private CancellationTokenSource lifetimeCancellation;
         private CancellationTokenSource startCancellation;
+        private GameplayWorldComposition composition;
         private GameplayWorldTickDriver tickDriver;
+        private GameplayWorldLateTickDriver lateTickDriver;
         private GameplayWorldHostState state = GameplayWorldHostState.Idle;
         private string lastError;
 
@@ -54,11 +54,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         public GameInstance GameInstance => gameInstance;
         public World CurrentWorld => gameInstance?.CurrentWorld;
         public bool IsRunning => state == GameplayWorldHostState.Running && CurrentWorld != null;
+        public GameplayWorldComposition Composition => composition;
+        public bool HasExplicitComposition => composition != null;
 
         private void Awake()
         {
             EnsureLifetime();
-            EnsureTickDriver();
+            EnsureTickDrivers();
         }
 
         private void Start()
@@ -73,7 +75,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             EnsureLifetime();
             ThrowIfDisposed();
-            EnsureTickDriver();
+            EnsureTickDrivers();
 
             if (state == GameplayWorldHostState.Running && CurrentWorld != null)
             {
@@ -99,16 +101,19 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             try
             {
+                GameplayWorldComposition activeComposition =
+                    composition ?? GameplayWorldComposition.CreateDefault();
                 gameInstance = new GameInstance(
-                    CreateObjectSpawner(),
+                    activeComposition.ActorLifetime,
                     EffectiveLocalPlayerCount,
-                    CreateReferenceResolver(),
-                    CreateSceneTransitionHandler());
+                    activeComposition.ReferenceResolver,
+                    activeComposition.SceneTransitionHandler,
+                    activeComposition.RuntimeLimits);
 
                 World world = await gameInstance.StartWorldAsync(
                     worldSettings,
                     netMode,
-                    CreateGameSession(),
+                    activeComposition.GameSession,
                     startCancellation.Token);
                 await UniTask.SwitchToMainThread();
                 ThrowIfDisposed();
@@ -193,24 +198,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        protected virtual IUnityObjectSpawner CreateObjectSpawner()
+        /// <summary>
+        /// Supplies explicit World dependencies. Call before startup; the caller retains
+        /// ownership of the supplied services and disposes them after this host stops.
+        /// </summary>
+        public void Configure(GameplayWorldComposition value)
         {
-            return new DefaultUnityObjectSpawner();
-        }
+            ThrowIfDisposed();
+            if (state == GameplayWorldHostState.Starting ||
+                state == GameplayWorldHostState.Running ||
+                state == GameplayWorldHostState.Stopping)
+            {
+                throw new InvalidOperationException(
+                    $"GameplayWorldHost composition cannot change while the host is {state}.");
+            }
 
-        protected virtual IWorldSettingsReferenceResolver CreateReferenceResolver()
-        {
-            return null;
-        }
-
-        protected virtual ISceneTransitionHandler CreateSceneTransitionHandler()
-        {
-            return null;
-        }
-
-        protected virtual IGameSession CreateGameSession()
-        {
-            return null;
+            composition = value ?? throw new ArgumentNullException(nameof(value));
         }
 
         private async UniTaskVoid StartAutomaticallyAsync()
@@ -244,14 +247,26 @@ namespace CycloneGames.GameplayFramework.Runtime
             state = GameplayWorldHostState.Disposed;
             tickDriver?.Unbind(this);
             tickDriver = null;
+            lateTickDriver?.Unbind(this);
+            lateTickDriver = null;
             CancelWithoutInterruptingCleanup(lifetimeCancellation);
             CancelWithoutInterruptingCleanup(startCancellation);
 
-            DisposeGameInstance();
-            startCancellation?.Dispose();
-            startCancellation = null;
-            lifetimeCancellation?.Dispose();
-            lifetimeCancellation = null;
+            try
+            {
+                DisposeGameInstance();
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "GameplayWorldHost GameInstance disposal failed during destruction.");
+            }
+            finally
+            {
+                startCancellation?.Dispose();
+                startCancellation = null;
+                lifetimeCancellation?.Dispose();
+                lifetimeCancellation = null;
+            }
         }
 
         private void DisposeGameInstance()
@@ -302,7 +317,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             gameInstance?.Tick(phase, deltaSeconds);
         }
 
-        private void EnsureTickDriver()
+        private void EnsureTickDrivers()
         {
             tickDriver = GetComponent<GameplayWorldTickDriver>();
             if (tickDriver == null)
@@ -312,6 +327,15 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             tickDriver.Bind(this);
+
+            lateTickDriver = GetComponent<GameplayWorldLateTickDriver>();
+            if (lateTickDriver == null)
+            {
+                lateTickDriver = gameObject.AddComponent<GameplayWorldLateTickDriver>();
+                lateTickDriver.hideFlags = HideFlags.HideInInspector;
+            }
+
+            lateTickDriver.Bind(this);
         }
     }
 }

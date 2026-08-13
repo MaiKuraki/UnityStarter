@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Factory.Runtime;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -22,9 +22,15 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             int localPlayerCount = 0,
             IGameSession session = null,
             WorldNetMode netMode = WorldNetMode.Standalone,
-            Action<GameplayTestWorld> configure = null)
+            Action<GameplayTestWorld> configure = null,
+            IActorLifetime actorLifetime = null,
+            WorldRuntimeLimits runtimeLimits = null)
         {
-            GameplayTestWorld testWorld = Create(localPlayerCount, configure);
+            GameplayTestWorld testWorld = Create(
+                localPlayerCount,
+                configure,
+                actorLifetime,
+                runtimeLimits);
             try
             {
                 testWorld.StartWorld(netMode, session);
@@ -39,7 +45,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         public static GameplayTestWorld Create(
             int localPlayerCount = 0,
-            Action<GameplayTestWorld> configure = null)
+            Action<GameplayTestWorld> configure = null,
+            IActorLifetime actorLifetime = null,
+            WorldRuntimeLimits runtimeLimits = null)
         {
             var testWorld = new GameplayTestWorld
             {
@@ -51,7 +59,10 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             testWorld.SetReference("pawnClass", testWorld.CreateAuthoringActor<Pawn>("PawnPrefab"));
             testWorld.SetReference("playerStateClass", testWorld.CreateAuthoringActor<PlayerState>("PlayerStatePrefab"));
             configure?.Invoke(testWorld);
-            testWorld.Instance = new GameInstance(new DefaultUnityObjectSpawner(), localPlayerCount);
+            testWorld.Instance = new GameInstance(
+                actorLifetime ?? new UnityActorLifetime(),
+                localPlayerCount,
+                runtimeLimits: runtimeLimits);
             return testWorld;
         }
 

@@ -1,370 +1,273 @@
 # CycloneGames.GameplayFramework.Networking
 
-## Bounded Observer Admission
+`CycloneGames.GameplayFramework.Networking` connects the engine-independent networking primitives in `CycloneGames.Networking` to the Unity-facing GameplayFramework runtime. The package supplies bounded wire contracts, server-authoritative damage validation, replication authority and observer policies, actor transfer snapshots, and a network-aware game-session adapter.
 
-One `GameplayNetworkObserverRegistry` retains at most `MaximumObserverCount` (`65,536`) observers. The constructor rejects a larger initial capacity. This is an implementation safety ceiling, not an interest-management budget. Updates and removal of existing observers remain available at capacity.
+The package has two assembly layers:
 
-New code should use either `TrySetObserver` overload and handle `false` as a new-observer capacity rejection. Existing `SetObserver` overloads preserve successful behavior but fail fast with `InvalidOperationException` at the ceiling. `GetAdmissionSnapshot()` exposes count, capacity, and the monotonic rejection counter in O(1). No observer is automatically evicted.
+```mermaid
+flowchart LR
+    GFC["GameplayFramework.Core"] --> NC["GameplayFramework.Networking.Core"]
+    N["Networking.Core"] --> NC
+    NC --> NR["GameplayFramework.Networking.Runtime"]
+    GFC --> NR
+    GFR["GameplayFramework.Runtime"] --> NR
+    N --> NR
 
-Migration is additive: replace capacity-sensitive `SetObserver` calls with `TrySetObserver`, then apply the product's disconnect, relevance, or retry policy outside this registry. To roll back a call site, use `SetObserver` only when fail-fast behavior is intended. Workloads beyond one ceiling should shard registries by explicit World/session ownership; raising the constant requires a reviewed build and load validation.
-
-Staged connections remain hard-bounded but do not gain inferred expiry: there is no explicit monotonic timestamp and timeout owner in the current contract. Their lifecycle/protocol owner remains responsible for removal after authentication completion, rejection, disconnect, or shutdown; pressure handling must not prune them. This change adds no serialized field, renames no wire or Unity-serialized type, changes no prefab/scene/asset data, and persists no state. No asset or protocol migration is required.
-
-English | [Simplified Chinese](./README.SCH.md)
-
-`CycloneGames.GameplayFramework.Networking` connects `CycloneGames.GameplayFramework` to `CycloneGames.Networking`. It supplies the authoritative session adapter, GameplayFramework message catalog, actor migration wire contract, server-authoritative damage messages, authority role helpers, and observer selection for owner, team, area, and always-relevant replication.
-
-The base `CycloneGames.GameplayFramework.Runtime` assembly remains network-agnostic. Projects only reference this integration assembly when GameplayFramework objects participate in Cyclone Networking flows.
-
-## Package Layout
-
-```text
-CycloneGames.GameplayFramework.Networking/
-  Core/
-    CycloneGames.GameplayFramework.Networking.Core.asmdef
-    ActorMigrationNetworkingExtensions.cs
-    GameplayFrameworkNetworkProtocol.cs
-    GameplayNetworkObserverRegistry.cs
-    GameplayNetworkReplication.cs
-    NetworkGameSessionAdapter.cs
-    Damage/
-      DamageNetworkMessages.cs
-      ServerDamageValidation.cs
-  Tests/Editor/
-    CycloneGames.GameplayFramework.Networking.Tests.Editor.asmdef
-    ActorMigrationNetworkingExtensionsTests.cs
-    GameplayNetworkReplicationTests.cs
-    ServerDamageValidationTests.cs
+    classDef core fill:#d8f3dc,stroke:#2d6a4f,color:#081c15
+    classDef unity fill:#dbeafe,stroke:#1d4ed8,color:#172554
+    class GFC,N,NC core
+    class GFR,NR unity
 ```
 
-## Assembly Boundary
+- `CycloneGames.GameplayFramework.Networking.Core` has `noEngineReferences: true`. Protocol definitions, codecs, validation, authority policy, observer resolution, and network value types can run without `UnityEngine`.
+- `CycloneGames.GameplayFramework.Networking.Runtime` contains the Unity adapters for `Actor`, `PlayerController`, `GameSession`, and `Vector3`.
 
-| Assembly | Role | Unity dependency | Reference behavior |
-| --- | --- | --- | --- |
-| `CycloneGames.GameplayFramework.Networking.Core` | Session bridging, protocol registration, actor migration DTO/codec, damage messages, authority helpers, observer registry, and observer resolution. | Yes | Explicit opt-in: `autoReferenced` is `false`; every consuming project/integration asmdef must reference this assembly directly. |
-| `CycloneGames.GameplayFramework.Networking.Tests.Editor` | EditMode coverage for migration, protocol registration, authority/observer selection, and damage validation. | Yes, Editor only | Test assembly with `autoReferenced` set to `false`; it explicitly references the Runtime, Networking Core, and shared Networking assemblies. |
+## Installation
 
-The core assembly directly references `CycloneGames.GameplayFramework.Runtime` and `CycloneGames.Networking.Core`. It has no Editor reference, no platform exclusion, and no dependency on a concrete transport SDK or DI container. Because it is not auto-referenced, predefined Unity assemblies and unrelated asmdefs do not receive it implicitly.
+Install these packages in the Unity project:
 
-`ActorMigrationState` is owned by the `CycloneGames.GameplayFramework.Networking` namespace and compiled into `CycloneGames.GameplayFramework.Networking.Core`. A consumer that names this DTO must therefore reference the Networking Core assembly. Catalog descriptors do not store a runtime type name; message `11000` uses the explicit wire contract ID `ActorMigrationState:v1`.
+- `com.cyclone-games.gameplay-framework`
+- `com.cyclone-games.networking`
+- `com.cyclone-games.gameplay-framework-networking`
 
-## Core Concepts
+The integration package declares the first two dependencies in `package.json`. Projects that embed packages under `Assets/` must keep the corresponding assembly definitions available because Unity does not resolve local `package.json` dependencies there.
 
-| Type | Purpose |
-| --- | --- |
-| `NetworkGameSessionAdapter` | A plain C# `GameSession` implementation that stages authenticated connections by player id, binds successful `PlayerController` instances, and applies connection-aware admission, kick, and bounded in-memory address-ban rules. |
-| `PlayerLoginRequest` | The bounded GameplayFramework admission input consumed by `GameMode.LoginAsync` and `NetworkGameSessionAdapter.ApproveLogin`, including the trusted composition-only `IsLocal` marker. |
-| `ActorMigrationState` | Version-1 actor migration DTO registered as message `11000`. |
-| `ActorMigrationNetworkingExtensions` | Captures/applies Unity actor state and reads/writes the fixed version-1 payload. |
-| `GameplayFrameworkNetworkProtocol` | Owns the module manifest, message range, explicit contract identities, protocol version/fingerprint, and atomic catalog registration. |
-| `DamageRequestMessage` / `DamageResultMessage` | Client intent and server-authoritative damage outcome messages. |
-| `ServerAuthoritativeGameplayAuthorityResolver` | Resolves server authority, autonomous proxy, and simulated proxy roles. |
-| `NetworkedGameplayActor` | Projects an `Actor` into network id, ownership, team, layer, relevance, and interest-position data. |
-| `GameplayReplicationPolicy` | Carries visibility, channel, distance, tick interval, priority, layer, owner-inclusion, and authentication metadata. |
-| `GameplayNetworkObserverRegistry` | Stores `NetworkInterestObserver` data by connection id. |
-| `GameplayNetworkObserverResolver` | Filters caller-owned candidate connections by connection state, authentication, ownership, team, area, and relevance policy. |
+No scripting define symbol, global service locator, or hidden Editor preference is required.
 
-## Composition And Session Workflow
+## Quick start
 
-The authority composition root owns the session object. `NetworkGameSessionAdapter` is not a `MonoBehaviour` and is not placed in a scene.
+### Register the protocol
 
-1. Construct `NetworkGameSessionAdapter(maxPlayers, maxSpectators)` in the authority composition root.
-2. Call `SetMessageEndpoint` with the active `INetworkMessageEndpoint`. This attempts GameplayFramework catalog registration when the endpoint exposes an `INetworkMessageCatalog` through `INetworkRuntimeContextProvider`.
-3. Pass the session into `GameInstance.StartWorldAsync(settings, authorityNetMode, gameSession: session, cancellationToken: cancellationToken)`.
-4. `World.InitializeAsync` spawns and initializes the authoritative `GameMode` with that session. Host/local requests created by `GameMode` use `IsLocal = true` and do not require staged network connections. After `StartWorldAsync` returns, obtain the initialized instance from `world.GameMode`.
-5. Authenticate and rate-limit the transport connection, assign a positive authoritative player id, then call `TryStageConnection(playerId, connection, out error)`.
-6. Create `PlayerLoginRequest` with the same player id and connection address, then call `GameMode.LoginAsync`.
-7. `TryRegisterPlayer` consumes the staged connection and binds the successful `PlayerController` automatically.
-8. If login does not succeed, the composition root must call `RemoveStagedConnection(playerId, connection)`.
-9. Use `GameMode.Logout`, `UnregisterPlayer`, `KickPlayer`, or `BanPlayer` on the World owner thread during teardown.
+Register the module manifest before accepting GameplayFramework messages:
 
 ```csharp
-using System;
-using System.Threading;
-using CycloneGames.GameplayFramework.Networking;
-using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.Networking;
-using Cysharp.Threading.Tasks;
+GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(messageCatalog);
+```
 
-public sealed class GameplayNetworkLoginBridge
+`NetworkGameSessionAdapter.SetMessageEndpoint` also attempts registration through an `INetworkMessageEndpoint`.
+
+### Configure a network-aware session
+
+Create the adapter on the gameplay World's owner thread:
+
+```csharp
+var session = new NetworkGameSessionAdapter(
+    maxPlayers: 64,
+    maxSpectators: 8);
+
+session.SetMessageEndpoint(messageEndpoint);
+```
+
+For explicit composition, supply any `IGameSession` implementation:
+
+```csharp
+IGameSession gameplaySession = new GameSession(64, 8);
+var session = new NetworkGameSessionAdapter(gameplaySession);
+```
+
+The adapter is sealed and delegates gameplay roster behavior to the supplied session. It owns only network connection staging, connection-to-player binding, address bans, endpoint registration, and disconnect coordination. `maximumBannedAddressCount` configures the in-memory sanction budget per session and cannot exceed the implementation safety ceiling.
+
+Transport callbacks must enter a bounded owner-thread queue before accessing the adapter. Every collection-backed adapter operation rejects access from another thread. This preserves the GameplayFramework single-owner mutation model without locks or concurrent collections.
+
+### Stage a remote connection
+
+An authenticated transport connection is staged before gameplay login:
+
+```csharp
+if (!session.TryStageConnection(playerId, connection, out string stageError))
 {
-    private readonly GameMode gameMode;
-    private readonly NetworkGameSessionAdapter session;
+    RejectConnection(stageError);
+    return;
+}
 
-    private GameplayNetworkLoginBridge(
-        GameMode gameMode,
-        NetworkGameSessionAdapter session)
-    {
-        this.gameMode = gameMode;
-        this.session = session;
-    }
+var request = new PlayerLoginRequest(
+    playerId,
+    playerName,
+    remoteAddress: connection.RemoteAddress);
 
-    public static async UniTask<GameplayNetworkLoginBridge> StartAuthorityWorldAsync(
-        GameInstance gameInstance,
-        WorldSettings settings,
-        WorldNetMode authorityNetMode,
-        INetworkMessageEndpoint messageEndpoint,
-        CancellationToken cancellationToken)
-    {
-        if (authorityNetMode == WorldNetMode.Client)
-        {
-            throw new ArgumentOutOfRangeException(nameof(authorityNetMode), "An authority net mode is required.");
-        }
-
-        var session = new NetworkGameSessionAdapter(maxPlayers: 64, maxSpectators: 8);
-        session.SetMessageEndpoint(messageEndpoint);
-
-        World world = await gameInstance.StartWorldAsync(
-            settings,
-            authorityNetMode,
-            gameSession: session,
-            cancellationToken: cancellationToken);
-
-        GameMode gameMode = world.GameMode
-            ?? throw new InvalidOperationException("The authority World did not create a GameMode.");
-        return new GameplayNetworkLoginBridge(gameMode, session);
-    }
-
-    public async UniTask<PlayerLoginResult> LoginAsync(
-        INetConnection connection,
-        int playerId,
-        string playerName,
-        string validatedOptions,
-        CancellationToken cancellationToken)
-    {
-        if (connection == null || !connection.IsConnected || !connection.IsAuthenticated)
-        {
-            return PlayerLoginResult.Failure(PlayerLoginStatus.Rejected, "Connection is not ready.");
-        }
-
-        if (!session.TryStageConnection(playerId, connection, out string stageError))
-        {
-            return PlayerLoginResult.Failure(PlayerLoginStatus.Rejected, stageError);
-        }
-
-        try
-        {
-            var request = new PlayerLoginRequest(
-                playerId,
-                playerName,
-                isSpectator: false,
-                remoteAddress: connection.RemoteAddress,
-                options: validatedOptions,
-                isLocal: false);
-
-            return await gameMode.LoginAsync(request, cancellationToken: cancellationToken);
-        }
-        finally
-        {
-            // Success consumes the staged entry. Failure and cancellation require cleanup.
-            session.RemoveStagedConnection(playerId, connection);
-        }
-    }
+if (!session.ApproveLogin(in request, out string loginError))
+{
+    session.RemoveStagedConnection(playerId, connection);
+    RejectConnection(loginError);
 }
 ```
 
-`GameInstance.StartWorldAsync` owns World construction and the one-time `GameMode.Initialize` call. Do not initialize `world.GameMode` again after the World is returned. The start call and subsequent session operations must follow GameInstance/World owner-thread rules; a backend adapter must not invoke them directly from an arbitrary transport callback thread.
+Connection state, authentication, player identity, address length, staged capacity, duplicate connection IDs, and configured bans are validated before the gameplay session accepts the request. Transport `ConnectionId` values must be positive. Staging freezes the validated ID and address; approval and binding reject a connection whose identity changes before commit.
 
-The local exception is two-part: `GameMode.CreateLocalPlayerLoginRequest` sets `IsLocal = true`, and the resulting controller is initialized with a `LocalPlayer`, making `PlayerController.IsLocalController` true. `NetworkGameSessionAdapter` skips staged admission for the trusted local request and permits the trusted local controller to register without a connection, allowing listen-server local players to initialize during `StartWorldAsync`.
+## Replication authority and observers
 
-`IsLocal` is a server/composition trust marker, not network input. A transport adapter must ignore any client-supplied local flag and construct every remote `PlayerLoginRequest` with `isLocal: false`. Setting it from an untrusted payload can bypass staged connection, authentication, and ban checks during `ApproveLogin`.
+`NetworkedGameplayActor` is an engine-independent replication descriptor. It contains network identity, owner identity, team, interest layer, relevance policy, and a `NetworkVector3` interest position. It does not retain a Unity `Actor` reference.
 
-### PlayerLoginRequest Contract
-
-| Field | Validation and ownership |
-| --- | --- |
-| `PlayerId` | The base request requires a non-negative value; `NetworkGameSessionAdapter` requires a positive value for staged network login. The authoritative composition root owns id assignment and collision handling. |
-| `PlayerName` | Optional; maximum `64` UTF-16 code units. Sanitization, uniqueness, and moderation are project responsibilities. |
-| `IsSpectator` | Selects the independently bounded spectator roster. |
-| `RemoteAddress` | Optional; maximum `256` UTF-16 code units. Used by the adapter for in-memory address bans and address lookup. Must be null or empty when `IsLocal` is true. Do not place credentials in this field. |
-| `Options` | Optional; maximum `1024` UTF-16 code units. Parsing and per-option validation are project responsibilities. |
-| `IsLocal` | Defaults to `false`. Only authoritative in-process composition may set it to `true`; remote/network-derived requests must keep it `false`. |
-
-`GameSession` defaults to `16` players and `4` spectators. Each capacity must be between `0` and `100,000`, and their sum cannot exceed `100,000`. `ApproveLogin` validates the request and capacity before the adapter applies its network-specific checks.
-
-`TryStageConnection` bounds pending entries to `maxPlayers + maxSpectators`. It rejects non-positive ids, null connections, overlong or banned addresses, active duplicate player ids, a different connection already staged for the same id, the same connection already assigned to a different staged or active player id, and capacity overflow. The adapter enforces both directions of the one connection ↔ one PlayerId relationship across staged and active bindings. Repeating the same player-id/connection pair is idempotent. Removing a staged entry or unbinding a player releases the reverse connection index. Staging does not replace transport authentication or flood control.
-
-`RejectUnknownAddresses`, `RejectDisconnectedConnections`, and `RejectUnauthenticatedConnections` all default to `true`. For a remote request, admission requires a staged entry for `PlayerLoginRequest.PlayerId`; a non-empty request address must match the staged address case-insensitively, and the staged connection must be connected and authenticated. The adapter snapshots the remote address at staging and revalidates connection identity, current address, connection state, authentication, and bans during approval and commit-time binding. Address mutation, disconnection, authentication loss, or a ban applied after staging therefore rejects admission. A trusted local request is also rejected when its PlayerId collides with a staged remote identity. `TryRegisterPlayer` rolls back roster registration if automatic binding fails or a remote controller lacks its staged entry. `TryBindConnection` supports explicit binding/rebinding outside the normal login flow; `BindConnection` is its throwing wrapper.
-
-Staged entries, address bans, and player/connection indices are memory-only. `UnregisterPlayer` also unbinds the connection. `KickPlayer` requests disconnect, then uses `player.World.GameMode.Logout` when available so World, `GameState`, session roster, and spawned player objects are cleaned through the authoritative gameplay path; it falls back to `UnregisterPlayer` when no `GameMode` is available. `BanPlayer` requires a bound connection with a non-empty address, and new banned addresses are bounded by `MaxBannedAddresses` (`4096`) before the player is kicked. `BanAddress` additionally enforces the `PlayerLoginRequest` address-length limit.
-
-Set the `INetworkMessageEndpoint` before staging or registering any connection. Repeating the same endpoint is idempotent, but replacing or clearing it while staged or active bindings exist throws; clear those bindings through their owning transport and gameplay teardown paths first.
-
-## Actor Migration Contract
-
-### Stable Prefab Definition Id
-
-`CaptureMigrationState` requires an explicit `prefabDefinitionId`. This value must be deterministic across server/client builds, processes, save/restore boundaries, and content updates covered by the same protocol compatibility window.
-
-- Own ids in a project-visible, version-controlled content registry, configuration asset, or generated table.
-- Do not use `UnityEngine.Object.name`, runtime instance ids, transient scene hierarchy paths, or process-local handles as identity.
-- Validate that the id resolves to the expected spawn definition before allocating or spawning the destination actor.
-- Define project behavior for missing, retired, unauthorized, or incompatible definitions.
-
-The version-1 DTO property is named `PrefabAssetPath`; it carries the explicit `prefabDefinitionId` supplied to `CaptureMigrationState`. The codec checks its byte length, but the project-owned registry is responsible for existence, authorization, and compatibility.
-
-### Capture And Apply
+Unity code samples the current Actor position explicitly:
 
 ```csharp
-ActorMigrationState outbound = sourceActor.CaptureMigrationState(
-    prefabDefinitionId: "actors.hero.v1",
-    ownerConnectionId: ownerConnectionId,
-    instigatorActorId: instigatorActorId);
-
-writer.WriteMigrationState(outbound);
-
-ActorMigrationState inbound = reader.ReadMigrationState();
-Actor targetActor = SpawnAndRegisterFromDefinitionId(inbound.PrefabAssetPath); // Project-owned.
-targetActor.ApplyMigrationState(inbound);
-ResolveOwnershipAndInstigator(targetActor, inbound.OwnerConnectionId, inbound.InstigatorActorId); // Project-owned.
+NetworkedGameplayActor target = actor.ToNetworkedGameplayActor(
+    networkId,
+    ownerConnectionId,
+    ownerPlayerId,
+    teamId,
+    interestLayerMask,
+    alwaysRelevant: false);
 ```
 
-| Operation | Included behavior | Explicitly outside the operation |
-| --- | --- | --- |
-| `CaptureMigrationState` | Copies position, rotation, scale, remaining lifespan, damageability, hidden state, actor tags, actor name, `HasBegunPlay`, stable definition id, owner connection id, and instigator actor id. | Prefab lookup, authority validation, target spawning, connection lookup, and subclass-specific state. |
-| `WriteMigrationState` | Validates the snapshot and writes the version-1 fields in fixed order. | Catalog envelope creation, total payload enforcement, transport delivery, compression, encryption, and retry policy. |
-| `ReadMigrationState` | Bounds tag allocation and string lengths, rejects non-finite numeric data, reconstructs the DTO, and validates the snapshot. | Definition authorization, semantic world bounds, owner/instigator resolution, and spawn budgeting. |
-| `ApplyMigrationState` | Applies transform, scale, damageability, tags, hidden state, non-negative lifespan, and a non-empty actor name to an already spawned and registered actor. | Spawning/registering the actor, assigning owner/instigator, invoking or replaying `BeginPlay`, or applying `HasBegunPlay` as lifecycle state. |
+`ServerAuthoritativeGameplayAuthorityResolver` returns one of these roles:
 
-`CaptureMigrationState` allocates a tag array when the actor has tags. Treat capture as a migration event operation, not a per-frame replication path.
+- `ServerAuthority`
+- `AutonomousProxy`
+- `SimulatedProxy`
+- `None` for an invalid descriptor or a context that is neither server nor client
 
-## Protocol And Version-1 Wire Layout
+Owner matching requires both IDs to be positive. `OwnerConnectionId == 0` represents an unowned Actor and never matches `LocalConnectionId == 0`.
 
-`GameplayFrameworkNetworkProtocol` owns message IDs `11000-11999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). Its current and minimum supported protocol versions are both `1`. `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
-
-| Message | ID | Default channel | Catalog payload limit | Purpose |
-| --- | ---: | --- | --- | --- |
-| `MsgActorMigrationState` | `11000` | Reliable | `NetworkConstants.DefaultMaxPayloadSize * 4` | Version-1 actor migration state. |
-| `MsgDamageRequest` | `11001` | Reliable | `49` bytes | Untrusted client damage intent for server validation. |
-| `MsgDamageResult` | `11002` | Reliable | `30` bytes | Server-authoritative damage result. |
-
-Register the module protocol from the composition root before traffic is accepted:
+`GameplayNetworkObserverResolver` applies owner, team, area, layer, authentication, and always-relevant rules to a caller-provided candidate list. It deduplicates positive connection IDs with a reusable scratch set and stops at its configured `MaximumResultCount`. Area visibility uses the smaller of the replication policy distance and the observer radius. A zero observer radius disables area visibility but does not disable team visibility. The caller owns and reuses the result list, so steady-state resolution does not allocate.
 
 ```csharp
-using CycloneGames.GameplayFramework.Networking;
-using CycloneGames.Networking;
-
-public static class GameplayFrameworkNetworkInstaller
-{
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-}
+var resolver = new GameplayNetworkObserverResolver(
+    initialCapacity: 64,
+    maximumResultCount: 512);
 ```
 
-`ActorMigrationState.SchemaVersion` is `1`. The payload does not contain an embedded schema-version byte; compatibility is established by the protocol manifest/catalog and its explicit contract identity. Primitive numeric fields are little-endian. Floats use their 32-bit IEEE 754 bit representation. Strings are a little-endian `ushort` UTF-8 byte count followed by exactly that many bytes. Null strings are encoded as empty strings. Fields are serialized individually with no struct padding.
+`GameplayNetworkObserverRegistry` accepts both an initial dictionary capacity and a product budget:
 
-Every descriptor declares an explicit printable-ASCII `ContractId`: `ActorMigrationState:v1`, `DamageRequestMessage:v1`, or `DamageResultMessage:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. Damage messages additionally expose `DamageWireSchemaFingerprint`, derived from canonical field-offset, width, endian, payload-size, and `ServerDamageRejectReason` value descriptors. `DamageRequestMessage` is exactly 49 bytes and `DamageResultMessage` is exactly 30 bytes; these exact limits are registered in the manifest. `ServerDamageRejectReason.Unknown` is 0, `Accepted` is 1, and all rejection codes are nonzero, so default-initialized validation and wire messages fail closed. CLR type names, reflection, field inspection, and `SchemaVersion` are not automatic protocol identity. Any field-order, encoding, enum assignment, or semantic compatibility change must update the canonical descriptor and fixed byte fixture; every communicating peer must deploy matching protocol descriptors and fingerprints. Incompatible peers must be rejected before gameplay traffic. Project messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
-
-| Order | Field | Encoding | Version-1 validation |
-| ---: | --- | --- | --- |
-| 1 | `Position.x/y/z` | 3 × `float32` | Every component must be finite. |
-| 2 | `Rotation.x/y/z/w` | 4 × `float32` | Every component must be finite; normalization is not enforced by the codec. |
-| 3 | `Scale.x/y/z` | 3 × `float32` | Every component must be finite; semantic scale bounds are project-owned. |
-| 4 | `PrefabAssetPath` | `ushort byteCount` + UTF-8 bytes | Carries `prefabDefinitionId`; maximum `1024` UTF-8 bytes. |
-| 5 | `RemainingLifeSpan` | `float32` | Must be finite and non-negative. |
-| 6 | `CanBeDamaged`, `Hidden`, `HasBegunPlay` | 3 × `byte`, in that order | Writer emits `0` or `1`; reader treats nonzero as `true`. |
-| 7 | `Tags` | `ushort tagCount`; each tag is `ushort byteCount` + UTF-8 bytes | Codec runtime count maximum `64`; each encoded tag maximum `384` UTF-8 bytes. Applying to an `Actor` additionally requires a nonblank tag of at most `128` UTF-16 code units. |
-| 8 | `OwnerConnectionId` | `int32` | Resolution and authorization are project-owned. |
-| 9 | `InstigatorActorId` | `int32` | Resolution and authorization are project-owned. |
-| 10 | `ActorName` | `ushort byteCount` + UTF-8 bytes | Maximum `256` UTF-8 bytes. Empty leaves the target name unchanged during apply. |
-
-The public codec constants are `MaxPrefabDefinitionIdUtf8Bytes = 1024`, `MaxActorNameUtf8Bytes = 256`, `MaxTagUtf8Bytes = Actor.MaxActorTagLength * 3`, and `DefaultMaxRuntimeTagCount = Actor.MaxActorTags`.
-
-The minimum payload is `61` bytes. For `P` prefab-id bytes, `N` actor-name bytes, and encoded tags `Ti`, the payload size is:
-
-```text
-61 + P + N + sum(2 + Ti)
+```csharp
+var observers = new GameplayNetworkObserverRegistry(
+    initialCapacity: 64,
+    maximumObserverCount: 512);
 ```
 
-The snapshot must satisfy both the per-field limits and the message descriptor's total payload limit. `WriteMigrationState` enforces the per-field rules; catalog/transport validation owns the descriptor-level total.
+The product budget exposed by `MaximumObserverCount` cannot exceed `MaximumSupportedObserverCount`. Admission diagnostics are available through `GetAdmissionSnapshot()`, whose `MaximumObserverCount` reports the same instance budget rather than dictionary allocation capacity. Position and radius inputs must be finite, radius must be non-negative, and observer connection IDs must be positive.
 
-`ReadMigrationState(maxRuntimeTagCount)` applies the smaller of the positive caller limit and `Actor.MaxActorTags` (`64`). A zero or negative argument selects the default runtime limit. Length prefixes are checked before tag arrays or large scratch buffers are allocated. The codec also rejects non-finite transform data and invalid lifespan values. `ApplyMigrationState` calls `Actor.ReplaceTags`, which validates every inbound tag before mutating the target tag set. Projects must add semantic validation for world bounds, allowed definitions, allowed tags, ownership, and resource budgets before spawning or applying untrusted state.
+Core code registers observers with `NetworkVector3`. Unity code can use the Runtime adapter overload:
 
-## Authority And Observer Boundaries
+```csharp
+observers.SetObserver(connection, cameraPosition, radius, layerMask, teamId);
+```
 
-### Authority
+## Actor transfer state
 
-`ServerAuthoritativeGameplayAuthorityResolver` provides role and permission decisions; it does not send packets, apply state, or prevent a caller from bypassing the result.
+`ActorMigrationState` is an immutable, engine-independent snapshot used to transfer Actor runtime state between authoritative Worlds or server instances. Its transform uses `NetworkVector3` and `NetworkQuaternion`. Content identity uses `PrefabDefinitionId`; it does not assume a Unity asset path.
 
-| Context | Role and permission |
-| --- | --- |
-| Invalid actor (`NetworkId == 0` or non-finite interest position) | `None`; no authoritative state write and no owner input. |
-| Server, including a host that is also a client | `ServerAuthority`; may write authoritative state for a valid actor. |
-| Client whose local connection id equals `OwnerConnectionId` | `AutonomousProxy`; may send owner input. |
-| Other valid client | `SimulatedProxy`; cannot send owner input through this policy. |
+Capture state from a Unity Actor:
 
-The authoritative replication loop must call `CanWriteAuthoritativeState` before producing state. The input bridge must call `CanSendOwnerInput` and the server must still validate every received command. Migration owner/instigator ids and damage request fields are untrusted identifiers, not authority proof.
+```csharp
+ActorMigrationState state = actor.CaptureMigrationState(
+    prefabDefinitionId: "actors/player/warrior",
+    ownerConnectionId,
+    instigatorActorId);
+```
 
-### Observer Resolution
+Serialize it through the shared networking primitives:
 
-`GameplayNetworkObserverResolver.ResolveObservers` clears the caller-provided result list and adds eligible entries from the caller-provided candidate list. Reuse both lists to avoid avoidable allocations.
+```csharp
+writer.WriteMigrationState(in state);
+ActorMigrationState state = reader.ReadMigrationState();
+```
 
-1. Null, disconnected, and—when `RequireAuthenticated` is true—unauthenticated candidates are rejected.
-2. An invalid target or `Visibility.None` returns an empty result.
-3. `AlwaysRelevant` actors and `Visibility.All` include every remaining candidate, including the owner.
-4. For other visibility modes, the owner is included only when `IncludeOwner` is true or visibility is `OwnerOnly`.
-5. `Team` requires a nonzero actor team and matching observer team data.
-6. `Area` requires observer data, a positive policy `MaxDistance`, overlapping policy/actor/observer layer masks, and distance within the policy radius.
-7. `TeamOrArea` accepts either the team or area condition.
+Apply a validated state after the destination World has spawned and registered the Actor:
 
-The registry's `NetworkInterestObserver.Radius` is stored but is not consumed by the area resolver; area selection uses `GameplayReplicationPolicy.MaxDistance`. `Channel`, `MinTickInterval`, and `Priority` are scheduling metadata for the caller's replication pipeline and are not enforced by the observer resolver. The resolver selects observers only; it does not establish authority, serialize payloads, send packets, or own connection lifecycle.
+```csharp
+destinationActor.ApplyMigrationState(in state);
+```
 
-## Threading, Performance, And Platform Notes
+The complete snapshot is validated before any Unity state changes. Validation requires a non-empty definition ID, finite transforms, a normalized non-degenerate quaternion, non-negative finite lifespan, content ID and name byte budgets, unique ordinal tags, tag count, tag character length, tag content, and strict UTF-8. Invalid Unicode is rejected instead of being replaced. Unity capture normalizes a finite quaternion before constructing the strict Core value. Tags are copied when the snapshot is constructed and exposed through allocation-free indexed read access.
 
-- `GameSession`, `NetworkGameSessionAdapter`, and `GameplayNetworkObserverRegistry` are owner-thread objects and are not thread-safe. Invoke them on the owning World/replication thread. Marshal transport callbacks before calling GameplayFramework or Unity APIs.
-- `CaptureMigrationState` and `ApplyMigrationState` access `Actor`, `Transform`, `GameObject`, and other Unity-facing state and therefore belong on the Unity/World owner thread.
-- `WriteMigrationState` and `ReadMigrationState` do not access Unity objects. They may run on a worker only when the DTO, reader/writer, buffer, and result ownership are exclusive and the surrounding networking implementation permits it.
-- Migration capture allocates a tag array for non-empty tags. Read allocates decoded strings and a bounded tag array. Short UTF-8 scratch data uses `stackalloc`; larger scratch data rents from `ArrayPool<byte>`.
-- Reuse preallocated candidate/result collections and pre-size the registry to avoid collection growth during observer resolution.
-- The Core asmdef has no platform exclusions and directly uses Unity types. It is suitable for Unity Player and Unity headless/server compositions, not a Unity-free .NET assembly.
-- The package does not use reflection-based discovery, runtime code generation, or direct native plugins. Validate IL2CPP, managed stripping, AOT, Burst, architecture, and target-platform behavior with target Player builds and runtime tests.
-- Protocol registration must execute in every runtime composition. Do not rely on Editor-only discovery or a type being present in a namespace to preserve it.
+The owner and instigator fields are stable network identifiers. The network layer resolves them after the destination World has created the relevant runtime objects. `ActorMigrationNetworkingExtensions.MaximumEncodedSize` is the exact maximum legal payload, 26,045 bytes, and the protocol descriptor advertises that same limit. A deployment must configure a route payload/fragmentation budget large enough for the largest state it actually permits.
 
-## Extension Points
+## Server-authoritative damage
 
-- Implement `IGameplayNetworkAuthorityResolver` for project authority rules.
-- Implement `IGameplayNetworkObserverSource` when observer data lives outside `GameplayNetworkObserverRegistry`.
-- Implement `IGameplayNetworkObserverResolver` for a different interest policy while preserving connection/authentication and allocation budgets.
-- Derive from `NetworkGameSessionAdapter` for project admission rules, while calling the base bounded validation where applicable.
-- Add project-owned messages through a separate project-owned manifest in an unclaimed `NetworkMessageRanges.User` subrange; do not consume another module's ID range.
-- Keep Mirror, Mirage, Nakama, Photon, Steam, platform-service, and dedicated-server transport SDK code in separate backend adapters.
+`DamageRequestMessage` represents untrusted client intent. The server supplies authoritative ownership, transform, range, damage cap, target state, clock, and cooldown data to `DefaultServerDamageValidator` or a project-specific `IServerDamageValidator`.
+
+```csharp
+ServerDamageValidationResult validation = processor.Process(
+    in validationRequest,
+    out DamageResultMessage result,
+    requestSequence,
+    damageEventType,
+    hitLocation);
+```
+
+The default validator fails closed for:
+
+- non-positive Actor or connection IDs;
+- non-finite positions, damage, clock, range, or cooldown values;
+- negative damage, clock, range, or cooldown values (the unknown last-accepted-time sentinel is `float.NegativeInfinity`);
+- ownership mismatch;
+- non-damageable targets;
+- out-of-range requests;
+- requests inside the authoritative cooldown window.
+
+`ServerAuthoritativeDamageProcessor` always runs the default fail-closed baseline before a custom validator. The custom validator can reject a baseline-approved request or reduce its approved damage, but it cannot bypass the baseline or raise damage above the authoritative cap. The processor ignores the caller-provided `LastAcceptedTimeSeconds` and rebuilds it from its own `DamageCooldownTracker`; accepted timestamps are monotonic and cannot move backward.
+
+`ServerDamageValidationResult.Accept` accepts only finite non-negative damage, while `Reject` accepts only defined rejection reasons. The processor converts malformed custom-validator results, or damage above the baseline-approved amount, into a `Custom` rejection. Before committing cooldown state, it validates the complete outbound result. An accepted result requires positive, distinct instigator and target Actor IDs, finite non-negative applied damage, and a finite hit location. Rejected results cannot carry non-zero damage. Invalid hit locations fail before custom validation and are replaced with zero only in the rejection payload so that the fail-closed result remains serializable.
+
+The shared networking security pipeline remains responsible for authentication, payload limits, rate limiting, replay policy, and transport-level abuse protection.
+
+This float-based path targets server-authoritative combat. Deterministic ability effects should use the GameplayAbilities networking pipeline and must not apply the same hit through both paths.
+
+## Wire protocol
+
+`GameplayFrameworkNetworkProtocol` owns message IDs `11000` through `11999`. The current catalog contains:
+
+| Message | ID | Channel | Purpose |
+| --- | ---: | --- | --- |
+| `ActorMigrationState:v1` | `11000` | Reliable | Bounded Actor transfer state |
+| `DamageRequestMessage:v1` | `11001` | Reliable | Client damage intent |
+| `DamageResultMessage:v1` | `11002` | Reliable | Authoritative result |
+
+All primitive fields are serialized explicitly in a fixed order. Protocol IDs, schema identities, message sizes, result codes, and fingerprints are covered by frozen-contract tests. Deserializers reject data that exceeds runtime budgets or contains non-finite numeric values.
+
+## Performance and memory
+
+- Core replication descriptors and validation requests are value types.
+- Observer resolution writes into caller-owned lists and reuses a bounded connection-ID set for deduplication.
+- The observer registry and game-session adapter allocate their bounded dictionaries during composition, not per tick.
+- Actor transfer is a cold path. Snapshot construction copies tags once to establish immutable ownership.
+- Small transfer strings use stack buffers; larger strings use `ArrayPool<byte>`.
+- The package does not create a parallel per-Actor model or add a per-tick Unity/Core synchronization layer.
+
+Product code must configure observer, participant, staged connection, inbound queue, and transport payload budgets for each deployment profile.
+
+## Threading and lifecycle
+
+- Core protocol values and pure validators have no Unity thread affinity.
+- Mutable registries and the observer resolver capture their owner thread and reject access from other threads; their owner must serialize access.
+- `NetworkGameSessionAdapter` captures its owner thread at construction and rejects collection access from other threads. `MaximumSupportedBannedAddressCount` is the implementation ceiling, while `MaximumBannedAddressCount` reports the injected per-session budget.
+- `ActorNetworkingExtensions` invokes Unity APIs. A bound Actor validates its owning World thread before any state read or write. An unbound authoring Actor has no World owner to validate, so its caller must invoke the adapter on the Unity main thread.
+- Transport shutdown removes staged and bound connections on the owner thread before replacing the message endpoint.
 
 ## Persistence
 
-This package writes no files, assets, preferences, caches, or save data.
+This package does not write files, PlayerPrefs, EditorPrefs, registry entries, or hidden project state. Banned addresses and connection bindings are in-memory session state. Products that require durable sanctions must supply a dedicated persistence service with explicit storage, privacy, retention, integrity, and recovery policies.
 
-| State | Owner and lifetime | Cleanup and version control |
-| --- | --- | --- |
-| Staged connections, player/connection maps, and banned addresses | `NetworkGameSessionAdapter`; memory-only for the adapter lifetime. Staging is bounded by participant capacity and bans by `4096`. | Remove failed/cancelled staged logins, unbind/unregister players, and discard the adapter. Nothing is committed to Git. |
-| Observer records | `GameplayNetworkObserverRegistry`; memory-only for the registry lifetime. | Call `Remove`/`Clear` or discard the registry. Nothing is committed to Git. |
-| Migration DTO and encoded payload | Caller/network buffer; transient transfer state. | Release or return buffers according to the networking buffer owner. Nothing is committed to Git. |
-| Stable prefab definition registry | Project-owned and outside this package. | Document its path, schema version, migration policy, Git ownership, and safe retirement process in the owning project/module. |
+## Tests and validation
 
-## Validation
+The package separates tests by dependency boundary:
 
-Run these EditMode suites after changing this package or its contracts:
+- `CycloneGames.GameplayFramework.Networking.Core.Tests.Editor`: protocol fingerprints, codecs, bounded validation, damage processing, authority rules, observer budgets, and observer resolution without UnityEngine.
+- `CycloneGames.GameplayFramework.Networking.Runtime.Tests.Editor`: Actor capture/apply adapters, Actor replication conversion, network-aware session composition, endpoint behavior, and owner-thread enforcement.
 
-```text
-Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
-```
+Minimum Unity validation:
 
-The Networking package tests cover migration round-trip and bounds, explicit definition-id capture/apply, authority roles, owner/team/area observer selection, protocol range/catalog registration, staged session admission, disconnected/unauthenticated rejection, connection reuse, post-stage bans, and server damage validation. The base GameplayFramework tests cover `GameSession` roster/capacity, local-controller initialization, and authoritative World lifecycle behavior. The Networking Core tests cover shared buffers, message catalogs, security validation, and replication infrastructure.
+1. Allow Unity to reimport the package and confirm that the Console has no compilation errors.
+2. Run both EditMode test assemblies above.
+3. Start a host/server configuration and verify staged login, disconnect, and observer updates on the World owner thread.
+4. Round-trip an Actor transfer through the selected transport and resolve owner/instigator identifiers after spawn.
+5. Validate Player/IL2CPP builds for every supported target because Editor tests do not prove AOT, stripping, or native transport compatibility.
 
-For batchmode-capable environments, run the package suite with the Unity version recorded in `UnityStarter/ProjectSettings/ProjectVersion.txt`:
+## Troubleshooting
 
-```text
-<Unity-editor-executable> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.GameplayFramework.Networking.Tests.Editor -testResults <test-results-path> -quit
-```
+### Core assembly reports an engine reference
 
-Before release, also perform the following integration checks:
+Ensure protocol code references `NetworkVector3`, `NetworkQuaternion`, and GameplayFramework Core contracts. Unity `Vector3`, `Actor`, `PlayerController`, and `GameSession` belong in the Runtime assembly.
 
-1. Register the same protocol manifest on client and server; verify ids `11000`, `11001`, and `11002`, version `1`, and matching protocol fingerprints.
-2. Verify message `11000` against a fixed version-1 byte fixture, including empty strings/tags and maximum approved project values.
-3. Exercise listen-server local-player bootstrap without staging, force `IsLocal = false` for all network-derived requests, and test authenticated staging, one connection ↔ one PlayerId rejection, staged-capacity rejection, post-stage bans, failed-login cleanup, automatic binding, spectator/player capacity, duplicate registration, disconnect, authoritative logout, kick, the `4096`-address ban bound, and unban through the real backend adapter.
-4. Test owner, non-owner, host, dedicated-server, unauthenticated, team, area, layer-mask, and always-relevant observer cases.
-5. Run a clean target Player build and runtime smoke test for every supported backend/platform combination, including IL2CPP/AOT and managed stripping where applicable.
-6. Use the Unity Profiler or platform tooling to measure migration allocations, observer selection cost, payload sizes, and transport-thread marshaling under production-scale loads.
+### A transport callback throws an owner-thread exception
+
+Queue the callback in a bounded main/World-thread dispatcher and invoke `NetworkGameSessionAdapter` when that queue is drained. Do not disable the check or add unsynchronized collection access.
+
+### Actor transfer is rejected
+
+Check finite transform values, lifespan, `PrefabDefinitionId`, name UTF-8 size, tag count, tag character length, and empty/whitespace tags before writing or applying the snapshot.
+
+### An observer is not selected
+
+Check connection/authentication state, policy visibility, owner ID, team ID, observer presence, layer-mask intersection, finite radius, and the squared distance from the Actor interest position.

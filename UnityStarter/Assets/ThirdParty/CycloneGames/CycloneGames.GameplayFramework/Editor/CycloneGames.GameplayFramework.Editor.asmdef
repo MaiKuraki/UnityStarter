@@ -2,8 +2,8 @@
     "name": "CycloneGames.GameplayFramework.Editor",
     "rootNamespace": "",
     "references": [
-        "Unity.Cinemachine",
         "UniTask",
+        "CycloneGames.GameplayFramework.Core",
         "CycloneGames.GameplayFramework.Runtime",
         "CycloneGames.Logging.Core"
     ],

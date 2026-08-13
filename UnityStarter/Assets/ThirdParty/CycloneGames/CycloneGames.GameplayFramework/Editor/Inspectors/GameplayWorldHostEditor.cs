@@ -94,11 +94,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     MessageType.Error);
             }
 
-            if (settings.UsesExternalReferences && target.GetType() == typeof(GameplayWorldHost))
+            if (settings.UsesExternalReferences)
             {
                 EditorGUILayout.HelpBox(
-                    "This WorldSettings uses external locations. Derive GameplayWorldHost and override CreateReferenceResolver, or compose GameInstance directly with a resolver.",
-                    MessageType.Error);
+                    "This WorldSettings uses external locations. Configure the host with a GameplayWorldComposition that provides IWorldSettingsReferenceResolver before startup.",
+                    MessageType.Warning);
             }
         }
 
@@ -129,6 +129,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.EnumPopup("Host State", host.State);
+                EditorGUILayout.Toggle("Explicit Composition", host.HasExplicitComposition);
                 EditorGUILayout.ObjectField("Game Mode", host.CurrentWorld?.GameMode, typeof(GameMode), true);
                 EditorGUILayout.IntField("Effective Local Players", host.EffectiveLocalPlayerCount);
             }

@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine",
+        "Unity.Cinemachine"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_CINEMACHINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.cinemachine",
+            "expression": "[3.0.0,4.0.0)",
+            "define": "CYCLONEGAMES_HAS_CINEMACHINE"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -79,6 +79,18 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Read-only view of all entries for iteration.</summary>
         public IReadOnlyList<Entry> GetEntries() => entries;
 
+        /// <summary>
+        /// Builds the runtime lookup during an owned startup phase so the first gameplay action
+        /// does not pay the dictionary construction cost.
+        /// </summary>
+        public void Warmup()
+        {
+            if (runtimeLookup == null)
+            {
+                BuildLookupTable();
+            }
+        }
+
         private void BuildLookupTable()
         {
             runtimeLookup = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);

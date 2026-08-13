@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.gameplay-framework-asset-management",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayFramework.AssetManagement",
+  "description": "AssetManagement integration for resolving GameplayFramework WorldSettings references with explicit asset-handle ownership.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0",
+    "com.cyclone-games.gameplay-framework": "1.0.0",
+    "com.cyclone-games.asset-management": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayFramework",
+    "AssetManagement",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

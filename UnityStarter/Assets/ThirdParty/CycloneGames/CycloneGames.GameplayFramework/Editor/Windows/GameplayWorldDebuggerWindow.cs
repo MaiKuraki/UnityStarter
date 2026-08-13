@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -102,6 +103,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.EnumPopup("State", targetHost.State);
                 EditorGUILayout.EnumPopup("Net Mode", targetHost.NetMode);
                 EditorGUILayout.IntField("Local Players", targetHost.EffectiveLocalPlayerCount);
+                EditorGUILayout.Toggle("Explicit Composition", targetHost.HasExplicitComposition);
                 EditorGUILayout.ObjectField(
                     "WorldSettings",
                     targetHost.WorldSettings,
@@ -118,6 +120,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private static void DrawWorldSummary(World world)
         {
+            ActorAdmissionSnapshot admission = world.GetActorAdmissionSnapshot();
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("World", EditorStyles.boldLabel);
             using (new EditorGUI.DisabledScope(true))
@@ -126,6 +129,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.Toggle("Authority", world.IsAuthority);
                 EditorGUILayout.IntField("Actors", world.ActorCount);
                 EditorGUILayout.IntField("World-Owned Actors", world.OwnedActorCount);
+                EditorGUILayout.IntField("Peak Actors", admission.PeakActorCount);
+                EditorGUILayout.IntField("Actor Admission Limit", admission.MaximumActorCount);
+                EditorGUILayout.IntField("Allocated Actor Capacity", admission.AllocatedActorCapacity);
+                EditorGUILayout.LongField("Rejected Actor Admissions", admission.RejectedAdmissionCount);
                 EditorGUILayout.IntField(
                     "Update Tick Actors",
                     world.GetTickActorCount(ActorTickPhase.Update));

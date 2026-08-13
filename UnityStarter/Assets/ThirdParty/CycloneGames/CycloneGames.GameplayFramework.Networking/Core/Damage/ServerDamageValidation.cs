@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using CycloneGames.Networking;
@@ -41,7 +42,10 @@ namespace CycloneGames.GameplayFramework.Networking
         /// <summary>Server time in seconds.</summary>
         public readonly float CurrentTimeSeconds;
 
-        /// <summary>Last accepted damage time for this instigator (see <see cref="DamageCooldownTracker"/>).</summary>
+        /// <summary>
+        /// Last accepted damage time for standalone validator calls. <see cref="ServerAuthoritativeDamageProcessor"/>
+        /// always replaces this value with its owned <see cref="DamageCooldownTracker"/> state.
+        /// </summary>
         public readonly float LastAcceptedTimeSeconds;
 
         /// <summary>Minimum seconds between accepted damages. 0 or less disables the cooldown check.</summary>
@@ -100,13 +104,49 @@ namespace CycloneGames.GameplayFramework.Networking
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ServerDamageValidationResult Accept(float approvedDamage)
         {
+            if (!IsFiniteNonNegative(approvedDamage))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(approvedDamage),
+                    "Approved damage must be finite and non-negative.");
+            }
+
             return new ServerDamageValidationResult(ServerDamageRejectReason.Accepted, approvedDamage);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ServerDamageValidationResult Reject(ServerDamageRejectReason reason)
         {
+            if (!IsValidRejectReason(reason))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(reason),
+                    "A rejection requires a defined non-Accepted reason.");
+            }
+
             return new ServerDamageValidationResult(reason, 0f);
+        }
+
+        internal bool IsWellFormed
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => Accepted
+                ? IsFiniteNonNegative(ApprovedDamage)
+                : IsValidRejectReason(Reason) && ApprovedDamage == 0f;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFiniteNonNegative(float value)
+        {
+            return value >= 0f && value < float.PositiveInfinity;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsValidRejectReason(ServerDamageRejectReason reason)
+        {
+            byte value = (byte)reason;
+            return value >= (byte)ServerDamageRejectReason.InvalidPayload
+                && value <= (byte)ServerDamageRejectReason.Custom;
         }
     }
 
@@ -130,12 +170,21 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public ServerDamageValidationResult Validate(in ServerDamageValidationRequest request)
         {
-            // 1. Payload sanity. Reject self-damage spoofing, unset ids and non-finite/negative magnitudes.
-            if (request.InstigatorActorId == 0
-                || request.TargetActorId == 0
+            // 1. Payload sanity. Every resolved value remains a trust boundary even when supplied by an adapter.
+            if (request.InstigatorActorId <= 0
+                || request.TargetActorId <= 0
                 || request.InstigatorActorId == request.TargetActorId
+                || request.InstigatorOwnerConnectionId <= 0
+                || request.RequestConnectionId <= 0
+                || !request.InstigatorPosition.IsFinite()
+                || !request.TargetPosition.IsFinite()
                 || !IsFiniteNonNegative(request.RequestedDamage)
-                || !IsFiniteNonNegative(request.MaxDamage))
+                || !IsFiniteNonNegative(request.MaxDamage)
+                || !IsFiniteNonNegative(request.MaxRangeSqr)
+                || !IsFiniteNonNegative(request.CurrentTimeSeconds)
+                || !IsValidLastAcceptedTime(request.LastAcceptedTimeSeconds)
+                || !IsFiniteNonNegative(request.CooldownSeconds)
+                || request.LastAcceptedTimeSeconds > request.CurrentTimeSeconds)
             {
                 return ServerDamageValidationResult.Reject(ServerDamageRejectReason.InvalidPayload);
             }
@@ -177,6 +226,12 @@ namespace CycloneGames.GameplayFramework.Networking
             // NaN fails every comparison, so (value >= 0) already rejects NaN; the upper bound rejects +Infinity.
             return value >= 0f && value < float.PositiveInfinity;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsValidLastAcceptedTime(float value)
+        {
+            return value == float.NegativeInfinity || IsFiniteNonNegative(value);
+        }
     }
 
     /// <summary>
@@ -210,6 +265,11 @@ namespace CycloneGames.GameplayFramework.Networking
         /// </summary>
         public float GetLastAcceptedTime(int instigatorActorId)
         {
+            if (instigatorActorId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(instigatorActorId));
+            }
+
             return _lastAcceptedByInstigator.TryGetValue(instigatorActorId, out float time)
                 ? time
                 : float.NegativeInfinity;
@@ -217,11 +277,33 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public void MarkAccepted(int instigatorActorId, float timeSeconds)
         {
+            if (instigatorActorId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(instigatorActorId));
+            }
+
+            if (timeSeconds < 0f || float.IsNaN(timeSeconds) || float.IsInfinity(timeSeconds))
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeSeconds));
+            }
+
+            if (_lastAcceptedByInstigator.TryGetValue(instigatorActorId, out float previousTime) &&
+                timeSeconds < previousTime)
+            {
+                throw new InvalidOperationException(
+                    "Damage cooldown time cannot move backwards for an instigator.");
+            }
+
             _lastAcceptedByInstigator[instigatorActorId] = timeSeconds;
         }
 
         public void Remove(int instigatorActorId)
         {
+            if (instigatorActorId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(instigatorActorId));
+            }
+
             _lastAcceptedByInstigator.Remove(instigatorActorId);
         }
 
@@ -240,8 +322,8 @@ namespace CycloneGames.GameplayFramework.Networking
     /// Typical server usage per inbound <see cref="DamageRequestMessage"/>:
     /// <list type="number">
     /// <item>Resolve authoritative instigator/target facts (positions, owner connection, weapon rules).</item>
-    /// <item>Build a <see cref="ServerDamageValidationRequest"/>, reading the last accepted time from
-    /// <see cref="CooldownTracker"/>.</item>
+    /// <item>Build a <see cref="ServerDamageValidationRequest"/> from authoritative facts. <see cref="Process"/>
+    /// replaces its last-accepted time with the state owned by <see cref="CooldownTracker"/>.</item>
     /// <item>Call <see cref="Process"/>; on accept apply <see cref="ServerDamageValidationResult.ApprovedDamage"/>
     /// to the target actor, then broadcast the produced result message to observers.</item>
     /// </list>
@@ -250,14 +332,16 @@ namespace CycloneGames.GameplayFramework.Networking
     /// </remarks>
     public sealed class ServerAuthoritativeDamageProcessor
     {
-        private readonly IServerDamageValidator _validator;
+        private readonly IServerDamageValidator _customValidator;
         private readonly DamageCooldownTracker _cooldownTracker;
 
         public ServerAuthoritativeDamageProcessor(
             IServerDamageValidator validator = null,
             DamageCooldownTracker cooldownTracker = null)
         {
-            _validator = validator ?? DefaultServerDamageValidator.Instance;
+            _customValidator = ReferenceEquals(validator, DefaultServerDamageValidator.Instance)
+                ? null
+                : validator;
             _cooldownTracker = cooldownTracker ?? new DamageCooldownTracker();
         }
 
@@ -270,10 +354,26 @@ namespace CycloneGames.GameplayFramework.Networking
             byte damageEventType = 0,
             NetworkVector3 hitLocation = default)
         {
-            ServerDamageValidationResult result = _validator.Validate(request);
-            if (result.Accepted)
+            float authoritativeLastAcceptedTime = request.InstigatorActorId > 0
+                ? _cooldownTracker.GetLastAcceptedTime(request.InstigatorActorId)
+                : float.NegativeInfinity;
+            ServerDamageValidationRequest authoritativeRequest = WithLastAcceptedTime(
+                in request,
+                authoritativeLastAcceptedTime);
+
+            bool hitLocationIsFinite = hitLocation.IsFinite();
+            ServerDamageValidationResult baselineResult = hitLocationIsFinite
+                ? DefaultServerDamageValidator.Instance.Validate(in authoritativeRequest)
+                : ServerDamageValidationResult.Reject(ServerDamageRejectReason.InvalidPayload);
+            ServerDamageValidationResult result = baselineResult;
+            if (baselineResult.Accepted && _customValidator != null)
             {
-                _cooldownTracker.MarkAccepted(request.InstigatorActorId, request.CurrentTimeSeconds);
+                result = _customValidator.Validate(in authoritativeRequest);
+                if (!result.IsWellFormed ||
+                    result.Accepted && result.ApprovedDamage > baselineResult.ApprovedDamage)
+                {
+                    result = ServerDamageValidationResult.Reject(ServerDamageRejectReason.Custom);
+                }
             }
 
             resultMessage = new DamageResultMessage
@@ -284,10 +384,39 @@ namespace CycloneGames.GameplayFramework.Networking
                 AppliedDamage = result.ApprovedDamage,
                 ResultCode = result.Reason,
                 DamageEventType = damageEventType,
-                HitLocation = hitLocation
+                HitLocation = hitLocationIsFinite ? hitLocation : NetworkVector3.Zero
             };
 
+            // Validate the complete outbound contract before committing authoritative cooldown state.
+            DamageNetworkingExtensions.ValidateDamageResult(in resultMessage);
+            if (result.Accepted)
+            {
+                _cooldownTracker.MarkAccepted(
+                    authoritativeRequest.InstigatorActorId,
+                    authoritativeRequest.CurrentTimeSeconds);
+            }
+
             return result;
+        }
+
+        private static ServerDamageValidationRequest WithLastAcceptedTime(
+            in ServerDamageValidationRequest request,
+            float lastAcceptedTimeSeconds)
+        {
+            return new ServerDamageValidationRequest(
+                request.InstigatorActorId,
+                request.TargetActorId,
+                request.InstigatorOwnerConnectionId,
+                request.RequestConnectionId,
+                request.TargetCanBeDamaged,
+                request.InstigatorPosition,
+                request.TargetPosition,
+                request.RequestedDamage,
+                request.MaxDamage,
+                request.MaxRangeSqr,
+                request.CurrentTimeSeconds,
+                lastAcceptedTimeSeconds,
+                request.CooldownSeconds);
         }
     }
 }

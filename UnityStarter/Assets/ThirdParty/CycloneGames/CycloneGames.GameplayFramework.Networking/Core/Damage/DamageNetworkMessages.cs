@@ -144,7 +144,7 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public static void WriteDamageResult(this INetWriter writer, in DamageResultMessage message)
         {
-            ValidateResultCode(message.ResultCode);
+            ValidateDamageResult(in message);
             writer.WriteUInt(message.RequestSequence);
             writer.WriteInt(message.InstigatorActorId);
             writer.WriteInt(message.TargetActorId);
@@ -164,7 +164,38 @@ namespace CycloneGames.GameplayFramework.Networking
             message.ResultCode = ReadResultCode(reader);
             message.DamageEventType = reader.ReadByte();
             message.HitLocation = ReadFiniteVector3(reader, "HitLocation");
+            ValidateDamageResult(in message);
             return message;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void ValidateDamageResult(in DamageResultMessage message)
+        {
+            ValidateResultCode(message.ResultCode);
+            if (message.AppliedDamage < 0f ||
+                float.IsNaN(message.AppliedDamage) ||
+                float.IsInfinity(message.AppliedDamage))
+            {
+                ThrowInvalidAppliedDamage();
+            }
+
+            if (!message.HitLocation.IsFinite())
+            {
+                ThrowNotFinite("HitLocation");
+            }
+
+            if (message.ResultCode != ServerDamageRejectReason.Accepted && message.AppliedDamage != 0f)
+            {
+                ThrowRejectedDamageIsNonZero();
+            }
+
+            if (message.ResultCode == ServerDamageRejectReason.Accepted &&
+                (message.InstigatorActorId <= 0 ||
+                 message.TargetActorId <= 0 ||
+                 message.InstigatorActorId == message.TargetActorId))
+            {
+                ThrowInvalidAcceptedActorIdentifiers();
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -225,6 +256,25 @@ namespace CycloneGames.GameplayFramework.Networking
         private static void ThrowInvalidResultCode(byte value)
         {
             throw new System.InvalidOperationException("Damage result contains an invalid result code: " + value + ".");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidAppliedDamage()
+        {
+            throw new System.InvalidOperationException("Damage result AppliedDamage must be finite and non-negative.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowRejectedDamageIsNonZero()
+        {
+            throw new System.InvalidOperationException("A rejected damage result must have zero AppliedDamage.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidAcceptedActorIdentifiers()
+        {
+            throw new System.InvalidOperationException(
+                "An accepted damage result requires distinct positive instigator and target Actor IDs.");
         }
     }
 }

@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath",
+    "references": [
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.DeterministicMath.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
