@@ -450,51 +450,55 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region Name and transform
+        // These reads forward to Unity-native gameObject/transform state and use a lenient
+        // thread check (AssertActorReadThread) so they remain callable in editor contexts
+        // (Gizmos, inspectors) before Awake binds the lifecycle owner thread, while still
+        // rejecting worker-thread access once the owner thread is bound.
         public string GetName()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return gameObject.name;
         }
 
         public Vector3 GetActorLocation()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.position;
         }
 
         public Quaternion GetActorRotation()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.rotation;
         }
 
         public Vector3 GetActorScale()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.localScale;
         }
 
         public float GetYaw()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.eulerAngles.y;
         }
 
         public Vector3 GetActorForwardVector()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.forward;
         }
 
         public Vector3 GetActorRightVector()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.right;
         }
 
         public Vector3 GetActorUpVector()
         {
-            AssertActorOwnerThread();
+            AssertActorReadThread();
             return transform.up;
         }
         public void SetActorLocation(Vector3 newLocation)
@@ -525,14 +529,12 @@ namespace CycloneGames.GameplayFramework.Runtime
         #region Camera
         public virtual void GetActorEyesViewPoint(out Vector3 outLocation, out Quaternion outRotation)
         {
-            AssertActorOwnerThread();
             outLocation = GetActorLocation();
             outRotation = GetActorRotation();
         }
 
         public virtual void CalcCamera(float deltaTime, out CameraPose outResult, float fallbackFov)
         {
-            AssertActorOwnerThread();
             GetActorEyesViewPoint(out Vector3 location, out Quaternion rotation);
             outResult = new CameraPose(location, rotation, fallbackFov);
         }
@@ -1409,6 +1411,36 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 throw new InvalidOperationException(
                     "Actor lifecycle ownership has not been initialized.");
+            }
+
+            if (Thread.CurrentThread.ManagedThreadId != expectedThreadId)
+            {
+                throw new InvalidOperationException(
+                    "Actor live state must be accessed on its Unity lifecycle owner thread.");
+            }
+        }
+
+        /// <summary>
+        /// Enforces the owner-thread contract for read accessors while allowing reads before the
+        /// Actor's lifecycle owner thread has been bound (for example editor Gizmos and
+        /// inspectors that read Unity-native state before Awake). Once bound, a read from a
+        /// different thread still fails immediately.
+        /// </summary>
+        protected void AssertActorReadThread()
+        {
+            World currentWorld = world;
+            if (currentWorld != null)
+            {
+                currentWorld.AssertOwnerThread();
+                return;
+            }
+
+            int expectedThreadId = actorOwnerThreadId;
+            if (expectedThreadId == 0)
+            {
+                // Not yet bound to a lifecycle owner thread; there is no captured thread to
+                // validate against, so the read is allowed.
+                return;
             }
 
             if (Thread.CurrentThread.ManagedThreadId != expectedThreadId)
