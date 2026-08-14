@@ -14,13 +14,20 @@ namespace CycloneGames.GameplayFramework.Runtime
             IWorldSettingsReferenceResolver referenceResolver = null,
             ISceneTransitionHandler sceneTransitionHandler = null,
             IGameSession gameSession = null,
-            WorldRuntimeLimits runtimeLimits = null)
+            WorldRuntimeLimits runtimeLimits = null,
+            IWorldActorSource actorSource = null,
+            IMatchClock matchClock = null,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null)
         {
             ActorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
             ReferenceResolver = referenceResolver;
             SceneTransitionHandler = sceneTransitionHandler;
             GameSession = gameSession;
             RuntimeLimits = runtimeLimits ?? WorldRuntimeLimits.Default;
+            ActorSource = actorSource;
+            MatchClock = matchClock ?? UnityMatchClock.Scaled;
+            CameraOutputLeaseArbiter =
+                cameraOutputLeaseArbiter ?? new CameraOutputLeaseArbiter();
         }
 
         public IActorLifetime ActorLifetime { get; }
@@ -28,12 +35,22 @@ namespace CycloneGames.GameplayFramework.Runtime
         public ISceneTransitionHandler SceneTransitionHandler { get; }
         public IGameSession GameSession { get; }
         public WorldRuntimeLimits RuntimeLimits { get; }
+        public IWorldActorSource ActorSource { get; }
+        public IMatchClock MatchClock { get; }
+        public ICameraOutputLeaseArbiter CameraOutputLeaseArbiter { get; }
 
-        public static GameplayWorldComposition CreateDefault(WorldRuntimeLimits runtimeLimits = null)
+        public static GameplayWorldComposition CreateDefault(
+            WorldRuntimeLimits runtimeLimits = null,
+            IWorldActorSource actorSource = null,
+            IMatchClock matchClock = null,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null)
         {
             return new GameplayWorldComposition(
                 new UnityActorLifetime(),
-                runtimeLimits: runtimeLimits);
+                runtimeLimits: runtimeLimits,
+                actorSource: actorSource,
+                matchClock: matchClock,
+                cameraOutputLeaseArbiter: cameraOutputLeaseArbiter);
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.Networking;
+using CycloneGames.Networking.Replication;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Networking
@@ -60,68 +61,37 @@ namespace CycloneGames.GameplayFramework.Networking
             }
         }
 
-        public static NetworkedGameplayActor ToNetworkedGameplayActor(
+        /// <summary>
+        /// Samples the Actor's current position into the shared Networking replication model. The returned
+        /// value owns no Unity reference and can be passed directly to <see cref="NetworkReplicationPlanner"/>.
+        /// </summary>
+        public static NetworkReplicatedObject CaptureReplicationObject(
             this Actor actor,
-            uint networkId,
-            int ownerConnectionId,
+            ulong objectId,
+            in NetworkReplicationPolicy policy,
+            int ownerConnectionId = 0,
             ulong ownerPlayerId = 0UL,
             int teamId = 0,
             uint interestLayerMask = uint.MaxValue,
-            bool alwaysRelevant = false)
+            bool isDirty = true,
+            bool requiresFullState = false,
+            int lastSentTick = NetworkReplicatedObject.NEVER_SENT,
+            int estimatedPayloadBytes = 64)
         {
             AssertActorAccessThread(actor);
 
-            return new NetworkedGameplayActor(
-                networkId,
+            return new NetworkReplicatedObject(
+                objectId,
+                policy,
+                ToNetworkVector3(actor.GetActorLocation()),
                 ownerConnectionId,
                 ownerPlayerId,
                 teamId,
                 interestLayerMask,
-                alwaysRelevant,
-                ToNetworkVector3(actor.GetActorLocation()));
-        }
-
-        public static void SetObserver(
-            this GameplayNetworkObserverRegistry registry,
-            INetConnection connection,
-            Vector3 position,
-            float radius,
-            uint layerMask = uint.MaxValue,
-            int teamId = 0)
-        {
-            if (!TrySetObserver(registry, connection, position, radius, layerMask, teamId))
-            {
-                throw new InvalidOperationException(
-                    $"Observer capacity reached the configured maximum of {registry.MaximumObserverCount}.");
-            }
-        }
-
-        public static bool TrySetObserver(
-            this GameplayNetworkObserverRegistry registry,
-            INetConnection connection,
-            Vector3 position,
-            float radius,
-            uint layerMask = uint.MaxValue,
-            int teamId = 0)
-        {
-            if (registry == null)
-            {
-                throw new ArgumentNullException(nameof(registry));
-            }
-
-            if (connection == null)
-            {
-                throw new ArgumentNullException(nameof(connection));
-            }
-
-            return registry.TrySetObserver(
-                connection.ConnectionId,
-                ToNetworkVector3(position),
-                radius,
-                layerMask,
-                connection.PlayerId,
-                teamId,
-                connection);
+                isDirty,
+                requiresFullState,
+                lastSentTick,
+                estimatedPayloadBytes);
         }
 
         private static NetworkVector3 ToNetworkVector3(Vector3 value)

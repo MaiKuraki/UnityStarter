@@ -16,23 +16,45 @@ namespace CycloneGames.GameplayFramework.Runtime
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
 
-        [SerializeField] private GameplayMatchState matchState = GameplayMatchState.EnteringMap;
+        [SerializeField] private GameplayMatchState initialMatchState = GameplayMatchState.EnteringMap;
 
         private readonly List<PlayerState> playerStates = new List<PlayerState>(8);
         private ReadOnlyCollection<PlayerState> playerStateView;
+        private IMatchClock matchClock;
         private MatchStateMachine matchStateMachine;
         private bool isChangingMatchState;
 
-        public GameplayMatchState MatchState => matchStateMachine?.State ?? matchState;
+        public GameplayMatchState MatchState => matchStateMachine?.State ?? initialMatchState;
         public IReadOnlyList<PlayerState> PlayerArray => playerStateView ??= playerStates.AsReadOnly();
 
-        public float ElapsedTime
+        public double ElapsedTimeSeconds
         {
             get
             {
-                double seconds = GetMatchStateMachine().GetElapsedSeconds(Time.timeAsDouble);
-                return seconds >= float.MaxValue ? float.MaxValue : (float)Math.Max(0d, seconds);
+                MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
+                return GetMatchStateMachine(in timestamp).GetElapsedSeconds(in timestamp);
             }
+        }
+
+        /// <summary>
+        /// Selects the clock used by this GameState. Composition must configure the clock before
+        /// the first transition, elapsed-time read, snapshot capture, or restore.
+        /// </summary>
+        public void ConfigureMatchClock(IMatchClock value)
+        {
+            World?.AssertOwnerThread();
+            if (value == null)
+            {
+                throw new ArgumentNullException(nameof(value));
+            }
+
+            if (matchStateMachine != null && !ReferenceEquals(matchClock, value))
+            {
+                throw new InvalidOperationException(
+                    "Match clock cannot be replaced after match runtime state has been created.");
+            }
+
+            matchClock = value;
         }
 
         public void SetMatchState(GameplayMatchState newState)
@@ -46,30 +68,30 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool TrySetMatchState(GameplayMatchState newState, out string error)
         {
             World?.AssertOwnerThread();
-            MatchStateMachine stateMachine = GetMatchStateMachine();
-            if (stateMachine.State == newState)
-            {
-                error = null;
-                return true;
-            }
-
             if (isChangingMatchState)
             {
                 error = "A match-state transition is already in progress.";
                 return false;
             }
 
+            MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
+            MatchStateMachine stateMachine = GetMatchStateMachine(in timestamp);
             GameplayMatchState oldState = stateMachine.State;
             MatchStateTransitionResult result = stateMachine.TryTransition(
                 newState,
-                Time.timeAsDouble);
+                in timestamp);
+            if (result == MatchStateTransitionResult.Unchanged)
+            {
+                error = null;
+                return true;
+            }
+
             if (result != MatchStateTransitionResult.Success)
             {
                 error = GetTransitionError(oldState, newState, result);
                 return false;
             }
 
-            matchState = newState;
             isChangingMatchState = true;
             try
             {
@@ -82,6 +104,74 @@ namespace CycloneGames.GameplayFramework.Runtime
                     Log.Error(
                         exception,
                         $"GameState '{name}' match-state observer failed after transition from '{oldState}' to '{newState}'.");
+                }
+            }
+            finally
+            {
+                isChangingMatchState = false;
+            }
+
+            error = null;
+            return true;
+        }
+
+        public MatchStateSnapshot CaptureMatchStateSnapshot()
+        {
+            World?.AssertOwnerThread();
+            MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
+            return GetMatchStateMachine(in timestamp).CaptureSnapshot(in timestamp);
+        }
+
+        public void RestoreMatchStateSnapshot(in MatchStateSnapshot snapshot)
+        {
+            if (!TryRestoreMatchStateSnapshot(in snapshot, out string error))
+            {
+                throw new InvalidOperationException(error);
+            }
+        }
+
+        public bool TryRestoreMatchStateSnapshot(
+            in MatchStateSnapshot snapshot,
+            out string error)
+        {
+            World?.AssertOwnerThread();
+            if (isChangingMatchState)
+            {
+                error = "A match-state transition is already in progress.";
+                return false;
+            }
+
+            MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
+            MatchStateRestoreResult result = MatchStateMachine.TryRestore(
+                in snapshot,
+                in timestamp,
+                out MatchStateMachine restoredStateMachine);
+            if (result != MatchStateRestoreResult.Success)
+            {
+                error = GetRestoreError(result);
+                return false;
+            }
+
+            GameplayMatchState oldState = MatchState;
+            matchStateMachine = restoredStateMachine;
+            if (oldState == restoredStateMachine.State)
+            {
+                error = null;
+                return true;
+            }
+
+            isChangingMatchState = true;
+            try
+            {
+                try
+                {
+                    OnMatchStateChanged(oldState, restoredStateMachine.State);
+                }
+                catch (Exception exception)
+                {
+                    Log.Error(
+                        exception,
+                        $"GameState '{name}' match-state observer failed while restoring '{restoredStateMachine.State}'.");
                 }
             }
             finally
@@ -122,22 +212,23 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public int GetNumPlayers() => playerStates.Count;
 
-        protected override void Awake()
-        {
-            base.Awake();
-            matchStateMachine = new MatchStateMachine(matchState, Time.timeAsDouble);
-        }
-
         protected override void OnDestroy()
         {
             playerStates.Clear();
             matchStateMachine = null;
+            matchClock = null;
             base.OnDestroy();
         }
 
-        private MatchStateMachine GetMatchStateMachine()
+        private IMatchClock GetMatchClock()
         {
-            return matchStateMachine ??= new MatchStateMachine(matchState, Time.timeAsDouble);
+            return matchClock ?? UnityMatchClock.Scaled;
+        }
+
+        private MatchStateMachine GetMatchStateMachine(in MatchTimestamp timestamp)
+        {
+            return matchStateMachine ??=
+                new MatchStateMachine(initialMatchState, in timestamp);
         }
 
         private static string GetTransitionError(
@@ -153,8 +244,27 @@ namespace CycloneGames.GameplayFramework.Runtime
                     return $"Match state '{newState}' is invalid.";
                 case MatchStateTransitionResult.InvalidTimestamp:
                     return "Match-state transition timestamp is invalid or moved backwards.";
+                case MatchStateTransitionResult.ClockEpochMismatch:
+                    return "Match-state transition timestamp belongs to a different clock epoch.";
                 default:
                     return $"Match-state transition failed: {oldState} -> {newState}.";
+            }
+        }
+
+        private static string GetRestoreError(MatchStateRestoreResult result)
+        {
+            switch (result)
+            {
+                case MatchStateRestoreResult.InvalidSnapshot:
+                    return "Match-state snapshot is invalid.";
+                case MatchStateRestoreResult.InvalidTimestamp:
+                    return "Current match-clock timestamp is invalid.";
+                case MatchStateRestoreResult.ClockEpochMismatch:
+                    return "Match-state snapshot belongs to a different clock epoch.";
+                case MatchStateRestoreResult.RestoreTimestampPrecedesSnapshot:
+                    return "Current match-clock timestamp precedes the snapshot timestamp.";
+                default:
+                    return "Match-state snapshot restore failed.";
             }
         }
     }

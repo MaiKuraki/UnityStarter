@@ -12,7 +12,7 @@
 
 | Assembly | Engine reference | Auto referenced | 职责 |
 | --- | --- | --- | --- |
-| `CycloneGames.GameplayFramework.Core` | 无 | No | 参与者准入与 roster、login request/status 值、match state machine、player snapshot、World limit、Actor admission snapshot 与 Actor tag validation。 |
+| `CycloneGames.GameplayFramework.Core` | 无 | No | 参与者准入与 roster、login request/status 值、match clock/state/snapshot、player snapshot、World limit、Actor admission snapshot 与 Actor tag validation。 |
 | `CycloneGames.GameplayFramework.Runtime` | Unity | No | `GameInstance`、`World`、`Actor`、`GameMode`、Controller、Pawn、Unity 生命周期、authoring asset、camera orchestration，以及对 Core 规则的 Runtime adapter。 |
 | `CycloneGames.GameplayFramework.Editor` | Unity Editor | Yes | Inspector、validation、diagnostic 与 authoring tool。 |
 
@@ -34,7 +34,7 @@ Package 为每个 gameplay object 保留唯一身份。`Actor` 就是注册到 `
 }
 ```
 
-如果 assembly 还会直接构造或查询 `ParticipantRoster`、`PlayerLoginRequest`、`MatchStateMachine`、`PlayerStateSnapshot` 或其他 Core 类型，则显式引用两个 assembly：
+如果 assembly 还会直接构造或查询 `ParticipantRoster`、`PlayerLoginRequest`、`MatchTimestamp`、`MatchStateMachine`、`MatchStateSnapshot`、`PlayerStateSnapshot` 或其他 Core 类型，则显式引用两个 assembly：
 
 ```json
 {
@@ -65,17 +65,27 @@ Package 为每个 gameplay object 保留唯一身份。`Actor` 就是注册到 `
 `GameplayWorldComposition` 是与 container 无关的 Unity composition value。手动 bootstrap 与 DI container 构造同一个值，并在启动前调用 `GameplayWorldHost.Configure`。
 
 ```csharp
+var sharedCameraOutputLeaseArbiter = new CameraOutputLeaseArbiter();
 var composition = new GameplayWorldComposition(
     new UnityActorLifetime(),
     referenceResolver: resolver,
     sceneTransitionHandler: transitions,
     gameSession: session,
-    runtimeLimits: limits);
+    runtimeLimits: limits,
+    actorSource: new SceneWorldActorSource(gameplayWorldHost.gameObject.scene),
+    matchClock: UnityMatchClock.Unscaled,
+    cameraOutputLeaseArbiter: sharedCameraOutputLeaseArbiter);
 
 gameplayWorldHost.Configure(composition);
 ```
 
-`GameSession` 是面向 Unity 参与者对象的 Runtime facade，内部组合 Core `ParticipantRoster`。`GameState` 组合 Core `MatchStateMachine`，并在提交 match state transition 时输入 Unity time。Container 可以提供 Runtime facade、其依赖，或完整 composition value；这些 contract 都不依赖具体 container 类型。
+`GameSession` 是面向 Unity 参与者对象的 Runtime facade，内部组合 Core `ParticipantRoster`。`GameState` 组合 Core `MatchStateMachine`，并读取 composition 显式提供的 `IMatchClock`。World 会在 GameState registration 期间、registry commit 与 BeginPlay publication 之前配置该 clock。Timestamp 携带 `Guid` epoch 与 `double` 秒数；readonly `MatchStateSnapshot` 不包含 persistence 或 wire schema。Container 可以提供 Runtime facade、clock、Actor source、camera-output lease arbiter、它们的依赖，或完整 composition value；这些 contract 都不依赖具体 container 类型。
+
+未显式配置的 `GameplayWorldHost` 会为 Host GameObject 自身 Scene 提供 `SceneWorldActorSource`、使用 `UnityMatchClock.Scaled`，并创建一个 `CameraOutputLeaseArbiter`。显式 composition 会精确控制这些 seam。`ActorSource` 为 null 时（包括直接构造 `GameInstance`）会关闭启动发现，不会扫描全部已加载 Scene。
+
+自定义 Actor source 通过事务范围内的 `IWorldActorCollector` 写入候选项；`TryAdd` 返回 false 时必须停止，且不得保留 collector。这样可将候选存储限制在 `WorldRuntimeLimits.MaximumActorCount` 内，并在注册前拒绝 shutdown re-entry。`SceneWorldActorSource` 还接受不可变的 `maximumVisitedGameObjectCount` 遍历预算，并以增量方式遍历层级，不会物化 scene-wide Actor list。
+
+`ICameraOutputLeaseArbiter` 是 camera-resource ownership 的 composition seam。`CameraOutputLeaseArbiter` 记录构造线程，不保存 static global state，并对共享该实例的所有 World 执行仲裁。一个 GameInstance 对其创建的全部 World 使用同一个 arbiter。Parallel World 使用不同 GameInstance；如果它们可能引用同一个 persistent Camera、CinemachineBrain、Virtual Camera 或自定义 backend resource，应向所有实例注入同一个 shared arbiter。彼此独立的 default arbiter 是独立 ownership domain。
 
 需要 VContainer 专用 entry point 的项目应把它放在项目 integration asmdef 中，并使用 `jp.hadashikick.vcontainer` package capability 门控。VContainer 缺失时，GameplayFramework 仍可使用。
 
@@ -89,10 +99,10 @@ gameplayWorldHost.Configure(composition);
 | `com.cyclone-games.gameplay-framework-factory` | `CycloneGames.GameplayFramework.Runtime.Integrations.Factory` | Unity Runtime adapter，将 `IUnityObjectLifetime` 连接到 Actor 的终态创建与释放。 |
 | `com.cyclone-games.gameplay-framework-gameplay-abilities` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities` | Actor owner/avatar 信息与 GameplayAbilities 的 Unity Runtime bridge。 |
 | `com.cyclone-games.gameplay-framework-gameplay-tags` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags` | Actor 与 GameplayTags 之间的 Unity Runtime helper。 |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | 纯 protocol message、bound、codec、observer rule 与 validation；依赖 GameplayFramework Core 和 Networking Core。 |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Actor capture/apply、World replication 与 Runtime GameSession binding 的 Unity adapter。 |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | 纯 protocol message、bound、codec、security-policy composition 与 validation；依赖 GameplayFramework Core 和 Networking Core。 |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Actor capture/apply、共享 replication capture 与 Runtime GameSession binding 的 Unity adapter。 |
 
-Networking Core assembly 设置 `noEngineReferences: true`，且不引用 GameplayFramework Runtime。Networking Runtime assembly 依赖两侧 Core，并包含所有读写 Unity gameplay object 的操作。产品 protocol assembly 引用 `CycloneGames.GameplayFramework.Networking.Core`；Unity replication assembly 还要引用 `CycloneGames.GameplayFramework.Networking.Runtime`，以及源码直接使用的 GameplayFramework assembly。
+Networking Core assembly 设置 `noEngineReferences: true`，且不引用 GameplayFramework Runtime。共享的 `CycloneGames.Networking.Core` 仍是 replication object、observer、policy、budget 与 `NetworkReplicationPlanner` 的唯一 owner。Networking Runtime assembly 依赖两侧 Core，并包含所有读写 Unity gameplay object 的操作。产品 protocol assembly 引用 `CycloneGames.GameplayFramework.Networking.Core`；Unity replication assembly 还要引用 `CycloneGames.GameplayFramework.Networking.Runtime`，以及源码直接使用的 GameplayFramework assembly。
 
 ### UPM 安装
 
@@ -116,7 +126,7 @@ Companion 不使用 `versionDefines` 发现 `Assets` 下的相邻 package manife
 
 对应 EditMode test assembly 使用相同 capability 与 version expression。Package 缺失或版本不在范围内时，Unity 会排除该 adapter 及其测试；GameplayFramework Core、Runtime、Editor、sample 与无关 companion 继续编译。
 
-`CinemachineCameraOutput` 实现 Runtime `ICameraOutput` contract。`NavigathenaSceneTransitionHandler` 实现 Runtime `ISceneTransitionHandler` contract。外部 package 类型不会进入 GameplayFramework Core 或 Runtime public interface。
+`CinemachineCameraOutput` 实现 Runtime `ICameraOutput` contract，并将 Brain 与 Virtual Camera prepare 为一个 atomic、有界 ownership-resource domain。其内置 discovery 仅限 output GameObject 所在 Scene。内置 `UnityCameraOutput` 只 prepare target Camera。每个 output 最多 prepare `CameraOutputLimits.MaximumPreparedResourceCount`（4）个 resource。`NavigathenaSceneTransitionHandler` 实现 Runtime `ISceneTransitionHandler` contract。外部 package 类型不会进入 GameplayFramework Core 或 Runtime public interface。
 
 Package-derived gate 只对 UPM 已解析的 package 生效。把 Cinemachine 或 Navigathena 源码复制到 `Assets` 下不会满足这些 `versionDefines`；这种布局需要项目自有、带显式 reference 的 adapter assembly。
 
@@ -147,9 +157,10 @@ Unity-facing assembly 可以依赖纯 assembly。纯 assembly 不引用 Unity-fa
 Assembly 分层不会增加逐帧 adapter object。只有规则本身具有独立状态时，Runtime 才持有 Core rule object，例如每个 `GameSession` 一个 roster、每个 `GameState` 一个 match state machine。
 
 - Core snapshot 与 status value 是有界值数据，不持有 Unity object。
-- `ParticipantRoster`、`MatchStateMachine` 与 Runtime `GameSession` 都是 single-owner object，且不添加 lock。读取可变 instance state 或执行 mutation 时，非构造 owner 线程的访问会被拒绝。
+- `ParticipantRoster` 与 Runtime `GameSession` 由构造线程持有，且不添加 lock。`MatchStateMachine` 由构造线程或成功恢复 snapshot 的线程持有。其他线程执行 mutable read 或 mutation 时会被拒绝。
 - Immutable limit 与 static validation/transition-policy function 不读取 live mutable state。Worker result 必须先 marshal 到 owner，之后才能访问 live roster、match state machine 或 session。
 - Runtime World 与 Unity object 遵守已记录的 owner-thread 和 Unity main-thread 要求。
+- Shared `CameraOutputLeaseArbiter` 在一个 composition owner thread 创建和修改；所有参与 World 都在该线程执行 lease operation。
 - Network 与 worker-thread 输入应先在纯代码中验证，再 marshal 到 World owner 执行 Runtime 修改。
 - 产品应在每个发布 backend 上分析实际 Actor、roster、protocol 与 replication workload。Assembly 结构本身不能证明 zero-GC 或平台性能。
 
@@ -189,10 +200,11 @@ CycloneGames.GameplayFramework.Integrations.Navigathena.Tests.Editor
 4. Networking Runtime 持有所有 Unity Actor、World 与 GameSession adapter。
 5. UPM 依赖缺失时，gated assembly 被排除。
 6. 产品的准确 assembly graph 能完成 clean Player build。
+7. 共享 persistent camera resource 的 parallel World 获得同一个 composition-owned arbiter，并拒绝重叠 lease。
 
 ## 持久化
 
-Package 组合不会写文件、偏好、registry entry 或 PlayerSettings symbol。`WorldSettings` 仍是显式项目 asset。Core roster、match、admission 与 diagnostic state 只存在于内存。Storage、catalog、save 与 protocol state 由各自模块持有，并在对应 package 文档中说明。
+Package 组合不会写文件、偏好、registry entry 或 PlayerSettings symbol。`WorldSettings` 仍是显式项目 asset。Core roster、match、admission、snapshot 与 diagnostic state 只存在于内存。Camera lease ownership 同样仅存在于内存，并随各 World shutdown 释放；shared arbiter 由 composition 持有，直到所有参与 World 停止。`MatchStateSnapshot` 包含 state、elapsed seconds、captured timestamp 与 clock epoch，但不包含 storage schema；storage 与 protocol adapter 持有 envelope 和 compatibility。Storage、catalog、save 与 protocol state 由各自模块持有，并在对应 package 文档中说明。
 
 ## 故障排查
 
@@ -206,3 +218,4 @@ Package 组合不会写文件、偏好、registry entry 或 PlayerSettings symbo
 | Gated external assembly 不存在 | 确认 Package Manager 已解析受支持版本，并让 consumer asmdef 显式引用 integration assembly。 |
 | 不同 checkout 的 capability 不一致 | 比较 `Packages/manifest.json`、`Packages/packages-lock.json`、package root 与 asmdef reference；不要添加 PlayerSettings symbol。 |
 | DI 配置晚于 Host 启动 | 在 Unity `Start` 前配置 Host，或关闭 **Auto Start**，待 composition 完成后调用 `StartWorldAsync`。 |
+| Parallel World 同时激活一个 persistent camera resource | 在共同 owner thread 创建一个 `CameraOutputLeaseArbiter`，并注入每个参与的 composition。 |

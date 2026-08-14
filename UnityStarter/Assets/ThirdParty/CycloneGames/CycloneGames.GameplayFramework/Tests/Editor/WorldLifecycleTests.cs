@@ -471,8 +471,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                     Quaternion.Euler(5f, 15f, 0f),
                     75f);
 
-                Assert.IsTrue(output.TryPrepare(out Object resource, out string prepareError), prepareError);
-                Assert.AreSame(camera, resource);
+                Assert.IsTrue(output.TryPrepare(out string prepareError), prepareError);
+                Assert.AreEqual(1, output.PreparedResourceCount);
+                Assert.AreSame(camera, output.GetPreparedResource(0));
                 Assert.IsTrue(output.TryActivate(manager, out string activationError), activationError);
                 output.ApplyPose(in pose);
 
@@ -1210,12 +1211,16 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public bool ReenterOnActivate { get; set; } = true;
             public override Object OutputObject => activeCamera;
 
-            protected override bool OnTryPrepare(out Object ownershipResource, out string error)
+            protected override bool OnTryPrepare(out string error)
             {
                 activeCamera = GetComponent<Camera>();
-                ownershipResource = activeCamera;
-                error = activeCamera == null ? "A Camera is required." : null;
-                return activeCamera != null;
+                if (activeCamera == null)
+                {
+                    error = "A Camera is required.";
+                    return false;
+                }
+
+                return TryAddPreparedResource(activeCamera, out error);
             }
 
             protected override bool OnActivate(CameraManager newOwner, out string error)
@@ -1233,7 +1238,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
             }
 
-            protected override void OnDeactivate()
+            protected override void OnReleasePreparedResources()
             {
                 activeCamera = null;
             }

@@ -26,6 +26,13 @@ namespace CycloneGames.Networking.Replication
 
     public readonly struct NetworkReplicationPolicy : IEquatable<NetworkReplicationPolicy>
     {
+        private const NetworkReplicationInterest KnownInterest =
+            NetworkReplicationInterest.Always
+            | NetworkReplicationInterest.Owner
+            | NetworkReplicationInterest.Team
+            | NetworkReplicationInterest.Area
+            | NetworkReplicationInterest.Manual;
+
         public static readonly NetworkReplicationPolicy Never = new NetworkReplicationPolicy(
             NetworkReplicationInterest.None,
             NetworkChannel.Reliable,
@@ -55,7 +62,17 @@ namespace CycloneGames.Networking.Replication
             bool requireAuthenticated = true,
             bool sendUnchanged = false)
         {
-            if (maxDistance < 0f || float.IsNaN(maxDistance))
+            if ((interest & ~KnownInterest) != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(interest));
+            }
+
+            if (channel < NetworkChannel.Reliable || channel > NetworkChannel.UnreliableSequenced)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channel));
+            }
+
+            if (maxDistance < 0f || !float.IsFinite(maxDistance))
             {
                 throw new ArgumentOutOfRangeException(nameof(maxDistance));
             }
@@ -65,7 +82,7 @@ namespace CycloneGames.Networking.Replication
                 throw new ArgumentOutOfRangeException(nameof(minIntervalTicks));
             }
 
-            if (priority < 0f || float.IsNaN(priority))
+            if (priority < 0f || !float.IsFinite(priority))
             {
                 throw new ArgumentOutOfRangeException(nameof(priority));
             }

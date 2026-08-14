@@ -1,10 +1,15 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
+using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.PlayMode
 {
@@ -274,6 +279,237 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
             }
         }
 
+        [UnityTest]
+        public IEnumerator HostDefaultActorSource_DiscoversOnlyActorsInTheHostScene()
+        {
+            var authoringObjects = new List<GameObject>(6);
+            WorldSettings settings = ScriptableObject.CreateInstance<WorldSettings>();
+            Scene hostScene = default;
+            Scene otherScene = default;
+            GameObject hostObject = null;
+            GameObject hostSceneActorObject = null;
+            GameObject otherSceneActorObject = null;
+            AsyncOperation unloadHostScene = null;
+            AsyncOperation unloadOtherScene = null;
+            try
+            {
+                SetField(settings, "gameModeClass", CreateActor<GameMode>("GameModePrefab", authoringObjects));
+                SetField(settings, "playerControllerClass", CreateActor<PlayerController>("PlayerControllerPrefab", authoringObjects));
+                SetField(settings, "pawnClass", CreateActor<Pawn>("PawnPrefab", authoringObjects));
+                SetField(settings, "playerStateClass", CreateActor<PlayerState>("PlayerStatePrefab", authoringObjects));
+
+                hostScene = SceneManager.CreateScene("GameplayHostScene");
+                otherScene = SceneManager.CreateScene("GameplayOtherScene");
+                hostSceneActorObject = new GameObject("HostSceneActor");
+                SceneManager.MoveGameObjectToScene(hostSceneActorObject, hostScene);
+                PlayModeLifetimeActor hostSceneActor =
+                    hostSceneActorObject.AddComponent<PlayModeLifetimeActor>();
+                otherSceneActorObject = new GameObject("OtherSceneActor");
+                SceneManager.MoveGameObjectToScene(otherSceneActorObject, otherScene);
+                PlayModeLifetimeActor otherSceneActor =
+                    otherSceneActorObject.AddComponent<PlayModeLifetimeActor>();
+
+                hostObject = new GameObject("GameplayWorldHost");
+                SceneManager.MoveGameObjectToScene(hostObject, hostScene);
+                GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                SetField(host, "autoStart", false);
+                SetField(host, "worldSettings", settings);
+
+                World world = host.StartWorldAsync().GetAwaiter().GetResult();
+
+                Assert.IsTrue(world.IsActorRegistered(hostSceneActor));
+                Assert.IsFalse(world.IsActorRegistered(otherSceneActor));
+                Assert.AreSame(world, hostSceneActor.World);
+                Assert.IsNull(otherSceneActor.World);
+
+                host.StopWorldAsync().GetAwaiter().GetResult();
+                Assert.IsNull(hostSceneActor.World);
+                Assert.IsFalse(hostSceneActor == null);
+            }
+            finally
+            {
+                if (hostObject != null)
+                {
+                    Object.Destroy(hostObject);
+                }
+
+                if (hostSceneActorObject != null)
+                {
+                    Object.Destroy(hostSceneActorObject);
+                }
+
+                if (otherSceneActorObject != null)
+                {
+                    Object.Destroy(otherSceneActorObject);
+                }
+
+                for (int i = authoringObjects.Count - 1; i >= 0; i--)
+                {
+                    if (authoringObjects[i] != null)
+                    {
+                        Object.Destroy(authoringObjects[i]);
+                    }
+                }
+
+                Object.Destroy(settings);
+                if (hostScene.IsValid() && hostScene.isLoaded)
+                {
+                    unloadHostScene = SceneManager.UnloadSceneAsync(hostScene);
+                }
+
+                if (otherScene.IsValid() && otherScene.isLoaded)
+                {
+                    unloadOtherScene = SceneManager.UnloadSceneAsync(otherScene);
+                }
+            }
+
+            if (unloadHostScene != null)
+            {
+                yield return unloadHostScene;
+            }
+
+            if (unloadOtherScene != null)
+            {
+                yield return unloadOtherScene;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator Host_DestroyDuringPendingStart_CancelsAndDisposesStartup()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                var authoringObjects = new List<GameObject>(4);
+                WorldSettings settings = ScriptableObject.CreateInstance<WorldSettings>();
+                GameObject hostObject = null;
+                try
+                {
+                    GameMode gameMode = CreateActor<GameMode>("GameModePrefab", authoringObjects);
+                    SetField(settings, "gameModeClass", gameMode);
+                    SetField(settings, "gameModeSource", WorldSettingsReferenceSource.PathLocation);
+                    SetField(settings, "gameModeAssetLocation", "tests/game-mode");
+                    SetField(settings, "playerControllerClass", CreateActor<PlayerController>(
+                        "PlayerControllerPrefab",
+                        authoringObjects));
+                    SetField(settings, "pawnClass", CreateActor<Pawn>("PawnPrefab", authoringObjects));
+                    SetField(settings, "playerStateClass", CreateActor<PlayerState>(
+                        "PlayerStatePrefab",
+                        authoringObjects));
+
+                    var resolver = new PendingWorldSettingsResolver(gameMode);
+                    hostObject = new GameObject("GameplayWorldHost");
+                    GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                    SetField(host, "autoStart", false);
+                    SetField(host, "worldSettings", settings);
+                    host.Configure(new GameplayWorldComposition(
+                        new UnityActorLifetime(),
+                        referenceResolver: resolver));
+
+                    UniTask<World> startTask = host.StartWorldAsync();
+                    GameInstance pendingInstance = host.GameInstance;
+                    Assert.IsNotNull(pendingInstance);
+                    Assert.IsTrue(resolver.ResolveEntered);
+                    Assert.AreEqual(GameplayWorldHostState.Starting, host.State);
+
+                    Object.Destroy(hostObject);
+                    await UniTask.NextFrame();
+                    hostObject = null;
+                    Exception startFailure = await CaptureStartFailure(startTask);
+
+                    Assert.IsInstanceOf<OperationCanceledException>(startFailure);
+                    Assert.IsTrue(resolver.CancellationObserved);
+                    Assert.IsTrue(pendingInstance.IsDisposed);
+                    Assert.IsNull(pendingInstance.CurrentWorld);
+                    Assert.AreEqual(GameplayWorldHostState.Disposed, host.State);
+                    Assert.IsNull(host.GameInstance);
+                }
+                finally
+                {
+                    if (hostObject != null)
+                    {
+                        Object.Destroy(hostObject);
+                    }
+
+                    for (int i = authoringObjects.Count - 1; i >= 0; i--)
+                    {
+                        if (authoringObjects[i] != null)
+                        {
+                            Object.Destroy(authoringObjects[i]);
+                        }
+                    }
+
+                    Object.Destroy(settings);
+                }
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Host_DestroyedReentrantlyDuringStop_RemainsDisposed()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                var authoringObjects = new List<GameObject>(5);
+                WorldSettings settings = ScriptableObject.CreateInstance<WorldSettings>();
+                GameObject hostObject = null;
+                GameObject actorObject = null;
+                try
+                {
+                    SetField(settings, "gameModeClass", CreateActor<GameMode>(
+                        "GameModePrefab",
+                        authoringObjects));
+                    SetField(settings, "playerControllerClass", CreateActor<PlayerController>(
+                        "PlayerControllerPrefab",
+                        authoringObjects));
+                    SetField(settings, "pawnClass", CreateActor<Pawn>("PawnPrefab", authoringObjects));
+                    SetField(settings, "playerStateClass", CreateActor<PlayerState>(
+                        "PlayerStatePrefab",
+                        authoringObjects));
+
+                    hostObject = new GameObject("GameplayWorldHost");
+                    GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                    SetField(host, "autoStart", false);
+                    SetField(host, "worldSettings", settings);
+                    World world = await host.StartWorldAsync();
+                    GameInstance stoppingInstance = host.GameInstance;
+
+                    actorObject = new GameObject("DestroyHostOnEndPlayActor");
+                    var actor = actorObject.AddComponent<DestroyHostOnEndPlayActor>();
+                    actor.HostObject = hostObject;
+                    world.RegisterActor(actor);
+
+                    await host.StopWorldAsync();
+                    hostObject = null;
+
+                    Assert.IsTrue(stoppingInstance.IsDisposed);
+                    Assert.AreEqual(GameplayWorldHostState.Disposed, host.State);
+                    Assert.IsNull(host.GameInstance);
+                    Assert.IsNull(host.CurrentWorld);
+                }
+                finally
+                {
+                    if (hostObject != null)
+                    {
+                        Object.Destroy(hostObject);
+                    }
+
+                    if (actorObject != null)
+                    {
+                        Object.Destroy(actorObject);
+                    }
+
+                    for (int i = authoringObjects.Count - 1; i >= 0; i--)
+                    {
+                        if (authoringObjects[i] != null)
+                        {
+                            Object.Destroy(authoringObjects[i]);
+                        }
+                    }
+
+                    Object.Destroy(settings);
+                }
+            });
+        }
+
         private static T CreateActor<T>(string name, List<GameObject> objects) where T : Actor
         {
             var gameObject = new GameObject(name);
@@ -295,6 +531,67 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
             Assert.IsNotNull(field, fieldName);
             field.SetValue(target, value);
+        }
+
+        private static async UniTask<Exception> CaptureStartFailure(UniTask<World> startTask)
+        {
+            try
+            {
+                await startTask;
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+
+        private sealed class PendingWorldSettingsResolver : IWorldSettingsReferenceResolver
+        {
+            private readonly GameMode gameMode;
+
+            public PendingWorldSettingsResolver(GameMode gameMode)
+            {
+                this.gameMode = gameMode;
+            }
+
+            public bool ResolveEntered { get; private set; }
+            public bool CancellationObserved { get; private set; }
+
+            public bool Supports(WorldSettingsReferenceSource source)
+            {
+                return source == WorldSettingsReferenceSource.PathLocation;
+            }
+
+            public async UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+                string location,
+                CancellationToken cancellationToken) where T : UnityEngine.Object
+            {
+                ResolveEntered = true;
+                using (cancellationToken.Register(() => CancellationObserved = true))
+                {
+                    await UniTask.WaitUntilCanceled(cancellationToken);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                T asset = gameMode as T;
+                return asset != null
+                    ? new WorldSettingsAssetLoadResult<T>(true, asset, null)
+                    : new WorldSettingsAssetLoadResult<T>(false, null, "Unexpected asset type.");
+            }
+        }
+
+        private sealed class DestroyHostOnEndPlayActor : Actor
+        {
+            public GameObject HostObject { get; set; }
+
+            protected override void EndPlay(EndPlayReason reason)
+            {
+                if (HostObject != null)
+                {
+                    Object.DestroyImmediate(HostObject);
+                }
+            }
         }
 
         private sealed class PlayModeTickActor : Actor

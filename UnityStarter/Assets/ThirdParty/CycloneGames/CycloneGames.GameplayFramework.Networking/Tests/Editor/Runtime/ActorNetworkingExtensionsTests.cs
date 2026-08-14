@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Networking.Replication;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -59,15 +60,18 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 Actor actor = gameObject.AddComponent<Actor>();
                 actor.SetActorLocation(new Vector3(4f, 5f, 6f));
 
-                NetworkedGameplayActor value = actor.ToNetworkedGameplayActor(
-                    networkId: 11,
+                NetworkReplicationPolicy policy = NetworkReplicationPolicy.Area(25f);
+                NetworkReplicatedObject value = actor.CaptureReplicationObject(
+                    objectId: 11UL,
+                    policy: policy,
                     ownerConnectionId: 2,
                     teamId: 3);
 
-                Assert.AreEqual(11u, value.NetworkId);
-                Assert.AreEqual(4f, value.InterestPosition.X);
-                Assert.AreEqual(5f, value.InterestPosition.Y);
-                Assert.AreEqual(6f, value.InterestPosition.Z);
+                Assert.AreEqual(11UL, value.ObjectId);
+                Assert.AreEqual(policy, value.Policy);
+                Assert.AreEqual(4f, value.Position.X);
+                Assert.AreEqual(5f, value.Position.Y);
+                Assert.AreEqual(6f, value.Position.Z);
             }
             finally
             {
@@ -95,8 +99,10 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 "actors/player",
                 ownerConnectionId: 1,
                 instigatorActorId: 2));
-            Exception conversionException = RunOnWorkerThread(() => fixture.Actor.ToNetworkedGameplayActor(
-                networkId: 1u,
+            NetworkReplicationPolicy policy = NetworkReplicationPolicy.Always();
+            Exception conversionException = RunOnWorkerThread(() => fixture.Actor.CaptureReplicationObject(
+                objectId: 1UL,
+                policy: policy,
                 ownerConnectionId: 1));
 
             Assert.IsInstanceOf<InvalidOperationException>(captureException);

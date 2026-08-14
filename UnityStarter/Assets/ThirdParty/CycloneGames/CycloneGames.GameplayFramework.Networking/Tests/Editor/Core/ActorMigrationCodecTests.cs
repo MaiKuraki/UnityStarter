@@ -204,6 +204,89 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         }
 
         [Test]
+        public void ConstructorDefinesZeroAsIdentitySentinelAndRejectsNegativeIds()
+        {
+            Assert.DoesNotThrow(() => new ActorMigrationState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                "actor/player",
+                0f,
+                true,
+                false,
+                System.ReadOnlySpan<string>.Empty,
+                ownerConnectionId: 0,
+                instigatorActorId: 0,
+                actorName: null,
+                hasBegunPlay: false));
+            Assert.Throws<System.InvalidOperationException>(() => new ActorMigrationState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                "actor/player",
+                0f,
+                true,
+                false,
+                System.ReadOnlySpan<string>.Empty,
+                ownerConnectionId: -1,
+                instigatorActorId: 0,
+                actorName: null,
+                hasBegunPlay: false));
+            Assert.Throws<System.InvalidOperationException>(() => new ActorMigrationState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                "actor/player",
+                0f,
+                true,
+                false,
+                System.ReadOnlySpan<string>.Empty,
+                ownerConnectionId: 0,
+                instigatorActorId: -1,
+                actorName: null,
+                hasBegunPlay: false));
+        }
+
+        [Test]
+        public void ReadRejectsNonCanonicalBooleanTruncationAndTrailingBytes()
+        {
+            var state = new ActorMigrationState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                "P",
+                0f,
+                true,
+                false,
+                System.ReadOnlySpan<string>.Empty,
+                0,
+                0,
+                string.Empty,
+                false);
+            byte[] encoded = Encode(in state);
+
+            byte[] invalidBoolean = (byte[])encoded.Clone();
+            invalidBoolean[47] = 2;
+            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(invalidBoolean))
+            {
+                Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
+            }
+
+            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(
+                       new System.ReadOnlySpan<byte>(encoded, 0, encoded.Length - 1)))
+            {
+                Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
+            }
+
+            byte[] trailing = new byte[encoded.Length + 1];
+            System.Buffer.BlockCopy(encoded, 0, trailing, 0, encoded.Length);
+            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(trailing))
+            {
+                Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
+            }
+        }
+
+        [Test]
         public void ConstructorRejectsInvalidUnicodeIdentity()
         {
             Assert.Throws<System.ArgumentException>(() => new ActorMigrationState(
@@ -242,6 +325,49 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             ActorMigrationState result = buffer.ReadMigrationState(maxRuntimeTagCount: 1024);
 
             Assert.AreEqual(ActorTagLimits.MaximumTagCount, result.TagCount);
+        }
+
+        [Test]
+        public void ReadLimitZeroDisablesRuntimeTagsWithoutFallingBackToDefault()
+        {
+            ActorMigrationState stateWithTag = CreateState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                new[] { "Player" });
+            byte[] payloadWithTag = Encode(in stateWithTag);
+            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(payloadWithTag))
+            {
+                Assert.Throws<System.InvalidOperationException>(() =>
+                    reader.ReadMigrationState(maxRuntimeTagCount: 0));
+            }
+
+            ActorMigrationState stateWithoutTags = CreateState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                System.Array.Empty<string>());
+            byte[] payloadWithoutTags = Encode(in stateWithoutTags);
+            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(payloadWithoutTags))
+            {
+                ActorMigrationState decoded = reader.ReadMigrationState(maxRuntimeTagCount: 0);
+                Assert.AreEqual(0, decoded.TagCount);
+            }
+        }
+
+        [Test]
+        public void ReadLimitRejectsNegativeRuntimeTagBudget()
+        {
+            ActorMigrationState state = CreateState(
+                NetworkVector3.Zero,
+                NetworkQuaternion.Identity,
+                NetworkVector3.One,
+                System.Array.Empty<string>());
+            byte[] payload = Encode(in state);
+            using NetworkBuffer reader = NetworkBufferPool.GetWithData(payload);
+
+            Assert.Throws<System.ArgumentOutOfRangeException>(() =>
+                reader.ReadMigrationState(maxRuntimeTagCount: -1));
         }
 
         [Test]
@@ -301,6 +427,16 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 13,
                 "PlayerActor",
                 true);
+        }
+
+        private static byte[] Encode(in ActorMigrationState state)
+        {
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            buffer.WriteMigrationState(in state);
+            System.ArraySegment<byte> segment = buffer.ToArraySegment();
+            var encoded = new byte[segment.Count];
+            System.Buffer.BlockCopy(segment.Array, segment.Offset, encoded, 0, segment.Count);
+            return encoded;
         }
     }
 }

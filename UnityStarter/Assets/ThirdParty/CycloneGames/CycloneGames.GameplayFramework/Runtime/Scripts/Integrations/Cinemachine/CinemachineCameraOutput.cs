@@ -17,6 +17,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
         private CinemachineBrain.UpdateMethods previousUpdateMethod;
         private Transform previousFollowTarget;
         private Transform previousLookAtTarget;
+        private bool stateCaptured;
 
         public CinemachineCamera ActiveVirtualCamera => activeVirtualCamera;
         public CinemachineBrain ActiveBrain => activeBrain;
@@ -25,22 +26,21 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
 
         public void SetVirtualCamera(CinemachineCamera virtualCamera)
         {
-            ThrowIfActive();
+            ThrowIfPreparedOrActive();
             bootstrapVirtualCamera = virtualCamera;
         }
 
         public void SetBrain(CinemachineBrain brain)
         {
-            ThrowIfActive();
+            ThrowIfPreparedOrActive();
             bootstrapBrain = brain;
         }
 
-        protected override bool OnTryPrepare(out UnityEngine.Object ownershipResource, out string error)
+        protected override bool OnTryPrepare(out string error)
         {
             activeVirtualCamera = ResolveVirtualCamera(out error);
             if (activeVirtualCamera == null)
             {
-                ownershipResource = null;
                 return false;
             }
 
@@ -48,13 +48,15 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             if (activeBrain == null)
             {
                 activeVirtualCamera = null;
-                ownershipResource = null;
                 return false;
             }
 
-            ownershipResource = activeBrain;
-            error = null;
-            return true;
+            if (!TryAddPreparedResource(activeBrain, out error))
+            {
+                return false;
+            }
+
+            return TryAddPreparedResource(activeVirtualCamera, out error);
         }
 
         protected override bool OnActivate(CameraManager newOwner, out string error)
@@ -68,6 +70,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             previousUpdateMethod = activeBrain.UpdateMethod;
             previousFollowTarget = activeVirtualCamera.Follow;
             previousLookAtTarget = activeVirtualCamera.LookAt;
+            stateCaptured = true;
             activeBrain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
             activeVirtualCamera.Follow = null;
             activeVirtualCamera.LookAt = null;
@@ -89,17 +92,21 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
 
         protected override void OnDeactivate()
         {
-            if (activeVirtualCamera != null)
+            if (stateCaptured && activeVirtualCamera != null)
             {
                 activeVirtualCamera.Follow = previousFollowTarget;
                 activeVirtualCamera.LookAt = previousLookAtTarget;
             }
 
-            if (activeBrain != null)
+            if (stateCaptured && activeBrain != null)
             {
                 activeBrain.UpdateMethod = previousUpdateMethod;
             }
+        }
 
+        protected override void OnReleasePreparedResources()
+        {
+            stateCaptured = false;
             previousFollowTarget = null;
             previousLookAtTarget = null;
             activeVirtualCamera = null;
@@ -132,16 +139,29 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             }
 
             CinemachineCamera[] cameras = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
-            if (cameras.Length != 1)
+            int sceneCameraCount = 0;
+            for (int i = 0; i < cameras.Length; i++)
             {
-                error = cameras.Length == 0
-                    ? "No CinemachineCamera was found."
-                    : "Multiple CinemachineCamera components were found; assign one explicitly.";
+                CinemachineCamera candidate = cameras[i];
+                if (candidate == null || candidate.gameObject.scene != gameObject.scene)
+                {
+                    continue;
+                }
+
+                resolved = candidate;
+                sceneCameraCount++;
+            }
+
+            if (sceneCameraCount != 1)
+            {
+                error = sceneCameraCount == 0
+                    ? "No CinemachineCamera was found in the output Scene."
+                    : "Multiple CinemachineCamera components were found in the output Scene; assign one explicitly.";
                 return null;
             }
 
             error = null;
-            return cameras[0];
+            return resolved;
         }
 
         private CinemachineBrain ResolveBrain(CinemachineCamera virtualCamera, out string error)
@@ -165,15 +185,29 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             }
 
             CinemachineBrain[] brains = FindObjectsByType<CinemachineBrain>(FindObjectsSortMode.None);
-            if (brains.Length == 1)
+            int sceneBrainCount = 0;
+            CinemachineBrain onlySceneBrain = null;
+            for (int i = 0; i < brains.Length; i++)
             {
-                error = null;
-                return brains[0];
+                CinemachineBrain candidate = brains[i];
+                if (candidate == null || candidate.gameObject.scene != gameObject.scene)
+                {
+                    continue;
+                }
+
+                onlySceneBrain = candidate;
+                sceneBrainCount++;
             }
 
-            if (brains.Length == 0)
+            if (sceneBrainCount == 1)
             {
-                error = "No CinemachineBrain was found.";
+                error = null;
+                return onlySceneBrain;
+            }
+
+            if (sceneBrainCount == 0)
+            {
+                error = "No CinemachineBrain was found in the output Scene.";
                 return null;
             }
 
@@ -181,14 +215,17 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             for (int i = 0; i < brains.Length; i++)
             {
                 CinemachineBrain candidate = brains[i];
-                if (candidate == null || !candidate.isActiveAndEnabled || !candidate.gameObject.activeInHierarchy)
+                if (candidate == null ||
+                    candidate.gameObject.scene != gameObject.scene ||
+                    !candidate.isActiveAndEnabled ||
+                    !candidate.gameObject.activeInHierarchy)
                 {
                     continue;
                 }
 
                 if (activeCandidate != null)
                 {
-                    error = "Multiple active CinemachineBrain components were found; assign one explicitly.";
+                    error = "Multiple active CinemachineBrain components were found in the output Scene; assign one explicitly.";
                     return null;
                 }
 
@@ -197,7 +234,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
 
             if (activeCandidate == null)
             {
-                error = "Multiple CinemachineBrain components were found; assign one explicitly.";
+                error = "Multiple CinemachineBrain components were found in the output Scene; assign one explicitly.";
                 return null;
             }
 
@@ -205,13 +242,5 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             return activeCandidate;
         }
 
-        private void ThrowIfActive()
-        {
-            if (IsActive)
-            {
-                throw new InvalidOperationException(
-                    "Cinemachine output references cannot change while the output is active.");
-            }
-        }
     }
 }

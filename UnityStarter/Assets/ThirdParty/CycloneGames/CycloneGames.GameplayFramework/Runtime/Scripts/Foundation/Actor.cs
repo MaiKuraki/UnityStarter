@@ -35,6 +35,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// lightweight tags, visibility, and damage hooks. Network migration and persistence are
     /// integration responsibilities.
     /// </summary>
+    [DisallowMultipleComponent]
     public class Actor : MonoBehaviour
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;

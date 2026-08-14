@@ -18,15 +18,11 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetTargetCamera(Camera camera)
         {
-            if (IsActive)
-            {
-                throw new InvalidOperationException("The target Camera cannot change while the output is active.");
-            }
-
+            ThrowIfPreparedOrActive();
             targetCamera = camera;
         }
 
-        protected override bool OnTryPrepare(out UnityEngine.Object ownershipResource, out string error)
+        protected override bool OnTryPrepare(out string error)
         {
             activeCamera = targetCamera != null
                 ? targetCamera
@@ -38,14 +34,11 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (activeCamera == null)
             {
-                ownershipResource = null;
                 error = "UnityCameraOutput requires an explicitly assigned Camera or a Camera on its hierarchy.";
                 return false;
             }
 
-            ownershipResource = activeCamera;
-            error = null;
-            return true;
+            return TryAddPreparedResource(activeCamera, out error);
         }
 
         protected override void OnApplyPose(in CameraPose pose)
@@ -66,7 +59,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        protected override void OnDeactivate()
+        protected override void OnReleasePreparedResources()
         {
             activeCamera = null;
         }

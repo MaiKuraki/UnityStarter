@@ -34,6 +34,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         Travel = 3,
         InitializationFailure = 4,
         ApplicationShutdown = 5,
+        RemovedFromWorld = 6,
     }
 
     /// <summary>
@@ -65,6 +66,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly IWorldSettingsReferenceResolver referenceResolver;
         private readonly ISceneTransitionHandler sceneTransitionHandler;
         private readonly WorldRuntimeLimits runtimeLimits;
+        private readonly IWorldActorSource actorSource;
+        private readonly IMatchClock matchClock;
+        private readonly ICameraOutputLeaseArbiter cameraOutputLeaseArbiter;
         private readonly List<LocalPlayer> localPlayers;
         private readonly ReadOnlyCollection<LocalPlayer> localPlayerView;
         private readonly int ownerThreadId;
@@ -78,7 +82,10 @@ namespace CycloneGames.GameplayFramework.Runtime
             int localPlayerCount = 1,
             IWorldSettingsReferenceResolver referenceResolver = null,
             ISceneTransitionHandler sceneTransitionHandler = null,
-            WorldRuntimeLimits runtimeLimits = null)
+            WorldRuntimeLimits runtimeLimits = null,
+            IWorldActorSource actorSource = null,
+            IMatchClock matchClock = null,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null)
         {
             this.actorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
             if (localPlayerCount < 0 || localPlayerCount > MaxLocalPlayers)
@@ -92,6 +99,10 @@ namespace CycloneGames.GameplayFramework.Runtime
             this.referenceResolver = referenceResolver;
             this.sceneTransitionHandler = sceneTransitionHandler;
             this.runtimeLimits = runtimeLimits ?? WorldRuntimeLimits.Default;
+            this.actorSource = actorSource;
+            this.matchClock = matchClock ?? UnityMatchClock.Scaled;
+            this.cameraOutputLeaseArbiter =
+                cameraOutputLeaseArbiter ?? new CameraOutputLeaseArbiter();
             ownerThreadId = Thread.CurrentThread.ManagedThreadId;
             lifetimeCancellation = new CancellationTokenSource();
             localPlayers = new List<LocalPlayer>(localPlayerCount);
@@ -107,6 +118,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         public IReadOnlyList<LocalPlayer> LocalPlayers => localPlayerView;
         public World CurrentWorld => currentWorld;
         public WorldRuntimeLimits RuntimeLimits => runtimeLimits;
+        public IMatchClock MatchClock => matchClock;
+        public ICameraOutputLeaseArbiter CameraOutputLeaseArbiter => cameraOutputLeaseArbiter;
         public bool IsDisposed => isDisposed;
 
         public World GetWorld() => currentWorld;
@@ -175,7 +188,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                     gameSession,
                     sceneTransitionHandler,
                     ownerThreadId,
-                    runtimeLimits);
+                    runtimeLimits,
+                    actorSource,
+                    matchClock,
+                    cameraOutputLeaseArbiter);
 
                 // Ownership transfers to World only after construction succeeds.
                 pendingDefinition = null;

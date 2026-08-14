@@ -12,7 +12,7 @@ Optional CycloneGames modules and external UPM packages are connected through na
 
 | Assembly | Engine references | Auto referenced | Responsibility |
 | --- | --- | --- | --- |
-| `CycloneGames.GameplayFramework.Core` | No | No | Participant admission and roster, login request/status values, match-state machine, player snapshots, World limits, Actor admission snapshots, and Actor-tag validation. |
+| `CycloneGames.GameplayFramework.Core` | No | No | Participant admission and roster, login request/status values, match clocks/state/snapshots, player snapshots, World limits, Actor admission snapshots, and Actor-tag validation. |
 | `CycloneGames.GameplayFramework.Runtime` | Unity | No | `GameInstance`, `World`, `Actor`, `GameMode`, Controllers, Pawns, Unity lifecycle, authoring assets, camera orchestration, and runtime adapters over Core rules. |
 | `CycloneGames.GameplayFramework.Editor` | Unity Editor | Yes | Inspectors, validation, diagnostics, and authoring tools. |
 
@@ -34,7 +34,7 @@ A Unity gameplay assembly that uses only `Actor`, `World`, or other Unity-facing
 }
 ```
 
-An assembly that also constructs or queries `ParticipantRoster`, `PlayerLoginRequest`, `MatchStateMachine`, `PlayerStateSnapshot`, or other Core types references both assemblies explicitly:
+An assembly that also constructs or queries `ParticipantRoster`, `PlayerLoginRequest`, `MatchTimestamp`, `MatchStateMachine`, `MatchStateSnapshot`, `PlayerStateSnapshot`, or other Core types references both assemblies explicitly:
 
 ```json
 {
@@ -65,17 +65,27 @@ Do not edit Unity-generated project or solution files. Add references to the con
 `GameplayWorldComposition` is the container-neutral Unity composition value. Manual bootstrap code and DI containers construct the same value and call `GameplayWorldHost.Configure` before startup.
 
 ```csharp
+var sharedCameraOutputLeaseArbiter = new CameraOutputLeaseArbiter();
 var composition = new GameplayWorldComposition(
     new UnityActorLifetime(),
     referenceResolver: resolver,
     sceneTransitionHandler: transitions,
     gameSession: session,
-    runtimeLimits: limits);
+    runtimeLimits: limits,
+    actorSource: new SceneWorldActorSource(gameplayWorldHost.gameObject.scene),
+    matchClock: UnityMatchClock.Unscaled,
+    cameraOutputLeaseArbiter: sharedCameraOutputLeaseArbiter);
 
 gameplayWorldHost.Configure(composition);
 ```
 
-`GameSession` is the Runtime facade for Unity participant objects and composes the Core `ParticipantRoster`. `GameState` composes the Core `MatchStateMachine` and supplies Unity time when committing a match-state transition. Containers may provide the Runtime facade, its dependencies, or a complete composition value; none of these contracts depend on a container type.
+`GameSession` is the Runtime facade for Unity participant objects and composes the Core `ParticipantRoster`. `GameState` composes the Core `MatchStateMachine` and reads the explicit `IMatchClock` supplied by composition. World configures that clock during GameState registration, before registry commitment and BeginPlay publication. Its timestamps carry a `Guid` epoch and `double` seconds; its readonly `MatchStateSnapshot` has no persistence or wire schema. Containers may provide the Runtime facade, clocks, Actor sources, camera-output lease arbiters, their dependencies, or a complete composition value; none of these contracts depend on a container type.
+
+An unconfigured `GameplayWorldHost` supplies a `SceneWorldActorSource` for the Host GameObject's own Scene, uses `UnityMatchClock.Scaled`, and creates a `CameraOutputLeaseArbiter`. An explicit composition controls these seams exactly. A null `ActorSource`, including on a directly constructed `GameInstance`, disables startup discovery rather than scanning all loaded Scenes.
+
+Custom Actor sources write through the transaction-scoped `IWorldActorCollector`; they stop when `TryAdd` returns false and never retain the collector. This keeps candidate storage within `WorldRuntimeLimits.MaximumActorCount` and rejects shutdown re-entry before registration. `SceneWorldActorSource` additionally accepts an immutable `maximumVisitedGameObjectCount` traversal budget and walks the hierarchy incrementally instead of materializing a scene-wide Actor list.
+
+`ICameraOutputLeaseArbiter` is the composition seam for camera-resource ownership. `CameraOutputLeaseArbiter` captures its construction thread, stores no static global state, and arbitrates every World that shares that instance. A GameInstance uses one arbiter for all Worlds it creates. Parallel Worlds use separate GameInstances; inject one shared arbiter into all of them when they can reference the same persistent Camera, CinemachineBrain, Virtual Camera, or custom backend resource. Separate default arbiters are independent ownership domains.
 
 A project that needs VContainer-specific entry points keeps them in a project integration asmdef gated by a `jp.hadashikick.vcontainer` package capability. GameplayFramework remains usable when VContainer is absent.
 
@@ -89,10 +99,10 @@ Each companion is an independent package root with direct dependencies on Gamepl
 | `com.cyclone-games.gameplay-framework-factory` | `CycloneGames.GameplayFramework.Runtime.Integrations.Factory` | Unity Runtime adapter from `IUnityObjectLifetime` to terminal Actor creation and release. |
 | `com.cyclone-games.gameplay-framework-gameplay-abilities` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities` | Unity Runtime bridge for Actor owner/avatar information and GameplayAbilities. |
 | `com.cyclone-games.gameplay-framework-gameplay-tags` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags` | Unity Runtime helpers between Actor and GameplayTags. |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | Pure protocol messages, bounds, codecs, observer rules, and validation; depends on GameplayFramework Core and Networking Core. |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Unity adapter for Actor capture/apply, World replication, and Runtime GameSession binding. |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | Pure protocol messages, bounds, codecs, security-policy composition, and validation; depends on GameplayFramework Core and Networking Core. |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Unity adapter for Actor capture/apply, shared replication capture, and Runtime GameSession binding. |
 
-The Networking Core assembly sets `noEngineReferences: true` and does not reference GameplayFramework Runtime. The Networking Runtime assembly depends on both Core layers and contains every operation that reads or writes Unity gameplay objects. A product protocol assembly references `CycloneGames.GameplayFramework.Networking.Core`; a Unity replication assembly also references `CycloneGames.GameplayFramework.Networking.Runtime` and any directly used GameplayFramework assembly.
+The Networking Core assembly sets `noEngineReferences: true` and does not reference GameplayFramework Runtime. Shared `CycloneGames.Networking.Core` remains the only owner of replication objects, observers, policies, budgets, and `NetworkReplicationPlanner`. The Networking Runtime assembly depends on both Core layers and contains every operation that reads or writes Unity gameplay objects. A product protocol assembly references `CycloneGames.GameplayFramework.Networking.Core`; a Unity replication assembly also references `CycloneGames.GameplayFramework.Networking.Runtime` and any directly used GameplayFramework assembly.
 
 ### UPM installation
 
@@ -116,7 +126,7 @@ External adapters remain inside the GameplayFramework package but compile only w
 
 Matching EditMode test assemblies use the same capability and version expression. If a package is missing or outside the supported range, Unity excludes that adapter and its tests. GameplayFramework Core, Runtime, Editor, samples, and unrelated companions continue to compile.
 
-`CinemachineCameraOutput` implements the Runtime `ICameraOutput` contract. `NavigathenaSceneTransitionHandler` implements the Runtime `ISceneTransitionHandler` contract. External package types do not enter GameplayFramework Core or Runtime public interfaces.
+`CinemachineCameraOutput` implements the Runtime `ICameraOutput` contract and prepares its Brain plus Virtual Camera as one atomic, bounded ownership-resource domain. Its built-in discovery is limited to the output GameObject's Scene. The built-in `UnityCameraOutput` prepares only its target Camera. Every output prepares at most `CameraOutputLimits.MaximumPreparedResourceCount` (4) resources. `NavigathenaSceneTransitionHandler` implements the Runtime `ISceneTransitionHandler` contract. External package types do not enter GameplayFramework Core or Runtime public interfaces.
 
 Package-derived gates are active only for UPM-resolved packages. Copying Cinemachine or Navigathena source under `Assets` does not satisfy these `versionDefines`; that layout requires a project-owned adapter assembly with explicit references.
 
@@ -147,9 +157,10 @@ Unity-facing assemblies can depend on pure assemblies. Pure assemblies never ref
 Assembly separation does not add a per-frame adapter object. Runtime holds Core rule objects only where those rules have independent state, such as one roster per `GameSession` and one match-state machine per `GameState`.
 
 - Core snapshots and status values are bounded value data and do not own Unity objects.
-- `ParticipantRoster`, `MatchStateMachine`, and Runtime `GameSession` are single-owner objects and add no locks. Reads of mutable instance state and mutations reject access from any thread other than the constructing owner.
+- `ParticipantRoster` and Runtime `GameSession` are owned by their constructing thread and add no locks. `MatchStateMachine` is owned by its constructing thread, or by the thread that successfully restores a snapshot. Mutable reads and mutations reject every other thread.
 - Immutable limits and static validation/transition-policy functions do not read live mutable state. Worker results marshal to the owner before accessing a live roster, match state machine, or session.
 - Runtime World and Unity objects keep the documented owner-thread and Unity main-thread requirements.
+- A shared `CameraOutputLeaseArbiter` is created and mutated on one composition owner thread; all participating Worlds use that thread for lease operations.
 - Network and worker-thread input must be validated in pure code, then marshalled to the World owner before Runtime mutation.
 - Product code should profile actual Actor, roster, protocol, and replication workloads on every release backend. Assembly structure alone is not evidence of zero-GC or platform performance.
 
@@ -189,10 +200,11 @@ Release validation covers dependency-present and dependency-absent UPM profiles,
 4. Networking Runtime owns every Unity Actor, World, and GameSession adapter.
 5. Gated assemblies are excluded when their UPM dependency is absent.
 6. The product's exact assembly graph succeeds in a clean Player build.
+7. Parallel Worlds that share persistent camera resources receive the same composition-owned arbiter and reject overlapping leases.
 
 ## Persistence
 
-Package composition writes no files, preferences, registry entries, or PlayerSettings symbols. `WorldSettings` remains an explicit project asset. Core roster, match, admission, and diagnostic state is memory-only. Storage, catalogs, saves, and protocol state belong to their owning modules and are documented by those packages.
+Package composition writes no files, preferences, registry entries, or PlayerSettings symbols. `WorldSettings` remains an explicit project asset. Core roster, match, admission, snapshot, and diagnostic state is memory-only. Camera lease ownership is also memory-only and is released per World shutdown; a shared arbiter remains composition-owned until all participating Worlds stop. `MatchStateSnapshot` contains state, elapsed seconds, captured timestamp, and clock epoch but no storage schema; storage and protocol adapters own envelopes and compatibility. Storage, catalogs, saves, and protocol state belong to their owning modules and are documented by those packages.
 
 ## Troubleshooting
 
@@ -206,3 +218,4 @@ Package composition writes no files, preferences, registry entries, or PlayerSet
 | A gated external assembly is absent | Confirm Package Manager resolved the package inside the supported version expression and that the consumer asmdef explicitly references the integration assembly. |
 | A capability differs between checkouts | Compare `Packages/manifest.json`, `Packages/packages-lock.json`, package roots, and asmdef references. Do not add a PlayerSettings symbol. |
 | DI configuration runs after Host startup | Configure the Host before Unity `Start`, or disable **Auto Start** and call `StartWorldAsync` after composition is ready. |
+| Parallel Worlds both activate one persistent camera resource | Create one `CameraOutputLeaseArbiter` on their common owner thread and inject it into every participating composition. |

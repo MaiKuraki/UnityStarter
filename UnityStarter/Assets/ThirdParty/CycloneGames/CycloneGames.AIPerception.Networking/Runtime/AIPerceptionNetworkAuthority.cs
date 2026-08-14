@@ -123,6 +123,7 @@ namespace CycloneGames.AIPerception.Networking
         public bool IsValid =>
             ObserverNetworkId != 0u &&
             OwnerConnectionId >= 0 &&
+            TeamId >= 0 &&
             AuthorityGeneration != 0u &&
             InterestPosition.IsFinite();
     }
@@ -320,7 +321,10 @@ namespace CycloneGames.AIPerception.Networking
             for (int i = 0; i < candidates.Count; i++)
             {
                 INetConnection connection = candidates[i];
-                if (connection == null || !connection.IsConnected || ContainsConnection(results, connection.ConnectionId))
+                if (connection == null
+                    || !connection.IsConnected
+                    || connection.ConnectionId <= 0
+                    || ContainsConnection(results, connection.ConnectionId))
                 {
                     continue;
                 }
@@ -330,7 +334,7 @@ namespace CycloneGames.AIPerception.Networking
                                          observerSource.TryGetObserver(
                                              connection.ConnectionId,
                                              out sourceObserver);
-                if (hasSourceObserver && !sourceObserver.IsValid)
+                if (hasSourceObserver && (!sourceObserver.IsValid || sourceObserver.TeamId < 0))
                 {
                     continue;
                 }

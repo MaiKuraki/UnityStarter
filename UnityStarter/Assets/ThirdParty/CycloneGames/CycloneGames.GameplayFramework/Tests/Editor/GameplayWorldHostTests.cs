@@ -1,10 +1,16 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
 using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.GameplayFramework.Runtime.Editor;
+using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
 {
@@ -89,6 +95,163 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             }
         }
 
+        [UnityTest]
+        public IEnumerator Host_PreCanceledStart_RollsBackToStoppedAndCanRetry()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+                var hostObject = new GameObject("GameplayWorldHost");
+                GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                AssignWorldSettings(host, testWorld.Settings);
+                using var cancellation = new CancellationTokenSource();
+                cancellation.Cancel();
+
+                try
+                {
+                    Exception cancellationFailure = await CaptureStartFailure(
+                        host.StartWorldAsync(cancellation.Token));
+
+                    Assert.IsInstanceOf<OperationCanceledException>(cancellationFailure);
+                    Assert.AreEqual(GameplayWorldHostState.Stopped, host.State);
+                    Assert.IsNull(host.GameInstance);
+                    Assert.IsNull(host.CurrentWorld);
+
+                    World retryWorld = await host.StartWorldAsync();
+                    Assert.AreEqual(GameplayWorldHostState.Running, host.State);
+                    Assert.AreSame(retryWorld, host.CurrentWorld);
+                    await host.StopWorldAsync();
+                }
+                finally
+                {
+                    Object.DestroyImmediate(hostObject);
+                }
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Host_StopDuringPendingStart_CancelsAndCompletesBothTransactions()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+                var resolver = new ControlledResolver(testWorld.Settings.GameModeClass)
+                {
+                    Behavior = ResolverBehavior.Pending,
+                };
+                ConfigureExternalGameMode(testWorld.Settings);
+                var hostObject = new GameObject("GameplayWorldHost");
+                GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                AssignWorldSettings(host, testWorld.Settings);
+                host.Configure(new GameplayWorldComposition(
+                    new UnityActorLifetime(),
+                    referenceResolver: resolver));
+
+                try
+                {
+                    UniTask<World> startTask = host.StartWorldAsync();
+                    Assert.IsTrue(resolver.ResolveEntered);
+                    Assert.AreEqual(GameplayWorldHostState.Starting, host.State);
+
+                    UniTask stopTask = host.StopWorldAsync();
+                    await stopTask;
+                    Exception startFailure = await CaptureStartFailure(startTask);
+
+                    Assert.IsInstanceOf<OperationCanceledException>(startFailure);
+                    Assert.AreEqual(GameplayWorldHostState.Stopped, host.State);
+                    Assert.IsNull(host.GameInstance);
+                    Assert.IsNull(host.CurrentWorld);
+                }
+                finally
+                {
+                    Object.DestroyImmediate(hostObject);
+                }
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Host_FaultedStart_CanRetryWithoutLeakingPreviousGameInstance()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+                var resolver = new ControlledResolver(testWorld.Settings.GameModeClass)
+                {
+                    Behavior = ResolverBehavior.Fault,
+                };
+                ConfigureExternalGameMode(testWorld.Settings);
+                var hostObject = new GameObject("GameplayWorldHost");
+                GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                AssignWorldSettings(host, testWorld.Settings);
+                host.Configure(new GameplayWorldComposition(
+                    new UnityActorLifetime(),
+                    referenceResolver: resolver));
+
+                try
+                {
+                    Exception firstFailure = await CaptureStartFailure(host.StartWorldAsync());
+                    Assert.IsInstanceOf<InvalidOperationException>(firstFailure);
+                    Assert.AreEqual(GameplayWorldHostState.Faulted, host.State);
+                    Assert.IsNull(host.GameInstance);
+                    Assert.IsNotEmpty(host.LastError);
+
+                    resolver.Behavior = ResolverBehavior.Succeed;
+                    World world = await host.StartWorldAsync();
+
+                    Assert.AreEqual(2, resolver.ResolveCount);
+                    Assert.AreEqual(GameplayWorldHostState.Running, host.State);
+                    Assert.AreSame(world, host.CurrentWorld);
+                    Assert.IsNull(host.LastError);
+                    await host.StopWorldAsync();
+                }
+                finally
+                {
+                    Object.DestroyImmediate(hostObject);
+                }
+            });
+        }
+
+        [UnityTest]
+        public IEnumerator Host_ReentrantStartWhilePending_FailsWithoutReplacingActiveTransaction()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                using GameplayTestWorld testWorld = GameplayTestWorld.Create();
+                var resolver = new ControlledResolver(testWorld.Settings.GameModeClass)
+                {
+                    Behavior = ResolverBehavior.Pending,
+                };
+                ConfigureExternalGameMode(testWorld.Settings);
+                var hostObject = new GameObject("GameplayWorldHost");
+                GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                AssignWorldSettings(host, testWorld.Settings);
+                host.Configure(new GameplayWorldComposition(
+                    new UnityActorLifetime(),
+                    referenceResolver: resolver));
+
+                try
+                {
+                    UniTask<World> firstStart = host.StartWorldAsync();
+                    GameInstance firstInstance = host.GameInstance;
+                    Exception reentrantFailure = await CaptureStartFailure(host.StartWorldAsync());
+
+                    Assert.IsInstanceOf<InvalidOperationException>(reentrantFailure);
+                    Assert.AreSame(firstInstance, host.GameInstance);
+                    Assert.AreEqual(GameplayWorldHostState.Starting, host.State);
+                    Assert.AreEqual(1, resolver.ResolveCount);
+
+                    await host.StopWorldAsync();
+                    Exception firstFailure = await CaptureStartFailure(firstStart);
+                    Assert.IsInstanceOf<OperationCanceledException>(firstFailure);
+                    Assert.AreEqual(GameplayWorldHostState.Stopped, host.State);
+                }
+                finally
+                {
+                    Object.DestroyImmediate(hostObject);
+                }
+            });
+        }
+
         [Test]
         public void WorldRuntimeLimits_CapInitialCapacityHintsToAdmissionLimit()
         {
@@ -157,5 +320,78 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             serializedHost.FindProperty("worldSettings").objectReferenceValue = settings;
             serializedHost.ApplyModifiedPropertiesWithoutUndo();
         }
+
+        private static void ConfigureExternalGameMode(WorldSettings settings)
+        {
+            var serializedSettings = new SerializedObject(settings);
+            serializedSettings.FindProperty("gameModeSource").enumValueIndex =
+                (int)WorldSettingsReferenceSource.PathLocation;
+            serializedSettings.FindProperty("gameModeAssetLocation").stringValue =
+                "tests/game-mode";
+            serializedSettings.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static async UniTask<Exception> CaptureStartFailure(UniTask<World> startTask)
+        {
+            try
+            {
+                await startTask;
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+
+        private enum ResolverBehavior : byte
+        {
+            Pending = 0,
+            Fault = 1,
+            Succeed = 2,
+        }
+
+        private sealed class ControlledResolver : IWorldSettingsReferenceResolver
+        {
+            private readonly GameMode gameMode;
+
+            public ControlledResolver(GameMode gameMode)
+            {
+                this.gameMode = gameMode;
+            }
+
+            public ResolverBehavior Behavior { get; set; }
+            public bool ResolveEntered { get; private set; }
+            public int ResolveCount { get; private set; }
+
+            public bool Supports(WorldSettingsReferenceSource source)
+            {
+                return source == WorldSettingsReferenceSource.PathLocation;
+            }
+
+            public async UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+                string location,
+                CancellationToken cancellationToken) where T : UnityEngine.Object
+            {
+                ResolveEntered = true;
+                ResolveCount++;
+                if (Behavior == ResolverBehavior.Pending)
+                {
+                    await UniTask.WaitUntilCanceled(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                if (Behavior == ResolverBehavior.Fault)
+                {
+                    throw new InvalidOperationException("Resolver failure requested by the test.");
+                }
+
+                T asset = gameMode as T;
+                return asset != null
+                    ? new WorldSettingsAssetLoadResult<T>(true, asset, null)
+                    : new WorldSettingsAssetLoadResult<T>(false, null, "Unexpected asset type.");
+            }
+        }
+
     }
 }

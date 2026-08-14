@@ -9,104 +9,178 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public abstract class CameraOutputBehaviour : MonoBehaviour, ICameraOutput
     {
+        private enum OutputState : byte
+        {
+            Idle,
+            Preparing,
+            Prepared,
+            Activating,
+            Active,
+            Deactivating,
+        }
+
+        private readonly UnityEngine.Object[] preparedResources =
+            new UnityEngine.Object[CameraOutputLimits.MaximumPreparedResourceCount];
+
         private CameraManager owner;
-        private UnityEngine.Object ownershipResource;
-        private bool isPrepared;
-        private bool isActive;
-        private bool isDeactivating;
+        private OutputState state;
+        private int preparedResourceCount;
 
         public virtual string DisplayName => GetType().Name;
-        public bool IsActive => isActive;
+        public bool IsActive => state == OutputState.Active || state == OutputState.Deactivating;
         public CameraManager Owner => owner;
         public abstract UnityEngine.Object OutputObject { get; }
+        public int PreparedResourceCount => preparedResourceCount;
 
-        public bool TryPrepare(out UnityEngine.Object resource, out string error)
+        public bool TryPrepare(out string error)
         {
-            if (isActive)
+            if (this == null)
             {
-                resource = ownershipResource;
-                error = resource != null ? null : "The active camera output lost its ownership resource.";
-                return resource != null;
+                error = "The camera output was destroyed.";
+                return false;
             }
 
-            if (isPrepared && ownershipResource == null)
+            if (state == OutputState.Active)
             {
-                isPrepared = false;
-                ownershipResource = null;
+                return ValidatePreparedResources(out error);
             }
 
-            if (!isPrepared)
+            if (state == OutputState.Prepared)
             {
-                if (!OnTryPrepare(out ownershipResource, out error))
+                if (ValidatePreparedResources(out error))
                 {
-                    ownershipResource = null;
-                    resource = null;
+                    return true;
+                }
+
+                ReleasePreparedState(invokeDeactivation: false);
+                return false;
+            }
+
+            if (state != OutputState.Idle)
+            {
+                error = "Camera output preparation cannot run during another lifecycle transition.";
+                return false;
+            }
+
+            state = OutputState.Preparing;
+            try
+            {
+                if (!OnTryPrepare(out error))
+                {
+                    ReleasePreparedState(invokeDeactivation: false);
                     return false;
                 }
 
-                if (ownershipResource == null)
+                if (this == null)
                 {
-                    error = "Camera output preparation did not provide an ownership resource.";
-                    resource = null;
+                    error = "The camera output was destroyed during preparation.";
+                    ReleasePreparedState(invokeDeactivation: false);
                     return false;
                 }
 
-                isPrepared = true;
+                if (!ValidatePreparedResources(out error))
+                {
+                    ReleasePreparedState(invokeDeactivation: false);
+                    return false;
+                }
+
+                state = OutputState.Prepared;
+                error = null;
+                return true;
+            }
+            catch
+            {
+                ReleasePreparedState(invokeDeactivation: false);
+                throw;
+            }
+        }
+
+        public UnityEngine.Object GetPreparedResource(int index)
+        {
+            if ((uint)index >= preparedResourceCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            resource = ownershipResource;
-            error = null;
-            return true;
+            return preparedResources[index];
         }
 
         public bool TryActivate(CameraManager newOwner, out string error)
         {
+            if (this == null)
+            {
+                error = "The camera output was destroyed.";
+                return false;
+            }
+
             if (newOwner == null)
             {
                 error = "CameraManager is required.";
                 return false;
             }
 
-            if (isActive)
+            if (state == OutputState.Active)
             {
                 if (ReferenceEquals(owner, newOwner))
                 {
-                    error = null;
-                    return true;
+                    return ValidatePreparedResources(out error);
                 }
 
-                error = $"Camera output '{name}' is already owned by '{owner?.name}'.";
+                error = "Camera output is already owned by another CameraManager.";
                 return false;
             }
 
-            if (!isPrepared && !TryPrepare(out _, out error))
+            if (state != OutputState.Prepared && !TryPrepare(out error))
             {
                 return false;
             }
 
+            if (state != OutputState.Prepared)
+            {
+                error = "Camera output activation cannot run during another lifecycle transition.";
+                return false;
+            }
+
+            state = OutputState.Activating;
+            bool activationSucceeded;
             try
             {
-                if (!OnActivate(newOwner, out error))
-                {
-                    RollBackFailedActivation();
-                    return false;
-                }
+                activationSucceeded = OnActivate(newOwner, out error);
             }
             catch
             {
-                RollBackFailedActivation();
+                ReleasePreparedState(invokeDeactivation: true);
                 throw;
             }
 
+            if (!activationSucceeded)
+            {
+                ReleasePreparedState(invokeDeactivation: true);
+                return false;
+            }
+
+            if (this == null)
+            {
+                error = "The camera output was destroyed during activation.";
+                ReleasePreparedState(invokeDeactivation: true);
+                return false;
+            }
+
+            if (!ValidatePreparedResources(out error))
+            {
+                ReleasePreparedState(invokeDeactivation: true);
+                return false;
+            }
+
             owner = newOwner;
-            isActive = true;
+            state = OutputState.Active;
             error = null;
             return true;
         }
 
         public void ApplyPose(in CameraPose pose)
         {
-            if (!isActive)
+            if (state != OutputState.Active)
             {
                 throw new InvalidOperationException(
                     $"Camera output '{name}' must be active before a pose can be applied.");
@@ -117,34 +191,40 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void Deactivate(CameraManager expectedOwner)
         {
-            if (!isActive || isDeactivating)
+            if (state == OutputState.Idle || state == OutputState.Deactivating)
             {
                 return;
             }
 
-            if (expectedOwner != null && !ReferenceEquals(owner, expectedOwner))
+            if (state == OutputState.Preparing || state == OutputState.Activating)
+            {
+                throw new InvalidOperationException(
+                    "Camera output deactivation cannot run during another lifecycle transition.");
+            }
+
+            if (state == OutputState.Active &&
+                !ReferenceEquals(expectedOwner, null) &&
+                !ReferenceEquals(owner, expectedOwner))
             {
                 return;
             }
 
-            isDeactivating = true;
+            bool invokeDeactivation = state == OutputState.Active;
+            state = OutputState.Deactivating;
             try
             {
-                OnDeactivate();
+                if (invokeDeactivation)
+                {
+                    OnDeactivate();
+                }
             }
             finally
             {
-                isActive = false;
-                isPrepared = false;
-                owner = null;
-                ownershipResource = null;
-                isDeactivating = false;
+                ReleasePreparedState(invokeDeactivation: false);
             }
         }
 
-        protected abstract bool OnTryPrepare(
-            out UnityEngine.Object ownershipResource,
-            out string error);
+        protected abstract bool OnTryPrepare(out string error);
 
         protected virtual bool OnActivate(CameraManager newOwner, out string error)
         {
@@ -156,23 +236,131 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected virtual void OnDeactivate() { }
 
-        private void RollBackFailedActivation()
+        /// <summary>
+        /// Clears backend references resolved during preparation. This callback must not restore
+        /// externally owned state; <see cref="OnDeactivate"/> owns that responsibility.
+        /// </summary>
+        protected virtual void OnReleasePreparedResources() { }
+
+        protected bool TryAddPreparedResource(UnityEngine.Object resource, out string error)
+        {
+            if (state != OutputState.Preparing)
+            {
+                throw new InvalidOperationException(
+                    "Prepared resources can only be registered from OnTryPrepare.");
+            }
+
+            if (resource == null)
+            {
+                error = "Camera output preparation produced a missing or destroyed resource.";
+                return false;
+            }
+
+            if (preparedResourceCount >= CameraOutputLimits.MaximumPreparedResourceCount)
+            {
+                error = $"Camera output preparation exceeds the {CameraOutputLimits.MaximumPreparedResourceCount}-resource limit.";
+                return false;
+            }
+
+            int resourceId = resource.GetInstanceID();
+            for (int i = 0; i < preparedResourceCount; i++)
+            {
+                UnityEngine.Object existing = preparedResources[i];
+                if (existing != null && existing.GetInstanceID() == resourceId)
+                {
+                    error = "Camera output preparation produced a duplicate ownership resource.";
+                    return false;
+                }
+            }
+
+            preparedResources[preparedResourceCount++] = resource;
+            error = null;
+            return true;
+        }
+
+        protected void ThrowIfPreparedOrActive()
+        {
+            if (state != OutputState.Idle)
+            {
+                throw new InvalidOperationException(
+                    "Camera output references cannot change while resources are prepared or active.");
+            }
+        }
+
+        private bool ValidatePreparedResources(out string error)
+        {
+            if (preparedResourceCount <= 0 ||
+                preparedResourceCount > CameraOutputLimits.MaximumPreparedResourceCount)
+            {
+                error = "Camera output preparation must provide at least one ownership resource.";
+                return false;
+            }
+
+            for (int i = 0; i < preparedResourceCount; i++)
+            {
+                UnityEngine.Object resource = preparedResources[i];
+                if (resource == null)
+                {
+                    error = "A prepared camera output resource was destroyed.";
+                    return false;
+                }
+
+                int resourceId = resource.GetInstanceID();
+                for (int j = 0; j < i; j++)
+                {
+                    UnityEngine.Object previous = preparedResources[j];
+                    if (previous != null && previous.GetInstanceID() == resourceId)
+                    {
+                        error = "Camera output preparation produced a duplicate ownership resource.";
+                        return false;
+                    }
+                }
+            }
+
+            error = null;
+            return true;
+        }
+
+        private void ReleasePreparedState(bool invokeDeactivation)
         {
             try
             {
-                OnDeactivate();
+                if (invokeDeactivation)
+                {
+                    OnDeactivate();
+                }
             }
             finally
             {
-                isPrepared = false;
-                ownershipResource = null;
+                try
+                {
+                    OnReleasePreparedResources();
+                }
+                finally
+                {
+                    for (int i = 0; i < preparedResourceCount; i++)
+                    {
+                        preparedResources[i] = null;
+                    }
+
+                    preparedResourceCount = 0;
+                    owner = null;
+                    state = OutputState.Idle;
+                }
             }
         }
 
         private void OnDestroy()
         {
+            if (state == OutputState.Preparing ||
+                state == OutputState.Activating ||
+                state == OutputState.Deactivating)
+            {
+                return;
+            }
+
             CameraManager currentOwner = owner;
-            if (currentOwner != null)
+            if (!ReferenceEquals(currentOwner, null))
             {
                 currentOwner.HandleCameraOutputDestroyed(this);
                 return;

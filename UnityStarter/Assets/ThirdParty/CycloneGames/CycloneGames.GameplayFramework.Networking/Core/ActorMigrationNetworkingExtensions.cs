@@ -210,9 +210,18 @@ namespace CycloneGames.GameplayFramework.Networking
                 throw new ArgumentNullException(nameof(reader));
             }
 
-            int effectiveTagLimit = Math.Min(
-                maxRuntimeTagCount > 0 ? maxRuntimeTagCount : DefaultMaxRuntimeTagCount,
-                ActorTagLimits.MaximumTagCount);
+            if (maxRuntimeTagCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxRuntimeTagCount));
+            }
+
+            if (reader.Remaining <= 0 || reader.Remaining > MaximumEncodedSize)
+            {
+                throw new InvalidOperationException(
+                    "Actor migration payload length is outside the supported range.");
+            }
+
+            int effectiveTagLimit = Math.Min(maxRuntimeTagCount, ActorTagLimits.MaximumTagCount);
 
             float px = ReadFiniteFloat(reader, "Position.x");
             float py = ReadFiniteFloat(reader, "Position.y");
@@ -227,9 +236,9 @@ namespace CycloneGames.GameplayFramework.Networking
 
             string prefabDefinitionId = ReadString(reader, MaxPrefabDefinitionIdUtf8Bytes);
             float lifeSpan = ReadFiniteFloat(reader, "RemainingLifeSpan");
-            bool canBeDamaged = reader.ReadByte() != 0;
-            bool hidden = reader.ReadByte() != 0;
-            bool hasBegunPlay = reader.ReadByte() != 0;
+            bool canBeDamaged = ReadCanonicalBoolean(reader, "CanBeDamaged");
+            bool hidden = ReadCanonicalBoolean(reader, "Hidden");
+            bool hasBegunPlay = ReadCanonicalBoolean(reader, "HasBegunPlay");
 
             int tagCount = reader.ReadUShort();
             if (tagCount > effectiveTagLimit)
@@ -261,6 +270,11 @@ namespace CycloneGames.GameplayFramework.Networking
                 actorName,
                 hasBegunPlay);
 
+            if (reader.Remaining != 0)
+            {
+                throw new InvalidOperationException("Actor migration payload contains trailing bytes.");
+            }
+
             return state;
         }
 
@@ -288,6 +302,12 @@ namespace CycloneGames.GameplayFramework.Networking
                 float.IsInfinity(state.RemainingLifeSpan))
             {
                 throw new InvalidOperationException("Actor migration lifespan is invalid.");
+            }
+
+            if (state.OwnerConnectionId < 0 || state.InstigatorActorId < 0)
+            {
+                throw new InvalidOperationException(
+                    "Actor migration IDs cannot be negative; zero represents no owner or no instigator.");
             }
 
             int tagCount = state.TagCount;
@@ -344,10 +364,29 @@ namespace CycloneGames.GameplayFramework.Networking
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool ReadCanonicalBoolean(INetReader reader, string field)
+        {
+            byte value = reader.ReadByte();
+            if (value > 1)
+            {
+                ThrowInvalidBoolean(field, value);
+            }
+
+            return value == 1;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void ThrowNotFinite(string field)
         {
             throw new InvalidOperationException("Actor migration field '" + field + "' is not finite.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidBoolean(string field, byte value)
+        {
+            throw new InvalidOperationException(
+                "Actor migration field '" + field + "' must be encoded as 0 or 1; received " + value + ".");
         }
 
         private static void WriteString(INetWriter writer, string value, int maxUtf8Bytes)

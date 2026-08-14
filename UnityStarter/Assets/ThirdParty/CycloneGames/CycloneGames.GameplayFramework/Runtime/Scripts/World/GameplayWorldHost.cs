@@ -36,6 +36,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private CancellationTokenSource lifetimeCancellation;
         private CancellationTokenSource startCancellation;
         private GameplayWorldComposition composition;
+        private SceneWorldActorSource defaultActorSource;
         private GameplayWorldTickDriver tickDriver;
         private GameplayWorldLateTickDriver lateTickDriver;
         private GameplayWorldHostState state = GameplayWorldHostState.Idle;
@@ -102,13 +103,17 @@ namespace CycloneGames.GameplayFramework.Runtime
             try
             {
                 GameplayWorldComposition activeComposition =
-                    composition ?? GameplayWorldComposition.CreateDefault();
+                    composition ?? GameplayWorldComposition.CreateDefault(
+                        actorSource: GetDefaultActorSource());
                 gameInstance = new GameInstance(
                     activeComposition.ActorLifetime,
                     EffectiveLocalPlayerCount,
                     activeComposition.ReferenceResolver,
                     activeComposition.SceneTransitionHandler,
-                    activeComposition.RuntimeLimits);
+                    activeComposition.RuntimeLimits,
+                    activeComposition.ActorSource,
+                    activeComposition.MatchClock,
+                    activeComposition.CameraOutputLeaseArbiter);
 
                 World world = await gameInstance.StartWorldAsync(
                     worldSettings,
@@ -179,18 +184,29 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
+            GameInstance stoppingInstance = gameInstance;
             state = GameplayWorldHostState.Stopping;
             lastError = null;
             try
             {
-                await gameInstance.StopWorldAsync(reason, cancellationToken);
+                await stoppingInstance.StopWorldAsync(reason, cancellationToken);
                 await UniTask.SwitchToMainThread();
+                if (state == GameplayWorldHostState.Disposed)
+                {
+                    return;
+                }
+
                 DisposeGameInstance();
                 state = GameplayWorldHostState.Stopped;
             }
             catch (Exception exception)
             {
                 await UniTask.SwitchToMainThread();
+                if (state == GameplayWorldHostState.Disposed)
+                {
+                    return;
+                }
+
                 DisposeGameInstance();
                 lastError = exception.Message;
                 state = GameplayWorldHostState.Faulted;
@@ -262,11 +278,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             finally
             {
-                startCancellation?.Dispose();
-                startCancellation = null;
+                // An active startup transaction owns and disposes startCancellation in its
+                // finally block after every cancellation observer has resumed.
                 lifetimeCancellation?.Dispose();
                 lifetimeCancellation = null;
+                defaultActorSource = null;
             }
+        }
+
+        private SceneWorldActorSource GetDefaultActorSource()
+        {
+            if (defaultActorSource == null || defaultActorSource.Scene != gameObject.scene)
+            {
+                defaultActorSource = new SceneWorldActorSource(gameObject.scene);
+            }
+
+            return defaultActorSource;
         }
 
         private void DisposeGameInstance()

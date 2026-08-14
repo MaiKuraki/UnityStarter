@@ -57,6 +57,7 @@ flowchart TD
     LD --> GI
     GI["GameInstance<br/>application scope"] --> LP["LocalPlayer 槽位<br/>0..8"]
     GI --> W["World<br/>单个 active scope"]
+    GI --> CLA["ICameraOutputLeaseArbiter<br/>composition resource domain"]
     W --> WD["WorldDefinition<br/>已解析 prefab 引用和 lease"]
     W --> A["已注册 Actor"]
     W --> GM["GameMode<br/>仅 authority"]
@@ -71,6 +72,7 @@ flowchart TD
     PC --> CM["CameraManager<br/>仅本地 Controller"]
     CM --> CC["CameraContext<br/>view target 和 mode stack"]
     CM --> OUT["ICameraOutput<br/>独占输出资源"]
+    W --> CLA
 ~~~
 
 这些关系具有独立含义：
@@ -81,13 +83,14 @@ flowchart TD
 - **参与者状态：**PlayerState 标识参与者，并可在同一 World 内的 Pawn 替换过程中继续存在。
 - **本地关联：**LocalPlayer 把设备/用户槽位关联到当前 world-scoped PlayerController。
 - **View target：**PlayerController 的相机目标与 possession 相互独立。
+- **Camera resource domain：**共享同一个 camera-output lease arbiter 的 World 不能同时持有相互重叠的 backend resource。
 - **Authority：**World 在 Standalone、ListenServer 和 DedicatedServer mode 下接受权威端 Gameplay 编排。
 
 ### 目录布局
 
 | 区域 | 职责 |
 | --- | --- |
-| `Core` | 不依赖 engine 的参与者 roster、login value、match state machine、player snapshot、World runtime limit、Actor admission snapshot 与 Actor tag limit |
+| `Core` | 不依赖 engine 的参与者 roster、login value、match timestamp/state/snapshot、player snapshot、World runtime limit、Actor admission snapshot 与 Actor tag limit |
 | `Runtime/Scripts/World` | GameplayWorldHost、GameplayWorldComposition、early/late Tick driver、GameInstance、LocalPlayer、World、WorldSettings、WorldDefinition、KillZVolume |
 | `Runtime/Scripts/Foundation` | Actor 生命周期、primary Tick、tag、damage 契约 |
 | `Runtime/Scripts/Game` | GameMode、GameSession、GameState、PlayerState |
@@ -136,7 +139,7 @@ flowchart TD
 }
 ~~~
 
-直接构造或查询 `ParticipantRoster`、`PlayerLoginRequest`、`MatchStateMachine`、`MatchState`、`PlayerStateSnapshot`、`WorldRuntimeLimits`、`ActorAdmissionSnapshot` 或 `ActorTagLimits` 的代码还要添加：
+直接构造或查询 `ParticipantRoster`、`PlayerLoginRequest`、`MatchTimestamp`、`MatchStateMachine`、`MatchState`、`MatchStateSnapshot`、`PlayerStateSnapshot`、`WorldRuntimeLimits`、`ActorAdmissionSnapshot` 或 `ActorTagLimits` 的代码还要添加：
 
 ~~~json
 {
@@ -238,6 +241,9 @@ Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
 | `IWorldSettingsReferenceResolver` | 可选 WorldSettings 外部资源加载器 |
 | `ISceneTransitionHandler` | 可选 scene navigation adapter |
 | `WorldRuntimeLimits` | 可选的不可变 Actor 准入与集合初始容量配置 |
+| `IWorldActorSource` | 可选；在 World 初始化期间提供待注册的 externally owned Actor |
+| `IMatchClock` | 可选 match-clock domain；默认为 `UnityMatchClock.Scaled` |
+| `ICameraOutputLeaseArbiter` | 可选 camera-resource ownership domain；默认为该 GameInstance 的 composition domain 新建一个 `CameraOutputLeaseArbiter` |
 
 `LocalPlayer` 包含稳定的 `Index` 和当前 world-scoped `PlayerController`。Controller logout、World 停止或 GameInstance dispose 时会清理此关联。
 
@@ -245,21 +251,27 @@ Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
 
 ### Host 组合与 DI
 
-`GameplayWorldComposition` 是手动 bootstrap 与 DI 共用的 Host 依赖边界。它包含必需的 `IActorLifetime`，以及可选的 reference resolver、scene transition、session 与 World runtime-limit service。必须在 sealed Host 启动前配置：
+`GameplayWorldComposition` 是手动 bootstrap 与 DI 共用的 Host 依赖边界。它包含必需的 `IActorLifetime`，以及可选的 reference resolver、scene transition、session、World runtime limit、Actor source、match clock 与 camera-output lease arbiter。必须在 sealed Host 启动前配置：
 
 ~~~csharp
+var sharedCameraOutputLeaseArbiter = new CameraOutputLeaseArbiter();
 var composition = new GameplayWorldComposition(
     actorLifetime,
-    referenceResolver,
-    sceneTransitionHandler,
-    gameSession,
-    runtimeLimits);
+    referenceResolver: referenceResolver,
+    sceneTransitionHandler: sceneTransitionHandler,
+    gameSession: gameSession,
+    runtimeLimits: runtimeLimits,
+    actorSource: new SceneWorldActorSource(gameObject.scene),
+    matchClock: UnityMatchClock.Unscaled,
+    cameraOutputLeaseArbiter: sharedCameraOutputLeaseArbiter);
 
 host.Configure(composition);
 await host.StartWorldAsync(cancellationToken);
 ~~~
 
-调用方保留传入 service 的所有权，并在 Host 停止后 dispose。`GameplayWorldComposition.CreateDefault()` 使用 `UnityActorLifetime`，负责实例化和销毁 Unity Actor。DI container 提供相同构造参数即可；不需要 GameplayWorldHost 子类或容器专用 Runtime assembly。
+调用方保留传入 service 的所有权，并确保它们在 Host 停止前保持有效。未显式配置的 `GameplayWorldHost` 使用 `UnityActorLifetime`、固定指向 Host GameObject 所在 scene 的 `SceneWorldActorSource`、`UnityMatchClock.Scaled`，以及新建的 `CameraOutputLeaseArbiter`。显式配置的 Host 会严格使用传入 composition：`ActorSource` 为 null 时不执行启动发现。直接构造的 `GameInstance` 在 `actorSource` 为 null 时同样不会扫描 scene。DI container 提供相同构造参数即可；不需要 GameplayWorldHost 子类或容器专用 Runtime assembly。
+
+Host 启动是单一事务。首次启动尚未完成时，第二次启动会被拒绝。启动期间调用 `StopWorldAsync` 会取消 pending transaction 并等待其回滚。预先取消的启动、resolver fault 以及 await 期间发生的销毁都会释放临时 GameInstance；未 dispose 的 Host 会回到 `Stopped`，并可在失败事务完成后重新启动。
 
 World-owned Actor 的每次 `IActorLifetime.Create` 都会与 `Release` 配对，包括 spawn transaction 失败、self-destruction 和 shutdown。即使 Unity destruction 已经发生，实现也必须接受该 Actor。`Release` 必须永久结束该 Actor instance；已进入终态 `Destroyed` 的 Actor 不支持返回 pool 后复用。使用 CycloneGames.Factory 的项目安装 Factory companion package 并组合 `FactoryActorLifetime`；Factory 类型不会出现在 GameplayFramework Runtime interface 中。
 
@@ -298,7 +310,7 @@ World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
 2. 将 WorldSettings 解析为 WorldDefinition。
 3. 切换到 Unity main thread 并校验 owner-thread affinity。
 4. 创建 World，并将其公开为 `CurrentWorld`。
-5. 通过无排序 scan 发现当前全部已加载有效 scene 中的 Actor，包括 inactive Actor。
+5. 如果配置了 `IWorldActorSource`，则请求它收集 externally owned Actor，并注册结果中非 null、非重复的 Actor。
 6. 在 authoritative World 中 spawn 并初始化 GameMode。
 7. 在 authority 中，若 GameMode prefab 配置了 `gameStateClass`，则从该 prefab 创建 GameState。
 8. 执行 LocalPlayer 登录事务。
@@ -439,7 +451,8 @@ EndPlay reason 包括：
 - `WorldShutdown`；
 - `Travel`；
 - `InitializationFailure`；
-- `ApplicationShutdown`。
+- `ApplicationShutdown`；
+- `RemovedFromWorld`。
 
 ### Primary Actor Tick
 
@@ -480,7 +493,7 @@ flowchart TD
 
 Tick 顺序不是 Gameplay 排序契约。注册和移除采用 dense swap-back 结构，因此 Actor 之间的依赖必须通过显式状态、事件或编排表达，不能依赖 callback 顺序。
 
-Actor 仍然是 MonoBehaviour，因此专用子类或同级 component 仍可声明原生 Unity message。这些 message 由 Unity 持有，不受 World registration 或 lifecycle gate 约束，适合生命周期跟随 component 的窄 Unity-facing 职责。
+Actor 仍然是 MonoBehaviour，因此专用子类或同级 component 仍可声明原生 Unity message。这些 message 由 Unity 持有，不受 World registration 或 lifecycle gate 约束，适合生命周期跟随 component 的窄 Unity-facing 职责。`DisallowMultipleComponent` 强制每个 GameObject 只有一个 Actor identity；额外 gameplay capability 应放入同级 component 或组合的纯 C# object。
 
 一个 Actor 只有一个 primary phase。需要 Unity physics callback、Animator callback、rendering callback、worker-scheduled simulation 或多个独立 phase 的组件，应继续使用职责收敛的 MonoBehaviour adapter 或纯 C# simulation owner。GameplayAbilities、movement、projectile 和 presentation 模块不会因为 owner 是 Actor 就自动改为 Actor-Tick 驱动。
 
@@ -490,12 +503,17 @@ Actor 仍然是 MonoBehaviour，因此专用子类或同级 component 仍可声�
 
 | API | World registry | Begin/End 通知 | World 销毁 GameObject |
 | --- | --- | --- | --- |
-| Scene discovery | 是 | 是 | 否 |
+| 已配置的 `IWorldActorSource` | 是 | 是 | 否 |
 | `RegisterActor` | 是 | 是 | 否 |
+| `UnregisterActor` / `TryUnregisterActor` | 移除 registration | 使用传入 reason 发布 EndPlay | 否 |
 | `SpawnActor` | 是 | 是 | 是 |
 | `SpawnActorDeferred` | 是 | Finish 后 | 是 |
 
-对于普通已注册 Actor，`DestroyActor` 会将其从 World 移除、发布 EndPlay 并销毁 GameObject。Play Mode 使用 Unity 正常销毁边界；Edit Mode 使用立即销毁。注入的 `IActorLifetime` 只释放 World-owned spawned Actor；显式销毁 non-owned registered Actor 时使用 core Unity destruction helper，不调用 injected lifetime。
+`IWorldActorSource.CollectActors(IWorldActorCollector)` 是 cold-path composition boundary。事务范围内的 collector 提供 `Count`、`RemainingCapacity` 与 `TryAdd`；`TryAdd` 返回 false 时 source 必须停止，且不得在回调结束后保留 collector。World 会忽略 destroyed reference、重复候选项，以及已由更早候选项完成注册的 Actor。超过 `WorldRuntimeLimits.MaximumActorCount` 会在任何已收集候选项绑定前中止发现。回调期间发生 World shutdown 或 replacement 也会中止事务，因此 source 无法将 Actor 绑定到 terminal World。`SceneWorldActorSource` 遍历一个显式选定且已加载 Scene 的 active 与 inactive 子层级，不会先物化 scene-wide Actor list。其不可变 `MaximumVisitedGameObjectCount` 会约束遍历内存与工作量；超过预算会中止初始化，且不会发生部分注册。它会记录创建线程，要求在该线程执行收集，并可在同一 Scene 保持加载时供 replacement World 复用；不会扫描其他已加载 Scene。
+
+`UnregisterActor` 与 `TryUnregisterActor` 仅适用于 externally owned Actor。它们从 Tick 和 gameplay registry 移除 Actor、发布 EndPlay、清除 World binding 以及相关 Controller、PlayerStart 或 GameState bookkeeping，同时保留 GameObject。World-owned Actor 会被拒绝，因为这类 instance 必须通过 `DestroyActor` 完成其生命周期。
+
+`DestroyActor` 是面向任意 registered Actor 的显式销毁命令。它会将 Actor 从 World 移除、发布 EndPlay 并销毁 GameObject。Play Mode 使用 Unity 正常销毁边界；Edit Mode 使用立即销毁。注入的 `IActorLifetime` 只释放 World-owned spawned Actor；显式销毁 non-owned registered Actor 时使用 core Unity destruction helper，不调用 injected lifetime。
 
 销毁已提交的 PlayerController 或其 PlayerState 会升级为 participant logout，使 roster、GameState、LocalPlayer、Pawn、camera 和 spectator 状态作为一次操作完成清理。在 World 处于 `Initializing` 或 `Playing` 时销毁 active GameMode，会升级为完整 World shutdown。
 
@@ -690,7 +708,7 @@ Session match notification 成对发布。只有 World 进入 Playing 且全部�
 
 ### Spawn、Restart、Logout 与 Travel
 
-GameMode 首先按精确 portal/GameObject 名称选择 PlayerStart，然后调用 `ChoosePlayerStart`。基础实现选择缓存中的第一个 start。Scene discovery 无排序要求，因此 spawn 选择需要确定性时，应重写 `ChoosePlayerStart`。
+GameMode 首先按精确 portal/GameObject 名称选择 PlayerStart，然后调用 `ChoosePlayerStart`。基础实现选择缓存中的第一个 start。Actor-source 与 registry order 都不是稳定选择策略，因此 spawn 选择需要确定性时，应重写 `ChoosePlayerStart`。
 
 `RestartPlayer` 会复用已有 Pawn，或 deferred-spawn 默认 Pawn；随后执行 teleport、发布 initial rotation、possession，并 finish spawn。
 
@@ -798,7 +816,11 @@ PlayerState 存储：
 
 ### GameState
 
-GameState 包含参与者 `PlayerArray`，并组合一个 Core `MatchStateMachine`。它拒绝 null/重复 PlayerState entry，并校验 World membership。State machine 持有合法 transition、已提交 `MatchState` 与 in-progress elapsed time；只有 Runtime 推进或提交状态时，GameState 才输入当前 Unity time。
+GameState 包含参与者 `PlayerArray`，并组合一个 Core `MatchStateMachine`。它拒绝 null/重复 PlayerState entry，并校验 World membership。Serialized `initialMatchState` 字段是首次创建 state machine 时使用的 authoring input；Runtime transition 和 restore operation 不会回写该字段。
+
+State machine 在一个显式 clock domain 内持有合法 transition、已提交 `MatchState` 与 in-progress elapsed time。`GameplayWorldComposition` 和 `GameInstance` 接受 `IMatchClock`。Actor registration 期间，World 会在绑定每个 GameState 后立即配置其 clock，并保证该操作早于 registry commit 与 BeginPlay publication；authoritative spawn 与 client replication 因而遵循相同的 clock-ordering contract。默认为 `UnityMatchClock.Scaled`；当 pause 与 `Time.timeScale` 不应停止 match time 时，可使用 `UnityMatchClock.Unscaled`。Server 或 deterministic simulation 可以提供其他 `IMatchClock`，无需向 Core 引入 Unity 类型。
+
+每次 clock reading 都是 `MatchTimestamp`，包含非空 `Guid` epoch 与 finite、non-negative `double` 秒数。Epoch 会阻止 scaled、unscaled、已重启或其他互不相关的 time domain 被混合使用。State machine 还会拒绝倒退的 timestamp，并把可变访问限制在创建或恢复它的线程。
 
 合法 match transition：
 
@@ -814,6 +836,10 @@ GameState 包含参与者 `PlayerArray`，并组合一个 Core `MatchStateMachin
 Elapsed time 仅在 InProgress 时推进。WaitingPostMatch 到 WaitingToStart 的 transition 会重置累计时间。Core transition rule 可以在不创建 GameObject、不读取 Unity clock 的条件下测试。
 
 GameMode 拥有 transition policy。需要可恢复结果时使用 `TrySetMatchState`；非法 transition 属于编程错误时使用 `SetMatchState`。
+
+`GameState.ElapsedTimeSeconds` 以 `double` 公开累计值。`CaptureMatchStateSnapshot` 返回 readonly Core value，包含 `State`、`ElapsedSeconds`、`CapturedTimestamp` 与 `ClockEpoch`。只有当前 clock 与 snapshot 具有相同 epoch，且未倒退到 captured timestamp 之前时，`TryRestoreMatchStateSnapshot` 才会恢复状态。若捕获时处于 InProgress，elapsed time 会包含 capture 到 restore 之间同 epoch 的时间段。当 restore rejection 属于编程错误时，可使用会抛出异常的 `RestoreMatchStateSnapshot`。
+
+`MatchStateSnapshot` 是 runtime state，不是 persistence 或 wire schema。Save、reconnect 或 replication adapter 持有其 envelope、产品格式、validation 与 clock-epoch continuity。Process-local `UnityMatchClock` 的 epoch 会在 domain reload 或 process restart 后改变；需要跨越该边界的 snapshot 应使用 application-owned clock，确保其 epoch 与 monotonic timebase 在该边界两侧仍有明确含义。
 
 `MatchState` 是 Core 顶层 enum，由 `MatchStateMachine` 与 Runtime GameState facade 共同使用：
 
@@ -881,24 +907,28 @@ GameMode 登录过程中，只有本地 PlayerController 且 WorldDefinition 包
 
 - 初始化后通过 LateUpdate phase 的 primary Actor Tick 计算相机状态；
 - 解析 authoring `CameraOutputBehaviour`，或通过 `SetCameraOutput` 接收显式 `ICameraOutput`；
-- prepare backend，并向 World 申请独占 backend resource；
-- 仅在 ownership 成功后 activate output；
+- prepare backend 的完整 ownership-resource set，并向 World 申请一个 atomic lease；
+- 仅在所有 prepared resource 均获取成功后 activate output；
 - 通过 `ApplyPose` 发布最终 pose 和 FOV；
 - 在 output replacement、Actor teardown 或 World shutdown 时 deactivate output 并释放 ownership。
 
-两个 CameraManager 同时申请同一 output resource 时，World 会拒绝后一个请求。没有 output 的 CameraManager 仍会继续计算并公开 `CurrentPose`；output 是可选的 presentation boundary。
+`ICameraOutput.TryPrepare` 会解析 1 到 `CameraOutputLimits.MaximumPreparedResourceCount`（4）个稳定的 Unity resource。`PreparedResourceCount` 与 `GetPreparedResource` 公开该有界集合。组合得到的 `ICameraOutputLeaseArbiter` 会校验 resource 非 null 且互不重复；任一 resource 已在其 ownership domain 中被 lease 时拒绝整个请求，否则返回覆盖全部 resource 的 generation-safe `CameraOutputLease`。获取过程是 all-or-nothing；activation 失败会回滚 prepared backend state 与整个 lease。
+
+`CameraOutputLeaseArbiter` 是由 composition 持有、具有 owner-thread affinity 的 registry，不包含 static global ownership state。未传入 arbiter 时，`GameplayWorldComposition` 会创建并保留一个；直接构造的 GameInstance 会创建自己的 default，并把同一实例传给它创建的每个 World。一个 GameInstance 仍只接受一个 active World，因此该 ownership domain 会在 replacement World 之间保持连续。Parallel World 属于不同 GameInstance：如果它们的 output 可能引用同一个 persistent Camera、CinemachineBrain 或其他 backend resource，必须向每个参与的 composition 注入同一个 arbiter instance。彼此独立的 default arbiter 有意表示不同 resource domain，无法检测这些 World 之间的重叠。
+
+在同一个 arbiter domain 内，只要两个 CameraManager 的 prepared set 存在交集，即使 output component 或 World 不同，也不能同时持有 lease。Release 会在移除 ownership 前校验 World identity、owner、output identity、lease generation 与完整 resource ID。Arbiter 必须在一个 owner thread 创建和修改；所有共享它的 GameInstance 与 World 都必须在该线程执行 lease operation。Destroyed Unity resource 会被视为不可用，而 managed reference identity 继续作为 ownership token。World shutdown 会请求 arbiter 释放该 World 的全部 lease。Output destruction、replacement 与 activation exception 同样最终执行 deactivation 和 lease release。CameraManager teardown 会清理 pose、blend、dirty state 与 backend reference，之后才可重新使用。没有 output 的 CameraManager 仍会继续计算并公开 `CurrentPose`；output 是可选的 presentation boundary。
 
 ### Core Unity Camera Output
 
 `UnityCameraOutput` 位于 GameplayFramework Runtime assembly。可以显式分配 `UnityEngine.Camera`，也可以把 Camera 放在 output hierarchy。该 component 可选择应用最终 transform、field of view 或两者，不需要其他 camera package；PureUnity sample 使用此 output。
 
-GameplayFramework Runtime 与 public interface 不包含 Cinemachine 类型。自定义 backend 可以直接实现 `ICameraOutput`，也可以继承 `CameraOutputBehaviour` 获得 Unity authoring 支持。`TryPrepare` 返回作为独占 ownership resource 的 Unity object；`TryActivate`、`ApplyPose` 与 `Deactivate` 都在 World owner thread 执行。
+GameplayFramework Runtime 与 public interface 不包含 Cinemachine 类型。自定义 backend 可以直接实现 `ICameraOutput`，也可以继承 `CameraOutputBehaviour` 获得 Unity authoring 支持。Prepared count 与 resource identity 必须保持稳定，直到 `Deactivate` 释放 prepared state。`TryPrepare`、`TryActivate`、`ApplyPose` 与 `Deactivate` 都在 World owner thread 执行。`UnityCameraOutput` 只 prepare 一个 ownership resource，即 target Camera。
 
 ### 可选 Cinemachine Output
 
 安装受支持 `[3.0.0,4.0.0)` 范围的 `com.unity.cinemachine` 后，gated assembly `CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine` 提供 `CinemachineCameraOutput`。其 asmdef 使用 `versionDefines`、`defineConstraints` 与 `autoReferenced: false`；GameplayFramework package 不声明 Cinemachine dependency。
 
-通过 `SetVirtualCamera`/`SetBrain` 或 serialized field 分配 `CinemachineCamera` 与 `CinemachineBrain`。可选 scene discovery 只有在可以无歧义选择 camera 与 brain 时才会成功。Activate 时，output 保存 brain update mode 以及 camera Follow/LookAt target，选择 manual brain update，应用 pose 与 lens，并在 deactivate 时恢复保存的状态。World 把 brain 作为独占 output resource。
+通过 `SetVirtualCamera`/`SetBrain` 或 serialized field 分配 `CinemachineCamera` 与 `CinemachineBrain`。内置 discovery 只检查 `CinemachineCameraOutput` GameObject 所在的 Scene，并且只有能在该 Scene 内无歧义选择 camera 与 brain 时才会成功；不会选择其他 loaded Scene 中的 candidate。Output 将 Brain 与 Virtual Camera 一起 prepare 为同一个 resource domain，因此共享任一对象都会发生 atomic conflict。Activate 时，它会保存 brain update mode 以及 camera Follow/LookAt target，选择 manual brain update，应用 pose 与 lens，并在 deactivate 或 rollback 时恢复保存的状态。
 
 ### View Target 与 Post-processor
 
@@ -960,8 +990,8 @@ GameplayFramework Core 没有 engine reference。GameplayFramework Runtime 依�
 | `com.cyclone-games.gameplay-framework-asset-management` | `CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement` | `AssetManagementWorldSettingsReferenceResolver` | 安装 companion；显式引用 |
 | `com.cyclone-games.gameplay-framework-gameplay-abilities` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities` | AbilitySystem provider 与 Actor-info helper | 安装 companion；显式引用 |
 | `com.cyclone-games.gameplay-framework-gameplay-tags` | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags` | Actor tag-container extension method | 安装 companion；显式引用 |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | 纯 protocol、Actor migration message/codec、damage validation 与 observer rule | 安装 companion 与 Networking；protocol code 显式引用 |
-| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Actor capture/apply、World replication 与 Runtime session adapter | Unity replication code 显式引用 |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Core` | 纯 protocol、security-policy composition、Actor migration codec 与 damage validation | 安装 companion 与 Networking；protocol code 显式引用 |
+| `com.cyclone-games.gameplay-framework-networking` | `CycloneGames.GameplayFramework.Networking.Runtime` | Actor capture/apply、共享 replication capture 与 Runtime session adapter | Unity replication code 显式引用 |
 | GameplayFramework package | `CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena` | `ISceneTransitionHandler` adapter | 显式引用；条件编译 |
 
 ### Factory Actor Lifetime
@@ -1000,13 +1030,13 @@ GameplayTags integration 由 sibling companion package 提供，该 companion �
 
 ### Networking
 
-Networking sibling package 提供两个显式层。`CycloneGames.GameplayFramework.Networking.Core` 没有 engine reference，持有 protocol message、bound、codec、observer selection 与 validation。`CycloneGames.GameplayFramework.Networking.Runtime` 持有 `NetworkGameSessionAdapter`、Actor capture/apply、World replication，以及所有读写 Unity gameplay object 的 adapter。
+Networking sibling package 提供两个显式层。`CycloneGames.GameplayFramework.Networking.Core` 没有 engine reference，持有 protocol message、bound、codec、security-policy composition 与 validation。共享的 `CycloneGames.Networking.Core` 持有 replication object、observer、policy、budget 与 `NetworkReplicationPlanner`。`CycloneGames.GameplayFramework.Networking.Runtime` 持有 `NetworkGameSessionAdapter`、Actor capture/apply、replication snapshot capture，以及所有读写 Unity gameplay object 的 adapter。
 
 `NetworkGameSessionAdapter` 可作为权威端 `IGameSession` 传入。Client replication adapter 先注册接收的 GameState Actor 并调用 `World.SetReplicatedGameState`；对每个接收的 PlayerController 和 PlayerState，先完成注册与 Controller 初始化，再调用 `World.CommitReplicatedPlayerController`。这两个 client-only commit boundary 都必须在 World owner thread 运行，并会拒绝 authority World。Transport callback 必须先完成认证并 marshal 到该线程，之后才能调用 gameplay API。
 
 Protocol code 引用 Networking Core。Unity replication code 引用 Networking Runtime，以及源码直接使用的每个 GameplayFramework assembly。GameplayFramework Core 与 Runtime 都不引用 Networking companion。
 
-Actor migration 的 transport value 位于 Networking Core。`ActorMigrationState` 使用 `NetworkVector3`、`NetworkQuaternion`、prefab definition ID、有界 readonly tag 与其他 transport-facing Actor state，不持有 Unity object reference。Networking Runtime 提供 `ActorNetworkingExtensions.CaptureMigrationState` 与 `ApplyMigrationState`，在该值与 Actor 之间转换；还提供 `ToNetworkedGameplayActor` 以及 observer 配置的 Unity `Vector3` overload。这些转换用于显式 replication 或 travel boundary，不应放入 Actor Tick。
+Actor migration 的 transport value 位于 Networking Core。`ActorMigrationState` 使用 `NetworkVector3`、`NetworkQuaternion`、prefab definition ID、有界 readonly tag 与其他 transport-facing Actor state，不持有 Unity object reference。Networking Runtime 提供 `ActorNetworkingExtensions.CaptureMigrationState` 与 `ApplyMigrationState`，在该值与 Actor 之间转换。`CaptureReplicationObject` 会把 Actor 状态采样为共享的 `CycloneGames.Networking.Replication.NetworkReplicatedObject`，供 `NetworkReplicationPlanner` 使用。Observer 构造与 replication planning 直接使用共享 Networking contract。这些转换用于显式 replication 或 travel boundary，不应放入 Actor Tick。
 
 ### Navigathena Package 边界
 
@@ -1176,21 +1206,23 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 | CameraActionPreset、CameraActionMap | 项目 authoring | ScriptableObject asset | 通常纳入 | 保持 action key 与使用方配置一致 |
 | WorldDefinition | World Runtime | 仅内存 | 否 | 随 World dispose；按逆序释放 lease |
 | GameplayWorldHost、GameInstance、LocalPlayer、World | Runtime composition | 仅内存 | 否 | Host GameObject lifetime 或显式 Stop/Dispose |
+| CameraOutputLeaseArbiter ownership registry | Runtime composition | 仅内存 | 否 | 随每个 World shutdown 释放 entry；全部共享 World 停止后丢弃 |
 | PlayerStateSnapshot | Save/network adapter | Core 内存值 | 取决于 adapter | Restore 前校验 persistence 或 protocol envelope |
+| MatchStateSnapshot | Save/network adapter 与 clock owner | 不包含 schema envelope 的 Core 内存值 | 取决于 adapter | 仅在兼容 clock epoch 与已校验产品格式中恢复 |
 | Camera debug sample | CameraDebugWindow | 仅 Editor 内存 | 否 | 清空 buffer，或关闭/重新加载 window |
 | World Debugger 和 Project Validation 状态 | Editor window | 仅 Editor 内存 | 否 | 关闭或重载窗口；不写入 EditorPrefs 或 SessionState |
 
 对于存档数据：
 
-1. 在受控边界捕获 PlayerStateSnapshot；
-2. 把它传给专用 save service；
+1. 在受控边界捕获 `PlayerStateSnapshot` 或 `MatchStateSnapshot`；
+2. 把该值传给专用 save service；
 3. 包含由 save service 拥有的 slot、format 与 integrity metadata；
 4. 原子写入平台 persistent-data location；
 5. 反序列化前校验大小和完整性；
 6. 按当前 build 的产品格式校验 payload；
-7. 调用 `TryRestoreSnapshot` 并处理 error。
+7. 调用对应的 `TryRestore...` API 并处理 error，包括 match-clock epoch rejection。
 
-应选择并验证在目标 backend 上支持 readonly `PlayerStateSnapshot` property 的 serializer；Unity `JsonUtility` 不会直接序列化该 contract。
+应选择并验证在目标 backend 上支持 readonly snapshot property 的 serializer；Unity `JsonUtility` 不会直接序列化这些 contract。两个 Core snapshot 都不携带 storage schema version；format identification 与 compatibility 由 save 或 protocol envelope 持有。
 
 ## 性能、线程与平台说明
 
@@ -1201,8 +1233,10 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 - Actor Tick dispatch、phase change 和 Runtime enable change 使用同一个 owner thread。
 - Network、file 和 asset callback 在修改框架状态前必须 marshal 到 Unity main thread。
 - Unity object 与 camera-output 操作运行在 Unity main thread；可选 camera backend 遵循同一规则。
+- `CameraOutputLeaseArbiter` 会记录构造线程；共享它的每个 World 都在该 owner thread 获取和释放 lease。
 - WorldSettings resolver I/O 可以在其他线程完成；result validation、rollback、lease transfer 和 WorldDefinition disposal 会在执行解析的 main thread 上运行。跨线程调用 WorldDefinition disposal 会在消费所有权前被拒绝。
-- `ParticipantRoster`、`MatchStateMachine` 与 `GameSession` 都把构造线程记录为 single owner，不添加 lock。
+- `ParticipantRoster` 与 `GameSession` 都把构造线程记录为 single owner，不添加 lock。
+- `MatchStateMachine` 记录构造线程；成功的 `TryRestore` 会创建由执行 restore 的线程持有的 state machine。
 - 对三者可变状态的读取与所有 mutation 都会校验 owner；跨线程访问以 `InvalidOperationException` 失败，不会读取可能不一致的 roster、match clock 或 Runtime binding。
 - Immutable limit value 与 static validation/transition-policy function 不读取可变 instance state。Worker result 仍须 marshal 到 owner，之后才能访问 live roster、match state machine 或 session。
 - Async API 使用 UniTask，并在启动和 asset resolution 期间传播 cancellation。World initialization 会链接 caller、GameInstance 和 World lifetime token；direct World shutdown 会取消 pending async login，阻止 startup 继续提交。
@@ -1219,6 +1253,7 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 | GameSession 参与者总数 | 最多 100,000 |
 | CameraContext mode | 每个 context 固定；默认 8 |
 | CameraManager post-processor | 最多 16 |
+| Camera output ownership resource | 每个 prepared output 为 1 到 4 个 |
 | CameraActionStateBehaviour tracking | 最多 8 个 Animator/layer pair |
 | CameraActionBinding active/pool count | 可配置；默认各 8 |
 | Actor primary Tick phase | 每个 Actor 一个 phase；热路径 registry size 取决于 Runtime-enabled Actor 数量 |
@@ -1230,7 +1265,8 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 性能分析时应检查以下 cold path 或 boundary operation：
 
 - World construction 预留 configured initial collection capacity；
-- World scene discovery，以及超过 initial capacity 后的 collection growth；
+- configured World Actor-source collection，以及超过 initial capacity 后的 collection growth；
+- camera-output arbiter ownership registry 超过 configured initial capacity 后的增长；
 - WorldSettings resolution 和 lease array 创建；
 - PlayerState snapshot capture 之后的 persistence/serializer 工作；
 - Actor tag 和 renderer buffer 首次使用；
@@ -1254,7 +1290,7 @@ Actor Tick dispatch 遍历可复用 phase snapshot，不扫描 Tick phase 为 No
 - Client mode 本身不提供 replication。
 - Mono、IL2CPP、managed stripping、headless/server 和每个目标平台都需要代表性 Player build 验证。
 
-Owner-thread enforcement 与有界输入提供一致的 failure rule，但框架不会让 Unity physics、floating-point result、scene discovery order、用户 callback 或第三方 integration 在不同硬件上自动具备确定性。需要 lockstep 或 replay determinism 的产品，必须在该 gameplay-flow 层之上提供 deterministic simulation model、clock、ordering policy、numeric policy 与目标平台验证。
+Owner-thread enforcement 与有界输入提供一致的 failure rule，但框架不会让 Unity physics、floating-point result、Actor-source order、用户 callback 或第三方 integration 在不同硬件上自动具备确定性。需要 lockstep 或 replay determinism 的产品，必须在该 gameplay-flow 层之上提供 deterministic simulation model、clock、ordering policy、numeric policy 与目标平台验证。
 
 ## 由简到深示例
 
@@ -1280,17 +1316,26 @@ if (registration != ParticipantRegistrationResult.Success)
 
 创建 roster 的线程持有它。`EvaluateRegistration`、`Register`、`Remove`、`ChangeCategory`、`Contains`、`TryGetCategory` 与 `AtCapacity` 都会校验 owner。
 
-Match state machine 接收应用持有、以秒为单位的 monotonic timestamp：
+Match state machine 接收应用持有、属于一个显式 epoch 的 monotonic timestamp：
 
 ~~~csharp
-var match = new MatchStateMachine(timestamp: 10d);
-match.TryTransition(MatchState.WaitingToStart, timestamp: 11d);
-match.TryTransition(MatchState.InProgress, timestamp: 12d);
+Guid clockEpoch = Guid.NewGuid();
+var enteringAt = new MatchTimestamp(clockEpoch, 10d);
+var waitingAt = new MatchTimestamp(clockEpoch, 11d);
+var startedAt = new MatchTimestamp(clockEpoch, 12d);
+var capturedAt = new MatchTimestamp(clockEpoch, 15.5d);
 
-double elapsedSeconds = match.GetElapsedSeconds(timestamp: 15.5d);
+var match = new MatchStateMachine(
+    MatchState.EnteringMap,
+    in enteringAt);
+match.TryTransition(MatchState.WaitingToStart, in waitingAt);
+match.TryTransition(MatchState.InProgress, in startedAt);
+
+double elapsedSeconds = match.GetElapsedSeconds(in capturedAt);
+MatchStateSnapshot snapshot = match.CaptureSnapshot(in capturedAt);
 ~~~
 
-Core 不读取 Unity time，也不调度 update。GameState 在 Runtime 边界输入 Unity time；纯 simulation 或 server 输入自身的 monotonic clock。
+Core 不读取 Unity time，也不调度 update。Runtime GameState 读取 composition 提供的 `IMatchClock`；纯 simulation 或 server 提供自己的 epoch 与 monotonic clock。只有 timebase 保持连续时才应复用同一个 epoch。
 
 ### 查询 World Actor
 
@@ -1434,6 +1479,19 @@ if (!targetPlayerState.TryRestoreSnapshot(snapshot, out string error))
 
 `PlayerStateSnapshot` 是 readonly Core value；`CaptureSnapshot` 与 `TryRestoreSnapshot` 是 Runtime facade API。持久化 integration 持有 file path、serialization envelope、atomic replace、integrity 与 encryption policy。
 
+### 捕获与恢复 Match State
+
+~~~csharp
+MatchStateSnapshot snapshot = sourceGameState.CaptureMatchStateSnapshot();
+
+if (!targetGameState.TryRestoreMatchStateSnapshot(in snapshot, out string error))
+{
+    throw new InvalidDataException(error);
+}
+~~~
+
+Target GameState 必须使用与 snapshot 相同 epoch 的 clock，且当前 timestamp 不得早于 `CapturedTimestamp`。负责转移 snapshot 的 adapter 持有 storage/protocol schema，并负责该 clock domain 的连续性。
+
 ### 校验轻量 Actor Tag
 
 Core 提供与 Runtime Actor operation 相同的有界 tag validation：
@@ -1494,20 +1552,20 @@ Core test assembly 覆盖：
 
 - participant capacity、重复 identity、register、remove 与 spectator-category accounting；
 - 有界 login request 与 `PlayerLoginStatus` value；
-- match-state transition、elapsed-time accounting 与 reset rule；
+- match-state transition、epoch validation、elapsed-time accounting、snapshot capture/restore、restore 时的 owner-thread transfer 与 reset rule；
 - 不引用 UnityEngine 的 World limit、Actor admission snapshot、player snapshot 与 Actor-tag bound。
 
 Unity EditMode test assembly 覆盖：
 
-- World mode、启动、回滚、client GameState/PlayerController commit boundary、non-owned Actor 复用、可信 local login 校验、participant/GameMode 销毁升级、logout 和 CurrentWorld 清理；
+- World mode、启动、回滚、client GameState/PlayerController commit boundary、scoped Actor-source discovery、parallel Scene isolation、non-owned Actor unregistration/复用、可信 local login 校验、participant/GameMode 销毁升级、logout 和 CurrentWorld 清理；
 - terminal Actor-lifetime 在正常销毁、spawn failure、self-destruction、shutdown 与 throwing-release failure isolation 中的配对；
 - WorldSettings 校验、外部 resolver、cancellation 和 lease disposal；
-- GameplayWorldHost composition、不可变 WorldRuntimeLimits、Actor admission/allocated-capacity/peak/rejection 诊断、索引式 World 检查、自定义 Inspector 和项目校验；
+- GameplayWorldHost composition、预先取消与 pending-start cancellation、await 期间销毁、fault retry、reentrant-start rejection、不可变 WorldRuntimeLimits、Actor admission/allocated-capacity/peak/rejection 诊断、索引式 World 检查、自定义 Inspector 和项目校验；
 - Actor tag、damage、lifespan、possession、Pawn input、primary Tick phase、Runtime gate、mutation safety、re-entry rejection、exception isolation 和 owner-thread enforcement；
 - PlayerState snapshot、session identity lock、atomic spectator change 和 post-commit Pawn notification；
-- GameState transition 和 World-scoped PlayerStart；
+- GameState transition、registration-time BeginPlay 前的 clock 配置、custom match-clock composition、match snapshot 和 World-scoped PlayerStart；
 - CameraContext capacity、replacement、evaluation mutation guard、deferred clear、teardown order、view-target policy 和 action limit；
-- Camera blend、camera math、core UnityCameraOutput、output ownership、replacement、teardown 与 failure isolation；
+- Camera blend、camera math、core UnityCameraOutput、atomic multi-resource output ownership、shared arbiter 对 parallel World 的排他、activation rollback、destroyed-resource handling、reset、replacement、teardown 与 failure isolation；
 - CameraContext、GameSession 和 1,000 个 opt-in Actor Tick 性能 benchmark；
 - 安装受支持 Navigathena package 时的 request 映射、自定义、校验和 cancellation 转发。
 
@@ -1551,7 +1609,7 @@ Batchmode 示例：
 
 ### PlayMode 测试
 
-PlayMode assembly 验证 auto-start Host 会创建 Playing World、创建独立 early/late driver、按 configured framework phase 包围普通 MonoBehaviour 的 Update/LateUpdate callback、转发 Update/FixedUpdate/LateUpdate Actor Tick phase、Host disabled 时停止转发、externally destroyed World-owned Actor 只释放一次，并随 Host GameObject dispose World。
+PlayMode assembly 验证 auto-start Host 会创建 Playing World、只发现 Host 自身 Scene 中的 Actor、创建独立 early/late driver、按 configured framework phase 包围普通 MonoBehaviour 的 Update/LateUpdate callback、转发 Update/FixedUpdate/LateUpdate Actor Tick phase、Host disabled 时停止转发、externally destroyed World-owned Actor 只释放一次，并随 Host GameObject dispose World。
 
 ~~~text
 Window > General > Test Runner > PlayMode
@@ -1614,11 +1672,16 @@ EditMode 测试和源码检查不能证明 Player、IL2CPP、headless 或目标�
 | 直接组合 GameInstance 时 Actor 从不 Tick | 由 composition root 对每个必需 phase 精确转发一次；GameplayWorldHost 会自动提供该转发 |
 | Movement 或 Ability 使用不同 update model | 保留模块自己的 MonoBehaviour 或显式 simulation clock；Actor Tick 是 opt-in，不替代 package-owned scheduling |
 | Scene Actor 在 World barrier 外 BeginPlay | 让 composition root 早于普通 Actor Start callback 启动 |
+| 直接构造的 GameInstance 没有发现 Scene Actor | 显式提供 `IWorldActorSource`，例如 `SceneWorldActorSource`；null source 表示有意不执行 scan |
+| Host 从错误 Scene 发现了 Actor | 使用未配置 Host 以绑定其自身 Scene，或通过 composition 为准确的 loaded Scene 传入 `SceneWorldActorSource` |
 | Ended Actor 无法加入另一个 World | non-owned scene/external Actor 必须先解绑再注册到 replacement World；World-owned Actor 不能重入 |
 | GameState transition 非法 | 遵循合法 transition table，或处理 `TrySetMatchState` failure |
+| Match-state snapshot restore 失败 | 确认 snapshot 有效、当前 `IMatchClock` 具有相同 epoch，且其 timestamp 未倒退到 `CapturedTimestamp` 之前 |
 | 没有 CameraManager | 配置可选 prefab，并使用本地 PlayerController |
 | CameraManager 没有输出 | 分配 `CameraOutputBehaviour`、调用 `SetCameraOutput`，或者明确选择只计算 pose 而不提供 presentation output |
-| Camera output ownership error | 确保一个 backend resource 只由一个 CameraManager 拥有；对 Cinemachine，该 resource 是 brain |
+| Camera output ownership error | 确保全部 prepared resource 仍存活、互不重复、在 deactivation 前保持稳定，且只被一个 CameraManager lease；Cinemachine 会同时 lease Brain 与 Virtual Camera |
+| Parallel World 同时获取一个 persistent camera resource | 在共同 owner thread 构造一个 `CameraOutputLeaseArbiter`，并把同一实例注入每个参与的 GameInstance 或 Host composition |
+| Camera lease arbiter 报告 owner-thread error | 在所有参与 World 使用的同一 owner thread 创建并修改 shared arbiter |
 | Cinemachine integration 不编译 | 确认已解析 `[3.0.0,4.0.0)` 范围内的 `com.unity.cinemachine`，并从匹配的 integration asmdef 引用 gated integration assembly |
 | Host 依赖需要来自 DI | 构造 `GameplayWorldComposition` 并在 startup 前调用 `Configure`，不要继承 sealed Host |
 | Actor admission 返回 false | 检查 configured `WorldRuntimeLimits.MaximumActorCount`、allocated capacity、peak count 与 rejected admission count，并按产品 policy 释放或延迟工作 |

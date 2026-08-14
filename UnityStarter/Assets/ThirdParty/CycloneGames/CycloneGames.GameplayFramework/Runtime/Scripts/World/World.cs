@@ -45,11 +45,110 @@ namespace CycloneGames.GameplayFramework.Runtime
             public int TickListIndex;
         }
 
-        private struct CameraOutputOwnership
+        private sealed class WorldActorCollector : IWorldActorCollector
         {
-            public CameraManager Owner;
-            public ICameraOutput Output;
-            public UnityEngine.Object Resource;
+            private readonly World world;
+            private readonly HashSet<int> candidateIds = new HashSet<int>();
+            private bool isActive;
+            private bool capacityExceeded;
+
+            public WorldActorCollector(World world)
+            {
+                this.world = world;
+            }
+
+            public int Count
+            {
+                get
+                {
+                    EnsureActive();
+                    world.EnsureOwnerThread();
+                    world.EnsureActorDiscoveryTransactionActive();
+                    return world.lifecycleScratch.Count;
+                }
+            }
+
+            public int RemainingCapacity
+            {
+                get
+                {
+                    EnsureActive();
+                    world.EnsureOwnerThread();
+                    world.EnsureActorDiscoveryTransactionActive();
+                    return Math.Max(
+                        0,
+                        world.runtimeLimits.MaximumActorCount -
+                        world.actors.Count -
+                        world.lifecycleScratch.Count);
+                }
+            }
+
+            public bool TryAdd(Actor actor)
+            {
+                EnsureActive();
+                world.EnsureOwnerThread();
+                world.EnsureActorDiscoveryTransactionActive();
+                if (actor == null)
+                {
+                    return true;
+                }
+
+                int instanceId = actor.GetStableInstanceId();
+                if (world.actorIndices.ContainsKey(instanceId) || candidateIds.Contains(instanceId))
+                {
+                    return true;
+                }
+
+                if (RemainingCapacity == 0)
+                {
+                    if (!capacityExceeded)
+                    {
+                        capacityExceeded = true;
+                        world.IncrementRejectedActorAdmissionCount();
+                    }
+
+                    return false;
+                }
+
+                candidateIds.Add(instanceId);
+                world.lifecycleScratch.Add(actor);
+                return true;
+            }
+
+            public void Begin()
+            {
+                if (isActive)
+                {
+                    throw new InvalidOperationException("World Actor collection is already active.");
+                }
+
+                candidateIds.Clear();
+                capacityExceeded = false;
+                isActive = true;
+            }
+
+            public bool End()
+            {
+                if (!isActive)
+                {
+                    return false;
+                }
+
+                bool exceeded = capacityExceeded;
+                candidateIds.Clear();
+                capacityExceeded = false;
+                isActive = false;
+                return exceeded;
+            }
+
+            private void EnsureActive()
+            {
+                if (!isActive)
+                {
+                    throw new InvalidOperationException(
+                        "The World Actor collector is only valid during its CollectActors callback.");
+                }
+            }
         }
 
         private readonly GameInstance gameInstance;
@@ -59,6 +158,10 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly ISceneTransitionHandler sceneTransitionHandler;
         private readonly int ownerThreadId;
         private readonly WorldRuntimeLimits runtimeLimits;
+        private readonly IWorldActorSource actorSource;
+        private readonly WorldActorCollector actorCollector;
+        private readonly IMatchClock matchClock;
+        private readonly ICameraOutputLeaseArbiter cameraOutputLeaseArbiter;
         private readonly List<ActorEntry> actors;
         private readonly List<Actor> lifecycleScratch;
         private readonly List<Actor> updateTickActors;
@@ -68,8 +171,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly Dictionary<int, int> actorIndices;
         private readonly List<PlayerController> playerControllers = new List<PlayerController>(8);
         private readonly List<PlayerStart> playerStarts = new List<PlayerStart>(16);
-        private readonly Dictionary<int, CameraOutputOwnership> cameraOutputOwners =
-            new Dictionary<int, CameraOutputOwnership>(4);
         private readonly CancellationTokenSource lifetimeCancellation = new CancellationTokenSource();
 
         private WorldLifecycleState lifecycleState = WorldLifecycleState.Created;
@@ -92,7 +193,10 @@ namespace CycloneGames.GameplayFramework.Runtime
             IGameSession gameSession,
             ISceneTransitionHandler sceneTransitionHandler,
             int ownerThreadId,
-            WorldRuntimeLimits runtimeLimits)
+            WorldRuntimeLimits runtimeLimits,
+            IWorldActorSource actorSource,
+            IMatchClock matchClock,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter)
         {
             this.gameInstance = gameInstance ?? throw new ArgumentNullException(nameof(gameInstance));
             this.actorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
@@ -101,8 +205,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             this.sceneTransitionHandler = sceneTransitionHandler;
             this.ownerThreadId = ownerThreadId;
             this.runtimeLimits = runtimeLimits ?? throw new ArgumentNullException(nameof(runtimeLimits));
+            this.actorSource = actorSource;
+            this.matchClock = matchClock ?? throw new ArgumentNullException(nameof(matchClock));
+            this.cameraOutputLeaseArbiter = cameraOutputLeaseArbiter ??
+                throw new ArgumentNullException(nameof(cameraOutputLeaseArbiter));
             actors = new List<ActorEntry>(runtimeLimits.InitialActorCapacity);
             lifecycleScratch = new List<Actor>(runtimeLimits.InitialActorCapacity);
+            actorCollector = new WorldActorCollector(this);
             updateTickActors = new List<Actor>(runtimeLimits.InitialUpdateTickCapacity);
             fixedUpdateTickActors = new List<Actor>(runtimeLimits.InitialFixedUpdateTickCapacity);
             lateUpdateTickActors = new List<Actor>(runtimeLimits.InitialLateUpdateTickCapacity);
@@ -117,6 +226,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public GameInstance GameInstance => gameInstance;
         public WorldRuntimeLimits RuntimeLimits => runtimeLimits;
+        public IMatchClock MatchClock => matchClock;
         public WorldDefinition Definition => definition;
         public WorldNetMode NetMode { get; }
         public WorldLifecycleState LifecycleState => lifecycleState;
@@ -250,7 +360,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             CancellationToken initializationToken = initializationCancellation.Token;
             initializationToken.ThrowIfCancellationRequested();
 
-            DiscoverSceneActors();
+            DiscoverActors();
 
             if (IsAuthority)
             {
@@ -511,6 +621,52 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
+        /// <summary>
+        /// Removes a live, externally owned Actor from this World without destroying it or
+        /// invoking the configured Actor lifetime. World-owned Actors must use DestroyActor.
+        /// </summary>
+        public void UnregisterActor(
+            Actor actor,
+            EndPlayReason reason = EndPlayReason.RemovedFromWorld)
+        {
+            EnsureOwnerThread();
+            EnsureAcceptingActors();
+            if (actor == null ||
+                !actorIndices.TryGetValue(actor.GetStableInstanceId(), out int index))
+            {
+                throw new InvalidOperationException("Cannot unregister an Actor that is not registered.");
+            }
+
+            if (actors[index].Owned)
+            {
+                throw new InvalidOperationException(
+                    "World-owned Actors cannot be unregistered; use DestroyActor to end their lifetime.");
+            }
+
+            UnregisterExternalActorAt(index, reason);
+        }
+
+        /// <summary>
+        /// Attempts to remove a live, externally owned Actor without destroying or releasing it.
+        /// Returns false for null, unregistered, or World-owned Actors.
+        /// </summary>
+        public bool TryUnregisterActor(
+            Actor actor,
+            EndPlayReason reason = EndPlayReason.RemovedFromWorld)
+        {
+            EnsureOwnerThread();
+            EnsureAcceptingActors();
+            if (actor == null ||
+                !actorIndices.TryGetValue(actor.GetStableInstanceId(), out int index) ||
+                actors[index].Owned)
+            {
+                return false;
+            }
+
+            UnregisterExternalActorAt(index, reason);
+            return true;
+        }
+
         /// <summary>Returns an allocation-free O(1) actor admission snapshot.</summary>
         public ActorAdmissionSnapshot GetActorAdmissionSnapshot()
         {
@@ -714,11 +870,18 @@ namespace CycloneGames.GameplayFramework.Runtime
         internal void SetGameState(GameState value)
         {
             EnsureOwnerThread();
-            if (value != null && !ReferenceEquals(value.World, this))
+            if (value == null)
+            {
+                gameState = null;
+                return;
+            }
+
+            if (!ReferenceEquals(value.World, this))
             {
                 throw new InvalidOperationException("GameState must be registered with this World.");
             }
 
+            value.ConfigureMatchClock(matchClock);
             gameState = value;
         }
 
@@ -736,18 +899,25 @@ namespace CycloneGames.GameplayFramework.Runtime
                     "Replicated GameState can only be bound in a client World.");
             }
 
-            if (value != null && !ReferenceEquals(value.World, this))
+            if (value == null)
+            {
+                gameState = null;
+                return;
+            }
+
+            if (!ReferenceEquals(value.World, this))
             {
                 throw new InvalidOperationException(
                     "Replicated GameState must be registered with this World before binding.");
             }
 
-            if (gameState != null && value != null && !ReferenceEquals(gameState, value))
+            if (gameState != null && !ReferenceEquals(gameState, value))
             {
                 throw new InvalidOperationException(
                     "Destroy or clear the current replicated GameState before binding another instance.");
             }
 
+            value.ConfigureMatchClock(matchClock);
             gameState = value;
         }
 
@@ -948,74 +1118,55 @@ namespace CycloneGames.GameplayFramework.Runtime
         internal bool TryAcquireCameraOutput(
             CameraManager owner,
             ICameraOutput output,
-            UnityEngine.Object ownershipResource,
-            out int ownershipId,
+            out CameraOutputLease lease,
             out string error)
         {
             EnsureOwnerThread();
-            ownershipId = 0;
             if (lifecycleState != WorldLifecycleState.Initializing &&
                 lifecycleState != WorldLifecycleState.Playing)
             {
+                lease = default;
                 error = $"World cannot acquire a camera output while in state '{lifecycleState}'.";
                 return false;
             }
 
-            if (owner == null || output == null || ownershipResource == null)
+            if (owner == null || !ReferenceEquals(owner.World, this))
             {
-                error = "CameraManager, camera output, and ownership resource are required.";
-                return false;
-            }
-
-            if (!ReferenceEquals(owner.World, this))
-            {
+                lease = default;
                 error = "CameraManager must belong to this World before acquiring an output.";
                 return false;
             }
 
-            int id = ownershipResource.GetInstanceID();
-            if (cameraOutputOwners.TryGetValue(id, out CameraOutputOwnership existing))
+            if (!cameraOutputLeaseArbiter.TryAcquire(
+                    this,
+                    owner,
+                    output,
+                    out lease,
+                    out error))
             {
-                if (ReferenceEquals(existing.Owner, owner) && ReferenceEquals(existing.Output, output))
-                {
-                    ownershipId = id;
-                    error = null;
-                    return true;
-                }
-
-                error = $"Camera output resource '{ownershipResource.name}' is already owned by '{existing.Owner?.name}'.";
                 return false;
             }
 
-            cameraOutputOwners.Add(id, new CameraOutputOwnership
+            if ((lifecycleState == WorldLifecycleState.Initializing ||
+                 lifecycleState == WorldLifecycleState.Playing) &&
+                ReferenceEquals(owner.World, this))
             {
-                Owner = owner,
-                Output = output,
-                Resource = ownershipResource,
-            });
-            ownershipId = id;
-            error = null;
-            return true;
+                return true;
+            }
+
+            cameraOutputLeaseArbiter.Release(this, owner, output, in lease);
+            lease = default;
+            error = "Camera output acquisition was interrupted by World or owner teardown.";
+            return false;
         }
 
         internal void ReleaseCameraOutput(
             CameraManager owner,
             ICameraOutput output,
-            int ownershipId)
+            CameraOutputLease lease)
         {
             EnsureOwnerThread();
-            if (ownershipId == 0 ||
-                !cameraOutputOwners.TryGetValue(ownershipId, out CameraOutputOwnership entry))
-            {
-                return;
-            }
-
-            if (!ReferenceEquals(entry.Owner, owner) || !ReferenceEquals(entry.Output, output))
-            {
-                return;
-            }
-
-            cameraOutputOwners.Remove(ownershipId);
+            cameraOutputLeaseArbiter.Release(this, owner, output, in lease);
         }
 
         public void Dispose()
@@ -1023,22 +1174,72 @@ namespace CycloneGames.GameplayFramework.Runtime
             ShutdownImmediate(EndPlayReason.WorldShutdown);
         }
 
-        private void DiscoverSceneActors()
+        private void DiscoverActors()
         {
-            Actor[] sceneActors = UnityEngine.Object.FindObjectsByType<Actor>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None);
-
-            for (int i = 0; i < sceneActors.Length; i++)
+            EnsureOwnerThread();
+            if (actorSource == null)
             {
-                Actor actor = sceneActors[i];
-                if (actor == null || actor.gameObject.scene.IsValid() == false)
+                return;
+            }
+
+            lifecycleScratch.Clear();
+            bool collectionActive = false;
+            try
+            {
+                EnsureActorDiscoveryTransactionActive();
+                actorCollector.Begin();
+                collectionActive = true;
+                actorSource.CollectActors(actorCollector);
+                bool capacityExceeded = actorCollector.End();
+                collectionActive = false;
+                EnsureActorDiscoveryTransactionActive();
+                if (capacityExceeded)
                 {
-                    continue;
+                    throw CreateActorCapacityException();
                 }
 
-                RegisterActorInternal(actor, owned: false, beginIfPlaying: true, deferred: false, activateOnFinish: false);
+                for (int i = 0; i < lifecycleScratch.Count; i++)
+                {
+                    EnsureActorDiscoveryTransactionActive();
+                    Actor actor = lifecycleScratch[i];
+                    if (actor == null || IsActorRegistered(actor))
+                    {
+                        continue;
+                    }
+
+                    RegisterActorInternal(
+                        actor,
+                        owned: false,
+                        beginIfPlaying: true,
+                        deferred: false,
+                        activateOnFinish: false);
+                }
             }
+            finally
+            {
+                if (collectionActive)
+                {
+                    actorCollector.End();
+                }
+
+                lifecycleScratch.Clear();
+            }
+        }
+
+        private void EnsureActorDiscoveryTransactionActive()
+        {
+            if (lifecycleState != WorldLifecycleState.Initializing)
+            {
+                throw new InvalidOperationException(
+                    "World Actor discovery cannot continue after initialization has been interrupted.");
+            }
+        }
+
+        private void UnregisterExternalActorAt(int index, EndPlayReason reason)
+        {
+            ActorEntry entry = RemoveActorAt(index);
+            DetachActorBookkeeping(entry.Actor);
+            entry.Actor.UnbindFromWorld(this, reason);
         }
 
         private void RegisterActorInternal(
@@ -1121,6 +1322,11 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 actor.BindToWorld(this, allowReentry: !owned);
                 actorBound = true;
+                if (actor is GameState registeringGameState)
+                {
+                    registeringGameState.ConfigureMatchClock(matchClock);
+                }
+
                 actors.Add(new ActorEntry
                 {
                     Actor = actor,
@@ -1396,7 +1602,17 @@ namespace CycloneGames.GameplayFramework.Runtime
             updateTickActors.Clear();
             fixedUpdateTickActors.Clear();
             lateUpdateTickActors.Clear();
-            ReleaseAllCameraOutputs();
+            try
+            {
+                cameraOutputLeaseArbiter.ReleaseAll(this);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(
+                    exception,
+                    "Camera output lease release failed during World shutdown; terminal cleanup will continue.");
+            }
+
             gameMode = null;
             gameState = null;
             lifecycleState = WorldLifecycleState.Stopped;
@@ -1456,38 +1672,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 throw new InvalidOperationException(
                     $"World does not accept actors while in state '{lifecycleState}'.");
-            }
-        }
-
-        private void ReleaseAllCameraOutputs()
-        {
-            while (cameraOutputOwners.Count > 0)
-            {
-                int ownershipId;
-                CameraOutputOwnership entry;
-                using (Dictionary<int, CameraOutputOwnership>.Enumerator enumerator =
-                       cameraOutputOwners.GetEnumerator())
-                {
-                    if (!enumerator.MoveNext())
-                    {
-                        break;
-                    }
-
-                    ownershipId = enumerator.Current.Key;
-                    entry = enumerator.Current.Value;
-                }
-
-                cameraOutputOwners.Remove(ownershipId);
-                try
-                {
-                    entry.Output?.Deactivate(entry.Owner);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        $"Camera output '{entry.Resource?.name}' failed to deactivate during World shutdown.");
-                }
             }
         }
 

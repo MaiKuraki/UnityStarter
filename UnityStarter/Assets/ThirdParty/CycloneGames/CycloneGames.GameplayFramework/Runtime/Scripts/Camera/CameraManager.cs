@@ -50,7 +50,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private bool isUpdatingCamera;
 
         private ICameraOutput configuredOutput;
-        private int activeOutputOwnershipId;
+        private CameraOutputLease activeOutputLease;
         private bool isTransitioningOutput;
 
         // Fixed-capacity array keeps registration allocation-free after construction.
@@ -212,6 +212,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 throw new System.InvalidOperationException("CameraManager is already initialized.");
             }
 
+            World expectedWorld = World;
             PCOwner = PlayerController;
             lockedFOV = DefaultFOV;
             hasExplicitFovOverride = false;
@@ -240,6 +241,16 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
+            if (!ReferenceEquals(World, expectedWorld) ||
+                expectedWorld.LifecycleState == WorldLifecycleState.Stopping ||
+                expectedWorld.LifecycleState == WorldLifecycleState.Stopped ||
+                expectedWorld.LifecycleState == WorldLifecycleState.Disposed)
+            {
+                ResetRuntimeState();
+                throw new System.InvalidOperationException(
+                    "CameraManager initialization was interrupted by World teardown.");
+            }
+
             var currentViewTarget = PlayerController != null ? PlayerController.GetViewTarget() : null;
             PendingViewTargetTF = currentViewTarget != null ? currentViewTarget.transform : PlayerController?.transform;
             NotifyCameraStateChanged();
@@ -250,24 +261,61 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private bool TryBindOutput(ICameraOutput output)
         {
-            World?.AssertOwnerThread();
-            ThrowIfOutputTransitioning();
-            if (ReferenceEquals(ActiveOutput, output) &&
-                IsOutputAlive(output) &&
-                output.TryPrepare(out _, out _))
-            {
-                return true;
-            }
-
-            if (!IsOutputAlive(output) || World == null)
+            World expectedWorld = World;
+            if (expectedWorld == null)
             {
                 return false;
             }
 
+            expectedWorld.AssertOwnerThread();
+            ThrowIfOutputTransitioning();
             isTransitioningOutput = true;
             try
             {
-                if (!output.TryPrepare(out UnityEngine.Object ownershipResource, out string error))
+                if (ReferenceEquals(ActiveOutput, output))
+                {
+                    CameraOutputLease existingLease = activeOutputLease;
+                    try
+                    {
+                        if (IsOutputAlive(output) &&
+                            output.TryPrepare(out _) &&
+                            ValidatePreparedResourcesAgainstLease(
+                                output,
+                                in activeOutputLease,
+                                out _) &&
+                            IsTransitionWorldValid(expectedWorld))
+                        {
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        ReleaseRepreparedActiveOutput(output, expectedWorld, in existingLease);
+                        throw;
+                    }
+
+                    ReleaseRepreparedActiveOutput(output, expectedWorld, in existingLease);
+                }
+
+                if (!IsOutputAlive(output) || !IsTransitionWorldValid(expectedWorld))
+                {
+                    return false;
+                }
+
+                bool prepared;
+                string error;
+                try
+                {
+                    prepared = output.TryPrepare(out error);
+                }
+                catch
+                {
+                    ReleasePreparedOutput(output);
+                    throw;
+                }
+
+                if (!prepared ||
+                    !ValidatePreparedResources(output, out error))
                 {
                     Log.Error(
                         error,
@@ -276,15 +324,27 @@ namespace CycloneGames.GameplayFramework.Runtime
                             builder.Append("Camera output preparation failed: ");
                             builder.Append(message);
                         });
+                    ReleasePreparedOutput(output);
+                    return false;
+                }
+
+                if (!IsTransitionWorldValid(expectedWorld))
+                {
+                    ReleasePreparedOutput(output);
                     return false;
                 }
 
                 ReleaseActiveOutputCore();
-                if (!World.TryAcquireCameraOutput(
+                if (!IsTransitionWorldValid(expectedWorld))
+                {
+                    ReleasePreparedOutput(output);
+                    return false;
+                }
+
+                if (!expectedWorld.TryAcquireCameraOutput(
                         this,
                         output,
-                        ownershipResource,
-                        out int newOwnershipId,
+                        out CameraOutputLease newLease,
                         out error))
                 {
                     Log.Error(
@@ -294,6 +354,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                             builder.Append("Camera output ownership acquisition failed: ");
                             builder.Append(message);
                         });
+                    ReleasePreparedOutput(output);
                     return false;
                 }
 
@@ -308,33 +369,32 @@ namespace CycloneGames.GameplayFramework.Runtime
                                 builder.Append("Camera output activation failed: ");
                                 builder.Append(message);
                             });
-                        World.ReleaseCameraOutput(this, output, newOwnershipId);
+                        ReleaseFailedActivation(output, expectedWorld, newLease);
                         return false;
                     }
 
-                    if (!IsOutputAlive(output) || ownershipResource == null)
+                    if (!IsOutputAlive(output) ||
+                        !output.TryPrepare(out error) ||
+                        !ValidatePreparedResourcesAgainstLease(
+                            output,
+                            in newLease,
+                            out error) ||
+                        !IsTransitionWorldValid(expectedWorld))
                     {
-                        try
-                        {
-                            output.Deactivate(this);
-                        }
-                        finally
-                        {
-                            World.ReleaseCameraOutput(this, output, newOwnershipId);
-                        }
-
-                        Log.Error("Camera output resources were destroyed during activation.");
+                        ReleaseFailedActivation(output, expectedWorld, newLease);
+                        Log.Error(
+                            error ?? "Camera output resources were destroyed during activation.");
                         return false;
                     }
                 }
                 catch
                 {
-                    World.ReleaseCameraOutput(this, output, newOwnershipId);
+                    ReleaseFailedActivation(output, expectedWorld, newLease);
                     throw;
                 }
 
                 ActiveOutput = output;
-                activeOutputOwnershipId = newOwnershipId;
+                activeOutputLease = newLease;
                 return true;
             }
             finally
@@ -360,9 +420,10 @@ namespace CycloneGames.GameplayFramework.Runtime
         private void ReleaseActiveOutputCore()
         {
             ICameraOutput output = ActiveOutput;
-            int ownershipId = activeOutputOwnershipId;
+            CameraOutputLease lease = activeOutputLease;
+            World owningWorld = World;
             ActiveOutput = null;
-            activeOutputOwnershipId = 0;
+            activeOutputLease = default;
             if (output == null)
             {
                 return;
@@ -370,15 +431,59 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             try
             {
-                output.Deactivate(this);
-            }
-            catch (System.Exception exception)
-            {
-                Log.Error(exception, $"Camera output '{output.DisplayName}' failed to deactivate.");
+                ReleasePreparedOutput(output);
             }
             finally
             {
-                World?.ReleaseCameraOutput(this, output, ownershipId);
+                owningWorld?.ReleaseCameraOutput(this, output, lease);
+            }
+        }
+
+        private void ReleaseFailedActivation(
+            ICameraOutput output,
+            World owningWorld,
+            CameraOutputLease lease)
+        {
+            try
+            {
+                ReleasePreparedOutput(output);
+            }
+            finally
+            {
+                owningWorld?.ReleaseCameraOutput(this, output, lease);
+            }
+        }
+
+        private void ReleaseRepreparedActiveOutput(
+            ICameraOutput output,
+            World owningWorld,
+            in CameraOutputLease lease)
+        {
+            if (ReferenceEquals(ActiveOutput, output))
+            {
+                ReleaseActiveOutputCore();
+                return;
+            }
+
+            try
+            {
+                ReleasePreparedOutput(output);
+            }
+            finally
+            {
+                owningWorld?.ReleaseCameraOutput(this, output, lease);
+            }
+        }
+
+        private void ReleasePreparedOutput(ICameraOutput output)
+        {
+            try
+            {
+                output?.Deactivate(this);
+            }
+            catch (System.Exception exception)
+            {
+                Log.Error(exception, $"Camera output '{GetOutputDisplayName(output)}' failed to release prepared state.");
             }
         }
 
@@ -521,7 +626,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 Log.Error(
                     exception,
-                    $"Camera output '{output.DisplayName}' failed while applying a pose and was released.");
+                    $"Camera output '{GetOutputDisplayName(output)}' failed while applying a pose and was released.");
                 ReleaseActiveOutput();
             }
         }
@@ -585,7 +690,10 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             try
             {
-                ReleaseActiveOutput();
+                if (!isTransitioningOutput)
+                {
+                    ReleaseActiveOutput();
+                }
             }
             finally
             {
@@ -598,7 +706,10 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             try
             {
-                ReleaseActiveOutput();
+                if (!isTransitioningOutput)
+                {
+                    ReleaseActiveOutput();
+                }
             }
             finally
             {
@@ -616,7 +727,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (!ReferenceEquals(ActiveOutput, output))
             {
-                output?.Deactivate(this);
+                ReleasePreparedOutput(output);
                 return;
             }
 
@@ -638,6 +749,133 @@ namespace CycloneGames.GameplayFramework.Runtime
                    (!(output is UnityEngine.Object unityObject) || unityObject != null);
         }
 
+        private static bool ValidatePreparedResources(ICameraOutput output, out string error)
+        {
+            int resourceCount;
+            try
+            {
+                resourceCount = output.PreparedResourceCount;
+            }
+            catch (System.Exception exception)
+            {
+                error = $"Camera output resource count could not be read: {exception.Message}";
+                return false;
+            }
+
+            if (resourceCount <= 0 || resourceCount > CameraOutputLimits.MaximumPreparedResourceCount)
+            {
+                error = $"Camera output must prepare between 1 and {CameraOutputLimits.MaximumPreparedResourceCount} ownership resources.";
+                return false;
+            }
+
+            for (int i = 0; i < resourceCount; i++)
+            {
+                try
+                {
+                    UnityEngine.Object resource = output.GetPreparedResource(i);
+                    if (resource == null)
+                    {
+                        error = $"Camera output resource {i} is missing or destroyed.";
+                        return false;
+                    }
+
+                    int resourceId = resource.GetInstanceID();
+                    for (int j = 0; j < i; j++)
+                    {
+                        UnityEngine.Object previous = output.GetPreparedResource(j);
+                        if (previous != null && previous.GetInstanceID() == resourceId)
+                        {
+                            error = $"Camera output resource {i} duplicates resource {j}.";
+                            return false;
+                        }
+                    }
+                }
+                catch (System.Exception exception)
+                {
+                    error = $"Camera output resource {i} could not be read: {exception.Message}";
+                    return false;
+                }
+            }
+
+            error = null;
+            return true;
+        }
+
+        private static bool ValidatePreparedResourcesAgainstLease(
+            ICameraOutput output,
+            in CameraOutputLease lease,
+            out string error)
+        {
+            if (!lease.IsValid)
+            {
+                error = "Camera output has no active ownership lease.";
+                return false;
+            }
+
+            int resourceCount;
+            try
+            {
+                resourceCount = output.PreparedResourceCount;
+            }
+            catch (System.Exception exception)
+            {
+                error = $"Camera output resource count could not be read: {exception.Message}";
+                return false;
+            }
+
+            if (resourceCount != lease.ResourceCount)
+            {
+                error = "Camera output changed its ownership-resource count after lease acquisition.";
+                return false;
+            }
+
+            for (int index = 0; index < resourceCount; index++)
+            {
+                try
+                {
+                    UnityEngine.Object resource = output.GetPreparedResource(index);
+                    if (resource == null || resource.GetInstanceID() != lease.GetResourceId(index))
+                    {
+                        error =
+                            $"Camera output changed ownership resource {index} after lease acquisition.";
+                        return false;
+                    }
+                }
+                catch (System.Exception exception)
+                {
+                    error = $"Camera output resource {index} could not be read: {exception.Message}";
+                    return false;
+                }
+            }
+
+            error = null;
+            return true;
+        }
+
+        private bool IsTransitionWorldValid(World expectedWorld)
+        {
+            return ReferenceEquals(World, expectedWorld) &&
+                   (expectedWorld.LifecycleState == WorldLifecycleState.Initializing ||
+                    expectedWorld.LifecycleState == WorldLifecycleState.Playing);
+        }
+
+        private static string GetOutputDisplayName(ICameraOutput output)
+        {
+            if (output == null)
+            {
+                return "Unknown";
+            }
+
+            try
+            {
+                return output.DisplayName ?? "Unknown";
+            }
+            catch
+            {
+                return "Destroyed output";
+            }
+        }
+
         private void ResetRuntimeState()
         {
             SetActorTickEnabled(false);
@@ -649,7 +887,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             lastViewTarget = null;
             lastPrimaryMode = null;
             PendingViewTargetTF = null;
+            currentPose = default;
             hasCurrentPose = false;
+            cameraStateDirty = false;
             hasExplicitFovOverride = false;
             hasPendingBlendDurationOverride = false;
             pendingBlendDurationOverride = 0f;
@@ -659,6 +899,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             blendState = default;
             isUpdatingCamera = false;
             isTransitioningOutput = false;
+            ActiveOutput = null;
+            activeOutputLease = default;
         }
 
         private void EnsureActorTickConfiguration()
