@@ -106,6 +106,8 @@ if (!session.ApproveLogin(in request, out string loginError))
 
 在 gameplay session 接受请求之前，模块会校验 connection 状态、认证状态、玩家身份、地址长度、staging 容量、重复 connection ID 和地址封禁。Transport `ConnectionId` 必须为正数。Staging 会冻结已验证的 ID 与地址；如果 connection identity 在提交前发生变化，approval 与 binding 会拒绝该 connection。
 
+Staging 会在发布任何条目之前同时为两份 identity index 预留容量。注册事务先提交组合的 `IGameSession`，再将暂存 connection 的验证与绑定作为同一 adapter 事务完成。提交后的任何拒绝或异常都会先回滚组合 session，再返回或重新抛出。如果自定义 session 无法完成回滚，adapter 会保留唯一的 recovery owner、报告 `HasRegistrationRollbackFault`，并拒绝后续注册。修复自定义 session 后，应在 owner thread 调用 `TryRecoverRegistrationRollback()`。该有界 fail-closed 状态可防止未绑定 participant 静默占用 gameplay roster。
+
 ## 共享复制规划器
 
 复制策略、observer 求值、优先级、tick 间隔、channel 选择和字节/消息预算统一由 `CycloneGames.Networking.Replication` 提供。GameplayFramework 不维护第二套复制模型，其 Runtime assembly 仅将 Unity Actor 状态采样为共享的不可变输入值：
@@ -246,7 +248,7 @@ ServerDamageValidationResult validation = processor.Process(
 - Core protocol value 和纯 validator 没有 Unity thread affinity。
 - `DamageCooldownTracker` 捕获 owner thread 并拒绝其他线程访问；server simulation owner 必须串行化访问。
 - `NetworkGameSessionAdapter` 在构造时捕获 owner thread，其他线程访问 collection 时会抛出异常。`MaximumSupportedBannedAddressCount` 是实现上限，`MaximumBannedAddressCount` 表示注入的每 session 预算。
-- `ActorNetworkingExtensions` 调用 Unity API。已绑定 Actor 会在任何状态读写前验证所属 World thread。未绑定 authoring Actor 没有可验证的 World owner，因此调用方必须在 Unity main thread 调用 adapter。
+- `ActorNetworkingExtensions` 调用 Actor live API。每个已初始化 Actor 都会验证其在 `Awake` 捕获的不可迁移 owner thread；已绑定 Actor 还会验证所属 World 的 owner thread，尚未初始化的 Actor 则 fail closed。
 - Transport shutdown 应在 owner thread 移除 staged/bound connection 后再替换 message endpoint。
 
 ## 持久化

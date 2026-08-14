@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
@@ -90,7 +91,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             var playerObject = new GameObject("PlayerController");
             try
             {
-                PlayerController player = playerObject.AddComponent<PlayerController>();
+                PlayerController player = AddInitializedActor<PlayerController>(playerObject);
                 var session = new NetworkGameSessionAdapter(new ContainingSession(player));
 
                 Assert.IsFalse(session.TryBindConnection(
@@ -122,6 +123,155 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 new NetworkGameSessionAdapter(
                     maximumBannedAddressCount:
                         NetworkGameSessionAdapter.MaximumSupportedBannedAddressCount + 1));
+        }
+
+        [Test]
+        public void BanPlayer_UsesValidatedBoundAddressSnapshot()
+        {
+            var playerObject = new GameObject("PlayerController");
+            var stateObject = new GameObject("PlayerState");
+            try
+            {
+                PlayerController player = AddInitializedActor<PlayerController>(playerObject);
+                PlayerState playerState = AddInitializedActor<PlayerState>(stateObject);
+                playerState.SetPlayerId(42);
+                FieldInfo playerStateField = typeof(Controller).GetField(
+                    "playerState",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(playerStateField);
+                playerStateField.SetValue(player, playerState);
+
+                var session = new NetworkGameSessionAdapter(new ContainingSession(player));
+                var connection = new TestConnection(42, "10.0.0.42");
+                Assert.IsTrue(session.TryBindConnection(player, connection, out string bindError), bindError);
+
+                connection.RemoteAddress = new string(
+                    'x',
+                    PlayerLoginRequest.MaxRemoteAddressLength + 1);
+
+                Assert.IsTrue(session.BanPlayer(player));
+                Assert.IsTrue(session.IsAddressBanned("10.0.0.42"));
+                Assert.IsFalse(session.IsAddressBanned(connection.RemoteAddress));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(stateObject);
+                UnityEngine.Object.DestroyImmediate(playerObject);
+            }
+        }
+
+        [Test]
+        public void RegistrationException_RollsBackComposedSessionBeforeRethrow()
+        {
+            var playerObject = new GameObject("PlayerController");
+            var stateObject = new GameObject("PlayerState");
+            try
+            {
+                PlayerController player = AddInitializedActor<PlayerController>(playerObject);
+                PlayerState playerState = AddInitializedActor<PlayerState>(stateObject);
+                playerState.SetPlayerId(43);
+                AssignPlayerState(player, playerState);
+
+                var composedSession = new TrackingSession();
+                var session = new NetworkGameSessionAdapter(composedSession);
+                var connection = new TestConnection(43, "10.0.0.43");
+                Assert.IsTrue(session.TryStageConnection(43, connection, out string stageError), stageError);
+                connection.ThrowOnIsConnected = true;
+
+                Assert.Throws<InvalidOperationException>(() =>
+                    session.TryRegisterPlayer(player, spectator: false, out _));
+
+                Assert.IsFalse(composedSession.ContainsPlayer(player));
+                Assert.IsFalse(session.HasRegistrationRollbackFault);
+                Assert.AreEqual(1, composedSession.RegisterCallCount);
+                Assert.AreEqual(1, composedSession.UnregisterCallCount);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(stateObject);
+                UnityEngine.Object.DestroyImmediate(playerObject);
+            }
+        }
+
+        [Test]
+        public void FailedRegistrationRollback_BlocksAdmissionUntilExplicitRecovery()
+        {
+            var playerObject = new GameObject("PlayerController");
+            var stateObject = new GameObject("PlayerState");
+            try
+            {
+                PlayerController player = AddInitializedActor<PlayerController>(playerObject);
+                PlayerState playerState = AddInitializedActor<PlayerState>(stateObject);
+                playerState.SetPlayerId(44);
+                AssignPlayerState(player, playerState);
+
+                var composedSession = new TrackingSession { AllowUnregister = false };
+                var session = new NetworkGameSessionAdapter(composedSession);
+                var connection = new TestConnection(44, "10.0.0.44")
+                {
+                    IsConnectedValue = false,
+                };
+                Assert.IsTrue(session.TryStageConnection(44, connection, out string stageError), stageError);
+
+                Assert.IsFalse(session.TryRegisterPlayer(player, spectator: false, out string registrationError));
+                Assert.AreEqual("Network registration rollback did not complete.", registrationError);
+                Assert.IsTrue(session.HasRegistrationRollbackFault);
+                Assert.IsTrue(composedSession.ContainsPlayer(player));
+
+                Assert.IsFalse(session.TryRegisterPlayer(player, spectator: false, out string blockedError));
+                StringAssert.Contains("must be recovered", blockedError);
+                Assert.AreEqual(1, composedSession.RegisterCallCount);
+
+                composedSession.AllowUnregister = true;
+                Assert.IsTrue(session.TryRecoverRegistrationRollback());
+                Assert.IsFalse(session.HasRegistrationRollbackFault);
+                Assert.IsFalse(composedSession.ContainsPlayer(player));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(stateObject);
+                UnityEngine.Object.DestroyImmediate(playerObject);
+            }
+        }
+
+        [Test]
+        public void RegistrationRollbackOutOfMemory_RetainsRecoveryOwnerAndRethrows()
+        {
+            var playerObject = new GameObject("PlayerController");
+            var stateObject = new GameObject("PlayerState");
+            try
+            {
+                PlayerController player = AddInitializedActor<PlayerController>(playerObject);
+                PlayerState playerState = AddInitializedActor<PlayerState>(stateObject);
+                playerState.SetPlayerId(45);
+                AssignPlayerState(player, playerState);
+
+                var composedSession = new TrackingSession
+                {
+                    ThrowOutOfMemoryOnUnregister = true,
+                };
+                var session = new NetworkGameSessionAdapter(composedSession);
+                var connection = new TestConnection(45, "10.0.0.45")
+                {
+                    IsConnectedValue = false,
+                };
+                Assert.IsTrue(session.TryStageConnection(45, connection, out string stageError), stageError);
+
+                Assert.Throws<OutOfMemoryException>(() =>
+                    session.TryRegisterPlayer(player, spectator: false, out _));
+                Assert.IsTrue(session.HasRegistrationRollbackFault);
+                Assert.IsTrue(composedSession.ContainsPlayer(player));
+
+                composedSession.ThrowOutOfMemoryOnUnregister = false;
+                Assert.IsTrue(session.TryRecoverRegistrationRollback());
+                Assert.IsFalse(session.HasRegistrationRollbackFault);
+                Assert.IsFalse(composedSession.ContainsPlayer(player));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(stateObject);
+                UnityEngine.Object.DestroyImmediate(playerObject);
+            }
         }
 
         [Test]
@@ -172,6 +322,17 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.IsInstanceOf<InvalidOperationException>(captured);
         }
 
+        private static T AddInitializedActor<T>(GameObject gameObject) where T : Actor
+        {
+            T actor = gameObject.AddComponent<T>();
+            MethodInfo awake = typeof(Actor).GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(awake);
+            awake.Invoke(actor, null);
+            return actor;
+        }
+
         private sealed class TestConnection : INetConnection
         {
             public TestConnection(int connectionId, string remoteAddress)
@@ -181,10 +342,13 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             }
 
             public int ConnectionId { get; set; }
-            public string RemoteAddress { get; }
+            public string RemoteAddress { get; set; }
             public bool IsConnectedValue { get; set; } = true;
             public bool IsAuthenticatedValue { get; set; } = true;
-            public bool IsConnected => IsConnectedValue;
+            public bool ThrowOnIsConnected { get; set; }
+            public bool IsConnected => ThrowOnIsConnected
+                ? throw new InvalidOperationException("Connection state probe failed.")
+                : IsConnectedValue;
             public bool IsAuthenticated => IsAuthenticatedValue;
             public int Ping => 0;
             public ConnectionQuality Quality => ConnectionQuality.Good;
@@ -193,6 +357,75 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             public long BytesReceived => 0;
             public ulong PlayerId { get; set; }
             public bool Equals(INetConnection other) => other != null && other.ConnectionId == ConnectionId;
+        }
+
+        private sealed class TrackingSession : IGameSession
+        {
+            private PlayerController player;
+
+            public bool AllowUnregister { get; set; } = true;
+            public bool ThrowOutOfMemoryOnUnregister { get; set; }
+            public int RegisterCallCount { get; private set; }
+            public int UnregisterCallCount { get; private set; }
+            public int MaxPlayers => 1;
+            public int MaxSpectators => 0;
+            public int PlayerCount => ReferenceEquals(player, null) ? 0 : 1;
+            public int SpectatorCount => 0;
+            public bool AtCapacity(bool spectator) => !ReferenceEquals(player, null);
+            public bool ApproveLogin(in PlayerLoginRequest request, out string errorMessage)
+            {
+                errorMessage = null;
+                return true;
+            }
+
+            public bool TryRegisterPlayer(
+                PlayerController candidate,
+                bool spectator,
+                out string errorMessage)
+            {
+                RegisterCallCount++;
+                if (!ReferenceEquals(player, null))
+                {
+                    errorMessage = "Session is full.";
+                    return false;
+                }
+
+                player = candidate;
+                errorMessage = null;
+                return true;
+            }
+
+            public bool ContainsPlayer(PlayerController candidate) =>
+                ReferenceEquals(player, candidate);
+
+            public bool UnregisterPlayer(PlayerController candidate)
+            {
+                UnregisterCallCount++;
+                if (ThrowOutOfMemoryOnUnregister)
+                {
+                    throw new OutOfMemoryException("Synthetic rollback failure.");
+                }
+
+                if (!AllowUnregister || !ReferenceEquals(player, candidate))
+                {
+                    return false;
+                }
+
+                player = null;
+                return true;
+            }
+
+            public bool TrySetSpectatorStatus(
+                PlayerController candidate,
+                bool spectator,
+                out string errorMessage)
+            {
+                errorMessage = null;
+                return false;
+            }
+
+            public void HandleMatchHasStarted() { }
+            public void HandleMatchHasEnded() { }
         }
 
         private sealed class OversizedSession : IGameSession
@@ -248,6 +481,15 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             public NetworkSendResult BroadcastToClients(ushort id, ReadOnlySpan<byte> payload, NetworkChannel channel = NetworkChannel.Reliable) => default;
             public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, ushort id, ReadOnlySpan<byte> payload, NetworkChannel channel = NetworkChannel.Reliable) => default;
             public void Disconnect(INetConnection connection) { }
+        }
+
+        private static void AssignPlayerState(PlayerController player, PlayerState playerState)
+        {
+            FieldInfo playerStateField = typeof(Controller).GetField(
+                "playerState",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(playerStateField);
+            playerStateField.SetValue(player, playerState);
         }
     }
 }

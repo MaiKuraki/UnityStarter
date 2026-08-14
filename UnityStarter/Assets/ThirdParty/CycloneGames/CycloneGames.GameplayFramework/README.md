@@ -7,11 +7,12 @@ This module provides a Unity gameplay-flow foundation organized around the famil
 ## Table of Contents
 
 - [Overview](#overview)
+- [Migration Notes](#migration-notes)
 - [Architecture](#architecture)
 - [Assembly Integration](#assembly-integration)
 - [Quick Start](#quick-start)
 - [Runtime Lifecycle](#runtime-lifecycle)
-- [WorldSettings and WorldDefinition](#worldsettings-and-worlddefinition)
+- [WorldSettings and IWorldDefinition](#worldsettings-and-iworlddefinition)
 - [Actor and World Ownership](#actor-and-world-ownership)
 - [GameMode Login and Roster](#gamemode-login-and-roster)
 - [Controller, Pawn, and Possession](#controller-pawn-and-possession)
@@ -31,13 +32,31 @@ A `GameInstance` owns one active `World`. That World owns actors and an authorit
 
 The package contains two runtime layers. `CycloneGames.GameplayFramework.Core` owns engine-independent admission, roster, match-state, snapshot, and capacity rules. `CycloneGames.GameplayFramework.Runtime` owns the Unity object graph and presents the familiar Unreal-style gameplay interface. Runtime depends on Core; Core never references Runtime or UnityEngine.
 
-The module handles what UE calls the "game flow" layer—not input, physics, or networking transport. `WorldNetMode` (Standalone, ListenServer, DedicatedServer) controls framework authority behavior; actual network transport and replication live in separate modules composed into the World.
+The module handles what UE calls the "game flow" layer—not input, physics, or networking transport. `WorldNetMode` (`Standalone`, `Client`, `ListenServer`, and `DedicatedServer`) controls framework authority behavior; actual network transport and replication live in separate modules composed into the World. Undefined enum values are rejected before WorldSettings resolution or World construction begins.
 
 ### Owner-thread Contract
 
-`GameInstance` and each `World` are single-owner runtime scopes. The thread that creates the `GameInstance` becomes the owner; Unity compositions should create and use it on the Unity main thread. World mutation and inline callbacks must remain on that owner thread. The framework provides neither an implicit lock nor a cross-thread queue.
+`GameInstance` and each `World` are single-owner runtime scopes. The thread that creates the `GameInstance` becomes the owner; Unity compositions should create and use it on the Unity main thread. World mutation, live runtime reads, collection views, and inline callbacks must remain on that owner thread. These APIs fail immediately when called from another thread. Immutable construction metadata remains safe to inspect according to its individual contract. The framework provides neither an implicit lock nor a cross-thread queue.
 
-For a World-bound `Actor`, `SetOwner` and `SetInstigator` assert the World owner thread before mutation. `OwnerChanged` is invoked synchronously on the same thread. Unbound Actors retain their existing Unity-facing contract and should be accessed on the Unity main thread. Product network adapters must explicitly marshal remote input to the World owner before changing these references.
+Each `Actor` captures one immutable lifecycle owner thread in `Awake` or `BindToWorld`. A later lifecycle or World bind on another thread fails immediately. The protected `AssertActorOwnerThread` delegates to the current World while the Actor is registered and otherwise checks the captured lifecycle thread. Actor mutation entry points use this guard, and `PlayerController.GetCameraContext` checks it before creating the context, so a worker thread cannot establish ownership through first access. `OwnerChanged` is invoked synchronously on the same accepted thread. Product network adapters must explicitly marshal remote input to the Actor or World owner before mutation.
+
+CameraManager applies the same guard to every public live-state or output getter and every public mutation or evaluation API. A retained manager reference used from a worker throws `InvalidOperationException` before any component, Transform, or other Unity-object lookup.
+
+## Migration Notes
+
+This refactor preserves assembly names and serialized `.meta` GUIDs, so existing Prefab, Scene, and asmdef references remain valid. The source-level breaking changes are:
+
+| Before | After |
+| --- | --- |
+| `GameState.EMatchState` | `CycloneGames.GameplayFramework.Core.MatchState` |
+| `GameState.ElapsedTime` (`float`) | `GameState.ElapsedTimeSeconds` (`double`) |
+| `WorldActorAdmissionSnapshot` | `CycloneGames.GameplayFramework.Core.ActorAdmissionSnapshot` |
+| `DamageEvent.EffectContext` (`object`) | Removed. Keep stable IDs or an immutable snapshot in your own adapter. |
+| `event Action<float, DamageEvent, Controller, Actor> OnTakePointDamage` / `OnTakeRadialDamage` | `event DamageEventHandler` (the value is passed by `in`) |
+| `GameState.SetMatchState` / `AddPlayerState` / `RemovePlayerState` virtual | Non-virtual. Override `OnMatchStateChanged` instead. |
+| `Runtime/Scripts/Integrations/AssetManagement` / `GameplayAbilities` / `GameplayTags` | Separate companion packages (`CycloneGames.GameplayFramework.*`) with identical assembly names |
+
+`DamageEvent` is now an immutable `readonly struct` created only through `MakeGenericDamage`, `MakePointDamage`, or `MakeRadialDamage`, and validated on ingress by `Validate()`. `PlayerLoginRequest.Validate()` offers an allocation-free enum result, `MatchStateMachine.PeekElapsedSeconds` offers a non-mutating read, and `UnityMatchClock.WithEpoch(Guid)` enables restoring a persisted clock epoch.
 
 ## Architecture
 
@@ -53,7 +72,7 @@ flowchart TD
     GI["GameInstance<br/>application scope"] --> LP["LocalPlayer slots<br/>0..8"]
     GI --> W["World<br/>one active scope"]
     GI --> CLA["ICameraOutputLeaseArbiter<br/>composition resource domain"]
-    W --> WD["WorldDefinition<br/>resolved prefab references and leases"]
+    W --> WD["IWorldDefinition<br/>read-only resolved prefab view"]
     W --> A["Registered Actors"]
     W --> GM["GameMode<br/>authority only"]
     W --> GS["GameState<br/>committed World state"]
@@ -86,7 +105,7 @@ These relationships have distinct meanings:
 | Area | Responsibility |
 | --- | --- |
 | `Core` | Engine-independent participant roster, login values, match timestamps/state/snapshots, player snapshots, World runtime limits, Actor admission snapshots, and Actor-tag limits |
-| `Runtime/Scripts/World` | GameplayWorldHost, GameplayWorldComposition, early/late Tick drivers, GameInstance, LocalPlayer, World, WorldSettings, WorldDefinition, KillZVolume |
+| `Runtime/Scripts/World` | GameplayWorldHost, terminal-cleanup ownership, GameplayWorldComposition, early/late Tick drivers, GameInstance, LocalPlayer, World, WorldSettings, IWorldDefinition, KillZVolume |
 | `Runtime/Scripts/Foundation` | Actor lifecycle, primary Tick, tags, and damage contracts |
 | `Runtime/Scripts/Game` | GameMode, GameSession, GameState, PlayerState |
 | `Runtime/Scripts/Controllers` | Controller, PlayerController, AIController |
@@ -193,13 +212,14 @@ CameraManager and SpectatorPawn are optional. Click **Validate Configuration** i
 
 ### Add GameplayWorldHost
 
-1. Create a scene GameObject named `Gameplay World Host`.
-2. Add `GameplayWorldHost`.
-3. Assign the WorldSettings asset.
-4. Select the net mode and local-player count.
-5. Keep **Auto Start** enabled when the Host is the scene entry point.
+1. Create a dedicated root GameObject that outlives gameplay scenes and add `GameplayWorldTerminalCleanupOwner`.
+2. Set its fixed capacity to the maximum number of GameInstances that may await terminal retry at once.
+3. Create a separate scene root named `Gameplay World Host` and add `GameplayWorldHost`.
+4. Assign the cleanup owner and WorldSettings asset to the Host. The two components must not share the same root hierarchy.
+5. Select the net mode and local-player count.
+6. Keep **Auto Start** enabled when the Host is the scene entry point.
 
-Dedicated Server mode always uses zero local players. The Host starts before ordinary Actor `Start` callbacks, owns the GameInstance, creates an early Update/FixedUpdate driver and a late LateUpdate driver, exposes runtime status and failure diagnostics, and disposes the World when its GameObject is destroyed. Disabling the Host component pauses both drivers without changing the World lifecycle; keep the Host enabled until stop or disposal.
+Dedicated Server mode always uses zero local players. The Host starts before ordinary Actor `Start` callbacks, registers every new GameInstance with the application-lifetime cleanup owner before World startup, creates an early Update/FixedUpdate driver and a late LateUpdate driver, and exposes runtime status and failure diagnostics. On destruction it attempts terminal disposal and then relinquishes any incomplete GameInstance reference to the independent cleanup owner for later retry. Disabling the Host component pauses both drivers without changing the World lifecycle; keep the Host enabled until stop or disposal.
 
 Direct Reference requires no resolver. Asset Reference and Path require an explicit `IWorldSettingsReferenceResolver`; the WorldSettings section describes the resolver contract and the optional AssetManagement companion package. If the project's DI container already owns the application lifetime, construct and dispose `GameInstance` directly without adding a Host.
 
@@ -240,18 +260,19 @@ Constructor parameters:
 | `IMatchClock` | Optional match-clock domain; defaults to `UnityMatchClock.Scaled` |
 | `ICameraOutputLeaseArbiter` | Optional camera-resource ownership domain; defaults to a new `CameraOutputLeaseArbiter` for this GameInstance's composition domain |
 
-`LocalPlayer` contains a stable `Index` and the current world-scoped `PlayerController`. Controller logout, World stop, and GameInstance disposal clear this association.
+`LocalPlayer` contains a stable `Index` and the current world-scoped `PlayerController`. Every `PlayerController` read and internal assignment enforces the owning GameInstance thread. Controller logout, World stop, and GameInstance disposal clear this association.
 
-One GameInstance accepts only one active World. Call and await `StopWorldAsync` before starting the next World. Calling public `World.ShutdownAsync` or `World.Dispose` directly performs the same ownership cleanup and notifies the owning GameInstance to clear `CurrentWorld`. A reentrant stop while the World is already `Stopping` does not release `CurrentWorld`; replacement start remains rejected until disposal completes.
+One GameInstance accepts only one active World. Call and await `StopWorldAsync` before starting the next World. `StopWorldAsync` and public `World.ShutdownAsync` accept only an `EndPlayReason`; once shutdown begins it is deliberately non-cancellable. Calling public `World.ShutdownAsync` or `World.Dispose` directly uses the same terminal transaction. `CurrentWorld` is cleared only after every cleanup owner reports completion. A failed pass leaves the World in `Stopping`, rejects replacement startup, and can be retried on the same owner thread. Re-entering while a terminal pass is already executing fails fast; retry only after that pass returns or throws.
 
 ### Host Composition and DI
 
-`GameplayWorldComposition` is the single Host dependency boundary for manual bootstrap and DI. It contains the required `IActorLifetime` plus optional reference resolution, scene transition, session, World runtime limits, Actor source, match clock, and camera-output lease arbiter. Configure the sealed Host before it starts:
+`GameplayWorldComposition` is the single Host dependency boundary for manual bootstrap and DI. It contains the required `IActorLifetime` and `IGameplayWorldTerminalCleanupOwner` plus optional reference resolution, scene transition, session, World runtime limits, Actor source, match clock, and camera-output lease arbiter. Configure the sealed Host before it starts:
 
 ~~~csharp
 var sharedCameraOutputLeaseArbiter = new CameraOutputLeaseArbiter();
 var composition = new GameplayWorldComposition(
     actorLifetime,
+    terminalCleanupOwner,
     referenceResolver: referenceResolver,
     sceneTransitionHandler: sceneTransitionHandler,
     gameSession: gameSession,
@@ -264,9 +285,11 @@ host.Configure(composition);
 await host.StartWorldAsync(cancellationToken);
 ~~~
 
-The caller retains ownership of supplied services and keeps them valid until the Host has stopped. An unconfigured `GameplayWorldHost` uses `UnityActorLifetime`, a `SceneWorldActorSource` fixed to the Host GameObject's scene, `UnityMatchClock.Scaled`, and a new `CameraOutputLeaseArbiter`. An explicitly configured Host uses the composition exactly as supplied: a null `ActorSource` disables startup discovery. A directly constructed `GameInstance` also performs no scene scan when `actorSource` is null. A DI container supplies the same constructor arguments; it does not require a GameplayWorldHost subclass or a container-specific Runtime assembly.
+The caller retains ownership of supplied services and keeps them valid until the Host and its registered GameInstances have completed terminal cleanup. A Host always requires an application-lifetime cleanup owner, supplied by its serialized root component, `ConfigureTerminalCleanupOwner`, or `GameplayWorldComposition`. With that owner and no explicit composition, it uses `UnityActorLifetime`, a `SceneWorldActorSource` fixed to the Host GameObject's scene, `UnityMatchClock.Scaled`, and a new `CameraOutputLeaseArbiter`. An explicit composition controls every seam exactly: a null `ActorSource` disables startup discovery. A directly constructed `GameInstance` also performs no scene scan when `actorSource` is null. A DI container supplies the same dependencies; it does not require a GameplayWorldHost subclass or a container-specific Runtime assembly.
 
-Host startup is a single transaction. A second start while the first is pending is rejected. `StopWorldAsync` during startup cancels the pending transaction and waits for its rollback. Pre-cancelled starts, resolver faults, and destruction during an await release the temporary GameInstance; a non-disposed Host returns to `Stopped` and can start again after the failed transaction has completed.
+`GameplayWorldTerminalCleanupRegistry` is the pure runtime implementation of `IGameplayWorldTerminalCleanupOwner`; `GameplayWorldTerminalCleanupOwner` is its Unity root component. Both are owner-thread-bound and use fixed, preallocated GameInstance slots. Host startup verifies capacity and registers the new GameInstance before invoking its asynchronous startup. Successful disposal calls `ReleaseCompleted`. `TryCleanupAll` retries every registered instance in one pass, keeps incomplete owners registered, and rethrows the first direct or nested OOM only after the pass. The application shutdown composition calls `TryCleanupAll` and verifies that it returns true before destroying the cleanup owner.
+
+Host startup is a single transaction controlled by the `StartWorldAsync` cancellation token. A second start while the first is pending is rejected. `StopWorldAsync` during startup cancels the Host-owned pending transaction and waits for its rollback; shutdown itself has no cancellation token. Pre-cancelled starts, resolver faults, and destruction during an await release the temporary GameInstance; a non-disposed Host returns to `Stopped` and can start again after the failed transaction has completed.
 
 `IActorLifetime.Create` and `Release` are paired for every World-owned Actor, including failed spawn transactions, self-destruction, and shutdown. Implementations must accept the Actor even when Unity destruction has already occurred. `Release` must permanently end that Actor instance; returning an Actor that has reached its terminal `Destroyed` lifecycle state to a pool is unsupported. Projects that use CycloneGames.Factory install the Factory companion package and compose `FactoryActorLifetime`; Factory types do not appear in GameplayFramework Runtime interfaces.
 
@@ -290,6 +313,7 @@ stateDiagram-v2
     Initializing --> Playing: initialization commits
     Initializing --> Stopping: cancellation or failure
     Playing --> Stopping: StopWorldAsync, travel, or dispose
+    Stopping --> Stopping: retry incomplete terminal cleanup
     Stopping --> Stopped: Actors and gameplay state end
     Stopped --> Disposed: leases and lifecycle resources released
     Disposed --> [*]
@@ -302,7 +326,7 @@ A World accepts new Actors only while `Initializing` or `Playing`.
 `StartWorldAsync` performs this transaction:
 
 1. Validate GameInstance state and WorldSettings.
-2. Resolve WorldSettings into a WorldDefinition.
+2. Resolve WorldSettings into the internal definition owner exposed through `IWorldDefinition`.
 3. Switch to the Unity main thread and assert owner-thread affinity.
 4. Create the World and expose it as `CurrentWorld`.
 5. Ask the configured `IWorldActorSource`, when present, to collect externally owned Actors and register its non-null, non-duplicate results.
@@ -314,30 +338,31 @@ A World accepts new Actors only while `Initializing` or `Playing`.
 11. Notify GameMode that the World has started.
 12. Enable Actor Tick dispatch.
 
-Any exception aborts initialization, ends registered Actors, destroys World-owned Actors, disposes WorldDefinition leases, clears `CurrentWorld`, and rethrows the exception.
+Any exception aborts initialization and starts the same staged terminal transaction used by shutdown. `CurrentWorld` and its cleanup owners remain reachable when that transaction is incomplete; only a fully disposed World is removed from the GameInstance.
 
 ### Shutdown and Travel
 
-Once shutdown begins, cleanup no longer accepts cancellation:
+`GameInstance.StopWorldAsync(EndPlayReason)` and `World.ShutdownAsync(EndPlayReason)` expose no cancellation parameter. Once shutdown begins, cleanup no longer accepts cancellation:
 
-1. World stops Actor Tick dispatch, enters `Stopping`, and cancels `LifetimeToken`.
-2. GameMode logs out every PlayerController.
-3. Remaining Actors receive EndPlay in reverse World-registry order.
-4. World-owned GameObjects are destroyed.
-5. Scene and external Actors are unbound, but their GameObjects are not destroyed by the World.
-6. Active camera outputs are deactivated and their exclusive resource leases are released.
-7. External WorldDefinition leases are released in reverse acquisition order.
-8. World enters `Disposed`, and GameInstance clears `CurrentWorld`.
+1. World stops Actor Tick dispatch, enters `Stopping`, and commits cancellation of `LifetimeToken`.
+2. GameMode removes each participant in stages: possession, GameSession registration, GameState PlayerState membership, World PlayerController membership, then associated Actor destruction. A failed stage keeps the exact participant owner reachable and prevents later participant stages from being repeated out of order.
+3. Remaining Actor entries advance through CameraContext cleanup when applicable, bookkeeping detachment, one-shot World unbind, one-shot lifetime ownership transfer, and registry removal. Completed stages are recorded so retries neither repeat callbacks nor release the same Actor twice. Scene and external Actor GameObjects are not destroyed by the World.
+4. The camera-output arbiter attempts every unique lease once in the pass. Failed leases remain owned; successful leases are removed.
+5. Only after Actor and camera-output ownership has completed does the internal definition owner release registered external asset owners in reverse order.
+6. Only after definition cleanup succeeds does World dispose its lifetime cancellation source.
+7. World enters `Disposed`, GameInstance clears `CurrentWorld`, and the application cleanup owner releases the completed GameInstance registration.
 
-`GameMode.TravelToLevel` first stops the World with `EndPlayReason.Travel`, then calls `ISceneTransitionHandler.ChangeScene`. The destination scene creates its own World. Capture any data that must cross scenes before requesting travel.
+If any owner remains, World stays in `Stopping`. A non-OOM incomplete pass throws the preallocated `WorldShutdownIncompleteException`; its retained World exposes gameplay, Actor, camera-output, WorldSettings-lease, and lifetime-token pending diagnostics. A direct or nested terminal OOM is preserved while required stages continue and is rethrown afterward. GameInstance retains `CurrentWorld`, and GameplayWorldHost retains the registered owner even when it reports `Faulted`; calling stop again on the same owner thread retries only incomplete stages. If the Host is destroyed, the independent `IGameplayWorldTerminalCleanupOwner` remains the retry owner.
 
-`GameInstance.Dispose` cancels its lifetime, immediately shuts down the World with `ApplicationShutdown`, clears LocalPlayer associations, and releases its cancellation source.
+`GameMode.TravelToLevel(levelName)` commits a non-cancellable travel operation: it first stops the World with `EndPlayReason.Travel`, then calls `ISceneTransitionHandler.ChangeScene` with `CancellationToken.None`. Decide whether to begin travel and capture any cross-scene data before invoking it; once invoked, shutdown and destination navigation run to completion. The destination scene creates its own World.
 
-## WorldSettings and WorldDefinition
+`GameInstance.Dispose` is also retryable. It cancels its lifetime once, retries any retained World or definition owner, clears LocalPlayer associations, and releases its cancellation source in stages. `IsDisposalComplete` becomes true only when no terminal owner remains.
+
+## WorldSettings and IWorldDefinition
 
 ### Authoring and Runtime Responsibilities
 
-`WorldSettings` is a ScriptableObject authoring asset. Each class entry selects a prefab whose root contains exactly one component of the required framework type. Runtime startup resolves these prefab classes into an immutable `WorldDefinition`; Runtime code reads the definition through `World.Definition`.
+`WorldSettings` is a ScriptableObject authoring asset. Each class entry selects a prefab whose root contains exactly one component of the required framework type. Runtime startup resolves these prefab classes into an internal lifetime owner. Product code reads the immutable public `IWorldDefinition` view through `World.Definition`; the view exposes prefab properties but no disposal operation or external lease handle.
 
 | Reference | Required | Runtime purpose |
 | --- | --- | --- |
@@ -360,6 +385,8 @@ The `GameMode`, `PlayerController`, `Pawn`, and `PlayerState` prefab classes are
 | `AssetReference` | Inspector-recorded asset location | Resolver must support `AssetReference` |
 | `PathLocation` | Project-defined address/path | Resolver must support `PathLocation` |
 
+Every external entry stores one explicit `AssetLocation` string. WorldSettings uses the selected source only to query `Supports`, then passes the location unchanged through `ResolveAsync<T>`, where `T` is the expected component type. WorldSettings stores no parallel identity metadata. The resolver owns location meaning, normalization, lookup, and lease policy.
+
 Required references must resolve to non-null assets. An optional direct reference may be null. An optional external reference is considered configured whenever its location is non-empty and must then resolve successfully.
 
 ### Resolver Contract
@@ -371,24 +398,27 @@ public interface IWorldSettingsReferenceResolver
 
     UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
         string location,
+        IWorldSettingsLeaseRegistrar leaseRegistrar,
         CancellationToken cancellationToken)
         where T : UnityEngine.Object;
 }
 ~~~
 
-The result contains success, asset, error, and an optional `IDisposable` lease. WorldSettings disposes acquired leases after a partial resolution failure. On success, WorldDefinition owns the leases and releases them exactly once in reverse order.
+`WorldSettingsAssetLoadResult<T>` contains only `Success`, `Asset`, and `Error`; ownership never travels in the result. Before each external resolve call, WorldSettings reserves one registrar slot. The resolver may register at most one non-null `IDisposable` owner for that call, and a registered owner must never be disposed by the resolver. A resolver that needs several backend handles pre-creates one composite owner, registers that owner before any handle-bearing await, cancellation observation, validation, or callback can fail, and places every handle under it.
+
+WorldSettings preallocates the rollback exception carriers and lease quarantine before invoking external code. A resolver may complete or fault on a worker thread; result validation and rollback first return to the owner/main thread without cancellation. Partial failure releases registered owners in reverse order. A failed cleanup owner remains quarantined. `WorldSettingsLeaseCleanupException` and `WorldSettingsLeaseCleanupOutOfMemoryException` expose diagnostic failures and `PendingLeaseCount`, but no quarantine handle. Before either exception leaves the startup transaction, GameInstance adopts the quarantine exactly once. A Host's application-lifetime terminal registry retains that GameInstance and retries its terminal disposal; direct GameInstance composition keeps the same responsibility with its application owner. On successful resolution, only the internal definition owner can release the registered owners.
 
 Resolver implementations must:
 
-- respond to cancellation;
+- respond to cancellation without bypassing registered ownership cleanup;
 - return bounded error messages;
-- dispose failed handles before returning;
+- register its single owner before the first failure-capable asynchronous boundary and never dispose it after registration;
 - avoid storing mutable resolution state in WorldSettings;
 - treat a location as untrusted input when it can originate outside project assets.
 
 ### AssetManagement Companion
 
-The sibling package `com.cyclone-games.gameplay-framework-asset-management` provides `AssetManagementWorldSettingsReferenceResolver`. It receives an explicit `IAssetPackage`, supports `AssetReference`, and transfers successful asset handles to `WorldDefinition` as leases. It does not support `PathLocation`.
+The sibling package `com.cyclone-games.gameplay-framework-asset-management` provides `AssetManagementWorldSettingsReferenceResolver`. It receives an explicit `IAssetPackage`, supports `AssetReference`, and registers the resolve call's load-handle owner through `IWorldSettingsLeaseRegistrar` before awaiting completion. It does not support `PathLocation`.
 
 ~~~csharp
 var resolver =
@@ -435,7 +465,11 @@ protected override void EndPlay(EndPlayReason reason)
 }
 ~~~
 
-Each World binding publishes `BeginPlay` at most once. World owns the ordinary publication barrier; Unity `Start` only provides a fallback when the Actor is already bound and that World is already `Playing`. After shutdown, a non-owned scene or external Actor is unbound and can reset from `Ended` to `Initialized` when registered with a replacement World. A World-owned Actor cannot re-enter after ending. Each binding publishes `OnWorldUnbound` at most once, including direct destruction; when destruction occurs inside EndPlay, the terminal `Destroyed` state is not overwritten by `Ended`. `OnDestroyed` is the terminal Unity-destruction event and is separate from EndPlay.
+Each World binding publishes `BeginPlay` at most once. World owns the ordinary publication barrier; Unity `Start` only provides a fallback when the Actor is already bound and that World is already `Playing`. After shutdown, a non-owned scene or external Actor is unbound and can reset from `Ended` to `Initialized` when registered with a replacement World. A World-owned Actor cannot re-enter after ending. Each binding publishes `OnWorldUnbound` at most once, including direct destruction; when destruction occurs inside EndPlay, the terminal `Destroyed` state is not overwritten by `Ended`. `OnDestroyed` is the terminal Unity-destruction event and is separate from EndPlay. Its subscriptions use a copy-on-write array, so terminal dispatch consumes the already published snapshot without allocating. Non-OOM observer failures are logged and isolated. Direct or nested OOM is retained while base Actor cleanup and all published destruction observers finish, then the first OOM is rethrown.
+
+An Actor subclass that overrides Unity `OnDestroy` must make base terminal cleanup unconditional: place local cleanup in `try` and invoke `base.OnDestroy()` from `finally`, or use an equivalent accumulator that still reaches the base call before propagating a failure. The built-in Controller, Pawn, PlayerState, GameMode, and CameraManager hierarchy follows this terminal rule. Skipping the base call can leave World registration, lifespan ownership, or observers unreleased.
+
+Actor lifespan cancellation uses staged ownership. Once cancellation commits it is not repeated; the `CancellationTokenSource` remains owned until disposal succeeds, and re-entrant cleanup is rejected while that disposal is in progress. Terminal cleanup detects direct or nested OOM, finishes the required base boundary, and then propagates it without losing the retained source needed by a later retry.
 
 An inactive Actor registered with a Playing World remains `Initialized` until it becomes active; `OnEnable` then asks the World to publish BeginPlay. The World rejects that fallback while the Actor is still a deferred spawn, so activation cannot bypass `FinishSpawningActor`.
 
@@ -577,6 +611,12 @@ Actor also provides:
 
 Actor owner, Controller possession, and World ownership are independent relationships.
 
+`DamageEvent` is a readonly value created with `MakeGenericDamage`, `MakePointDamage`, or `MakeRadialDamage`. Point factories require finite hit geometry; radial factories require a finite origin and `0 <= innerRadius <= outerRadius`. `TakeDamage` accepts the value by `in`, calls its allocation-free `Validate` ingress check, and rejects default, unknown-type, or invalid geometry before dispatch. Point and radial observers use `DamageEventHandler` and also receive the same value by `in`. The value contains the event type, optional `IDamageType`, and event-specific geometry; external gameplay systems retain their own stable identifiers and immutable context snapshots.
+
+Subscriptions to `OnTakePointDamage` and `OnTakeRadialDamage` publish copy-on-write observer snapshots. Adding or removing an observer is an owner-thread boundary after the Actor is bound and can allocate; damage dispatch traverses the published array without managed allocation.
+
+After `InternalTakeDamage` returns a valid committed amount, point and radial dispatch calls the typed `ReceivePointDamage`/`ReceiveRadialDamage` receiver, every published observer, and finally `ReceiveAnyDamage`. Each receiver and each observer independently logs and isolates non-OOM exceptions. A typed-receiver failure does not skip observers or generic dispatch; an observer failure does not skip later observers or generic dispatch; a generic-receiver failure does not change the returned committed damage. A direct or nested OOM is rethrown immediately from the failing receiver or observer, so later damage callbacks and the normal committed-damage return do not run for that call.
+
 Tag bulk operations use span boundaries:
 
 ~~~csharp
@@ -604,7 +644,9 @@ PlayerController firstPlayer = world.GetFirstPlayerController();
 PlayerController player = world.GetPlayerController(index);
 ~~~
 
-`GetAuthGameMode` returns null in a non-authoritative World. Generic getters use safe casts and also return null when the active object does not match the requested type. `GameInstance.GetWorld()` returns the current World. On a Client World, a replication adapter registers the received GameState Actor and commits it with `World.SetReplicatedGameState`; replacing a non-null committed instance is rejected, and destroying or explicitly clearing that Actor releases the World reference before another instance can be committed. The adapter exposes received Controllers through `GetFirstPlayerController`/`GetPlayerController` by calling `CommitReplicatedPlayerController` after the Controller and its PlayerState are registered and the Controller is initialized; an optional LocalPlayer must be the exact slot owned by that GameInstance. Destroying the Controller clears the committed World and LocalPlayer associations. These APIs are scoped to the object graph and do not create ambient global state.
+`GetAuthGameMode` returns null in a non-authoritative World. Generic getters use safe casts and also return null when the active object does not match the requested type. `GameInstance.GetWorld()` returns the current World. Live GameInstance and World queries—including lifecycle state, current World, LocalPlayers, Actor and PlayerController registries, Tick counts, and indexed registration reads—require the owner thread. On a Client World, a replication adapter registers the received GameState Actor and commits it with `World.SetReplicatedGameState`; replacing a non-null committed instance is rejected, and destroying or explicitly clearing that Actor releases the World reference before another instance can be committed. The adapter exposes received Controllers through `GetFirstPlayerController`/`GetPlayerController` by calling `CommitReplicatedPlayerController` after the Controller and its PlayerState are registered and the Controller is initialized; an optional LocalPlayer must be the exact slot owned by that GameInstance. Destroying the Controller clears the committed World and LocalPlayer associations. These APIs are scoped to the object graph and do not create ambient global state.
+
+`World.PlayerControllers`, `World.PlayerStarts`, and `GameState.PlayerArray` return concrete `OwnerThreadReadOnlyList<T>` live views; `GameInstance.LocalPlayers` uses the same contract. `Count`, the indexer, enumerator creation, `Current`, and `MoveNext` enforce the owner thread on every access. Retaining a view or enumerator and using it from a worker thread cannot bypass the check. `LocalPlayer.PlayerController` also performs the owner check on every read and internal assignment. A concrete-view `foreach` on the owner thread uses the struct enumerator and creates no managed allocation.
 
 ## GameMode Login and Roster
 
@@ -679,6 +721,8 @@ flowchart TD
 
 `PostLogin` runs after relationships are committed and every deferred Actor has finished spawning. If PostLogin throws, the login transaction rolls back.
 
+An exception from `PreLogin` or `IGameSession.ApproveLogin` is logged with its full exception inside the authoritative process. The external result is `Rejected` with the bounded message `Player login policy evaluation failed.` and never contains `Exception.Message`. After admission completes, an unexpected participant-staging or extension failure is logged internally and returns `SpawnFailed` with the bounded message `Player login failed while preparing participant state.` Product network adapters still map all result text to their own protocol-safe error catalog.
+
 ### GameSession
 
 `GameSession` is the sealed Runtime facade over one Core `ParticipantRoster`. The roster indexes non-negative PlayerId values, rejects duplicate identities, enforces player and spectator capacities, and updates category counts atomically. The facade keeps the admitted `PlayerController`/`PlayerState` binding in its Runtime dictionary so World cleanup and possession remain direct. Product-specific session behavior is composed through `IGameSession`, including DI-provided implementations; GameSession transactions are not subclass extension points.
@@ -733,7 +777,7 @@ Do not call `Possess` or `UnPossess` from a possession callback; the reentrancy 
 
 Possession callbacks run after state commits. After each callback returns, the transaction verifies the bidirectional Controller, Pawn, and PlayerState relationships again. If a callback destroys or otherwise invalidates the committed Controller or Pawn, the framework performs an emergency detach without callbacks and `TryPossess` returns false. Exceptions still propagate. When committed relationships remain valid, they are preserved, so a throwing callback still requires an explicit compensation policy.
 
-World unbind clears Controller possession, PlayerState, start spot, input-suppression counters, and initialization state. This also applies to non-owned scene Controllers and externally registered Controllers. AIController also stops AI and clears focus. PlayerController clears LocalPlayer, camera context, CameraManager, SpectatorPawn, and view-target relationships. Explicitly reinitialize these non-owned objects before reusing them in a replacement World.
+World unbind clears Controller possession, PlayerState, start spot, input-suppression counters, and initialization state. This also applies to non-owned scene Controllers and externally registered Controllers. AIController also stops AI and clears focus. PlayerController clears LocalPlayer, CameraManager, SpectatorPawn, and view-target relationships, then releases its CameraContext only when `CameraContext.Clear()` reports complete cleanup. If that call returns false or throws a non-fatal exception, the failure is logged and the same context reference is retained so explicit `Clear` or terminal `OnDestroy` can retry. Explicitly reinitialize these non-owned objects only after retained camera cleanup has completed.
 
 ### Controller Input and View
 
@@ -761,6 +805,8 @@ Pawn provides:
 - turn-on and turn-off state.
 
 Pawn inherits optional primary Actor Tick but does not participate by default. A movement adapter should consume movement input and call `ApplyControllerRotation` in the phase owned by that movement implementation. Rigidbody-based adapters usually retain Unity `FixedUpdate`; a deterministic simulator can expose an explicit `Step` instead.
+
+`PawnConfig` is the Pawn's single serialized authoring source for controller-rotation flags, base eye height, and look-angle limits. When assigned, `Pawn.Awake` validates and applies it before gameplay callbacks. `SetPawnConfig` requires a non-null asset, validates it, stores it, and applies it immediately on the owner thread. Base eye height must be finite; both look angles must be finite and within `[0, 180]`. A Pawn with no assigned asset uses its built-in runtime defaults, while an assigned invalid asset fails initialization instead of publishing partially applied values.
 
 `NotifyInitialRotation` finds components on the Pawn that implement `IInitialRotationSettable` and publishes the spawn rotation before possession completes.
 
@@ -813,7 +859,9 @@ While registered with GameSession, PlayerId is locked and spectator status is co
 
 GameState contains the participant `PlayerArray` and composes one Core `MatchStateMachine`. It rejects null or duplicate PlayerState entries and validates World membership. The serialized `initialMatchState` field is authoring input for the first state machine; Runtime transitions and restore operations do not write back into that field.
 
-The state machine owns legal transitions, committed `MatchState`, and elapsed in-progress time in one explicit clock domain. `GameplayWorldComposition` and `GameInstance` accept an `IMatchClock`. During Actor registration, World configures every GameState immediately after binding it and before registry commitment or BeginPlay publication; authoritative spawn and client replication therefore observe the same clock-ordering contract. `UnityMatchClock.Scaled` is the default, while `UnityMatchClock.Unscaled` is available when pause and `Time.timeScale` must not stop match time. A server or deterministic simulation can supply another `IMatchClock` without introducing Unity types into Core.
+The state machine owns legal transitions, committed `MatchState`, and elapsed in-progress time in one explicit clock domain. `GameplayWorldComposition` and `GameInstance` accept an `IMatchClock`. During Actor registration, World configures every GameState immediately after binding it and before registry commitment or BeginPlay publication; authoritative spawn and client replication therefore observe the same clock-ordering contract. Clock selection is owned by World composition and is not a public GameState mutation. `UnityMatchClock.Scaled` is the default, while `UnityMatchClock.Unscaled` is available when pause and `Time.timeScale` must not stop match time. A server or deterministic simulation can supply another `IMatchClock` without introducing Unity types into Core.
+
+GameState runtime reads and mutations require registration with a World and run on that World's owner thread. This includes `MatchState`, `PlayerArray`, elapsed time, participant counts, transitions, and snapshot capture or restore. Elapsed-time access therefore cannot establish a clock or thread owner lazily; both are fixed before registry commitment.
 
 Every clock reading is a `MatchTimestamp` containing a non-empty `Guid` epoch and finite, non-negative `double` seconds. The epoch prevents scaled, unscaled, restarted, or otherwise unrelated time domains from being combined. The state machine also rejects timestamps that move backwards and confines mutable access to its constructing or restoring thread.
 
@@ -831,6 +879,8 @@ Valid match transitions are:
 Elapsed time advances only during InProgress. A transition from WaitingPostMatch to WaitingToStart resets the accumulated time. Core transition rules can be tested without a GameObject or Unity clock.
 
 GameMode owns transition policy. Use `TrySetMatchState` when a recoverable result is required; use `SetMatchState` when an illegal transition is a programming error.
+
+`OnMatchStateChanged` observes a transition only after the state machine or restored snapshot has committed. A non-OOM callback failure is logged and isolated. A direct OOM propagates after the committed state remains visible; the re-entry guard is cleared in `finally`, so a later transition or restore can proceed.
 
 `GameState.ElapsedTimeSeconds` exposes the accumulated value as `double`. `CaptureMatchStateSnapshot` returns a readonly Core value with `State`, `ElapsedSeconds`, `CapturedTimestamp`, and `ClockEpoch`. `TryRestoreMatchStateSnapshot` restores only when the current clock has the same epoch and has not moved behind the captured timestamp. If the captured state is InProgress, elapsed time includes the same-epoch interval between capture and restore. `RestoreMatchStateSnapshot` throws when restore rejection is a programming error.
 
@@ -874,7 +924,15 @@ Each PlayerController creates a CameraContext on demand. The context owns:
 
 The default mode capacity is 8 and can be changed by overriding `PlayerController.GetCameraModeStackCapacity`. A requested non-positive capacity becomes 1.
 
+CameraContext captures its construction thread as its owner. `Owner` and `MaxCameraModes` are immutable construction values. Every other live-state getter, view-target or mode mutation, `Clear`, and evaluation-scope transition checks that owner on each access, so retaining a context does not authorize worker-thread reads. The successful fast path is one managed-thread ID integer comparison with no lock or managed allocation; a mismatch fails immediately with `InvalidOperationException`.
+
 `TryPushCameraMode` rejects null, duplicate instances, clearing state, and capacity overflow. `TryPushOrReplaceOldest` provides an explicit full-stack policy. During CameraManager evaluation, base-mode replacement and stack push, replace, or remove are rejected so the iterated stack remains stable. A `Clear` requested during evaluation is deferred until the evaluation scope ends; it then deactivates stacked modes in reverse order before deactivating the base mode.
+
+Mode changes are transactional. An activation failure is compensated by deactivating the attempted mode and restoring the previous activation state when applicable. If a deactivation fails, or activation compensation cannot prove the attempted mode inactive or restore the previous mode safely, `HasModeLifecycleFault` becomes true. CameraContext retains exactly one context-owned cleanup reference to every affected mode instead of publishing an unowned lifecycle state. Callback exceptions are logged, and boolean stack operations return false when the transaction cannot commit.
+
+An `OutOfMemoryException` from `CameraMode.OnActivate` or `OnDeactivate` first commits the same fault state—setting `HasModeLifecycleFault`, retaining one cleanup handle for each affected mode, including an uncommitted replacement during a full-stack replace, and freezing mutation and evaluation—then propagates. `Clear` can retry the retained cleanup and clears the fault only after every survivor deactivates successfully.
+
+While `HasModeLifecycleFault` is true, base/stack mutation and CameraMode evaluation are frozen, and `GetPrimaryCameraMode` returns null. `Clear()` is the only lifecycle mutation that remains available: it retries every retained mode in reverse stack order followed by the base mode, removes only successfully deactivated entries, and keeps failed entries for another attempt. It returns true only when cleanup is complete and the fault has cleared; a deferred, reentrant, or incomplete cleanup returns false.
 
 ### Camera Modes and Blending
 
@@ -890,40 +948,53 @@ public override CameraPose Evaluate(
 }
 ~~~
 
+`CameraPose` is a readonly value containing position, normalized rotation, and FOV. Its constructor rejects non-finite positions, non-finite or degenerate rotations, and FOV values outside the open interval `(0, 180)`. `TryCreate` applies the same rules without throwing and returns an invalid default value on failure. `Lerp` requires two valid poses and a finite interpolation value.
+
+CameraManager treats every external evaluation boundary as untrusted: `Actor.CalcCamera`, CameraMode Tick/Evaluate, post-processors, and custom blend curves are contained. An exception or invalid pose is logged, the last-known-good pose is retained, and invalid data is never written to the manager Transform or active output. Before the first valid pose, the manager uses a validated Transform pose and safe FOV, with zero position and identity rotation as the final fallback.
+
 The base mode evaluates first. Stacked modes then evaluate from index 0 through the newest entry. The newest stacked mode is the primary mode used to select transition blend duration.
 
-`CameraBlendState` supports Linear, SmoothStep, EaseOut, EaseIn, and custom `ICameraBlendCurve` evaluation. Negative blend durations are clamped to zero.
+`CameraBlendState` supports Linear, SmoothStep, EaseOut, EaseIn, and custom evaluation. Built-in curves are selected through `CameraBlendCurveType` and evaluated without allocating curve objects. Extend the blend policy through `ICameraBlendCurve` or `CustomCameraBlendCurve`. Negative blend durations are clamped to zero.
 
 ### CameraManager and Output Ownership
 
-During GameMode login, CameraManager is created only for a local PlayerController and only when WorldDefinition contains a CameraManager prefab.
+During GameMode login, CameraManager is created only for a local PlayerController and only when the World's `IWorldDefinition.CameraManagerClass` is configured.
 
 It:
 
 - evaluates camera state through primary Actor Tick in the LateUpdate phase after initialization;
 - resolves an authored `CameraOutputBehaviour` or accepts an explicit `ICameraOutput` through `SetCameraOutput`;
-- prepares the backend's complete ownership-resource set and asks the World for one atomic lease;
-- activates the output only after every prepared resource has been acquired;
+- discovers the backend's complete ownership-resource snapshot through `TryGetResourceSet`;
+- asks the World to acquire one atomic lease for that exact snapshot;
+- activates the output with the leased snapshot only after every resource has been acquired;
 - publishes the final pose and FOV through `ApplyPose`;
 - deactivates the output and releases ownership during replacement, Actor teardown, or World shutdown.
 
-`ICameraOutput.TryPrepare` resolves between one and `CameraOutputLimits.MaximumPreparedResourceCount` (4) stable Unity resources. `PreparedResourceCount` and `GetPreparedResource` expose that bounded set. The composed `ICameraOutputLeaseArbiter` validates non-null, distinct resources, rejects the complete request if any resource is already leased in its ownership domain, and then returns one generation-safe `CameraOutputLease` covering all of them. Acquisition is all-or-nothing; a failed activation rolls back prepared backend state and the entire lease.
+`ICameraOutput.TryGetResourceSet(out CameraOutputResourceSet resources, out string error)` is the side-effect-free discovery boundary. It must not change lifecycle state, capture or mutate backend state, or produce another externally visible effect. `CameraOutputResourceSet` is a readonly, allocation-free value snapshot containing between one and `CameraOutputLimits.MaximumResourceCount` (4) distinct live `UnityEngine.Object` resources and their captured instance IDs. Its constructors enforce the resource contract, while `TryCreate` reports invalid input without throwing. `Count`, `GetResource`, `GetResourceId`, and `TryValidate` provide bounded access and detect missing, destroyed, or identity-mismatched resources.
+
+Resource discovery, atomic lease acquisition, activation with the leased snapshot, and commit form one output transaction. `ICameraOutput.TryActivate(CameraManager owner, in CameraOutputResourceSet resources, out string error)` receives the same snapshot already leased by the World; an implementation must not discover, replace, or substitute a resource during activation. The composed `ICameraOutputLeaseArbiter` rejects the complete request when any resource is already leased in its ownership domain and returns one generation-safe `CameraOutputLease` only after the all-or-nothing acquisition succeeds.
 
 `CameraOutputLeaseArbiter` is a composition-owned, owner-thread-affine registry with no static global ownership state. `GameplayWorldComposition` creates and retains one when none is supplied; a directly constructed GameInstance creates its own default and passes the same instance to every World it creates. One GameInstance still accepts only one active World, so this domain remains continuous across replacement Worlds. Parallel Worlds belong to separate GameInstances: if their outputs can reference the same persistent Camera, CinemachineBrain, or other backend resource, inject the same arbiter instance into every participating composition. Independent default arbiters intentionally represent independent resource domains and cannot detect overlap between those Worlds.
 
-Within one arbiter domain, two CameraManagers cannot hold overlapping prepared sets even when their output components or Worlds differ. Release checks World identity, owner, output identity, lease generation, and complete resource IDs before removing ownership. The arbiter is created and mutated on one owner thread; all sharing GameInstances and Worlds must perform lease operations on that thread. Destroyed Unity resources are treated as unavailable, while managed reference identity remains the ownership token. World shutdown asks the arbiter to release all leases for that World. Output destruction, replacement, and activation exceptions also converge on deactivation and lease release. CameraManager teardown clears its pose, blend, dirty-state, and backend references before reuse. A CameraManager without an output continues evaluating and exposing `CurrentPose`; output is an optional presentation boundary.
+Within one arbiter domain, two CameraManagers cannot hold overlapping resource snapshots even when their output components or Worlds differ. Release checks World identity, owner, output identity, lease generation, and complete resource IDs before removing ownership. The arbiter is created and mutated on one owner thread; all sharing GameInstances and Worlds must perform lease operations on that thread. Destroyed Unity resources are treated as unavailable, while managed reference identity remains the ownership token. World shutdown asks the arbiter to release all leases for that World. CameraManager teardown clears its pose, blend, dirty-state, and backend references before reuse. A CameraManager without an output continues evaluating and exposing `CurrentPose`; output is an optional presentation boundary.
+
+If activation cleanup or `Deactivate` throws, CameraManager retains the lease and fails closed because the backend may still own or mutate the leased resources. `CameraOutputBehaviour` retains its owner and faulted lifecycle state and accepts a later `Deactivate` retry; it becomes idle only after that call succeeds. World `TryReleaseAll` processes each unique lease once per cleanup pass. Non-OOM and OOM deactivation failures retain only the affected lease and do not prevent attempts for the remaining unique leases in that pass. Successful deactivation removes the corresponding lease. After all unique leases have been visited, the arbiter rethrows the first direct or nested OOM; `World.CompleteShutdown` preserves it while its remaining required terminal cleanup runs, then propagates it.
+
+A `CameraOutputBehaviour` subclass that overrides `Awake`, `OnEnable`, or `OnDestroy` must call the corresponding base method. The first two establish or validate lifecycle-thread ownership; base `OnDestroy` returns the output to its owning CameraManager or performs the final deactivation path. Its public live-state and mutation APIs enforce that captured lifecycle owner thread.
+
+`CameraManager.HasOutputLeaseFault` becomes true when an arbiter exception or output-deactivation failure leaves ownership untrusted. While that flag is set, the current Runtime binding does not attempt another output bind. World unbind or manager Runtime reset clears the flag. Treat it as an operational fault: stop the affected World, inspect the failing output or custom arbiter, and do not assume the backend resource is free until its ownership domain has been reconciled.
 
 ### Core Unity Camera Output
 
-`UnityCameraOutput` is included in the GameplayFramework Runtime assembly. Assign a `UnityEngine.Camera` explicitly or place one on the output hierarchy. The component can apply the final transform, field of view, or both. It requires no camera package and is the output used by the PureUnity sample.
+`UnityCameraOutput` is included in the GameplayFramework Runtime assembly. Assign a `UnityEngine.Camera` explicitly or place one on the output hierarchy. The component can apply the final transform, field of view, or both. It requires no camera package and is the output used by the PureUnity sample. That sample's Camera and Light authoring uses built-in Unity and GameplayFramework components; it carries no optional Cinemachine or render-pipeline-specific component.
 
-GameplayFramework Runtime and its public interfaces contain no Cinemachine type. Custom backends implement `ICameraOutput` directly or derive from `CameraOutputBehaviour` for Unity authoring. The prepared count and resource identities must remain stable until `Deactivate` releases prepared state. `TryPrepare`, `TryActivate`, `ApplyPose`, and `Deactivate` run on the World owner thread. `UnityCameraOutput` prepares exactly one ownership resource: its target Camera.
+GameplayFramework Runtime and its public interfaces contain no Cinemachine type. Custom backends implement `ICameraOutput` directly or derive from `CameraOutputBehaviour` for Unity authoring. Discovery, activation, pose application, and deactivation run on the World owner thread. `UnityCameraOutput.TryGetResourceSet` discovers exactly one ownership resource: its explicitly assigned Camera or the Camera resolved from its hierarchy. Discovery does not set `ActiveCamera`; activation assigns that property from the already leased snapshot.
 
 ### Optional Cinemachine Output
 
 When `com.unity.cinemachine` in the supported `[3.0.0,4.0.0)` range is installed, the gated assembly `CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine` provides `CinemachineCameraOutput`. Its asmdef uses `versionDefines`, `defineConstraints`, and `autoReferenced: false`; the GameplayFramework package does not declare Cinemachine as a dependency.
 
-Assign a `CinemachineCamera` and `CinemachineBrain` with `SetVirtualCamera`/`SetBrain` or serialized fields. Built-in discovery inspects only the `CinemachineCameraOutput` GameObject's Scene and succeeds only when it can choose an unambiguous camera and brain there; it never selects a candidate from another loaded Scene. The output prepares both the Brain and Virtual Camera as one resource domain, so sharing either object conflicts atomically. On activation, it stores the brain update mode and camera Follow/LookAt targets, selects manual brain updates, applies pose and lens, and restores the stored state on deactivation or rollback.
+Assign a `CinemachineCamera` and `CinemachineBrain` with `SetVirtualCamera`/`SetBrain` or serialized fields. Scene discovery is disabled by default. The output still checks its own component hierarchy; when **Allow Scene Discovery** is enabled, the cold-path scan inspects only the output GameObject's Scene and succeeds only when that Scene contains exactly one eligible CinemachineCamera and exactly one CinemachineBrain. It never selects a candidate from another loaded Scene. `TryGetResourceSet` returns the Brain and CinemachineCamera as one immutable resource snapshot, so sharing either object conflicts atomically; discovery does not set `ActiveBrain` or `ActiveVirtualCamera`. Activation receives that leased snapshot, captures the brain update mode and camera Follow/LookAt targets, assigns the active properties, selects manual brain updates, and starts applying pose and lens. Deactivation attempts to restore Follow, LookAt, and `CinemachineBrain.UpdateMethod` independently, so one failure does not skip the other restore operations. Completed items are no longer pending; a faulted lifecycle retains the owner, active properties, and only the unfinished restore items for a later `Deactivate` retry. Lifecycle state is released only after all three restorations complete.
 
 ### View Target and Post-processors
 
@@ -935,7 +1006,7 @@ CameraManager supports at most 16 registered `ICameraPostProcessor` instances. T
 
 ### Camera Actions
 
-`CameraActionBinding` maps string action keys to `CameraActionPreset`:
+`CameraActionBinding` is a sealed authoring component. Compose it with gameplay components or the bridges below, and map string action keys to `CameraActionPreset`:
 
 1. Check inline entries first.
 2. Use `CameraActionMap` as the fallback.
@@ -947,9 +1018,9 @@ Trigger policies are:
 - `IgnoreIfRunning`;
 - `Stack`.
 
-The binding has configurable active-action and pooled-mode limits, both defaulting to 8. At the active limit or CameraContext capacity, `PlayAction`/`PlayPreset` returns false. When the pool has no available mode, the binding creates a `PresetCameraMode`; returned modes are retained only up to the configured pool limit.
+The binding has configurable active-action and pooled-mode limits, both defaulting to 8 and hard-limited to 64. Inline entries, shared `CameraActionMap` entries, and Timeline signal mappings are each hard-limited to 256. `Awake` validates every budget before allocating lookup or pool storage. At the active limit or CameraContext capacity, `PlayAction`/`PlayPreset` returns false. When the pool has no available mode, the binding creates a `PresetCameraMode`; returned modes are retained only up to the configured pool limit.
 
-On disable or destruction, the binding stops active actions and removes their modes from the PlayerController that originally accepted them.
+Every committed `ActiveAction` captures the exact CameraContext that accepted its `PresetCameraMode`. Stop, automatic completion, disable, and destruction cleanup use that stored context instead of resolving the current PlayerController, so a destroyed Unity owner that compares as fake-null does not orphan the mode. A removal requested during CameraContext evaluation can be accepted and deferred; the binding keeps the ActiveAction and checks the captured context again in `LateUpdate`. The mode returns to the pool only after that context no longer contains it. If lifecycle cleanup retains the mode for `Clear`, CameraActionBinding does not reset or pool that instance.
 
 Available bridges are:
 
@@ -957,6 +1028,8 @@ Available bridges are:
 - `CameraActionStateBehaviour` for Animator state enter, progress thresholds, and exit;
 - `TimelineCameraActionReceiver` for Playables notifications;
 - direct calls from gameplay code.
+
+`CameraActionMap.Warmup()` validates and builds a complete immutable Runtime snapshot before publishing it. Runtime reads use `EntryCount`, `GetEntry`, and `TryGetEntry`; callers never receive the serialized backing list. `CameraActionBinding`, `AnimatorCameraActionBridge`, and `TimelineCameraActionReceiver` are sealed owner-thread components. Their live entry points reject use before lifecycle initialization or from a worker thread, and missing required bindings fail during initialization instead of dropping actions silently.
 
 Each CameraActionStateBehaviour instance tracks at most 8 concurrent Animator/layer pairs. At capacity, enter and exit actions continue to run, but progress triggers for additional pairs pause until a slot is released. `OnStateExit` releases the slot.
 
@@ -968,7 +1041,7 @@ Exit mode can perform no operation, stop an action key, or play an action key. P
 | --- | --- |
 | `CameraProfile` | Shared default FOV and fallback blend duration; requires an explicit `ApplyTo` call |
 | `CameraActionPreset` | Timed framing, offsets, lens, weight curve, and blend data for an action shot |
-| `CameraActionMap` | Shared action-key table with a lazy Runtime lookup |
+| `CameraActionMap` | Shared action-key table with an explicitly warmed, atomically published Runtime snapshot |
 | `PresetCameraMode` | Runtime evaluator used by CameraActionBinding |
 | `ViewTargetCameraMode` | Pass-through base mode that uses the resolved Actor camera pose |
 
@@ -1028,6 +1101,8 @@ The GameplayTags integration is delivered by its sibling companion package, whic
 The Networking sibling package provides two explicit layers. `CycloneGames.GameplayFramework.Networking.Core` has no engine references and owns protocol messages, bounds, codecs, security-policy composition, and validation. Shared `CycloneGames.Networking.Core` owns replication objects, observers, policies, budgets, and `NetworkReplicationPlanner`. `CycloneGames.GameplayFramework.Networking.Runtime` owns `NetworkGameSessionAdapter`, Actor capture/apply, replication snapshot capture, and every adapter that reads or mutates Unity gameplay objects.
 
 `NetworkGameSessionAdapter` can be supplied as the authoritative `IGameSession`. A client replication adapter registers its received GameState Actor and calls `World.SetReplicatedGameState`; it registers and initializes each received PlayerController and PlayerState before calling `World.CommitReplicatedPlayerController`. Both client-only commit boundaries run on the World owner thread and reject authority Worlds. Transport callbacks must be authenticated and marshalled to that thread before they call gameplay APIs.
+
+Registration stages both identity indexes before either becomes visible. If a custom composed session cannot roll back a post-commit registration failure, `NetworkGameSessionAdapter` retains exactly one recovery owner, reports `HasRegistrationRollbackFault`, and rejects later registrations. After correcting the session, call `TryRecoverRegistrationRollback()` on the owner thread before admitting another participant.
 
 Protocol code references Networking Core. Unity replication code references Networking Runtime and every GameplayFramework assembly whose types it uses directly. GameplayFramework Core and Runtime do not reference the Networking companion.
 
@@ -1093,10 +1168,10 @@ public static GameInstance CreateGameInstance(ISceneNavigator sceneNavigator)
 After the World enters Playing, authority-side code can request level travel:
 
 ~~~csharp
-await world.GameMode.TravelToLevel("Stage02", cancellationToken);
+await world.GameMode.TravelToLevel("Stage02");
 ~~~
 
-The call stops the current World before calling `ISceneNavigator.Change`. The destination scene's composition root starts its own World. Initialize the supplied `ISceneNavigator` according to the Navigathena lifecycle before gameplay travel occurs.
+The call is the commit boundary for travel. Decide whether to proceed before invoking it; it stops the current World and calls the adapter with `CancellationToken.None`, so caller cancellation cannot interrupt shutdown or navigation after the operation begins. The destination scene's composition root starts its own World. Initialize the supplied `ISceneNavigator` according to the Navigathena lifecycle before gameplay travel occurs.
 
 ### Composing Navigathena Through the Host
 
@@ -1108,6 +1183,7 @@ var sceneTransitions =
 
 host.Configure(new GameplayWorldComposition(
     new UnityActorLifetime(),
+    terminalCleanupOwner,
     sceneTransitionHandler: sceneTransitions));
 ~~~
 
@@ -1168,9 +1244,9 @@ The integration asmdef references its dependency assemblies directly. Companion 
 | CameraManager Inspector | Configured/active output, owner, pose, blend, view target, mode, and FOV telemetry |
 | CinemachineCameraOutput Inspector | Optional active CinemachineCamera and CinemachineBrain telemetry when the integration is compiled |
 | CameraActionStateBehaviour Inspector | Conditional enter/exit/progress authoring and capacity guidance |
-| Camera Debug Window | Buffered camera telemetry, graphs, and configurable alerts |
-| World Debugger | Host, World, session, Actor admission/allocated-capacity/peak/rejection diagnostics, per-phase Tick counts, and indexed Actor-registration inspection |
-| Project Validation | Read-only scan of WorldSettings assets and loaded-scene Hosts, including required external-resolver composition guidance |
+| Camera Debug Window | Buffered camera telemetry using measured realtime sample intervals, graphs, and configurable alerts |
+| World Debugger | Host, World, session, Actor admission/allocated-capacity/peak/rejection diagnostics, per-phase Tick counts, and 32-entry pages of indexed Actor registrations |
+| Project Validation | Read-only scan of WorldSettings assets and loaded-scene Hosts, including same-Scene auto-start conflict detection and required external-resolver composition guidance |
 
 Open the camera window through:
 
@@ -1185,7 +1261,9 @@ Tools > CycloneGames > GameplayFramework > World Debugger
 Tools > CycloneGames > GameplayFramework > Project Validation
 ~~~
 
-The camera window samples only in Play Mode. Sampling modes are Off, Basic, and Full. Sampling frequency is configurable from 5 to 120 Hz. The in-memory ring buffer is configurable from 120 to 2048 samples and defaults to 600. Full mode additionally samples linear and angular speed. Alert thresholds cover FOV delta, remaining blend time, blend stall, and motion speed.
+The camera window samples only in Play Mode. Sampling modes are Off, Basic, and Full. Sampling frequency is configurable from 5 to 120 Hz. The in-memory ring buffer is configurable from 120 to 2048 samples and defaults to 600. Full mode computes linear and angular speed from the measured `realtimeSinceStartupAsDouble` interval between successful samples, so Editor scheduling delay is not mistaken for the configured nominal interval. Alert thresholds cover FOV delta, remaining blend time, blend stall, and motion speed.
+
+World Debugger reads at most 32 dense registration indices per visible page and does not materialize a World-wide Actor snapshot. Automatic Host binding is refreshed on hierarchy changes or by the explicit **Find Loaded Host** action, avoiding repeated scene-wide searches on the repaint path. Project Validation groups enabled auto-start Hosts by loaded Scene: multiple Hosts conflict only when they would auto-start in the same Scene-scoped Actor domain.
 
 Editor diagnostics are observational only. Validate performance in a target Player and the Profiler before using diagnostic results as release evidence.
 
@@ -1195,12 +1273,13 @@ The framework writes no Runtime save file or preference key.
 
 | Data | Owner | Storage provided by the module | Version control | Lifecycle and cleanup |
 | --- | --- | --- | --- | --- |
-| WorldSettings | Project authoring | ScriptableObject asset | Usually tracked | Edit and validate the serialized asset |
+| WorldSettings | Project authoring | ScriptableObject asset with one direct prefab or one `AssetLocation` per class entry | Usually tracked | Edit and validate the serialized asset |
 | Actor phase and startup Tick flag | Scene/prefab authoring | Serialized MonoBehaviour fields | Usually tracked | Edit through Actor Inspector; use Runtime APIs for temporary changes |
-| GameModeConfig, PawnConfig, CameraProfile | Project authoring | ScriptableObject assets | Usually tracked | Edit and validate through their Inspectors |
+| GameModeConfig, PawnConfig, CameraProfile | Project authoring | ScriptableObject assets | Usually tracked | Edit and validate through their Inspectors; an assigned PawnConfig is applied by Pawn during Awake |
 | CameraActionPreset, CameraActionMap | Project authoring | ScriptableObject assets | Usually tracked | Keep action keys consistent with consumer configuration |
-| WorldDefinition | World Runtime | Memory only | No | Disposed with World; releases leases in reverse order |
-| GameplayWorldHost, GameInstance, LocalPlayer, World | Runtime composition | Memory only | No | Host GameObject lifetime or explicit Stop/Dispose |
+| `IWorldDefinition` view and internal definition owner | World Runtime | Memory only | No | Public view is readonly; staged World shutdown releases the internal owner's registered resolver resources in reverse order |
+| GameplayWorldTerminalCleanupRegistry | Application Runtime composition | Memory only | No | Retains incomplete GameInstances for owner-thread retry; release only after `TryCleanupAll()` returns true |
+| GameplayWorldHost, GameInstance, LocalPlayer, World | Runtime composition | Memory only | No | Host startup registers before World startup; explicit Stop/Dispose or terminal-owner retry completes staged cleanup |
 | CameraOutputLeaseArbiter ownership registry | Runtime composition | Memory only | No | Releases entries per World shutdown; discard after all sharing Worlds have stopped |
 | PlayerStateSnapshot | Save/network adapter | Core in-memory value | Adapter-specific | Validate the persistence or protocol envelope before restore |
 | MatchStateSnapshot | Save/network adapter and clock owner | Core in-memory value without a schema envelope | Adapter-specific | Restore only in a compatible clock epoch and validated product format |
@@ -1225,16 +1304,20 @@ Select and validate a serializer that supports readonly snapshot properties on t
 
 - GameInstance and World mutations run on one owner thread.
 - GameInstance records the constructor thread ID.
-- Actor Tick dispatch, phase changes, and Runtime enable changes use that same owner thread.
+- GameInstance and World live-state reads, collection views, registry queries, and GameState runtime APIs assert that same owner before accessing mutable state. `World.Definition` returns the readonly `IWorldDefinition`, and every property read through a retained definition view repeats the same owner-thread check.
+- `LocalPlayers`, `PlayerControllers`, `PlayerStarts`, and `PlayerArray` expose live `OwnerThreadReadOnlyList<T>` views whose count, indexer, enumerator creation, `Current`, and `MoveNext` repeat the owner check even after the view or enumerator has been retained. `LocalPlayer.PlayerController` guards every read and internal assignment.
+- CameraContext captures its construction thread. Its live getters, view-target and mode mutations, `Clear`, and evaluation scope repeat a lock-free, allocation-free thread-ID check; only immutable `Owner` and `MaxCameraModes` omit that live-state guard.
+- Each Actor captures a non-transferable lifecycle owner thread; while registered, mutation delegates to the World owner-thread check. Tick dispatch, phase changes, Runtime enable changes, and first CameraContext access follow this contract.
+- CameraManager guards every public live-state/output getter and public mutation/evaluation API before any Unity-object lookup, including access through a retained reference.
 - Network, file, and asset callbacks must marshal to the Unity main thread before mutating framework state.
 - Unity object and camera-output operations run on the Unity main thread. Optional camera backends follow the same rule.
 - `CameraOutputLeaseArbiter` captures its construction thread; every World sharing it acquires and releases leases on that owner thread.
-- WorldSettings resolver I/O can complete on other threads. Result validation, rollback, lease transfer, and WorldDefinition disposal run on the main thread performing resolution. Cross-thread WorldDefinition disposal is rejected before consuming ownership.
+- WorldSettings resolver I/O can complete on other threads. Each call registers at most one owner through `IWorldSettingsLeaseRegistrar` before its first failure point; multiple backend handles belong to one pre-created composite owner. Result validation, ownership transfer, and rollback marshal without cancellation to the owner thread. `WorldSettingsAssetLoadResult<T>` carries no lease, product code receives only the readonly `IWorldDefinition` view, and internal disposal remains a staged World responsibility.
 - `ParticipantRoster` and `GameSession` capture their constructing thread as the single owner and add no locks.
 - `MatchStateMachine` captures its constructing thread; a successful `TryRestore` creates a state machine owned by the restoring thread.
 - Reads of their mutable state and every mutation assert that owner. Cross-thread access fails with `InvalidOperationException` instead of observing a potentially inconsistent roster, match clock, or Runtime binding.
 - Immutable limit values and static validation/transition-policy functions do not read mutable instance state. Worker results still marshal to the owner before accessing a live roster, match state machine, or session.
-- Async APIs use UniTask and propagate cancellation during startup and asset resolution. World initialization links caller, GameInstance, and World lifetime tokens; direct World shutdown cancels pending async login so startup cannot continue committing.
+- Async APIs use UniTask and propagate cancellation during startup and asset resolution. World initialization links caller, GameInstance, and World lifetime tokens; beginning shutdown cancels pending async login so startup cannot continue committing. Stop and shutdown then run to completion without accepting a cancellation token.
 
 ### Bounded Structures
 
@@ -1248,9 +1331,10 @@ Select and validate a serializer that supports readonly snapshot properties on t
 | Total GameSession participants | At most 100,000 |
 | CameraContext modes | Fixed per context; default 8 |
 | CameraManager post-processors | At most 16 |
-| Camera output ownership resources | 1 through 4 per prepared output |
+| `CameraOutputResourceSet` resources | 1 through `CameraOutputLimits.MaximumResourceCount` (4) per snapshot |
 | CameraActionStateBehaviour tracking | At most 8 Animator/layer pairs |
-| CameraActionBinding active/pool counts | Configurable; default 8 each |
+| CameraActionBinding active/pool counts | Configurable; default 8 each, hard maximum 64 each |
+| CameraActionMap / inline action / Timeline mapping entries | Hard maximum 256 each |
 | Actor primary Tick phase | One phase per Actor; hot-path registry size depends on Runtime-enabled Actors |
 
 `WorldRuntimeLimits.MaximumSupportedActorCount` is an implementation safety ceiling, not a product budget. Use `WorldRuntimeLimits` to define a measured per-World maximum and initial capacities, use the `Try*` admission APIs for recoverable rejection, and monitor peak/rejection diagnostics. Roster growth is bounded separately by GameSession limits.
@@ -1266,9 +1350,10 @@ When profiling, inspect these cold-path or boundary operations:
 - persistence/serializer work performed after PlayerState snapshot capture;
 - first use of Actor tags and renderer buffers;
 - Actor lifespan cancellation-source creation;
+- point/radial damage-observer and `OnDestroyed` subscription changes, which publish copy-on-write arrays; warmed damage dispatch and terminal destruction reuse their published arrays without creating a dispatch snapshot;
 - Tick registry and reusable-snapshot capacity growth during Actor registration;
 - CameraContext construction;
-- CameraActionMap lazy-lookup construction;
+- explicit CameraActionMap warmup and atomic lookup-snapshot construction;
 - mode creation when the CameraActionBinding pool is empty;
 - string parsing from timed Animation Events;
 - diagnostic-window buffer resizing.
@@ -1552,15 +1637,15 @@ The Core test assembly covers:
 
 The Unity EditMode test assembly covers:
 
-- World modes, startup, rollback, client GameState/PlayerController commit boundaries, scoped Actor-source discovery, parallel Scene isolation, non-owned Actor unregistration/reuse, trusted local-login validation, participant/GameMode destruction escalation, logout, and CurrentWorld cleanup;
-- terminal Actor-lifetime pairing across successful destruction, spawn failure, self-destruction, shutdown, and throwing-release failure isolation;
-- WorldSettings validation, external resolvers, cancellation, and lease disposal;
-- GameplayWorldHost composition, pre-cancelled and pending-start cancellation, destruction during await, fault retry, reentrant-start rejection, immutable WorldRuntimeLimits, Actor admission/allocated-capacity/peak/rejection diagnostics, indexed World inspection, custom Inspectors, and project validation;
-- Actor tags, damage, lifespan, possession, Pawn input, primary Tick phases, Runtime gates, mutation safety, re-entry rejection, exception isolation, and owner-thread enforcement;
+- World modes and invalid-value rejection, startup rollback, client GameState/PlayerController commit boundaries, scoped Actor-source discovery, parallel Scene isolation, non-owned Actor unregistration/reuse, trusted local-login validation, bounded admission and participant-staging failure results, staged participant/GameMode terminal cleanup, logout, retained live-view/enumerator owner-thread enforcement, `Stopping` retry, `WorldShutdownIncompleteException`, and final CurrentWorld cleanup;
+- terminal Actor-lifetime pairing and staged Actor teardown across successful destruction, spawn failure, self-destruction, shutdown, throwing release, retained cleanup owners, and direct or nested OOM;
+- WorldSettings validation, single-location external references, one-owner `IWorldSettingsLeaseRegistrar`, composite-handle ownership, result-without-lease, worker completion marshalled to the owner thread, startup cancellation, quarantine, and retryable lease disposal;
+- GameplayWorldHost composition, independent fixed-capacity terminal-cleanup ownership, registration before startup, pre-cancelled and pending-start cancellation, destruction during await, application-lifetime transfer, fault retry, reentrant-start rejection, immutable WorldRuntimeLimits, Actor admission/allocated-capacity/peak/rejection diagnostics, indexed World inspection, custom Inspectors, and project validation;
+- Actor tags, readonly damage-event validation and `in` dispatch, copy-on-write damage observers, typed/generic receiver and per-observer non-OOM fault isolation through committed damage return, immediate direct/nested OOM propagation, allocation-free published `OnDestroyed` dispatch, unconditional base cleanup, staged lifespan-source ownership, possession, Pawn input, PawnConfig application/validation, primary Tick phases, Runtime gates, mutation safety, re-entry rejection, exception isolation, immutable lifecycle-owner capture, and bound/unbound owner-thread enforcement;
 - PlayerState snapshots, session identity locks, atomic spectator changes, and post-commit Pawn notification;
-- GameState transitions, clock configuration before registration-time BeginPlay, custom match-clock composition, match snapshots, and World-scoped PlayerStart;
-- CameraContext capacity, replacement, evaluation mutation guards, deferred clear, teardown order, view-target policy, and action limits;
-- camera blending, camera math, core UnityCameraOutput, atomic multi-resource output ownership, shared-arbiter exclusion across parallel Worlds, activation rollback, destroyed-resource handling, reset, replacement, teardown, and failure isolation;
+- GameState transitions, clock configuration before registration-time BeginPlay, custom match-clock composition, committed-state observer isolation and OOM guard reset, match snapshots, and World-scoped PlayerStart;
+- CameraContext capacity, retained-context owner-thread enforcement, transactional mode changes, lifecycle-fault retention before OOM propagation, frozen evaluation, boolean `Clear` recovery, PlayerController terminal retry ownership, CameraActionBinding committed-context and deferred-removal cleanup after Unity owner fake-null, pool ownership, evaluation mutation guards, deferred clear, teardown order, view-target policy, and action limits;
+- readonly CameraPose validation, last-known-good containment, allocation-free built-in camera curves, side-effect-free output discovery, immutable resource-snapshot validation, activation with the leased snapshot, core UnityCameraOutput, atomic multi-resource ownership, shared-arbiter exclusion across parallel Worlds, all-unique-lease terminal attempts before OOM propagation, retained leases after failed deactivation, independent Cinemachine-state restoration, lease-fault reporting, destroyed-resource handling, reset, replacement, teardown, and failure isolation;
 - CameraContext, GameSession, and 1,000 opt-in Actor Tick performance benchmarks;
 - request mapping, customization, validation, and cancellation forwarding when a supported Navigathena package is installed.
 
@@ -1614,20 +1699,20 @@ Assembly: CycloneGames.GameplayFramework.Tests.PlayMode
 ### Editor Manual Smoke Test
 
 1. Reimport or reload the project and confirm that Runtime, Editor, sample, and test assemblies compile.
-2. Open the PureUnity sample scene.
-3. Confirm GameplayWorldHost references UnitySampleWorldSettings.
+2. Open the PureUnity sample scene and confirm its Camera and Light GameObjects contain no optional package components.
+3. Confirm GameplayWorldHost references UnitySampleWorldSettings and an independent-root GameplayWorldTerminalCleanupOwner with available capacity.
 4. While still in Edit Mode, add `UnitySampleRotatingActor` to a scene GameObject and save the scene.
 5. Enter Play Mode.
 6. Verify the World is Playing and the local Controller owns a PlayerState and Pawn.
 7. Verify the local CameraManager owns its configured `UnityCameraOutput`, applies pose/FOV to the target Camera, and releases the output on stop.
 8. Confirm that the sample Actor rotates only while the World is Playing.
-9. Open World Debugger and inspect the World, configured Actor admission limit, allocated capacity, peak/rejection counters, per-phase Tick counts, and Actor registration.
+9. Open World Debugger and inspect the World, configured Actor admission limit, allocated capacity, peak/rejection counters, per-phase Tick counts, and paged Actor registrations.
 10. Click `Disable Runtime Tick` in the sample Actor Inspector. Confirm rotation stops, the Tick Enabled diagnostic changes, and the Actor remains registered; then click `Enable Runtime Tick` to resume.
 11. Run Project Validation and confirm the sample reports no configuration errors.
 12. Open Camera Debug Window and observe pose/blend data.
-13. Exit Play Mode and confirm no participant, Tick, or camera-mode state remains.
+13. Exit Play Mode and confirm no participant, Tick, camera-mode, or terminal-cleanup registration state remains.
 
-When Cinemachine is part of the product, repeat the camera check with `CinemachineCameraOutput`: confirm manual update is active only while owned and that brain update mode plus Follow/LookAt targets are restored after stop.
+When Cinemachine is part of the product, repeat the camera check with `CinemachineCameraOutput`: assign the Camera and Brain explicitly, or enable **Allow Scene Discovery** in a Scene containing exactly one of each. Confirm manual update is active only while owned and that brain update mode plus Follow/LookAt targets are restored after stop.
 
 ### Player and Platform Validation
 
@@ -1649,19 +1734,26 @@ EditMode tests and source inspection do not prove Player, IL2CPP, headless, or t
 | Symptom | Check |
 | --- | --- |
 | “A world is already active” | Call and await `StopWorldAsync` before `StartWorldAsync` |
-| Owner-thread exception | Marshal to the Unity main thread before mutating GameInstance or World, or performing login, spawn, or possession |
+| WorldNetMode is rejected | Pass one of `Standalone`, `Client`, `ListenServer`, or `DedicatedServer`; undefined enum values are invalid input |
+| Host reports a missing, shared-root, or full terminal-cleanup owner | Assign a `GameplayWorldTerminalCleanupOwner` on an independent persistent root and set enough capacity before startup; do not destroy it until `TryCleanupAll()` returns true |
+| Stop/Dispose throws `WorldShutdownIncompleteException` | Keep the World, GameInstance, and terminal-cleanup owner alive; inspect pending-stage properties, repair the failing callback or lifetime adapter, and retry on the same owner thread |
+| Owner-thread exception | Marshal to the captured Actor lifecycle thread or the composition owner thread before Actor mutation, first `GetCameraContext` access, retained CameraManager use, `World.Definition` or retained `IWorldDefinition` property access, live GameInstance/World/GameState/CameraContext reads, retained-view use, login, spawn, or possession; ownership cannot move to the calling worker |
 | WorldSettings validation fails | Configure GameMode, PlayerController, Pawn, and PlayerState |
 | External reference has no resolver | Pass a resolver to GameInstance and confirm `Supports` returns true for the selected source |
-| External load fails after cancellation | Propagate cancellation and dispose the loader handle |
+| A WorldSettings resolver is rejected for ownership registration | Register exactly one owner before the first await or other failure point. Put multiple backend handles in one pre-created composite `IDisposable`, and never return or dispose the registered owner from the resolver |
+| External load fails after cancellation | Propagate cancellation from the resolver and let WorldSettings marshal to the owner thread and roll back its registered owner. GameInstance adopts any failed quarantine once; retry its disposal directly or through the registered terminal-cleanup owner |
 | Client World has no GameMode | Client mode is non-authoritative; populate client-visible state through a network adapter |
 | Dedicated server has no local Controller | Use remote `LoginAsync`; automatic local login is disabled |
 | Login returns InvalidRequest | Check ID and name/address/options bounds, `IsLocal`, and the exact LocalPlayer slot from GameInstance |
-| Login returns Rejected | Check PlayerId uniqueness within the session and product admission policy |
+| Login returns Rejected | Check PlayerId uniqueness, product admission policy, and the authoritative log for a `PreLogin` or `ApproveLogin` exception; external exception details are intentionally bounded |
+| `NetworkGameSessionAdapter.HasRegistrationRollbackFault` is true | Correct the custom session rollback path, then call `TryRecoverRegistrationRollback()` on the owner thread before accepting another registration |
 | Login returns AtCapacity | Check GameSession player/spectator capacity and counts |
 | Login returns SpawnFailed | Check prefab references, Actor-lifetime results, World state, and custom initialization callbacks |
 | Player spawn point is unstable | Override `ChoosePlayerStart` or pass an exact portal name |
 | Possession fails | Register and initialize the Controller, use the same World, and avoid reentrant callbacks |
 | Movement input has no effect | The movement adapter must consume and apply the pending vector |
+| Pawn initialization reports invalid configuration | Assign a PawnConfig with finite base eye height and finite look angles in `[0, 180]`; `SetPawnConfig` does not accept null |
+| TakeDamage rejects the event | Construct DamageEvent with its typed factory and pass a value whose event-specific geometry validates |
 | Actor Tick does not run | Confirm the phase is not None, Runtime Tick is enabled, the component is active/enabled, BeginPlay completed, registration is not deferred, and World is Playing |
 | Actor Tick reports re-entry | Do not call GameInstance.Tick or World.Tick from an Actor Tick callback; defer work to the next owned loop phase |
 | Actors never Tick with direct GameInstance composition | Forward each required phase exactly once from the composition root; GameplayWorldHost supplies this automatically |
@@ -1674,14 +1766,19 @@ EditMode tests and source inspection do not prove Player, IL2CPP, headless, or t
 | Match-state snapshot restore fails | Confirm the snapshot is valid, the current `IMatchClock` has the same epoch, and its timestamp has not moved behind `CapturedTimestamp` |
 | No CameraManager | Configure the optional prefab and use a local PlayerController |
 | CameraManager has no output | Assign a `CameraOutputBehaviour`, call `SetCameraOutput`, or intentionally run pose evaluation without presentation output |
-| Camera output ownership error | Ensure all prepared resources are alive, distinct, stable until deactivation, and leased by only one CameraManager; Cinemachine leases both its Brain and Virtual Camera |
+| Camera evaluation reports an invalid pose | Inspect custom CalcCamera, CameraMode, post-processor, or blend-curve code; CameraManager keeps the last-known-good pose instead of publishing invalid data |
+| Camera output ownership error | Ensure the discovered snapshot contains live, distinct resources and is leased by only one CameraManager; activation must use that same snapshot, and Cinemachine leases both its Brain and CinemachineCamera |
+| `HasOutputLeaseFault` is true | Stop the affected World and inspect the output deactivation path and custom arbiter; the lease remains held and binding stays fail-closed until successful cleanup or World unbind/reset |
 | Parallel Worlds both acquire one persistent camera resource | Construct one `CameraOutputLeaseArbiter` on their common owner thread and inject that same instance into every participating GameInstance or Host composition |
 | Camera lease arbiter reports an owner-thread error | Create and mutate the shared arbiter on the same owner thread used by every participating World |
 | Cinemachine integration does not compile | Confirm `com.unity.cinemachine` in `[3.0.0,4.0.0)` is resolved and reference the gated integration assembly from a matching integration asmdef |
+| Cinemachine output cannot resolve resources | Assign Camera and Brain explicitly, or opt into Scene discovery and keep exactly one CinemachineCamera and one CinemachineBrain in the output Scene |
 | Host dependency must come from DI | Build `GameplayWorldComposition`, call `Configure` before startup, and do not subclass the sealed Host |
 | Actor admission returns false | Inspect configured `WorldRuntimeLimits.MaximumActorCount`, allocated capacity, peak count, and rejected admission count; release or defer work according to product policy |
-| Camera-mode push returns false | Check duplicate instance, clearing/evaluation state, and CameraContext capacity |
-| Camera clear does not execute immediately | A clear requested during evaluation runs after the evaluation scope ends |
+| Camera-mode push returns false | Check duplicate instance, clearing/evaluation state, CameraContext capacity, and `HasModeLifecycleFault` |
+| `HasModeLifecycleFault` is true | Inspect the logged CameraMode callback failure and call `Clear` to retry retained cleanup; mutation and evaluation remain frozen until all retained modes deactivate successfully |
+| PlayerController retains its CameraContext after unbind | `Clear()` returned false or threw; inspect the lifecycle log and retry the same context explicitly, while terminal `OnDestroy` also performs another cleanup attempt |
+| Camera clear does not execute immediately | A clear requested during evaluation runs after the evaluation scope ends; a faulted mode that fails cleanup remains retained for the next `Clear` attempt |
 | Camera action returns false | Check action key, preset, active-action limit, Controller resolution, and mode-stack capacity |
 | Animator progress action does not trigger | Check progress key, threshold, transition flag, loop policy, and the 8-pair tracking capacity |
 | Snapshot restore fails | Validate non-negative ID, player-name length, and registered identity/spectator locks; validate persistence or protocol envelopes before calling Runtime |

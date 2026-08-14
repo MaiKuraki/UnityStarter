@@ -1,3 +1,4 @@
+using System.Reflection;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities;
@@ -28,7 +29,7 @@ namespace CycloneGames.GameplayFramework.Integrations.GameplayAbilities.Tests.Ed
         public void ComponentProvider_IsResolvedAndInitializesActorInfo()
         {
             actorObject = new GameObject("AbilityActor");
-            Actor actor = actorObject.AddComponent<Actor>();
+            Actor actor = AddInitializedActor(actorObject);
             AbilitySystemProvider provider = actorObject.AddComponent<AbilitySystemProvider>();
             abilitySystem = new AbilitySystemComponent();
             provider.Initialize(abilitySystem);
@@ -44,11 +45,22 @@ namespace CycloneGames.GameplayFramework.Integrations.GameplayAbilities.Tests.Ed
         public void MissingProvider_ReturnsFalseWithoutCreatingState()
         {
             actorObject = new GameObject("ActorWithoutAbilitySystem");
-            Actor actor = actorObject.AddComponent<Actor>();
+            Actor actor = AddInitializedActor(actorObject);
 
             Assert.IsFalse(actor.TryGetAbilitySystem(out AbilitySystemComponent resolved));
             Assert.IsNull(resolved);
             Assert.IsFalse(actor.InitializeAbilityActorInfo());
+        }
+
+        private static Actor AddInitializedActor(GameObject gameObject)
+        {
+            Actor actor = gameObject.AddComponent<Actor>();
+            MethodInfo awake = typeof(Actor).GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(awake);
+            awake.Invoke(actor, null);
+            return actor;
         }
 
         private sealed class AbilitySystemProvider : MonoBehaviour, IAbilitySystemProvider

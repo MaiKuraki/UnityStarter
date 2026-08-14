@@ -1,3 +1,5 @@
+using System;
+using System.Threading;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -22,14 +24,27 @@ namespace CycloneGames.GameplayFramework.Runtime
     ///       — stops every active camera preset immediately.
     /// </summary>
     [RequireComponent(typeof(CameraActionBinding))]
-    public class AnimatorCameraActionBridge : MonoBehaviour
+    public sealed class AnimatorCameraActionBridge : MonoBehaviour
     {
         [SerializeField] private CameraActionBinding actionBinding;
+        private int ownerThreadId;
+        private bool isInitialized;
 
         private void Awake()
         {
+            BindOwnerThread();
             if (actionBinding == null)
+            {
                 actionBinding = GetComponent<CameraActionBinding>();
+            }
+
+            if (actionBinding == null)
+            {
+                throw new InvalidOperationException(
+                    "AnimatorCameraActionBridge requires a CameraActionBinding.");
+            }
+
+            isInitialized = true;
         }
 
         // ── Animation Event callbacks ──────────────────────────────────────────
@@ -37,7 +52,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Plays the preset registered under <paramref name="actionKey"/>.</summary>
         public void PlayCameraAction(string actionKey)
         {
-            actionBinding?.PlayAction(actionKey);
+            AssertReady();
+            actionBinding.PlayAction(actionKey);
         }
 
         /// <summary>
@@ -46,12 +62,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void PlayCameraActionTimed(AnimationEvent animationEvent)
         {
+            AssertReady();
             if (animationEvent == null || string.IsNullOrEmpty(animationEvent.stringParameter))
             {
                 return;
             }
 
-            actionBinding?.PlayAction(
+            actionBinding.PlayAction(
                 animationEvent.stringParameter,
                 animationEvent.floatParameter);
         }
@@ -59,13 +76,48 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Stops all active instances of the preset registered under <paramref name="actionKey"/>.</summary>
         public void StopCameraAction(string actionKey)
         {
-            actionBinding?.StopAction(actionKey);
+            AssertReady();
+            actionBinding.StopAction(actionKey);
         }
 
         /// <summary>Stops every active camera preset immediately.</summary>
         public void StopAllCameraActions()
         {
-            actionBinding?.StopAllActions();
+            AssertReady();
+            actionBinding.StopAllActions();
+        }
+
+        private void BindOwnerThread()
+        {
+            int currentThreadId = Thread.CurrentThread.ManagedThreadId;
+            if (ownerThreadId != 0 && ownerThreadId != currentThreadId)
+            {
+                throw new InvalidOperationException(
+                    "AnimatorCameraActionBridge Unity lifecycle moved to a different owner thread.");
+            }
+
+            ownerThreadId = currentThreadId;
+        }
+
+        private void AssertOwnerThread()
+        {
+            int expectedThreadId = ownerThreadId;
+            if (expectedThreadId == 0 ||
+                Thread.CurrentThread.ManagedThreadId != expectedThreadId)
+            {
+                throw new InvalidOperationException(
+                    "AnimatorCameraActionBridge live state must be accessed on its Awake owner thread.");
+            }
+        }
+
+        private void AssertReady()
+        {
+            AssertOwnerThread();
+            if (!isInitialized || actionBinding == null)
+            {
+                throw new InvalidOperationException(
+                    "AnimatorCameraActionBridge live state is not available before Awake completes successfully.");
+            }
         }
     }
 }

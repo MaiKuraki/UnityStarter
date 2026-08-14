@@ -13,7 +13,7 @@ Use the package when a `WorldSettings` entry uses `AssetReference`. Direct prefa
 | Assembly | Purpose | Consumer reference |
 | --- | --- | --- |
 | `CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement` | Implements `IWorldSettingsReferenceResolver` with `IAssetPackage`. | Explicit |
-| `CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor` | Verifies prefab component resolution, asset resolution, failure handling, and lease transfer. | Test Runner only |
+| `CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor` | Verifies prefab component resolution, failure handling, and immediate lease registration. | Test Runner only |
 
 The package declares direct UPM dependencies on GameplayFramework, AssetManagement, and UniTask. The Runtime assembly is `autoReferenced: false`; a project assembly that names the resolver must reference it explicitly.
 
@@ -44,17 +44,19 @@ The resolver supports `WorldSettingsReferenceSource.AssetReference`. For a compo
 ## Ownership and Failure Behavior
 
 - The application owns `IAssetPackage`; the resolver never disposes it.
-- A successful result transfers its `IAssetHandle` as a lease to the resolved `WorldDefinition`.
-- World shutdown disposes transferred leases through the GameplayFramework lifetime owner.
-- Failed and cancelled resolution releases any acquired handle.
+- Every non-null `IAssetHandle` is registered with the core-owned `IWorldSettingsLeaseRegistrar` immediately after creation and before its task, cancellation, or asset state is observed.
+- One resolver call registers at most one non-null ownership handle. Once the backend returns a non-null handle, the resolver registers its owner before the first subsequent failure point. A backend that creates multiple child handles must pre-create and register one composite `IDisposable`, then create every child under that owner.
+- Registration transfers exclusive disposal responsibility to GameplayFramework. The resolver never disposes a registered handle and the load result contains no lease field.
+- Resolution rollback and World shutdown dispose registered leases through the retryable GameplayFramework lifetime owner. A failed disposal remains owned and can be retried; it is never silently discarded.
 - Cancellation is propagated as `OperationCanceledException`.
+- `OutOfMemoryException`, including one nested in an `AggregateException`, is propagated after the handle ownership transfer rather than converted into a normal load failure.
 - Invalid locations and incompatible prefab contents return a failed result with an error message.
 
 ## Performance and Threading
 
 Resolution is a World startup and travel operation, not a per-frame API. Prefab component resolution performs a root component query and may allocate. Cache the resolved runtime definition rather than resolving references from gameplay hot paths.
 
-Asset completion may occur away from the Unity main thread. The resolver switches to the main thread before reading Unity objects or disposing Unity-backed handles. The owning GameplayFramework composition must also create, use, and dispose the resulting World on its owner thread.
+Asset completion may occur away from the Unity main thread. The resolver switches to the main thread before reading Unity objects. Handle registration, World creation, runtime access, rollback, and shutdown remain bound to the GameplayFramework owner thread.
 
 ## Persistence
 
@@ -68,4 +70,4 @@ Run the following EditMode assembly after both required packages compile:
 CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor
 ~~~
 
-For a Player target, verify one direct-reference World and one asset-reference World, cancellation during loading, World shutdown, and backend handle counts after shutdown.
+For a Player target, verify one direct-reference World and one asset-reference World, cancellation and out-of-memory propagation after handle creation, retryable World shutdown, and backend handle counts after shutdown.

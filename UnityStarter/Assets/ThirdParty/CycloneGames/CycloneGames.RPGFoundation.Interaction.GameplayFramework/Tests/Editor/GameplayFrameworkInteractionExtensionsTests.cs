@@ -1,3 +1,4 @@
+using System.Reflection;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.RPGFoundation.Interaction.Core;
 using CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework;
@@ -94,7 +95,18 @@ namespace CycloneGames.RPGFoundation.Interaction.GameplayFramework.Tests.Editor
             _gameObject = new GameObject("InteractionGameplayFrameworkTests_Actor");
             _gameObject.SetActive(false);
             _gameObject.transform.position = position;
-            return _gameObject.AddComponent<Actor>();
+            Actor actor = _gameObject.AddComponent<Actor>();
+            InvokeAwake(actor);
+            return actor;
+        }
+
+        private static void InvokeAwake(Actor actor)
+        {
+            MethodInfo awake = typeof(Actor).GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(awake, Is.Not.Null);
+            awake.Invoke(actor, null);
         }
     }
 }

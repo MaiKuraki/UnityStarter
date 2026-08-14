@@ -199,6 +199,30 @@ namespace CycloneGames.GameplayFramework.Core
             return elapsedSeconds;
         }
 
+        /// <summary>
+        /// Pure elapsed-seconds read that does not advance the monotonic observation watermark.
+        /// Use this for diagnostics, UI, or deterministic replay where a read must not invalidate
+        /// later transitions. <see cref="GetElapsedSeconds"/> remains the committing read.
+        /// </summary>
+        public double PeekElapsedSeconds(in MatchTimestamp timestamp)
+        {
+            AssertOwnerThread();
+            ValidateCompatibleTimestamp(in timestamp);
+            if (!matchClockRunning)
+            {
+                return accumulatedMatchSeconds;
+            }
+
+            if (timestamp.Seconds < activeSince)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timestamp),
+                    "Timestamp cannot move backwards while the match clock is running.");
+            }
+
+            return accumulatedMatchSeconds + timestamp.Seconds - activeSince;
+        }
+
         public MatchStateSnapshot CaptureSnapshot(in MatchTimestamp timestamp)
         {
             double elapsedSeconds = GetElapsedSeconds(in timestamp);

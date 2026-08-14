@@ -186,7 +186,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             runtimeRoster.Remove(playerController);
             try
             {
-                entry.PlayerState?.UnlockIdentity(this);
+                // Unity may already have destroyed the PlayerState while the managed
+                // participant identity is still present in the runtime roster. Session
+                // ownership must still commit, but there is no live identity lock to mutate.
+                if (!ReferenceEquals(entry.PlayerState, null) && entry.PlayerState != null)
+                {
+                    entry.PlayerState.UnlockIdentity(this);
+                }
                 return true;
             }
             catch

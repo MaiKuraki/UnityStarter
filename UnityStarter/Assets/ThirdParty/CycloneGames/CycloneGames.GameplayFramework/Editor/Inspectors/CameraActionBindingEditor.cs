@@ -58,8 +58,13 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 var binding = (CameraActionBinding)target;
                 using (new EditorGUI.DisabledScope(true))
                 {
-                    EditorGUILayout.IntField("Active Actions", binding.ActiveActionCount);
-                    EditorGUILayout.IntField("Pooled Modes", binding.PooledModeCount);
+                    bool canReadRuntimeState = Application.isPlaying && binding.isActiveAndEnabled;
+                    EditorGUILayout.IntField(
+                        "Active Actions",
+                        canReadRuntimeState ? binding.ActiveActionCount : 0);
+                    EditorGUILayout.IntField(
+                        "Pooled Modes",
+                        canReadRuntimeState ? binding.PooledModeCount : 0);
                 }
             }
 

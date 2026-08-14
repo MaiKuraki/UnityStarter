@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             serializedObject.Update();
             DrawDefaultInspector();
 
-            if (targets.Length == 1)
+            if (targets.Length == 1 && Application.isPlaying)
             {
                 var output = (CameraOutputBehaviour)target;
                 EditorGUILayout.Space(6f);
@@ -21,6 +21,15 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     "Output Status",
                     "CameraManager owns activation and release through the active World.",
                     new Color(0.42f, 0.62f, 0.82f, 1f));
+                if (!output.gameObject.activeInHierarchy)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Runtime output state is available after this component enters the Play Mode lifecycle.",
+                        MessageType.Info);
+                    serializedObject.ApplyModifiedProperties();
+                    return;
+                }
+
                 using (new EditorGUI.DisabledScope(true))
                 {
                     EditorGUILayout.Toggle("Active", output.IsActive);
@@ -35,6 +44,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                         typeof(CameraManager),
                         allowSceneObjects: true);
                 }
+            }
+            else if (targets.Length == 1)
+            {
+                EditorGUILayout.HelpBox(
+                    "Runtime output ownership is available in Play Mode.",
+                    MessageType.Info);
             }
 
             serializedObject.ApplyModifiedProperties();

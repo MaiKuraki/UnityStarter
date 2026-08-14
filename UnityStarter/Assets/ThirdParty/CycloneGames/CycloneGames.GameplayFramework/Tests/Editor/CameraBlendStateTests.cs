@@ -62,6 +62,26 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.AreEqual(70f, result.Fov, 0.0001f);
         }
 
+        [Test]
+        public void Evaluate_InvalidCustomCurveStopsBlendAndRetainsStartPose()
+        {
+            CameraBlendState state = default;
+            CameraPose startPose = new CameraPose(Vector3.zero, Quaternion.identity, 60f);
+            CameraPose targetPose = new CameraPose(
+                new Vector3(10f, 0f, 0f),
+                Quaternion.identity,
+                80f);
+            state.Start(startPose, 1f, new FixedCameraBlendCurve(float.NaN));
+
+            CameraPose result = state.Evaluate(targetPose, 0.1f);
+
+            Assert.IsFalse(state.IsActive);
+            Assert.AreEqual(startPose.Position, result.Position);
+            Assert.AreEqual(startPose.Rotation, result.Rotation);
+            Assert.AreEqual(startPose.Fov, result.Fov);
+            Assert.IsTrue(result.IsValid);
+        }
+
         private sealed class FixedCameraBlendCurve : ICameraBlendCurve
         {
             private readonly float value;

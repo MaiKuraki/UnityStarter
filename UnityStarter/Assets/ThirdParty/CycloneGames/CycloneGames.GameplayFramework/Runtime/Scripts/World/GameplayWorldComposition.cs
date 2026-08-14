@@ -11,6 +11,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     {
         public GameplayWorldComposition(
             IActorLifetime actorLifetime,
+            IGameplayWorldTerminalCleanupOwner terminalCleanupOwner,
             IWorldSettingsReferenceResolver referenceResolver = null,
             ISceneTransitionHandler sceneTransitionHandler = null,
             IGameSession gameSession = null,
@@ -20,6 +21,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null)
         {
             ActorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
+            TerminalCleanupOwner = terminalCleanupOwner ??
+                throw new ArgumentNullException(nameof(terminalCleanupOwner));
             ReferenceResolver = referenceResolver;
             SceneTransitionHandler = sceneTransitionHandler;
             GameSession = gameSession;
@@ -31,6 +34,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
 
         public IActorLifetime ActorLifetime { get; }
+        public IGameplayWorldTerminalCleanupOwner TerminalCleanupOwner { get; }
         public IWorldSettingsReferenceResolver ReferenceResolver { get; }
         public ISceneTransitionHandler SceneTransitionHandler { get; }
         public IGameSession GameSession { get; }
@@ -40,6 +44,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         public ICameraOutputLeaseArbiter CameraOutputLeaseArbiter { get; }
 
         public static GameplayWorldComposition CreateDefault(
+            IGameplayWorldTerminalCleanupOwner terminalCleanupOwner,
             WorldRuntimeLimits runtimeLimits = null,
             IWorldActorSource actorSource = null,
             IMatchClock matchClock = null,
@@ -47,6 +52,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             return new GameplayWorldComposition(
                 new UnityActorLifetime(),
+                terminalCleanupOwner,
                 runtimeLimits: runtimeLimits,
                 actorSource: actorSource,
                 matchClock: matchClock,

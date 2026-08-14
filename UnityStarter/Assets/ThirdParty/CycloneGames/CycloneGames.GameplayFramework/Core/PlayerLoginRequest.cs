@@ -12,6 +12,16 @@ namespace CycloneGames.GameplayFramework.Core
         Cancelled = 7,
     }
 
+    public enum PlayerLoginRequestValidationResult : byte
+    {
+        Valid = 0,
+        InvalidPlayerId = 1,
+        PlayerNameTooLong = 2,
+        RemoteAddressTooLong = 3,
+        OptionsTooLong = 4,
+        LocalRequestWithRemoteAddress = 5,
+    }
+
     /// <summary>
     /// Bounded login input. Transport adapters authenticate and rate-limit requests before
     /// constructing this framework-level value.
@@ -47,38 +57,68 @@ namespace CycloneGames.GameplayFramework.Core
 
         public bool TryValidate(out string error)
         {
+            PlayerLoginRequestValidationResult result = Validate();
+            if (result == PlayerLoginRequestValidationResult.Valid)
+            {
+                error = null;
+                return true;
+            }
+
+            error = GetValidationError(result);
+            return false;
+        }
+
+        /// <summary>
+        /// Allocation-free ingress validation. Transport adapters that only need a machine
+        /// decision can use this instead of building an error string.
+        /// </summary>
+        public PlayerLoginRequestValidationResult Validate()
+        {
             if (PlayerId < 0)
             {
-                error = "PlayerId cannot be negative.";
-                return false;
+                return PlayerLoginRequestValidationResult.InvalidPlayerId;
             }
 
             if (PlayerName != null && PlayerName.Length > MaxPlayerNameLength)
             {
-                error = $"PlayerName exceeds {MaxPlayerNameLength} characters.";
-                return false;
+                return PlayerLoginRequestValidationResult.PlayerNameTooLong;
             }
 
             if (RemoteAddress != null && RemoteAddress.Length > MaxRemoteAddressLength)
             {
-                error = $"RemoteAddress exceeds {MaxRemoteAddressLength} characters.";
-                return false;
+                return PlayerLoginRequestValidationResult.RemoteAddressTooLong;
             }
 
             if (Options != null && Options.Length > MaxOptionsLength)
             {
-                error = $"Options exceeds {MaxOptionsLength} characters.";
-                return false;
+                return PlayerLoginRequestValidationResult.OptionsTooLong;
             }
 
             if (IsLocal && !string.IsNullOrEmpty(RemoteAddress))
             {
-                error = "A local login request cannot include a remote address.";
-                return false;
+                return PlayerLoginRequestValidationResult.LocalRequestWithRemoteAddress;
             }
 
-            error = null;
-            return true;
+            return PlayerLoginRequestValidationResult.Valid;
+        }
+
+        private static string GetValidationError(PlayerLoginRequestValidationResult result)
+        {
+            switch (result)
+            {
+                case PlayerLoginRequestValidationResult.InvalidPlayerId:
+                    return "PlayerId cannot be negative.";
+                case PlayerLoginRequestValidationResult.PlayerNameTooLong:
+                    return $"PlayerName exceeds {MaxPlayerNameLength} characters.";
+                case PlayerLoginRequestValidationResult.RemoteAddressTooLong:
+                    return $"RemoteAddress exceeds {MaxRemoteAddressLength} characters.";
+                case PlayerLoginRequestValidationResult.OptionsTooLong:
+                    return $"Options exceeds {MaxOptionsLength} characters.";
+                case PlayerLoginRequestValidationResult.LocalRequestWithRemoteAddress:
+                    return "A local login request cannot include a remote address.";
+                default:
+                    return "Player login request is invalid.";
+            }
         }
     }
 }

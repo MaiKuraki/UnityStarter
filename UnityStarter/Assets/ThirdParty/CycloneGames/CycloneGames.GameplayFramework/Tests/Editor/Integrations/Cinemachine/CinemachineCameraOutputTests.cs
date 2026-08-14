@@ -1,17 +1,104 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine;
 using NUnit.Framework;
 using Unity.Cinemachine;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
 {
     public sealed class CinemachineCameraOutputTests
     {
+        [Test]
+        public void Authoring_DefaultsToExplicitReferencesWithoutSceneDiscovery()
+        {
+            var outputObject = new GameObject("CinemachineOutput");
+            try
+            {
+                CinemachineCameraOutput output = outputObject.AddComponent<CinemachineCameraOutput>();
+                InvokeAwake(output);
+                var serializedOutput = new SerializedObject(output);
+
+                Assert.IsFalse(
+                    serializedOutput.FindProperty("allowSceneDiscovery").boolValue);
+            }
+            finally
+            {
+                Object.DestroyImmediate(outputObject);
+            }
+        }
+
+        [Test]
+        public void Authoring_ExplicitSceneDiscoveryResolvesUniqueSameSceneResources()
+        {
+            RunInTemporaryMainStageScene("CinemachineDiscovery", scene =>
+            {
+                var outputObject = new GameObject("CinemachineOutput");
+                var cameraObject = new GameObject("CinemachineCamera");
+                var brainObject = new GameObject("CinemachineBrain");
+                SceneManager.MoveGameObjectToScene(outputObject, scene);
+                SceneManager.MoveGameObjectToScene(cameraObject, scene);
+                SceneManager.MoveGameObjectToScene(brainObject, scene);
+                CinemachineCameraOutput output =
+                    outputObject.AddComponent<CinemachineCameraOutput>();
+                InvokeAwake(output);
+                CinemachineCamera virtualCamera =
+                    cameraObject.AddComponent<CinemachineCamera>();
+                brainObject.AddComponent<Camera>();
+                CinemachineBrain brain = brainObject.AddComponent<CinemachineBrain>();
+                var serializedOutput = new SerializedObject(output);
+                serializedOutput.FindProperty("allowSceneDiscovery").boolValue = true;
+                serializedOutput.ApplyModifiedPropertiesWithoutUndo();
+
+                Assert.IsTrue(output.TryGetResourceSet(
+                    out CameraOutputResourceSet resources,
+                    out string error), error);
+                Assert.AreSame(brain, resources.GetResource(0));
+                Assert.AreSame(virtualCamera, resources.GetResource(1));
+                Assert.IsNull(output.ActiveBrain);
+                Assert.IsNull(output.ActiveVirtualCamera);
+            });
+        }
+
+        [Test]
+        public void Authoring_SceneDiscoveryRejectsMultipleSameSceneBrains()
+        {
+            RunInTemporaryMainStageScene("CinemachineAmbiguity", scene =>
+            {
+                var outputObject = new GameObject("CinemachineOutput");
+                var firstBrainObject = new GameObject("FirstBrain");
+                var secondBrainObject = new GameObject("SecondBrain");
+                SceneManager.MoveGameObjectToScene(outputObject, scene);
+                SceneManager.MoveGameObjectToScene(firstBrainObject, scene);
+                SceneManager.MoveGameObjectToScene(secondBrainObject, scene);
+                CinemachineCameraOutput output =
+                    outputObject.AddComponent<CinemachineCameraOutput>();
+                InvokeAwake(output);
+                outputObject.AddComponent<CinemachineCamera>();
+                firstBrainObject.AddComponent<Camera>();
+                firstBrainObject.AddComponent<CinemachineBrain>();
+                secondBrainObject.SetActive(false);
+                secondBrainObject.AddComponent<Camera>();
+                CinemachineBrain secondBrain =
+                    secondBrainObject.AddComponent<CinemachineBrain>();
+                secondBrain.enabled = false;
+                secondBrainObject.SetActive(true);
+                var serializedOutput = new SerializedObject(output);
+                serializedOutput.FindProperty("allowSceneDiscovery").boolValue = true;
+                serializedOutput.ApplyModifiedPropertiesWithoutUndo();
+
+                Assert.IsFalse(output.TryGetResourceSet(out _, out string error));
+                StringAssert.Contains("Multiple CinemachineBrain", error);
+            });
+        }
+
         [Test]
         public void ActivateApplyDeactivate_RestoresOwnedCinemachineState()
         {
@@ -20,8 +107,10 @@ namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
             try
             {
                 CameraManager manager = managerObject.AddComponent<CameraManager>();
+                InvokeAwake(manager);
                 CinemachineCamera virtualCamera = managerObject.AddComponent<CinemachineCamera>();
                 CinemachineCameraOutput output = managerObject.AddComponent<CinemachineCameraOutput>();
+                InvokeAwake(output);
                 brainObject.AddComponent<Camera>();
                 CinemachineBrain brain = brainObject.AddComponent<CinemachineBrain>();
                 CinemachineBrain.UpdateMethods initialUpdateMethod = brain.UpdateMethod;
@@ -34,11 +123,16 @@ namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
                 output.SetVirtualCamera(virtualCamera);
                 output.SetBrain(brain);
 
-                Assert.IsTrue(output.TryPrepare(out string prepareError), prepareError);
-                Assert.AreEqual(2, output.PreparedResourceCount);
-                Assert.AreSame(brain, output.GetPreparedResource(0));
-                Assert.AreSame(virtualCamera, output.GetPreparedResource(1));
-                Assert.IsTrue(output.TryActivate(manager, out string activationError), activationError);
+                Assert.IsTrue(output.TryGetResourceSet(
+                    out CameraOutputResourceSet resources,
+                    out string discoveryError), discoveryError);
+                Assert.AreEqual(2, resources.Count);
+                Assert.AreSame(brain, resources.GetResource(0));
+                Assert.AreSame(virtualCamera, resources.GetResource(1));
+                Assert.IsTrue(output.TryActivate(
+                    manager,
+                    in resources,
+                    out string activationError), activationError);
                 Assert.AreEqual(CinemachineBrain.UpdateMethods.ManualUpdate, brain.UpdateMethod);
                 Assert.IsNull(virtualCamera.Follow);
                 Assert.IsNull(virtualCamera.LookAt);
@@ -123,6 +217,7 @@ namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
             CameraManager prefab = world.CreateAuthoringActor<CameraManager>(name + "Prefab");
             CameraManager manager = world.World.SpawnActor(prefab);
             CinemachineCameraOutput output = manager.gameObject.AddComponent<CinemachineCameraOutput>();
+            InvokeAwake(output);
             output.SetVirtualCamera(virtualCamera);
             output.SetBrain(brain);
             manager.SetCameraOutput(output, rebindImmediately: false);
@@ -156,6 +251,130 @@ namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
             }
         }
 
+        private static void RunInTemporaryMainStageScene(
+            string testName,
+            Action<Scene> testBody)
+        {
+            string folderName =
+                $"__CycloneGamesGameplayFrameworkTests_{testName}_{Guid.NewGuid():N}";
+            string folderPath = $"Assets/{folderName}";
+            string baseScenePath = $"{folderPath}/BaseScene.unity";
+            Scene baseScene = default;
+            Scene testScene = default;
+            ExceptionDispatchInfo firstFailure = null;
+
+            try
+            {
+                string folderGuid = AssetDatabase.CreateFolder("Assets", folderName);
+                if (string.IsNullOrEmpty(folderGuid))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to create temporary test folder '{folderPath}'.");
+                }
+
+                baseScene = EditorSceneManager.NewScene(
+                    NewSceneSetup.EmptyScene,
+                    NewSceneMode.Single);
+                if (!EditorSceneManager.SaveScene(baseScene, baseScenePath))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to save temporary base Scene '{baseScenePath}'.");
+                }
+
+                testScene = EditorSceneManager.NewScene(
+                    NewSceneSetup.EmptyScene,
+                    NewSceneMode.Additive);
+                testBody(testScene);
+            }
+            catch (Exception exception)
+            {
+                firstFailure = ExceptionDispatchInfo.Capture(exception);
+            }
+            finally
+            {
+                CaptureCleanupFailure(ref firstFailure, () => CloseScene(testScene));
+                CaptureCleanupFailure(ref firstFailure, () => ReplaceBaseScene(baseScene));
+                CaptureCleanupFailure(ref firstFailure, () => DeleteAsset(baseScenePath));
+                CaptureCleanupFailure(ref firstFailure, () => DeleteAsset(folderPath));
+            }
+
+            firstFailure?.Throw();
+        }
+
+        private static void CloseScene(Scene scene)
+        {
+            if (scene.IsValid() && scene.isLoaded &&
+                !EditorSceneManager.CloseScene(scene, removeScene: true))
+            {
+                throw new InvalidOperationException(
+                    $"Failed to close temporary test Scene '{scene.name}'.");
+            }
+        }
+
+        private static void ReplaceBaseScene(Scene baseScene)
+        {
+            if (!baseScene.IsValid() || !baseScene.isLoaded)
+            {
+                return;
+            }
+
+            Scene replacement = EditorSceneManager.NewScene(
+                NewSceneSetup.EmptyScene,
+                NewSceneMode.Single);
+            if (!replacement.IsValid() || !replacement.isLoaded)
+            {
+                throw new InvalidOperationException(
+                    "Failed to replace the temporary saved base Scene.");
+            }
+        }
+
+        private static void DeleteAsset(string assetPath)
+        {
+            if ((AssetDatabase.IsValidFolder(assetPath) ||
+                 AssetDatabase.LoadMainAssetAtPath(assetPath) != null) &&
+                !AssetDatabase.DeleteAsset(assetPath))
+            {
+                throw new InvalidOperationException(
+                    $"Failed to delete temporary test asset '{assetPath}'.");
+            }
+        }
+
+        private static void CaptureCleanupFailure(
+            ref ExceptionDispatchInfo firstFailure,
+            Action cleanup)
+        {
+            try
+            {
+                cleanup();
+            }
+            catch (Exception exception)
+            {
+                firstFailure ??= ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+
+        private static void InvokeAwake(MonoBehaviour behaviour)
+        {
+            MethodInfo awake = behaviour.GetType().GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (awake == null)
+            {
+                throw new InvalidOperationException(
+                    $"Type '{behaviour.GetType().FullName}' does not declare an Awake lifecycle method.");
+            }
+
+            try
+            {
+                awake.Invoke(behaviour, null);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException != null)
+            {
+                ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+                throw;
+            }
+        }
+
         private sealed class CinemachineTestWorld : IDisposable
         {
             private readonly List<GameObject> authoringObjects = new List<GameObject>(8);
@@ -179,7 +398,9 @@ namespace CycloneGames.GameplayFramework.Integrations.Cinemachine.Tests.Editor
             {
                 var gameObject = new GameObject(name);
                 authoringObjects.Add(gameObject);
-                return gameObject.AddComponent<T>();
+                T actor = gameObject.AddComponent<T>();
+                InvokeAwake(actor);
+                return actor;
             }
 
             public void Dispose()

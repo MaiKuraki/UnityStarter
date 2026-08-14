@@ -6,7 +6,7 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.cysharp.unitask": "2.0.0",
+    "com.cysharp.unitask": "2.5.0",
     "com.cyclone-games.gameplay-framework": "1.0.0",
     "com.cyclone-games.asset-management": "1.0.0"
   },

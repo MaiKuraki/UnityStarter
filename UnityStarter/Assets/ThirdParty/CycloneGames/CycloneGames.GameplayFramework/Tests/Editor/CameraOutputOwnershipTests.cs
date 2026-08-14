@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
+using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -103,12 +106,80 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
-        public void ActivationResourceMutation_IsRejectedAndOriginalLeaseIsReleased()
+        public void DerivedOnDestroyCallingBase_ReleasesLeaseForAnotherOutput()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
+            Object firstResource = CreateResource("DestroyedOutputFirst");
+            Object secondResource = CreateResource("DestroyedOutputSecond");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("DestroyedOutputManagerPrefab"));
+            DestroyAwareCameraOutput output =
+                manager.gameObject.AddComponent<DestroyAwareCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(output);
+            output.SetResources(firstResource, secondResource);
+            manager.SetCameraOutput(output, rebindImmediately: false);
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            Assert.AreSame(output, manager.ActiveOutput);
+
+            output.InvokeOnDestroyForTest();
+            Object.DestroyImmediate(output);
+
+            Assert.IsTrue(output.DestroyHookInvoked);
+            Assert.IsNull(manager.ActiveOutput);
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "DestroyedOutputClaimant",
+                firstResource,
+                secondResource,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput);
+        }
+
+        [Test]
+        public void CameraManagerLiveApi_RejectsRetainedWorkerThreadAccessBeforeUnityLookup()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ThreadGuardManagerPrefab"));
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            Exception getterFailure = null;
+            Exception lookupFailure = null;
+
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    _ = manager.CurrentPose;
+                }
+                catch (Exception exception)
+                {
+                    getterFailure = exception;
+                }
+
+                try
+                {
+                    manager.TryResolveAndBindOutput();
+                }
+                catch (Exception exception)
+                {
+                    lookupFailure = exception;
+                }
+            });
+            worker.Start();
+            Assert.IsTrue(worker.Join(TimeSpan.FromSeconds(5)));
+
+            Assert.IsInstanceOf<InvalidOperationException>(getterFailure);
+            Assert.IsInstanceOf<InvalidOperationException>(lookupFailure);
+        }
+
+        [Test]
+        public void ActivationUsesLeasedSnapshot_WhenFutureDiscoveryWouldReturnDifferentResources()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
             Object firstResource = CreateResource("LeasedFirst");
             Object leasedSecondResource = CreateResource("LeasedSecond");
             Object replacementResource = CreateResource("UnleasedReplacement");
+            Object replacementPairResource = CreateResource("ReplacementPair");
             CameraManager manager = testWorld.World.SpawnActor(
                 testWorld.CreateAuthoringActor<CameraManager>("MutatingManagerPrefab"));
             var mutatingOutput = new MutatingCameraOutput(
@@ -119,15 +190,25 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
             manager.InitializeFor(testWorld.World.PlayerControllers[0]);
 
-            Assert.IsNull(manager.ActiveOutput);
-            Assert.IsFalse(mutatingOutput.IsActive);
+            Assert.AreSame(mutatingOutput, manager.ActiveOutput);
+            Assert.IsTrue(mutatingOutput.IsActive);
             CameraManager claimant = CreateManager(
                 testWorld,
                 "OriginalResourceClaimant",
                 firstResource,
                 leasedSecondResource,
                 out _);
-            Assert.IsNotNull(claimant.ActiveOutput);
+            Assert.IsNull(claimant.ActiveOutput,
+                "Activation must retain the exact snapshot leased before backend mutation begins.");
+
+            CameraManager replacementClaimant = CreateManager(
+                testWorld,
+                "ReplacementResourceClaimant",
+                replacementResource,
+                replacementPairResource,
+                out _);
+            Assert.IsNotNull(replacementClaimant.ActiveOutput,
+                "Resources only returned by future discovery must remain unleased.");
         }
 
         [Test]
@@ -140,161 +221,502 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 testWorld.CreateAuthoringActor<CameraManager>("TeardownCameraManager");
             WorldShutdownCameraOutput output =
                 manager.gameObject.AddComponent<WorldShutdownCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(output);
             output.SetResources(firstResource, secondResource);
             manager.SetCameraOutput(output, rebindImmediately: false);
             testWorld.StartWorld();
 
-            Assert.Throws<InvalidOperationException>(() =>
+            Assert.Throws<WorldShutdownIncompleteException>(() =>
                 manager.InitializeFor(testWorld.World.PlayerControllers[0]));
 
-            Assert.AreEqual(WorldLifecycleState.Disposed, testWorld.World.LifecycleState);
+            Assert.AreEqual(WorldLifecycleState.Stopping, testWorld.World.LifecycleState);
             Assert.IsNull(manager.World);
             Assert.IsNull(manager.ActiveOutput);
             Assert.IsFalse(output.IsActive);
             Assert.IsNull(output.Owner);
+
+            Assert.DoesNotThrow(testWorld.Instance.Dispose);
+            Assert.AreEqual(WorldLifecycleState.Disposed, testWorld.World.LifecycleState);
         }
 
         [Test]
-        public void RawOutput_PrepareException_ReleasesPreparedStateBeforeRethrow()
+        public void ResourceDiscoveryException_DoesNotInvokeBackendDeactivationOrAcquireLease()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
-            Object resource = CreateResource("PrepareExceptionResource");
+            Object resource = CreateResource("DiscoveryExceptionResource");
+            Object secondResource = CreateResource("DiscoveryExceptionSecond");
             CameraManager manager = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("PrepareExceptionManagerPrefab"));
+                testWorld.CreateAuthoringActor<CameraManager>("DiscoveryExceptionManagerPrefab"));
             var output = new FaultingRawCameraOutput(
                 resource,
-                RawOutputFailure.Prepare);
+                RawOutputFailure.DiscoveryException);
             manager.SetCameraOutput(output, rebindImmediately: false);
 
             Assert.Throws<InvalidOperationException>(() =>
                 manager.InitializeFor(testWorld.World.PlayerControllers[0]));
 
-            Assert.AreEqual(1, output.DeactivateCount);
-            Assert.IsFalse(output.IsPrepared);
+            Assert.Zero(output.DeactivateCount);
             Assert.IsFalse(output.IsActive);
             Assert.IsNull(manager.ActiveOutput);
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "DiscoveryExceptionClaimant",
+                resource,
+                secondResource,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput);
         }
 
         [Test]
-        public void ActiveRawOutput_ReprepareException_ReleasesOutputAndLeaseBeforeRethrow()
+        public void ActiveOutput_RebindUsesCommittedSnapshotWithoutRediscovery()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
-            Object resource = CreateResource("ActivePrepareExceptionResource");
+            Object resource = CreateResource("ActiveSnapshotResource");
             CameraManager manager = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("ActivePrepareExceptionManagerPrefab"));
+                testWorld.CreateAuthoringActor<CameraManager>("ActiveSnapshotManagerPrefab"));
             var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
             manager.SetCameraOutput(output, rebindImmediately: false);
             manager.InitializeFor(testWorld.World.PlayerControllers[0]);
-            output.Failure = RawOutputFailure.Prepare;
+            output.Failure = RawOutputFailure.DiscoveryException;
 
-            Assert.Throws<InvalidOperationException>(() => manager.TryResolveAndBindOutput());
+            Assert.IsTrue(manager.TryResolveAndBindOutput());
 
-            Assert.AreEqual(1, output.DeactivateCount);
-            Assert.IsFalse(output.IsPrepared);
-            Assert.IsFalse(output.IsActive);
-            Assert.IsNull(manager.ActiveOutput);
-
-            CameraManager claimant = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("ActivePrepareExceptionClaimantPrefab"));
-            var claimantOutput = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
-            claimant.SetCameraOutput(claimantOutput, rebindImmediately: false);
-            claimant.InitializeFor(testWorld.World.PlayerControllers[0]);
-            Assert.AreSame(claimantOutput, claimant.ActiveOutput);
+            Assert.AreEqual(1, output.DiscoveryCount);
+            Assert.Zero(output.DeactivateCount);
+            Assert.IsTrue(output.IsActive);
+            Assert.AreSame(output, manager.ActiveOutput);
         }
 
         [Test]
-        public void ActiveRawOutput_ReentrantPrepare_IsRejectedAndRollsBackOutputAndLease()
+        public void InvalidResourceSnapshot_FailsBeforeActivationWithoutDeactivation()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
-            Object resource = CreateResource("ActiveReentrantPrepareResource");
+            Object resource = CreateResource("InvalidSnapshotResource");
+            Object secondResource = CreateResource("InvalidSnapshotSecond");
             CameraManager manager = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("ActiveReentrantPrepareManagerPrefab"));
-            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
-            manager.SetCameraOutput(output, rebindImmediately: false);
-            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
-            output.ReenterOnPrepare = true;
-
-            Assert.Throws<InvalidOperationException>(() => manager.TryResolveAndBindOutput());
-
-            Assert.AreEqual(1, output.DeactivateCount);
-            Assert.IsFalse(output.IsPrepared);
-            Assert.IsFalse(output.IsActive);
-            Assert.IsNull(manager.ActiveOutput);
-
-            CameraManager claimant = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("ActiveReentrantPrepareClaimantPrefab"));
-            var claimantOutput = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
-            claimant.SetCameraOutput(claimantOutput, rebindImmediately: false);
-            claimant.InitializeFor(testWorld.World.PlayerControllers[0]);
-            Assert.AreSame(claimantOutput, claimant.ActiveOutput);
-        }
-
-        [Test]
-        public void ActiveRawOutput_WorldTeardownDuringReprepare_ReleasesPostTeardownPreparedState()
-        {
-            using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
-            Object resource = CreateResource("ActivePrepareWorldTeardownResource");
-            CameraManager manager = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>("ActivePrepareWorldTeardownManagerPrefab"));
-            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
-            manager.SetCameraOutput(output, rebindImmediately: false);
-            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
-            output.DisposeWorldOnPrepare = true;
-
-            Assert.IsFalse(manager.TryResolveAndBindOutput());
-
-            Assert.AreEqual(WorldLifecycleState.Disposed, testWorld.World.LifecycleState);
-            Assert.AreEqual(2, output.DeactivateCount);
-            Assert.IsFalse(output.IsPrepared);
-            Assert.IsFalse(output.IsActive);
-            Assert.IsNull(manager.ActiveOutput);
-        }
-
-        [TestCase(RawOutputFailure.ResourceCount)]
-        [TestCase(RawOutputFailure.PreparedResource)]
-        public void RawOutput_ResourceInspectionException_ReleasesPreparedStateAndFailsClosed(
-            RawOutputFailure failure)
-        {
-            using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
-            Object resource = CreateResource(failure + "Resource");
-            CameraManager manager = testWorld.World.SpawnActor(
-                testWorld.CreateAuthoringActor<CameraManager>(failure + "ManagerPrefab"));
-            var output = new FaultingRawCameraOutput(resource, failure);
+                testWorld.CreateAuthoringActor<CameraManager>("InvalidSnapshotManagerPrefab"));
+            var output = new FaultingRawCameraOutput(
+                resource,
+                RawOutputFailure.InvalidResourceSet);
             manager.SetCameraOutput(output, rebindImmediately: false);
 
             Assert.DoesNotThrow(() =>
                 manager.InitializeFor(testWorld.World.PlayerControllers[0]));
 
-            Assert.AreEqual(1, output.DeactivateCount);
-            Assert.IsFalse(output.IsPrepared);
+            Assert.Zero(output.DeactivateCount);
             Assert.IsFalse(output.IsActive);
             Assert.IsNull(manager.ActiveOutput);
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "InvalidSnapshotClaimant",
+                resource,
+                secondResource,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput);
         }
 
         [Test]
-        public void ThrowingArbiterReleaseAll_DoesNotInterruptWorldTerminalCleanup()
+        public void ArbiterAcquireExceptionAfterCommit_RollsBackLeaseAndPreparedOutput()
         {
-            var arbiter = new ThrowingReleaseAllArbiter();
+            var arbiter = new FaultInjectingLeaseArbiter
+            {
+                ThrowAfterAcquire = true,
+            };
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object firstResource = CreateResource("AcquireExceptionFirst");
+            Object secondResource = CreateResource("AcquireExceptionSecond");
+            CameraManager manager = CreateManager(
+                testWorld,
+                "AcquireExceptionManager",
+                firstResource,
+                secondResource,
+                out CompositeCameraOutput output,
+                initialize: false);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                manager.InitializeFor(testWorld.World.PlayerControllers[0]));
+
+            Assert.IsNull(manager.ActiveOutput);
+            Assert.IsFalse(output.IsActive);
+            Assert.IsNull(output.Owner);
+            Assert.IsTrue(manager.HasOutputLeaseFault);
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "AcquireExceptionClaimant",
+                firstResource,
+                secondResource,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput,
+                "The lease committed before the exception must be rolled back.");
+        }
+
+        [Test]
+        public void ArbiterReleaseExceptionAfterCommit_EntersFaultStateWithoutLeakingLease()
+        {
+            var arbiter = new FaultInjectingLeaseArbiter();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object firstResource = CreateResource("ReleaseExceptionFirst");
+            Object secondResource = CreateResource("ReleaseExceptionSecond");
+            CameraManager manager = CreateManager(
+                testWorld,
+                "ReleaseExceptionManager",
+                firstResource,
+                secondResource,
+                out CompositeCameraOutput output);
+            arbiter.ThrowAfterRelease = true;
+
+            Assert.DoesNotThrow(() => manager.SetCameraOutput(null));
+
+            Assert.IsNull(manager.ActiveOutput);
+            Assert.IsFalse(output.IsActive);
+            Assert.IsNull(output.Owner);
+            Assert.IsTrue(manager.HasOutputLeaseFault);
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "ReleaseExceptionClaimant",
+                firstResource,
+                secondResource,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput,
+                "A release exception after commit must not retain the lease.");
+        }
+
+        [Test]
+        public void RawOutput_DeactivateExceptionRetainsLeaseAndFailsClosed()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false);
+            Object sharedResource = CreateResource("ThrowingDeactivateShared");
+            Object secondResource = CreateResource("ThrowingDeactivateSecond");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ThrowingDeactivateManagerPrefab"));
+            var output = new FaultingRawCameraOutput(
+                sharedResource,
+                RawOutputFailure.None);
+            manager.SetCameraOutput(output, rebindImmediately: false);
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            output.ThrowDuringDeactivate = true;
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, NullLogWriter.Instance));
+            CameraManager claimant;
+            try
+            {
+                Assert.DoesNotThrow(() => manager.SetCameraOutput(null));
+                claimant = CreateManager(
+                    testWorld,
+                    "ThrowingDeactivateClaimant",
+                    sharedResource,
+                    secondResource,
+                    out _);
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previousWriter));
+            }
+
+            Assert.IsTrue(manager.HasOutputLeaseFault);
+            Assert.IsNull(manager.ActiveOutput);
+            Assert.IsTrue(output.IsActive);
+            Assert.IsNull(claimant.ActiveOutput,
+                "A backend that failed to deactivate must retain exclusive ownership until World cleanup.");
+
+            output.ThrowDuringDeactivate = false;
+            Assert.DoesNotThrow(testWorld.Instance.Dispose);
+            Assert.AreEqual(2, output.DeactivateCount);
+            Assert.IsFalse(output.IsActive);
+        }
+
+        [Test]
+        public void ActivationCleanupOutOfMemory_QuarantinesLeaseAndBlocksDifferentRebind()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false);
+            Object quarantinedResource = CreateResource("ActivationCleanupOutOfMemory");
+            Object claimantSpare = CreateResource("ActivationCleanupOutOfMemorySpare");
+            Object replacementResource = CreateResource("ActivationCleanupReplacement");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ActivationCleanupOutOfMemoryManagerPrefab"));
+            var output = new FaultingRawCameraOutput(
+                quarantinedResource,
+                RawOutputFailure.None)
+            {
+                RejectActivationAfterMutation = true,
+                ThrowOutOfMemoryDuringDeactivate = true,
+            };
+            manager.SetCameraOutput(output, rebindImmediately: false);
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, NullLogWriter.Instance));
+            CameraManager claimant;
+            try
+            {
+                Assert.Throws<OutOfMemoryException>(() =>
+                    manager.InitializeFor(testWorld.World.PlayerControllers[0]));
+
+                var replacement = new FaultingRawCameraOutput(
+                    replacementResource,
+                    RawOutputFailure.None);
+                manager.SetCameraOutput(replacement);
+                Assert.IsFalse(manager.TryResolveAndBindOutput());
+                Assert.Zero(replacement.DiscoveryCount,
+                    "A quarantined manager must reject a different resource domain before discovery.");
+
+                claimant = CreateManager(
+                    testWorld,
+                    "ActivationCleanupOutOfMemoryClaimant",
+                    quarantinedResource,
+                    claimantSpare,
+                    out _);
+            }
+            finally
+            {
+                output.ThrowOutOfMemoryDuringDeactivate = false;
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previousWriter));
+            }
+
+            Assert.IsTrue(manager.HasOutputLeaseFault);
+            Assert.IsNull(manager.ActiveOutput);
+            Assert.IsTrue(output.IsActive,
+                "The partially activated backend remains quarantined until deactivation succeeds.");
+            Assert.IsNull(claimant.ActiveOutput,
+                "A catastrophic cleanup failure must retain the original lease fail-closed.");
+        }
+
+        [Test]
+        public void TryReleaseAll_IsolatesDeactivationFailureAndContinuesWithLaterLeases()
+        {
+            var arbiter = new CameraOutputLeaseArbiter();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object failedResource = CreateResource("ReleaseAllFailed");
+            Object successfulFirst = CreateResource("ReleaseAllSuccessfulFirst");
+            Object successfulSecond = CreateResource("ReleaseAllSuccessfulSecond");
+            Object failedClaimantSpare = CreateResource("ReleaseAllFailedClaimantSpare");
+
+            CameraManager failedManager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ReleaseAllFailedManagerPrefab"));
+            var failedOutput = new FaultingRawCameraOutput(
+                failedResource,
+                RawOutputFailure.None);
+            failedManager.SetCameraOutput(failedOutput, rebindImmediately: false);
+            failedManager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            failedOutput.ThrowDuringDeactivate = true;
+
+            CameraManager successfulManager = CreateManager(
+                testWorld,
+                "ReleaseAllSuccessfulManager",
+                successfulFirst,
+                successfulSecond,
+                out CompositeCameraOutput successfulOutput);
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, NullLogWriter.Instance));
+            bool allReleased;
+            try
+            {
+                allReleased = TryReleaseAll(arbiter, testWorld.World);
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previousWriter));
+            }
+
+            Assert.IsFalse(allReleased);
+            Assert.AreEqual(1, failedOutput.DeactivateCount);
+            Assert.IsTrue(failedOutput.IsActive);
+            Assert.IsFalse(successfulOutput.IsActive,
+                "A later independent lease must still be deactivated in the same terminal pass.");
+
+            CameraManager failedClaimant = CreateManager(
+                testWorld,
+                "ReleaseAllFailedClaimant",
+                failedResource,
+                failedClaimantSpare,
+                out _);
+            CameraManager successfulClaimant = CreateManager(
+                testWorld,
+                "ReleaseAllSuccessfulClaimant",
+                successfulFirst,
+                successfulSecond,
+                out _);
+
+            Assert.IsNull(failedClaimant.ActiveOutput,
+                "The failed lease must remain quarantined after the terminal pass.");
+            Assert.IsNotNull(successfulClaimant.ActiveOutput,
+                "A later successfully deactivated lease must be available to another manager.");
+
+            failedOutput.ThrowDuringDeactivate = false;
+            Assert.IsTrue(TryReleaseAll(arbiter, testWorld.World));
+        }
+
+        [Test]
+        public void WorldShutdown_AttemptsEachOutputLeaseOncePerTerminalPass()
+        {
+            var arbiter = new CameraOutputLeaseArbiter();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object resource = CreateResource("ManagerAttemptResource");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ManagerAttemptPrefab"));
+            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
+            manager.SetCameraOutput(output, rebindImmediately: false);
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            output.ThrowDuringDeactivate = true;
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, NullLogWriter.Instance));
+            try
+            {
+                Assert.Throws<WorldShutdownIncompleteException>(testWorld.Instance.Dispose);
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previousWriter));
+            }
+
+            Assert.AreEqual(1, output.DeactivateCount,
+                "One terminal pass must invoke a backend cleanup callback at most once per lease.");
+            Assert.AreEqual(WorldLifecycleState.Stopping, testWorld.World.LifecycleState);
+            Assert.AreSame(testWorld.World, testWorld.Instance.CurrentWorld);
+
+            output.ThrowDuringDeactivate = false;
+            Assert.DoesNotThrow(testWorld.Instance.Dispose);
+            Assert.AreEqual(2, output.DeactivateCount,
+                "A later explicit terminal pass must be allowed to retry the retained lease.");
+            Assert.IsNull(testWorld.Instance.CurrentWorld);
+        }
+
+        [Test]
+        public void TryReleaseAll_PropagatesOutOfMemoryWithoutReleasingLease()
+        {
+            var arbiter = new CameraOutputLeaseArbiter();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object resource = CreateResource("ReleaseAllOutOfMemory");
+            Object claimantSpare = CreateResource("ReleaseAllOutOfMemorySpare");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("ReleaseAllOutOfMemoryManagerPrefab"));
+            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
+            manager.SetCameraOutput(output, rebindImmediately: false);
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            output.ThrowOutOfMemoryDuringDeactivate = true;
+
+            Assert.Throws<OutOfMemoryException>(() => TryReleaseAll(arbiter, testWorld.World));
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "ReleaseAllOutOfMemoryClaimant",
+                resource,
+                claimantSpare,
+                out _);
+            Assert.IsNull(claimant.ActiveOutput,
+                "An interrupted terminal pass must not expose the unclean backend resource.");
+
+            output.ThrowOutOfMemoryDuringDeactivate = false;
+            Assert.IsTrue(TryReleaseAll(arbiter, testWorld.World));
+        }
+
+        [Test]
+        public void WorldShutdown_RetainsStoppingWorldUntilOutputCleanupCanRetry()
+        {
+            var arbiter = new CameraOutputLeaseArbiter();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                cameraOutputLeaseArbiter: arbiter);
+            Object resource = CreateResource("WorldShutdownOutOfMemory");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>("WorldShutdownOutOfMemoryManagerPrefab"));
+            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None);
+            manager.SetCameraOutput(output, rebindImmediately: false);
+            manager.InitializeFor(testWorld.World.PlayerControllers[0]);
+            output.ThrowOutOfMemoryDuringDeactivate = true;
+            World world = testWorld.World;
+            GameInstance instance = testWorld.Instance;
+            var cancellationFailure = new OutOfMemoryException(
+                "World cancellation out-of-memory failure requested by the test.");
+            using CancellationTokenRegistration cancellationRegistration =
+                world.LifetimeToken.Register(() => throw cancellationFailure);
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, NullLogWriter.Instance));
+            OutOfMemoryException propagated;
+            try
+            {
+                propagated = Assert.Throws<OutOfMemoryException>(instance.Dispose);
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previousWriter));
+            }
+
+            Assert.AreEqual(WorldLifecycleState.Stopping, world.LifecycleState);
+            Assert.IsTrue(instance.IsDisposed);
+            Assert.AreSame(world, instance.CurrentWorld);
+            Assert.AreSame(cancellationFailure, propagated,
+                "Terminal cleanup must preserve the first observed out-of-memory failure.");
+            Assert.AreEqual(1, output.DeactivateCount,
+                "Camera cleanup must still run after a cancellation observer reports out-of-memory.");
+
+            output.ThrowOutOfMemoryDuringDeactivate = false;
+            Assert.DoesNotThrow(instance.Dispose);
+            Assert.AreEqual(2, output.DeactivateCount);
+            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
+            Assert.IsNull(instance.CurrentWorld);
+        }
+
+        [Test]
+        public void FaultingTryReleaseAll_RetainsWorldForTerminalRetry()
+        {
+            var arbiter = new FaultingTryReleaseAllArbiter();
             using GameplayTestWorld testWorld = GameplayTestWorld.Create(
                 discoverActiveSceneActors: false,
                 cameraOutputLeaseArbiter: arbiter);
             World world = testWorld.StartWorld();
             GameInstance instance = testWorld.Instance;
-            WorldDefinition definition = world.Definition;
+            WorldDefinition definition = (WorldDefinition)world.Definition;
             var lifetimeToken = world.LifetimeToken;
 
-            Assert.DoesNotThrow(instance.Dispose);
+            Assert.Throws<WorldShutdownIncompleteException>(instance.Dispose);
 
-            Assert.AreEqual(1, arbiter.ReleaseAllCount);
-            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
-            Assert.IsTrue(definition.IsDisposed);
+            Assert.AreEqual(1, arbiter.TryReleaseAllCount);
+            Assert.AreEqual(WorldLifecycleState.Stopping, world.LifecycleState);
+            Assert.IsFalse(definition.IsDisposed,
+                "Definition ownership must remain available until camera cleanup completes.");
             Assert.IsTrue(lifetimeToken.IsCancellationRequested);
+            Assert.AreEqual(lifetimeToken, world.LifetimeToken,
+                "The cancelled lifetime token remains owned until all earlier cleanup stages complete.");
+            Assert.AreSame(world, instance.CurrentWorld);
+            Assert.IsTrue(instance.IsDisposed);
+
+            Assert.DoesNotThrow(instance.Dispose);
+            Assert.AreEqual(2, arbiter.TryReleaseAllCount);
+            Assert.IsTrue(definition.IsDisposed);
             Assert.Throws<ObjectDisposedException>(() =>
             {
                 _ = world.LifetimeToken;
             });
+            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
             Assert.IsNull(instance.CurrentWorld);
-            Assert.IsTrue(instance.IsDisposed);
         }
 
         [Test]
@@ -323,6 +745,48 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
             Assert.IsNull(rejected.ActiveOutput);
             Assert.IsNotNull(claimant.ActiveOutput);
+        }
+
+        [Test]
+        public void ActivationRejection_LoggingOutOfMemoryRunsCleanupBeforePropagation()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
+            Object resource = CreateResource("ActivationRejectionLoggingOutOfMemory");
+            Object claimantSpare = CreateResource("ActivationRejectionLoggingOutOfMemorySpare");
+            CameraManager manager = testWorld.World.SpawnActor(
+                testWorld.CreateAuthoringActor<CameraManager>(
+                    "ActivationRejectionLoggingOutOfMemoryManagerPrefab"));
+            var output = new FaultingRawCameraOutput(resource, RawOutputFailure.None)
+            {
+                RejectActivationAfterMutation = true,
+            };
+            manager.SetCameraOutput(output, rebindImmediately: false);
+
+            ILogWriter previousWriter = LogRuntime.Writer;
+            var throwingWriter = new OutOfMemoryLogWriter();
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, throwingWriter));
+            try
+            {
+                Assert.Throws<OutOfMemoryException>(() =>
+                    manager.InitializeFor(testWorld.World.PlayerControllers[0]));
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(throwingWriter, previousWriter));
+            }
+
+            Assert.IsFalse(output.IsActive);
+            Assert.IsNull(manager.ActiveOutput);
+            Assert.IsFalse(manager.HasOutputLeaseFault);
+
+            CameraManager claimant = CreateManager(
+                testWorld,
+                "ActivationRejectionLoggingOutOfMemoryClaimant",
+                resource,
+                claimantSpare,
+                out _);
+            Assert.IsNotNull(claimant.ActiveOutput,
+                "Logging failure must not strand a lease after backend cleanup succeeded.");
         }
 
         [Test]
@@ -355,7 +819,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
-        public void DeactivationException_DoesNotLeakCompositeLease()
+        public void DeactivationException_RetainsCompositeLeaseAndFailsClosed()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
             Object firstResource = CreateResource("First");
@@ -375,7 +839,12 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 firstResource,
                 secondResource,
                 out _);
-            Assert.IsNotNull(claimant.ActiveOutput);
+            Assert.IsNull(claimant.ActiveOutput,
+                "A backend with unknown deactivation state must quarantine its leased resources.");
+
+            output.ThrowDuringDeactivation = false;
+            Assert.DoesNotThrow(testWorld.Instance.Dispose);
+            Assert.IsFalse(output.IsActive);
         }
 
         [Test]
@@ -438,6 +907,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager prefab = testWorld.CreateAuthoringActor<CameraManager>(name + "Prefab");
             CameraManager manager = testWorld.World.SpawnActor(prefab);
             output = manager.gameObject.AddComponent<CompositeCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(output);
             output.SetResources(firstResource, secondResource);
             manager.SetCameraOutput(output, rebindImmediately: false);
             if (initialize)
@@ -455,6 +925,15 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             return resource;
         }
 
+        private static bool TryReleaseAll(
+            CameraOutputLeaseArbiter arbiter,
+            World world)
+        {
+            CameraOutputTerminalReleasePass releasePass =
+                arbiter.BeginTerminalReleasePass(world);
+            return arbiter.TryReleaseAll(world, in releasePass);
+        }
+
         private sealed class CompositeCameraOutput : CameraOutputBehaviour
         {
             private Object firstResource;
@@ -464,26 +943,33 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public bool ThrowDuringActivation { get; set; }
             public bool ThrowDuringDeactivation { get; set; }
 
-            public override Object OutputObject => firstResource;
+            protected override Object OnGetOutputObject() => firstResource;
 
             public void SetResources(Object first, Object second)
             {
-                ThrowIfPreparedOrActive();
+                ThrowIfLifecycleBound();
                 firstResource = first;
                 secondResource = second;
             }
 
-            protected override bool OnTryPrepare(out string error)
+            protected override bool OnTryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
             {
-                if (!TryAddPreparedResource(firstResource, out error))
-                {
-                    return false;
-                }
-
-                return TryAddPreparedResource(secondResource, out error);
+                return CameraOutputResourceSet.TryCreate(
+                    2,
+                    firstResource,
+                    secondResource,
+                    null,
+                    null,
+                    out resources,
+                    out error);
             }
 
-            protected override bool OnActivate(CameraManager newOwner, out string error)
+            protected override bool OnActivate(
+                CameraManager newOwner,
+                in CameraOutputResourceSet resources,
+                out string error)
             {
                 if (ThrowDuringActivation)
                 {
@@ -512,22 +998,33 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             private Object firstResource;
             private Object secondResource;
 
-            public override Object OutputObject => firstResource;
+            protected override Object OnGetOutputObject() => firstResource;
 
             public void SetResources(Object first, Object second)
             {
-                ThrowIfPreparedOrActive();
+                ThrowIfLifecycleBound();
                 firstResource = first;
                 secondResource = second;
             }
 
-            protected override bool OnTryPrepare(out string error)
+            protected override bool OnTryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
             {
-                return TryAddPreparedResource(firstResource, out error) &&
-                       TryAddPreparedResource(secondResource, out error);
+                return CameraOutputResourceSet.TryCreate(
+                    2,
+                    firstResource,
+                    secondResource,
+                    null,
+                    null,
+                    out resources,
+                    out error);
             }
 
-            protected override bool OnActivate(CameraManager newOwner, out string error)
+            protected override bool OnActivate(
+                CameraManager newOwner,
+                in CameraOutputResourceSet resources,
+                out string error)
             {
                 newOwner.World.GameInstance.Dispose();
                 error = null;
@@ -539,12 +1036,56 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             }
         }
 
+        private sealed class DestroyAwareCameraOutput : CameraOutputBehaviour
+        {
+            private Object firstResource;
+            private Object secondResource;
+
+            public bool DestroyHookInvoked { get; private set; }
+            protected override Object OnGetOutputObject() => firstResource;
+
+            public void SetResources(Object first, Object second)
+            {
+                ThrowIfLifecycleBound();
+                firstResource = first;
+                secondResource = second;
+            }
+
+            protected override bool OnTryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
+            {
+                return CameraOutputResourceSet.TryCreate(
+                    2,
+                    firstResource,
+                    secondResource,
+                    null,
+                    null,
+                    out resources,
+                    out error);
+            }
+
+            protected override void OnApplyPose(in CameraPose pose)
+            {
+            }
+
+            protected override void OnDestroy()
+            {
+                DestroyHookInvoked = true;
+                base.OnDestroy();
+            }
+
+            public void InvokeOnDestroyForTest()
+            {
+                OnDestroy();
+            }
+        }
+
         public enum RawOutputFailure : byte
         {
             None,
-            Prepare,
-            ResourceCount,
-            PreparedResource,
+            DiscoveryException,
+            InvalidResourceSet,
         }
 
         private sealed class FaultingRawCameraOutput : ICameraOutput
@@ -558,72 +1099,51 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
             public string DisplayName => nameof(FaultingRawCameraOutput);
             public bool IsActive { get; private set; }
-            public bool IsPrepared { get; private set; }
             public CameraManager Owner { get; private set; }
             public Object OutputObject => resource;
+            public int DiscoveryCount { get; private set; }
             public int DeactivateCount { get; private set; }
             public RawOutputFailure Failure { get; set; }
-            public bool ReenterOnPrepare { get; set; }
-            public bool DisposeWorldOnPrepare { get; set; }
+            public bool RejectActivationAfterMutation { get; set; }
+            public bool ThrowDuringDeactivate { get; set; }
+            public bool ThrowOutOfMemoryDuringDeactivate { get; set; }
 
-            public int PreparedResourceCount
+            public bool TryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
             {
-                get
-                {
-                    if (Failure == RawOutputFailure.ResourceCount)
-                    {
-                        throw new InvalidOperationException(
-                            "Resource-count failure requested by the test.");
-                    }
-
-                    return 1;
-                }
-            }
-
-            public bool TryPrepare(out string error)
-            {
-                if (ReenterOnPrepare && Owner != null)
-                {
-                    Owner.SetCameraOutput(null);
-                }
-
-                World owningWorld = Owner?.World;
-                if (DisposeWorldOnPrepare && owningWorld != null)
-                {
-                    owningWorld.GameInstance.Dispose();
-                }
-
-                IsPrepared = true;
-                if (Failure == RawOutputFailure.Prepare)
+                DiscoveryCount++;
+                if (Failure == RawOutputFailure.DiscoveryException)
                 {
                     throw new InvalidOperationException(
-                        "Preparation failure requested by the test.");
+                        "Resource discovery failure requested by the test.");
                 }
 
+                if (Failure == RawOutputFailure.InvalidResourceSet)
+                {
+                    resources = default;
+                    error = null;
+                    return true;
+                }
+
+                resources = new CameraOutputResourceSet(resource);
                 error = null;
                 return true;
             }
 
-            public Object GetPreparedResource(int index)
-            {
-                if (Failure == RawOutputFailure.PreparedResource)
-                {
-                    throw new InvalidOperationException(
-                        "Prepared-resource failure requested by the test.");
-                }
-
-                if (index != 0)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(index));
-                }
-
-                return resource;
-            }
-
-            public bool TryActivate(CameraManager owner, out string error)
+            public bool TryActivate(
+                CameraManager owner,
+                in CameraOutputResourceSet resources,
+                out string error)
             {
                 Owner = owner;
                 IsActive = true;
+                if (RejectActivationAfterMutation)
+                {
+                    error = "Activation rejection requested after backend mutation by the test.";
+                    return false;
+                }
+
                 error = null;
                 return true;
             }
@@ -635,20 +1155,38 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public void Deactivate(CameraManager owner)
             {
                 DeactivateCount++;
-                IsPrepared = false;
+                if (ThrowOutOfMemoryDuringDeactivate)
+                {
+                    throw new OutOfMemoryException(
+                        "Out-of-memory failure requested by the test.");
+                }
+                if (ThrowDuringDeactivate)
+                {
+                    throw new InvalidOperationException(
+                        "Deactivation failure requested by the test.");
+                }
+
                 IsActive = false;
                 Owner = null;
             }
         }
 
-        private sealed class ThrowingReleaseAllArbiter : ICameraOutputLeaseArbiter
+        private sealed class FaultingTryReleaseAllArbiter : ICameraOutputLeaseArbiter
         {
-            public int ReleaseAllCount { get; private set; }
+            public int TryReleaseAllCount { get; private set; }
+            private long nextReleasePassSequence;
+
+            public CameraOutputTerminalReleasePass BeginTerminalReleasePass(World world)
+            {
+                nextReleasePassSequence++;
+                return new CameraOutputTerminalReleasePass(this, nextReleasePassSequence);
+            }
 
             public bool TryAcquire(
                 World world,
                 CameraManager owner,
                 ICameraOutput output,
+                in CameraOutputResourceSet resources,
                 out CameraOutputLease lease,
                 out string error)
             {
@@ -665,12 +1203,147 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
             }
 
-            public void ReleaseAll(World world)
+            public bool TryBeginTerminalReleaseAttempt(
+                World world,
+                CameraManager owner,
+                ICameraOutput output,
+                in CameraOutputLease lease,
+                in CameraOutputTerminalReleasePass releasePass)
             {
-                ReleaseAllCount++;
-                throw new InvalidOperationException(
-                    "ReleaseAll failure requested by the test.");
+                return false;
             }
+
+            public bool TryReleaseAll(
+                World world,
+                in CameraOutputTerminalReleasePass releasePass)
+            {
+                TryReleaseAllCount++;
+                if (TryReleaseAllCount == 1)
+                {
+                    throw new InvalidOperationException(
+                        "TryReleaseAll failure requested by the test.");
+                }
+
+                return true;
+            }
+        }
+
+        private sealed class FaultInjectingLeaseArbiter : ICameraOutputLeaseArbiter
+        {
+            private readonly CameraOutputLeaseArbiter inner =
+                new CameraOutputLeaseArbiter();
+
+            public bool ThrowAfterAcquire { get; set; }
+            public bool ThrowAfterRelease { get; set; }
+
+            public CameraOutputTerminalReleasePass BeginTerminalReleasePass(World world)
+            {
+                return inner.BeginTerminalReleasePass(world);
+            }
+
+            public bool TryAcquire(
+                World world,
+                CameraManager owner,
+                ICameraOutput output,
+                in CameraOutputResourceSet resources,
+                out CameraOutputLease lease,
+                out string error)
+            {
+                bool acquired = inner.TryAcquire(
+                    world,
+                    owner,
+                    output,
+                    in resources,
+                    out lease,
+                    out error);
+                if (acquired && ThrowAfterAcquire)
+                {
+                    ThrowAfterAcquire = false;
+                    throw new InvalidOperationException(
+                        "Acquire failure requested after lease commit by the test.");
+                }
+
+                return acquired;
+            }
+
+            public void Release(
+                World world,
+                CameraManager owner,
+                ICameraOutput output,
+                in CameraOutputLease lease)
+            {
+                inner.Release(world, owner, output, in lease);
+                if (ThrowAfterRelease)
+                {
+                    ThrowAfterRelease = false;
+                    throw new InvalidOperationException(
+                        "Release failure requested after lease commit by the test.");
+                }
+            }
+
+            public bool TryBeginTerminalReleaseAttempt(
+                World world,
+                CameraManager owner,
+                ICameraOutput output,
+                in CameraOutputLease lease,
+                in CameraOutputTerminalReleasePass releasePass)
+            {
+                return inner.TryBeginTerminalReleaseAttempt(
+                    world,
+                    owner,
+                    output,
+                    in lease,
+                    in releasePass);
+            }
+
+            public bool TryReleaseAll(
+                World world,
+                in CameraOutputTerminalReleasePass releasePass)
+            {
+                return inner.TryReleaseAll(world, in releasePass);
+            }
+        }
+
+        private sealed class OutOfMemoryLogWriter : ILogWriter
+        {
+            private readonly OutOfMemoryException failure = new OutOfMemoryException(
+                "Logging out-of-memory failure requested by the test.");
+
+            public bool IsEnabled(LogSeverity severity, string category) => throw failure;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => throw failure;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => throw failure;
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => throw failure;
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => throw failure;
         }
 
         private sealed class MutatingCameraOutput : ICameraOutput
@@ -694,25 +1367,22 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public bool IsActive { get; private set; }
             public CameraManager Owner { get; private set; }
             public Object OutputObject => firstResource;
-            public int PreparedResourceCount => 2;
 
-            public bool TryPrepare(out string error)
+            public bool TryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
             {
+                resources = new CameraOutputResourceSet(
+                    firstResource,
+                    useReplacement ? replacementResource : leasedSecondResource);
                 error = null;
                 return true;
             }
 
-            public Object GetPreparedResource(int index)
-            {
-                switch (index)
-                {
-                    case 0: return firstResource;
-                    case 1: return useReplacement ? replacementResource : leasedSecondResource;
-                    default: throw new ArgumentOutOfRangeException(nameof(index));
-                }
-            }
-
-            public bool TryActivate(CameraManager owner, out string error)
+            public bool TryActivate(
+                CameraManager owner,
+                in CameraOutputResourceSet resources,
+                out string error)
             {
                 Owner = owner;
                 IsActive = true;

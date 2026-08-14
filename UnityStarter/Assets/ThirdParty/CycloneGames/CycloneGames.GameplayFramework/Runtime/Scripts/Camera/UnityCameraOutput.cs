@@ -13,32 +13,63 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private Camera activeCamera;
 
-        public Camera ActiveCamera => activeCamera;
-        public override UnityEngine.Object OutputObject => activeCamera != null ? activeCamera : targetCamera;
+        public Camera ActiveCamera
+        {
+            get
+            {
+                AssertOutputOwnerThread();
+                return activeCamera;
+            }
+        }
+        protected override UnityEngine.Object OnGetOutputObject()
+        {
+            return activeCamera != null ? activeCamera : targetCamera;
+        }
 
         public void SetTargetCamera(Camera camera)
         {
-            ThrowIfPreparedOrActive();
+            ThrowIfLifecycleBound();
             targetCamera = camera;
         }
 
-        protected override bool OnTryPrepare(out string error)
+        protected override bool OnTryGetResourceSet(
+            out CameraOutputResourceSet resources,
+            out string error)
         {
-            activeCamera = targetCamera != null
+            Camera resolvedCamera = targetCamera != null
                 ? targetCamera
                 : GetComponent<Camera>();
-            if (activeCamera == null)
+            if (resolvedCamera == null)
             {
-                activeCamera = GetComponentInChildren<Camera>(includeInactive: true);
+                resolvedCamera = GetComponentInChildren<Camera>(includeInactive: true);
             }
 
-            if (activeCamera == null)
+            if (resolvedCamera == null)
             {
+                resources = default;
                 error = "UnityCameraOutput requires an explicitly assigned Camera or a Camera on its hierarchy.";
                 return false;
             }
 
-            return TryAddPreparedResource(activeCamera, out error);
+            resources = new CameraOutputResourceSet(resolvedCamera);
+            error = null;
+            return true;
+        }
+
+        protected override bool OnActivate(
+            CameraManager newOwner,
+            in CameraOutputResourceSet resources,
+            out string error)
+        {
+            if (resources.Count != 1 || !(resources.GetResource(0) is Camera leasedCamera))
+            {
+                error = "UnityCameraOutput requires one leased Unity Camera resource.";
+                return false;
+            }
+
+            activeCamera = leasedCamera;
+            error = null;
+            return true;
         }
 
         protected override void OnApplyPose(in CameraPose pose)
@@ -59,7 +90,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        protected override void OnReleasePreparedResources()
+        protected override void OnDeactivate()
         {
             activeCamera = null;
         }

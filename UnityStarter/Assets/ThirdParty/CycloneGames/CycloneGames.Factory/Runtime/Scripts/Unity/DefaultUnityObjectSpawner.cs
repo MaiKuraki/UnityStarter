@@ -30,6 +30,12 @@ namespace CycloneGames.Factory.Runtime
             return UnityEngine.Object.Instantiate(origin, parent);
         }
 
+        /// <summary>
+        /// Permanently releases an instance previously produced by <see cref="Create{T}(T)"/>.
+        /// Never pass a persistent asset: the Edit Mode path uses
+        /// <see cref="UnityEngine.Object.DestroyImmediate(UnityEngine.Object)"/> on the release
+        /// target, which permanently deletes a persistent asset instead of a scene instance.
+        /// </summary>
         public void Release(UnityEngine.Object instance)
         {
             if (ReferenceEquals(instance, null) || instance == null)

@@ -100,8 +100,8 @@ namespace CycloneGames.GameplayFramework.Networking
         }
 
         /// <summary>
-        /// Bound Actors expose their authoritative thread through World. Unbound authoring Actors have no
-        /// World owner to validate, so their caller remains responsible for Unity main-thread affinity.
+        /// Actor live APIs enforce the immutable owner thread captured during Awake. Bound Actors also
+        /// validate their World's owner thread, while Actors that have not initialized fail closed.
         /// </summary>
         private static void AssertActorAccessThread(Actor actor)
         {

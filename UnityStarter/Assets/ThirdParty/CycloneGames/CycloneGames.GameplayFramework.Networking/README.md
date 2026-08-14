@@ -106,6 +106,8 @@ if (!session.ApproveLogin(in request, out string loginError))
 
 Connection state, authentication, player identity, address length, staged capacity, duplicate connection IDs, and configured bans are validated before the gameplay session accepts the request. Transport `ConnectionId` values must be positive. Staging freezes the validated ID and address; approval and binding reject a connection whose identity changes before commit.
 
+Staging reserves both identity indexes before publishing either entry. Registration first commits the composed `IGameSession`, then validates and binds the staged connection as one adapter transaction. Any rejection or exception after that commit rolls the composed registration back before returning or rethrowing. If a custom session cannot complete the rollback, the adapter retains exactly one recovery owner, reports `HasRegistrationRollbackFault`, and rejects further registrations. After correcting the custom session, call `TryRecoverRegistrationRollback()` on the owner thread. This fail-closed state is bounded and prevents an unbound participant from silently occupying the gameplay roster.
+
 ## Shared replication planner
 
 Replication policy, observer evaluation, prioritization, tick intervals, channel selection, and byte/message budgets come from `CycloneGames.Networking.Replication`. GameplayFramework does not maintain a second replication model. Its Runtime assembly only samples Unity Actor state into the shared immutable input value:
@@ -246,7 +248,7 @@ Product code must configure replication-result, cooldown-tracker, participant, s
 - Core protocol values and pure validators have no Unity thread affinity.
 - `DamageCooldownTracker` captures its owner thread and rejects access from other threads; the server simulation owner must serialize access.
 - `NetworkGameSessionAdapter` captures its owner thread at construction and rejects collection access from other threads. `MaximumSupportedBannedAddressCount` is the implementation ceiling, while `MaximumBannedAddressCount` reports the injected per-session budget.
-- `ActorNetworkingExtensions` invokes Unity APIs. A bound Actor validates its owning World thread before any state read or write. An unbound authoring Actor has no World owner to validate, so its caller must invoke the adapter on the Unity main thread.
+- `ActorNetworkingExtensions` invokes Actor live APIs. Every initialized Actor enforces the immutable owner thread captured during `Awake`; a bound Actor also validates its World's owner thread, and an Actor that has not initialized fails closed.
 - Transport shutdown removes staged and bound connections on the owner thread before replacing the message endpoint.
 
 ## Persistence

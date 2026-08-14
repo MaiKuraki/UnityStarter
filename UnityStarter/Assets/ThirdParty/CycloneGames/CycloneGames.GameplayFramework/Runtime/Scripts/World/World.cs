@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
@@ -43,6 +43,17 @@ namespace CycloneGames.GameplayFramework.Runtime
             public bool ActivateOnFinish;
             public ActorTickPhase TickPhase;
             public int TickListIndex;
+            public bool TeardownDetached;
+            public bool TeardownUnbound;
+            public bool TeardownLifetimeReleased;
+        }
+
+        private enum ActorReleasePolicy : byte
+        {
+            None = 0,
+            DestroyRegisteredActor = 1,
+            ReleaseWorldOwnedActor = 2,
+            ObserveDestroyedActor = 3,
         }
 
         private sealed class WorldActorCollector : IWorldActorCollector
@@ -162,6 +173,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly WorldActorCollector actorCollector;
         private readonly IMatchClock matchClock;
         private readonly ICameraOutputLeaseArbiter cameraOutputLeaseArbiter;
+        private readonly WorldShutdownIncompleteException shutdownIncompleteException;
         private readonly List<ActorEntry> actors;
         private readonly List<Actor> lifecycleScratch;
         private readonly List<Actor> updateTickActors;
@@ -170,19 +182,36 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly List<Actor> tickScratch;
         private readonly Dictionary<int, int> actorIndices;
         private readonly List<PlayerController> playerControllers = new List<PlayerController>(8);
+        private readonly List<PlayerState> participantPlayerStates = new List<PlayerState>(8);
         private readonly List<PlayerStart> playerStarts = new List<PlayerStart>(16);
         private readonly CancellationTokenSource lifetimeCancellation = new CancellationTokenSource();
 
         private WorldLifecycleState lifecycleState = WorldLifecycleState.Created;
         private GameMode gameMode;
+        // The live Unity component and its terminal cleanup owner have different lifetimes.
+        // Unity destruction removes the live component immediately, while the managed wrapper
+        // must remain reachable until participant and session ownership reaches a terminal state.
+        private GameMode terminalGameModeOwner;
+        private GameMode gameModeDestructionStageOwner;
+        private IGameSession terminalGameSession;
         private GameState gameState;
         private int ownedActorCount;
         private int peakActorCount;
         private long rejectedActorAdmissionCount;
-        private ReadOnlyCollection<PlayerController> playerControllerView;
-        private ReadOnlyCollection<PlayerStart> playerStartView;
+        private OwnerThreadReadOnlyList<PlayerController> playerControllerView;
+        private OwnerThreadReadOnlyList<PlayerStart> playerStartView;
         private bool tickDispatchReady;
         private bool isDispatchingActorTick;
+        private bool isTerminalCleanupInProgress;
+        private bool isGameplayShutdownInProgress;
+        private bool gameplayShutdownCompleted;
+        private bool lifetimeCancellationDisposed;
+        private bool pendingGameplayCleanup;
+        private bool pendingActorCleanup;
+        private bool pendingCameraOutputCleanup;
+        private bool pendingLifetimeTokenCleanup;
+        private EndPlayReason shutdownReason;
+        private CameraOutputTerminalReleasePass activeCameraOutputTerminalReleasePass;
         private ActorTickPhase activeTickPhase;
 
         internal World(
@@ -198,6 +227,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             IMatchClock matchClock,
             ICameraOutputLeaseArbiter cameraOutputLeaseArbiter)
         {
+            ValidateNetMode(netMode);
             this.gameInstance = gameInstance ?? throw new ArgumentNullException(nameof(gameInstance));
             this.actorLifetime = actorLifetime ?? throw new ArgumentNullException(nameof(actorLifetime));
             this.definition = definition ?? throw new ArgumentNullException(nameof(definition));
@@ -209,6 +239,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             this.matchClock = matchClock ?? throw new ArgumentNullException(nameof(matchClock));
             this.cameraOutputLeaseArbiter = cameraOutputLeaseArbiter ??
                 throw new ArgumentNullException(nameof(cameraOutputLeaseArbiter));
+            shutdownIncompleteException = new WorldShutdownIncompleteException(this);
             actors = new List<ActorEntry>(runtimeLimits.InitialActorCapacity);
             lifecycleScratch = new List<Actor>(runtimeLimits.InitialActorCapacity);
             actorCollector = new WorldActorCollector(this);
@@ -224,40 +255,245 @@ namespace CycloneGames.GameplayFramework.Runtime
             NetMode = netMode;
         }
 
-        public GameInstance GameInstance => gameInstance;
-        public WorldRuntimeLimits RuntimeLimits => runtimeLimits;
-        public IMatchClock MatchClock => matchClock;
-        public WorldDefinition Definition => definition;
-        public WorldNetMode NetMode { get; }
-        public WorldLifecycleState LifecycleState => lifecycleState;
-        public bool IsAuthority => NetMode != WorldNetMode.Client;
-        public bool IsDedicatedServer => NetMode == WorldNetMode.DedicatedServer;
-        public GameMode GameMode => gameMode;
-        public GameState GameState => gameState;
-        public IReadOnlyList<PlayerController> PlayerControllers =>
-            playerControllerView ??= playerControllers.AsReadOnly();
-        public IReadOnlyList<PlayerStart> PlayerStarts =>
-            playerStartView ??= playerStarts.AsReadOnly();
-        public int ActorCount => actors.Count;
-        public int PeakActorCount => peakActorCount;
-        public int OwnedActorCount => ownedActorCount;
-        public int PlayerControllerCount => playerControllers.Count;
-        public int PlayerStartCount => playerStarts.Count;
-        public long RejectedActorAdmissionCount => rejectedActorAdmissionCount;
-        public CancellationToken LifetimeToken => lifetimeCancellation.Token;
-        public ISceneTransitionHandler SceneTransitionHandler => sceneTransitionHandler;
-        public bool IsDispatchingActorTick => isDispatchingActorTick;
-        public ActorTickPhase ActiveTickPhase => activeTickPhase;
+        public GameInstance GameInstance
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return gameInstance;
+            }
+        }
 
-        public GameInstance GetGameInstance() => gameInstance;
-        public GameMode GetAuthGameMode() => IsAuthority ? gameMode : null;
+        public WorldRuntimeLimits RuntimeLimits => runtimeLimits;
+        public IMatchClock MatchClock
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return matchClock;
+            }
+        }
+
+        public IWorldDefinition Definition
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return definition;
+            }
+        }
+        public WorldNetMode NetMode { get; }
+        public WorldLifecycleState LifecycleState
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return lifecycleState;
+            }
+        }
+
+        internal bool HasPendingGameplayCleanup
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return pendingGameplayCleanup;
+            }
+        }
+
+        internal bool HasPendingActorCleanup
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return pendingActorCleanup;
+            }
+        }
+
+        internal bool HasPendingCameraOutputCleanup
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return pendingCameraOutputCleanup;
+            }
+        }
+
+        internal int PendingWorldSettingsLeaseCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return definition.PendingLeaseCount;
+            }
+        }
+
+        internal bool HasPendingLifetimeTokenCleanup
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return pendingLifetimeTokenCleanup;
+            }
+        }
+
+        public bool IsAuthority =>
+            NetMode == WorldNetMode.Standalone ||
+            NetMode == WorldNetMode.ListenServer ||
+            NetMode == WorldNetMode.DedicatedServer;
+        public bool IsDedicatedServer => NetMode == WorldNetMode.DedicatedServer;
+        public GameMode GameMode
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return gameMode;
+            }
+        }
+
+        public GameState GameState
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return gameState;
+            }
+        }
+
+        public OwnerThreadReadOnlyList<PlayerController> PlayerControllers
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return playerControllerView ??= new OwnerThreadReadOnlyList<PlayerController>(
+                    EnsureOwnerThread,
+                    playerControllers);
+            }
+        }
+
+        public OwnerThreadReadOnlyList<PlayerStart> PlayerStarts
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return playerStartView ??= new OwnerThreadReadOnlyList<PlayerStart>(
+                    EnsureOwnerThread,
+                    playerStarts);
+            }
+        }
+
+        public int ActorCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return actors.Count;
+            }
+        }
+
+        public int PeakActorCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return peakActorCount;
+            }
+        }
+
+        public int OwnedActorCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return ownedActorCount;
+            }
+        }
+
+        public int PlayerControllerCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return playerControllers.Count;
+            }
+        }
+
+        public int PlayerStartCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return playerStarts.Count;
+            }
+        }
+
+        public long RejectedActorAdmissionCount
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return rejectedActorAdmissionCount;
+            }
+        }
+
+        public CancellationToken LifetimeToken
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return lifetimeCancellation.Token;
+            }
+        }
+        public ISceneTransitionHandler SceneTransitionHandler
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return sceneTransitionHandler;
+            }
+        }
+        public bool IsDispatchingActorTick
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return isDispatchingActorTick;
+            }
+        }
+
+        public ActorTickPhase ActiveTickPhase
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return activeTickPhase;
+            }
+        }
+
+        public GameInstance GetGameInstance()
+        {
+            EnsureOwnerThread();
+            return gameInstance;
+        }
+        public GameMode GetAuthGameMode()
+        {
+            EnsureOwnerThread();
+            return IsAuthority ? gameMode : null;
+        }
+
         public T GetAuthGameMode<T>() where T : GameMode => GetAuthGameMode() as T;
-        public GameState GetGameState() => gameState;
-        public T GetGameState<T>() where T : GameState => gameState as T;
+        public GameState GetGameState()
+        {
+            EnsureOwnerThread();
+            return gameState;
+        }
+
+        public T GetGameState<T>() where T : GameState => GetGameState() as T;
         public PlayerController GetFirstPlayerController() => GetPlayerController(0);
 
         public PlayerController GetPlayerController(int index)
         {
+            EnsureOwnerThread();
             return (uint)index < (uint)playerControllers.Count
                 ? playerControllers[index]
                 : null;
@@ -322,11 +558,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     }
                     catch (Exception exception)
                     {
-                        // One Actor cannot starve the rest of the phase. Exceptions remain
-                        // observable through the framework logging pipeline.
-                        Log.Error(
-                            exception,
-                            $"Actor '{actor.name}' Tick failed during '{phase}'; dispatch will continue with the remaining actors.");
+                        HandleActorCallbackFailure(actor, phase, exception);
                     }
                 }
             }
@@ -338,14 +570,45 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void HandleActorCallbackFailure(
+            Actor actor,
+            ActorTickPhase phase,
+            Exception exception)
+        {
+            OutOfMemoryException outOfMemory = FindOutOfMemory(exception);
+            if (outOfMemory != null)
+            {
+                throw outOfMemory;
+            }
+
+            try
+            {
+                string actorName = actor != null ? actor.name : "<destroyed>";
+                Log.Error(
+                    exception,
+                    $"Actor '{actorName}' Tick failed during '{phase}'; dispatch will continue with the remaining actors.");
+            }
+            catch (Exception loggingException)
+            {
+                outOfMemory = FindOutOfMemory(loggingException);
+                if (outOfMemory != null)
+                {
+                    throw outOfMemory;
+                }
+            }
+        }
+
         public int GetTickActorCount(ActorTickPhase phase)
         {
+            EnsureOwnerThread();
             return GetTickActorList(phase).Count;
         }
 
         public bool ContainsPlayerController(PlayerController playerController)
         {
-            return !ReferenceEquals(playerController, null) && playerControllers.Contains(playerController);
+            EnsureOwnerThread();
+            return IndexOfPlayerControllerReference(playerController) >= 0;
         }
 
         internal async UniTask InitializeAsync(
@@ -365,6 +628,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (IsAuthority)
             {
                 gameMode = SpawnActor(definition.GameModeClass);
+                terminalGameModeOwner = gameMode;
                 gameMode.Initialize(this, configuredGameSession);
                 await gameMode.StartPlayAsync(localPlayers, initializationToken);
                 await UniTask.SwitchToMainThread();
@@ -517,6 +781,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 Exception cleanupException = null;
                 bool releaseRegisteredInstance = registrationAdded && IsActorRegistered(instance);
+                bool registrationRemoved = false;
                 try
                 {
                     if (releaseRegisteredInstance)
@@ -524,6 +789,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                         RollbackActorRegistration(
                             instance,
                             EndPlayReason.InitializationFailure);
+                        registrationRemoved = true;
                     }
                 }
                 catch (Exception exception)
@@ -531,7 +797,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     cleanupException = exception;
                 }
 
-                if (releaseRegisteredInstance)
+                if (releaseRegisteredInstance && registrationRemoved)
                 {
                     try
                     {
@@ -543,6 +809,12 @@ namespace CycloneGames.GameplayFramework.Runtime
                             ? exception
                             : new AggregateException(cleanupException, exception);
                     }
+                }
+
+                if (IsActorRegistered(instance) || ReferenceEquals(instance.World, this))
+                {
+                    // Registry ownership remains reachable for a later terminal retry.
+                    pendingLifetimeRelease = false;
                 }
 
                 try
@@ -681,11 +953,14 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool IsActorRegistered(Actor actor)
         {
-            return actor != null && actorIndices.ContainsKey(actor.GetStableInstanceId());
+            EnsureOwnerThread();
+            return !ReferenceEquals(actor, null) &&
+                   actorIndices.ContainsKey(actor.GetStableInstanceId());
         }
 
         public bool TryGetActor(int instanceId, out Actor actor)
         {
+            EnsureOwnerThread();
             if (actorIndices.TryGetValue(instanceId, out int index))
             {
                 actor = actors[index].Actor;
@@ -702,6 +977,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public bool TryGetActorRegistration(int index, out WorldActorRegistration registration)
         {
+            EnsureOwnerThread();
             if ((uint)index < (uint)actors.Count)
             {
                 ActorEntry entry = actors[index];
@@ -715,6 +991,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool TryGetActor<T>(out T actor) where T : Actor
         {
+            EnsureOwnerThread();
             for (int i = 0; i < actors.Count; i++)
             {
                 if (actors[i].Actor is T candidate)
@@ -741,7 +1018,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             if (actor is PlayerController playerController &&
-                playerControllers.Contains(playerController) &&
+                IndexOfPlayerControllerReference(playerController) >= 0 &&
                 gameMode != null)
             {
                 return gameMode.Logout(playerController);
@@ -761,109 +1038,174 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return true;
             }
 
-            ActorEntry entry = RemoveActorAt(index);
-            Actor actorToRelease = entry.Actor;
-            DetachActorBookkeeping(entry.Actor);
-            try
+            bool removed = TryTeardownActorAt(
+                index,
+                reason,
+                ActorReleasePolicy.DestroyRegisteredActor,
+                preparePlayerCameraContext: true,
+                out Exception teardownFailure);
+            if (teardownFailure != null)
             {
-                entry.Actor.UnbindFromWorld(this, reason);
-            }
-            finally
-            {
-                if (entry.Owned)
-                {
-                    actorLifetime.Release(actorToRelease);
-                }
-                else
-                {
-                    UnityActorLifetime.ReleaseUnityActor(actorToRelease);
-                }
+                throw teardownFailure;
             }
 
-            return true;
+            return removed;
         }
 
+        /// <summary>
+        /// Ends gameplay and releases all World-owned resources. Shutdown is deliberately
+        /// non-cancellable after entry so every ownership boundary reaches a terminal state.
+        /// </summary>
         public async UniTask ShutdownAsync(
-            EndPlayReason reason = EndPlayReason.WorldShutdown,
-            CancellationToken cancellationToken = default)
+            EndPlayReason reason = EndPlayReason.WorldShutdown)
         {
             EnsureOwnerThread();
             if (lifecycleState == WorldLifecycleState.Disposed ||
-                lifecycleState == WorldLifecycleState.Stopped ||
-                lifecycleState == WorldLifecycleState.Stopping)
+                lifecycleState == WorldLifecycleState.Stopped)
             {
                 return;
             }
 
-            // Shutdown is non-cancellable once requested so ownership cleanup cannot be left
-            // half-complete. The token is reserved for future bounded adapter waits.
-            _ = cancellationToken;
-            BeginStopping();
+            if (lifecycleState == WorldLifecycleState.Stopping)
+            {
+                RetryTerminalCleanup();
+                return;
+            }
+
+            OutOfMemoryException terminalOutOfMemory = BeginStopping(reason);
+            isTerminalCleanupInProgress = true;
+            isGameplayShutdownInProgress = true;
 
             try
             {
-                if (gameMode != null)
+                GameMode cleanupOwner = terminalGameModeOwner;
+                if (CanInvokeGameModeCleanupOwner(cleanupOwner))
                 {
-                    await gameMode.ShutdownAsync(reason);
+                    await cleanupOwner.ShutdownAsync(reason);
+                }
+            }
+            catch (Exception exception)
+            {
+                if (!TryCaptureTerminalOutOfMemory(ref terminalOutOfMemory, exception))
+                {
+                    throw;
                 }
             }
             finally
             {
-                await UniTask.SwitchToMainThread();
-                EnsureOwnerThread();
-                CompleteShutdown(reason);
+                try
+                {
+                    await UniTask.SwitchToMainThread();
+                    EnsureOwnerThread();
+                    isGameplayShutdownInProgress = false;
+                    gameplayShutdownCompleted = IsGameModeShutdownComplete();
+                    CompleteShutdown(reason, terminalOutOfMemory);
+                }
+                finally
+                {
+                    isGameplayShutdownInProgress = false;
+                    isTerminalCleanupInProgress = false;
+                    activeCameraOutputTerminalReleasePass = default;
+                }
             }
         }
 
         internal void AbortInitialization()
         {
             EnsureOwnerThread();
-            if (lifecycleState == WorldLifecycleState.Disposed ||
-                lifecycleState == WorldLifecycleState.Stopping)
+            if (lifecycleState == WorldLifecycleState.Disposed)
             {
                 return;
             }
 
-            BeginStopping();
+            if (lifecycleState == WorldLifecycleState.Stopping)
+            {
+                RetryTerminalCleanup();
+                return;
+            }
+
+            OutOfMemoryException terminalOutOfMemory = BeginStopping(
+                EndPlayReason.InitializationFailure);
+            isTerminalCleanupInProgress = true;
+            isGameplayShutdownInProgress = true;
             try
             {
-                gameMode?.ShutdownImmediate(EndPlayReason.InitializationFailure);
+                GameMode cleanupOwner = terminalGameModeOwner;
+                if (CanInvokeGameModeCleanupOwner(cleanupOwner))
+                {
+                    cleanupOwner.ShutdownImmediate(EndPlayReason.InitializationFailure);
+                }
             }
             catch (Exception exception)
             {
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    "GameMode shutdown after World initialization failure failed; World cleanup will continue.");
+                    "GameMode shutdown after World initialization failure failed; World cleanup will continue.",
+                    ref terminalOutOfMemory);
             }
             finally
             {
-                CompleteShutdown(EndPlayReason.InitializationFailure);
+                try
+                {
+                    isGameplayShutdownInProgress = false;
+                    gameplayShutdownCompleted = IsGameModeShutdownComplete();
+                    CompleteShutdown(EndPlayReason.InitializationFailure, terminalOutOfMemory);
+                }
+                finally
+                {
+                    isGameplayShutdownInProgress = false;
+                    isTerminalCleanupInProgress = false;
+                    activeCameraOutputTerminalReleasePass = default;
+                }
             }
         }
 
         internal void ShutdownImmediate(EndPlayReason reason)
         {
             EnsureOwnerThread();
-            if (lifecycleState == WorldLifecycleState.Disposed ||
-                lifecycleState == WorldLifecycleState.Stopping)
+            if (lifecycleState == WorldLifecycleState.Disposed)
             {
                 return;
             }
 
-            BeginStopping();
+            if (lifecycleState == WorldLifecycleState.Stopping)
+            {
+                RetryTerminalCleanup();
+                return;
+            }
+
+            OutOfMemoryException terminalOutOfMemory = BeginStopping(reason);
+            isTerminalCleanupInProgress = true;
+            isGameplayShutdownInProgress = true;
             try
             {
-                gameMode?.ShutdownImmediate(reason);
+                GameMode cleanupOwner = terminalGameModeOwner;
+                if (CanInvokeGameModeCleanupOwner(cleanupOwner))
+                {
+                    cleanupOwner.ShutdownImmediate(reason);
+                }
             }
             catch (Exception exception)
             {
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    $"GameMode immediate shutdown failed for reason '{reason}'; World cleanup will continue.");
+                    "GameMode immediate shutdown failed; World cleanup will continue.",
+                    ref terminalOutOfMemory);
             }
             finally
             {
-                CompleteShutdown(reason);
+                try
+                {
+                    isGameplayShutdownInProgress = false;
+                    gameplayShutdownCompleted = IsGameModeShutdownComplete();
+                    CompleteShutdown(reason, terminalOutOfMemory);
+                }
+                finally
+                {
+                    isGameplayShutdownInProgress = false;
+                    isTerminalCleanupInProgress = false;
+                    activeCameraOutputTerminalReleasePass = default;
+                }
             }
         }
 
@@ -968,8 +1310,33 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void CommitPlayerController(PlayerController playerController, LocalPlayer localPlayer)
         {
+            PreparePlayerControllerCommit(playerController, localPlayer);
+
+            int controllerIndex = IndexOfPlayerControllerReference(playerController);
+            PlayerState playerState = playerController.GetPlayerState();
+            if (controllerIndex < 0)
+            {
+                playerControllers.Add(playerController);
+                participantPlayerStates.Add(playerState);
+            }
+            else if (!ReferenceEquals(participantPlayerStates[controllerIndex], playerState))
+            {
+                throw new InvalidOperationException(
+                    "A committed PlayerController cannot replace its managed PlayerState identity.");
+            }
+
+            if (localPlayer != null)
+            {
+                localPlayer.PlayerController = playerController;
+            }
+        }
+
+        internal void PreparePlayerControllerCommit(
+            PlayerController playerController,
+            LocalPlayer localPlayer)
+        {
             EnsureOwnerThread();
-            if (playerController == null)
+            if (ReferenceEquals(playerController, null))
             {
                 throw new ArgumentNullException(nameof(playerController));
             }
@@ -987,16 +1354,19 @@ namespace CycloneGames.GameplayFramework.Runtime
                     $"LocalPlayer {localPlayer.Index} already has a PlayerController.");
             }
 
-            // Validate every relationship before publishing the Controller to the World roster.
-            // Once the list mutation commits, the remaining LocalPlayer assignment cannot fail.
-            if (!playerControllers.Contains(playerController))
+            if (IndexOfPlayerControllerReference(playerController) < 0)
             {
-                playerControllers.Add(playerController);
-            }
-
-            if (localPlayer != null)
-            {
-                localPlayer.PlayerController = playerController;
+                int requiredCapacity = checked(playerControllers.Count + 1);
+                // Login reserves both sides of the managed participant ledger before the
+                // GameSession acquires ownership. Commit cannot allocate after that boundary.
+                if (playerControllers.Capacity < requiredCapacity)
+                {
+                    playerControllers.Capacity = requiredCapacity;
+                }
+                if (participantPlayerStates.Capacity < requiredCapacity)
+                {
+                    participantPlayerStates.Capacity = requiredCapacity;
+                }
             }
         }
 
@@ -1008,11 +1378,117 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            playerControllers.Remove(playerController);
+            int index = IndexOfPlayerControllerReference(playerController);
+            if (index >= 0)
+            {
+                playerControllers.RemoveAt(index);
+                participantPlayerStates.RemoveAt(index);
+            }
             LocalPlayer localPlayer = playerController.LocalPlayer;
             if (localPlayer != null && ReferenceEquals(localPlayer.PlayerController, playerController))
             {
                 localPlayer.PlayerController = null;
+            }
+        }
+
+        internal void BindTerminalGameSession(GameMode owner, IGameSession session)
+        {
+            EnsureOwnerThread();
+            if (!ReferenceEquals(owner, terminalGameModeOwner))
+            {
+                throw new InvalidOperationException(
+                    "Only the authoritative GameMode can bind the terminal GameSession owner.");
+            }
+            if (session == null)
+            {
+                throw new ArgumentNullException(nameof(session));
+            }
+            if (terminalGameSession != null && !ReferenceEquals(terminalGameSession, session))
+            {
+                throw new InvalidOperationException(
+                    "A different terminal GameSession owner is already bound to this World.");
+            }
+
+            terminalGameSession = session;
+        }
+
+        internal bool TryReleaseParticipantOwnership(
+            PlayerController playerController,
+            PlayerState playerState,
+            IGameSession session)
+        {
+            EnsureOwnerThread();
+            if (ReferenceEquals(playerController, null))
+            {
+                return false;
+            }
+            int controllerIndex = IndexOfPlayerControllerReference(playerController);
+            if (controllerIndex < 0)
+            {
+                return true;
+            }
+            PlayerState retainedPlayerState = participantPlayerStates[controllerIndex];
+            if (!ReferenceEquals(retainedPlayerState, playerState))
+            {
+                throw new InvalidOperationException(
+                    "Participant cleanup must use the PlayerState identity committed to this World.");
+            }
+            if (session != null &&
+                terminalGameSession != null &&
+                !ReferenceEquals(session, terminalGameSession))
+            {
+                throw new InvalidOperationException(
+                    "Participant cleanup must use the GameSession bound to this World.");
+            }
+
+            if (session != null)
+            {
+                if (session.ContainsPlayer(playerController))
+                {
+                    session.UnregisterPlayer(playerController);
+                }
+                if (session.ContainsPlayer(playerController))
+                {
+                    return false;
+                }
+            }
+
+            GameState retainedGameState = gameState;
+            if (!ReferenceEquals(retainedGameState, null))
+            {
+                retainedGameState.RemovePlayerState(retainedPlayerState);
+            }
+
+            RemovePlayerController(playerController);
+            return IndexOfPlayerControllerReference(playerController) < 0;
+        }
+
+        internal void EnterGameModeDestructionStage(GameMode owner)
+        {
+            EnsureOwnerThread();
+            if (ReferenceEquals(owner, null) ||
+                !ReferenceEquals(owner, terminalGameModeOwner))
+            {
+                throw new InvalidOperationException(
+                    "Only the retained GameMode cleanup owner can enter its destruction stage.");
+            }
+
+            if (!ReferenceEquals(gameModeDestructionStageOwner, null) &&
+                !ReferenceEquals(gameModeDestructionStageOwner, owner))
+            {
+                throw new InvalidOperationException(
+                    "Another GameMode destruction stage is already active.");
+            }
+
+            gameModeDestructionStageOwner = owner;
+        }
+
+        internal void ExitGameModeDestructionStage(GameMode owner)
+        {
+            EnsureOwnerThread();
+            if (ReferenceEquals(gameModeDestructionStageOwner, owner))
+            {
+                gameModeDestructionStageOwner = null;
             }
         }
 
@@ -1024,39 +1500,52 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             EnsureOwnerThread();
-            if (!actorIndices.TryGetValue(actor.GetStableInstanceId(), out int index))
-            {
-                return;
-            }
-
-            bool activeGameModeDestroyed = ReferenceEquals(actor, gameMode) &&
+            GameMode participantCleanupOwner = terminalGameModeOwner;
+            bool authoritativeGameModeDestroyed =
+                ReferenceEquals(actor, participantCleanupOwner);
+            bool activeGameModeDestroyed = authoritativeGameModeDestroyed &&
                                            (lifecycleState == WorldLifecycleState.Initializing ||
                                             lifecycleState == WorldLifecycleState.Playing);
+            if (authoritativeGameModeDestroyed)
+            {
+                // The live Unity authority slot ends at destruction notification. The separate
+                // terminal fields retain only managed ownership metadata for deterministic retry.
+                gameMode = null;
+            }
+
+            PlayerState destroyedPlayerState = actor as PlayerState;
             PlayerController destroyedStateOwner = null;
-            if (actor is PlayerState destroyedPlayerState && gameMode != null)
+            if (!ReferenceEquals(destroyedPlayerState, null) &&
+                !ReferenceEquals(participantCleanupOwner, null))
             {
                 TryGetPlayerControllerForState(destroyedPlayerState, out destroyedStateOwner);
             }
 
-            ActorEntry entry = RemoveActorAt(index);
-            DetachActorBookkeeping(entry.Actor);
-            if (entry.Owned)
+            if (actorIndices.TryGetValue(actor.GetStableInstanceId(), out int index))
             {
-                try
+                bool removed = TryTeardownActorAt(
+                    index,
+                    EndPlayReason.Destroyed,
+                    ActorReleasePolicy.ObserveDestroyedActor,
+                    preparePlayerCameraContext: false,
+                    out Exception teardownFailure);
+                if (teardownFailure != null)
                 {
-                    actorLifetime.Release(entry.Actor);
+                    throw teardownFailure;
                 }
-                catch (Exception exception)
+                if (!removed)
                 {
-                    Log.Error(
-                        exception,
-                        "The Actor lifetime failed to observe an externally destroyed World-owned Actor; cleanup will continue.");
+                    throw new InvalidOperationException(
+                        "Destroyed Actor bookkeeping retained registry ownership for retry.");
                 }
             }
 
-            if (destroyedStateOwner != null)
+            if (!ReferenceEquals(destroyedStateOwner, null) &&
+                CanInvokeGameModeCleanupOwner(participantCleanupOwner))
             {
-                gameMode?.Logout(destroyedStateOwner);
+                participantCleanupOwner.HandleExternallyDestroyedPlayerState(
+                    destroyedStateOwner,
+                    destroyedPlayerState);
             }
 
             if (activeGameModeDestroyed)
@@ -1118,6 +1607,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         internal bool TryAcquireCameraOutput(
             CameraManager owner,
             ICameraOutput output,
+            in CameraOutputResourceSet resources,
             out CameraOutputLease lease,
             out string error)
         {
@@ -1141,6 +1631,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     this,
                     owner,
                     output,
+                    in resources,
                     out lease,
                     out error))
             {
@@ -1167,6 +1658,25 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             EnsureOwnerThread();
             cameraOutputLeaseArbiter.Release(this, owner, output, in lease);
+        }
+
+        internal bool TryBeginCameraOutputTerminalReleaseAttempt(
+            CameraManager owner,
+            ICameraOutput output,
+            in CameraOutputLease lease)
+        {
+            EnsureOwnerThread();
+            if (lifecycleState != WorldLifecycleState.Stopping)
+            {
+                return false;
+            }
+
+            return cameraOutputLeaseArbiter.TryBeginTerminalReleaseAttempt(
+                this,
+                owner,
+                output,
+                in lease,
+                in activeCameraOutputTerminalReleasePass);
         }
 
         public void Dispose()
@@ -1237,9 +1747,21 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private void UnregisterExternalActorAt(int index, EndPlayReason reason)
         {
-            ActorEntry entry = RemoveActorAt(index);
-            DetachActorBookkeeping(entry.Actor);
-            entry.Actor.UnbindFromWorld(this, reason);
+            bool removed = TryTeardownActorAt(
+                index,
+                reason,
+                ActorReleasePolicy.None,
+                preparePlayerCameraContext: true,
+                out Exception failure);
+            if (failure != null)
+            {
+                throw failure;
+            }
+            if (!removed)
+            {
+                throw new InvalidOperationException(
+                    "External Actor cleanup retained ownership for retry.");
+            }
         }
 
         private void RegisterActorInternal(
@@ -1292,6 +1814,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 throw new ArgumentNullException(nameof(actor));
             }
 
+            actor.PrepareForWorldRegistration(this, allowReentry: !owned);
             int instanceId = actor.GetStableInstanceId();
             if (actorIndices.TryGetValue(instanceId, out int existingIndex))
             {
@@ -1302,11 +1825,6 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
 
                 return true;
-            }
-
-            if (actor.World != null && !ReferenceEquals(actor.World, this))
-            {
-                throw new InvalidOperationException($"Actor '{actor.name}' already belongs to another World.");
             }
 
             if (actors.Count >= runtimeLimits.MaximumActorCount)
@@ -1450,9 +1968,21 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            ActorEntry entry = RemoveActorAt(index);
-            DetachActorBookkeeping(entry.Actor);
-            entry.Actor.UnbindFromWorld(this, reason);
+            bool removed = TryTeardownActorAt(
+                index,
+                reason,
+                ActorReleasePolicy.None,
+                preparePlayerCameraContext: true,
+                out Exception failure);
+            if (failure != null)
+            {
+                throw failure;
+            }
+            if (!removed)
+            {
+                throw new InvalidOperationException(
+                    "Actor registration rollback retained cleanup ownership for retry.");
+            }
         }
 
         private void BeginPlayAfterRegistration(Actor actor, bool beginIfPlaying)
@@ -1471,6 +2001,205 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 rejectedActorAdmissionCount++;
             }
+        }
+
+        private bool TryTeardownActorAt(
+            int index,
+            EndPlayReason reason,
+            ActorReleasePolicy releasePolicy,
+            bool preparePlayerCameraContext,
+            out Exception failure)
+        {
+            failure = null;
+            ActorEntry entry = actors[index];
+            Actor actor = entry.Actor;
+            int stableInstanceId = actor.GetStableInstanceId();
+
+            if (!entry.TeardownDetached &&
+                preparePlayerCameraContext &&
+                actor is PlayerController playerController &&
+                actor != null)
+            {
+                try
+                {
+                    if (!playerController.TryReleaseCameraContextForWorldTeardown())
+                    {
+                        return !TryResolveActorEntry(
+                            actor,
+                            stableInstanceId,
+                            out index,
+                            out entry);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                    return !TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry);
+                }
+
+                if (!TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry))
+                {
+                    return true;
+                }
+            }
+
+            if (!entry.TeardownDetached)
+            {
+                try
+                {
+                    DetachActorBookkeeping(actor);
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                    return !TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry);
+                }
+
+                if (!TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry))
+                {
+                    return true;
+                }
+
+                entry.TeardownDetached = true;
+                actors[index] = entry;
+            }
+
+            if (!entry.TeardownUnbound)
+            {
+                // Actor.UnbindFromWorld commits its one-shot callback boundary even when an
+                // observer throws. Commit the teardown stage before invoking it so reentrant
+                // registry updates cannot be overwritten by this method's earlier snapshot.
+                entry.TeardownUnbound = true;
+                actors[index] = entry;
+                if (actor != null)
+                {
+                    try
+                    {
+                        actor.UnbindFromWorld(this, reason);
+                    }
+                    catch (Exception exception)
+                    {
+                        // Actor commits its one-shot World-unbound boundary in a finally block.
+                        // Preserve the observer failure without invoking the callback twice.
+                        failure = exception;
+                    }
+                }
+
+                if (!TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry))
+                {
+                    return true;
+                }
+            }
+
+            if (!entry.TeardownLifetimeReleased)
+            {
+                // IActorLifetime transfers or terminates ownership before Release can throw.
+                // Record that irreversible boundary before invoking external lifetime code.
+                entry.TeardownLifetimeReleased = true;
+                actors[index] = entry;
+                try
+                {
+                    if (releasePolicy == ActorReleasePolicy.DestroyRegisteredActor)
+                    {
+                        if (entry.Owned)
+                        {
+                            actorLifetime.Release(actor);
+                        }
+                        else
+                        {
+                            UnityActorLifetime.ReleaseUnityActor(actor);
+                        }
+                    }
+                    else if (releasePolicy == ActorReleasePolicy.ReleaseWorldOwnedActor &&
+                             entry.Owned)
+                    {
+                        actorLifetime.Release(actor);
+                    }
+                    else if (releasePolicy == ActorReleasePolicy.ObserveDestroyedActor &&
+                             entry.Owned)
+                    {
+                        actorLifetime.Release(actor);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    failure ??= exception;
+                }
+
+                if (!TryResolveActorEntry(
+                        actor,
+                        stableInstanceId,
+                        out index,
+                        out entry))
+                {
+                    return true;
+                }
+            }
+
+            try
+            {
+                RemoveActorAt(index);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+                return false;
+            }
+        }
+
+        private bool TryResolveActorEntry(
+            Actor actor,
+            int stableInstanceId,
+            out int index,
+            out ActorEntry entry)
+        {
+            if (actorIndices.TryGetValue(stableInstanceId, out index) &&
+                (uint)index < (uint)actors.Count)
+            {
+                entry = actors[index];
+                if (ReferenceEquals(entry.Actor, actor))
+                {
+                    return true;
+                }
+            }
+
+            for (int candidateIndex = actors.Count - 1; candidateIndex >= 0; candidateIndex--)
+            {
+                ActorEntry candidate = actors[candidateIndex];
+                if (!ReferenceEquals(candidate.Actor, actor))
+                {
+                    continue;
+                }
+
+                index = candidateIndex;
+                entry = candidate;
+                return true;
+            }
+
+            index = -1;
+            entry = default;
+            return false;
         }
 
         private ActorEntry RemoveActorAt(int index)
@@ -1531,17 +2260,21 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        private void BeginStopping()
+        private OutOfMemoryException BeginStopping(EndPlayReason reason)
         {
             if (lifecycleState == WorldLifecycleState.Stopping ||
                 lifecycleState == WorldLifecycleState.Stopped ||
                 lifecycleState == WorldLifecycleState.Disposed)
             {
-                return;
+                return null;
             }
 
             tickDispatchReady = false;
             lifecycleState = WorldLifecycleState.Stopping;
+            shutdownReason = reason;
+            activeCameraOutputTerminalReleasePass =
+                cameraOutputLeaseArbiter.BeginTerminalReleasePass(this);
+            OutOfMemoryException terminalOutOfMemory = null;
             try
             {
                 lifetimeCancellation.Cancel();
@@ -1549,87 +2282,377 @@ namespace CycloneGames.GameplayFramework.Runtime
             catch (Exception exception)
             {
                 // Cancellation observers are not allowed to interrupt ownership cleanup.
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    "A World lifetime cancellation observer failed; ownership cleanup will continue.");
+                    "A World lifetime cancellation observer failed; ownership cleanup will continue.",
+                    ref terminalOutOfMemory);
+            }
+
+            return terminalOutOfMemory;
+        }
+
+        private void RetryTerminalCleanup()
+        {
+            if (isTerminalCleanupInProgress)
+            {
+                throw new InvalidOperationException(
+                    "World terminal cleanup is already in progress.");
+            }
+
+            activeCameraOutputTerminalReleasePass =
+                cameraOutputLeaseArbiter.BeginTerminalReleasePass(this);
+            isTerminalCleanupInProgress = true;
+            try
+            {
+                OutOfMemoryException retryOutOfMemory = null;
+                RetryGameplayShutdownImmediate(ref retryOutOfMemory);
+                CompleteShutdown(shutdownReason, retryOutOfMemory);
+            }
+            finally
+            {
+                isGameplayShutdownInProgress = false;
+                isTerminalCleanupInProgress = false;
+                activeCameraOutputTerminalReleasePass = default;
             }
         }
 
-        private void CompleteShutdown(EndPlayReason reason)
+        private void RetryGameplayShutdownImmediate(
+            ref OutOfMemoryException terminalOutOfMemory)
         {
-            while (actors.Count > 0)
+            if (IsGameModeShutdownComplete())
             {
-                ActorEntry entry = RemoveActorAt(actors.Count - 1);
-                Actor actor = entry.Actor;
-                if (actor == null)
-                {
-                    continue;
-                }
+                gameplayShutdownCompleted = true;
+                return;
+            }
 
-                DetachActorBookkeeping(actor);
-                string actorName = actor.name;
-                Actor actorToRelease = entry.Owned ? actor : null;
+            isGameplayShutdownInProgress = true;
+            try
+            {
+                GameMode cleanupOwner = terminalGameModeOwner;
+                if (CanInvokeGameModeCleanupOwner(cleanupOwner))
+                {
+                    cleanupOwner.ShutdownImmediate(shutdownReason);
+                }
+                else if (!ReferenceEquals(cleanupOwner, null) &&
+                         gameMode == null &&
+                         ReferenceEquals(gameModeDestructionStageOwner, null))
+                {
+                    RetryParticipantCleanupWithoutGameMode(ref terminalOutOfMemory);
+                }
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "GameMode terminal cleanup retry failed; participant ownership remains available.",
+                    ref terminalOutOfMemory);
+            }
+            finally
+            {
+                isGameplayShutdownInProgress = false;
+                gameplayShutdownCompleted = IsGameModeShutdownComplete();
+            }
+        }
+
+        private bool IsGameModeShutdownComplete()
+        {
+            GameMode cleanupOwner = terminalGameModeOwner;
+            if (ReferenceEquals(cleanupOwner, null))
+            {
+                return true;
+            }
+
+            // Once Unity destroys the authoritative GameMode, its retained managed identity
+            // is ownership metadata only. Never dispatch properties or callbacks through it.
+            if (gameMode == null)
+            {
+                return playerControllers.Count == 0;
+            }
+
+            return cleanupOwner.ModeState == GameModeLifecycleState.Stopped ||
+                   cleanupOwner.ModeState == GameModeLifecycleState.Uninitialized;
+        }
+
+        private bool CanInvokeGameModeCleanupOwner(GameMode cleanupOwner)
+        {
+            return !ReferenceEquals(cleanupOwner, null) &&
+                   cleanupOwner != null &&
+                   ReferenceEquals(cleanupOwner, gameMode) &&
+                   !ReferenceEquals(cleanupOwner, gameModeDestructionStageOwner);
+        }
+
+        private void RetryParticipantCleanupWithoutGameMode(
+            ref OutOfMemoryException terminalOutOfMemory)
+        {
+            while (playerControllers.Count > 0)
+            {
+                int controllerCount = playerControllers.Count;
+                PlayerController playerController = playerControllers[controllerCount - 1];
+                PlayerState playerState = participantPlayerStates[controllerCount - 1];
+
                 try
                 {
-                    actor.UnbindFromWorld(this, reason);
+                    playerController.UnPossess();
                 }
                 catch (Exception exception)
                 {
-                    Log.Error(
+                    LogTerminalException(
                         exception,
-                        $"Actor '{actorName}' failed to unbind during World shutdown for reason '{reason}'.");
+                        "PlayerController failed to release possession during retained participant cleanup.",
+                        ref terminalOutOfMemory);
                 }
-                finally
+
+                if (playerController.GetPawn() != null)
                 {
-                    if (entry.Owned)
+                    break;
+                }
+
+                try
+                {
+                    if (!TryReleaseParticipantOwnership(
+                            playerController,
+                            playerState,
+                            terminalGameSession))
                     {
-                        try
-                        {
-                            actorLifetime.Release(actorToRelease);
-                        }
-                        catch (Exception exception)
-                        {
-                            Log.Error(
-                                exception,
-                                $"Actor '{actorName}' lifetime release failed during World shutdown; cleanup will continue.");
-                        }
+                        break;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    LogTerminalException(
+                        exception,
+                        "Retained participant ownership cleanup failed; the World will keep it for retry.",
+                        ref terminalOutOfMemory);
+                    break;
+                }
+
+                if (playerControllers.Count >= controllerCount)
+                {
+                    break;
+                }
+            }
+        }
+
+        private void CompleteShutdown(
+            EndPlayReason reason,
+            OutOfMemoryException terminalOutOfMemory)
+        {
+            pendingGameplayCleanup =
+                !gameplayShutdownCompleted || isGameplayShutdownInProgress;
+            if (pendingGameplayCleanup)
+            {
+                if (terminalOutOfMemory != null)
+                {
+                    throw terminalOutOfMemory;
+                }
+
+                throw shutdownIncompleteException;
+            }
+
+            for (int index = actors.Count - 1; index >= 0; index--)
+            {
+                bool removed = TryTeardownActorAt(
+                    index,
+                    reason,
+                    ActorReleasePolicy.ReleaseWorldOwnedActor,
+                    preparePlayerCameraContext: true,
+                    out Exception teardownFailure);
+                if (teardownFailure != null)
+                {
+                    LogTerminalException(
+                        teardownFailure,
+                        removed
+                            ? "Actor teardown completed after reporting an observer or lifetime failure."
+                            : "Actor teardown retained registry ownership for retry.",
+                        ref terminalOutOfMemory);
+                }
+            }
+
+            pendingActorCleanup = actors.Count != 0;
+            if (!pendingActorCleanup)
+            {
+                playerControllers.Clear();
+                participantPlayerStates.Clear();
+                playerStarts.Clear();
+                updateTickActors.Clear();
+                fixedUpdateTickActors.Clear();
+                lateUpdateTickActors.Clear();
+                gameMode = null;
+                terminalGameModeOwner = null;
+                gameModeDestructionStageOwner = null;
+                terminalGameSession = null;
+                gameState = null;
+            }
+
+            bool cameraOutputsReleased = false;
+            try
+            {
+                cameraOutputsReleased = cameraOutputLeaseArbiter.TryReleaseAll(
+                    this,
+                    in activeCameraOutputTerminalReleasePass);
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "Camera output lease release failed during World shutdown; terminal cleanup will continue.",
+                    ref terminalOutOfMemory);
+            }
+
+            pendingCameraOutputCleanup = !cameraOutputsReleased;
+
+            if (!pendingActorCleanup &&
+                !pendingCameraOutputCleanup &&
+                !definition.IsDisposed)
+            {
+                try
+                {
+                    definition.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    LogTerminalException(
+                        exception,
+                        "World definition disposal failed; the retained leases remain available for retry.",
+                        ref terminalOutOfMemory);
+                }
+            }
+
+            if (!pendingActorCleanup &&
+                !pendingCameraOutputCleanup &&
+                definition.IsDisposed &&
+                !lifetimeCancellationDisposed)
+            {
+                try
+                {
+                    lifetimeCancellation.Dispose();
+                    lifetimeCancellationDisposed = true;
+                }
+                catch (Exception exception)
+                {
+                    LogTerminalException(
+                        exception,
+                        "World lifetime-token disposal failed; the token owner remains available for retry.",
+                        ref terminalOutOfMemory);
+                }
+            }
+
+            pendingLifetimeTokenCleanup = !lifetimeCancellationDisposed;
+
+            if (pendingActorCleanup ||
+                pendingCameraOutputCleanup ||
+                !definition.IsDisposed ||
+                !lifetimeCancellationDisposed)
+            {
+                if (terminalOutOfMemory != null)
+                {
+                    throw terminalOutOfMemory;
+                }
+
+                throw shutdownIncompleteException;
+            }
+
+            pendingGameplayCleanup = false;
+            pendingActorCleanup = false;
+            pendingCameraOutputCleanup = false;
+            pendingLifetimeTokenCleanup = false;
+            lifecycleState = WorldLifecycleState.Disposed;
+            try
+            {
+                gameInstance.NotifyWorldDisposed(this);
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "GameInstance notification failed after World disposal.",
+                    ref terminalOutOfMemory);
+            }
+
+            if (terminalOutOfMemory != null)
+            {
+                throw terminalOutOfMemory;
+            }
+        }
+
+        private static void LogTerminalException(
+            Exception exception,
+            string message,
+            ref OutOfMemoryException terminalOutOfMemory)
+        {
+            if (TryCaptureTerminalOutOfMemory(ref terminalOutOfMemory, exception))
+            {
+                return;
+            }
+
+            try
+            {
+                Log.Error(exception, message);
+            }
+            catch (Exception loggingException)
+            {
+                TryCaptureTerminalOutOfMemory(ref terminalOutOfMemory, loggingException);
+            }
+        }
+
+        private static bool TryCaptureTerminalOutOfMemory(
+            ref OutOfMemoryException terminalOutOfMemory,
+            Exception exception)
+        {
+            OutOfMemoryException captured = FindOutOfMemory(exception);
+            if (captured == null)
+            {
+                return false;
+            }
+
+            CaptureTerminalOutOfMemory(ref terminalOutOfMemory, captured);
+            return true;
+        }
+
+        private static void CaptureTerminalOutOfMemory(
+            ref OutOfMemoryException terminalOutOfMemory,
+            OutOfMemoryException exception)
+        {
+            if (terminalOutOfMemory == null)
+            {
+                terminalOutOfMemory = exception;
+            }
+        }
+
+        private static OutOfMemoryException FindOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemoryException)
+            {
+                return outOfMemoryException;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int index = 0; index < aggregateException.InnerExceptions.Count; index++)
+                {
+                    OutOfMemoryException nested = FindOutOfMemory(
+                        aggregateException.InnerExceptions[index]);
+                    if (nested != null)
+                    {
+                        return nested;
                     }
                 }
             }
 
-            playerControllers.Clear();
-            playerStarts.Clear();
-            updateTickActors.Clear();
-            fixedUpdateTickActors.Clear();
-            lateUpdateTickActors.Clear();
-            try
-            {
-                cameraOutputLeaseArbiter.ReleaseAll(this);
-            }
-            catch (Exception exception)
-            {
-                Log.Error(
-                    exception,
-                    "Camera output lease release failed during World shutdown; terminal cleanup will continue.");
-            }
-
-            gameMode = null;
-            gameState = null;
-            lifecycleState = WorldLifecycleState.Stopped;
-
-            definition.Dispose();
-            lifetimeCancellation.Dispose();
-            lifecycleState = WorldLifecycleState.Disposed;
-            gameInstance.NotifyWorldDisposed(this);
+            return null;
         }
 
         private void DetachActorBookkeeping(Actor actor)
         {
             if (actor is PlayerController playerController)
             {
-                if (playerControllers.Contains(playerController))
+                if (IndexOfPlayerControllerReference(playerController) >= 0)
                 {
-                    gameMode?.HandleExternallyDestroyedPlayerController(playerController);
+                    GameMode cleanupOwner = terminalGameModeOwner;
+                    if (!ReferenceEquals(cleanupOwner, null))
+                    {
+                        cleanupOwner.HandleExternallyDestroyedPlayerController(playerController);
+                    }
                 }
 
                 RemovePlayerController(playerController);
@@ -1646,6 +2669,24 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
+        private int IndexOfPlayerControllerReference(PlayerController playerController)
+        {
+            if (ReferenceEquals(playerController, null))
+            {
+                return -1;
+            }
+
+            for (int index = 0; index < playerControllers.Count; index++)
+            {
+                if (ReferenceEquals(playerControllers[index], playerController))
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
         private bool TryGetPlayerControllerForState(
             PlayerState playerState,
             out PlayerController playerController)
@@ -1654,7 +2695,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 PlayerController candidate = playerControllers[i];
                 if (!ReferenceEquals(candidate, null) &&
-                    ReferenceEquals(candidate.GetPlayerState(), playerState))
+                    ReferenceEquals(participantPlayerStates[i], playerState))
                 {
                     playerController = candidate;
                     return true;
@@ -1769,6 +2810,20 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
+        internal static void ValidateNetMode(WorldNetMode netMode)
+        {
+            if (netMode != WorldNetMode.Standalone &&
+                netMode != WorldNetMode.Client &&
+                netMode != WorldNetMode.ListenServer &&
+                netMode != WorldNetMode.DedicatedServer)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(netMode),
+                    netMode,
+                    "World network mode is not defined.");
+            }
+        }
+
         internal static void ValidateTickRequest(ActorTickPhase phase, float deltaSeconds)
         {
             if (phase == ActorTickPhase.None || phase > ActorTickPhase.LateUpdate)
@@ -1801,7 +2856,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
             {
                 throw new InvalidOperationException(
-                    "World mutation must run on the GameInstance owner thread.");
+                    "World live-state access must run on the GameInstance owner thread.");
             }
         }
 

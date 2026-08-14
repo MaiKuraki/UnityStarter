@@ -29,8 +29,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement
 
         public UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
             string location,
+            IWorldSettingsLeaseRegistrar leaseRegistrar,
             CancellationToken cancellationToken) where T : UnityEngine.Object
         {
+            if (leaseRegistrar == null)
+            {
+                throw new ArgumentNullException(nameof(leaseRegistrar));
+            }
+
             if (string.IsNullOrWhiteSpace(location))
             {
                 return UniTask.FromResult(
@@ -38,12 +44,13 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement
             }
 
             return typeof(Component).IsAssignableFrom(typeof(T))
-                ? ResolvePrefabComponentAsync<T>(location, cancellationToken)
-                : ResolveAssetAsync<T>(location, cancellationToken);
+                ? ResolvePrefabComponentAsync<T>(location, leaseRegistrar, cancellationToken)
+                : ResolveAssetAsync<T>(location, leaseRegistrar, cancellationToken);
         }
 
         private async UniTask<WorldSettingsAssetLoadResult<T>> ResolvePrefabComponentAsync<T>(
             string location,
+            IWorldSettingsLeaseRegistrar leaseRegistrar,
             CancellationToken cancellationToken) where T : UnityEngine.Object
         {
             IAssetHandle<GameObject> handle = null;
@@ -61,51 +68,48 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement
                         "Prefab asset handle creation returned null.");
                 }
 
+                leaseRegistrar.Register(handle);
                 await handle.Task.AttachExternalCancellation(cancellationToken);
                 await UniTask.SwitchToMainThread();
                 cancellationToken.ThrowIfCancellationRequested();
 
                 if (!string.IsNullOrEmpty(handle.Error))
                 {
-                    return FailAndDispose<T, GameObject>(handle.Error, ref handle);
+                    return Failure<T>(handle.Error);
                 }
 
                 GameObject prefab = handle.Asset;
                 if (prefab == null)
                 {
-                    return FailAndDispose<T, GameObject>(
-                        "Prefab asset handle completed but returned null.",
-                        ref handle);
+                    return Failure<T>(
+                        "Prefab asset handle completed but returned null.");
                 }
 
                 Component[] components = prefab.GetComponents(typeof(T));
                 if (components.Length != 1)
                 {
-                    return FailAndDispose<T, GameObject>(
-                        $"Prefab '{prefab.name}' must contain exactly one {typeof(T).Name} component on its root, but found {components.Length}.",
-                        ref handle);
+                    return Failure<T>(
+                        $"Prefab '{prefab.name}' must contain exactly one {typeof(T).Name} component on its root, but found {components.Length}.");
                 }
 
                 T component = components[0] as T;
-                IAssetHandle<GameObject> lease = handle;
-                handle = null;
-                return new WorldSettingsAssetLoadResult<T>(true, component, null, lease);
+                return new WorldSettingsAssetLoadResult<T>(true, component, null);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 await UniTask.SwitchToMainThread();
-                handle?.Dispose();
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (FindOutOfMemory(exception) == null)
             {
                 await UniTask.SwitchToMainThread();
-                return FailAndDispose<T, GameObject>(exception.Message, ref handle);
+                return Failure<T>(exception.Message);
             }
         }
 
         private async UniTask<WorldSettingsAssetLoadResult<T>> ResolveAssetAsync<T>(
             string location,
+            IWorldSettingsLeaseRegistrar leaseRegistrar,
             CancellationToken cancellationToken) where T : UnityEngine.Object
         {
             IAssetHandle<T> handle = null;
@@ -123,49 +127,64 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement
                         "Asset handle creation returned null.");
                 }
 
+                leaseRegistrar.Register(handle);
                 await handle.Task.AttachExternalCancellation(cancellationToken);
                 await UniTask.SwitchToMainThread();
                 cancellationToken.ThrowIfCancellationRequested();
 
                 if (!string.IsNullOrEmpty(handle.Error))
                 {
-                    return FailAndDispose<T, T>(handle.Error, ref handle);
+                    return Failure<T>(handle.Error);
                 }
 
                 T asset = handle.Asset;
                 if (asset == null)
                 {
-                    return FailAndDispose<T, T>(
-                        "Asset handle completed but returned null.",
-                        ref handle);
+                    return Failure<T>(
+                        "Asset handle completed but returned null.");
                 }
 
-                IAssetHandle<T> lease = handle;
-                handle = null;
-                return new WorldSettingsAssetLoadResult<T>(true, asset, null, lease);
+                return new WorldSettingsAssetLoadResult<T>(true, asset, null);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 await UniTask.SwitchToMainThread();
-                handle?.Dispose();
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (FindOutOfMemory(exception) == null)
             {
                 await UniTask.SwitchToMainThread();
-                return FailAndDispose<T, T>(exception.Message, ref handle);
+                return Failure<T>(exception.Message);
             }
         }
 
-        private static WorldSettingsAssetLoadResult<TResult> FailAndDispose<TResult, THandle>(
-            string error,
-            ref IAssetHandle<THandle> handle)
-            where TResult : UnityEngine.Object
-            where THandle : UnityEngine.Object
+        private static WorldSettingsAssetLoadResult<T> Failure<T>(string error)
+            where T : UnityEngine.Object
         {
-            handle?.Dispose();
-            handle = null;
-            return new WorldSettingsAssetLoadResult<TResult>(false, null, error);
+            return new WorldSettingsAssetLoadResult<T>(false, null, error);
+        }
+
+        private static OutOfMemoryException FindOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemoryException)
+            {
+                return outOfMemoryException;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int index = 0; index < aggregateException.InnerExceptions.Count; index++)
+                {
+                    OutOfMemoryException nested = FindOutOfMemory(
+                        aggregateException.InnerExceptions[index]);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
         }
     }
 }

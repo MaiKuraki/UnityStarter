@@ -414,7 +414,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             var gameObject = new GameObject(name);
             SceneManager.MoveGameObjectToScene(gameObject, scene);
-            return gameObject.AddComponent<T>();
+            T actor = gameObject.AddComponent<T>();
+            UnityLifecycleTestUtility.InvokeAwake(actor);
+            return actor;
         }
 
         private static void ClosePreviewScene(Scene scene)

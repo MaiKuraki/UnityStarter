@@ -6,8 +6,8 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.unity.mathematics": "1.3.0",
-    "com.cysharp.unitask": "2.0.0",
+    "com.unity.mathematics": "1.3.3",
+    "com.cysharp.unitask": "2.5.0",
     "com.cyclone-games.logging": "1.0.0"
   },
   "keywords": [

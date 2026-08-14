@@ -19,16 +19,22 @@ namespace CycloneGames.GameplayFramework.Networking
 
         private readonly struct ConnectionBinding
         {
-            public ConnectionBinding(int playerId, int connectionId, INetConnection connection)
+            public ConnectionBinding(
+                int playerId,
+                int connectionId,
+                string remoteAddress,
+                INetConnection connection)
             {
                 PlayerId = playerId;
                 Connection = connection;
                 ConnectionId = connectionId;
+                RemoteAddress = remoteAddress;
             }
 
             public int PlayerId { get; }
             public INetConnection Connection { get; }
             public int ConnectionId { get; }
+            public string RemoteAddress { get; }
         }
 
         private readonly struct StagedConnection
@@ -62,6 +68,7 @@ namespace CycloneGames.GameplayFramework.Networking
         private readonly int ownerThreadId;
         private readonly int maxPlayers;
         private readonly int maxSpectators;
+        private PlayerController registrationRollbackPlayer;
 
         public NetworkGameSessionAdapter(
             int maxPlayers = 16,
@@ -150,6 +157,20 @@ namespace CycloneGames.GameplayFramework.Networking
             {
                 AssertOwnerThread();
                 return bannedAddresses.Count;
+            }
+        }
+        /// <summary>
+        /// Gets whether a composed-session registration could not be rolled back. Further
+        /// registrations are rejected until <see cref="TryRecoverRegistrationRollback"/>
+        /// completes, preserving a single bounded recovery owner instead of admitting more
+        /// participants into an inconsistent roster.
+        /// </summary>
+        public bool HasRegistrationRollbackFault
+        {
+            get
+            {
+                AssertOwnerThread();
+                return !ReferenceEquals(registrationRollbackPlayer, null);
             }
         }
         public int MaxPlayers => maxPlayers;
@@ -245,7 +266,7 @@ namespace CycloneGames.GameplayFramework.Networking
             if (stagedConnections.TryGetValue(playerId, out StagedConnection existing))
             {
                 if (existing.ConnectionId == connectionId &&
-                    ConnectionsEqual(existing.Connection, connection))
+                    ReferenceEquals(existing.Connection, connection))
                 {
                     errorMessage = null;
                     return true;
@@ -261,6 +282,10 @@ namespace CycloneGames.GameplayFramework.Networking
                 return false;
             }
 
+            stagedConnections.EnsureCapacity(checked(stagedConnections.Count + 1));
+            connectionIdPlayerIds.EnsureCapacity(connectionIdPlayerIds.ContainsKey(connectionId)
+                ? connectionIdPlayerIds.Count
+                : checked(connectionIdPlayerIds.Count + 1));
             stagedConnections.Add(
                 playerId,
                 new StagedConnection(connection, connectionId, remoteAddress));
@@ -389,7 +414,7 @@ namespace CycloneGames.GameplayFramework.Networking
             {
                 if (previousBinding.PlayerId == playerId &&
                     previousBinding.ConnectionId == connectionId &&
-                    ConnectionsEqual(previousBinding.Connection, connection))
+                    ReferenceEquals(previousBinding.Connection, connection))
                 {
                     RemoveStagedConnection(playerId, connection);
                     errorMessage = null;
@@ -408,7 +433,11 @@ namespace CycloneGames.GameplayFramework.Networking
                 : checked(connectionIdPlayerIds.Count + 1));
 
             RemoveStagedConnection(playerId, connection);
-            playerConnections[player] = new ConnectionBinding(playerId, connectionId, connection);
+            playerConnections[player] = new ConnectionBinding(
+                playerId,
+                connectionId,
+                expectedRemoteAddress,
+                connection);
             playerIdConnections[playerId] = connection;
             connectionIdPlayerIds[connectionId] = playerId;
 
@@ -531,41 +560,86 @@ namespace CycloneGames.GameplayFramework.Networking
             out string errorMessage)
         {
             AssertOwnerThread();
+            if (!ReferenceEquals(registrationRollbackPlayer, null))
+            {
+                errorMessage = "A previous network registration rollback must be recovered before admitting another participant.";
+                return false;
+            }
+
             if (!gameSession.TryRegisterPlayer(playerController, spectator, out errorMessage))
             {
                 return false;
             }
 
-            int playerId = playerController.GetPlayerState()?.GetPlayerId() ?? 0;
-            if (stagedConnections.TryGetValue(playerId, out StagedConnection staged))
+            try
             {
-                if (playerController.IsLocalController)
+                int playerId = playerController.GetPlayerState()?.GetPlayerId() ?? 0;
+                if (stagedConnections.TryGetValue(playerId, out StagedConnection staged))
                 {
-                    RollbackSessionRegistration(playerController);
-                    errorMessage = "Local PlayerId conflicts with a staged remote connection.";
-                    return false;
-                }
+                    if (playerController.IsLocalController)
+                    {
+                        if (!TryRollbackSessionRegistration(playerController))
+                        {
+                            errorMessage = "Network registration rollback did not complete.";
+                            return false;
+                        }
 
-                if (!ValidateConnectionState(
-                        staged.Connection,
-                        staged.ConnectionId,
-                        staged.RemoteAddress,
-                        out errorMessage) ||
-                    !TryBindConnection(playerController, staged.Connection, out errorMessage))
+                        errorMessage = "Local PlayerId conflicts with a staged remote connection.";
+                        return false;
+                    }
+
+                    if (!ValidateConnectionState(
+                            staged.Connection,
+                            staged.ConnectionId,
+                            staged.RemoteAddress,
+                            out errorMessage) ||
+                        !TryBindConnection(playerController, staged.Connection, out errorMessage))
+                    {
+                        if (!TryRollbackSessionRegistration(playerController))
+                        {
+                            errorMessage = "Network registration rollback did not complete.";
+                        }
+
+                        return false;
+                    }
+                }
+                else if (rejectUnknownAddresses && !playerController.IsLocalController)
                 {
-                    RollbackSessionRegistration(playerController);
+                    if (!TryRollbackSessionRegistration(playerController))
+                    {
+                        errorMessage = "Network registration rollback did not complete.";
+                        return false;
+                    }
+
+                    errorMessage = "No staged connection exists for this PlayerId.";
                     return false;
                 }
             }
-            else if (rejectUnknownAddresses && !playerController.IsLocalController)
+            catch
             {
-                RollbackSessionRegistration(playerController);
-                errorMessage = "No staged connection exists for this PlayerId.";
-                return false;
+                TryRollbackSessionRegistration(playerController);
+                throw;
             }
 
             errorMessage = null;
             return true;
+        }
+
+        /// <summary>
+        /// Retries the single retained composed-session rollback after its owner has corrected
+        /// the underlying session failure. No additional participant can be registered while
+        /// this recovery owner is present.
+        /// </summary>
+        public bool TryRecoverRegistrationRollback()
+        {
+            AssertOwnerThread();
+            PlayerController playerController = registrationRollbackPlayer;
+            if (ReferenceEquals(playerController, null))
+            {
+                return true;
+            }
+
+            return TryRollbackSessionRegistration(playerController);
         }
 
         public bool UnregisterPlayer(PlayerController playerController)
@@ -591,7 +665,58 @@ namespace CycloneGames.GameplayFramework.Networking
                 RemoveBindingCore(playerController, in binding);
             }
 
+            if (ReferenceEquals(registrationRollbackPlayer, playerController))
+            {
+                registrationRollbackPlayer = null;
+            }
+
             return true;
+        }
+
+        /// <summary>
+        /// Removes every active network binding and unregisters each bound participant from the
+        /// composed session. Unbound participants owned directly by the composed session are
+        /// left untouched. Safe to call when no bindings exist.
+        /// </summary>
+        public void UnregisterAllConnections()
+        {
+            AssertOwnerThread();
+            if (playerConnections.Count == 0)
+            {
+                return;
+            }
+
+            // Snapshot the keys first: UnregisterPlayer mutates the dictionaries in place.
+            PlayerController[] players = new PlayerController[playerConnections.Count];
+            playerConnections.Keys.CopyTo(players, 0);
+            for (int index = 0; index < players.Length; index++)
+            {
+                PlayerController player = players[index];
+                if (ReferenceEquals(player, null) || player == null)
+                {
+                    continue;
+                }
+
+                UnregisterPlayer(player);
+            }
+        }
+
+        /// <summary>
+        /// Terminal, idempotent teardown of all adapter-owned state: drains network-bound
+        /// participants, clears staged connections, bans, the rollback owner, and detaches the
+        /// message endpoint. The composed IGameSession keeps any participant it was given
+        /// directly by its owner. Message-catalog registration is owned by the shared protocol
+        /// registry and is not removed here.
+        /// </summary>
+        public void Shutdown()
+        {
+            AssertOwnerThread();
+            UnregisterAllConnections();
+            stagedConnections.Clear();
+            connectionIdPlayerIds.Clear();
+            bannedAddresses.Clear();
+            registrationRollbackPlayer = null;
+            messageEndpoint = null;
         }
 
         public bool ContainsPlayer(PlayerController playerController)
@@ -627,10 +752,13 @@ namespace CycloneGames.GameplayFramework.Networking
             gameSession.HandleMatchHasEnded();
         }
 
-        public bool KickPlayer(PlayerController player, string reason)
+        /// <summary>
+        /// Requests transport disconnection and removes the participant from gameplay state.
+        /// Returns true when either operation was committed.
+        /// </summary>
+        public bool KickPlayer(PlayerController player)
         {
             AssertOwnerThread();
-            _ = reason;
             if (ReferenceEquals(player, null))
             {
                 return false;
@@ -659,7 +787,11 @@ namespace CycloneGames.GameplayFramework.Networking
             return disconnectRequested || gameplayRemoved;
         }
 
-        public bool BanPlayer(PlayerController player, string reason)
+        /// <summary>
+        /// Adds the participant's validated remote address to the bounded ban set, then kicks
+        /// the participant. Returns false when no valid connection address can be resolved.
+        /// </summary>
+        public bool BanPlayer(PlayerController player)
         {
             AssertOwnerThread();
             if (ReferenceEquals(player, null))
@@ -669,20 +801,26 @@ namespace CycloneGames.GameplayFramework.Networking
 
             player.World?.AssertOwnerThread();
 
-            if (!TryGetConnection(player, out INetConnection connection) ||
-                string.IsNullOrWhiteSpace(connection.RemoteAddress))
+            if (!TryGetConsistentBinding(player, out ConnectionBinding binding))
             {
                 return false;
             }
 
-            if (!bannedAddresses.Contains(connection.RemoteAddress) &&
+            string remoteAddress = binding.RemoteAddress;
+            if (string.IsNullOrWhiteSpace(remoteAddress) ||
+                remoteAddress.Length > PlayerLoginRequest.MaxRemoteAddressLength)
+            {
+                return false;
+            }
+
+            if (!bannedAddresses.Contains(remoteAddress) &&
                 bannedAddresses.Count >= maximumBannedAddressCount)
             {
                 return false;
             }
 
-            bannedAddresses.Add(connection.RemoteAddress);
-            return KickPlayer(player, reason);
+            bannedAddresses.Add(remoteAddress);
+            return KickPlayer(player);
         }
 
         public bool BanAddress(string address)
@@ -710,6 +848,11 @@ namespace CycloneGames.GameplayFramework.Networking
             return !string.IsNullOrWhiteSpace(address) && bannedAddresses.Contains(address);
         }
 
+        /// <summary>
+        /// Logical connection identity (by ConnectionId) used for validation. A transport that
+        /// reuses a ConnectionId for a new object is still considered logically equal here, so
+        /// idempotent no-op paths that must update a stored reference use ReferenceEquals.
+        /// </summary>
         private static bool ConnectionsEqual(INetConnection left, INetConnection right)
         {
             return ReferenceEquals(left, right) ||
@@ -757,12 +900,32 @@ namespace CycloneGames.GameplayFramework.Networking
             }
         }
 
-        private void RollbackSessionRegistration(PlayerController playerController)
+        private bool TryRollbackSessionRegistration(PlayerController playerController)
         {
-            if (!gameSession.UnregisterPlayer(playerController))
+            try
             {
-                throw new InvalidOperationException(
-                    "The composed GameSession failed to roll back a rejected network registration.");
+                if (!gameSession.UnregisterPlayer(playerController))
+                {
+                    registrationRollbackPlayer = playerController;
+                    return false;
+                }
+
+                if (ReferenceEquals(registrationRollbackPlayer, playerController))
+                {
+                    registrationRollbackPlayer = null;
+                }
+
+                return true;
+            }
+            catch (OutOfMemoryException)
+            {
+                registrationRollbackPlayer = playerController;
+                throw;
+            }
+            catch
+            {
+                registrationRollbackPlayer = playerController;
+                return false;
             }
         }
 

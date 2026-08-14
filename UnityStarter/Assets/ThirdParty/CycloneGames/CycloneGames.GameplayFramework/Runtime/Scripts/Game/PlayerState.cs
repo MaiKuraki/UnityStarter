@@ -16,14 +16,37 @@ namespace CycloneGames.GameplayFramework.Runtime
         private bool bIsSpectator;
         private Pawn pawnPrivate;
         private object identityLockOwner;
+        private Action<PlayerState, Pawn, Pawn> pawnSetObservers;
 
-        public event Action<PlayerState, Pawn, Pawn> OnPawnSetEvent;
+        public event Action<PlayerState, Pawn, Pawn> OnPawnSetEvent
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                pawnSetObservers += value;
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                pawnSetObservers -= value;
+            }
+        }
 
-        public Pawn GetPawn() => pawnPrivate;
-        public T GetPawn<T>() where T : Pawn => pawnPrivate as T;
+        public Pawn GetPawn()
+        {
+            AssertActorOwnerThread();
+            return pawnPrivate;
+        }
+
+        public T GetPawn<T>() where T : Pawn
+        {
+            AssertActorOwnerThread();
+            return pawnPrivate as T;
+        }
 
         internal Pawn SetPawnSilently(Pawn newPawn)
         {
+            AssertActorOwnerThread();
             Pawn previousPawn = pawnPrivate;
             pawnPrivate = newPawn;
             return previousPawn;
@@ -31,17 +54,22 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void PublishPawnChanged(Pawn newPawn, Pawn oldPawn)
         {
+            AssertActorOwnerThread();
             if (!ReferenceEquals(newPawn, oldPawn))
             {
-                OnPawnSetEvent?.Invoke(this, newPawn, oldPawn);
+                pawnSetObservers?.Invoke(this, newPawn, oldPawn);
             }
         }
 
-        public string GetPlayerName() => playerName;
+        public string GetPlayerName()
+        {
+            AssertActorOwnerThread();
+            return playerName;
+        }
 
         public void SetPlayerName(string newName)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (newName != null && newName.Length > PlayerLoginRequest.MaxPlayerNameLength)
             {
                 throw new ArgumentException(
@@ -52,12 +80,24 @@ namespace CycloneGames.GameplayFramework.Runtime
             playerName = newName;
         }
 
-        public int GetPlayerId() => playerId;
-        public bool IsIdentityLocked => identityLockOwner != null;
+        public int GetPlayerId()
+        {
+            AssertActorOwnerThread();
+            return playerId;
+        }
+
+        public bool IsIdentityLocked
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return identityLockOwner != null;
+            }
+        }
 
         public void SetPlayerId(int newId)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (newId < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(newId));
@@ -74,7 +114,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void LockIdentity(object owner, int expectedPlayerId)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (owner == null)
             {
                 throw new ArgumentNullException(nameof(owner));
@@ -96,7 +136,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void UnlockIdentity(object owner)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (identityLockOwner == null)
             {
                 return;
@@ -111,11 +151,15 @@ namespace CycloneGames.GameplayFramework.Runtime
             identityLockOwner = null;
         }
 
-        public bool IsSpectator() => bIsSpectator;
+        public bool IsSpectator()
+        {
+            AssertActorOwnerThread();
+            return bIsSpectator;
+        }
 
         protected internal void SetIsSpectator(bool spectator)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (identityLockOwner != null && spectator != bIsSpectator)
             {
                 throw new InvalidOperationException(
@@ -127,7 +171,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void SetRegisteredSpectatorStatus(object owner, bool spectator)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (identityLockOwner == null)
             {
                 throw new InvalidOperationException("PlayerState is not registered in a GameSession.");
@@ -144,13 +188,14 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void CopyProperties(PlayerState other)
         {
-            World?.AssertOwnerThread();
-            if (other == null)
+            AssertActorOwnerThread();
+            if (ReferenceEquals(other, null) || other == null)
             {
                 throw new ArgumentNullException(nameof(other));
             }
 
-            other.World?.AssertOwnerThread();
+            other.AssertActorOwnerThread();
+
             PlayerStateSnapshot snapshot = other.CaptureSnapshot();
             if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
             {
@@ -177,13 +222,13 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public PlayerStateSnapshot CaptureSnapshot()
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             return new PlayerStateSnapshot(playerName, playerId, bIsSpectator);
         }
 
         public bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
             {
                 switch (validationResult)
@@ -221,10 +266,21 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected override void OnDestroy()
         {
-            OnPawnSetEvent = null;
-            base.OnDestroy();
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            pawnSetObservers = null;
+            try
+            {
+                base.OnDestroy();
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "PlayerState base Actor cleanup failed during destruction.");
+            }
+
             pawnPrivate = null;
-            identityLockOwner = null;
+            terminalExceptions.ThrowIfCaptured();
         }
     }
 }

@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -10,8 +9,6 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class Controller : Actor
     {
-        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
-
         private Actor startSpot;
         private Pawn pawn;
         private PlayerState playerState;
@@ -19,15 +16,54 @@ namespace CycloneGames.GameplayFramework.Runtime
         private int ignoreMoveInputCount;
         private int ignoreLookInputCount;
         private bool isChangingPossession;
+        private bool isInitialized;
+        private Action<Pawn, Pawn> possessedPawnChangedObservers;
 
-        public event Action<Pawn, Pawn> OnPossessedPawnChanged;
+        public event Action<Pawn, Pawn> OnPossessedPawnChanged
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                possessedPawnChangedObservers += value;
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                possessedPawnChangedObservers -= value;
+            }
+        }
 
-        public bool IsInitialized { get; private set; }
-        public bool IsChangingPossession => isChangingPossession;
-        public virtual bool IsLocalController => false;
+        public bool IsInitialized
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return isInitialized;
+            }
+            private set => isInitialized = value;
+        }
+
+        public bool IsChangingPossession
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return isChangingPossession;
+            }
+        }
+
+        public virtual bool IsLocalController
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return false;
+            }
+        }
 
         public virtual void Initialize(World targetWorld, PlayerState state = null)
         {
+            AssertActorOwnerThread();
             if (targetWorld == null)
             {
                 throw new ArgumentNullException(nameof(targetWorld));
@@ -59,30 +95,47 @@ namespace CycloneGames.GameplayFramework.Runtime
             IsInitialized = true;
         }
 
-        public Pawn GetDefaultPawnPrefab() => World?.Definition.PawnClass;
+        public Pawn GetDefaultPawnPrefab()
+        {
+            AssertActorOwnerThread();
+            return World?.Definition.PawnClass;
+        }
 
         public void SetInitialLocationAndRotation(Vector3 newLocation, Quaternion newRotation)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             transform.position = newLocation;
             SetControlRotation(newRotation);
         }
 
         public void SetStartSpot(Actor newStartSpot)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             startSpot = newStartSpot;
         }
 
-        public Actor GetStartSpot() => startSpot;
+        public Actor GetStartSpot()
+        {
+            AssertActorOwnerThread();
+            return startSpot;
+        }
 
         #region Pawn and possession
-        public Pawn GetPawn() => pawn;
-        public T GetPawn<T>() where T : Pawn => pawn as T;
+        public Pawn GetPawn()
+        {
+            AssertActorOwnerThread();
+            return pawn;
+        }
+
+        public T GetPawn<T>() where T : Pawn
+        {
+            AssertActorOwnerThread();
+            return pawn as T;
+        }
 
         public void Possess(Pawn newPawn)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (!TryPossess(newPawn, out string error))
             {
                 throw new InvalidOperationException(error);
@@ -91,7 +144,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool TryPossess(Pawn newPawn, out string error)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (!IsInitialized)
             {
                 error = "Controller must be initialized before possession.";
@@ -188,7 +241,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                         return false;
                     }
 
-                    previousController.OnPossessedPawnChanged?.Invoke(newPawn, null);
+                    previousController.possessedPawnChangedObservers?.Invoke(newPawn, null);
                     if (!EnsureCommittedPossession(newPawn, controllerPlayerState, out error))
                     {
                         return false;
@@ -240,7 +293,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     return false;
                 }
 
-                OnPossessedPawnChanged?.Invoke(previousPawn, newPawn);
+                possessedPawnChangedObservers?.Invoke(previousPawn, newPawn);
                 if (!EnsureCommittedPossession(newPawn, controllerPlayerState, out error))
                 {
                     return false;
@@ -267,7 +320,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void UnPossess()
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             Pawn previousPawn = pawn;
             if (previousPawn == null)
             {
@@ -290,7 +343,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 previousPawn.PublishControllerChanged(this, null);
                 previousState?.PublishPawnChanged(null, oldStatePawn);
                 OnUnPossess();
-                OnPossessedPawnChanged?.Invoke(previousPawn, null);
+                possessedPawnChangedObservers?.Invoke(previousPawn, null);
             }
             finally
             {
@@ -358,14 +411,23 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region PlayerState
-        public PlayerState GetPlayerState() => playerState;
-        public T GetPlayerState<T>() where T : PlayerState => playerState as T;
+        public PlayerState GetPlayerState()
+        {
+            AssertActorOwnerThread();
+            return playerState;
+        }
+
+        public T GetPlayerState<T>() where T : PlayerState
+        {
+            AssertActorOwnerThread();
+            return playerState as T;
+        }
         #endregion
 
         #region Control rotation and input suppression
         public virtual void SetControlRotation(Quaternion newRotation)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (pawn != null)
             {
                 Vector3 euler = newRotation.eulerAngles;
@@ -377,49 +439,66 @@ namespace CycloneGames.GameplayFramework.Runtime
             controlRotation = newRotation;
         }
 
-        public Quaternion ControlRotation() => controlRotation;
+        public Quaternion ControlRotation()
+        {
+            AssertActorOwnerThread();
+            return controlRotation;
+        }
 
         public virtual void SetIgnoreMoveInput(bool ignore)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             ignoreMoveInputCount = Mathf.Max(0, ignoreMoveInputCount + (ignore ? 1 : -1));
         }
 
         public virtual void ResetIgnoreMoveInput()
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             ignoreMoveInputCount = 0;
         }
 
-        public virtual bool IsMoveInputIgnored() => ignoreMoveInputCount > 0;
+        public virtual bool IsMoveInputIgnored()
+        {
+            AssertActorOwnerThread();
+            return ignoreMoveInputCount > 0;
+        }
 
         public virtual void SetIgnoreLookInput(bool ignore)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             ignoreLookInputCount = Mathf.Max(0, ignoreLookInputCount + (ignore ? 1 : -1));
         }
 
         public virtual void ResetIgnoreLookInput()
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             ignoreLookInputCount = 0;
         }
 
-        public virtual bool IsLookInputIgnored() => ignoreLookInputCount > 0;
+        public virtual bool IsLookInputIgnored()
+        {
+            AssertActorOwnerThread();
+            return ignoreLookInputCount > 0;
+        }
 
         public virtual void ResetIgnoreInputFlags()
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             ResetIgnoreMoveInput();
             ResetIgnoreLookInput();
         }
         #endregion
 
         #region View and game flow
-        public virtual Actor GetViewTarget() => pawn != null ? pawn : this;
+        public virtual Actor GetViewTarget()
+        {
+            AssertActorOwnerThread();
+            return pawn != null ? pawn : this;
+        }
 
         public override void GetActorEyesViewPoint(out Vector3 outLocation, out Quaternion outRotation)
         {
+            AssertActorOwnerThread();
             if (pawn != null)
             {
                 pawn.GetActorEyesViewPoint(out outLocation, out outRotation);
@@ -429,76 +508,118 @@ namespace CycloneGames.GameplayFramework.Runtime
             base.GetActorEyesViewPoint(out outLocation, out outRotation);
         }
 
-        public virtual void StopMovement() { }
-        public virtual void GameHasEnded(Actor endGameFocus = null, bool isWinner = false) { }
-        public virtual void FailedToSpawnPawn() { }
+        public virtual void StopMovement()
+        {
+            AssertActorOwnerThread();
+        }
+
+        public virtual void GameHasEnded(Actor endGameFocus = null, bool isWinner = false)
+        {
+            AssertActorOwnerThread();
+        }
+
+        public virtual void FailedToSpawnPawn()
+        {
+            AssertActorOwnerThread();
+        }
         #endregion
 
         protected override void OnWorldUnbound(EndPlayReason reason)
         {
-            Pawn possessedPawn = pawn;
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            ReleasePossessionForTerminal(
+                "Controller failed to release possession while unbinding from its World; fallback detachment will run.",
+                ref terminalExceptions);
+            ResetControllerRuntimeState();
             try
             {
-                if (!ReferenceEquals(possessedPawn, null))
-                {
-                    if (!isChangingPossession && possessedPawn != null)
-                    {
-                        UnPossess();
-                    }
-                    else
-                    {
-                        DetachPossessionWithoutCallbacks(possessedPawn, playerState);
-                    }
-                }
+                base.OnWorldUnbound(reason);
             }
             catch (Exception exception)
             {
-                Log.Error(
+                terminalExceptions.HandleAndLog(
                     exception,
-                    $"Controller '{name}' failed to release possession while unbinding from its World; fallback detachment will run.");
-                DetachPossessionWithoutCallbacks(possessedPawn, playerState);
+                    "Controller base Actor cleanup failed while unbinding from its World.");
             }
-            finally
-            {
-                pawn = null;
-                playerState = null;
-                startSpot = null;
-                ResetIgnoreInputFlags();
-                IsInitialized = false;
-                base.OnWorldUnbound(reason);
-            }
+
+            terminalExceptions.ThrowIfCaptured();
         }
 
         protected override void OnDestroy()
         {
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            ReleasePossessionForTerminal(
+                "Controller failed to release possession during destruction; fallback detachment will run.",
+                ref terminalExceptions);
+            possessedPawnChangedObservers = null;
+            ResetControllerRuntimeState();
+            try
+            {
+                base.OnDestroy();
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Controller base Actor cleanup failed during destruction.");
+            }
+
+            terminalExceptions.ThrowIfCaptured();
+        }
+
+        private void ReleasePossessionForTerminal(
+            string failureDescription,
+            ref TerminalExceptionAccumulator terminalExceptions)
+        {
             Pawn possessedPawn = pawn;
-            if (!ReferenceEquals(possessedPawn, null))
+            if (ReferenceEquals(possessedPawn, null))
+            {
+                return;
+            }
+
+            bool attemptedUnPossess = false;
+            try
             {
                 if (!isChangingPossession && possessedPawn != null)
                 {
-                    try
-                    {
-                        UnPossess();
-                    }
-                    catch (Exception exception)
-                    {
-                        Log.Error(
-                            exception,
-                            $"Controller '{name}' failed to release possession during destruction.");
-                    }
+                    attemptedUnPossess = true;
+                    UnPossess();
                 }
                 else
                 {
                     DetachPossessionWithoutCallbacks(possessedPawn, playerState);
                 }
             }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(exception, failureDescription);
+                if (!attemptedUnPossess)
+                {
+                    return;
+                }
 
-            OnPossessedPawnChanged = null;
-            IsInitialized = false;
-            base.OnDestroy();
+                try
+                {
+                    DetachPossessionWithoutCallbacks(possessedPawn, playerState);
+                }
+                catch (Exception fallbackException)
+                {
+                    terminalExceptions.HandleAndLog(
+                        fallbackException,
+                        "Controller fallback possession detachment failed during terminal cleanup.");
+                }
+            }
+        }
+
+        private void ResetControllerRuntimeState()
+        {
             pawn = null;
             playerState = null;
             startSpot = null;
+            ignoreMoveInputCount = 0;
+            ignoreLookInputCount = 0;
+            isChangingPossession = false;
+            IsInitialized = false;
         }
     }
 }

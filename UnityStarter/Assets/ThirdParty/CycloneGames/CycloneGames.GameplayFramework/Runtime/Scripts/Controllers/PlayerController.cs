@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -10,8 +9,6 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class PlayerController : Controller
     {
-        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
-
         [SerializeField] private bool bAutoManageActiveCameraTarget = true;
 
         private LocalPlayer localPlayer;
@@ -20,14 +17,56 @@ namespace CycloneGames.GameplayFramework.Runtime
         private CameraContext cameraContext;
         private Actor viewTarget;
         private bool hasExplicitViewTarget;
+        private bool runtimeComponentsInitialized;
 
-        public override bool IsLocalController => localPlayer != null;
-        public LocalPlayer LocalPlayer => localPlayer;
-        public bool RuntimeComponentsInitialized { get; private set; }
-        public bool AutoManageActiveCameraTargetEnabled => bAutoManageActiveCameraTarget;
+        public override bool IsLocalController
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return localPlayer != null;
+            }
+        }
 
-        public SpectatorPawn GetSpectatorPawn() => spectatorPawn;
-        public CameraManager GetCameraManager() => cameraManager;
+        public LocalPlayer LocalPlayer
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return localPlayer;
+            }
+        }
+
+        public bool RuntimeComponentsInitialized
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return runtimeComponentsInitialized;
+            }
+            private set => runtimeComponentsInitialized = value;
+        }
+
+        public bool AutoManageActiveCameraTargetEnabled
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return bAutoManageActiveCameraTarget;
+            }
+        }
+
+        public SpectatorPawn GetSpectatorPawn()
+        {
+            AssertActorOwnerThread();
+            return spectatorPawn;
+        }
+
+        public CameraManager GetCameraManager()
+        {
+            AssertActorOwnerThread();
+            return cameraManager;
+        }
 
         public virtual void InitializePlayer(
             World targetWorld,
@@ -36,6 +75,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             CameraManager localCameraManager = null,
             SpectatorPawn initialSpectatorPawn = null)
         {
+            AssertActorOwnerThread();
             if (RuntimeComponentsInitialized)
             {
                 throw new InvalidOperationException("PlayerController runtime components are already initialized.");
@@ -76,6 +116,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         #region Camera context
         public CameraContext GetCameraContext()
         {
+            AssertActorOwnerThread();
             EnsureCameraContextCreated();
             return cameraContext;
         }
@@ -94,6 +135,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private void EnsureCameraContextCreated()
         {
+            AssertActorOwnerThread();
             if (cameraContext != null)
             {
                 return;
@@ -108,24 +150,27 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetViewTargetPolicy(IViewTargetPolicy policy)
         {
+            AssertActorOwnerThread();
             GetCameraContext().SetViewTargetPolicy(policy ?? CreateDefaultViewTargetPolicy());
             RefreshActiveCameraTarget();
         }
 
         public virtual void SetBaseCameraMode(CameraMode cameraMode)
         {
+            AssertActorOwnerThread();
             GetCameraContext().SetBaseCameraMode(cameraMode);
             cameraManager?.NotifyCameraStateChanged();
         }
 
-        public virtual bool PushCameraMode(CameraMode cameraMode)
+        public virtual bool TryPushCameraMode(CameraMode cameraMode)
         {
+            AssertActorOwnerThread();
             if (cameraMode == null)
             {
                 return false;
             }
 
-            bool pushed = GetCameraContext().PushCameraMode(cameraMode);
+            bool pushed = GetCameraContext().TryPushCameraMode(cameraMode);
             if (pushed)
             {
                 cameraManager?.NotifyCameraStateChanged();
@@ -134,12 +179,11 @@ namespace CycloneGames.GameplayFramework.Runtime
             return pushed;
         }
 
-        public virtual bool TryPushCameraMode(CameraMode cameraMode) => PushCameraMode(cameraMode);
-
         public virtual bool TryPushOrReplaceOldestCameraMode(
             CameraMode cameraMode,
             out CameraMode replacedMode)
         {
+            AssertActorOwnerThread();
             if (cameraMode == null)
             {
                 replacedMode = null;
@@ -157,6 +201,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual bool RemoveCameraMode(CameraMode cameraMode)
         {
+            AssertActorOwnerThread();
             if (cameraMode == null || cameraContext == null)
             {
                 return false;
@@ -173,6 +218,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetAutoManageActiveCameraTarget(bool enabled)
         {
+            AssertActorOwnerThread();
             if (bAutoManageActiveCameraTarget == enabled)
             {
                 return;
@@ -188,6 +234,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void ClearViewTargetOverride(bool restoreAutoManagedTarget = true)
         {
+            AssertActorOwnerThread();
             hasExplicitViewTarget = false;
             cameraContext?.ClearManualViewTargetOverride();
             if (restoreAutoManagedTarget)
@@ -262,11 +309,13 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetViewTarget(Actor newViewTarget)
         {
+            AssertActorOwnerThread();
             SetViewTargetInternal(newViewTarget, isExplicitOverride: true);
         }
 
         public virtual void SetViewTargetWithBlend(Actor newViewTarget, float blendTime = 0f)
         {
+            AssertActorOwnerThread();
             if (float.IsNaN(blendTime) || float.IsInfinity(blendTime) || blendTime < 0f)
             {
                 throw new ArgumentOutOfRangeException(nameof(blendTime));
@@ -289,6 +338,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public override Actor GetViewTarget()
         {
+            AssertActorOwnerThread();
             if (cameraContext != null && cameraContext.CurrentViewTarget != null)
             {
                 return cameraContext.CurrentViewTarget;
@@ -299,6 +349,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void AutoManageActiveCameraTarget(Actor suggestedTarget)
         {
+            AssertActorOwnerThread();
             if (!bAutoManageActiveCameraTarget || hasExplicitViewTarget)
             {
                 return;
@@ -324,6 +375,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected override void OnWorldUnbound(EndPlayReason reason)
         {
+            var terminalExceptions = new TerminalExceptionAccumulator();
             World currentWorld = World;
             CameraManager ownedCameraManager = cameraManager;
             SpectatorPawn ownedSpectatorPawn = spectatorPawn;
@@ -331,95 +383,199 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 base.OnWorldUnbound(reason);
             }
-            finally
+            catch (Exception exception)
             {
-                ClearPlayerRuntimeRelationships();
-                if (currentWorld != null &&
-                    (currentWorld.LifecycleState == WorldLifecycleState.Initializing ||
-                     currentWorld.LifecycleState == WorldLifecycleState.Playing))
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "PlayerController base Controller cleanup failed while unbinding from its World.");
+            }
+
+            ClearPlayerRuntimeRelationships(ref terminalExceptions);
+            bool destroyAssociatedActors = false;
+            if (currentWorld != null)
+            {
+                try
                 {
-                    DestroyAssociatedActor(currentWorld, ownedCameraManager);
-                    DestroyAssociatedActor(currentWorld, ownedSpectatorPawn);
+                    WorldLifecycleState state = currentWorld.LifecycleState;
+                    destroyAssociatedActors =
+                        state == WorldLifecycleState.Initializing ||
+                        state == WorldLifecycleState.Playing;
+                }
+                catch (Exception exception)
+                {
+                    terminalExceptions.HandleAndLog(
+                        exception,
+                        "PlayerController failed to inspect World state during relationship cleanup.");
                 }
             }
+
+            if (destroyAssociatedActors)
+            {
+                DestroyAssociatedActor(
+                    currentWorld,
+                    ownedCameraManager,
+                    ref terminalExceptions);
+                DestroyAssociatedActor(
+                    currentWorld,
+                    ownedSpectatorPawn,
+                    ref terminalExceptions);
+            }
+
+            terminalExceptions.ThrowIfCaptured();
         }
 
         protected override void OnDestroy()
         {
+            var terminalExceptions = new TerminalExceptionAccumulator();
             World currentWorld = World;
-            if (currentWorld != null &&
-                currentWorld.ContainsPlayerController(this) &&
-                currentWorld.GameMode != null)
-            {
-                currentWorld.GameMode.HandleDestroyingPlayerController(this);
-            }
-
             CameraManager ownedCameraManager = cameraManager;
             SpectatorPawn ownedSpectatorPawn = spectatorPawn;
-
-            base.OnDestroy();
-            ClearPlayerRuntimeRelationships();
-
             if (currentWorld != null)
             {
-                if (ownedCameraManager != null && currentWorld.IsActorRegistered(ownedCameraManager))
+                try
                 {
-                    currentWorld.DestroyActor(ownedCameraManager);
+                    GameMode currentGameMode = currentWorld.GameMode;
+                    if (currentWorld.ContainsPlayerController(this) &&
+                        currentGameMode != null &&
+                        !currentGameMode.HandleDestroyingPlayerController(this))
+                    {
+                        terminalExceptions.LogFailure(
+                            "PlayerController destruction retained participant cleanup ownership for retry.");
+                    }
                 }
-
-                if (ownedSpectatorPawn != null && currentWorld.IsActorRegistered(ownedSpectatorPawn))
+                catch (Exception exception)
                 {
-                    currentWorld.DestroyActor(ownedSpectatorPawn);
+                    terminalExceptions.HandleAndLog(
+                        exception,
+                        "PlayerController participant cleanup failed during destruction; terminal cleanup will continue.");
                 }
             }
-        }
 
-        private void ClearPlayerRuntimeRelationships()
-        {
-            LocalPlayer ownedLocalPlayer = localPlayer;
             try
             {
-                cameraContext?.Clear();
+                base.OnDestroy();
             }
             catch (Exception exception)
             {
-                Log.Error(
+                terminalExceptions.HandleAndLog(
                     exception,
-                    $"PlayerController '{name}' failed to clear its camera context; relationship cleanup will continue.");
+                    "PlayerController base Controller cleanup failed during destruction.");
             }
-            finally
-            {
-                cameraContext = null;
-                cameraManager = null;
-                spectatorPawn = null;
-                viewTarget = null;
-                hasExplicitViewTarget = false;
-                RuntimeComponentsInitialized = false;
-                if (ownedLocalPlayer != null && ReferenceEquals(ownedLocalPlayer.PlayerController, this))
-                {
-                    ownedLocalPlayer.PlayerController = null;
-                }
 
-                localPlayer = null;
+            ClearPlayerRuntimeRelationships(ref terminalExceptions);
+
+            if (currentWorld != null)
+            {
+                DestroyAssociatedActor(
+                    currentWorld,
+                    ownedCameraManager,
+                    ref terminalExceptions);
+                DestroyAssociatedActor(
+                    currentWorld,
+                    ownedSpectatorPawn,
+                    ref terminalExceptions);
             }
+
+            terminalExceptions.ThrowIfCaptured();
         }
 
-        private void DestroyAssociatedActor(World currentWorld, Actor actor)
+        private void ClearPlayerRuntimeRelationships(
+            ref TerminalExceptionAccumulator terminalExceptions)
         {
-            if (actor == null || !currentWorld.IsActorRegistered(actor))
+            LocalPlayer ownedLocalPlayer = localPlayer;
+            CameraContext ownedCameraContext = cameraContext;
+            bool cameraContextReleased = ownedCameraContext == null;
+            try
             {
-                return;
+                cameraContextReleased = ownedCameraContext == null || ownedCameraContext.Clear();
+                if (!cameraContextReleased)
+                {
+                    terminalExceptions.LogFailure(
+                        "PlayerController retained a faulted camera context so cleanup can be retried.");
+                }
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "PlayerController failed to clear its camera context; relationship cleanup will continue.");
+            }
+
+            cameraContext = cameraContextReleased ? null : ownedCameraContext;
+            cameraManager = null;
+            spectatorPawn = null;
+            viewTarget = null;
+            hasExplicitViewTarget = false;
+            RuntimeComponentsInitialized = false;
+            if (ownedLocalPlayer != null)
+            {
+                try
+                {
+                    if (ReferenceEquals(ownedLocalPlayer.PlayerController, this))
+                    {
+                        ownedLocalPlayer.PlayerController = null;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    terminalExceptions.HandleAndLog(
+                        exception,
+                        "PlayerController failed to clear its LocalPlayer association during terminal cleanup.");
+                }
+            }
+
+            localPlayer = null;
+        }
+
+        internal bool TryReleaseCameraContextForWorldTeardown()
+        {
+            AssertActorOwnerThread();
+            CameraContext ownedCameraContext = cameraContext;
+            if (ownedCameraContext == null)
+            {
+                return true;
             }
 
             try
             {
+                if (!ownedCameraContext.Clear())
+                {
+                    return false;
+                }
+
+                cameraContext = null;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                var terminalExceptions = new TerminalExceptionAccumulator();
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "PlayerController camera context cleanup failed; World teardown retained the participant for retry.");
+                terminalExceptions.ThrowIfCaptured();
+                return false;
+            }
+        }
+
+        private void DestroyAssociatedActor(
+            World currentWorld,
+            Actor actor,
+            ref TerminalExceptionAccumulator terminalExceptions)
+        {
+            try
+            {
+                if (actor == null || !currentWorld.IsActorRegistered(actor))
+                {
+                    return;
+                }
+
                 currentWorld.DestroyActor(actor);
             }
             catch (Exception exception)
             {
-                Log.Error(
+                terminalExceptions.HandleAndLog(
                     exception,
-                    $"PlayerController '{name}' failed to destroy associated Actor '{actor.name}'.");
+                    "PlayerController failed to destroy an associated Actor during terminal cleanup.");
             }
         }
     }

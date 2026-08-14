@@ -31,64 +31,52 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private SerializedProperty gameModeClassProp;
         private SerializedProperty gameModeSourceProp;
         private SerializedProperty gameModeAssetLocationProp;
-        private SerializedProperty gameModeAssetGuidProp;
 
         private SerializedProperty playerControllerClassProp;
         private SerializedProperty playerControllerSourceProp;
         private SerializedProperty playerControllerAssetLocationProp;
-        private SerializedProperty playerControllerAssetGuidProp;
 
         private SerializedProperty pawnClassProp;
         private SerializedProperty pawnSourceProp;
         private SerializedProperty pawnAssetLocationProp;
-        private SerializedProperty pawnAssetGuidProp;
 
         private SerializedProperty playerStateClassProp;
         private SerializedProperty playerStateSourceProp;
         private SerializedProperty playerStateAssetLocationProp;
-        private SerializedProperty playerStateAssetGuidProp;
 
         private SerializedProperty cameraManagerClassProp;
         private SerializedProperty cameraManagerSourceProp;
         private SerializedProperty cameraManagerAssetLocationProp;
-        private SerializedProperty cameraManagerAssetGuidProp;
 
         private SerializedProperty spectatorPawnClassProp;
         private SerializedProperty spectatorPawnSourceProp;
         private SerializedProperty spectatorPawnAssetLocationProp;
-        private SerializedProperty spectatorPawnAssetGuidProp;
 
         private void OnEnable()
         {
             gameModeClassProp = serializedObject.FindProperty("gameModeClass");
             gameModeSourceProp = serializedObject.FindProperty("gameModeSource");
             gameModeAssetLocationProp = serializedObject.FindProperty("gameModeAssetLocation");
-            gameModeAssetGuidProp = serializedObject.FindProperty("gameModeAssetGuid");
 
             playerControllerClassProp = serializedObject.FindProperty("playerControllerClass");
             playerControllerSourceProp = serializedObject.FindProperty("playerControllerSource");
             playerControllerAssetLocationProp = serializedObject.FindProperty("playerControllerAssetLocation");
-            playerControllerAssetGuidProp = serializedObject.FindProperty("playerControllerAssetGuid");
 
             pawnClassProp = serializedObject.FindProperty("pawnClass");
             pawnSourceProp = serializedObject.FindProperty("pawnSource");
             pawnAssetLocationProp = serializedObject.FindProperty("pawnAssetLocation");
-            pawnAssetGuidProp = serializedObject.FindProperty("pawnAssetGuid");
 
             playerStateClassProp = serializedObject.FindProperty("playerStateClass");
             playerStateSourceProp = serializedObject.FindProperty("playerStateSource");
             playerStateAssetLocationProp = serializedObject.FindProperty("playerStateAssetLocation");
-            playerStateAssetGuidProp = serializedObject.FindProperty("playerStateAssetGuid");
 
             cameraManagerClassProp = serializedObject.FindProperty("cameraManagerClass");
             cameraManagerSourceProp = serializedObject.FindProperty("cameraManagerSource");
             cameraManagerAssetLocationProp = serializedObject.FindProperty("cameraManagerAssetLocation");
-            cameraManagerAssetGuidProp = serializedObject.FindProperty("cameraManagerAssetGuid");
 
             spectatorPawnClassProp = serializedObject.FindProperty("spectatorPawnClass");
             spectatorPawnSourceProp = serializedObject.FindProperty("spectatorPawnSource");
             spectatorPawnAssetLocationProp = serializedObject.FindProperty("spectatorPawnAssetLocation");
-            spectatorPawnAssetGuidProp = serializedObject.FindProperty("spectatorPawnAssetGuid");
         }
 
         public override void OnInspectorGUI()
@@ -121,12 +109,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 InspectorUiUtility.DrawSectionHeader("Reference Strategy", "Choose Direct Reference for project-owned prefab assets, Asset Reference for CycloneGames.AssetManagement-backed loading, or Path for a custom address-based resource manager.", new Color(1f, 0.76f, 0.38f, 1f));
-                DrawReferenceEntry<GameMode>("GameMode", "Class Prefab", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true);
-                DrawReferenceEntry<PlayerController>("PlayerController", "Default Class Prefab", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true);
-                DrawReferenceEntry<Pawn>("Pawn", "Default Class Prefab", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true);
-                DrawReferenceEntry<PlayerState>("PlayerState", "Default Class Prefab", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, true);
-                DrawReferenceEntry<CameraManager>("CameraManager", "Default Class Prefab", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false);
-                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", "Default Class Prefab", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false);
+                DrawReferenceEntry<GameMode>("GameMode", "Class Prefab", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, true);
+                DrawReferenceEntry<PlayerController>("PlayerController", "Default Class Prefab", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, true);
+                DrawReferenceEntry<Pawn>("Pawn", "Default Class Prefab", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, true);
+                DrawReferenceEntry<PlayerState>("PlayerState", "Default Class Prefab", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, true);
+                DrawReferenceEntry<CameraManager>("CameraManager", "Default Class Prefab", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, false);
+                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", "Default Class Prefab", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, false);
                 EditorGUILayout.EndVertical();
             }
 
@@ -199,7 +187,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             SerializedProperty sourceProp,
             SerializedProperty directReferenceProp,
             SerializedProperty assetLocationProp,
-            SerializedProperty assetGuidProp,
             bool required) where T : Component
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -231,7 +218,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
             else if (source == WorldSettingsReferenceSource.AssetReference)
             {
-                DrawAssetReferenceField<T>(assetLocationProp, assetGuidProp);
+                DrawAssetReferenceField<T>(assetLocationProp);
             }
             else
             {
@@ -265,13 +252,13 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.HelpBox("Legend: Required entries must be configured to boot the gameplay loop. Optional entries may be omitted depending on your project architecture.", MessageType.None);
         }
 
-        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp) where T : Object
+        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp) where T : Object
         {
             T currentAsset = LoadAssetAtPath<T>(assetLocationProp.stringValue);
             T selectedAsset = (T)EditorGUILayout.ObjectField("Asset", currentAsset, typeof(T), false);
             if (selectedAsset != currentAsset)
             {
-                AssignAssetReference(selectedAsset, assetLocationProp, assetGuidProp);
+                AssignAssetReference(selectedAsset, assetLocationProp);
                 currentAsset = selectedAsset;
             }
 
@@ -401,18 +388,16 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             return AssetDatabase.LoadAssetAtPath<T>(assetPath);
         }
 
-        private static void AssignAssetReference(Object asset, SerializedProperty assetLocationProp, SerializedProperty assetGuidProp)
+        private static void AssignAssetReference(Object asset, SerializedProperty assetLocationProp)
         {
             if (asset == null)
             {
                 assetLocationProp.stringValue = string.Empty;
-                assetGuidProp.stringValue = string.Empty;
                 return;
             }
 
             string assetPath = AssetDatabase.GetAssetPath(asset);
             assetLocationProp.stringValue = assetPath;
-            assetGuidProp.stringValue = AssetDatabase.AssetPathToGUID(assetPath);
         }
 
         private static WorldSettingsReferenceSource DrawModeToolbar(WorldSettingsReferenceSource source)

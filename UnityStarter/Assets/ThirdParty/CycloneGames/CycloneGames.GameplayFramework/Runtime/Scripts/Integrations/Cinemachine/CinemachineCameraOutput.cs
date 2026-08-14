@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
     {
         [SerializeField] private CinemachineCamera bootstrapVirtualCamera;
         [SerializeField] private CinemachineBrain bootstrapBrain;
-        [SerializeField] private bool allowSceneDiscovery = true;
+        [SerializeField] private bool allowSceneDiscovery;
 
         private CinemachineCamera activeVirtualCamera;
         private CinemachineBrain activeBrain;
@@ -18,59 +18,90 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
         private Transform previousFollowTarget;
         private Transform previousLookAtTarget;
         private bool stateCaptured;
+        private bool followRestorePending;
+        private bool lookAtRestorePending;
+        private bool brainUpdateRestorePending;
 
-        public CinemachineCamera ActiveVirtualCamera => activeVirtualCamera;
-        public CinemachineBrain ActiveBrain => activeBrain;
-        public override UnityEngine.Object OutputObject =>
-            activeVirtualCamera != null ? activeVirtualCamera : bootstrapVirtualCamera;
+        public CinemachineCamera ActiveVirtualCamera
+        {
+            get
+            {
+                AssertOutputOwnerThread();
+                return activeVirtualCamera;
+            }
+        }
+
+        public CinemachineBrain ActiveBrain
+        {
+            get
+            {
+                AssertOutputOwnerThread();
+                return activeBrain;
+            }
+        }
+
+        protected override UnityEngine.Object OnGetOutputObject()
+        {
+            return activeVirtualCamera != null ? activeVirtualCamera : bootstrapVirtualCamera;
+        }
 
         public void SetVirtualCamera(CinemachineCamera virtualCamera)
         {
-            ThrowIfPreparedOrActive();
+            ThrowIfLifecycleBound();
             bootstrapVirtualCamera = virtualCamera;
         }
 
         public void SetBrain(CinemachineBrain brain)
         {
-            ThrowIfPreparedOrActive();
+            ThrowIfLifecycleBound();
             bootstrapBrain = brain;
         }
 
-        protected override bool OnTryPrepare(out string error)
+        protected override bool OnTryGetResourceSet(
+            out CameraOutputResourceSet resources,
+            out string error)
         {
-            activeVirtualCamera = ResolveVirtualCamera(out error);
-            if (activeVirtualCamera == null)
+            CinemachineCamera resolvedVirtualCamera = ResolveVirtualCamera(out error);
+            if (resolvedVirtualCamera == null)
             {
+                resources = default;
                 return false;
             }
 
-            activeBrain = ResolveBrain(activeVirtualCamera, out error);
-            if (activeBrain == null)
+            CinemachineBrain resolvedBrain = ResolveBrain(resolvedVirtualCamera, out error);
+            if (resolvedBrain == null)
             {
-                activeVirtualCamera = null;
+                resources = default;
                 return false;
             }
 
-            if (!TryAddPreparedResource(activeBrain, out error))
-            {
-                return false;
-            }
-
-            return TryAddPreparedResource(activeVirtualCamera, out error);
+            resources = new CameraOutputResourceSet(resolvedBrain, resolvedVirtualCamera);
+            error = null;
+            return true;
         }
 
-        protected override bool OnActivate(CameraManager newOwner, out string error)
+        protected override bool OnActivate(
+            CameraManager newOwner,
+            in CameraOutputResourceSet resources,
+            out string error)
         {
-            if (activeVirtualCamera == null || activeBrain == null)
+            if (resources.Count != 2 ||
+                !(resources.GetResource(0) is CinemachineBrain leasedBrain) ||
+                !(resources.GetResource(1) is CinemachineCamera leasedVirtualCamera))
             {
-                error = "Cinemachine output resources are no longer available.";
+                error = "CinemachineCameraOutput requires one leased Brain and one leased Cinemachine Camera.";
                 return false;
             }
 
+            activeBrain = leasedBrain;
+            activeVirtualCamera = leasedVirtualCamera;
             previousUpdateMethod = activeBrain.UpdateMethod;
             previousFollowTarget = activeVirtualCamera.Follow;
             previousLookAtTarget = activeVirtualCamera.LookAt;
             stateCaptured = true;
+            followRestorePending = true;
+            lookAtRestorePending = true;
+            brainUpdateRestorePending = true;
             activeBrain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
             activeVirtualCamera.Follow = null;
             activeVirtualCamera.LookAt = null;
@@ -92,25 +123,76 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
 
         protected override void OnDeactivate()
         {
-            if (stateCaptured && activeVirtualCamera != null)
+            Exception cleanupFailure = null;
+            if (stateCaptured && followRestorePending)
             {
-                activeVirtualCamera.Follow = previousFollowTarget;
-                activeVirtualCamera.LookAt = previousLookAtTarget;
+                try
+                {
+                    if (activeVirtualCamera != null)
+                    {
+                        activeVirtualCamera.Follow = previousFollowTarget;
+                    }
+                    followRestorePending = false;
+                }
+                catch (Exception exception)
+                {
+                    CaptureCleanupFailure(ref cleanupFailure, exception);
+                }
             }
 
-            if (stateCaptured && activeBrain != null)
+            if (stateCaptured && lookAtRestorePending)
             {
-                activeBrain.UpdateMethod = previousUpdateMethod;
+                try
+                {
+                    if (activeVirtualCamera != null)
+                    {
+                        activeVirtualCamera.LookAt = previousLookAtTarget;
+                    }
+                    lookAtRestorePending = false;
+                }
+                catch (Exception exception)
+                {
+                    CaptureCleanupFailure(ref cleanupFailure, exception);
+                }
             }
-        }
 
-        protected override void OnReleasePreparedResources()
-        {
+            if (stateCaptured && brainUpdateRestorePending)
+            {
+                try
+                {
+                    if (activeBrain != null)
+                    {
+                        activeBrain.UpdateMethod = previousUpdateMethod;
+                    }
+                    brainUpdateRestorePending = false;
+                }
+                catch (Exception exception)
+                {
+                    CaptureCleanupFailure(ref cleanupFailure, exception);
+                }
+            }
+
+            if (cleanupFailure != null)
+            {
+                throw cleanupFailure;
+            }
+
             stateCaptured = false;
             previousFollowTarget = null;
             previousLookAtTarget = null;
             activeVirtualCamera = null;
             activeBrain = null;
+        }
+
+        private static void CaptureCleanupFailure(
+            ref Exception current,
+            Exception candidate)
+        {
+            if (current == null ||
+                (!(current is OutOfMemoryException) && candidate is OutOfMemoryException))
+            {
+                current = candidate;
+            }
         }
 
         private CinemachineCamera ResolveVirtualCamera(out string error)
@@ -199,47 +281,16 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
                 sceneBrainCount++;
             }
 
-            if (sceneBrainCount == 1)
+            if (sceneBrainCount != 1)
             {
-                error = null;
-                return onlySceneBrain;
-            }
-
-            if (sceneBrainCount == 0)
-            {
-                error = "No CinemachineBrain was found in the output Scene.";
-                return null;
-            }
-
-            CinemachineBrain activeCandidate = null;
-            for (int i = 0; i < brains.Length; i++)
-            {
-                CinemachineBrain candidate = brains[i];
-                if (candidate == null ||
-                    candidate.gameObject.scene != gameObject.scene ||
-                    !candidate.isActiveAndEnabled ||
-                    !candidate.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
-
-                if (activeCandidate != null)
-                {
-                    error = "Multiple active CinemachineBrain components were found in the output Scene; assign one explicitly.";
-                    return null;
-                }
-
-                activeCandidate = candidate;
-            }
-
-            if (activeCandidate == null)
-            {
-                error = "Multiple CinemachineBrain components were found in the output Scene; assign one explicitly.";
+                error = sceneBrainCount == 0
+                    ? "No CinemachineBrain was found in the output Scene."
+                    : "Multiple CinemachineBrain components were found in the output Scene; assign one explicitly.";
                 return null;
             }
 
             error = null;
-            return activeCandidate;
+            return onlySceneBrain;
         }
 
     }

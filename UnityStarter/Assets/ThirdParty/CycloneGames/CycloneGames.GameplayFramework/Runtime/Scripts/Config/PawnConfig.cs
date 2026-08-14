@@ -29,20 +29,25 @@ namespace CycloneGames.GameplayFramework.Runtime
         public float MaxLookUpAngle => maxLookUpAngle;
         public float MaxLookDownAngle => maxLookDownAngle;
 
-        /// <summary>
-        /// Apply this configuration to a Pawn instance.
-        /// Call this during Pawn initialization.
-        /// </summary>
-        public virtual void ApplyTo(Pawn pawn)
+        internal void ValidateOrThrow()
         {
-            if (pawn == null) return;
+            if (float.IsNaN(baseEyeHeight) || float.IsInfinity(baseEyeHeight))
+            {
+                throw new System.InvalidOperationException(
+                    "PawnConfig Base Eye Height must be finite.");
+            }
 
-            pawn.UseControllerRotationPitch = useControllerRotationPitch;
-            pawn.UseControllerRotationYaw = useControllerRotationYaw;
-            pawn.UseControllerRotationRoll = useControllerRotationRoll;
-            pawn.BaseEyeHeight = baseEyeHeight;
-            pawn.MaxLookUpAngle = maxLookUpAngle;
-            pawn.MaxLookDownAngle = maxLookDownAngle;
+            ValidateLookAngle(maxLookUpAngle, "Max Look Up Angle");
+            ValidateLookAngle(maxLookDownAngle, "Max Look Down Angle");
+        }
+
+        private static void ValidateLookAngle(float value, string displayName)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f || value > 180f)
+            {
+                throw new System.InvalidOperationException(
+                    $"PawnConfig {displayName} must be finite and between 0 and 180 degrees.");
+            }
         }
     }
 }

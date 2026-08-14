@@ -535,8 +535,9 @@ namespace Build.Pipeline.Tests.Editor
         {
             BuildRequest request = CreateSandboxRequest(companyName: string.Empty);
             LogAssert.Expect(
-                LogType.Exception,
+                LogType.Error,
                 new System.Text.RegularExpressions.Regex(
+                    "Build event sink failed after the terminal outcome in 'RunFinished'\\.[\\s\\S]*" +
                     "run-finished sink failure"));
 
             BuildRunResult result = new BuildPipelineRunner(
@@ -704,9 +705,10 @@ namespace Build.Pipeline.Tests.Editor
             BuildRequest request = CreateSandboxRequest(companyName: string.Empty);
             var sink = new ManifestBlockingEventSink();
             LogAssert.Expect(
-                LogType.Exception,
+                LogType.Error,
                 new System.Text.RegularExpressions.Regex(
-                    "IOException:.*already exists"));
+                    "Failed to persist the required build result manifest\\.[\\s\\S]*" +
+                    "IOException:[\\s\\S]*already exists"));
 
             BuildRunResult result = new BuildPipelineRunner(
                     sink,

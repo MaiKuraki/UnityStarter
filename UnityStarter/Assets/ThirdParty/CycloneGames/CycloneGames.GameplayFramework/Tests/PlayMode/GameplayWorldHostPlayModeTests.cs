@@ -30,6 +30,8 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
                 hostObject = new GameObject("GameplayWorldHost");
                 GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                host.ConfigureTerminalCleanupOwner(
+                    new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                 SetField(host, "worldSettings", settings);
 
                 yield return null;
@@ -87,6 +89,8 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
                 hostObject = new GameObject("GameplayWorldHost");
                 GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                host.ConfigureTerminalCleanupOwner(
+                    new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                 SetField(host, "worldSettings", settings);
 
                 yield return null;
@@ -188,6 +192,8 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
                 hostObject = new GameObject("GameplayWorldHost");
                 GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                host.ConfigureTerminalCleanupOwner(
+                    new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                 SetField(host, "worldSettings", settings);
 
                 yield return null;
@@ -312,6 +318,8 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
                 hostObject = new GameObject("GameplayWorldHost");
                 SceneManager.MoveGameObjectToScene(hostObject, hostScene);
                 GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                host.ConfigureTerminalCleanupOwner(
+                    new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                 SetField(host, "autoStart", false);
                 SetField(host, "worldSettings", settings);
 
@@ -399,10 +407,13 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
                     var resolver = new PendingWorldSettingsResolver(gameMode);
                     hostObject = new GameObject("GameplayWorldHost");
                     GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                    host.ConfigureTerminalCleanupOwner(
+                        new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                     SetField(host, "autoStart", false);
                     SetField(host, "worldSettings", settings);
                     host.Configure(new GameplayWorldComposition(
                         new UnityActorLifetime(),
+                        host.TerminalCleanupOwner,
                         referenceResolver: resolver));
 
                     UniTask<World> startTask = host.StartWorldAsync();
@@ -467,6 +478,8 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
                     hostObject = new GameObject("GameplayWorldHost");
                     GameplayWorldHost host = hostObject.AddComponent<GameplayWorldHost>();
+                    host.ConfigureTerminalCleanupOwner(
+                        new GameplayWorldTerminalCleanupRegistry(capacity: 4));
                     SetField(host, "autoStart", false);
                     SetField(host, "worldSettings", settings);
                     World world = await host.StartWorldAsync();
@@ -565,6 +578,7 @@ namespace CycloneGames.GameplayFramework.Tests.PlayMode
 
             public async UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
                 string location,
+                IWorldSettingsLeaseRegistrar leaseRegistrar,
                 CancellationToken cancellationToken) where T : UnityEngine.Object
             {
                 ResolveEntered = true;

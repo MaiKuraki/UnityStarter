@@ -355,7 +355,7 @@ namespace Build.Pipeline.Editor
                         stepResults,
                         Combine(result.Failure, manifestFailure),
                         result.NonFatalFailures);
-                    UnityEngine.Debug.LogException(manifestFailure);
+                    UnityEngine.Debug.LogError(manifestFailure);
                 }
 
                 NotifyTerminalEventSink(
@@ -535,7 +535,7 @@ namespace Build.Pipeline.Editor
                     throw;
                 }
 
-                UnityEngine.Debug.LogException(
+                UnityEngine.Debug.LogError(
                     new InvalidOperationException(
                         $"Build event sink failed after the terminal outcome in '{eventName}'.",
                         exception));

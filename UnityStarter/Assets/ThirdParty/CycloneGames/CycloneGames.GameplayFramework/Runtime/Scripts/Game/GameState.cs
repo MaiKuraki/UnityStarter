@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using UnityEngine;
@@ -19,20 +18,38 @@ namespace CycloneGames.GameplayFramework.Runtime
         [SerializeField] private GameplayMatchState initialMatchState = GameplayMatchState.EnteringMap;
 
         private readonly List<PlayerState> playerStates = new List<PlayerState>(8);
-        private ReadOnlyCollection<PlayerState> playerStateView;
+        private OwnerThreadReadOnlyList<PlayerState> playerStateView;
         private IMatchClock matchClock;
         private MatchStateMachine matchStateMachine;
         private bool isChangingMatchState;
 
-        public GameplayMatchState MatchState => matchStateMachine?.State ?? initialMatchState;
-        public IReadOnlyList<PlayerState> PlayerArray => playerStateView ??= playerStates.AsReadOnly();
+        public GameplayMatchState MatchState
+        {
+            get
+            {
+                AssertRuntimeOwnerThread();
+                return matchStateMachine?.State ?? initialMatchState;
+            }
+        }
+
+        public OwnerThreadReadOnlyList<PlayerState> PlayerArray
+        {
+            get
+            {
+                AssertRuntimeOwnerThread();
+                return playerStateView ??= new OwnerThreadReadOnlyList<PlayerState>(
+                    AssertRuntimeOwnerThread,
+                    playerStates);
+            }
+        }
 
         public double ElapsedTimeSeconds
         {
             get
             {
+                AssertRuntimeOwnerThread();
                 MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
-                return GetMatchStateMachine(in timestamp).GetElapsedSeconds(in timestamp);
+                return GetMatchStateMachine().GetElapsedSeconds(in timestamp);
             }
         }
 
@@ -40,21 +57,29 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// Selects the clock used by this GameState. Composition must configure the clock before
         /// the first transition, elapsed-time read, snapshot capture, or restore.
         /// </summary>
-        public void ConfigureMatchClock(IMatchClock value)
+        internal void ConfigureMatchClock(IMatchClock value)
         {
-            World?.AssertOwnerThread();
+            AssertRuntimeOwnerThread();
             if (value == null)
             {
                 throw new ArgumentNullException(nameof(value));
             }
 
-            if (matchStateMachine != null && !ReferenceEquals(matchClock, value))
+            if (matchStateMachine != null)
             {
+                if (ReferenceEquals(matchClock, value))
+                {
+                    return;
+                }
+
                 throw new InvalidOperationException(
                     "Match clock cannot be replaced after match runtime state has been created.");
             }
 
+            MatchTimestamp timestamp = value.CurrentTimestamp;
+            MatchStateMachine stateMachine = new MatchStateMachine(initialMatchState, in timestamp);
             matchClock = value;
+            matchStateMachine = stateMachine;
         }
 
         public void SetMatchState(GameplayMatchState newState)
@@ -67,7 +92,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool TrySetMatchState(GameplayMatchState newState, out string error)
         {
-            World?.AssertOwnerThread();
+            AssertRuntimeOwnerThread();
             if (isChangingMatchState)
             {
                 error = "A match-state transition is already in progress.";
@@ -75,7 +100,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
-            MatchStateMachine stateMachine = GetMatchStateMachine(in timestamp);
+            MatchStateMachine stateMachine = GetMatchStateMachine();
             GameplayMatchState oldState = stateMachine.State;
             MatchStateTransitionResult result = stateMachine.TryTransition(
                 newState,
@@ -101,6 +126,12 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
+                    OutOfMemoryException outOfMemory = FindTerminalOutOfMemory(exception);
+                    if (outOfMemory != null)
+                    {
+                        throw outOfMemory;
+                    }
+
                     Log.Error(
                         exception,
                         $"GameState '{name}' match-state observer failed after transition from '{oldState}' to '{newState}'.");
@@ -117,9 +148,9 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public MatchStateSnapshot CaptureMatchStateSnapshot()
         {
-            World?.AssertOwnerThread();
+            AssertRuntimeOwnerThread();
             MatchTimestamp timestamp = GetMatchClock().CurrentTimestamp;
-            return GetMatchStateMachine(in timestamp).CaptureSnapshot(in timestamp);
+            return GetMatchStateMachine().CaptureSnapshot(in timestamp);
         }
 
         public void RestoreMatchStateSnapshot(in MatchStateSnapshot snapshot)
@@ -134,7 +165,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             in MatchStateSnapshot snapshot,
             out string error)
         {
-            World?.AssertOwnerThread();
+            AssertRuntimeOwnerThread();
             if (isChangingMatchState)
             {
                 error = "A match-state transition is already in progress.";
@@ -169,6 +200,12 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
+                    OutOfMemoryException outOfMemory = FindTerminalOutOfMemory(exception);
+                    if (outOfMemory != null)
+                    {
+                        throw outOfMemory;
+                    }
+
                     Log.Error(
                         exception,
                         $"GameState '{name}' match-state observer failed while restoring '{restoredStateMachine.State}'.");
@@ -189,8 +226,9 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool AddPlayerState(PlayerState playerState)
         {
-            World?.AssertOwnerThread();
-            if (playerState == null || playerStates.Contains(playerState))
+            AssertRuntimeOwnerThread();
+            if (ReferenceEquals(playerState, null) ||
+                IndexOfPlayerStateReference(playerState) >= 0)
             {
                 return false;
             }
@@ -206,29 +244,79 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool RemovePlayerState(PlayerState playerState)
         {
-            World?.AssertOwnerThread();
-            return playerState != null && playerStates.Remove(playerState);
+            AssertRuntimeOwnerThread();
+            int index = IndexOfPlayerStateReference(playerState);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            playerStates.RemoveAt(index);
+            return true;
         }
 
-        public int GetNumPlayers() => playerStates.Count;
+        public int GetNumPlayers()
+        {
+            AssertRuntimeOwnerThread();
+            return playerStates.Count;
+        }
 
         protected override void OnDestroy()
         {
+            ResetRuntimeState();
+            base.OnDestroy();
+        }
+
+        protected override void OnWorldUnbound(EndPlayReason reason)
+        {
+            ResetRuntimeState();
+            base.OnWorldUnbound(reason);
+        }
+
+        private void ResetRuntimeState()
+        {
             playerStates.Clear();
+            playerStateView = null;
             matchStateMachine = null;
             matchClock = null;
-            base.OnDestroy();
+            isChangingMatchState = false;
+        }
+
+        private int IndexOfPlayerStateReference(PlayerState playerState)
+        {
+            if (ReferenceEquals(playerState, null))
+            {
+                return -1;
+            }
+
+            for (int index = 0; index < playerStates.Count; index++)
+            {
+                if (ReferenceEquals(playerStates[index], playerState))
+                {
+                    return index;
+                }
+            }
+
+            return -1;
         }
 
         private IMatchClock GetMatchClock()
         {
-            return matchClock ?? UnityMatchClock.Scaled;
+            return matchClock ?? throw new InvalidOperationException(
+                "Match clock must be configured before accessing match runtime state.");
         }
 
-        private MatchStateMachine GetMatchStateMachine(in MatchTimestamp timestamp)
+        private MatchStateMachine GetMatchStateMachine()
         {
-            return matchStateMachine ??=
-                new MatchStateMachine(initialMatchState, in timestamp);
+            return matchStateMachine ?? throw new InvalidOperationException(
+                "Match runtime state must be initialized by configuring its clock before use.");
+        }
+
+        private void AssertRuntimeOwnerThread()
+        {
+            World currentWorld = World ?? throw new InvalidOperationException(
+                "GameState runtime APIs require registration with a World.");
+            currentWorld.AssertOwnerThread();
         }
 
         private static string GetTransitionError(

@@ -110,6 +110,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             var gameObject = new GameObject("DestroyedController");
             objects.Add(gameObject);
             PlayerController controller = gameObject.AddComponent<PlayerController>();
+            UnityLifecycleTestUtility.InvokeAwake(controller);
             Object.DestroyImmediate(gameObject);
 
             Assert.Throws<System.ArgumentNullException>(() => PlayerLoginResult.Success(controller));
@@ -119,7 +120,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             var gameObject = new GameObject(name);
             objects.Add(gameObject);
-            return gameObject.AddComponent<PlayerState>();
+            PlayerState playerState = gameObject.AddComponent<PlayerState>();
+            UnityLifecycleTestUtility.InvokeAwake(playerState);
+            return playerState;
         }
     }
 }

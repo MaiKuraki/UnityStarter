@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -10,43 +9,134 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class Pawn : Actor
     {
-        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
-
-        [SerializeField] private bool bUseControllerRotationPitch;
-        [SerializeField] private bool bUseControllerRotationYaw;
-        [SerializeField] private bool bUseControllerRotationRoll;
-        [SerializeField] private float baseEyeHeight = 0.8f;
         [SerializeField] private PawnConfig pawnConfig;
 
         private PlayerState playerState;
         private Controller controller;
         private Vector3 pendingMovementInput;
         private Vector3 lastMovementInput;
-        private bool bIsTurnedOff;
+        private bool useControllerRotationPitch;
+        private bool useControllerRotationYaw;
+        private bool useControllerRotationRoll;
+        private bool isTurnedOff;
+        private float baseEyeHeight = 0.8f;
         private float maxLookUpAngle = 89f;
         private float maxLookDownAngle = 89f;
         private readonly List<MonoBehaviour> cachedComponents = new List<MonoBehaviour>(16);
 
-        public Controller Controller => controller;
-        public bool UseControllerRotationPitch { get => bUseControllerRotationPitch; set => bUseControllerRotationPitch = value; }
-        public bool UseControllerRotationYaw { get => bUseControllerRotationYaw; set => bUseControllerRotationYaw = value; }
-        public bool UseControllerRotationRoll { get => bUseControllerRotationRoll; set => bUseControllerRotationRoll = value; }
-        public float BaseEyeHeight { get => baseEyeHeight; set => baseEyeHeight = value; }
-        public float MaxLookUpAngle { get => maxLookUpAngle; set => maxLookUpAngle = Mathf.Clamp(value, 0f, 180f); }
-        public float MaxLookDownAngle { get => maxLookDownAngle; set => maxLookDownAngle = Mathf.Clamp(value, 0f, 180f); }
+        public Controller Controller
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return controller;
+            }
+        }
+        public bool UseControllerRotationPitch
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return useControllerRotationPitch;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                useControllerRotationPitch = value;
+            }
+        }
+
+        public bool UseControllerRotationYaw
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return useControllerRotationYaw;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                useControllerRotationYaw = value;
+            }
+        }
+
+        public bool UseControllerRotationRoll
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return useControllerRotationRoll;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                useControllerRotationRoll = value;
+            }
+        }
+
+        public float BaseEyeHeight
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return baseEyeHeight;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                ValidateFinite(value, nameof(value));
+                baseEyeHeight = value;
+            }
+        }
+
+        public float MaxLookUpAngle
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return maxLookUpAngle;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                ValidateLookAngle(value, nameof(value));
+                maxLookUpAngle = value;
+            }
+        }
+
+        public float MaxLookDownAngle
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return maxLookDownAngle;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                ValidateLookAngle(value, nameof(value));
+                maxLookDownAngle = value;
+            }
+        }
 
         public virtual void SetPawnConfig(PawnConfig config)
         {
+            AssertActorOwnerThread();
             if (config == null)
             {
-                return;
+                throw new System.ArgumentNullException(nameof(config));
             }
 
+            config.ValidateOrThrow();
             pawnConfig = config;
-            config.ApplyTo(this);
+            ApplyPawnConfig(config);
         }
 
-        public PawnConfig GetPawnConfig() => pawnConfig;
+        public PawnConfig GetPawnConfig()
+        {
+            AssertActorOwnerThread();
+            return pawnConfig;
+        }
 
         #region Movement input
         public virtual void AddMovementInput(
@@ -54,7 +144,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             float scaleValue = 1f,
             bool force = false)
         {
-            if (bIsTurnedOff && !force)
+            AssertActorOwnerThread();
+            if (isTurnedOff && !force)
             {
                 return;
             }
@@ -74,11 +165,20 @@ namespace CycloneGames.GameplayFramework.Runtime
                 1f);
         }
 
-        public Vector3 GetPendingMovementInputVector() => pendingMovementInput;
-        public Vector3 GetLastMovementInputVector() => lastMovementInput;
+        public Vector3 GetPendingMovementInputVector()
+        {
+            AssertActorOwnerThread();
+            return pendingMovementInput;
+        }
+        public Vector3 GetLastMovementInputVector()
+        {
+            AssertActorOwnerThread();
+            return lastMovementInput;
+        }
 
         public Vector3 ConsumeMovementInputVector()
         {
+            AssertActorOwnerThread();
             lastMovementInput = pendingMovementInput;
             pendingMovementInput = Vector3.zero;
             return lastMovementInput;
@@ -88,6 +188,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         #region Initialization and restart
         public void NotifyInitialRotation(Quaternion rotation)
         {
+            AssertActorOwnerThread();
             cachedComponents.Clear();
             GetComponents(cachedComponents);
             for (int i = 0; i < cachedComponents.Count; i++)
@@ -101,6 +202,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void DispatchRestart()
         {
+            AssertActorOwnerThread();
             Restart();
         }
 
@@ -124,30 +226,47 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected virtual void NotifyControllerChanged(Controller oldController, Controller newController) { }
 
-        public PlayerState GetPlayerState() => playerState;
-        public T GetPlayerState<T>() where T : PlayerState => playerState as T;
+        public PlayerState GetPlayerState()
+        {
+            AssertActorOwnerThread();
+            return playerState;
+        }
+
+        public T GetPlayerState<T>() where T : PlayerState
+        {
+            AssertActorOwnerThread();
+            return playerState as T;
+        }
         #endregion
 
         #region Control and view
         public Quaternion GetControlRotation()
         {
+            AssertActorOwnerThread();
             return controller != null ? controller.ControlRotation() : Quaternion.identity;
         }
 
         public virtual Quaternion GetViewRotation()
         {
+            AssertActorOwnerThread();
             return controller != null ? controller.ControlRotation() : GetActorRotation();
         }
 
-        public virtual Quaternion GetBaseAimRotation() => GetViewRotation();
+        public virtual Quaternion GetBaseAimRotation()
+        {
+            AssertActorOwnerThread();
+            return GetViewRotation();
+        }
 
         public virtual Vector3 GetPawnViewLocation()
         {
+            AssertActorOwnerThread();
             return GetActorLocation() + Vector3.up * baseEyeHeight;
         }
 
         public override void GetActorEyesViewPoint(out Vector3 outLocation, out Quaternion outRotation)
         {
+            AssertActorOwnerThread();
             outLocation = GetPawnViewLocation();
             outRotation = GetViewRotation();
         }
@@ -158,7 +277,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public virtual void ApplyControllerRotation(float deltaTime)
         {
-            if (bIsTurnedOff || controller == null)
+            AssertActorOwnerThread();
+            if (isTurnedOff || controller == null)
             {
                 return;
             }
@@ -168,14 +288,15 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void FaceRotation(Quaternion newControlRotation, float deltaTime = 0f)
         {
+            AssertActorOwnerThread();
             Vector3 euler = newControlRotation.eulerAngles;
             Vector3 current = transform.eulerAngles;
 
-            if (bUseControllerRotationPitch) current.x = euler.x;
-            if (bUseControllerRotationYaw) current.y = euler.y;
-            if (bUseControllerRotationRoll) current.z = euler.z;
+            if (useControllerRotationPitch) current.x = euler.x;
+            if (useControllerRotationYaw) current.y = euler.y;
+            if (useControllerRotationRoll) current.z = euler.z;
 
-            if (bUseControllerRotationPitch || bUseControllerRotationYaw || bUseControllerRotationRoll)
+            if (useControllerRotationPitch || useControllerRotationYaw || useControllerRotationRoll)
             {
                 SetActorRotation(Quaternion.Euler(current));
             }
@@ -183,48 +304,148 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region State
-        public bool IsPawnControlled() => controller != null;
-        public bool IsPlayerControlled() => controller is PlayerController;
-        public bool IsBotControlled() => controller is AIController;
-        public virtual bool IsLocallyControlled() => controller != null && controller.IsLocalController;
-        public bool IsTurnedOff() => bIsTurnedOff;
-        public virtual void TurnOff() => bIsTurnedOff = true;
-        public virtual void TurnOn() => bIsTurnedOff = false;
+        public bool IsPawnControlled()
+        {
+            AssertActorOwnerThread();
+            return controller != null;
+        }
+
+        public bool IsPlayerControlled()
+        {
+            AssertActorOwnerThread();
+            return controller is PlayerController;
+        }
+
+        public bool IsBotControlled()
+        {
+            AssertActorOwnerThread();
+            return controller is AIController;
+        }
+
+        public virtual bool IsLocallyControlled()
+        {
+            AssertActorOwnerThread();
+            return controller != null && controller.IsLocalController;
+        }
+
+        public bool IsTurnedOff()
+        {
+            AssertActorOwnerThread();
+            return isTurnedOff;
+        }
+
+        public virtual void TurnOff()
+        {
+            AssertActorOwnerThread();
+            isTurnedOff = true;
+        }
+
+        public virtual void TurnOn()
+        {
+            AssertActorOwnerThread();
+            isTurnedOff = false;
+        }
 
         public virtual void DetachFromControllerPendingDestroy()
         {
+            AssertActorOwnerThread();
             controller?.UnPossess();
         }
         #endregion
 
         protected override void OnDestroy()
         {
+            var terminalExceptions = new TerminalExceptionAccumulator();
             Controller previousController = controller;
             if (!ReferenceEquals(previousController, null))
             {
-                if (previousController != null && !previousController.IsChangingPossession)
+                try
                 {
-                    try
+                    if (previousController != null && !previousController.IsChangingPossession)
                     {
                         previousController.UnPossess();
                     }
-                    catch (System.Exception exception)
+                    else
                     {
-                        Log.Error(
-                            exception,
-                            $"Pawn '{name}' failed to release its previous Controller during destruction.");
+                        previousController.DetachDestroyedPawn(this);
                     }
                 }
-                else
+                catch (System.Exception exception)
                 {
-                    previousController.DetachDestroyedPawn(this);
+                    terminalExceptions.HandleAndLog(
+                        exception,
+                        "Pawn failed to release its Controller during destruction; fallback detachment will run.");
+                    try
+                    {
+                        previousController.DetachDestroyedPawn(this);
+                    }
+                    catch (System.Exception fallbackException)
+                    {
+                        terminalExceptions.HandleAndLog(
+                            fallbackException,
+                            "Pawn fallback Controller detachment failed during destruction.");
+                    }
                 }
             }
 
             cachedComponents.Clear();
             controller = null;
             playerState = null;
-            base.OnDestroy();
+            try
+            {
+                base.OnDestroy();
+            }
+            catch (System.Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Pawn base Actor cleanup failed during destruction.");
+            }
+
+            terminalExceptions.ThrowIfCaptured();
+        }
+
+        protected override void Awake()
+        {
+            base.Awake();
+            if (pawnConfig != null)
+            {
+                pawnConfig.ValidateOrThrow();
+                ApplyPawnConfig(pawnConfig);
+            }
+        }
+
+        private void ApplyPawnConfig(PawnConfig config)
+        {
+            useControllerRotationPitch = config.UseControllerRotationPitch;
+            useControllerRotationYaw = config.UseControllerRotationYaw;
+            useControllerRotationRoll = config.UseControllerRotationRoll;
+            baseEyeHeight = config.BaseEyeHeight;
+            maxLookUpAngle = config.MaxLookUpAngle;
+            maxLookDownAngle = config.MaxLookDownAngle;
+        }
+
+        private static void ValidateFinite(float value, string parameterName)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                throw new System.ArgumentOutOfRangeException(
+                    parameterName,
+                    value,
+                    "Pawn configuration values must be finite.");
+            }
+        }
+
+        private static void ValidateLookAngle(float value, string parameterName)
+        {
+            ValidateFinite(value, parameterName);
+            if (value < 0f || value > 180f)
+            {
+                throw new System.ArgumentOutOfRangeException(
+                    parameterName,
+                    value,
+                    "Pawn look angles must be between 0 and 180 degrees.");
+            }
         }
 
         private static bool IsFinite(Vector3 value)

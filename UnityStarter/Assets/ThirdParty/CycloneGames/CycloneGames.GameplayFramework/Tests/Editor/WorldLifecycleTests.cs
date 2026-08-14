@@ -1,7 +1,9 @@
 using System.Collections;
+using System.Text;
 using System.Threading;
 using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
@@ -359,17 +361,26 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
-        public void ReentrantStopDuringEndPlay_KeepsStoppingWorldOwnedUntilShutdownCompletes()
+        public void ReentrantStopDuringEndPlay_FailsFastAndKeepsWorldOwnedUntilShutdownCompletes()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Create();
             ReentrantStopActor actor =
                 testWorld.CreateAuthoringActor<ReentrantStopActor>("ReentrantStopActor");
             World world = testWorld.StartWorld();
             World observedDuringCallback = null;
+            System.Exception reentrantStopException = null;
             System.Exception restartException = null;
             actor.Callback = () =>
             {
-                testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
+                try
+                {
+                    testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
+                }
+                catch (System.Exception exception)
+                {
+                    reentrantStopException = exception;
+                }
+
                 observedDuringCallback = testWorld.Instance.CurrentWorld;
                 try
                 {
@@ -384,9 +395,65 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
 
             Assert.AreSame(world, observedDuringCallback);
+            Assert.IsInstanceOf<System.InvalidOperationException>(reentrantStopException);
             Assert.IsInstanceOf<System.InvalidOperationException>(restartException);
             Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
             Assert.IsNull(testWorld.Instance.CurrentWorld);
+        }
+
+        [Test]
+        public void ReentrantStopDuringGameModeCleanup_FailsFastWithoutCompletingEarly()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Create(
+                localPlayerCount: 1,
+                configure: world => world.SetReference(
+                    "gameModeClass",
+                    world.CreateAuthoringActor<ReentrantStopGameMode>(
+                        "ReentrantStopGameModePrefab")));
+            World world = testWorld.StartWorld();
+            var gameMode = (ReentrantStopGameMode)world.GameMode;
+
+            testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
+
+            Assert.IsInstanceOf<System.InvalidOperationException>(
+                gameMode.ReentrantStopFailure);
+            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
+            Assert.IsNull(testWorld.Instance.CurrentWorld);
+        }
+
+        [Test]
+        public void DestroyedGameMode_RetainsParticipantCleanupUntilSessionReleaseSucceeds()
+        {
+            var session = new FailOnceUnregisterSession();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                session: session,
+                discoverActiveSceneActors: false);
+            World world = testWorld.World;
+            GameMode gameMode = world.GameMode;
+            Assert.AreEqual(1, session.PlayerCount);
+
+            GameObject gameModeObject = gameMode.gameObject;
+            UnityLifecycleTestUtility.InvokeOnDestroy(gameMode);
+            if (gameModeObject != null)
+            {
+                Object.DestroyImmediate(gameModeObject);
+            }
+
+            Assert.AreEqual(WorldLifecycleState.Stopping, world.LifecycleState);
+            Assert.IsNull(world.GameMode);
+            Assert.IsTrue(world.HasPendingGameplayCleanup);
+            Assert.AreSame(world, testWorld.Instance.CurrentWorld);
+            Assert.AreEqual(1, session.PlayerCount);
+            Assert.AreEqual(1, session.UnregisterAttemptCount);
+
+            testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
+            Assert.IsFalse(world.HasPendingGameplayCleanup);
+            Assert.IsNull(testWorld.Instance.CurrentWorld);
+            Assert.Zero(session.PlayerCount);
+            Assert.AreEqual(2, session.UnregisterAttemptCount);
         }
 
         [UnityTest]
@@ -404,6 +471,13 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 try
                 {
                     UniTask<World> startTask = testWorld.Instance.StartWorldAsync(testWorld.Settings);
+                    for (int attempt = 0;
+                         attempt < 120 && !PendingLoginGameMode.LoginEntered;
+                         attempt++)
+                    {
+                        await UniTask.Yield();
+                    }
+
                     Assert.IsTrue(PendingLoginGameMode.LoginEntered);
                     World world = testWorld.Instance.CurrentWorld;
                     Assert.IsNotNull(world);
@@ -440,10 +514,12 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager prefab = testWorld.CreateAuthoringActor<CameraManager>("CameraManagerPrefab");
             Camera prefabCamera = prefab.gameObject.AddComponent<Camera>();
             UnityCameraOutput prefabOutput = prefab.gameObject.AddComponent<UnityCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(prefabOutput);
             prefabOutput.SetTargetCamera(prefabCamera);
             prefab.SetCameraOutput(prefabOutput, rebindImmediately: false);
 
             CameraManager manager = testWorld.World.SpawnActor(prefab);
+            UnityLifecycleTestUtility.InvokeAwake(manager.GetComponent<UnityCameraOutput>());
             manager.InitializeFor(testWorld.World.PlayerControllers[0]);
             UnityCameraOutput activeOutput = manager.ActiveOutput as UnityCameraOutput;
 
@@ -463,18 +539,25 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             try
             {
                 CameraManager manager = managerObject.AddComponent<CameraManager>();
+                UnityLifecycleTestUtility.InvokeAwake(manager);
                 Camera camera = managerObject.AddComponent<Camera>();
                 UnityCameraOutput output = managerObject.AddComponent<UnityCameraOutput>();
+                UnityLifecycleTestUtility.InvokeAwake(output);
                 output.SetTargetCamera(camera);
                 var pose = new CameraPose(
                     new Vector3(2f, 3f, 4f),
                     Quaternion.Euler(5f, 15f, 0f),
                     75f);
 
-                Assert.IsTrue(output.TryPrepare(out string prepareError), prepareError);
-                Assert.AreEqual(1, output.PreparedResourceCount);
-                Assert.AreSame(camera, output.GetPreparedResource(0));
-                Assert.IsTrue(output.TryActivate(manager, out string activationError), activationError);
+                Assert.IsTrue(output.TryGetResourceSet(
+                    out CameraOutputResourceSet resources,
+                    out string discoveryError), discoveryError);
+                Assert.AreEqual(1, resources.Count);
+                Assert.AreSame(camera, resources.GetResource(0));
+                Assert.IsTrue(output.TryActivate(
+                    manager,
+                    in resources,
+                    out string activationError), activationError);
                 output.ApplyPose(in pose);
 
                 Assert.AreEqual(pose.Position, camera.transform.position);
@@ -499,11 +582,14 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 Camera sharedCamera = cameraObject.AddComponent<Camera>();
                 CameraManager prefab = testWorld.CreateAuthoringActor<CameraManager>("CameraManagerPrefab");
                 UnityCameraOutput prefabOutput = prefab.gameObject.AddComponent<UnityCameraOutput>();
+                UnityLifecycleTestUtility.InvokeAwake(prefabOutput);
                 prefabOutput.SetTargetCamera(sharedCamera);
                 prefab.SetCameraOutput(prefabOutput, rebindImmediately: false);
 
                 CameraManager first = testWorld.World.SpawnActor(prefab);
                 CameraManager second = testWorld.World.SpawnActor(prefab);
+                UnityLifecycleTestUtility.InvokeAwake(first.GetComponent<UnityCameraOutput>());
+                UnityLifecycleTestUtility.InvokeAwake(second.GetComponent<UnityCameraOutput>());
                 PlayerController controller = testWorld.World.PlayerControllers[0];
                 first.InitializeFor(controller);
                 second.InitializeFor(controller);
@@ -527,11 +613,13 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager prefab = testWorld.CreateAuthoringActor<CameraManager>("CameraManagerPrefab");
             Camera prefabCamera = prefab.gameObject.AddComponent<Camera>();
             UnityCameraOutput prefabOutput = prefab.gameObject.AddComponent<UnityCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(prefabOutput);
             prefabOutput.SetTargetCamera(prefabCamera);
             prefab.SetCameraOutput(prefabOutput, rebindImmediately: false);
 
             CameraManager manager = testWorld.World.SpawnActor(prefab);
             UnityCameraOutput spawnedOutput = manager.GetComponent<UnityCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(spawnedOutput);
             Object.DestroyImmediate(spawnedOutput);
 
             Assert.DoesNotThrow(() =>
@@ -547,10 +635,12 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager prefab = testWorld.CreateAuthoringActor<CameraManager>("CameraManagerPrefab");
             prefab.gameObject.AddComponent<Camera>();
             ReentrantCameraOutput prefabOutput = prefab.gameObject.AddComponent<ReentrantCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(prefabOutput);
             prefab.SetCameraOutput(prefabOutput, rebindImmediately: false);
 
             CameraManager manager = testWorld.World.SpawnActor(prefab);
             ReentrantCameraOutput output = manager.GetComponent<ReentrantCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(output);
             Assert.Throws<System.InvalidOperationException>(() =>
                 manager.InitializeFor(testWorld.World.PlayerControllers[0]));
             Assert.IsNull(manager.ActiveOutput);
@@ -577,7 +667,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
-        public void CameraMode_CannotMutateStackDuringEvaluation()
+        public void CameraMode_SelfRemovalCommitsAfterEvaluation()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start(localPlayerCount: 1);
             PlayerController controller = testWorld.World.PlayerControllers[0];
@@ -585,12 +675,12 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager manager = testWorld.World.SpawnActor(prefab);
             manager.InitializeFor(controller);
             var mode = new SelfRemovingCameraMode();
-            Assert.IsTrue(controller.PushCameraMode(mode));
+            Assert.IsTrue(controller.TryPushCameraMode(mode));
 
             Assert.DoesNotThrow(() => manager.UpdateCamera(1f / 60f));
 
-            Assert.IsFalse(mode.RemovalResult);
-            Assert.AreEqual(1, controller.GetCameraContext().CameraModeCount);
+            Assert.IsTrue(mode.RemovalResult);
+            Assert.AreEqual(0, controller.GetCameraContext().CameraModeCount);
         }
 
         [Test]
@@ -625,6 +715,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             CameraManager sceneManager = testWorld.CreateAuthoringActor<CameraManager>("InactiveSceneCameraManager");
             Camera sceneCamera = sceneManager.gameObject.AddComponent<Camera>();
             UnityCameraOutput output = sceneManager.gameObject.AddComponent<UnityCameraOutput>();
+            UnityLifecycleTestUtility.InvokeAwake(output);
             output.SetTargetCamera(sceneCamera);
             sceneManager.SetCameraOutput(output, rebindImmediately: false);
             sceneManager.gameObject.SetActive(false);
@@ -651,6 +742,30 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.DoesNotThrow(() => manager.UpdateCamera(1f / 60f));
 
             Assert.AreEqual(1, processor.ProcessCount);
+        }
+
+        [Test]
+        public void WorldShutdown_PreservesTickRegistryChangesMadeDuringCameraManagerUnbind()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false);
+            World world = testWorld.World;
+            CameraManager prefab =
+                testWorld.CreateAuthoringActor<CameraManager>("TickingCameraManagerPrefab");
+            CameraManager manager = world.SpawnActor(prefab);
+            manager.InitializeFor(world.PlayerControllers[0]);
+
+            Assert.IsTrue(manager.IsActorTickEnabled());
+            Assert.AreEqual(1, world.GetTickActorCount(ActorTickPhase.LateUpdate));
+
+            Assert.DoesNotThrow(() =>
+                testWorld.Instance.StopWorldAsync().GetAwaiter().GetResult());
+
+            Assert.AreEqual(WorldLifecycleState.Disposed, world.LifecycleState);
+            Assert.Zero(world.ActorCount);
+            Assert.Zero(world.GetTickActorCount(ActorTickPhase.LateUpdate));
+            Assert.IsNull(testWorld.Instance.CurrentWorld);
         }
 
         [Test]
@@ -751,6 +866,24 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
+        public void TravelToLevel_CompletesShutdownAndNavigationWithoutCancellationGap()
+        {
+            var sceneTransitionHandler = new RecordingSceneTransitionHandler();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                sceneTransitionHandler: sceneTransitionHandler);
+            World previousWorld = testWorld.World;
+
+            previousWorld.GameMode.TravelToLevel("Stage02")
+                .GetAwaiter()
+                .GetResult();
+
+            Assert.AreEqual(WorldLifecycleState.Disposed, previousWorld.LifecycleState);
+            Assert.IsNull(testWorld.Instance.CurrentWorld);
+            Assert.AreEqual("Stage02", sceneTransitionHandler.ChangedScene);
+            Assert.IsFalse(sceneTransitionHandler.ChangeToken.CanBeCanceled);
+        }
+
+        [Test]
         public void RemoteLoginAndLogout_AreTransactional()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start();
@@ -770,6 +903,38 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.IsTrue(gameMode.Logout(result.PlayerController));
             Assert.AreEqual(0, testWorld.World.PlayerControllers.Count);
             Assert.AreEqual(0, gameMode.GetGameSession().PlayerCount);
+        }
+
+        [Test]
+        public void AdmissionException_IsLoggedAndReturnsBoundedFailure()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                session: new ThrowingAdmissionSession());
+            var logWriter = new ExceptionRecordingLogWriter();
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, logWriter));
+            PlayerLoginResult result;
+            try
+            {
+                result = testWorld.World.GameMode.LoginAsync(
+                        new PlayerLoginRequest(150, "AdmissionFailure"))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(logWriter, previousWriter));
+            }
+
+            Assert.AreEqual(PlayerLoginStatus.Rejected, result.Status);
+            Assert.AreEqual("Player login policy evaluation failed.", result.Error);
+            StringAssert.DoesNotContain("sensitive admission failure", result.Error);
+            Assert.IsInstanceOf<System.InvalidOperationException>(logWriter.LastException);
+            Assert.AreEqual(
+                "sensitive admission failure",
+                logWriter.LastException.Message);
+            Assert.AreEqual(0, testWorld.World.PlayerControllerCount);
+            Assert.AreEqual(0, testWorld.World.GameMode.GetGameSession().PlayerCount);
         }
 
         [Test]
@@ -838,12 +1003,28 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                     gameMode);
             });
 
-            PlayerLoginResult result = testWorld.World.GameMode.LoginAsync(
-                    new PlayerLoginRequest(200, "RejectedAfterCommit"))
-                .GetAwaiter()
-                .GetResult();
+            var logWriter = new ExceptionRecordingLogWriter();
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, logWriter));
+            PlayerLoginResult result;
+            try
+            {
+                result = testWorld.World.GameMode.LoginAsync(
+                        new PlayerLoginRequest(200, "RejectedAfterCommit"))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(logWriter, previousWriter));
+            }
 
             Assert.IsFalse(result.Succeeded);
+            Assert.AreEqual(PlayerLoginStatus.SpawnFailed, result.Status);
+            Assert.AreEqual("Player login failed while preparing participant state.", result.Error);
+            StringAssert.DoesNotContain("PostLogin failure requested by test.", result.Error);
+            Assert.IsInstanceOf<System.InvalidOperationException>(logWriter.LastException);
+            Assert.AreEqual("PostLogin failure requested by test.", logWriter.LastException.Message);
             Assert.AreEqual(0, testWorld.World.PlayerControllers.Count);
             Assert.AreEqual(0, testWorld.World.GameState.PlayerArray.Count);
             Assert.AreEqual(0, testWorld.World.GameMode.GetGameSession().PlayerCount);
@@ -925,6 +1106,46 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
+        public void DestroyedPlayerState_IsRemovedFromGameStateByManagedIdentity()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start(
+                localPlayerCount: 1,
+                discoverActiveSceneActors: false,
+                configure: world =>
+                {
+                    GameMode gameMode =
+                        world.CreateAuthoringActor<GameMode>("GameModeWithGameStatePrefab");
+                    GameState gameStatePrefab =
+                        world.CreateAuthoringActor<GameState>("GameStatePrefab");
+                    var serializedGameMode = new UnityEditor.SerializedObject(gameMode);
+                    serializedGameMode.FindProperty("gameStateClass").objectReferenceValue =
+                        gameStatePrefab;
+                    serializedGameMode.ApplyModifiedPropertiesWithoutUndo();
+                    world.SetReference("gameModeClass", gameMode);
+                });
+            GameState gameState = testWorld.World.GameState;
+            IGameSession session = testWorld.World.GameMode.GetGameSession();
+            PlayerController playerController = testWorld.World.GetPlayerController(0);
+            PlayerState playerState = playerController.GetPlayerState();
+            Assert.AreEqual(1, gameState.PlayerArray.Count);
+            Assert.AreEqual(1, session.PlayerCount);
+
+            GameObject playerStateObject = playerState.gameObject;
+            UnityLifecycleTestUtility.InvokeOnDestroy(playerState);
+            if (playerStateObject != null)
+            {
+                Object.DestroyImmediate(playerStateObject);
+            }
+
+            Assert.Zero(
+                gameState.PlayerArray.Count,
+                $"controllers={testWorld.World.PlayerControllerCount}, " +
+                $"sessionPlayers={session.PlayerCount}, actors={testWorld.World.ActorCount}");
+            Assert.Zero(testWorld.World.PlayerControllerCount);
+            Assert.Zero(session.PlayerCount);
+        }
+
+        [Test]
         public void GameSession_WorkerThreadAccessIsRejectedBeforeRuntimeRosterAccess()
         {
             var session = new GameSession();
@@ -974,7 +1195,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 return inner.ContainsPlayer(playerController);
             }
 
-            public bool UnregisterPlayer(PlayerController playerController)
+            public virtual bool UnregisterPlayer(PlayerController playerController)
             {
                 return inner.UnregisterPlayer(playerController);
             }
@@ -997,6 +1218,70 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
                 errorMessage = "Rejected by test policy.";
                 return false;
+            }
+        }
+
+        private sealed class FailOnceUnregisterSession : TestSessionDecorator
+        {
+            private bool failNextUnregister = true;
+            public int UnregisterAttemptCount { get; private set; }
+
+            public override bool UnregisterPlayer(PlayerController playerController)
+            {
+                UnregisterAttemptCount++;
+                if (failNextUnregister)
+                {
+                    failNextUnregister = false;
+                    throw new System.InvalidOperationException(
+                        "Session unregister failure requested by the test.");
+                }
+
+                return base.UnregisterPlayer(playerController);
+            }
+        }
+
+        private sealed class ThrowingAdmissionSession : TestSessionDecorator
+        {
+            public override bool ApproveLogin(
+                in PlayerLoginRequest request,
+                out string errorMessage)
+            {
+                errorMessage = null;
+                throw new System.InvalidOperationException("sensitive admission failure");
+            }
+        }
+
+        private sealed class RecordingSceneTransitionHandler : ISceneTransitionHandler
+        {
+            public string ChangedScene { get; private set; }
+            public CancellationToken ChangeToken { get; private set; }
+
+            public UniTask ChangeScene(
+                string sceneName,
+                CancellationToken cancellationToken = default)
+            {
+                ChangedScene = sceneName;
+                ChangeToken = cancellationToken;
+                return UniTask.CompletedTask;
+            }
+
+            public UniTask PushScene(
+                string sceneName,
+                CancellationToken cancellationToken = default)
+            {
+                return UniTask.CompletedTask;
+            }
+
+            public UniTask PopScene(CancellationToken cancellationToken = default)
+            {
+                return UniTask.CompletedTask;
+            }
+
+            public UniTask ReplaceScene(
+                string sceneName,
+                CancellationToken cancellationToken = default)
+            {
+                return UniTask.CompletedTask;
             }
         }
 
@@ -1099,10 +1384,10 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 LoginEntered = false;
             }
 
-            public override UniTask<PlayerLoginResult> LoginAsync(
+            protected override UniTask<PlayerLoginResult> LoginCoreAsync(
                 PlayerLoginRequest request,
-                LocalPlayer localPlayer = null,
-                CancellationToken cancellationToken = default)
+                LocalPlayer localPlayer,
+                CancellationToken cancellationToken)
             {
                 LoginEntered = true;
                 return pendingLogin.Task;
@@ -1111,7 +1396,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         private sealed class ThrowingPostLoginGameMode : GameMode
         {
-            public override void PostLogin(PlayerController newPlayer)
+            protected override void HandleStartingNewPlayer(PlayerController newPlayer)
             {
                 throw new System.InvalidOperationException("PostLogin failure requested by test.");
             }
@@ -1119,9 +1404,26 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         private sealed class LogoutInPostLoginGameMode : GameMode
         {
-            public override void PostLogin(PlayerController newPlayer)
+            protected override void HandleStartingNewPlayer(PlayerController newPlayer)
             {
                 Logout(newPlayer);
+            }
+        }
+
+        private sealed class ReentrantStopGameMode : GameMode
+        {
+            public System.Exception ReentrantStopFailure { get; private set; }
+
+            protected override void HandleLogout(PlayerController exiting)
+            {
+                try
+                {
+                    World.GameInstance.StopWorldAsync().GetAwaiter().GetResult();
+                }
+                catch (System.Exception exception)
+                {
+                    ReentrantStopFailure = exception;
+                }
             }
         }
 
@@ -1204,27 +1506,86 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             }
         }
 
+        private sealed class ExceptionRecordingLogWriter : ILogWriter
+        {
+            public System.Exception LastException { get; private set; }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                return severity >= LogSeverity.Error && severity < LogSeverity.None;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") { }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                System.Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") { }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                System.Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") { }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                System.Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (IsEnabled(severity, category))
+                {
+                    LastException = exception;
+                }
+            }
+        }
+
         private sealed class ReentrantCameraOutput : CameraOutputBehaviour
         {
             private Camera activeCamera;
 
             public bool ReenterOnActivate { get; set; } = true;
-            public override Object OutputObject => activeCamera;
+            protected override Object OnGetOutputObject() => activeCamera;
 
-            protected override bool OnTryPrepare(out string error)
+            protected override bool OnTryGetResourceSet(
+                out CameraOutputResourceSet resources,
+                out string error)
             {
-                activeCamera = GetComponent<Camera>();
-                if (activeCamera == null)
+                Camera resolvedCamera = GetComponent<Camera>();
+                if (resolvedCamera == null)
                 {
+                    resources = default;
                     error = "A Camera is required.";
                     return false;
                 }
 
-                return TryAddPreparedResource(activeCamera, out error);
+                resources = new CameraOutputResourceSet(resolvedCamera);
+                error = null;
+                return true;
             }
 
-            protected override bool OnActivate(CameraManager newOwner, out string error)
+            protected override bool OnActivate(
+                CameraManager newOwner,
+                in CameraOutputResourceSet resources,
+                out string error)
             {
+                activeCamera = resources.GetResource(0) as Camera;
                 if (ReenterOnActivate)
                 {
                     newOwner.SetCameraOutput(null);
@@ -1238,7 +1599,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
             }
 
-            protected override void OnReleasePreparedResources()
+            protected override void OnDeactivate()
             {
                 activeCamera = null;
             }

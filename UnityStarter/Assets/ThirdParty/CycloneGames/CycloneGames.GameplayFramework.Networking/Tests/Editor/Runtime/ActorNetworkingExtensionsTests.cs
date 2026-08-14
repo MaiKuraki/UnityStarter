@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.Networking.Replication;
@@ -19,7 +20,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             var targetObject = new GameObject("TargetActor");
             try
             {
-                Actor source = sourceObject.AddComponent<Actor>();
+                Actor source = AddInitializedActor(sourceObject);
                 source.SetActorLocation(new Vector3(1f, 2f, 3f));
                 source.SetActorRotation(Quaternion.Euler(10f, 20f, 30f));
                 source.SetActorScale(new Vector3(2f, 2f, 2f));
@@ -30,7 +31,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                     ownerConnectionId: 7,
                     instigatorActorId: 9);
 
-                Actor target = targetObject.AddComponent<Actor>();
+                Actor target = AddInitializedActor(targetObject);
                 target.ApplyMigrationState(in state);
 
                 Assert.AreEqual("actors/player", state.PrefabDefinitionId);
@@ -57,7 +58,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             var gameObject = new GameObject("Actor");
             try
             {
-                Actor actor = gameObject.AddComponent<Actor>();
+                Actor actor = AddInitializedActor(gameObject);
                 actor.SetActorLocation(new Vector3(4f, 5f, 6f));
 
                 NetworkReplicationPolicy policy = NetworkReplicationPolicy.Area(25f);
@@ -133,6 +134,17 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.IsTrue(completed.Wait(TimeSpan.FromSeconds(5)));
             thread.Join();
             return captured;
+        }
+
+        private static Actor AddInitializedActor(GameObject gameObject)
+        {
+            Actor actor = gameObject.AddComponent<Actor>();
+            MethodInfo awake = typeof(Actor).GetMethod(
+                "Awake",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(awake);
+            awake.Invoke(actor, null);
+            return actor;
         }
 
         private sealed class BoundActorFixture : IDisposable
