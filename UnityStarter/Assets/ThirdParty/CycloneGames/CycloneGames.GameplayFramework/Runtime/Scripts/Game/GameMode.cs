@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -24,6 +25,10 @@ namespace CycloneGames.GameplayFramework.Runtime
     public class GameMode : Actor
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+        private const string UnexpectedAdmissionFailureMessage =
+            "Player login policy evaluation failed.";
+        private const string UnexpectedLoginFailureMessage =
+            "Player login failed while preparing participant state.";
 
         [SerializeField] private bool bStartPlayersAsSpectators;
         [SerializeField] private GameModeConfig gameModeConfig;
@@ -32,20 +37,46 @@ namespace CycloneGames.GameplayFramework.Runtime
         [SerializeField, Min(0)] private int maxSpectators = 4;
 
         private IGameSession gameSession;
+        private World terminalWorldOwner;
         private GameModeLifecycleState modeState;
         private bool ownsDefaultSession;
         private bool matchStartNotified;
+        private bool isLoginTransactionActive;
 
         public bool StartPlayersAsSpectators
         {
-            get => bStartPlayersAsSpectators;
-            set => bStartPlayersAsSpectators = value;
+            get
+            {
+                AssertActorOwnerThread();
+                return bStartPlayersAsSpectators;
+            }
+            set
+            {
+                AssertActorOwnerThread();
+                bStartPlayersAsSpectators = value;
+            }
         }
 
-        public GameModeLifecycleState ModeState => modeState;
-        public IGameSession GetGameSession() => gameSession;
-        public GameModeConfig GetGameModeConfig() => gameModeConfig;
-        public GameState GetGameState() => World?.GameState;
+        public GameModeLifecycleState ModeState
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return modeState;
+            }
+        }
+
+        public IGameSession GetGameSession()
+        {
+            AssertActorOwnerThread();
+            return gameSession;
+        }
+
+        public GameModeConfig GetGameModeConfig()
+        {
+            AssertActorOwnerThread();
+            return gameModeConfig;
+        }
 
         public virtual void Initialize(World targetWorld, IGameSession session = null)
         {
@@ -77,14 +108,16 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             gameSession = session ?? new GameSession(maxPlayers, maxSpectators);
+            terminalWorldOwner = targetWorld;
             ownsDefaultSession = session == null;
+            targetWorld.BindTerminalGameSession(this, gameSession);
             gameModeConfig?.ApplyTo(this);
             modeState = GameModeLifecycleState.Initialized;
         }
 
         public virtual void SetGameModeConfig(GameModeConfig config)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             gameModeConfig = config;
             config?.ApplyTo(this);
         }
@@ -100,7 +133,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             modeState = GameModeLifecycleState.Starting;
             InitializeGameState();
-            SetRequiredMatchState(GameState.EMatchState.WaitingToStart);
+            SetRequiredMatchState(MatchState.WaitingToStart);
 
             if (!World.IsDedicatedServer && localPlayers != null)
             {
@@ -126,7 +159,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
-            SetRequiredMatchState(GameState.EMatchState.InProgress);
+            SetRequiredMatchState(MatchState.InProgress);
             modeState = GameModeLifecycleState.Running;
         }
 
@@ -144,75 +177,105 @@ namespace CycloneGames.GameplayFramework.Runtime
                 isLocal: true);
         }
 
-        public virtual UniTask<PlayerLoginResult> LoginAsync(
+        public async UniTask<PlayerLoginResult> LoginAsync(
             PlayerLoginRequest request,
             LocalPlayer localPlayer = null,
             CancellationToken cancellationToken = default)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (modeState != GameModeLifecycleState.Starting &&
                 modeState != GameModeLifecycleState.Running)
             {
-                return UniTask.FromResult(PlayerLoginResult.Failure(
+                return PlayerLoginResult.Failure(
                     PlayerLoginStatus.WorldNotAcceptingPlayers,
-                    $"GameMode is in state '{modeState}'."));
+                    $"GameMode is in state '{modeState}'.");
             }
 
             if (World == null || !World.IsAuthority)
             {
-                return UniTask.FromResult(PlayerLoginResult.Failure(
+                return PlayerLoginResult.Failure(
                     PlayerLoginStatus.NotAuthoritative,
-                    "Only an authoritative World can accept players."));
+                    "Only an authoritative World can accept players.");
             }
 
             if (cancellationToken.IsCancellationRequested)
             {
-                return UniTask.FromResult(PlayerLoginResult.Failure(
+                return PlayerLoginResult.Failure(
                     PlayerLoginStatus.Cancelled,
-                    "Login was cancelled."));
+                    "Login was cancelled.");
             }
 
             if (!request.TryValidate(out string validationError))
             {
-                return UniTask.FromResult(PlayerLoginResult.Failure(
+                return PlayerLoginResult.Failure(
                     PlayerLoginStatus.InvalidRequest,
-                    validationError));
+                    validationError);
             }
 
             bool hasLocalPlayer = localPlayer != null;
             if (request.IsLocal != hasLocalPlayer ||
                 hasLocalPlayer && !IsOwnedLocalPlayer(localPlayer))
             {
-                return UniTask.FromResult(PlayerLoginResult.Failure(
+                return PlayerLoginResult.Failure(
                     PlayerLoginStatus.InvalidRequest,
-                    "Local login identity does not match the GameInstance LocalPlayer slot."));
+                    "Local login identity does not match the GameInstance LocalPlayer slot.");
             }
 
-            if (!PreLogin(in request, out string admissionError))
+            if (isLoginTransactionActive)
             {
-                PlayerLoginStatus status = request.IsSpectator
-                    ? gameSession.SpectatorCount >= gameSession.MaxSpectators
-                        ? PlayerLoginStatus.AtCapacity
-                        : PlayerLoginStatus.Rejected
-                    : gameSession.PlayerCount >= gameSession.MaxPlayers
-                        ? PlayerLoginStatus.AtCapacity
-                        : PlayerLoginStatus.Rejected;
-
-                return UniTask.FromResult(PlayerLoginResult.Failure(status, admissionError));
+                return PlayerLoginResult.Failure(
+                    PlayerLoginStatus.Rejected,
+                    "A Player login transaction is already active for this GameMode.");
             }
 
+            isLoginTransactionActive = true;
+            try
+            {
+                return await LoginCoreAsync(request, localPlayer, cancellationToken);
+            }
+            finally
+            {
+                isLoginTransactionActive = false;
+            }
+        }
+
+        /// <summary>
+        /// Executes the staged participant admission transaction. Override this to provide
+        /// asynchronous admission (for example a networked login handshake). The non-virtual
+        /// <see cref="LoginAsync"/> wrapper owns the transaction-serialization guard and
+        /// releases it only after the returned task completes.
+        /// </summary>
+        protected virtual UniTask<PlayerLoginResult> LoginCoreAsync(
+            PlayerLoginRequest request,
+            LocalPlayer localPlayer,
+            CancellationToken cancellationToken)
+        {
             PlayerController playerController = null;
             PlayerState playerState = null;
             CameraManager cameraManager = null;
             SpectatorPawn spectatorPawn = null;
             Pawn spawnedPawn = null;
-            bool sessionRegistered = false;
-            bool worldCommitted = false;
-            bool gameStateCommitted = false;
             bool transactionCommitted = false;
+            bool admissionCompleted = false;
+            Exception unexpectedLoginException = null;
+            OutOfMemoryException terminalOutOfMemory = null;
 
             try
             {
+                if (!PreLogin(in request, out string admissionError))
+                {
+                    PlayerLoginStatus status = request.IsSpectator
+                        ? gameSession.SpectatorCount >= gameSession.MaxSpectators
+                            ? PlayerLoginStatus.AtCapacity
+                            : PlayerLoginStatus.Rejected
+                        : gameSession.PlayerCount >= gameSession.MaxPlayers
+                            ? PlayerLoginStatus.AtCapacity
+                            : PlayerLoginStatus.Rejected;
+
+                    return UniTask.FromResult(PlayerLoginResult.Failure(status, admissionError));
+                }
+
+                admissionCompleted = true;
                 cancellationToken.ThrowIfCancellationRequested();
                 playerController = World.SpawnActorDeferred(World.Definition.PlayerControllerClass);
                 playerState = World.SpawnActorDeferred(World.Definition.PlayerStateClass);
@@ -237,14 +300,16 @@ namespace CycloneGames.GameplayFramework.Runtime
                     cameraManager,
                     spectatorPawn);
 
+                // Reserve the World roster slot before GameSession takes ownership. Once the
+                // session commit succeeds, publishing the Controller cannot grow the list.
+                World.PreparePlayerControllerCommit(playerController, localPlayer);
+
                 if (!gameSession.TryRegisterPlayer(playerController, request.IsSpectator, out string rosterError))
                 {
                     return UniTask.FromResult(PlayerLoginResult.Failure(PlayerLoginStatus.AtCapacity, rosterError));
                 }
 
-                sessionRegistered = true;
                 World.CommitPlayerController(playerController, localPlayer);
-                worldCommitted = true;
 
                 if (request.IsSpectator)
                 {
@@ -266,7 +331,6 @@ namespace CycloneGames.GameplayFramework.Runtime
                         throw new InvalidOperationException("PlayerState could not be committed to GameState.");
                     }
 
-                    gameStateCommitted = true;
                 }
 
                 World.FinishSpawningActor(playerState);
@@ -295,24 +359,57 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
+                if (TryCaptureTerminalOutOfMemory(ref terminalOutOfMemory, exception))
+                {
+                    throw;
+                }
+
+                unexpectedLoginException = exception;
                 return UniTask.FromResult(PlayerLoginResult.Failure(
-                    PlayerLoginStatus.SpawnFailed,
-                    exception.Message));
+                    admissionCompleted
+                        ? PlayerLoginStatus.SpawnFailed
+                        : PlayerLoginStatus.Rejected,
+                    admissionCompleted
+                        ? UnexpectedLoginFailureMessage
+                        : UnexpectedAdmissionFailureMessage));
             }
             finally
             {
+                bool rollbackCompleted = transactionCommitted;
                 if (!transactionCommitted)
                 {
-                    RollbackLogin(
-                        playerController,
-                        playerState,
-                        cameraManager,
-                        spectatorPawn,
-                        spawnedPawn,
-                        sessionRegistered,
-                        worldCommitted,
-                        gameStateCommitted);
+                    try
+                    {
+                        rollbackCompleted = RollbackLogin(
+                            playerController,
+                            playerState,
+                            cameraManager,
+                            spectatorPawn,
+                            spawnedPawn);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        LogTerminalException(
+                            rollbackException,
+                            "Player login rollback encountered an unexpected failure; cleanup cannot continue safely.",
+                            ref terminalOutOfMemory);
+                    }
                 }
+
+                if (unexpectedLoginException != null)
+                {
+                    string failureContext = admissionCompleted
+                        ? rollbackCompleted
+                            ? "Player login transaction failed after staged participant state was rolled back."
+                            : "Player login transaction failed and participant rollback did not complete."
+                        : "Player login policy evaluation failed before participant state was staged.";
+                    LogTerminalException(
+                        unexpectedLoginException,
+                        failureContext,
+                        ref terminalOutOfMemory);
+                }
+
+                ThrowTerminalOutOfMemory(terminalOutOfMemory);
             }
         }
 
@@ -330,8 +427,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                    ReferenceEquals(localPlayers[index], localPlayer);
         }
 
-        public virtual void PostLogin(PlayerController newPlayer)
+        public void PostLogin(PlayerController newPlayer)
         {
+            AssertActorOwnerThread();
             HandleStartingNewPlayer(newPlayer);
         }
 
@@ -339,24 +437,44 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool Logout(PlayerController exiting)
         {
-            World?.AssertOwnerThread();
-            return LogoutInternal(exiting, destroyController: true);
+            AssertActorOwnerThread();
+            OutOfMemoryException terminalOutOfMemory = null;
+            bool removed = LogoutInternal(
+                exiting,
+                ReferenceEquals(exiting, null) ? null : exiting.GetPlayerState(),
+                destroyController: true,
+                ref terminalOutOfMemory);
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+            return removed;
         }
 
         internal bool HandleDestroyingPlayerController(PlayerController exiting)
         {
-            return LogoutInternal(exiting, destroyController: false);
+            OutOfMemoryException terminalOutOfMemory = null;
+            bool removed = LogoutInternal(
+                exiting,
+                ReferenceEquals(exiting, null) ? null : exiting.GetPlayerState(),
+                destroyController: false,
+                ref terminalOutOfMemory);
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+            return removed;
         }
 
-        private bool LogoutInternal(PlayerController exiting, bool destroyController)
+        private bool LogoutInternal(
+            PlayerController exiting,
+            PlayerState playerState,
+            bool destroyController,
+            ref OutOfMemoryException terminalOutOfMemory)
         {
-            if (ReferenceEquals(exiting, null) || World == null || !World.ContainsPlayerController(exiting))
+            World cleanupWorld = terminalWorldOwner;
+            if (ReferenceEquals(exiting, null) ||
+                cleanupWorld == null ||
+                !cleanupWorld.ContainsPlayerController(exiting))
             {
                 return false;
             }
 
             Pawn pawn = exiting.GetPawn();
-            PlayerState playerState = exiting.GetPlayerState();
             CameraManager cameraManager = exiting.GetCameraManager();
             SpectatorPawn spectatorPawn = exiting.GetSpectatorPawn();
 
@@ -366,12 +484,24 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    $"PlayerController '{exiting.name}' failed to release possession during logout; cleanup will continue.");
+                    "PlayerController failed to release possession during logout; cleanup will continue.",
+                    ref terminalOutOfMemory);
             }
 
-            RemoveParticipantState(exiting, playerState);
+            if (exiting.GetPawn() != null)
+            {
+                return false;
+            }
+
+            if (!RemoveParticipantState(
+                    exiting,
+                    playerState,
+                    ref terminalOutOfMemory))
+            {
+                return false;
+            }
 
             try
             {
@@ -379,24 +509,30 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    $"GameMode logout extension failed for PlayerController '{exiting.name}'; cleanup will continue.");
+                    "GameMode logout extension failed; cleanup will continue.",
+                    ref terminalOutOfMemory);
             }
 
-            DestroyIfRegistered(pawn);
+            bool cleanupComplete =
+                DestroyIfRegistered(pawn, ref terminalOutOfMemory);
             if (destroyController)
             {
-                DestroyIfRegistered(exiting);
+                cleanupComplete &=
+                    DestroyIfRegistered(exiting, ref terminalOutOfMemory);
             }
-            DestroyIfRegistered(playerState);
-            DestroyIfRegistered(cameraManager);
+            cleanupComplete &=
+                DestroyIfRegistered(playerState, ref terminalOutOfMemory);
+            cleanupComplete &=
+                DestroyIfRegistered(cameraManager, ref terminalOutOfMemory);
             if (!ReferenceEquals(spectatorPawn, pawn))
             {
-                DestroyIfRegistered(spectatorPawn);
+                cleanupComplete &=
+                    DestroyIfRegistered(spectatorPawn, ref terminalOutOfMemory);
             }
 
-            return true;
+            return cleanupComplete;
         }
 
         protected virtual void HandleLogout(PlayerController exiting) { }
@@ -408,12 +544,45 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            RemoveParticipantState(exiting, exiting.GetPlayerState());
+            OutOfMemoryException terminalOutOfMemory = null;
+            bool cleanupComplete = RemoveParticipantState(
+                exiting,
+                exiting.GetPlayerState(),
+                ref terminalOutOfMemory);
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+            if (!cleanupComplete)
+            {
+                throw new InvalidOperationException(
+                    "Externally destroyed PlayerController cleanup retained participant ownership.");
+            }
+        }
+
+        internal void HandleExternallyDestroyedPlayerState(
+            PlayerController exiting,
+            PlayerState destroyedPlayerState)
+        {
+            if (ReferenceEquals(exiting, null) || ReferenceEquals(destroyedPlayerState, null))
+            {
+                return;
+            }
+
+            OutOfMemoryException terminalOutOfMemory = null;
+            bool cleanupComplete = LogoutInternal(
+                exiting,
+                destroyedPlayerState,
+                destroyController: true,
+                ref terminalOutOfMemory);
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+            if (!cleanupComplete)
+            {
+                throw new InvalidOperationException(
+                    "Externally destroyed PlayerState cleanup retained participant ownership.");
+            }
         }
 
         public virtual bool RestartPlayer(PlayerController player, string portal = "")
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             Pawn spawnedPawn = null;
             bool committed = false;
             try
@@ -436,6 +605,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 if (!committed && spawnedPawn != null)
                 {
+                    OutOfMemoryException terminalOutOfMemory = null;
                     if (player != null && ReferenceEquals(player.GetPawn(), spawnedPawn))
                     {
                         try
@@ -444,13 +614,15 @@ namespace CycloneGames.GameplayFramework.Runtime
                         }
                         catch (Exception exception)
                         {
-                            Log.Error(
+                            LogTerminalException(
                                 exception,
-                                $"PlayerController '{player.name}' failed to release possession during restart rollback.");
+                                "PlayerController failed to release possession during restart rollback.",
+                                ref terminalOutOfMemory);
                         }
                     }
 
-                    DestroyIfRegistered(spawnedPawn);
+                    DestroyIfRegistered(spawnedPawn, ref terminalOutOfMemory);
+                    ThrowTerminalOutOfMemory(terminalOutOfMemory);
                 }
             }
         }
@@ -549,6 +721,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public PlayerController GetPlayerController(int index = 0)
         {
+            AssertActorOwnerThread();
             IReadOnlyList<PlayerController> controllers = World?.PlayerControllers;
             return controllers != null && index >= 0 && index < controllers.Count
                 ? controllers[index]
@@ -562,8 +735,11 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            HandleMatchHasStarted();
+            // Enter the notified state before invoking extension code. A callback may
+            // synchronously stop the World or throw after publishing external side effects;
+            // both paths must observe a committed start and emit the paired end notification.
             matchStartNotified = true;
+            HandleMatchHasStarted();
         }
 
         protected virtual void HandleMatchHasStarted()
@@ -576,11 +752,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             gameSession?.HandleMatchHasEnded();
         }
 
-        public virtual async UniTask TravelToLevel(
-            string levelName,
-            CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Commits non-cancellable World shutdown and destination navigation as one travel
+        /// operation. Callers decide whether to begin travel before invoking this method.
+        /// </summary>
+        public virtual async UniTask TravelToLevel(string levelName)
         {
-            World?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (string.IsNullOrWhiteSpace(levelName))
             {
                 throw new ArgumentException("Level name is required.", nameof(levelName));
@@ -593,10 +771,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                 throw new InvalidOperationException("No scene transition handler is configured.");
             }
 
-            await instance.StopWorldAsync(EndPlayReason.Travel, cancellationToken);
+            await instance.StopWorldAsync(EndPlayReason.Travel);
             try
             {
-                await handler.ChangeScene(levelName, cancellationToken);
+                await handler.ChangeScene(levelName, CancellationToken.None);
             }
             finally
             {
@@ -613,13 +791,29 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             modeState = GameModeLifecycleState.Stopping;
-            while (World != null && World.PlayerControllers.Count > 0)
+            OutOfMemoryException terminalOutOfMemory = null;
+            World cleanupWorld = terminalWorldOwner;
+            while (cleanupWorld != null && cleanupWorld.PlayerControllers.Count > 0)
             {
-                PlayerController controller = World.PlayerControllers[World.PlayerControllers.Count - 1];
-                Logout(controller);
+                int controllerCount = cleanupWorld.PlayerControllers.Count;
+                PlayerController controller =
+                    cleanupWorld.PlayerControllers[cleanupWorld.PlayerControllers.Count - 1];
+                LogoutInternal(
+                    controller,
+                    controller.GetPlayerState(),
+                    destroyController: true,
+                    ref terminalOutOfMemory);
+                if (cleanupWorld.PlayerControllers.Count >= controllerCount)
+                {
+                    break;
+                }
             }
 
-            FinishShutdown();
+            if (cleanupWorld == null || cleanupWorld.PlayerControllers.Count == 0)
+            {
+                FinishShutdown(ref terminalOutOfMemory);
+            }
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
             return UniTask.CompletedTask;
         }
 
@@ -632,33 +826,40 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             modeState = GameModeLifecycleState.Stopping;
-            while (World != null && World.PlayerControllers.Count > 0)
+            OutOfMemoryException terminalOutOfMemory = null;
+            World cleanupWorld = terminalWorldOwner;
+            while (cleanupWorld != null && cleanupWorld.PlayerControllers.Count > 0)
             {
-                Logout(World.PlayerControllers[World.PlayerControllers.Count - 1]);
+                int controllerCount = cleanupWorld.PlayerControllers.Count;
+                PlayerController controller = cleanupWorld.PlayerControllers[controllerCount - 1];
+                LogoutInternal(
+                    controller,
+                    controller.GetPlayerState(),
+                    destroyController: true,
+                    ref terminalOutOfMemory);
+                if (cleanupWorld.PlayerControllers.Count >= controllerCount)
+                {
+                    break;
+                }
             }
 
-            FinishShutdown();
+            if (cleanupWorld == null || cleanupWorld.PlayerControllers.Count == 0)
+            {
+                FinishShutdown(ref terminalOutOfMemory);
+            }
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
         }
 
         private void InitializeGameState()
         {
-            GameState state = null;
             if (gameStateClass != null)
             {
-                state = World.SpawnActor(gameStateClass);
-            }
-            else
-            {
-                World.TryGetActor(out state);
-            }
-
-            if (state != null)
-            {
+                GameState state = World.SpawnActor(gameStateClass);
                 World.SetGameState(state);
             }
         }
 
-        private void SetRequiredMatchState(GameState.EMatchState matchState)
+        private void SetRequiredMatchState(MatchState matchState)
         {
             GameState state = GetGameState();
             if (state != null && !state.TrySetMatchState(matchState, out string error))
@@ -712,17 +913,15 @@ namespace CycloneGames.GameplayFramework.Runtime
             return true;
         }
 
-        private void RollbackLogin(
+        private bool RollbackLogin(
             PlayerController playerController,
             PlayerState playerState,
             CameraManager cameraManager,
             SpectatorPawn spectatorPawn,
-            Pawn spawnedPawn,
-            bool sessionRegistered,
-            bool worldCommitted,
-            bool gameStateCommitted)
+            Pawn spawnedPawn)
         {
-            if (playerController != null && playerController.GetPawn() != null)
+            OutOfMemoryException terminalOutOfMemory = null;
+            if (!ReferenceEquals(playerController, null) && playerController.GetPawn() != null)
             {
                 try
                 {
@@ -730,119 +929,161 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Log.Error(
+                    LogTerminalException(
                         exception,
-                        "PlayerController failed to release possession during login rollback.");
+                        "PlayerController failed to release possession during login rollback.",
+                        ref terminalOutOfMemory);
+                }
+
+                if (playerController.GetPawn() != null)
+                {
+                    RetainParticipantCleanupOwner(
+                        playerController,
+                        ref terminalOutOfMemory);
+                    ThrowTerminalOutOfMemory(terminalOutOfMemory);
+                    return false;
                 }
             }
 
-            if (sessionRegistered)
+            if (!RemoveParticipantState(
+                    playerController,
+                    playerState,
+                    ref terminalOutOfMemory))
             {
-                try
-                {
-                    gameSession?.UnregisterPlayer(playerController);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        "GameSession failed to unregister a PlayerController during login rollback.");
-                }
+                RetainParticipantCleanupOwner(
+                    playerController,
+                    ref terminalOutOfMemory);
+                ThrowTerminalOutOfMemory(terminalOutOfMemory);
+                return false;
             }
 
-            if (worldCommitted)
+            DestroyIfRegistered(spawnedPawn, ref terminalOutOfMemory);
+            DestroyIfRegistered(playerController, ref terminalOutOfMemory);
+            DestroyIfRegistered(playerState, ref terminalOutOfMemory);
+            DestroyIfRegistered(cameraManager, ref terminalOutOfMemory);
+            DestroyIfRegistered(spectatorPawn, ref terminalOutOfMemory);
+
+            bool cleanupComplete =
+                (ReferenceEquals(playerController, null) || !terminalWorldOwner.IsActorRegistered(playerController)) &&
+                (ReferenceEquals(playerState, null) || !terminalWorldOwner.IsActorRegistered(playerState)) &&
+                (ReferenceEquals(cameraManager, null) || !terminalWorldOwner.IsActorRegistered(cameraManager)) &&
+                (ReferenceEquals(spectatorPawn, null) || !terminalWorldOwner.IsActorRegistered(spectatorPawn)) &&
+                (ReferenceEquals(spawnedPawn, null) || !terminalWorldOwner.IsActorRegistered(spawnedPawn));
+            if (!cleanupComplete)
             {
-                try
-                {
-                    World.RemovePlayerController(playerController);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        "World failed to remove a PlayerController during login rollback.");
-                }
+                RetainParticipantCleanupOwner(
+                    playerController,
+                    ref terminalOutOfMemory);
             }
 
-            if (gameStateCommitted)
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+            return cleanupComplete;
+        }
+
+        private void RetainParticipantCleanupOwner(
+            PlayerController playerController,
+            ref OutOfMemoryException terminalOutOfMemory)
+        {
+            if (ReferenceEquals(playerController, null) ||
+                terminalWorldOwner == null ||
+                !terminalWorldOwner.IsActorRegistered(playerController) ||
+                terminalWorldOwner.ContainsPlayerController(playerController))
             {
-                try
-                {
-                    GetGameState()?.RemovePlayerState(playerState);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        "GameState failed to remove a PlayerState during login rollback.");
-                }
+                return;
             }
 
-            DestroyIfRegistered(spawnedPawn);
-            DestroyIfRegistered(playerController);
-            DestroyIfRegistered(playerState);
-            DestroyIfRegistered(cameraManager);
-            DestroyIfRegistered(spectatorPawn);
+            try
+            {
+                terminalWorldOwner.CommitPlayerController(playerController, localPlayer: null);
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "World failed to retain an incomplete login participant for cleanup retry.",
+                    ref terminalOutOfMemory);
+            }
         }
 
         private void DestroyIfRegistered(Actor actor)
         {
-            if (actor != null && World != null && World.IsActorRegistered(actor))
+            OutOfMemoryException terminalOutOfMemory = null;
+            DestroyIfRegistered(actor, ref terminalOutOfMemory);
+            ThrowTerminalOutOfMemory(terminalOutOfMemory);
+        }
+
+        private bool DestroyIfRegistered(
+            Actor actor,
+            ref OutOfMemoryException terminalOutOfMemory)
+        {
+            World cleanupWorld = terminalWorldOwner;
+            if (ReferenceEquals(actor, null) ||
+                cleanupWorld == null ||
+                !cleanupWorld.IsActorRegistered(actor))
             {
-                try
-                {
-                    World.DestroyActor(actor);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        $"World failed to destroy registered Actor '{actor.name}' during participant cleanup.");
-                }
+                return true;
+            }
+
+            try
+            {
+                return cleanupWorld.DestroyActor(actor) || !cleanupWorld.IsActorRegistered(actor);
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "World failed to destroy a registered Actor during participant cleanup.",
+                    ref terminalOutOfMemory);
+                return !cleanupWorld.IsActorRegistered(actor);
             }
         }
 
-        private void RemoveParticipantState(PlayerController playerController, PlayerState playerState)
+        private bool RemoveParticipantState(
+            PlayerController playerController,
+            PlayerState playerState,
+            ref OutOfMemoryException terminalOutOfMemory)
         {
             try
             {
-                gameSession?.UnregisterPlayer(playerController);
+                World cleanupWorld = terminalWorldOwner;
+                return cleanupWorld != null &&
+                       cleanupWorld.TryReleaseParticipantOwnership(
+                           playerController,
+                           playerState,
+                           gameSession);
             }
             catch (Exception exception)
             {
-                Log.Error(
+                LogTerminalException(
                     exception,
-                    "GameSession failed to unregister a PlayerController during logout; cleanup will continue.");
+                    "Participant session, GameState, or World roster cleanup failed during logout.",
+                    ref terminalOutOfMemory);
+                return false;
             }
-
-            try
-            {
-                GetGameState()?.RemovePlayerState(playerState);
-            }
-            catch (Exception exception)
-            {
-                Log.Error(
-                    exception,
-                    "GameState failed to remove a PlayerState during logout; cleanup will continue.");
-            }
-
-            World?.RemovePlayerController(playerController);
         }
 
-        private void FinishShutdown()
+        private void FinishShutdown(ref OutOfMemoryException terminalOutOfMemory)
         {
             try
             {
                 if (matchStartNotified)
                 {
                     matchStartNotified = false;
-                    GetGameState()?.TrySetMatchState(GameState.EMatchState.WaitingPostMatch, out _);
+                    GetGameState()?.TrySetMatchState(MatchState.WaitingPostMatch, out _);
                     HandleMatchHasEnded();
                 }
+            }
+            catch (Exception exception)
+            {
+                LogTerminalException(
+                    exception,
+                    "GameMode match-end notification failed; shutdown will continue.",
+                    ref terminalOutOfMemory);
             }
             finally
             {
                 modeState = GameModeLifecycleState.Stopped;
+                terminalWorldOwner = null;
                 if (ownsDefaultSession)
                 {
                     gameSession = null;
@@ -850,24 +1091,135 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        protected override void OnDestroy()
+        private static void LogTerminalException(
+            Exception exception,
+            string message,
+            ref OutOfMemoryException terminalOutOfMemory)
         {
-            if (modeState != GameModeLifecycleState.Stopped &&
-                modeState != GameModeLifecycleState.Uninitialized)
+            if (TryCaptureTerminalOutOfMemory(ref terminalOutOfMemory, exception))
             {
-                try
+                return;
+            }
+
+            try
+            {
+                Log.Error(exception, message);
+            }
+            catch (Exception loggingException)
+            {
+                TryCaptureTerminalOutOfMemory(
+                    ref terminalOutOfMemory,
+                    loggingException);
+            }
+        }
+
+        private static bool TryCaptureTerminalOutOfMemory(
+            ref OutOfMemoryException terminalOutOfMemory,
+            Exception exception)
+        {
+            OutOfMemoryException captured = FindOutOfMemory(exception);
+            if (captured == null)
+            {
+                return false;
+            }
+
+            if (terminalOutOfMemory == null)
+            {
+                terminalOutOfMemory = captured;
+            }
+
+            return true;
+        }
+
+        private static OutOfMemoryException FindOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemoryException)
+            {
+                return outOfMemoryException;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int index = 0; index < aggregateException.InnerExceptions.Count; index++)
                 {
-                    ShutdownImmediate(EndPlayReason.Destroyed);
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        $"GameMode '{name}' immediate shutdown failed during destruction.");
+                    OutOfMemoryException nested = FindOutOfMemory(
+                        aggregateException.InnerExceptions[index]);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
                 }
             }
 
-            base.OnDestroy();
+            return null;
+        }
+
+        private static void ThrowTerminalOutOfMemory(
+            OutOfMemoryException terminalOutOfMemory)
+        {
+            if (terminalOutOfMemory != null)
+            {
+                throw terminalOutOfMemory;
+            }
+        }
+
+        protected override void OnDestroy()
+        {
+            World destructionWorld = terminalWorldOwner;
+            bool destructionStageEntered = false;
+            OutOfMemoryException terminalOutOfMemory = null;
+            try
+            {
+                if (destructionWorld != null)
+                {
+                    destructionWorld.EnterGameModeDestructionStage(this);
+                    destructionStageEntered = true;
+                }
+
+                if (modeState != GameModeLifecycleState.Stopped &&
+                    modeState != GameModeLifecycleState.Uninitialized)
+                {
+                    try
+                    {
+                        ShutdownImmediate(EndPlayReason.Destroyed);
+                    }
+                    catch (Exception exception)
+                    {
+                        LogTerminalException(
+                            exception,
+                            "GameMode immediate shutdown failed during destruction.",
+                            ref terminalOutOfMemory);
+                    }
+                }
+
+                Exception baseFailure = null;
+                try
+                {
+                    base.OnDestroy();
+                }
+                catch (Exception exception)
+                {
+                    if (!TryCaptureTerminalOutOfMemory(
+                            ref terminalOutOfMemory,
+                            exception))
+                    {
+                        baseFailure = exception;
+                    }
+                }
+
+                ThrowTerminalOutOfMemory(terminalOutOfMemory);
+                if (baseFailure != null)
+                {
+                    throw baseFailure;
+                }
+            }
+            finally
+            {
+                if (destructionStageEntered)
+                {
+                    destructionWorld.ExitGameModeDestructionStage(this);
+                }
+            }
         }
     }
 }

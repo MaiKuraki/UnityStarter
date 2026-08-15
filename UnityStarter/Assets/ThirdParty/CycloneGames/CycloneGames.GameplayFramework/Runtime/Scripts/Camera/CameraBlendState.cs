@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -21,7 +22,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         public void Start(in CameraPose fromPose, float blendDuration, ICameraBlendCurve curve = null)
         {
             startPose = fromPose;
-            duration = Mathf.Max(0f, blendDuration);
+            duration = IsFinite(blendDuration)
+                ? Mathf.Max(0f, blendDuration)
+                : 0f;
             elapsed = 0f;
 
             if (curve == null)
@@ -41,7 +44,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         public void Start(in CameraPose fromPose, float blendDuration, CameraBlendCurveType curveType)
         {
             startPose = fromPose;
-            duration = Mathf.Max(0f, blendDuration);
+            duration = IsFinite(blendDuration)
+                ? Mathf.Max(0f, blendDuration)
+                : 0f;
             elapsed = 0f;
             builtInCurveType = curveType == CameraBlendCurveType.Custom ? CameraBlendCurveType.Linear : curveType;
             customCurve = null;
@@ -60,11 +65,25 @@ namespace CycloneGames.GameplayFramework.Runtime
             float easedT;
             if (customCurve != null && builtInCurveType == CameraBlendCurveType.Custom)
             {
-                easedT = customCurve.Evaluate(normalizedT);
+                try
+                {
+                    easedT = customCurve.Evaluate(normalizedT);
+                }
+                catch (Exception exception) when (!(exception is OutOfMemoryException))
+                {
+                    duration = 0f;
+                    throw;
+                }
             }
             else
             {
                 easedT = CameraBlendCurveEvaluator.Evaluate(builtInCurveType, normalizedT);
+            }
+
+            if (!IsFinite(easedT) || easedT < 0f || easedT > 1f)
+            {
+                duration = 0f;
+                return startPose;
             }
 
             CameraPose blendedPose = CameraPose.Lerp(startPose, targetPose, easedT);
@@ -99,6 +118,11 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             builtInCurveType = curveType == CameraBlendCurveType.Custom ? CameraBlendCurveType.Linear : curveType;
             customCurve = null;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

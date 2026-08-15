@@ -99,6 +99,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeUsing(SyntaxNodeAnalysisContext context)
         {
             var usingDirective = (UsingDirectiveSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(usingDirective.SyntaxTree)) return;
             var name = usingDirective.Name?.ToString() ?? "";
 
             if (!name.StartsWith("UnityEditor")) return;
@@ -114,6 +115,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
         {
             var memberAccess = (MemberAccessExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(memberAccess.SyntaxTree)) return;
             var symbolInfo = context.SemanticModel.GetSymbolInfo(memberAccess);
             if (symbolInfo.Symbol == null) return;
 

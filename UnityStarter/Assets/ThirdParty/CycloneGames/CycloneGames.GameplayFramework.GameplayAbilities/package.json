@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.gameplay-framework-gameplay-abilities",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayFramework.GameplayAbilities",
+  "description": "GameplayAbilities integration for exposing ability systems from GameplayFramework Actors and initializing actor information.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.gameplay-framework": "1.0.0",
+    "com.cyclone-games.gameplay-abilities": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayFramework",
+    "GameplayAbilities",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

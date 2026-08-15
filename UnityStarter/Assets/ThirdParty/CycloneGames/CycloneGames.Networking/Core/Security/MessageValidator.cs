@@ -464,6 +464,12 @@ namespace CycloneGames.Networking.Security
             bool enableReplayProtection,
             bool requireSignature = false)
         {
+            if (allowedDirections == NetworkMessageDirectionMask.None
+                || (allowedDirections & ~NetworkMessageDirectionMask.Any) != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(allowedDirections));
+            }
+
             if (maxPayloadSize <= 0)
                 throw new ArgumentOutOfRangeException(nameof(maxPayloadSize));
 

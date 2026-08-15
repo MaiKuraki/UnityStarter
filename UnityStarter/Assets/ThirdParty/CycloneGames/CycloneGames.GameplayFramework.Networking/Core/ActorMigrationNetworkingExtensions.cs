@@ -2,56 +2,123 @@ using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text;
-using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.GameplayFramework.Core;
+using CycloneGames.Networking;
 using CycloneGames.Networking.Serialization;
-using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Networking
 {
+    /// <summary>Engine-independent quaternion used by GameplayFramework network snapshots.</summary>
+    public readonly struct NetworkQuaternion : IEquatable<NetworkQuaternion>
+    {
+        public NetworkQuaternion(float x, float y, float z, float w)
+        {
+            X = x;
+            Y = y;
+            Z = z;
+            W = w;
+        }
+
+        public float X { get; }
+        public float Y { get; }
+        public float Z { get; }
+        public float W { get; }
+
+        public static NetworkQuaternion Identity => new NetworkQuaternion(0f, 0f, 0f, 1f);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsFinite()
+        {
+            return IsFinite(X) && IsFinite(Y) && IsFinite(Z) && IsFinite(W);
+        }
+
+        public bool Equals(NetworkQuaternion other)
+        {
+            return X == other.X && Y == other.Y && Z == other.Z && W == other.W;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is NetworkQuaternion other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = X.GetHashCode();
+                hash = (hash * 397) ^ Y.GetHashCode();
+                hash = (hash * 397) ^ Z.GetHashCode();
+                return (hash * 397) ^ W.GetHashCode();
+            }
+        }
+
+        public static bool operator ==(NetworkQuaternion left, NetworkQuaternion right) => left.Equals(right);
+        public static bool operator !=(NetworkQuaternion left, NetworkQuaternion right) => !left.Equals(right);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+    }
+
     /// <summary>
-    /// Version-1 actor migration wire DTO owned by the GameplayFramework Networking integration.
-    /// Protocol identity is defined by <see cref="GameplayFrameworkNetworkProtocol"/>, not by the CLR type name.
+    /// Version-1 actor migration wire value. Content identity is carried by
+    /// <see cref="PrefabDefinitionId"/> and is independent of Unity asset paths.
     /// </summary>
     public readonly struct ActorMigrationState
     {
-        public const int SchemaVersion = 1;
+        private readonly string[] tags;
 
         public ActorMigrationState(
-            Vector3 position,
-            Quaternion rotation,
-            Vector3 scale,
-            string prefabAssetPath,
+            NetworkVector3 position,
+            NetworkQuaternion rotation,
+            NetworkVector3 scale,
+            string prefabDefinitionId,
             float remainingLifeSpan,
             bool canBeDamaged,
             bool hidden,
-            string[] tags,
+            ReadOnlySpan<string> tags,
             int ownerConnectionId,
             int instigatorActorId,
             string actorName,
             bool hasBegunPlay)
         {
+            if (tags.Length > ActorTagLimits.MaximumTagCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(tags),
+                    $"Actor migration tags cannot exceed {ActorTagLimits.MaximumTagCount} entries.");
+            }
+
             Position = position;
             Rotation = rotation;
             Scale = scale;
-            PrefabAssetPath = prefabAssetPath;
+            PrefabDefinitionId = prefabDefinitionId;
             RemainingLifeSpan = remainingLifeSpan;
             CanBeDamaged = canBeDamaged;
             Hidden = hidden;
-            Tags = tags;
+            this.tags = tags.Length == 0
+                ? Array.Empty<string>()
+                : tags.ToArray();
             OwnerConnectionId = ownerConnectionId;
             InstigatorActorId = instigatorActorId;
             ActorName = actorName;
             HasBegunPlay = hasBegunPlay;
+            ActorMigrationNetworkingExtensions.ValidateMigrationState(in this);
         }
 
-        public Vector3 Position { get; }
-        public Quaternion Rotation { get; }
-        public Vector3 Scale { get; }
-        public string PrefabAssetPath { get; }
+        public NetworkVector3 Position { get; }
+        public NetworkQuaternion Rotation { get; }
+        public NetworkVector3 Scale { get; }
+        public string PrefabDefinitionId { get; }
         public float RemainingLifeSpan { get; }
         public bool CanBeDamaged { get; }
         public bool Hidden { get; }
-        public string[] Tags { get; }
+        public ReadOnlySpan<string> Tags => tags ?? Array.Empty<string>();
+        public int TagCount => tags?.Length ?? 0;
+        public string GetTag(int index) => (tags ?? Array.Empty<string>())[index];
         public int OwnerConnectionId { get; }
         public int InstigatorActorId { get; }
         public string ActorName { get; }
@@ -59,104 +126,65 @@ namespace CycloneGames.GameplayFramework.Networking
     }
 
     /// <summary>
-    /// Version-1 Actor migration wire codec and Unity adapter. The byte layout and message ID
-    /// remain stable while ownership of migration behavior stays outside the base runtime.
+    /// Bounded version-1 codec for <see cref="ActorMigrationState"/>. Field order, message identity,
+    /// and byte representation are fixed by <see cref="GameplayFrameworkNetworkProtocol"/>.
     /// </summary>
     public static class ActorMigrationNetworkingExtensions
     {
-        public const int DefaultMaxRuntimeTagCount = Actor.MaxActorTags;
+        public const int DefaultMaxRuntimeTagCount = ActorTagLimits.MaximumTagCount;
         public const int MaxPrefabDefinitionIdUtf8Bytes = 1024;
         public const int MaxActorNameUtf8Bytes = 256;
-        public const int MaxTagUtf8Bytes = Actor.MaxActorTagLength * 3;
+        public const int MaxTagUtf8Bytes = ActorTagLimits.MaximumTagLength * 3;
+
+        /// <summary>
+        /// Exact largest payload accepted by this codec: fixed fields, maximum UTF-8 strings, and every
+        /// bounded Actor tag. Protocol descriptors use the same value so the transport never advertises a
+        /// payload budget smaller than a legal state.
+        /// </summary>
+        public const int MaximumEncodedSize =
+            10 * 4 +
+            2 + MaxPrefabDefinitionIdUtf8Bytes +
+            4 +
+            3 +
+            2 + ActorTagLimits.MaximumTagCount * (2 + MaxTagUtf8Bytes) +
+            4 +
+            4 +
+            2 + MaxActorNameUtf8Bytes;
 
         private const int MaxWireStringBytes = ushort.MaxValue;
         private const int MaxWireTagCount = ushort.MaxValue;
-
-        /// <summary>
-        /// Captures an explicit network migration snapshot. The caller supplies a stable content
-        /// definition ID; Unity object names and runtime instance IDs are not accepted as identity.
-        /// </summary>
-        public static ActorMigrationState CaptureMigrationState(
-            this Actor actor,
-            string prefabDefinitionId,
-            int ownerConnectionId,
-            int instigatorActorId)
-        {
-            if (actor == null)
-            {
-                throw new ArgumentNullException(nameof(actor));
-            }
-
-            ValidateUtf8Length(prefabDefinitionId, MaxPrefabDefinitionIdUtf8Bytes, nameof(prefabDefinitionId));
-
-            int tagCount = actor.TagCount;
-            string[] tags = tagCount == 0 ? Array.Empty<string>() : new string[tagCount];
-            if (tagCount > 0)
-            {
-                actor.CopyTagsTo(tags);
-            }
-
-            return new ActorMigrationState(
-                actor.GetActorLocation(),
-                actor.GetActorRotation(),
-                actor.GetActorScale(),
-                prefabDefinitionId,
-                actor.GetRemainingLifeSpan(),
-                actor.CanBeDamaged(),
-                actor.IsHidden(),
-                tags,
-                ownerConnectionId,
-                instigatorActorId,
-                actor.GetName(),
-                actor.HasBegunPlay);
-        }
-
-        /// <summary>
-        /// Applies Unity-facing state after the target World has spawned and registered the Actor.
-        /// Owner/instigator identifiers are returned in the DTO for the network layer to resolve.
-        /// </summary>
-        public static void ApplyMigrationState(this Actor actor, in ActorMigrationState state)
-        {
-            if (actor == null)
-            {
-                throw new ArgumentNullException(nameof(actor));
-            }
-
-            ValidateSnapshot(in state);
-            actor.SetActorLocationAndRotation(state.Position, state.Rotation);
-            actor.SetActorScale(state.Scale);
-            actor.SetCanBeDamaged(state.CanBeDamaged);
-            actor.ReplaceTags(state.Tags);
-            actor.SetActorHiddenInGame(state.Hidden);
-            actor.SetLifeSpan(Mathf.Max(0f, state.RemainingLifeSpan));
-            if (!string.IsNullOrEmpty(state.ActorName))
-            {
-                actor.gameObject.name = state.ActorName;
-            }
-        }
+        private const float MinimumQuaternionSqrMagnitude = 1e-8f;
+        private const float MaximumQuaternionUnitError = 1e-3f;
+        private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true);
 
         public static void WriteMigrationState(this INetWriter writer, in ActorMigrationState state)
         {
-            if (writer == null) throw new ArgumentNullException(nameof(writer));
-            ValidateSnapshot(in state);
+            if (writer == null)
+            {
+                throw new ArgumentNullException(nameof(writer));
+            }
 
-            writer.WriteFloat(state.Position.x);
-            writer.WriteFloat(state.Position.y);
-            writer.WriteFloat(state.Position.z);
-            writer.WriteFloat(state.Rotation.x);
-            writer.WriteFloat(state.Rotation.y);
-            writer.WriteFloat(state.Rotation.z);
-            writer.WriteFloat(state.Rotation.w);
-            writer.WriteFloat(state.Scale.x);
-            writer.WriteFloat(state.Scale.y);
-            writer.WriteFloat(state.Scale.z);
-            WriteString(writer, state.PrefabAssetPath, MaxPrefabDefinitionIdUtf8Bytes);
+            ValidateMigrationState(in state);
+
+            writer.WriteFloat(state.Position.X);
+            writer.WriteFloat(state.Position.Y);
+            writer.WriteFloat(state.Position.Z);
+            writer.WriteFloat(state.Rotation.X);
+            writer.WriteFloat(state.Rotation.Y);
+            writer.WriteFloat(state.Rotation.Z);
+            writer.WriteFloat(state.Rotation.W);
+            writer.WriteFloat(state.Scale.X);
+            writer.WriteFloat(state.Scale.Y);
+            writer.WriteFloat(state.Scale.Z);
+            WriteString(writer, state.PrefabDefinitionId, MaxPrefabDefinitionIdUtf8Bytes);
             writer.WriteFloat(state.RemainingLifeSpan);
             writer.WriteByte((byte)(state.CanBeDamaged ? 1 : 0));
             writer.WriteByte((byte)(state.Hidden ? 1 : 0));
             writer.WriteByte((byte)(state.HasBegunPlay ? 1 : 0));
 
-            int tagCount = state.Tags?.Length ?? 0;
+            int tagCount = state.TagCount;
             if (tagCount > MaxWireTagCount)
             {
                 throw new InvalidOperationException("Actor migration tag count exceeds the wire format limit.");
@@ -165,7 +193,7 @@ namespace CycloneGames.GameplayFramework.Networking
             writer.WriteUShort((ushort)tagCount);
             for (int i = 0; i < tagCount; i++)
             {
-                WriteString(writer, state.Tags[i], MaxTagUtf8Bytes);
+                WriteString(writer, state.GetTag(i), MaxTagUtf8Bytes);
             }
 
             writer.WriteInt(state.OwnerConnectionId);
@@ -177,10 +205,23 @@ namespace CycloneGames.GameplayFramework.Networking
             this INetReader reader,
             int maxRuntimeTagCount = DefaultMaxRuntimeTagCount)
         {
-            if (reader == null) throw new ArgumentNullException(nameof(reader));
-            int effectiveTagLimit = Math.Min(
-                maxRuntimeTagCount > 0 ? maxRuntimeTagCount : DefaultMaxRuntimeTagCount,
-                Actor.MaxActorTags);
+            if (reader == null)
+            {
+                throw new ArgumentNullException(nameof(reader));
+            }
+
+            if (maxRuntimeTagCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxRuntimeTagCount));
+            }
+
+            if (reader.Remaining <= 0 || reader.Remaining > MaximumEncodedSize)
+            {
+                throw new InvalidOperationException(
+                    "Actor migration payload length is outside the supported range.");
+            }
+
+            int effectiveTagLimit = Math.Min(maxRuntimeTagCount, ActorTagLimits.MaximumTagCount);
 
             float px = ReadFiniteFloat(reader, "Position.x");
             float py = ReadFiniteFloat(reader, "Position.y");
@@ -193,11 +234,11 @@ namespace CycloneGames.GameplayFramework.Networking
             float sy = ReadFiniteFloat(reader, "Scale.y");
             float sz = ReadFiniteFloat(reader, "Scale.z");
 
-            string prefabPath = ReadString(reader, MaxPrefabDefinitionIdUtf8Bytes);
+            string prefabDefinitionId = ReadString(reader, MaxPrefabDefinitionIdUtf8Bytes);
             float lifeSpan = ReadFiniteFloat(reader, "RemainingLifeSpan");
-            bool canBeDamaged = reader.ReadByte() != 0;
-            bool hidden = reader.ReadByte() != 0;
-            bool hasBegunPlay = reader.ReadByte() != 0;
+            bool canBeDamaged = ReadCanonicalBoolean(reader, "CanBeDamaged");
+            bool hidden = ReadCanonicalBoolean(reader, "Hidden");
+            bool hasBegunPlay = ReadCanonicalBoolean(reader, "HasBegunPlay");
 
             int tagCount = reader.ReadUShort();
             if (tagCount > effectiveTagLimit)
@@ -216,10 +257,10 @@ namespace CycloneGames.GameplayFramework.Networking
             string actorName = ReadString(reader, MaxActorNameUtf8Bytes);
 
             var state = new ActorMigrationState(
-                new Vector3(px, py, pz),
-                new Quaternion(rx, ry, rz, rw),
-                new Vector3(sx, sy, sz),
-                prefabPath,
+                new NetworkVector3(px, py, pz),
+                new NetworkQuaternion(rx, ry, rz, rw),
+                new NetworkVector3(sx, sy, sz),
+                prefabDefinitionId,
                 lifeSpan,
                 canBeDamaged,
                 hidden,
@@ -229,33 +270,85 @@ namespace CycloneGames.GameplayFramework.Networking
                 actorName,
                 hasBegunPlay);
 
-            ValidateSnapshot(in state);
+            if (reader.Remaining != 0)
+            {
+                throw new InvalidOperationException("Actor migration payload contains trailing bytes.");
+            }
+
             return state;
         }
 
-        private static void ValidateSnapshot(in ActorMigrationState state)
+        /// <summary>Validates the complete snapshot before serialization or Unity state mutation.</summary>
+        public static void ValidateMigrationState(in ActorMigrationState state)
         {
-            if (!IsFinite(state.Position) || !IsFinite(state.Scale) || !IsFinite(state.Rotation))
+            if (!state.Position.IsFinite() || !state.Scale.IsFinite() || !state.Rotation.IsFinite())
             {
                 throw new InvalidOperationException("Actor migration transform contains a non-finite value.");
             }
 
-            if (state.RemainingLifeSpan < 0f || float.IsNaN(state.RemainingLifeSpan) || float.IsInfinity(state.RemainingLifeSpan))
+            float rotationSqrMagnitude =
+                state.Rotation.X * state.Rotation.X +
+                state.Rotation.Y * state.Rotation.Y +
+                state.Rotation.Z * state.Rotation.Z +
+                state.Rotation.W * state.Rotation.W;
+            if (rotationSqrMagnitude < MinimumQuaternionSqrMagnitude ||
+                Math.Abs(rotationSqrMagnitude - 1f) > MaximumQuaternionUnitError)
+            {
+                throw new InvalidOperationException("Actor migration rotation must be a normalized quaternion.");
+            }
+
+            if (state.RemainingLifeSpan < 0f ||
+                float.IsNaN(state.RemainingLifeSpan) ||
+                float.IsInfinity(state.RemainingLifeSpan))
             {
                 throw new InvalidOperationException("Actor migration lifespan is invalid.");
             }
 
-            int tagCount = state.Tags?.Length ?? 0;
-            if (tagCount > Actor.MaxActorTags)
+            if (state.OwnerConnectionId < 0 || state.InstigatorActorId < 0)
             {
-                throw new InvalidOperationException($"Actor migration tags exceed the runtime limit ({Actor.MaxActorTags}).");
+                throw new InvalidOperationException(
+                    "Actor migration IDs cannot be negative; zero represents no owner or no instigator.");
             }
 
-            ValidateUtf8Length(state.PrefabAssetPath, MaxPrefabDefinitionIdUtf8Bytes, nameof(state.PrefabAssetPath));
+            int tagCount = state.TagCount;
+            if (tagCount > ActorTagLimits.MaximumTagCount)
+            {
+                throw new InvalidOperationException(
+                    $"Actor migration tags exceed the runtime limit ({ActorTagLimits.MaximumTagCount}).");
+            }
+
+            if (string.IsNullOrWhiteSpace(state.PrefabDefinitionId))
+            {
+                throw new InvalidOperationException("Actor migration requires a PrefabDefinitionId.");
+            }
+
+            ValidateUtf8Length(
+                state.PrefabDefinitionId,
+                MaxPrefabDefinitionIdUtf8Bytes,
+                nameof(state.PrefabDefinitionId));
             ValidateUtf8Length(state.ActorName, MaxActorNameUtf8Bytes, nameof(state.ActorName));
             for (int i = 0; i < tagCount; i++)
             {
-                ValidateUtf8Length(state.Tags[i], MaxTagUtf8Bytes, "Tag");
+                string tag = state.GetTag(i);
+                if (string.IsNullOrWhiteSpace(tag))
+                {
+                    throw new InvalidOperationException("Actor migration tags cannot be null, empty, or whitespace.");
+                }
+
+                if (tag.Length > ActorTagLimits.MaximumTagLength)
+                {
+                    throw new InvalidOperationException(
+                        $"Actor migration tags cannot exceed {ActorTagLimits.MaximumTagLength} characters.");
+                }
+
+                ValidateUtf8Length(tag, MaxTagUtf8Bytes, "Tag");
+                for (int previousIndex = 0; previousIndex < i; previousIndex++)
+                {
+                    if (string.Equals(state.GetTag(previousIndex), tag, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException("Actor migration tags cannot contain duplicates.");
+                    }
+                }
             }
         }
 
@@ -271,16 +364,35 @@ namespace CycloneGames.GameplayFramework.Networking
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool ReadCanonicalBoolean(INetReader reader, string field)
+        {
+            byte value = reader.ReadByte();
+            if (value > 1)
+            {
+                ThrowInvalidBoolean(field, value);
+            }
+
+            return value == 1;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void ThrowNotFinite(string field)
         {
             throw new InvalidOperationException("Actor migration field '" + field + "' is not finite.");
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidBoolean(string field, byte value)
+        {
+            throw new InvalidOperationException(
+                "Actor migration field '" + field + "' must be encoded as 0 or 1; received " + value + ".");
+        }
+
         private static void WriteString(INetWriter writer, string value, int maxUtf8Bytes)
         {
             value ??= string.Empty;
-            int byteCount = Encoding.UTF8.GetByteCount(value);
+            int byteCount = GetStrictUtf8ByteCount(value, "Actor migration string");
             if (byteCount > maxUtf8Bytes || byteCount > MaxWireStringBytes)
             {
                 throw new InvalidOperationException("Actor migration string exceeds its safety limit.");
@@ -295,7 +407,7 @@ namespace CycloneGames.GameplayFramework.Networking
             if (byteCount <= 256)
             {
                 Span<byte> buffer = stackalloc byte[byteCount];
-                Encoding.UTF8.GetBytes(value, buffer);
+                StrictUtf8.GetBytes(value, buffer);
                 writer.WriteBytes(buffer);
                 return;
             }
@@ -303,7 +415,7 @@ namespace CycloneGames.GameplayFramework.Networking
             byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
             try
             {
-                int written = Encoding.UTF8.GetBytes(value, 0, value.Length, rented, 0);
+                int written = StrictUtf8.GetBytes(value, 0, value.Length, rented, 0);
                 writer.WriteBytes(new ReadOnlySpan<byte>(rented, 0, written));
             }
             finally
@@ -329,14 +441,14 @@ namespace CycloneGames.GameplayFramework.Networking
             {
                 Span<byte> buffer = stackalloc byte[byteCount];
                 reader.ReadBytes(buffer, byteCount);
-                return Encoding.UTF8.GetString(buffer);
+                return StrictUtf8.GetString(buffer);
             }
 
             byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
             try
             {
                 reader.ReadBytes(new Span<byte>(rented, 0, byteCount), byteCount);
-                return Encoding.UTF8.GetString(rented, 0, byteCount);
+                return StrictUtf8.GetString(rented, 0, byteCount);
             }
             finally
             {
@@ -346,26 +458,23 @@ namespace CycloneGames.GameplayFramework.Networking
 
         private static void ValidateUtf8Length(string value, int maxBytes, string field)
         {
-            int length = string.IsNullOrEmpty(value) ? 0 : Encoding.UTF8.GetByteCount(value);
+            int length = string.IsNullOrEmpty(value) ? 0 : GetStrictUtf8ByteCount(value, field);
             if (length > maxBytes)
             {
                 throw new ArgumentException($"{field} exceeds {maxBytes} UTF-8 bytes.", field);
             }
         }
 
-        private static bool IsFinite(Vector3 value)
+        private static int GetStrictUtf8ByteCount(string value, string field)
         {
-            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
-        }
-
-        private static bool IsFinite(Quaternion value)
-        {
-            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
-        }
-
-        private static bool IsFinite(float value)
-        {
-            return !float.IsNaN(value) && !float.IsInfinity(value);
+            try
+            {
+                return StrictUtf8.GetByteCount(value);
+            }
+            catch (EncoderFallbackException exception)
+            {
+                throw new ArgumentException($"{field} contains invalid Unicode text.", field, exception);
+            }
         }
     }
 }

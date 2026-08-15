@@ -1,0 +1,28 @@
+{
+  "name": "com.cyclone-games.rpg-foundation-interaction-deterministic-math-gameplay-framework",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework",
+  "description": "GameplayFramework Actor bridge for deterministic RPGFoundation Interaction authority state.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.rpg-foundation": "1.0.0",
+    "com.cyclone-games.rpg-foundation-interaction-deterministic-math": "1.0.0",
+    "com.cyclone-games.deterministic-math": "1.0.0",
+    "com.cyclone-games.gameplay-framework": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "RPGFoundation",
+    "Interaction",
+    "DeterministicMath",
+    "GameplayFramework",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

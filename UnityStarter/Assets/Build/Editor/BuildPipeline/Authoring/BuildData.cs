@@ -12,6 +12,13 @@ namespace Build.Pipeline.Editor
         Enabled
     }
 
+    public enum BuildSourceCleanlinessPolicy
+    {
+        RequireClean = 0,
+        AllowDirtyDevelopment = 1,
+        AllowDirtyLocalRelease = 2
+    }
+
     [Serializable]
     public sealed class BuildRecipeInvocation
     {
@@ -150,6 +157,10 @@ namespace Build.Pipeline.Editor
         [Tooltip("Controls whether ENABLE_CHEAT is applied during player builds.")]
         [SerializeField] private CheatBuildMode cheatBuildMode = CheatBuildMode.Disabled;
 
+        [Tooltip("Controls local interactive source qualification. Require Clean blocks dirty builds. Allow Dirty Development relaxes only Development. Allow Dirty Local Release also lets the Inspector Release action run an isolated, non-distributable Local Release Player. Batch-mode and qualified Release builds always require verified-clean source.")]
+        [SerializeField] private BuildSourceCleanlinessPolicy sourceCleanlinessPolicy =
+            BuildSourceCleanlinessPolicy.RequireClean;
+
         public string[] GetBuildScenePaths()
         {
             var paths = new List<string>();
@@ -231,6 +242,7 @@ namespace Build.Pipeline.Editor
         }
 
         public CheatBuildMode CheatBuildMode => cheatBuildMode;
+        public BuildSourceCleanlinessPolicy SourceCleanlinessPolicy => sourceCleanlinessPolicy;
     }
 
     internal static class BuildAuthoringAssetGuard

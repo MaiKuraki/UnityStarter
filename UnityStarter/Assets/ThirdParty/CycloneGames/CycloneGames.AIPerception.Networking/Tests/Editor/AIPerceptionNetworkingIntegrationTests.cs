@@ -829,6 +829,93 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 Is.Zero);
         }
 
+        [Test]
+        public void NetworkedObserverRejectsNegativeTeamBeforeSharedReplicationAdaptation()
+        {
+            var observer = new NetworkedAIPerceptionObserver(
+                100u,
+                ownerConnectionId: 1,
+                ownerPlayerId: 1UL,
+                teamId: -1,
+                interestLayerMask: uint.MaxValue,
+                alwaysRelevant: true,
+                interestPosition: NetworkVector3.Zero,
+                authorityGeneration: 1u);
+
+            Assert.That(observer.IsValid, Is.False);
+        }
+
+        [Test]
+        public void ObserverResolverSkipsNonPositiveCandidateConnectionIds()
+        {
+            var resolver = new AIPerceptionNetworkObserverResolver();
+            var observer = new NetworkedAIPerceptionObserver(
+                100u,
+                ownerConnectionId: 1,
+                ownerPlayerId: 1UL,
+                teamId: 0,
+                interestLayerMask: uint.MaxValue,
+                alwaysRelevant: true,
+                interestPosition: NetworkVector3.Zero,
+                authorityGeneration: 1u);
+            var context = new AIPerceptionReplicationContext(
+                in observer,
+                NetworkReplicationPolicy.Always());
+            var results = new List<INetConnection>(2);
+
+            int count = resolver.ResolveObservers(
+                in context,
+                new INetConnection[]
+                {
+                    new TestConnection(0, true),
+                    new TestConnection(-1, true)
+                },
+                observerSource: null,
+                results);
+
+            Assert.That(count, Is.Zero);
+            Assert.That(results, Is.Empty);
+        }
+
+        [Test]
+        public void ObserverResolverSkipsSourceObserverWithNegativeTeam()
+        {
+            var resolver = new AIPerceptionNetworkObserverResolver();
+            var candidate = new TestConnection(2, true);
+            var observerSource = new TestObserverSource();
+            observerSource.SetObserver(
+                candidate.ConnectionId,
+                new NetworkInterestObserver(
+                    candidate,
+                    NetworkVector3.Zero,
+                    10f,
+                    uint.MaxValue,
+                    playerId: 0UL,
+                    teamId: -1));
+            var observer = new NetworkedAIPerceptionObserver(
+                100u,
+                ownerConnectionId: 1,
+                ownerPlayerId: 1UL,
+                teamId: 0,
+                interestLayerMask: uint.MaxValue,
+                alwaysRelevant: true,
+                interestPosition: NetworkVector3.Zero,
+                authorityGeneration: 1u);
+            var context = new AIPerceptionReplicationContext(
+                in observer,
+                NetworkReplicationPolicy.Always());
+            var results = new List<INetConnection>(1);
+
+            int count = resolver.ResolveObservers(
+                in context,
+                new INetConnection[] { candidate },
+                observerSource,
+                results);
+
+            Assert.That(count, Is.Zero);
+            Assert.That(results, Is.Empty);
+        }
+
         private static void RunMeasuredPath(
             AIPerceptionNetworkSyncBridge bridge,
             IAIPerceptionNetworkTargetResolver resolver,

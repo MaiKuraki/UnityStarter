@@ -54,57 +54,6 @@ namespace CycloneGames.GameplayFramework.Runtime
     }
 
     /// <summary>
-    /// Linear camera blend curve: constant velocity blend.
-    /// </summary>
-    public sealed class LinearCameraBlendCurve : ICameraBlendCurve
-    {
-        public static readonly LinearCameraBlendCurve Instance = new LinearCameraBlendCurve();
-
-        private LinearCameraBlendCurve() { }
-
-        public float Evaluate(float t) => t;
-    }
-
-    /// <summary>
-    /// Smooth step camera blend curve: ease in & out.
-    /// Produces smooth acceleration and deceleration.
-    /// </summary>
-    public sealed class SmoothStepCameraBlendCurve : ICameraBlendCurve
-    {
-        public static readonly SmoothStepCameraBlendCurve Instance = new SmoothStepCameraBlendCurve();
-
-        private SmoothStepCameraBlendCurve() { }
-
-        public float Evaluate(float t) => Mathf.SmoothStep(0, 1, t);
-    }
-
-    /// <summary>
-    /// Ease out camera blend curve: starts fast, slows down.
-    /// Good for responsive camera transitions.
-    /// </summary>
-    public sealed class EaseOutCameraBlendCurve : ICameraBlendCurve
-    {
-        public static readonly EaseOutCameraBlendCurve Instance = new EaseOutCameraBlendCurve();
-
-        private EaseOutCameraBlendCurve() { }
-
-        public float Evaluate(float t) => 1f - Mathf.Pow(1f - t, 3f);
-    }
-
-    /// <summary>
-    /// Ease in camera blend curve: starts slow, speeds up.
-    /// Good for cinematic camera movements.
-    /// </summary>
-    public sealed class EaseInCameraBlendCurve : ICameraBlendCurve
-    {
-        public static readonly EaseInCameraBlendCurve Instance = new EaseInCameraBlendCurve();
-
-        private EaseInCameraBlendCurve() { }
-
-        public float Evaluate(float t) => Mathf.Pow(t, 3f);
-    }
-
-    /// <summary>
     /// Custom curve using AnimationCurve for fine control.
     /// </summary>
     public sealed class CustomCameraBlendCurve : ICameraBlendCurve

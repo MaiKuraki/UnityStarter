@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

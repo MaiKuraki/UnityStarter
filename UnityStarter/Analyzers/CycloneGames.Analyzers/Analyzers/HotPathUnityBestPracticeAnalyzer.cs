@@ -39,6 +39,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
         {
             var invocation = (InvocationExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(invocation.SyntaxTree)) return;
             var methodName = GetContainingMethodName(invocation);
             if (!IsHotPathMethod(methodName)) return;
 
@@ -80,6 +81,8 @@ namespace CycloneGames.Analyzers
 
         private static void AnalyzeLambda(SyntaxNodeAnalysisContext context)
         {
+            if (!AnalyzerSourceScope.IsRepositoryOwned(context.Node.SyntaxTree)) return;
+
             var methodName = GetContainingMethodName((SyntaxNode)context.Node);
             if (!IsHotPathMethod(methodName)) return;
 
@@ -92,6 +95,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeConversion(OperationAnalysisContext context)
         {
             if (context.Operation is not IConversionOperation conversion) return;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(conversion.Syntax.SyntaxTree)) return;
             var methodName = context.ContainingSymbol is IMethodSymbol method ? method.Name : "";
             if (!IsHotPathMethod(methodName)) return;
 

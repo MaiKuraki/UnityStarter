@@ -264,7 +264,7 @@ The protocol ceiling allows up to 125 entries. Adding, removing, reordering, or 
 
 ### Interest filtering
 
-`AIPerceptionNetworkObserverResolver` converts candidates to `NetworkReplicationObserver` and observers to `NetworkReplicatedObject`, then calls `INetworkInterestEvaluator`. This gives AIPerception the same semantics as Networking: ownership by connection/player ID, authentication and interest layers, team relevance, area relevance, and `IncludeOwner` support.
+`AIPerceptionNetworkObserverResolver` converts candidates to `NetworkReplicationObserver` and observers to `NetworkReplicatedObject`, then calls `INetworkInterestEvaluator`. This gives AIPerception the same semantics as Networking: ownership by connection/player ID, authentication and interest layers, team relevance, area relevance, and `IncludeOwner` support. Observer and source team IDs must be non-negative, and candidate transport connection IDs must be positive; invalid candidates are excluded before shared replication values are constructed.
 
 ### Profiles and scheduling
 

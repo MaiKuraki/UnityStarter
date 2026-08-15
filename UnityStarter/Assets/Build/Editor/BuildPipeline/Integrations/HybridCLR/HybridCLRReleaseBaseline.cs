@@ -140,9 +140,10 @@ namespace Build.Pipeline.Editor
             }
 
             playerInvocationId = string.Empty;
-            if (context.Request.DebugBuild)
+            if (!context.Request.CanPublishReleaseBaseline)
             {
-                reason = "Development Player builds never publish a HybridCLR release baseline.";
+                reason = "Only qualified Release builds publish a HybridCLR release baseline. " +
+                         "Development and Local Release Preview builds never publish one.";
                 return false;
             }
 
@@ -200,7 +201,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         internal sealed class Manifest
         {
-            public int formatVersion;
+            public string documentType;
             public string releaseKey;
             public string applicationIdentifier;
             public string applicationVersion;
@@ -234,7 +235,7 @@ namespace Build.Pipeline.Editor
             public string sha256;
         }
 
-        internal const int FormatVersion = 1;
+        internal const string DocumentType = "hybridclr-release-baseline";
         internal const string ManifestFileName = "baseline.json";
         internal const string AOTDirectoryName = "AOT";
         internal const string BaselineRootRelativePath =
@@ -273,10 +274,11 @@ namespace Build.Pipeline.Editor
             }
 
             BuildRequest request = context.Request;
-            if (request.DebugBuild)
+            if (!request.CanPublishReleaseBaseline)
             {
                 throw new InvalidOperationException(
-                    "Incremental HybridCLR builds require a Release request. Development builds cannot consume or publish a release baseline.");
+                    "Incremental HybridCLR builds require a qualified Release request. " +
+                    "Development and Local Release Preview builds cannot consume or publish a release baseline.");
             }
 
             string projectRoot = Path.GetFullPath(request.ProjectRoot);
@@ -302,7 +304,7 @@ namespace Build.Pipeline.Editor
             string compatibilityHash = ComputeTextSha256(
                 string.Join("\n", new[]
                 {
-                    "hybridclr-release-compatibility-v1",
+                    "hybridclr-release-compatibility",
                     request.Target.ToString(),
                     request.NamedTarget.ToString(),
                     request.ScriptingBackend.ToString(),
@@ -316,7 +318,7 @@ namespace Build.Pipeline.Editor
             string releaseKey = ComputeTextSha256(
                 string.Join("\n", new[]
                 {
-                    "hybridclr-release-key-v1",
+                    "hybridclr-release-key",
                     request.ApplicationIdentifier,
                     context.Version.ApplicationVersion,
                     invocation.InvocationId
@@ -455,7 +457,7 @@ namespace Build.Pipeline.Editor
 
             var manifest = new Manifest
             {
-                formatVersion = FormatVersion,
+                documentType = DocumentType,
                 releaseKey = expectation.ReleaseKey,
                 applicationIdentifier = expectation.ApplicationIdentifier,
                 applicationVersion = expectation.ApplicationVersion,
@@ -771,6 +773,10 @@ namespace Build.Pipeline.Editor
             Manifest manifest;
             try
             {
+                BuildJsonDocumentContract.Validate<Manifest>(
+                    json,
+                    DocumentType,
+                    "HybridCLR release-baseline manifest");
                 manifest = JsonUtility.FromJson<Manifest>(json);
             }
             catch (Exception exception)
@@ -803,10 +809,14 @@ namespace Build.Pipeline.Editor
             HybridCLRReleaseBaselineExpectation expectation,
             bool requireCompatibilityMatch)
         {
-            if (manifest == null || manifest.formatVersion != FormatVersion)
+            if (manifest == null
+                || !string.Equals(
+                    manifest.documentType,
+                    DocumentType,
+                    StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"HybridCLR release-baseline format must be {FormatVersion}.");
+                    "HybridCLR release-baseline manifest does not match the current document contract.");
             }
 
             RequireEqual(manifest.releaseKey, expectation.ReleaseKey, "release key");
@@ -975,7 +985,7 @@ namespace Build.Pipeline.Editor
             IReadOnlyList<string> assemblyNames)
         {
             var builder = new StringBuilder(2048);
-            Append(builder, "hybridclr-authoring-v1");
+            Append(builder, "hybridclr-authoring");
             Append(builder, configuration.Variant.ToString());
             Append(builder, configuration.GetHotUpdateDllOutputDirectoryPath());
             Append(builder, configuration.GetAOTDllOutputDirectoryPath());
@@ -1060,7 +1070,7 @@ namespace Build.Pipeline.Editor
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(value => value, StringComparer.Ordinal));
             var builder = new StringBuilder(512);
-            Append(builder, "hybridclr-player-aot-v1");
+            Append(builder, "hybridclr-player-aot");
             Append(builder, request.Target.ToString());
             Append(builder, request.NamedTarget.ToString());
             Append(builder, request.ScriptingBackend.ToString());

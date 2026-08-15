@@ -77,7 +77,7 @@ namespace Build.Pipeline.Tests.Editor
                 BuildTarget.StandaloneWindows64,
                 "profile-id",
                 "https://cdn.example.test/content",
-                formatVersion: AddressablesArtifactManifestFormat.CurrentVersion);
+                useCurrentDocumentType: true);
 
             Assert.DoesNotThrow(() =>
                 AddressablesBuilder.ValidateContentUpdateArtifactManifest(
@@ -93,11 +93,11 @@ namespace Build.Pipeline.Tests.Editor
                     baseline.Sha256));
         }
 
-        [TestCase(0, "profile-id", BuildTarget.StandaloneWindows64)]
-        [TestCase(1, "other-profile", BuildTarget.StandaloneWindows64)]
-        [TestCase(1, "profile-id", BuildTarget.Android)]
+        [TestCase(false, "profile-id", BuildTarget.StandaloneWindows64)]
+        [TestCase(true, "other-profile", BuildTarget.StandaloneWindows64)]
+        [TestCase(true, "profile-id", BuildTarget.Android)]
         public void ValidateArtifactManifest_IncompatibleBaseline_FailsClosed(
-            int formatVersion,
+            bool useCurrentDocumentType,
             string requestedProfileId,
             BuildTarget requestedTarget)
         {
@@ -105,7 +105,7 @@ namespace Build.Pipeline.Tests.Editor
                 BuildTarget.StandaloneWindows64,
                 "profile-id",
                 "https://cdn.example.test/content",
-                formatVersion);
+                useCurrentDocumentType);
 
             Assert.That(
                 () => AddressablesBuilder.ValidateContentUpdateArtifactManifest(
@@ -163,7 +163,7 @@ namespace Build.Pipeline.Tests.Editor
             BuildTarget target,
             string profileId,
             string remoteCatalogLoadPath,
-            int formatVersion)
+            bool useCurrentDocumentType)
         {
             const string relativeStatePath =
                 "Build/AddressablesContent/StandaloneWindows64/BuildMetadata/addressables_content_state.bin";
@@ -177,9 +177,11 @@ namespace Build.Pipeline.Tests.Editor
                 "StandaloneWindows64"));
             var manifest = new AddressablesArtifactManifest
             {
-                formatVersion = formatVersion,
+                documentType = useCurrentDocumentType
+                    ? AddressablesArtifactManifestFormat.DocumentType
+                    : "unsupported-addressables-artifact",
                 buildTarget = target.ToString(),
-                contentVersion = "pipeline-2",
+                contentIdentity = "pipeline-2",
                 incrementality = BuildIncrementality.Clean.ToString(),
                 unityVersion = Application.unityVersion,
                 activeProfileId = profileId,
@@ -197,8 +199,7 @@ namespace Build.Pipeline.Tests.Editor
                     }
                 }
             };
-            string manifestJson = formatVersion
-                                  == AddressablesArtifactManifestFormat.CurrentVersion
+            string manifestJson = useCurrentDocumentType
                 ? AddressablesArtifactManifestFormat.Serialize(
                     manifest,
                     prettyPrint: true)

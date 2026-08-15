@@ -284,7 +284,9 @@ namespace Build.Pipeline.Editor.Tests
                 "42",
                 "test-branch",
                 "2026-01-02T03:04:05Z",
-                "test");
+                "test",
+                Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable));
         }
 
         private static void CreateFolder(string parentAssetPath, string folderName)

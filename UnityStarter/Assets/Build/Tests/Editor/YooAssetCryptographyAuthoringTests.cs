@@ -39,7 +39,7 @@ namespace Build.Pipeline.Tests.Editor
                     Is.EqualTo(YooAssetCryptographyAvailabilityStatus.Available));
                 Assert.That(
                     availability.RuntimeDecryptContractId,
-                    Is.EqualTo("authoring-valid-runtime-v1"));
+                    Is.EqualTo("authoring-valid-runtime"));
             }
             finally
             {
@@ -114,7 +114,7 @@ namespace Build.Pipeline.Tests.Editor
                 new YooAssetCryptographyAdapterRegistrationAttribute(
                     YooAssetCryptographyIdentity.NoneAdapterId,
                     typeof(AuthoringValidConfiguration),
-                    "authoring-runtime-v1"));
+                    "authoring-runtime"));
         }
     }
 
@@ -126,7 +126,7 @@ namespace Build.Pipeline.Tests.Editor
     [YooAssetCryptographyAdapterRegistration(
         "authoring-valid-crypto",
         typeof(AuthoringValidConfiguration),
-        "authoring-valid-runtime-v1")]
+        "authoring-valid-runtime")]
     public sealed class AuthoringValidAdapterRegistration { }
 
     public sealed class AuthoringMissingConfiguration : YooAssetCryptographyConfiguration
@@ -142,13 +142,13 @@ namespace Build.Pipeline.Tests.Editor
     [YooAssetCryptographyAdapterRegistration(
         "authoring-duplicate-crypto",
         typeof(AuthoringDuplicateConfiguration),
-        "authoring-duplicate-runtime-v1")]
+        "authoring-duplicate-runtime")]
     public sealed class AuthoringDuplicateAdapterRegistrationA { }
 
     [YooAssetCryptographyAdapterRegistration(
         "authoring-duplicate-crypto",
         typeof(AuthoringDuplicateConfiguration),
-        "authoring-duplicate-runtime-v1")]
+        "authoring-duplicate-runtime")]
     public sealed class AuthoringDuplicateAdapterRegistrationB { }
 
     public sealed class AuthoringMismatchedConfiguration : YooAssetCryptographyConfiguration
@@ -164,6 +164,6 @@ namespace Build.Pipeline.Tests.Editor
     [YooAssetCryptographyAdapterRegistration(
         "authoring-mismatched-crypto",
         typeof(AuthoringRegisteredConfiguration),
-        "authoring-mismatched-runtime-v1")]
+        "authoring-mismatched-runtime")]
     public sealed class AuthoringMismatchedAdapterRegistration { }
 }

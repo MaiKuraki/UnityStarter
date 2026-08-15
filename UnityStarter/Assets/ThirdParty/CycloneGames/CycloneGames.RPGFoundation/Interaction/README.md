@@ -4,13 +4,13 @@
 
 One `InteractionAuthorityService` retains at most `65,536` registered targets and `65,536` queue owners. Its owned `InteractionRateLimiter` retains at most `65,536` instigator windows. These constants are implementation safety ceilings; products can construct a standalone limiter with a lower owner capacity. Existing entries can still be updated, consumed, removed, or cleared at capacity.
 
-`TryRegisterTarget` returns `false` when a new target reaches its ceiling. New code that accesses queues should use `TryGetOrCreateQueue`; legacy `GetOrCreateQueue` now fails fast with `InvalidOperationException` at capacity. `TryQueueRequest` converts queue-owner capacity rejection into the existing `QueueFull` result. `InteractionRateLimiter.TryConsume` returns `false`, which the authority maps to the existing `RateLimited` result. O(1) snapshots expose all counts, capacities, and monotonic rejection counters.
+`TryRegisterTarget` returns `false` when a new target reaches its ceiling. `TryGetOrCreateQueue` provides an explicit capacity result, while `GetOrCreateQueue` fails fast with `InvalidOperationException` at capacity. `TryQueueRequest` converts queue-owner capacity rejection into `QueueFull`. `InteractionRateLimiter.TryConsume` returns `false`, which the authority maps to `RateLimited`. O(1) snapshots expose all counts, capacities, and monotonic rejection counters.
 
 Rate windows use a bounded indexed expiry heap: each retained identity owns exactly one dictionary entry and one heap key. Before admission, one call removes at most `MaximumExpiredWindowsToPrunePerCall` (`256`) expired identities, so identity churn cannot permanently consume capacity and cleanup cannot become an unbounded request spike. `InteractionAuthorityService.RemoveInstigatorRateLimitWindow(instigatorId)` (or `InteractionRateLimiter.Remove` for a standalone owner) releases an authenticated identity explicitly on disconnect. Incoming `int` ticks are normalized to an owner-local monotonic `long` timeline by serial-number deltas, so the normal `int` wrap advances time. A backwards or out-of-order sample neither rewinds nor clears windows; it is evaluated at the latest observed time and therefore cannot reset another identity's limit. Use the explicit cold-path `Clear` operation when the authority intentionally starts a different time domain. Consecutive forward observations must remain less than half the `int` sequence space apart; a larger discontinuity requires that explicit reset. Mutation is O(log N), the common non-expired check is O(1), and snapshots remain allocation-free O(1).
 
-Migration is additive: use the `Try*` path and route rejection through the authoritative gameplay/security policy. Roll back a call site to `GetOrCreateQueue` only when fail-fast behavior is intended. If one authority owner genuinely needs more than a ceiling, shard by explicit World/authority ownership; raising constants requires a reviewed build, abuse-case analysis, and load validation. Governance never clears targets, queues, or rate-limit policy under pressure.
+Use `Try*` APIs at untrusted or recoverable boundaries and route capacity rejection through the authoritative gameplay/security policy. Use `GetOrCreateQueue` only where fail-fast behavior is an explicit invariant. If one authority owner genuinely needs more than a ceiling, shard by explicit World/authority ownership; raising constants requires a reviewed build, abuse-case analysis, and load validation. Governance never clears targets, queues, or rate-limit policy under pressure.
 
-This contract adds no serialized field, changes no command/wire enum value, renames no serialized type or field, modifies no prefab/scene/asset data, and persists no state. No asset, save, or protocol migration is required.
+This contract adds no serialized field, changes no command or wire enum value, renames no serialized type or field, modifies no prefab, scene, or asset data, and persists no state.
 
 [English | 简体中文](README.SCH.md)
 
@@ -101,10 +101,11 @@ sequenceDiagram
 | **CycloneGames.Factory.Runtime** | Object pooling (`ObjectPool`, `IPoolable`, `MonoPrefabFactory`) | Yes      |
 | **CycloneGames.Logging**         | Backend-neutral `LogChannel` diagnostics                        | Yes      |
 | **CycloneGames.RPGFoundation.Interaction.Networking** | Optional `NetworkVector3` and DTO bridge | Optional |
-| **CycloneGames.GameplayFramework.Runtime** | Optional `Actor` / world adapter bridge                | Optional |
-| **CycloneGames.DeterministicMath.Core** | Optional `FPVector3` / `FPInt64` authority bridge        | Optional |
+| **CycloneGames.RPGFoundation.Interaction.GameplayFramework** | Optional `Actor` / world adapter companion package | Optional |
+| **CycloneGames.RPGFoundation.Interaction.DeterministicMath** | Optional `FPVector3` / `FPInt64` authority companion package | Optional |
+| **CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework** | Optional Actor-to-fixed-point authority companion package | Optional |
 
-The DeterministicMath assemblies support `com.cyclone-games.deterministic-math` `1.x`, are gated by package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, and are not auto-referenced. The combined GameplayFramework bridge also requires `com.cyclone-games.gameplay-framework` `1.x`. Install the optional packages through UPM and add explicit integration asmdef references; do not define the capability symbols in PlayerSettings.
+Optional first-party integrations are physical sibling companion packages with direct package and asmdef dependencies. They compile consistently when installed through UPM or placed together under Assets. Consumer assemblies reference only the companion assembly they use; no PlayerSettings scripting define symbol is required.
 
 Runtime diagnostics use `CycloneGames.RPGFoundation.Interaction`; Editor diagnostics use `CycloneGames.RPGFoundation.Interaction.Editor`. The module never owns logging backend lifecycle. The application composition root selects an `ILogWriter`; absent a backend, the logging contract uses `NullLogWriter`.
 
@@ -589,7 +590,7 @@ This module provides Unity-free authority contracts for server-side validation:
 4. Server executes and broadcasts `InteractionResult`.
 5. Clients reconcile local focus/UI against the server result.
 
-For deterministic multiplayer, use `InteractionDeterministicAuthorityService` with `FPVector3` / `FPInt64` from the `DeterministicMath` integration.
+For deterministic multiplayer, install `CycloneGames.RPGFoundation.Interaction.DeterministicMath` and use `InteractionDeterministicAuthorityService` with `FPVector3` / `FPInt64`. Install the combined GameplayFramework companion only when an Actor needs to supply deterministic authority payloads.
 
 | Situation | Use | Do not use as authority |
 | --- | --- | --- |

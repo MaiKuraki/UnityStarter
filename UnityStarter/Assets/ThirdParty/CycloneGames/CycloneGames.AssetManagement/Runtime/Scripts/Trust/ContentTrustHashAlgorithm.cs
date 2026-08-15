@@ -1,8 +1,10 @@
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
     /// <summary>
-    /// Hash algorithms supported by content trust entries.
-    /// SHA-256 is the default security-boundary choice; XxHash64 is for fast non-cryptographic consistency checks.
+    /// Hash algorithms that can appear in content trust wire data.
+    /// SHA-256 is the only algorithm accepted by <see cref="ContentTrustManifestBuilder"/> and
+    /// <see cref="ContentTrustVerifier"/>. None and XxHash64 remain parseable as legacy wire values so persisted
+    /// manifests can still be read, normalized, fingerprinted, and then rejected at verification with a clear reason.
     /// </summary>
     public enum ContentTrustHashAlgorithm : byte
     {

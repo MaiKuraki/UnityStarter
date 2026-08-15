@@ -630,11 +630,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private static void DrawSelectedLabel(PlayerStart playerStart, GizmoContext context, GizmoMetrics metrics)
         {
-            string label = playerStart.GetName();
-            if (string.IsNullOrEmpty(label))
-            {
-                label = playerStart.gameObject.name;
-            }
+            // gameObject.name is a Unity-native read available outside Play Mode. Actor.GetName()
+            // enforces the owner-thread contract and throws before Awake initializes the lifecycle,
+            // which is not valid for editor Gizmo drawing.
+            string label = playerStart.gameObject.name;
 
             Vector3 position = playerStart.transform.position + context.LabelDirection * (metrics.LabelExtent + LABEL_OFFSET);
             Handles.Label(position, label, EditorStyles.boldLabel);

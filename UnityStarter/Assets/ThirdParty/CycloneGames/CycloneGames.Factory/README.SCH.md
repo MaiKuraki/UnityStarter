@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Factory 为纯 C# 与 Unity 提供显式创建契约和有界对象池。纯 C# 核心暴露 `IFactory` 与 `ObjectPool`，包含所有权跟踪、容量策略、诊断和确定性清理；Unity 对象创建隔离在独立 adapter assembly 中；可选的 Native Collections assembly 为高数量 DOD workload 提供基于稳定句柄的密集 unmanaged pool。
+CycloneGames.Factory 为纯 C# 与 Unity 提供显式创建契约、Unity 对象终止生命周期契约和有界对象池。纯 C# 核心暴露 `IFactory` 与 `ObjectPool`，包含所有权跟踪、容量策略、诊断和确定性清理；Unity 对象创建与释放隔离在独立 adapter assembly 中；可选的 Native Collections assembly 为高数量 DOD workload 提供基于稳定句柄的密集 unmanaged pool。
 
 ## 目录
 
@@ -27,6 +27,7 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 ### 主要特性
 
 - **`IFactory<TValue>` / `IFactory<TArg, TValue>`**：无参和带参构造的最小创建契约。
+- **`IUnityObjectSpawner` / `IUnityObjectLifetime`**：Unity 主线程创建与对称终止释放契约。
 - **`ObjectPool<TArg, TValue>`**：single-owner 托管池，含生命周期 callback、容量策略、诊断与失败隔离。
 - **`FastObjectPool<T>`**：无参 pool base，适合不需要 spawn 参数的 `Component` 类型 item。
 - **`MonoPrefabFactory<T>` / `MonoFastPool<T>`**：Unity 主线程 adapter，用于 prefab 实例化与 `Component` 池化。
@@ -37,7 +38,7 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
 | `CycloneGames.Factory.Runtime` | `Runtime/Scripts/`（不含 `Unity/`） | 纯 C# factory、`PoolBase`、`ObjectPool`、`FastObjectPool`。`noEngineReferences: true`。 |
-| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`、`DefaultUnityObjectSpawner`、`MonoPrefabFactory<T>`、`MonoFastPool<T>`。引用核心 assembly 与 `UnityEngine`。 |
+| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`、`IUnityObjectLifetime`、`DefaultUnityObjectSpawner`、`MonoPrefabFactory<T>`、`MonoFastPool<T>`。引用核心 assembly 与 `UnityEngine`。 |
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`、`NativeDensePool<T>`、`NativeDenseColumnPool2/3/4`。仅当已安装的 `com.unity.collections` 包定义 `PRESENT_COLLECTIONS` 时编译。 |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | 核心与 Unity adapter 契约测试。 |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership 与 handle 测试。仅在安装 Collections 时启用。 |
@@ -259,7 +260,7 @@ Callback 可以归还当前 item，但不能修改其他 active item。Pool 检�
 
 ### Unity adapter 组合
 
-Unity-facing API 仅允许在 Unity 主线程调用。创建必须通过其他已验证边界时注入自定义 `IUnityObjectSpawner`。
+Unity-facing API 仅允许在 Unity 主线程调用。只有创建策略发生变化时注入自定义 `IUnityObjectSpawner`。单一 owner 需要通过同一边界完成创建与永久释放时，使用 `IUnityObjectLifetime`。
 
 ```csharp
 using CycloneGames.Factory.Runtime;
@@ -273,6 +274,18 @@ var pool = new ObjectPool<BulletSpawn, Bullet>(
 ```
 
 `DefaultUnityObjectSpawner` 拒绝 null origin，并委托 `Object.Instantiate`。`MonoPrefabFactory<T>` 创建 inactive instance，让 pool 控制激活。`MonoFastPool<T>` 是轻量 `Component` pool，处理激活、可选 reparent 和永久清理时的 `Object.Destroy`，不需要 `IFactory`，因为它直接拥有创建。
+
+非池化 Unity 生命周期使用更强的契约：
+
+```csharp
+IUnityObjectLifetime lifetime = new DefaultUnityObjectSpawner();
+Transform instance = lifetime.Create(prefab.transform);
+
+// Composition owner 永久终止该 instance。
+lifetime.Release(instance);
+```
+
+`Release` 接收 `Component` 时销毁其所属 `GameObject`，接收其他 Unity object 类型时直接销毁对象。Play Mode 使用延迟 `Object.Destroy`，Edit Mode 使用立即销毁。该调用是终止操作：被释放的 instance 不会返回 pool，也不会再次提供复用。
 
 ### 自定义 `FastObjectPool<T>` 子类
 
@@ -447,7 +460,7 @@ Tracking collection 按 `SoftCapacity` 预设容量。ownership 超出预设数�
 
 ### 平台与 AOT
 
-Core 不使用反射、动态代码生成、文件系统、socket、native plugin 或 runtime type discovery。IL2CPP stripping 仍要求产品代码能够静态到达所需 closed generic form。Unity adapter 仅使用标准 Unity object API。DOD 支持范围由当前安装的 Collections 包和目标平台 capability 决定。
+Core 不使用反射、动态代码生成、文件系统、socket、native plugin 或 runtime type discovery。IL2CPP stripping 仍要求产品代码能够静态到达所需 closed generic form。Unity adapter 仅使用标准 Unity object API。通过契约调用 `Create` 与 `Release` 时各发生一次 interface dispatch；它们属于生命周期冷路径，且不新增模块持有的 tracking collection。DOD 支持范围由当前安装的 Collections 包和目标平台 capability 决定。
 
 Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机目标都需要独立 Player/AOT 证据。Editor 编译或 EditMode tests 不能认证这些目标。WebGL 是否具有线程能力取决于部署设置；无论能力如何，single-owner 契约都保持不变。
 
@@ -471,7 +484,7 @@ Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机目�
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Factory.Tests.Editor -testResults <result-path> -quit
 ```
 
-安装 `com.unity.collections` 后，也运行 `CycloneGames.Factory.DOD.Tests.Editor`。托管测试覆盖 reference identity、容量耗尽、duplicate return、spawn rollback、quarantine、callback reentrancy、self-return iteration、dispose，以及预热后的当前线程 allocation assertion。DOD tests 覆盖 handle invalidation、swap-and-pop、batch churn、SoA stream、容量与诊断。
+安装 `com.unity.collections` 后，也运行 `CycloneGames.Factory.DOD.Tests.Editor`。托管测试覆盖 reference identity、容量耗尽、duplicate return、spawn rollback、quarantine、callback reentrancy、self-return iteration、dispose、Unity create/release 契约，以及预热后的当前线程 allocation assertion。DOD tests 覆盖 handle invalidation、swap-and-pop、batch churn、SoA stream、容量与诊断。
 
 声明性能结论前，在目标 Player build 中测量已定义 workload，并记录 warmup、GC、CPU 分布、peak memory、backend、device 和 Unity 版本。声明 IL2CPP/AOT 支持前，使用当前 stripping 配置构建并 smoke-test 受影响目标。
 

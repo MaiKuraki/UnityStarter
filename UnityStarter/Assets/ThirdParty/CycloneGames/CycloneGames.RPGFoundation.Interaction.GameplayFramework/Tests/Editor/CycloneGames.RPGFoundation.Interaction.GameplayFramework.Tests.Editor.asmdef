@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.GameplayFramework.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.GameplayFramework.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

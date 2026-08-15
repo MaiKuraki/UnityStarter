@@ -492,12 +492,59 @@ namespace Build.Pipeline.Editor
                 && workspaceIsReady
                 && !editorBusy
                 && dirtyAssets.Count == 0;
-            bool savedRecipeReady = canRunBase && errors.Count == 0;
+            bool savedRecipeBaseReady = canRunBase && errors.Count == 0;
+            BuildSourceWorkspaceDecision releaseSourceDecision =
+                GetSourceWorkspaceDecision(debugBuild: false);
+            BuildSourceWorkspaceDecision developmentSourceDecision =
+                GetSourceWorkspaceDecision(debugBuild: true);
+            bool localPreviewSelectionValid =
+                BuildRequestFactory.TryResolveLocalReleasePreviewSelection(
+                    profile,
+                    out IReadOnlyList<string> localPreviewSelection,
+                    out string localPreviewSelectionError);
+            BuildInteractiveReleaseRoute releaseRoute =
+                GetInteractiveReleaseRoute(localPreviewSelectionValid);
+            bool releaseReady = savedRecipeBaseReady
+                && releaseRoute != BuildInteractiveReleaseRoute.Blocked;
+            bool developmentReady = savedRecipeBaseReady
+                && IsSourceWorkspacePreviewAllowed(debugBuild: true);
+            bool localPreviewReady = savedRecipeBaseReady
+                && localPreviewSelectionValid;
+            string localPreviewBaseDisabledReason =
+                GetBuildActionBaseDisabledReason(
+                    errors,
+                    workspaceIsReady,
+                    dirtyAssets,
+                    editorBusy);
+            string localPreviewDisabledReason =
+                !string.IsNullOrEmpty(localPreviewBaseDisabledReason)
+                    ? localPreviewBaseDisabledReason
+                    : localPreviewSelectionError;
+            string releaseDisabledReason = releaseRoute ==
+                BuildInteractiveReleaseRoute.LocalReleasePreview
+                    ? localPreviewDisabledReason
+                    : GetBuildActionDisabledReason(
+                        errors,
+                        workspaceIsReady,
+                        dirtyAssets,
+                        editorBusy,
+                        debugBuild: false);
+            if (releaseRoute == BuildInteractiveReleaseRoute.Blocked
+                && IsDirtyLocalReleasePolicy()
+                && !localPreviewSelectionValid
+                && string.IsNullOrEmpty(localPreviewBaseDisabledReason))
+            {
+                releaseDisabledReason = localPreviewSelectionError;
+            }
+
             BuildInspectorStatus status = GetBuildActionStatus(
                 errors,
+                analysis,
                 workspaceIsReady,
                 dirtyAssets,
-                editorBusy);
+                editorBusy,
+                releaseRoute,
+                localPreviewSelectionValid);
             showBuildActions = BuildInspectorUi.DrawFoldoutHeader(
                 "Build Actions",
                 showBuildActions,
@@ -544,18 +591,33 @@ namespace Build.Pipeline.Editor
             }
 
             BuildInspectorUi.DrawSubsectionLabel("Run Saved Recipe");
-            DrawSavedRecipeButtons(analysis, savedRecipeReady);
+            DrawSavedRecipeButtons(
+                analysis,
+                releaseReady,
+                releaseDisabledReason,
+                developmentReady,
+                GetBuildActionDisabledReason(
+                    errors,
+                    workspaceIsReady,
+                    dirtyAssets,
+                    editorBusy,
+                    debugBuild: true),
+                localPreviewReady,
+                localPreviewDisabledReason,
+                localPreviewSelection,
+                releaseRoute);
 
             EditorGUILayout.Space(4f);
             BuildInspectorUi.DrawSubsectionLabel("Focused Output (Does Not Modify Profile)");
             DrawFocusedBuildButtons(
                 profile,
-                canRunBase,
+                canRunBase && IsSourceWorkspacePreviewAllowed(debugBuild: false),
                 GetBuildActionDisabledReason(
                     errors,
                     workspaceIsReady,
                     dirtyAssets,
-                    editorBusy));
+                    editorBusy,
+                    debugBuild: false));
 
             if (editorBusy)
             {
@@ -566,9 +628,40 @@ namespace Build.Pipeline.Editor
             else if (!workspaceIsReady)
             {
                 BuildInspectorUi.DrawNotice(
-                    "Build actions are disabled until Workspace Safety reports Clean. " +
+                    "Build actions are disabled until Build Transaction Safety reports Clean. " +
                     "Open Workspace Health to inspect or explicitly recover durable transaction evidence.",
                     BuildInspectorTone.Warning);
+            }
+            else if (sourceWorkspaceCaptureTask != null)
+            {
+                BuildInspectorUi.DrawNotice(
+                    "Source workspace inspection is running. Release and focused non-Development actions " +
+                    "remain disabled until verified-clean evidence is available." +
+                    (localPreviewSelectionValid
+                        ? " Local Optimized Preview remains available because it is isolated and non-distributable."
+                        : string.Empty),
+                    BuildInspectorTone.Busy);
+            }
+            else if (!IsSourceWorkspacePreviewAllowed(debugBuild: false))
+            {
+                bool developmentAvailable = analysis.ProducesPlayer
+                    && IsSourceWorkspacePreviewAllowed(debugBuild: true);
+                bool previewAvailable = analysis.ProducesPlayer
+                    && localPreviewSelectionValid;
+                BuildInspectorUi.DrawNotice(
+                    releaseSourceDecision.Summary +
+                    (releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview
+                        ? " The Release action will run an isolated, non-distributable Local Dirty Release Player."
+                        : string.Empty) +
+                    (developmentAvailable
+                        ? " Development remains available under the saved local-development exception."
+                        : string.Empty) +
+                    (previewAvailable
+                        ? " Local Optimized Preview remains available as an isolated, non-distributable Player build."
+                        : string.Empty),
+                    developmentAvailable || previewAvailable
+                        ? BuildInspectorTone.Warning
+                        : BuildInspectorTone.Error);
             }
 
             BuildInspectorUi.EndPanel();
@@ -576,31 +669,66 @@ namespace Build.Pipeline.Editor
 
         private void DrawSavedRecipeButtons(
             BuildRecipeAnalysis analysis,
-            bool enabled)
+            bool releaseEnabled,
+            string releaseDisabledReason,
+            bool developmentEnabled,
+            string developmentDisabledReason,
+            bool localPreviewEnabled,
+            string localPreviewDisabledReason,
+            IReadOnlyList<string> localPreviewSelection,
+            BuildInteractiveReleaseRoute releaseRoute)
         {
             if (analysis.ProducesPlayer)
             {
                 int commandCount = EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android
-                    ? 3
-                    : 2;
+                    ? 4
+                    : 3;
                 var commands = new BuildInspectorCommand[commandCount];
                 commands[0] = new BuildInspectorCommand(
                     0,
-                    new GUIContent("Release", "Run the saved recipe as a Release build."),
-                    enabled,
+                    new GUIContent(
+                        releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview
+                            ? "Release (Local Dirty)"
+                            : "Release",
+                        AppendDisabledReason(
+                            releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview
+                                ? "Run an isolated, non-distributable Clean Player with Release optimization settings. " +
+                                  "This does not create a qualified Release or publish a Release baseline."
+                                : "Run the saved recipe as a qualified Release build.",
+                            releaseEnabled,
+                            releaseDisabledReason)),
+                    releaseEnabled,
                     BuildInspectorActionRole.Primary);
                 commands[1] = new BuildInspectorCommand(
                     1,
-                    new GUIContent("Development", "Run the saved recipe as a Development build."),
-                    enabled);
-                if (commandCount == 3)
+                    new GUIContent(
+                        "Development",
+                        AppendDisabledReason(
+                            "Run the saved recipe as a Development build.",
+                            developmentEnabled,
+                            developmentDisabledReason)),
+                    developmentEnabled);
+                commands[2] = new BuildInspectorCommand(
+                    2,
+                    new GUIContent(
+                        "Local Optimized Preview",
+                        AppendDisabledReason(
+                            "Build an isolated, non-distributable Clean Player with Release optimization " +
+                            "settings. Source changes are recorded but do not block this local preview.",
+                            localPreviewEnabled,
+                            localPreviewDisabledReason)),
+                    localPreviewEnabled);
+                if (commandCount == 4)
                 {
-                    commands[2] = new BuildInspectorCommand(
-                        2,
+                    commands[3] = new BuildInspectorCommand(
+                        3,
                         new GUIContent(
                             "Export Android Project",
-                            "Run a Release recipe and export an Android Gradle project."),
-                        enabled);
+                            AppendDisabledReason(
+                                "Run a Release recipe and export an Android Gradle project.",
+                                releaseEnabled,
+                                releaseDisabledReason)),
+                        releaseEnabled);
                 }
 
                 int clicked = DrawResponsiveCommandGrid(
@@ -609,13 +737,24 @@ namespace Build.Pipeline.Editor
                     expandIncompleteRow: true);
                 if (clicked == 0)
                 {
-                    ScheduleRun(false);
+                    if (releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview)
+                    {
+                        ScheduleLocalReleasePreview(localPreviewSelection);
+                    }
+                    else
+                    {
+                        ScheduleRun(false);
+                    }
                 }
                 else if (clicked == 1)
                 {
                     ScheduleRun(true);
                 }
                 else if (clicked == 2)
+                {
+                    ScheduleLocalReleasePreview(localPreviewSelection);
+                }
+                else if (clicked == 3)
                 {
                     ScheduleRun(
                         false,
@@ -630,8 +769,11 @@ namespace Build.Pipeline.Editor
                         0,
                         new GUIContent(
                             "Build Saved Recipe",
-                            "Run every enabled invocation in the saved recipe."),
-                        enabled,
+                            AppendDisabledReason(
+                                "Run every enabled invocation in the saved recipe.",
+                                releaseEnabled,
+                                releaseDisabledReason)),
+                        releaseEnabled,
                         BuildInspectorActionRole.Primary)
                 };
                 if (BuildInspectorUi.DrawCommandGrid(commands, maximumColumns: 1) == 0)
@@ -808,9 +950,12 @@ namespace Build.Pipeline.Editor
 
         private BuildInspectorStatus GetBuildActionStatus(
             IReadOnlyList<string> errors,
+            BuildRecipeAnalysis analysis,
             bool workspaceIsReady,
             IReadOnlyList<UnityEngine.Object> dirtyAssets,
-            bool editorBusy)
+            bool editorBusy,
+            BuildInteractiveReleaseRoute releaseRoute,
+            bool localPreviewAvailable)
         {
             if (editorBusy)
             {
@@ -834,10 +979,57 @@ namespace Build.Pipeline.Editor
                     $"{errors.Count} ISSUE{(errors.Count == 1 ? string.Empty : "S")}");
             }
 
+            if (sourceWorkspaceCaptureTask != null)
+            {
+                if (releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview)
+                {
+                    return new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL RELEASE");
+                }
+
+                return analysis.ProducesPlayer && localPreviewAvailable
+                    ? new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL PREVIEW")
+                    : new BuildInspectorStatus(BuildInspectorTone.Busy, "CHECKING SOURCE");
+            }
+
+            if (!IsSourceWorkspacePreviewAllowed(debugBuild: false))
+            {
+                if (releaseRoute == BuildInteractiveReleaseRoute.LocalReleasePreview)
+                {
+                    return new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL RELEASE");
+                }
+
+                if (analysis.ProducesPlayer
+                    && IsSourceWorkspacePreviewAllowed(debugBuild: true))
+                {
+                    return new BuildInspectorStatus(BuildInspectorTone.Warning, "DEV ONLY");
+                }
+
+                return analysis.ProducesPlayer && localPreviewAvailable
+                    ? new BuildInspectorStatus(BuildInspectorTone.Warning, "LOCAL PREVIEW")
+                    : new BuildInspectorStatus(BuildInspectorTone.Error, "SOURCE BLOCKED");
+            }
+
             return new BuildInspectorStatus(BuildInspectorTone.Ready, "READY");
         }
 
         private string GetBuildActionDisabledReason(
+            IReadOnlyList<string> errors,
+            bool workspaceIsReady,
+            IReadOnlyList<UnityEngine.Object> dirtyAssets,
+            bool editorBusy,
+            bool debugBuild)
+        {
+            string baseReason = GetBuildActionBaseDisabledReason(
+                errors,
+                workspaceIsReady,
+                dirtyAssets,
+                editorBusy);
+            return string.IsNullOrEmpty(baseReason)
+                ? GetSourceWorkspaceBlockedReason(debugBuild)
+                : baseReason;
+        }
+
+        private string GetBuildActionBaseDisabledReason(
             IReadOnlyList<string> errors,
             bool workspaceIsReady,
             IReadOnlyList<UnityEngine.Object> dirtyAssets,
@@ -855,7 +1047,7 @@ namespace Build.Pipeline.Editor
 
             if (!workspaceIsReady)
             {
-                return "Workspace Safety must report Clean before starting another build.";
+                return "Build Transaction Safety must report Clean before starting another build.";
             }
 
             if (dirtyAssets.Count > 0)
@@ -863,7 +1055,22 @@ namespace Build.Pipeline.Editor
                 return "Save the profile and referenced configuration assets before building.";
             }
 
-            return errors.Count == 0 ? string.Empty : string.Join("\n", errors);
+            if (errors.Count > 0)
+            {
+                return string.Join("\n", errors);
+            }
+
+            return string.Empty;
+        }
+
+        private static string AppendDisabledReason(
+            string tooltip,
+            bool enabled,
+            string disabledReason)
+        {
+            return enabled || string.IsNullOrWhiteSpace(disabledReason)
+                ? tooltip
+                : tooltip + "\n\n" + disabledReason;
         }
 
         private static bool TryResolveFocusedInvocationIds(
@@ -972,19 +1179,53 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
-                try
+                BuildEntryPoints.RunProfile(
+                    profile,
+                    buildTarget,
+                    debug,
+                    exportAndroidProject,
+                    selectedInvocations);
+            };
+
+            GUIUtility.ExitGUI();
+        }
+
+        private void ScheduleLocalReleasePreview(
+            IReadOnlyList<string> invocationIdsOverride)
+        {
+            serializedObject.ApplyModifiedProperties();
+            var profile = (BuildData)target;
+            try
+            {
+                BuildAuthoringAssetGuard.EnsureSaved(profile, invocationIdsOverride);
+            }
+            catch (Exception exception)
+            {
+                EditorUtility.DisplayDialog(
+                    "Unsaved Build Configuration",
+                    exception.Message,
+                    "OK");
+                return;
+            }
+
+            BuildTarget buildTarget = EditorUserBuildSettings.activeBuildTarget;
+            string[] selectedInvocations = new string[invocationIdsOverride.Count];
+            for (int index = 0; index < invocationIdsOverride.Count; index++)
+            {
+                selectedInvocations[index] = invocationIdsOverride[index];
+            }
+
+            EditorApplication.delayCall += () =>
+            {
+                if (profile == null)
                 {
-                    BuildEntryPoints.RunProfile(
-                        profile,
-                        buildTarget,
-                        debug,
-                        exportAndroidProject,
-                        selectedInvocations);
+                    return;
                 }
-                catch (Exception exception)
-                {
-                    Debug.LogException(exception);
-                }
+
+                BuildEntryPoints.RunLocalReleasePreview(
+                    profile,
+                    buildTarget,
+                    selectedInvocations);
             };
 
             GUIUtility.ExitGUI();

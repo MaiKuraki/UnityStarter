@@ -5,9 +5,9 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// <summary>
     /// Lightweight Perlin-noise camera shake processor.
     ///
-    /// This works in the same conceptual layer as Cinemachine Perlin noise, but stays inside
-    /// GameplayFramework's post-processor pipeline so it remains deterministic with your custom
-    /// CameraMode stack and collision processing.
+    /// The processor runs at a stable position in GameplayFramework's ordered post-processor
+    /// pipeline. Variable delta time and Mathf.PerlinNoise do not provide cross-platform
+    /// bitwise determinism.
     /// </summary>
     public sealed class PerlinNoiseShakePostProcessor : ICameraPostProcessor
     {

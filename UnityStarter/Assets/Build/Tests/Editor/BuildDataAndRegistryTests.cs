@@ -506,7 +506,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
                         projectRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.False);
@@ -537,7 +538,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
                         projectRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.False);
@@ -572,7 +574,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
                         projectRoot,
-                        () => true)
+                        () => true,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.False);
@@ -734,7 +737,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
                         projectRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.True, result.Failure?.ToString());
@@ -952,7 +956,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: applicationVersion,
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: invocations);
+                steps: invocations,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Development);
         }
 
         private static BuildExecutionContext CreatePlanContext(

@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.ExceptionServices;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -130,6 +129,24 @@ namespace Build.Pipeline.Editor
             CompleteExecution(execution);
         }
 
+        internal static void RunLocalReleasePreview(
+            BuildData profile,
+            BuildTarget target,
+            System.Collections.Generic.IReadOnlyList<string> invocationIdsOverride = null)
+        {
+            BuildEntryPointExecutionResult execution =
+                BuildEntryPointExecutor.ExecuteInteractive(
+                    GetCurrentProjectRoot(),
+                    () => profile,
+                    target,
+                    debug: false,
+                    exportAndroidProject: false,
+                    invocationIdsOverride,
+                    localReleasePreview: true,
+                    DefaultBuildEntryPointOperations.Instance);
+            CompleteExecution(execution);
+        }
+
         private static void CompleteExecution(BuildEntryPointExecutionResult execution)
         {
             if (execution == null)
@@ -137,7 +154,13 @@ namespace Build.Pipeline.Editor
                 throw new ArgumentNullException(nameof(execution));
             }
 
-            if (execution.Failure != null)
+            bool terminalFailureWasAlreadyLogged =
+                execution.BuildResult != null
+                && !execution.BuildResult.Succeeded
+                && ReferenceEquals(
+                    execution.Failure,
+                    execution.BuildResult.Failure);
+            if (execution.Failure != null && !terminalFailureWasAlreadyLogged)
             {
                 Debug.LogException(execution.Failure);
             }
@@ -148,14 +171,11 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            if (!execution.Succeeded)
+            if (!execution.Succeeded
+                && execution.Failure == null
+                && execution.BuildResult == null)
             {
-                if (execution.Failure != null)
-                {
-                    ExceptionDispatchInfo.Capture(execution.Failure).Throw();
-                }
-
-                throw new InvalidOperationException(
+                Debug.LogError(
                     $"Build run '{execution.RunId}' failed without an exception. " +
                     $"See '{execution.ManifestPath}'.");
             }

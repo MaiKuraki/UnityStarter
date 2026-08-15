@@ -226,16 +226,16 @@ namespace Build.Pipeline.Editor
                 : null;
         }
 
-        internal static IDisposable BeginSession(BuildTarget target, string contentVersion)
+        internal static IDisposable BeginSession(BuildTarget target, string contentIdentity)
         {
             if (target == BuildTarget.NoTarget)
             {
                 throw new ArgumentOutOfRangeException(nameof(target), target, "A valid build target is required.");
             }
 
-            if (string.IsNullOrWhiteSpace(contentVersion))
+            if (string.IsNullOrWhiteSpace(contentIdentity))
             {
-                throw new ArgumentException("Addressables content version is required.", nameof(contentVersion));
+                throw new ArgumentException("Addressables content version is required.", nameof(contentIdentity));
             }
 
             BuildSession session;
@@ -255,7 +255,7 @@ namespace Build.Pipeline.Editor
                     session = new BuildSession(
                         projectRoot,
                         target,
-                        contentVersion,
+                        contentIdentity,
                         isolationScope);
                     activeSession = session;
                     isolationScope = null;
@@ -334,7 +334,7 @@ namespace Build.Pipeline.Editor
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
                     session.ProjectRoot,
                     versionFilePath,
-                    session.ContentVersion);
+                    session.ContentIdentity);
             }
             catch (Exception exception)
             {
@@ -343,7 +343,7 @@ namespace Build.Pipeline.Editor
             }
 
             Debug.Log(
-                $"[AddressablesVersionBuildProcessor] Validated version '{session.ContentVersion}' in the provider-owned player data.");
+                $"[AddressablesVersionBuildProcessor] Validated version '{session.ContentIdentity}' in the provider-owned player data.");
         }
 
         private sealed class BuildSession
@@ -351,21 +351,21 @@ namespace Build.Pipeline.Editor
             public BuildSession(
                 string projectRoot,
                 BuildTarget target,
-                string contentVersion,
+                string contentIdentity,
                 IDisposable isolationScope)
             {
                 ProjectRoot = Path.GetFullPath(
                     projectRoot
                     ?? throw new ArgumentNullException(nameof(projectRoot)));
                 Target = target;
-                ContentVersion = contentVersion;
+                ContentIdentity = contentIdentity;
                 IsolationScope = isolationScope
                     ?? throw new ArgumentNullException(nameof(isolationScope));
             }
 
             public string ProjectRoot { get; }
             public BuildTarget Target { get; }
-            public string ContentVersion { get; }
+            public string ContentIdentity { get; }
             public IDisposable IsolationScope { get; }
         }
 

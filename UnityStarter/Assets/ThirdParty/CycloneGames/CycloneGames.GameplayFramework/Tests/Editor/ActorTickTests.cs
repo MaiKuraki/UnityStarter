@@ -168,6 +168,52 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
+        public void Tick_DirectOutOfMemoryPropagatesSameInstanceAfterDispatchStateCloses()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            TestTickActor throwingActor = RegisterActor(testWorld, "ThrowingActor", ActorTickPhase.Update);
+            TestTickActor healthyActor = RegisterActor(testWorld, "HealthyActor", ActorTickPhase.Update);
+            var expectedOutOfMemory = new OutOfMemoryException("Synthetic direct Tick exhaustion.");
+            throwingActor.TickAction = _ => throw expectedOutOfMemory;
+
+            OutOfMemoryException actualOutOfMemory = Assert.Throws<OutOfMemoryException>(() =>
+                testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+
+            Assert.AreSame(expectedOutOfMemory, actualOutOfMemory);
+            Assert.AreEqual(1, throwingActor.TickCount);
+            Assert.Zero(healthyActor.TickCount);
+
+            throwingActor.TickAction = null;
+            Assert.DoesNotThrow(() => testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+            Assert.AreEqual(2, throwingActor.TickCount);
+            Assert.AreEqual(1, healthyActor.TickCount);
+        }
+
+        [Test]
+        public void Tick_NestedOutOfMemoryPropagatesSameInstanceAfterDispatchStateCloses()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            TestTickActor throwingActor = RegisterActor(testWorld, "ThrowingActor", ActorTickPhase.Update);
+            TestTickActor healthyActor = RegisterActor(testWorld, "HealthyActor", ActorTickPhase.Update);
+            var expectedOutOfMemory = new OutOfMemoryException("Synthetic nested Tick exhaustion.");
+            throwingActor.TickAction = _ => throw new AggregateException(
+                new InvalidOperationException("Synthetic non-terminal Tick failure."),
+                new AggregateException(expectedOutOfMemory));
+
+            OutOfMemoryException actualOutOfMemory = Assert.Throws<OutOfMemoryException>(() =>
+                testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+
+            Assert.AreSame(expectedOutOfMemory, actualOutOfMemory);
+            Assert.AreEqual(1, throwingActor.TickCount);
+            Assert.Zero(healthyActor.TickCount);
+
+            throwingActor.TickAction = null;
+            Assert.DoesNotThrow(() => testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+            Assert.AreEqual(2, throwingActor.TickCount);
+            Assert.AreEqual(1, healthyActor.TickCount);
+        }
+
+        [Test]
         public void Tick_ReentryIsRejectedWithoutStarvingThePhase()
         {
             using GameplayTestWorld testWorld = GameplayTestWorld.Start();

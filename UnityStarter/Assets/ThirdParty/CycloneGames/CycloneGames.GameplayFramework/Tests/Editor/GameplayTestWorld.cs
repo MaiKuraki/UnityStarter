@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Factory.Runtime;
+using System.Runtime.ExceptionServices;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
@@ -22,9 +24,25 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             int localPlayerCount = 0,
             IGameSession session = null,
             WorldNetMode netMode = WorldNetMode.Standalone,
-            Action<GameplayTestWorld> configure = null)
+            Action<GameplayTestWorld> configure = null,
+            IActorLifetime actorLifetime = null,
+            WorldRuntimeLimits runtimeLimits = null,
+            IWorldActorSource actorSource = null,
+            bool discoverActiveSceneActors = true,
+            IMatchClock matchClock = null,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null,
+            ISceneTransitionHandler sceneTransitionHandler = null)
         {
-            GameplayTestWorld testWorld = Create(localPlayerCount, configure);
+            GameplayTestWorld testWorld = Create(
+                localPlayerCount,
+                configure,
+                actorLifetime,
+                runtimeLimits,
+                actorSource,
+                discoverActiveSceneActors,
+                matchClock,
+                cameraOutputLeaseArbiter,
+                sceneTransitionHandler);
             try
             {
                 testWorld.StartWorld(netMode, session);
@@ -39,7 +57,14 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         public static GameplayTestWorld Create(
             int localPlayerCount = 0,
-            Action<GameplayTestWorld> configure = null)
+            Action<GameplayTestWorld> configure = null,
+            IActorLifetime actorLifetime = null,
+            WorldRuntimeLimits runtimeLimits = null,
+            IWorldActorSource actorSource = null,
+            bool discoverActiveSceneActors = true,
+            IMatchClock matchClock = null,
+            ICameraOutputLeaseArbiter cameraOutputLeaseArbiter = null,
+            ISceneTransitionHandler sceneTransitionHandler = null)
         {
             var testWorld = new GameplayTestWorld
             {
@@ -51,7 +76,20 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             testWorld.SetReference("pawnClass", testWorld.CreateAuthoringActor<Pawn>("PawnPrefab"));
             testWorld.SetReference("playerStateClass", testWorld.CreateAuthoringActor<PlayerState>("PlayerStatePrefab"));
             configure?.Invoke(testWorld);
-            testWorld.Instance = new GameInstance(new DefaultUnityObjectSpawner(), localPlayerCount);
+            IWorldActorSource effectiveActorSource = actorSource;
+            if (effectiveActorSource == null && discoverActiveSceneActors)
+            {
+                effectiveActorSource = new SceneWorldActorSource(SceneManager.GetActiveScene());
+            }
+
+            testWorld.Instance = new GameInstance(
+                actorLifetime ?? new UnityActorLifetime(),
+                localPlayerCount,
+                sceneTransitionHandler: sceneTransitionHandler,
+                runtimeLimits: runtimeLimits,
+                actorSource: effectiveActorSource,
+                matchClock: matchClock,
+                cameraOutputLeaseArbiter: cameraOutputLeaseArbiter);
             return testWorld;
         }
 
@@ -70,7 +108,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             var gameObject = new GameObject(name);
             authoringObjects.Add(gameObject);
-            return gameObject.AddComponent<T>();
+            T actor = gameObject.AddComponent<T>();
+            UnityLifecycleTestUtility.InvokeAwake(actor);
+            return actor;
         }
 
         public void SetReference(string fieldName, Object value)
@@ -88,13 +128,45 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         public void Dispose()
         {
-            Instance?.Dispose();
+            Exception disposalFailure = null;
+            GameInstance ownedInstance = Instance;
+            if (ownedInstance != null)
+            {
+                try
+                {
+                    ownedInstance.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    disposalFailure = exception;
+                    if (!ownedInstance.IsDisposalComplete)
+                    {
+                        try
+                        {
+                            ownedInstance.Dispose();
+                        }
+                        catch
+                        {
+                            // Preserve the first failure while giving retryable terminal cleanup
+                            // one deterministic pass to release test-owned scene resources.
+                        }
+                    }
+                }
+            }
+
             Instance = null;
             World = null;
 
             if (Settings != null)
             {
-                Object.DestroyImmediate(Settings);
+                try
+                {
+                    Object.DestroyImmediate(Settings);
+                }
+                catch (Exception exception)
+                {
+                    disposalFailure ??= exception;
+                }
                 Settings = null;
             }
 
@@ -102,11 +174,29 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             {
                 if (authoringObjects[i] != null)
                 {
-                    Object.DestroyImmediate(authoringObjects[i]);
+                    try
+                    {
+                        Object.DestroyImmediate(authoringObjects[i]);
+                    }
+                    catch (Exception exception)
+                    {
+                        disposalFailure ??= exception;
+                    }
                 }
             }
 
             authoringObjects.Clear();
+
+            if (ownedInstance != null && !ownedInstance.IsDisposalComplete)
+            {
+                disposalFailure ??= new InvalidOperationException(
+                    "GameplayTestWorld disposal returned without completing terminal cleanup.");
+            }
+
+            if (disposalFailure != null)
+            {
+                ExceptionDispatchInfo.Capture(disposalFailure).Throw();
+            }
         }
     }
 }

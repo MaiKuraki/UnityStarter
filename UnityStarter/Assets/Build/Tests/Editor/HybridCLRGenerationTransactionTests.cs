@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Build.Pipeline.Editor;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace Build.Pipeline.Tests.Editor
 {
@@ -265,12 +266,408 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(scratchDirectories, Has.Length.EqualTo(1));
             File.WriteAllText(Path.Combine(scratchDirectories[0], "backup-000"), "corrupt");
 
-            Assert.Throws<IOException>(() =>
+            Assert.Catch<IOException>(() =>
                 HybridCLRGenerationTransaction.RecoverPending(projectRoot, out _));
             Assert.That(File.ReadAllText(linkFile), Is.EqualTo("generated"));
             Assert.That(
                 File.Exists(HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot)),
                 Is.True);
+        }
+
+        [Test]
+        public void RecoverPending_JournalWithoutCurrentDocumentType_IsRejectedAndPreserved()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+            transaction.AbandonForTesting();
+
+            string journalPath =
+                HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot);
+            string journal = File.ReadAllText(journalPath);
+            string unsupported = journal.Replace(
+                "  \"documentType\": \"hybridclr-generation-transaction\",\r\n",
+                string.Empty);
+            if (string.Equals(unsupported, journal, StringComparison.Ordinal))
+            {
+                unsupported = journal.Replace(
+                    "  \"documentType\": \"hybridclr-generation-transaction\",\n",
+                    string.Empty);
+            }
+
+            Assert.That(unsupported, Is.Not.EqualTo(journal));
+            File.WriteAllText(journalPath, unsupported);
+
+            Assert.Catch(() =>
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out _));
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("generated-link"));
+            Assert.That(File.Exists(journalPath), Is.True);
+        }
+
+        [Test]
+        public void SuspendForSourceQualification_RestoresOriginalThenResumesGeneratedState()
+        {
+            string hotDirectory = SeedDirectory(
+                "HybridCLRData/HotUpdateDlls/Android",
+                "old-dll");
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            string generatedFile = Path.Combine(
+                projectRoot,
+                "Assets",
+                "HybridCLRGenerate",
+                "AOTGenericReferences.cs");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddMirrorDirectory(hotDirectory);
+            plan.AddSnapshotFile(linkFile);
+            plan.AddGeneratedAssetFile(generatedFile);
+
+            using (HybridCLRGenerationTransaction transaction =
+                   HybridCLRGenerationTransaction.Begin(plan))
+            {
+                File.WriteAllText(Path.Combine(hotDirectory, "Game.dll"), "new-dll");
+                File.WriteAllText(Path.Combine(hotDirectory, "Extra.dll"), "new-extra");
+                File.WriteAllText(linkFile, "new-link");
+                File.WriteAllText(generatedFile, "generated-reference");
+                File.WriteAllText(generatedFile + ".meta", "generated-meta");
+
+                using (transaction.SuspendForSourceQualification())
+                {
+                    Assert.That(
+                        File.ReadAllText(Path.Combine(hotDirectory, "Game.dll")),
+                        Is.EqualTo("old-dll"));
+                    Assert.That(
+                        File.Exists(Path.Combine(hotDirectory, "Extra.dll")),
+                        Is.False);
+                    Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+                    Assert.That(File.Exists(generatedFile), Is.False);
+                    Assert.That(File.Exists(generatedFile + ".meta"), Is.False);
+                }
+
+                Assert.That(
+                    File.ReadAllText(Path.Combine(hotDirectory, "Game.dll")),
+                    Is.EqualTo("new-dll"));
+                Assert.That(
+                    File.ReadAllText(Path.Combine(hotDirectory, "Extra.dll")),
+                    Is.EqualTo("new-extra"));
+                Assert.That(File.ReadAllText(linkFile), Is.EqualTo("new-link"));
+                Assert.That(File.ReadAllText(generatedFile), Is.EqualTo("generated-reference"));
+                Assert.That(File.ReadAllText(generatedFile + ".meta"), Is.EqualTo("generated-meta"));
+            }
+
+            Assert.That(
+                File.ReadAllText(Path.Combine(hotDirectory, "Game.dll")),
+                Is.EqualTo("old-dll"));
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            Assert.That(File.Exists(generatedFile), Is.False);
+        }
+
+        [Test]
+        public void SuspendForSourceQualification_WhenGenerationDeletesExistingFile_RollbackRestoresOriginal()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+
+            using (HybridCLRGenerationTransaction transaction =
+                   HybridCLRGenerationTransaction.Begin(plan))
+            {
+                File.Delete(linkFile);
+                using (transaction.SuspendForSourceQualification())
+                {
+                    Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+                }
+
+                Assert.That(File.Exists(linkFile), Is.False);
+            }
+
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+        }
+
+        [Test]
+        public void SuspendForSourceQualification_AtomicSwapPreservesExactOriginalMetadata()
+        {
+            string directory = SeedDirectory(
+                "HybridCLRData/HotUpdateDlls/Android",
+                "old-dll");
+            string original = Path.Combine(directory, "Game.dll");
+            DateTime originalWriteTime = new DateTime(2024, 1, 2, 3, 4, 6, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(original, originalWriteTime);
+            File.SetAttributes(original, FileAttributes.Archive);
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddMirrorDirectory(directory);
+
+            using (HybridCLRGenerationTransaction transaction =
+                   HybridCLRGenerationTransaction.Begin(plan))
+            {
+                File.WriteAllText(original, "generated-dll");
+                using (transaction.SuspendForSourceQualification())
+                {
+                    Assert.That(File.ReadAllText(original), Is.EqualTo("old-dll"));
+                    Assert.That(File.GetLastWriteTimeUtc(original), Is.EqualTo(originalWriteTime));
+                    Assert.That(
+                        File.GetAttributes(original) & FileAttributes.Archive,
+                        Is.EqualTo(FileAttributes.Archive));
+                }
+
+                Assert.That(File.ReadAllText(original), Is.EqualTo("generated-dll"));
+            }
+        }
+
+        [Test]
+        public void ResumeAfterSourceQualification_WhenSourceViewIsTampered_PreservesEvidence()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+            IDisposable suspension = transaction.SuspendForSourceQualification();
+            File.WriteAllText(linkFile, "unknown-tamper");
+
+            IOException exception = Assert.Throws<IOException>(suspension.Dispose);
+
+            Assert.That(exception.Message, Does.Contain("Unknown evidence was preserved"));
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("unknown-tamper"));
+            Assert.That(
+                File.Exists(HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.True);
+            transaction.AbandonForTesting();
+        }
+
+        [Test]
+        public void ResumeAfterSourceQualification_WhenHeldGeneratedStateIsTampered_PreservesEvidence()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+            IDisposable suspension = transaction.SuspendForSourceQualification();
+            string stateRoot = Path.GetDirectoryName(
+                HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot));
+            string scratch = Directory.GetDirectories(stateRoot)[0];
+            File.WriteAllText(Path.Combine(scratch, "discard-000"), "unknown-held-tamper");
+
+            IOException exception = Assert.Throws<IOException>(suspension.Dispose);
+
+            Assert.That(exception.Message, Does.Contain("Unknown evidence was preserved"));
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            Assert.That(File.ReadAllText(Path.Combine(scratch, "discard-000")),
+                Is.EqualTo("unknown-held-tamper"));
+            transaction.AbandonForTesting();
+        }
+
+        [TestCase("Assets/GeneratedOutput/Child")]
+        [TestCase("Assets")]
+        [TestCase("Assets/GeneratedOutput.meta")]
+        public void ValidateNoOutputTargetOverlap_RejectsTargetAncestorChildAndMeta(
+            string generationRelativePath)
+        {
+            string generationPath = Path.Combine(
+                projectRoot,
+                generationRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            if (Directory.Exists(generationPath))
+            {
+                plan.AddMirrorDirectory(generationPath);
+            }
+            else
+            {
+                plan.AddSnapshotFile(generationPath);
+            }
+            string output = Path.Combine(projectRoot, "Assets", "GeneratedOutput");
+
+            using (HybridCLRGenerationTransaction transaction =
+                   HybridCLRGenerationTransaction.Begin(plan))
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    transaction.ValidateNoOutputTargetOverlap(
+                        new[] { new HybridCLROutputTarget("HotUpdate", output) }));
+            }
+        }
+
+        [Test]
+        public void RecoverPending_AfterSuspendedProcessStops_RestoresOriginalState()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+
+            transaction.SuspendForSourceQualification();
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            transaction.AbandonForTesting();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.True);
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            Assert.That(
+                File.Exists(HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.False);
+            barrier.Complete();
+        }
+
+        [Test]
+        public void RecoverPending_AfterOriginallyAbsentTargetIsSuspended_IgnoresCommitAndRestoresAbsence()
+        {
+            string generatedFile = Path.Combine(
+                projectRoot,
+                "Assets",
+                "HybridCLRGenerate",
+                "AOTGenericReferences.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(generatedFile));
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(generatedFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(generatedFile, "generated-reference");
+
+            transaction.SuspendForSourceQualification();
+            Assert.That(File.Exists(generatedFile), Is.False);
+            transaction.AbandonForTesting();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.True);
+            Assert.That(File.Exists(generatedFile), Is.False);
+            Assert.That(
+                File.Exists(HybridCLRGenerationTransaction.GetActiveJournalPathForTesting(projectRoot)),
+                Is.False);
+            barrier.Complete();
+        }
+
+        [Test]
+        public void RecoverPending_WhenSuspensionStopsAfterGeneratedDisplacement_RestoresOriginal()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+
+            Assert.Throws<HybridCLRGenerationTransaction.SimulatedProcessCrashException>(() =>
+                transaction.SuspendForSourceQualificationForTesting(
+                    (checkpoint, _) => checkpoint
+                        == HybridCLRGenerationTransaction.CrashCheckpoint
+                            .AfterSuspendedTargetDisplacedBeforeRestore));
+            transaction.Dispose();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.True);
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            barrier.Complete();
+        }
+
+        [Test]
+        public void RecoverPending_WhenResumeStopsAfterOriginalDisplacement_RestoresOriginal()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+            IDisposable suspension =
+                transaction.SuspendForSourceQualificationForTesting(
+                    (checkpoint, _) => checkpoint
+                        == HybridCLRGenerationTransaction.CrashCheckpoint
+                            .AfterResumeOriginalDisplacedBeforeGeneratedRestore);
+
+            Assert.Throws<HybridCLRGenerationTransaction.SimulatedProcessCrashException>(
+                suspension.Dispose);
+            transaction.Dispose();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.True);
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            barrier.Complete();
+        }
+
+        [Test]
+        public void RecoverPending_WhenDeletedGeneratedFileResumeStops_RestoresOriginal()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.Delete(linkFile);
+            IDisposable suspension =
+                transaction.SuspendForSourceQualificationForTesting(
+                    (checkpoint, _) => checkpoint
+                        == HybridCLRGenerationTransaction.CrashCheckpoint
+                            .AfterResumeOriginalDisplacedBeforeGeneratedRestore);
+
+            Assert.Throws<HybridCLRGenerationTransaction.SimulatedProcessCrashException>(
+                suspension.Dispose);
+            transaction.Dispose();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.True);
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("old-link"));
+            barrier.Complete();
+        }
+
+        [Test]
+        public void RecoverPending_ActivePhaseWithTerminalCommit_KeepsGeneratedState()
+        {
+            string linkFile = SeedFile(
+                "Assets/HybridCLRGenerate/link.xml",
+                "old-link");
+            var plan = new HybridCLRGenerationPlan(projectRoot);
+            plan.AddSnapshotFile(linkFile);
+            HybridCLRGenerationTransaction transaction =
+                HybridCLRGenerationTransaction.Begin(plan);
+            File.WriteAllText(linkFile, "generated-link");
+            transaction.AbandonForTesting();
+            BuildPublicationBarrier barrier = CreateCommittedTerminalBarrier();
+
+            Assert.That(
+                HybridCLRGenerationTransaction.RecoverPending(projectRoot, out bool assetsChanged),
+                Is.True);
+            Assert.That(assetsChanged, Is.False);
+            Assert.That(File.ReadAllText(linkFile), Is.EqualTo("generated-link"));
+            barrier.Complete();
         }
 
         [Test]
@@ -303,6 +700,37 @@ namespace Build.Pipeline.Tests.Editor
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             File.WriteAllText(file, content);
             return file;
+        }
+
+        private BuildPublicationBarrier CreateCommittedTerminalBarrier()
+        {
+            var publication = new TerminalDecisionPublication();
+            BuildPublicationBarrier barrier = BuildPublicationBarrier.Begin(
+                projectRoot,
+                "hybridclr-generation-recovery",
+                new IBuildDeferredPublication[] { publication });
+            publication.Publish();
+            barrier.CommitDecision();
+            return barrier;
+        }
+
+        private sealed class TerminalDecisionPublication : IBuildDeferredPublication
+        {
+            public string Id => HybridCLROutputTransaction.PublicationId;
+            public string RecoveryStateRelativePath =>
+                HybridCLROutputTransaction.StateRelativePath;
+
+            public void Publish()
+            {
+            }
+
+            public void Complete()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

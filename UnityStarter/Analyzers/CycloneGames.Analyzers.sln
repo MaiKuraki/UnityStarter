@@ -6,6 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CycloneGames.Analyzers", "C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CycloneGames.Analyzers.Tests", "CycloneGames.Analyzers.Tests\CycloneGames.Analyzers.Tests.csproj", "{B9D7E841-57EF-4CB2-AB69-0C4E2E56671C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CycloneGames.Analyzers.Unity", "CycloneGames.Analyzers.Unity\CycloneGames.Analyzers.Unity.csproj", "{6A2A98D3-2AE4-48EF-9CF1-A9F5BAE8AB02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CycloneGames.Analyzers.Verifier", "CycloneGames.Analyzers.Verifier\CycloneGames.Analyzers.Verifier.csproj", "{7C4F2E1A-9B3D-4E5F-8A6C-1D2E3F4A5B6C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,6 +24,14 @@ Global
 		{B9D7E841-57EF-4CB2-AB69-0C4E2E56671C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B9D7E841-57EF-4CB2-AB69-0C4E2E56671C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B9D7E841-57EF-4CB2-AB69-0C4E2E56671C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A2A98D3-2AE4-48EF-9CF1-A9F5BAE8AB02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A2A98D3-2AE4-48EF-9CF1-A9F5BAE8AB02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A2A98D3-2AE4-48EF-9CF1-A9F5BAE8AB02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A2A98D3-2AE4-48EF-9CF1-A9F5BAE8AB02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7C4F2E1A-9B3D-4E5F-8A6C-1D2E3F4A5B6C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7C4F2E1A-9B3D-4E5F-8A6C-1D2E3F4A5B6C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7C4F2E1A-9B3D-4E5F-8A6C-1D2E3F4A5B6C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7C4F2E1A-9B3D-4E5F-8A6C-1D2E3F4A5B6C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

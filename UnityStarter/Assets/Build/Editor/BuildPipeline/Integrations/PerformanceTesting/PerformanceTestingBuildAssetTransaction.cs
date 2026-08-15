@@ -289,7 +289,10 @@ namespace Build.Pipeline.Editor
             ".buildpipeline/transactions/performance-testing";
         internal const string CleanupPreferenceKey = "PT_ResourcesCleanup";
 
-        private const int FormatVersion = 1;
+        private const string JournalDocumentType =
+            "performance-testing-build-asset-transaction";
+        private const string EnvelopeDocumentType =
+            "performance-testing-build-asset-envelope";
         private const string PreparingPhase = "Preparing";
         private const string SnapshottedPhase = "Snapshotted";
         private const string ActivePhase = "Active";
@@ -372,7 +375,7 @@ namespace Build.Pipeline.Editor
                     preferences.HasKey(CleanupPreferenceKey);
                 var journal = new Journal
                 {
-                    formatVersion = FormatVersion,
+                    documentType = JournalDocumentType,
                     transactionId = transactionId,
                     projectRoot = NormalizePortablePath(root),
                     packageVersion = packageVersion,
@@ -1235,6 +1238,10 @@ namespace Build.Pipeline.Editor
             JournalEnvelope envelope;
             try
             {
+                BuildJsonDocumentContract.Validate<JournalEnvelope>(
+                    text,
+                    EnvelopeDocumentType,
+                    "Performance Testing journal envelope");
                 envelope = JsonUtility.FromJson<JournalEnvelope>(text);
             }
             catch (Exception exception)
@@ -1245,7 +1252,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (envelope == null
-                || envelope.formatVersion != FormatVersion
+                || !string.Equals(
+                    envelope.documentType,
+                    EnvelopeDocumentType,
+                    StringComparison.Ordinal)
                 || string.IsNullOrEmpty(envelope.payloadBase64)
                 || !IsSha256(envelope.sha256))
             {
@@ -1274,7 +1284,12 @@ namespace Build.Pipeline.Editor
             Journal journal;
             try
             {
-                journal = JsonUtility.FromJson<Journal>(DecodeStrictUtf8(payload));
+                string payloadJson = DecodeStrictUtf8(payload);
+                BuildJsonDocumentContract.Validate<Journal>(
+                    payloadJson,
+                    JournalDocumentType,
+                    "Performance Testing journal payload");
+                journal = JsonUtility.FromJson<Journal>(payloadJson);
             }
             catch (Exception exception)
             {
@@ -1293,7 +1308,10 @@ namespace Build.Pipeline.Editor
             Journal journal)
         {
             if (journal == null
-                || journal.formatVersion != FormatVersion
+                || !string.Equals(
+                    journal.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || !IsGuidN(journal.transactionId)
                 || !string.Equals(
                     journal.projectRoot,
@@ -1375,7 +1393,7 @@ namespace Build.Pipeline.Editor
             byte[] payload = StrictUtf8.GetBytes(payloadJson);
             var envelope = new JournalEnvelope
             {
-                formatVersion = FormatVersion,
+                documentType = EnvelopeDocumentType,
                 payloadBase64 = Convert.ToBase64String(payload),
                 sha256 = ComputeSha256(payload)
             };
@@ -2188,7 +2206,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class JournalEnvelope
         {
-            public int formatVersion;
+            public string documentType;
             public string payloadBase64;
             public string sha256;
         }
@@ -2196,7 +2214,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string transactionId;
             public string projectRoot;
             public string packageVersion;

@@ -34,6 +34,7 @@ namespace Build.Pipeline.Tests.Editor
                     "versionInfoAssetPath",
                     "additionalScenes",
                     "recipeInvocations",
+                    "sourceCleanlinessPolicy",
                     "cheatBuildMode"
                 },
                 BuildDataInspectorFieldNames.Profile.All);

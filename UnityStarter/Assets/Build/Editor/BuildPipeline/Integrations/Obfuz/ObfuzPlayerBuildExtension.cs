@@ -8,7 +8,7 @@ namespace Build.Pipeline.Editor
     {
         public const string Provider = "obfuz";
         public const string EnvironmentGuard = "obfuz-player-settings";
-        public const string Compatibility = "obfuz-player-v1";
+        public const string Compatibility = "obfuz-player";
     }
 
     [CreateAssetMenu(menuName = "CycloneGames/Build/Player Extensions/Obfuz")]

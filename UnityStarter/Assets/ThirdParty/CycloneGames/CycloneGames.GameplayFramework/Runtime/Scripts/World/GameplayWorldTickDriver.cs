@@ -4,8 +4,8 @@ using UnityEngine;
 namespace CycloneGames.GameplayFramework.Runtime
 {
     /// <summary>
-    /// Sealed Unity PlayerLoop bridge owned by GameplayWorldHost. Actor subclasses never receive
-    /// Unity Update messages from the framework directly.
+    /// Early Unity PlayerLoop bridge for Update and FixedUpdate phases. LateUpdate uses a
+    /// separate post-update driver so camera output observes ordinary LateUpdate motion.
     /// </summary>
     [AddComponentMenu("")]
     [DefaultExecutionOrder(-9999)]
@@ -45,11 +45,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         private void FixedUpdate()
         {
             Dispatch(ActorTickPhase.FixedUpdate, Time.fixedDeltaTime);
-        }
-
-        private void LateUpdate()
-        {
-            Dispatch(ActorTickPhase.LateUpdate, Time.deltaTime);
         }
 
         private void Dispatch(ActorTickPhase phase, float deltaSeconds)

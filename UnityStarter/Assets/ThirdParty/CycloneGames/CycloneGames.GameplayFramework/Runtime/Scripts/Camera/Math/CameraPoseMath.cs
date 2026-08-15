@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using Unity.Burst;
 using Unity.Mathematics;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -7,12 +6,11 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// <summary>
     /// Pure math helpers for camera pose calculations.
     ///
-    /// Methods here avoid UnityEngine.Object access so they are friendly to future Burst use
-    /// (for example when moved into jobs or function-pointer based pipelines).
+    /// Methods here avoid UnityEngine.Object access and can be reused by deterministic
+    /// evaluation code and optional job integrations.
     /// </summary>
     public static class CameraPoseMath
     {
-        [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float ExponentialDecayT(float speed, float deltaTime)
         {
@@ -21,7 +19,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             return 1f - math.exp(-clampedSpeed * clampedDt);
         }
 
-        [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static quaternion LookRotationSafe(float3 direction, quaternion fallback)
         {
@@ -34,7 +31,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             return quaternion.LookRotationSafe(math.normalize(direction), math.up());
         }
 
-        [BurstCompile(FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard)]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsInsideAngularDeadZone(quaternion referenceRotation, float3 lookDirection, float halfAngleXDeg, float halfAngleYDeg)
         {
