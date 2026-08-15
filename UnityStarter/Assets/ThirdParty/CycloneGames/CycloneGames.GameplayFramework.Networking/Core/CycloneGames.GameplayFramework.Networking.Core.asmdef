@@ -2,7 +2,7 @@
     "name": "CycloneGames.GameplayFramework.Networking.Core",
     "rootNamespace": "CycloneGames.GameplayFramework.Networking",
     "references": [
-        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Core",
         "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [],
@@ -13,5 +13,5 @@
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

@@ -19,7 +19,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         public static readonly ContentTrustVerifier IntegrityOnly = new ContentTrustVerifier(ContentTrustPolicy.IntegrityOnly);
 
         private const int SHA256_HEX_LENGTH = 64;
-        private const int XXHASH64_HEX_LENGTH = 16;
 
         public ContentTrustPolicy Policy { get; }
 
@@ -319,26 +318,20 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                         actualSize.ToString());
                 }
 
-                if (entry.HashAlgorithm == ContentTrustHashAlgorithm.None)
-                {
-                    return ContentTrustVerificationResult.Passed(entry.Location);
-                }
-
-                int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
                 await FileHasher.WriteHashAsync(
                     filePath,
-                    ToFileHashAlgorithm(entry.HashAlgorithm),
-                    new Memory<byte>(hashBuffer, 0, hashSize),
+                    FileHashAlgorithm.Sha256,
+                    new Memory<byte>(hashBuffer, 0, 32),
                     cancellationToken: cancellationToken);
                 if (!MatchesExpectedHashHex(
-                        new ReadOnlySpan<byte>(hashBuffer, 0, hashSize),
+                        new ReadOnlySpan<byte>(hashBuffer, 0, 32),
                         entry.ExpectedHashHex))
                 {
                     return ContentTrustVerificationResult.Failed(
                         ContentTrustFailure.HashMismatch,
                         entry.Location,
                         entry.ExpectedHashHex,
-                        ContentHasher.ToHex(new ReadOnlySpan<byte>(hashBuffer, 0, hashSize)));
+                        ContentHasher.ToHex(new ReadOnlySpan<byte>(hashBuffer, 0, 32)));
                 }
 
                 return ContentTrustVerificationResult.Passed(entry.Location);
@@ -421,16 +414,9 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                     "The selected content trust policy requires cryptographic SHA-256 hashes.");
             }
 
-            int expectedHashLength = GetExpectedHashHexLength(entry.HashAlgorithm);
-            if (expectedHashLength < 0)
+            if (!IsExpectedHashValid(entry.ExpectedHashHex, SHA256_HEX_LENGTH))
             {
-                return ContentTrustVerificationResult.Failed(ContentTrustFailure.UnsupportedHashAlgorithm, entry.Location);
-            }
-
-            if (entry.HashAlgorithm != ContentTrustHashAlgorithm.None &&
-                !IsExpectedHashValid(entry.ExpectedHashHex, expectedHashLength))
-            {
-                return ContentTrustVerificationResult.Failed(ContentTrustFailure.InvalidExpectedHash, entry.Location, expectedHashLength.ToString(), entry.ExpectedHashHex);
+                return ContentTrustVerificationResult.Failed(ContentTrustFailure.InvalidExpectedHash, entry.Location, SHA256_HEX_LENGTH.ToString(), entry.ExpectedHashHex);
             }
 
             return ContentTrustVerificationResult.Passed(entry.Location);
@@ -536,14 +522,8 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         private static ContentTrustVerificationResult VerifyFileHash(string filePath, in ContentTrustFileEntry entry)
         {
-            if (entry.HashAlgorithm == ContentTrustHashAlgorithm.None)
-            {
-                return ContentTrustVerificationResult.Passed(entry.Location);
-            }
-
-            int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
-            Span<byte> hashBuffer = stackalloc byte[hashSize];
-            FileHasher.WriteHash(filePath, ToFileHashAlgorithm(entry.HashAlgorithm), hashBuffer);
+            Span<byte> hashBuffer = stackalloc byte[32];
+            FileHasher.WriteHash(filePath, FileHashAlgorithm.Sha256, hashBuffer);
 
             if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
@@ -556,14 +536,8 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         private static ContentTrustVerificationResult VerifyHash(ReadOnlySpan<byte> bytes, in ContentTrustFileEntry entry)
         {
-            if (entry.HashAlgorithm == ContentTrustHashAlgorithm.None)
-            {
-                return ContentTrustVerificationResult.Passed(entry.Location);
-            }
-
-            int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
-            Span<byte> hashBuffer = stackalloc byte[hashSize];
-            ContentHasher.WriteHash(bytes, ToFileHashAlgorithm(entry.HashAlgorithm), hashBuffer);
+            Span<byte> hashBuffer = stackalloc byte[32];
+            ContentHasher.WriteHash(bytes, FileHashAlgorithm.Sha256, hashBuffer);
 
             if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
@@ -635,33 +609,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
 
             return true;
-        }
-
-        private static int GetExpectedHashHexLength(ContentTrustHashAlgorithm algorithm)
-        {
-            switch (algorithm)
-            {
-                case ContentTrustHashAlgorithm.None:
-                    return 0;
-                case ContentTrustHashAlgorithm.Sha256:
-                    return SHA256_HEX_LENGTH;
-                case ContentTrustHashAlgorithm.XxHash64:
-                    return XXHASH64_HEX_LENGTH;
-                default:
-                    return -1;
-            }
-        }
-
-        private static int GetHashSizeInBytes(ContentTrustHashAlgorithm algorithm)
-        {
-            return GetExpectedHashHexLength(algorithm) / 2;
-        }
-
-        private static FileHashAlgorithm ToFileHashAlgorithm(ContentTrustHashAlgorithm algorithm)
-        {
-            return algorithm == ContentTrustHashAlgorithm.XxHash64
-                ? FileHashAlgorithm.XxHash64
-                : FileHashAlgorithm.Sha256;
         }
 
         private static void AddFailure(List<ContentTrustVerificationResult> failures, ContentTrustVerificationResult failure)

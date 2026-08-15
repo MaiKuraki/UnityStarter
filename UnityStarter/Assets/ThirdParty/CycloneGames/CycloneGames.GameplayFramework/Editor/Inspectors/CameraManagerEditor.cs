@@ -1,6 +1,5 @@
 using UnityEditor;
 using UnityEngine;
-using Unity.Cinemachine;
 using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
@@ -101,7 +100,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             unchecked
             {
                 int hash = 17;
-                hash = CombineHash(hash, GetObjectInstanceId(cameraManager.ActiveVirtualCamera));
+                hash = CombineHash(hash, GetObjectInstanceId(cameraManager.ActiveOutputObject));
+                hash = CombineHash(
+                    hash,
+                    cameraManager.ActiveOutput != null
+                        ? cameraManager.ActiveOutput.GetType().GetHashCode()
+                        : 0);
 
                 if (!showReadOnlyTelemetry || !showRuntimeTelemetry)
                 {
@@ -197,26 +201,30 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             if (Application.isPlaying)
             {
-                var activeCamera = cameraManager.ActiveVirtualCamera;
+                ICameraOutput activeOutput = cameraManager.ActiveOutput;
 
-                if (activeCamera != null)
+                if (activeOutput != null)
                 {
                     GUI.color = new Color(0.7f, 1.0f, 0.7f);
-                    EditorGUILayout.LabelField("Active Camera:", EditorStyles.miniBoldLabel);
+                    EditorGUILayout.LabelField("Active Output:", EditorStyles.miniBoldLabel);
                     EditorGUILayout.BeginHorizontal();
                     GUI.enabled = false;
-                    EditorGUILayout.ObjectField(activeCamera, typeof(CinemachineCamera), false);
+                    EditorGUILayout.ObjectField(
+                        activeOutput.OutputObject,
+                        typeof(Object),
+                        allowSceneObjects: true);
                     GUI.enabled = true;
-                    if (GUILayout.Button("Ping", GUILayout.Width(50)))
+                    if (activeOutput.OutputObject != null && GUILayout.Button("Ping", GUILayout.Width(50)))
                     {
-                        EditorGUIUtility.PingObject(activeCamera);
+                        EditorGUIUtility.PingObject(activeOutput.OutputObject);
                     }
                     EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.LabelField("Backend", activeOutput.DisplayName);
                 }
                 else
                 {
                     GUI.color = Color.yellow;
-                    EditorGUILayout.LabelField("Active Camera: None", EditorStyles.boldLabel);
+                    EditorGUILayout.LabelField("Active Output: None", EditorStyles.boldLabel);
                 }
             }
             else

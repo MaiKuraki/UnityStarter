@@ -195,6 +195,7 @@ namespace Build.Pipeline.Editor
             string branch,
             string commitDate,
             string providerId,
+            Build.VersionControl.Editor.VersionControlWorkspaceEvidence sourceWorkspace,
             BuildIdentityOrigin identityOrigin = BuildIdentityOrigin.VersionControl,
             string detectedCommitHash = null,
             string detectedCommitCount = null,
@@ -230,6 +231,9 @@ namespace Build.Pipeline.Editor
             DetectedBuildNumber = detectedBuildNumber;
             CiProvider = ciProvider ?? string.Empty;
             CiRunId = ciRunId ?? string.Empty;
+            SourceWorkspace = sourceWorkspace
+                ?? Build.VersionControl.Editor.VersionControlWorkspaceEvidence.Unknown(
+                    Build.VersionControl.Editor.VersionControlWorkspaceEvidence.MetadataUnavailable);
         }
 
         public string ApplicationVersion { get; }
@@ -253,6 +257,38 @@ namespace Build.Pipeline.Editor
         public long? DetectedBuildNumber { get; }
         public string CiProvider { get; }
         public string CiRunId { get; }
+        public Build.VersionControl.Editor.VersionControlWorkspaceEvidence SourceWorkspace { get; }
+
+        internal BuildVersionContext WithSourceWorkspace(
+            Build.VersionControl.Editor.VersionControlWorkspaceEvidence sourceWorkspace)
+        {
+            return new BuildVersionContext(
+                ApplicationVersion,
+                PackageVersion,
+                BuildNumber,
+                CommitHash,
+                CommitCount,
+                Branch,
+                CommitDate,
+                ProviderId,
+                sourceWorkspace,
+                IdentityOrigin,
+                DetectedCommitHash,
+                DetectedCommitCount,
+                DetectedBranch,
+                DetectedCommitDate,
+                DetectedProviderId,
+                DetectedBuildNumber,
+                CiProvider,
+                CiRunId);
+        }
+    }
+
+    public enum BuildPurpose
+    {
+        Release = 0,
+        Development = 1,
+        LocalReleasePreview = 2
     }
 
     public sealed class BuildRequest
@@ -280,7 +316,9 @@ namespace Build.Pipeline.Editor
             bool batchMode,
             string applicationVersion,
             BuildIdentityOverride identityOverride,
-            IReadOnlyList<BuildStepInvocation> steps)
+            IReadOnlyList<BuildStepInvocation> steps,
+            BuildSourceCleanlinessPolicy sourceCleanlinessPolicy,
+            BuildPurpose purpose)
         {
             CompanyName = companyName ?? string.Empty;
             ProductName = productName ?? string.Empty;
@@ -309,6 +347,40 @@ namespace Build.Pipeline.Editor
             ApplicationVersion = applicationVersion ?? throw new ArgumentNullException(nameof(applicationVersion));
             IdentityOverride = identityOverride ?? throw new ArgumentNullException(nameof(identityOverride));
             Steps = SnapshotSteps(steps, nameof(steps));
+            if (purpose != BuildPurpose.Release
+                && purpose != BuildPurpose.Development
+                && purpose != BuildPurpose.LocalReleasePreview)
+            {
+                throw new ArgumentOutOfRangeException(nameof(purpose), purpose, null);
+            }
+
+            if (purpose == BuildPurpose.Release && debugBuild
+                || purpose == BuildPurpose.Development && !debugBuild
+                || purpose == BuildPurpose.LocalReleasePreview
+                   && (debugBuild || batchMode || exportAndroidProject || allowExternalOutput))
+            {
+                throw new ArgumentException(
+                    "Build purpose is incompatible with the requested build flags.",
+                    nameof(purpose));
+            }
+
+            Purpose = purpose;
+            if (sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.RequireClean
+                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyDevelopment
+                && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(sourceCleanlinessPolicy),
+                    sourceCleanlinessPolicy,
+                    "Source cleanliness policy must be RequireClean, AllowDirtyDevelopment, " +
+                    "or AllowDirtyLocalRelease.");
+            }
+
+            SourceCleanlinessPolicy = sourceCleanlinessPolicy;
+            RequireCleanSource = BuildSourceWorkspacePolicy.RequiresVerifiedClean(
+                batchMode,
+                purpose,
+                sourceCleanlinessPolicy);
 
             var stepTypeIds = new string[Steps.Count];
             for (int index = 0; index < Steps.Count; index++)
@@ -342,6 +414,11 @@ namespace Build.Pipeline.Editor
         public bool BatchMode { get; }
         public string ApplicationVersion { get; }
         public BuildIdentityOverride IdentityOverride { get; }
+        public BuildSourceCleanlinessPolicy SourceCleanlinessPolicy { get; }
+        public BuildPurpose Purpose { get; }
+        public bool RequireCleanSource { get; }
+        public bool CanPublishReleaseBaseline =>
+            Purpose == BuildPurpose.Release && RequireCleanSource;
         public IReadOnlyList<BuildStepInvocation> Steps { get; }
         public IReadOnlyList<string> StepTypeIds { get; }
 
@@ -1281,6 +1358,19 @@ namespace Build.Pipeline.Editor
     public interface IBuildDownstreamInputPublication : IBuildDeferredPublication
     {
         void ActivateForDownstream();
+    }
+
+    /// <summary>
+    /// An activated downstream publication whose transaction-owned workspace
+    /// mutations can be hidden while the runner qualifies the source checkout.
+    /// The returned scope must restore the exact publication-ready state when
+    /// disposed. Implementations must fail closed when either state cannot be
+    /// proven and must retain durable recovery evidence across interruption.
+    /// </summary>
+    public interface IBuildSourceQualificationPublication
+        : IBuildDownstreamInputPublication
+    {
+        IDisposable SuspendForSourceQualification();
     }
 
     public interface IBuildEventSink

@@ -202,7 +202,8 @@ namespace Build.Pipeline.Tests.Editor
                 BuildRunResult result = new BuildPipelineRunner(
                         evidence.CreateEventSink(),
                         projectRoot,
-                        () => false)
+                        () => false,
+                        BuildTestVersionResolver.ResolveClean)
                     .Run(request, evidence.RunId, evidence.ManifestPath);
 
                 Assert.That(result.Succeeded, Is.False);
@@ -265,7 +266,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: "0.1.0",
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: steps);
+                steps: steps,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Development);
         }
 
         private static BuildRunResult CreateResult(

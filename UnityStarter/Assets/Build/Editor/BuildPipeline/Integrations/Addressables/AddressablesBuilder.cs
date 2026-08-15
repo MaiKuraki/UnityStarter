@@ -30,7 +30,7 @@ namespace Build.Pipeline.Editor
         internal static IBuildDeferredPublication Build(
             string invocationId,
             BuildTarget buildTarget,
-            string contentVersion,
+            string contentIdentity,
             AddressablesBuildConfig config,
             BuildIncrementality incrementality)
         {
@@ -74,7 +74,7 @@ namespace Build.Pipeline.Editor
                     projectRoot,
                     invocationId,
                     buildTarget,
-                    contentVersion,
+                    contentIdentity,
                     config,
                     incrementality);
             });
@@ -290,11 +290,11 @@ namespace Build.Pipeline.Editor
             string projectRoot,
             string invocationId,
             BuildTarget buildTarget,
-            string contentVersion,
+            string contentIdentity,
             AddressablesBuildConfig config,
             BuildIncrementality incrementality)
         {
-            ValidatePortablePathSegment(contentVersion, "Addressables content version");
+            ValidatePortablePathSegment(contentIdentity, "Addressables content version");
 
             if (EditorUserBuildSettings.activeBuildTarget != buildTarget)
             {
@@ -309,7 +309,7 @@ namespace Build.Pipeline.Editor
                 invocationId,
                 config.buildOutputDirectory);
             Debug.Log(
-                $"{LogTag} Building content. Target={buildTarget}, Version={contentVersion}, Mode={incrementality}, " +
+                $"{LogTag} Building content. Target={buildTarget}, Version={contentIdentity}, Mode={incrementality}, " +
                 $"RemoteCatalog={useBuildRemoteCatalog}, Publish={useCopyToOutputDirectory}.");
 
             Type settingsType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
@@ -397,7 +397,7 @@ namespace Build.Pipeline.Editor
                 if (incrementality == BuildIncrementality.Clean)
                 {
                     ClearActiveBuilderCache(settings, settingsType, buildTarget);
-                    overridePlayerVersionProperty.SetValue(settings, contentVersion);
+                    overridePlayerVersionProperty.SetValue(settings, contentIdentity);
                 }
 
                 object buildResult = incrementality == BuildIncrementality.Clean
@@ -416,11 +416,11 @@ namespace Build.Pipeline.Editor
                             buildResult,
                             projectRoot,
                             incrementality,
-                            contentVersion,
+                            contentIdentity,
                             contentUpdateBaseline);
                         if (incrementality == BuildIncrementality.Clean)
                         {
-                            SaveVersionDataToAddressablesBuildPath(contentVersion, buildTarget);
+                            SaveVersionDataToAddressablesBuildPath(contentIdentity, buildTarget);
                         }
 
                         if (useCopyToOutputDirectory)
@@ -433,7 +433,7 @@ namespace Build.Pipeline.Editor
                                 buildResult,
                                 settings,
                                 settingsType,
-                                contentVersion,
+                                contentIdentity,
                                 config,
                                 incrementality,
                                 profileIdentity,
@@ -765,10 +765,10 @@ namespace Build.Pipeline.Editor
         internal static void WriteVersionArtifactDurably(
             string projectRoot,
             string versionFilePath,
-            string contentVersion)
+            string contentIdentity)
         {
             ValidatePortablePathSegment(
-                contentVersion,
+                contentIdentity,
                 "Addressables content version");
             string finalPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 versionFilePath,
@@ -796,11 +796,11 @@ namespace Build.Pipeline.Editor
                 temporaryPath,
                 backupPath);
 
-            var versionData = new VersionDataJson { contentVersion = contentVersion };
+            var versionData = new VersionDataJson { contentIdentity = contentIdentity };
             WriteNewTextDurably(
                 temporaryPath,
                 JsonUtility.ToJson(versionData, true));
-            ReadAndValidateVersionArtifact(projectRoot, temporaryPath, contentVersion);
+            ReadAndValidateVersionArtifact(projectRoot, temporaryPath, contentIdentity);
             if (IsRegularVersionArtifact(finalPath))
             {
                 File.Replace(temporaryPath, finalPath, backupPath);
@@ -810,13 +810,13 @@ namespace Build.Pipeline.Editor
                 File.Move(temporaryPath, finalPath);
             }
 
-            ReadAndValidateVersionArtifact(projectRoot, finalPath, contentVersion);
+            ReadAndValidateVersionArtifact(projectRoot, finalPath, contentIdentity);
             if (IsRegularVersionArtifact(backupPath))
             {
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     backupPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
                 DeleteVersionArtifactStrict(backupPath);
             }
         }
@@ -835,13 +835,13 @@ namespace Build.Pipeline.Editor
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     finalPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
                 if (temporaryExists)
                 {
                     ReadAndValidateVersionArtifact(
                         projectRoot,
                         temporaryPath,
-                        expectedContentVersion: null);
+                        expectedContentIdentity: null);
                 }
 
                 if (backupExists)
@@ -849,7 +849,7 @@ namespace Build.Pipeline.Editor
                     ReadAndValidateVersionArtifact(
                         projectRoot,
                         backupPath,
-                        expectedContentVersion: null);
+                        expectedContentIdentity: null);
                 }
 
                 DeleteVersionArtifactStrict(temporaryPath);
@@ -862,20 +862,20 @@ namespace Build.Pipeline.Editor
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     backupPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
                 if (temporaryExists)
                 {
                     ReadAndValidateVersionArtifact(
                         projectRoot,
                         temporaryPath,
-                        expectedContentVersion: null);
+                        expectedContentIdentity: null);
                 }
 
                 File.Move(backupPath, finalPath);
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     finalPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
                 DeleteVersionArtifactStrict(temporaryPath);
                 return;
             }
@@ -885,12 +885,12 @@ namespace Build.Pipeline.Editor
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     temporaryPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
                 File.Move(temporaryPath, finalPath);
                 ReadAndValidateVersionArtifact(
                     projectRoot,
                     finalPath,
-                    expectedContentVersion: null);
+                    expectedContentIdentity: null);
             }
         }
 
@@ -920,7 +920,7 @@ namespace Build.Pipeline.Editor
         internal static string ReadAndValidateVersionArtifact(
             string projectRoot,
             string path,
-            string expectedContentVersion)
+            string expectedContentIdentity)
         {
             EnsureVersionArtifactPathIsInsideProject(projectRoot, path);
             if (!IsRegularVersionArtifact(path))
@@ -988,26 +988,26 @@ namespace Build.Pipeline.Editor
                     exception);
             }
 
-            if (data == null || string.IsNullOrWhiteSpace(data.contentVersion))
+            if (data == null || string.IsNullOrWhiteSpace(data.contentIdentity))
             {
                 throw new InvalidDataException(
-                    $"Addressables version artifact contentVersion is invalid: '{path}'.");
+                    $"Addressables version artifact contentIdentity is invalid: '{path}'.");
             }
 
             ValidatePortablePathSegment(
-                data.contentVersion,
-                "Addressables version artifact contentVersion");
-            if (expectedContentVersion != null
+                data.contentIdentity,
+                "Addressables version artifact contentIdentity");
+            if (expectedContentIdentity != null
                 && !string.Equals(
-                    data.contentVersion,
-                    expectedContentVersion,
+                    data.contentIdentity,
+                    expectedContentIdentity,
                     StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"Addressables version artifact does not contain the expected contentVersion '{expectedContentVersion}': '{path}'.");
+                    $"Addressables version artifact does not contain the expected contentIdentity '{expectedContentIdentity}': '{path}'.");
             }
 
-            return data.contentVersion;
+            return data.contentIdentity;
         }
 
         private static void EnsureVersionArtifactPathIsInsideProject(
@@ -1188,7 +1188,7 @@ namespace Build.Pipeline.Editor
             object buildResult,
             object settings,
             Type settingsType,
-            string contentVersion,
+            string contentIdentity,
             AddressablesBuildConfig config,
             BuildIncrementality incrementality,
             ActiveProfileIdentity profileIdentity,
@@ -1222,7 +1222,7 @@ namespace Build.Pipeline.Editor
                 settingsType,
                 buildVersionPath,
                 customDestRoot,
-                contentVersion,
+                contentIdentity,
                 config,
                 contentStateIdentity);
             string destinationDirectory = Path.Combine(customDestRoot, buildTarget.ToString());
@@ -1234,7 +1234,7 @@ namespace Build.Pipeline.Editor
                 destinationDirectory,
                 files,
                 buildTarget,
-                contentVersion,
+                contentIdentity,
                 incrementality,
                 profileIdentity,
                 contentStateIdentity,
@@ -1250,7 +1250,7 @@ namespace Build.Pipeline.Editor
             Type settingsType,
             string versionFilePath,
             string publicationRoot,
-            string contentVersion,
+            string contentIdentity,
             AddressablesBuildConfig config,
             ContentStateIdentity contentStateIdentity)
         {
@@ -1362,7 +1362,7 @@ namespace Build.Pipeline.Editor
                 ? GetExpectedRemoteCatalogBaseName(
                     settings,
                     settingsType,
-                    contentStateIdentity?.PlayerVersion ?? contentVersion)
+                    contentStateIdentity?.PlayerVersion ?? contentIdentity)
                 : null;
             bool remoteCatalogDataFound = !buildRemoteCatalog;
             bool remoteCatalogHashFound = !buildRemoteCatalog;
@@ -1446,7 +1446,7 @@ namespace Build.Pipeline.Editor
             string destinationDirectory,
             IReadOnlyList<PublicationFile> files,
             BuildTarget buildTarget,
-            string contentVersion,
+            string contentIdentity,
             BuildIncrementality incrementality,
             ActiveProfileIdentity profileIdentity,
             ContentStateIdentity contentStateIdentity,
@@ -1463,7 +1463,7 @@ namespace Build.Pipeline.Editor
                 publicationRoot,
                 destinationDirectory,
                 invocationId,
-                buildTarget + "\n" + contentVersion);
+                buildTarget + "\n" + contentIdentity);
             Exception failure = null;
             try
             {
@@ -1521,7 +1521,7 @@ namespace Build.Pipeline.Editor
                 var manifest = new AddressablesArtifactManifest
                 {
                     buildTarget = buildTarget.ToString(),
-                    contentVersion = contentVersion,
+                    contentIdentity = contentIdentity,
                     incrementality = incrementality.ToString(),
                     unityVersion = Application.unityVersion,
                     activeProfileId = profileIdentity.Id,
@@ -2127,12 +2127,12 @@ namespace Build.Pipeline.Editor
         private static string GetExpectedRemoteCatalogBaseName(
             object settings,
             Type settingsType,
-            string contentVersion)
+            string contentIdentity)
         {
             string evaluated = EvaluateProfileString(
                 settings,
                 settingsType,
-                "/catalog_" + contentVersion);
+                "/catalog_" + contentIdentity);
             string fileName = Path.GetFileName(
                 (evaluated ?? string.Empty).TrimEnd('/', '\\'));
             if (string.IsNullOrWhiteSpace(fileName))
@@ -2572,7 +2572,7 @@ namespace Build.Pipeline.Editor
         /// maps this directory to StreamingAssets/aa; content publication copies the same validated file.
         /// </summary>
         private static void SaveVersionDataToAddressablesBuildPath(
-            string contentVersion,
+            string contentIdentity,
             BuildTarget buildTarget)
         {
             try
@@ -2601,7 +2601,7 @@ namespace Build.Pipeline.Editor
                 WriteVersionArtifactDurably(
                     projectRoot,
                     versionFilePath,
-                    contentVersion);
+                    contentIdentity);
 
                 if (!File.Exists(versionFilePath))
                 {
@@ -3260,7 +3260,7 @@ namespace Build.Pipeline.Editor
             object buildResult,
             string projectRoot,
             BuildIncrementality incrementality,
-            string requestedContentVersion,
+            string requestedContentIdentity,
             ContentUpdateBaseline baseline)
         {
             string path = GetOptionalBuildResultPath(
@@ -3285,7 +3285,7 @@ namespace Build.Pipeline.Editor
                     incrementality == BuildIncrementality.Incremental);
             string expectedPlayerVersion = incrementality == BuildIncrementality.Incremental
                 ? baseline?.State.PlayerVersion
-                : requestedContentVersion;
+                : requestedContentIdentity;
             if (!string.Equals(
                     state.PlayerVersion,
                     expectedPlayerVersion,
@@ -3700,7 +3700,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private class VersionDataJson
         {
-            public string contentVersion = string.Empty;
+            public string contentIdentity = string.Empty;
         }
     }
 }

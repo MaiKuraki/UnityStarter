@@ -25,7 +25,7 @@ namespace Build.Pipeline.Editor
         internal const string StateRelativePath = ".buildpipeline/transactions/publication-barrier";
         internal const string ParticipantId = "PublicationBarrier";
 
-        private const int FormatVersion = 1;
+        private const string DocumentType = "build-publication-decision";
         private const string PreparedPhase = "Prepared";
         private const string CommittedPhase = "Committed";
         private const string JournalFileName = "active.json";
@@ -111,7 +111,7 @@ namespace Build.Pipeline.Editor
 
             var journal = new Journal
             {
-                formatVersion = FormatVersion,
+                documentType = DocumentType,
                 runId = runId,
                 phase = PreparedPhase,
                 sequence = 1,
@@ -361,6 +361,10 @@ namespace Build.Pipeline.Editor
             }
 
             string json = StrictUtf8.GetString(File.ReadAllBytes(path));
+            BuildJsonDocumentContract.Validate<Journal>(
+                json,
+                DocumentType,
+                "Publication barrier journal");
             Journal value = JsonUtility.FromJson<Journal>(json);
             ValidateJournal(value, expectedProjectRoot);
             candidates.Add(new JournalCandidate(value, JsonUtility.ToJson(value, false)));
@@ -369,7 +373,7 @@ namespace Build.Pipeline.Editor
         private static void ValidateJournal(Journal value, string expectedProjectRoot)
         {
             if (value == null
-                || value.formatVersion != FormatVersion
+                || !string.Equals(value.documentType, DocumentType, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(value.runId)
                 || value.sequence <= 0
                 || (value.phase != PreparedPhase && value.phase != CommittedPhase)
@@ -653,7 +657,7 @@ namespace Build.Pipeline.Editor
 
             return new Journal
             {
-                formatVersion = source.formatVersion,
+                documentType = source.documentType,
                 runId = source.runId,
                 phase = source.phase,
                 sequence = source.sequence,
@@ -680,7 +684,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string runId;
             public string phase;
             public long sequence;

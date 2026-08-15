@@ -1,17 +1,67 @@
 using System;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
+    internal readonly struct ActorRegistrationPage
+    {
+        private ActorRegistrationPage(
+            int pageIndex,
+            int pageCount,
+            int startIndex,
+            int endIndexExclusive)
+        {
+            PageIndex = pageIndex;
+            PageCount = pageCount;
+            StartIndex = startIndex;
+            EndIndexExclusive = endIndexExclusive;
+        }
+
+        public int PageIndex { get; }
+        public int PageCount { get; }
+        public int StartIndex { get; }
+        public int EndIndexExclusive { get; }
+
+        public static ActorRegistrationPage Create(
+            int totalCount,
+            int requestedPageIndex,
+            int pageSize)
+        {
+            if (totalCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(totalCount));
+            }
+
+            if (pageSize <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(pageSize));
+            }
+
+            int pageCount = totalCount == 0
+                ? 1
+                : ((totalCount - 1) / pageSize) + 1;
+            int pageIndex = Math.Max(0, Math.Min(requestedPageIndex, pageCount - 1));
+            int startIndex = pageIndex * pageSize;
+            int endIndexExclusive = Math.Min(totalCount, startIndex + pageSize);
+            return new ActorRegistrationPage(
+                pageIndex,
+                pageCount,
+                startIndex,
+                endIndexExclusive);
+        }
+    }
+
     internal sealed class GameplayWorldDebuggerWindow : EditorWindow
     {
         private const double RefreshIntervalSeconds = 0.2d;
+        private const int ActorPageSize = 32;
 
         private GameplayWorldHost host;
         private bool autoBind = true;
-        private string actorFilter = string.Empty;
+        private int actorPageIndex;
         private Vector2 scrollPosition;
         private double nextRefreshTime;
 
@@ -24,12 +74,17 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private void OnEnable()
         {
             EditorApplication.update += OnEditorUpdate;
-            TryBindHost();
+            EditorApplication.hierarchyChanged += OnHierarchyChanged;
+            if (autoBind)
+            {
+                TryBindHost();
+            }
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= OnEditorUpdate;
+            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
         }
 
         private void OnEditorUpdate()
@@ -40,11 +95,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
 
             nextRefreshTime = EditorApplication.timeSinceStartup + RefreshIntervalSeconds;
-            if (autoBind && host == null)
-            {
-                TryBindHost();
-            }
-
             if (Application.isPlaying || host != null)
             {
                 Repaint();
@@ -58,12 +108,28 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 "Observes one GameplayWorldHost and its active World. Actor registrations are read by dense index without creating a runtime collection snapshot.",
                 new Color(0.42f, 0.78f, 1f, 1f));
 
-            host = (GameplayWorldHost)EditorGUILayout.ObjectField(
+            EditorGUI.BeginChangeCheck();
+            GameplayWorldHost selectedHost = (GameplayWorldHost)EditorGUILayout.ObjectField(
                 "World Host",
                 host,
                 typeof(GameplayWorldHost),
                 true);
-            autoBind = EditorGUILayout.ToggleLeft("Auto bind first loaded host", autoBind);
+            if (EditorGUI.EndChangeCheck())
+            {
+                host = selectedHost;
+                actorPageIndex = 0;
+            }
+
+            EditorGUI.BeginChangeCheck();
+            bool nextAutoBind = EditorGUILayout.ToggleLeft("Auto bind first loaded host", autoBind);
+            if (EditorGUI.EndChangeCheck())
+            {
+                autoBind = nextAutoBind;
+                if (autoBind && host == null)
+                {
+                    TryBindHost();
+                }
+            }
 
             if (GUILayout.Button("Find Loaded Host"))
             {
@@ -73,6 +139,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             if (host == null)
             {
                 EditorGUILayout.HelpBox("No GameplayWorldHost is bound.", MessageType.Info);
+                return;
+            }
+
+            if (!Application.isPlaying)
+            {
+                EditorGUILayout.HelpBox(
+                    "Enter Play Mode to inspect live Host and World state.",
+                    MessageType.Info);
                 return;
             }
 
@@ -102,6 +176,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.EnumPopup("State", targetHost.State);
                 EditorGUILayout.EnumPopup("Net Mode", targetHost.NetMode);
                 EditorGUILayout.IntField("Local Players", targetHost.EffectiveLocalPlayerCount);
+                EditorGUILayout.Toggle("Explicit Composition", targetHost.HasExplicitComposition);
                 EditorGUILayout.ObjectField(
                     "WorldSettings",
                     targetHost.WorldSettings,
@@ -118,6 +193,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private static void DrawWorldSummary(World world)
         {
+            ActorAdmissionSnapshot admission = world.GetActorAdmissionSnapshot();
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("World", EditorStyles.boldLabel);
             using (new EditorGUI.DisabledScope(true))
@@ -126,6 +202,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.Toggle("Authority", world.IsAuthority);
                 EditorGUILayout.IntField("Actors", world.ActorCount);
                 EditorGUILayout.IntField("World-Owned Actors", world.OwnedActorCount);
+                EditorGUILayout.IntField("Peak Actors", admission.PeakActorCount);
+                EditorGUILayout.IntField("Actor Admission Limit", admission.MaximumActorCount);
+                EditorGUILayout.IntField("Allocated Actor Capacity", admission.AllocatedActorCapacity);
+                EditorGUILayout.LongField("Rejected Actor Admissions", admission.RejectedAdmissionCount);
                 EditorGUILayout.IntField(
                     "Update Tick Actors",
                     world.GetTickActorCount(ActorTickPhase.Update));
@@ -158,11 +238,38 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         {
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("Actor Registrations", EditorStyles.boldLabel);
-            actorFilter = EditorGUILayout.TextField("Filter", actorFilter ?? string.Empty);
+            ActorRegistrationPage page = ActorRegistrationPage.Create(
+                world.ActorCount,
+                actorPageIndex,
+                ActorPageSize);
+            actorPageIndex = page.PageIndex;
+
+            EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(page.PageIndex == 0))
+            {
+                if (GUILayout.Button("Previous", GUILayout.Width(80f)))
+                {
+                    actorPageIndex--;
+                }
+            }
+
+            EditorGUILayout.LabelField(
+                $"Page {page.PageIndex + 1} of {page.PageCount} | indices {page.StartIndex}..{Math.Max(page.StartIndex, page.EndIndexExclusive - 1)}",
+                EditorStyles.centeredGreyMiniLabel);
+
+            using (new EditorGUI.DisabledScope(page.PageIndex >= page.PageCount - 1))
+            {
+                if (GUILayout.Button("Next", GUILayout.Width(80f)))
+                {
+                    actorPageIndex++;
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
             int visibleCount = 0;
-            for (int i = 0; i < world.ActorCount; i++)
+            for (int i = page.StartIndex; i < page.EndIndexExclusive; i++)
             {
                 if (!world.TryGetActorRegistration(i, out WorldActorRegistration registration))
                 {
@@ -170,7 +277,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 }
 
                 Actor actor = registration.Actor;
-                if (!MatchesFilter(actor))
+                if (actor == null)
                 {
                     continue;
                 }
@@ -205,29 +312,31 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             if (visibleCount == 0)
             {
-                EditorGUILayout.HelpBox("No actor registrations match the filter.", MessageType.Info);
+                EditorGUILayout.HelpBox("This page contains no live actor registrations.", MessageType.Info);
             }
 
             EditorGUILayout.EndScrollView();
         }
 
-        private bool MatchesFilter(Actor actor)
+        private void OnHierarchyChanged()
         {
-            if (actor == null || string.IsNullOrWhiteSpace(actorFilter))
+            if (autoBind && host == null)
             {
-                return actor != null;
+                TryBindHost();
             }
 
-            return actor.name.IndexOf(actorFilter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   actor.GetType().Name.IndexOf(actorFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+            Repaint();
         }
 
         private void TryBindHost()
         {
-            GameplayWorldHost[] hosts = UnityEngine.Object.FindObjectsByType<GameplayWorldHost>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None);
-            host = hosts.Length > 0 ? hosts[0] : null;
+            GameplayWorldHost nextHost = UnityEngine.Object.FindFirstObjectByType<GameplayWorldHost>(
+                FindObjectsInactive.Include);
+            if (host != nextHost)
+            {
+                host = nextHost;
+                actorPageIndex = 0;
+            }
         }
     }
 }

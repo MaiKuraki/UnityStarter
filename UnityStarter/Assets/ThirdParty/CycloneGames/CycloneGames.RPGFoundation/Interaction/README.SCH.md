@@ -4,13 +4,13 @@
 
 一个 `InteractionAuthorityService` 最多保留 `65,536` 个 registered target 与 `65,536` 个 queue owner；其拥有的 `InteractionRateLimiter` 最多保留 `65,536` 个 instigator window。这些常量是 implementation safety ceiling；产品可为独立 limiter 构造更低的 owner capacity。达到容量后，已有 entry 仍可更新、消费、移除或清空。
 
-新增 target 达到 ceiling 时，`TryRegisterTarget` 返回 `false`。新代码访问 queue 时应使用 `TryGetOrCreateQueue`；旧 `GetOrCreateQueue` 在容量处以 `InvalidOperationException` fail-fast。`TryQueueRequest` 将 queue-owner 容量拒绝转换为已有 `QueueFull` 结果。`InteractionRateLimiter.TryConsume` 返回 `false`，authority 将其映射为已有 `RateLimited` 结果。O(1) snapshot 暴露全部 count、capacity 与单调 rejection counter。
+新增 target 达到 ceiling 时，`TryRegisterTarget` 返回 `false`。`TryGetOrCreateQueue` 提供显式容量结果，`GetOrCreateQueue` 则在达到容量时以 `InvalidOperationException` fail-fast。`TryQueueRequest` 将 queue-owner 容量拒绝转换为 `QueueFull`。`InteractionRateLimiter.TryConsume` 返回 `false`，authority 将其映射为 `RateLimited`。O(1) snapshot 暴露全部 count、capacity 与单调 rejection counter。
 
 rate window 使用有界 indexed expiry heap：每个保留身份只拥有一个 dictionary entry 和一个 heap key。准入前，单次调用最多移除 `MaximumExpiredWindowsToPrunePerCall`（`256`）个过期身份，因此身份 churn 不会永久耗尽容量，清理本身也不会形成无界请求尖峰。身份通过认证且断线时，可调用 `InteractionAuthorityService.RemoveInstigatorRateLimitWindow(instigatorId)`（独立 owner 使用 `InteractionRateLimiter.Remove`）显式释放。输入的 `int` tick 通过序列号差值规范化到 owner-local monotonic `long` 时间线，因此正常的 `int` wrap 会继续推进时间。向后或乱序 sample 不会回退或清空任何 window，而是按最近观测时间求值，所以不能重置其他身份的限制。Authority 有意进入不同时间域时，应在冷路径显式调用 `Clear`。相邻两次前向观测必须小于 `int` 序列空间的一半；更大的 discontinuity 需要执行该显式 reset。mutation 为 O(log N)，常见的“无过期项”检查为 O(1)，snapshot 保持 allocation-free O(1)。
 
-迁移是 additive 的：使用 `Try*` 路径，并由 authoritative gameplay/security policy 处理拒绝。只有明确需要 fail-fast 时才把调用方回退到 `GetOrCreateQueue`。若单个 authority owner 确实需要超过 ceiling，应按显式 World/authority ownership 分片；提高常量需要经过审查的 build、滥用场景分析与负载验证。治理逻辑不会在压力下清空 target、queue 或 rate-limit policy。
+在不可信或可恢复边界使用 `Try*` API，并由 authoritative gameplay/security policy 处理容量拒绝。只有在 fail-fast 是显式不变量时才使用 `GetOrCreateQueue`。若单个 authority owner 确实需要超过 ceiling，应按显式 World/authority ownership 分片；提高常量需要经过审查的 build、滥用场景分析与负载验证。治理逻辑不会在压力下清空 target、queue 或 rate-limit policy。
 
-此契约不新增 serialized field，不改变 command/wire enum value，不重命名 serialized type 或 field，不修改 prefab、scene 或 asset 数据，也不持久化状态；无需资产、存档或协议迁移。
+此契约不新增 serialized field，不改变 command 或 wire enum value，不重命名 serialized type 或 field，不修改 prefab、scene 或 asset 数据，也不持久化状态。
 
 [English](README.md) | 简体中文
 
@@ -101,10 +101,11 @@ sequenceDiagram
 | **CycloneGames.Factory.Runtime** | 对象池（`ObjectPool`、`IPoolable`、`MonoPrefabFactory`） | 是       |
 | **CycloneGames.Logging**         | 与 backend 解耦的 `LogChannel` 诊断                     | 是       |
 | **CycloneGames.RPGFoundation.Interaction.Networking** | 可选 `NetworkVector3` 与 DTO 桥 | 可选     |
-| **CycloneGames.GameplayFramework.Runtime** | 可选 `Actor` / World adapter 桥                | 可选     |
-| **CycloneGames.DeterministicMath.Core** | 可选 `FPVector3` / `FPInt64` 权威校验桥         | 可选     |
+| **CycloneGames.RPGFoundation.Interaction.GameplayFramework** | 可选 `Actor` / World adapter companion package | 可选 |
+| **CycloneGames.RPGFoundation.Interaction.DeterministicMath** | 可选 `FPVector3` / `FPInt64` authority companion package | 可选 |
+| **CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework** | 可选 Actor 到定点 authority 的 companion package | 可选 |
 
-DeterministicMath assembly 支持 `com.cyclone-games.deterministic-math` `1.x`，由 package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` gate 控制，且不会被自动引用。组合 GameplayFramework bridge 还要求 `com.cyclone-games.gameplay-framework` `1.x`。请通过 UPM 安装可选 package，并显式添加 integration asmdef reference；不要在 PlayerSettings 中定义 capability symbol。
+可选 first-party integration 采用物理 sibling companion package，并通过 package.json 与 asmdef 直接声明依赖。无论通过 UPM 安装还是共同放置在 Assets 下，编译边界都保持一致。使用方程序集只显式引用实际使用的 companion assembly，不需要 PlayerSettings scripting define symbol。
 
 Runtime 诊断使用 `CycloneGames.RPGFoundation.Interaction`，Editor 诊断使用 `CycloneGames.RPGFoundation.Interaction.Editor`。模块不会持有 logging backend 生命周期。应用 composition root 选择 `ILogWriter`；未安装 backend 时，logging contract 使用 `NullLogWriter`。
 
@@ -589,7 +590,7 @@ EffectPoolSystem.Spawn(smokePrefab, position, rotation);  // 手动 ReturnToPool
 4. 服务端执行并广播 `InteractionResult`。
 5. 客户端根据服务端结果重对齐本地聚焦和 UI。
 
-确定性多人游戏使用 DeterministicMath integration 的 `FPVector3` / `FPInt64` 配合 `InteractionDeterministicAuthorityService`。
+确定性多人游戏安装 `CycloneGames.RPGFoundation.Interaction.DeterministicMath`，并使用 `FPVector3` / `FPInt64` 配合 `InteractionDeterministicAuthorityService`。仅当 Actor 需要提供确定性 authority payload 时安装组合 GameplayFramework companion。
 
 | 场景 | 应使用 | 不应作为权威源 |
 | --- | --- | --- |

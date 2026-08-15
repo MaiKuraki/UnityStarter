@@ -5,40 +5,53 @@
 ## 构建
 
 ```bash
-cd UnityStarter/Analyzers
+cd <unity-project>/Analyzers
 dotnet build CycloneGames.Analyzers.sln -c Release
 dotnet test CycloneGames.Analyzers.sln -c Release
 ```
 
-输出文件：
+`<unity-project>` 表示 Unity 项目目录（包含 `ProjectSettings/ProjectVersion.txt` 的文件夹）。Analyzer 体系不依赖任何名称：源码归属门、测试路径助手与激活验证脚本都通过 `ProjectSettings/ProjectVersion.txt` marker 定位 Unity 项目，因此项目文件夹改名或移动都不需要改动 Analyzer 工程。`CycloneGames.Analyzers.Unity.csproj` 的 `UnityProjectRoot` 默认取工程文件上两级目录，Analyzer 工程自身被移动时可用 `-p:UnityProjectRoot=<unity-project-路径>` 显式覆盖。当 CycloneGames 包以 UPM 形式（`Packages/...`）被消费时，包源码有意落在仓库自有范围之外：宿主项目不会治理包代码，包侧治理由包仓库自己的 Analyzer 构建承担。**本迭代的已记录决策：** Analyzer 与其 `Default.ruleset` 仅随项目模板分发，不作为 UPM 包发布——UPM 消费者在无宿主侧 Analyzer 治理的情况下运行，这是被接受的边界而非遗漏。
+
+解决方案会从同一套规则源码生成两份 Analyzer 工件：
 
 ```text
 CycloneGames.Analyzers/bin/Release/netstandard2.0/CycloneGames.Analyzers.dll
+CycloneGames.Analyzers.Unity/bin/Release/netstandard2.0/CycloneGames.Analyzers.dll
 ```
+
+第一个项目继续作为开发与 package 构建。Unity 专用项目使用当前 Unity 版本支持的 Roslyn 依赖级别，从 Editor 工件中排除 CodeFix/Workspaces 依赖，并把 Release 输出安装到 `<unity-project>/Assets/Analyzers/CycloneGames.Analyzers.dll`。
 
 ## Unity 项目接入
 
-只构建 Analyzer 源码不会在 Unity Editor 中自动启用规则。Unity 接入需要把编译后的 Analyzer DLL 放入对应的 `Assets/` 或 package 作用域，并为资产设置区分大小写的 `RoslynAnalyzer` label。参见 [Unity 2022.3 Roslyn Analyzer 手册](https://docs.unity3d.com/2022.3/Documentation/Manual/roslyn-analyzers.html)。
+Unity 接入需要把编译后的 Analyzer DLL 放入对应的 `Assets/` 或 package 作用域，并为资产设置区分大小写的 `RoslynAnalyzer` label。参见 [Unity 2022.3 Roslyn Analyzer 手册](https://docs.unity3d.com/2022.3/Documentation/Manual/roslyn-analyzers.html)。
 
-当前仓库只维护 Analyzer 源码项目，尚未发布或激活上述 Unity 资产。Analyzer 构建成功不能证明 Unity 编译正在执行这些规则。
+当前仓库通过 `<unity-project>/Assets/Analyzers/` 中已提交的 DLL 与 `.meta` 文件激活 Analyzer。Plugin Importer 继续禁止把该 DLL 当作普通 managed plugin 加载；`RoslynAnalyzer` label 是实际激活契约。构建 `CycloneGames.Analyzers.Unity.csproj` 的 Release 配置会刷新已提交 DLL。
 
-面向 IDE 和 Unity 生成 C# 项目的命令行验证，建议通过团队提交的 `Directory.Build.props`、Analyzer package 或 Unity project-generation hook 接入。不要依赖未提交的个人本地配置作为团队和 CI 的唯一启用方式。
+修改 Analyzer 依赖、部署 metadata 或 diagnostic 激活行为后，运行真实编译器 fixture：
 
-`UnityStarter/Directory.Build.props` 示例：
+```bash
+# 任意平台：验证器是 .NET console 工具，不依赖 PowerShell。
+dotnet run --project <unity-project>/Analyzers/CycloneGames.Analyzers.Verifier/CycloneGames.Analyzers.Verifier.csproj -- \
+  --unity-editor-path '<path-to-Unity>/Editor/Unity.exe'
 
-```xml
-<Project>
-    <ItemGroup>
-        <ProjectReference Include="$(MSBuildThisFileDirectory)Analyzers\CycloneGames.Analyzers\CycloneGames.Analyzers.csproj"
-                          ReferenceOutputAssembly="false"
-                          OutputItemType="Analyzer" />
-    </ItemGroup>
-</Project>
+# Windows 编辑器路径：'<path-to-Unity>/Editor/Unity.exe'
+# macOS 编辑器路径：  '/Applications/Unity/Hub/Editor/<version>/Unity.app/Contents/MacOS/Unity'
+# Linux 编辑器路径：  '~/Unity/Hub/Editor/<version>/Editor/Unity'
 ```
+
+验证器会先构建 Unity 兼容版 Analyzer；传入 `--skip-build` 可复用现有 Release 构建。`--unity-project-root` 可覆盖基于 marker 的项目发现，`--help` 列出全部选项。
+
+验证器会创建隔离的临时 Unity 项目，安装已提交 Analyzer 资产，并编译 `Integration/ForbiddenUnityApiViolation.cs.txt`。只有 Unity 未出现 `CS8032`/加载错误且真实输出 `CG0010` 时才通过。由于 fixture 故意触发 Error 级别的 `CG0010` 诊断，一次通过的验证通常会以 Unity 因编译错误中止 batchmode 并返回非零退出码结束——这个失败正是 Analyzer 生效的预期信号，而不是验证失败。`--timeout-seconds` 是覆盖 Analyzer 构建、Unity 编译与有界清理的单一端到端 deadline；`--keep-temporary-project` 会为诊断保留临时项目。所有外部进程都带硬 deadline 运行，超时即连同进程树一起终止；无法确认进程树终止时，验证器 fail-closed 并保留临时项目（任何失败同样保留并打印路径）。Windows 上还会 best-effort 地只停止本次运行中由编辑器新拉起的 VBCSCompiler server，既有 Editor server 不受影响。
+
+所有 Analyzer callback 只接收仓库自有源码。对于绝对源码路径，最后一个 `Assets/` segment 用于确定候选 Unity 项目根；对于规范的相对 `Assets/...` 路径，当前 host 目录必须能解析到该项目根。只有 `ProjectSettings/ProjectVersion.txt` 是带 Unity 版本 marker、大小受限、普通且非 reparse 的文件时，候选根才受信任。验证结果先进入容量有界的进程内 cache，再应用 `Assets/ThirdParty/` allowlist。路径 segment 比较遵循 host 文件系统：Windows 不区分大小写，Linux/macOS 区分大小写。这样，`Assets/Build/`、`Assets/<project-folder>/`、`Assets/ThirdParty/CycloneGames/` 与可选的 `Assets/ThirdParty/CycloneGames.MemoryGovernance/` package family 仍在治理范围内；Unity `Library/PackageCache/`、UPM `Packages/`、package 内嵌 `Assets/`、非 CycloneGames 第三方内容、generated path 和其他所有未知非空路径都会 fail-closed。即使真实 Unity checkout 位于名为 `Packages/<reverse-DNS-name>` 的祖先目录下，只要自身候选根具有 marker，仍会接受治理。只有空路径无需 marker 也在范围内；这是未提供物理路径的 focused Roslyn host/test 专用契约。
+
+`<unity-project>/Assets/Default.ruleset` 是已提交的 Unity 强制策略。`CG0010` 保持 Error；既有场景发现与定时器调用完成迁移前，`CG0011` 与 `CG0013` 保持可见 Warning，避免启用 Analyzer 时把已知迁移债直接转化为无关编译中断。GameplayAbilities sample 中两处按名称查找目标的代码是该 sample scene 专用、已局部记录的 `CG0010` 例外；生产替代边界是项目自有 targeting service。
+
+激活流程只持久化已提交的 DLL 与 `.meta` 资产。每个验证项目都使用独占随机 owner marker 认领；递归清理前会重新验证该 marker。`--keep-temporary-project` 会为诊断保留项目；无法确认进程树终止时也会自动保留。`bin/`、`obj/` 下的构建中间产物、带 owner marker 的操作系统临时验证项目以及 Unity import cache 均可重建；没有 Unity 进程占用时可以安全删除。
 
 ## 已实现规则
 
-| ID | 规则 | 严重级别 |
+| ID | 规则 | 描述符默认严重级别 |
 | -- | ---- | -------- |
 | CG0001 | 热路径中的 `foreach` | Warning |
 | CG0002 | 热路径中的 LINQ | Warning |
@@ -64,6 +77,8 @@ CycloneGames.Analyzers/bin/Release/netstandard2.0/CycloneGames.Analyzers.dll
 | CG0048 | static class 循环依赖风险 | Warning |
 | CG0049 | 受治理 CycloneGames assembly 绕过统一日志 API | Error |
 | CG0050 | 在 assembly 日志门面之外调用 `LogChannel.Create` | Error |
+
+`DiagnosticIds` 声明 28 个 ID 常量；上表列出的是 24 条已实现规则。`CG0015`（`NativeContainerLeak`）、`CG0022`（`ActorStartBaseCall`）、`CG0023`（`PoolOnDespawnOverride`）与 `CG0024`（`GameplayTagImplicitCast`）是尚未实现、刻意保留的规则 ID。
 
 ## Code Fix
 
@@ -103,7 +118,13 @@ OnPreTick, OnPostTick
 
 ## 抑制规则
 
-项目级严重性应通过 `.editorconfig` 配置：
+Unity compiler 的严重级别应通过已提交 ruleset 配置：
+
+```xml
+<Rule Id="CG0011" Action="Warning" />
+```
+
+兼容的 IDE 或独立 .NET compiler host 可以使用 `.editorconfig`：
 
 ```ini
 [*.cs]

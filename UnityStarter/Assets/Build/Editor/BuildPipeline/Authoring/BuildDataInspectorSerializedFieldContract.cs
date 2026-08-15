@@ -21,6 +21,7 @@ namespace Build.Pipeline.Editor
             public const string VersionInfoAssetPath = "versionInfoAssetPath";
             public const string AdditionalScenes = "additionalScenes";
             public const string RecipeInvocations = "recipeInvocations";
+            public const string SourceCleanlinessPolicy = "sourceCleanlinessPolicy";
             public const string CheatBuildMode = "cheatBuildMode";
 
             public static readonly IReadOnlyList<string> All = Array.AsReadOnly(new[]
@@ -34,6 +35,7 @@ namespace Build.Pipeline.Editor
                 VersionInfoAssetPath,
                 AdditionalScenes,
                 RecipeInvocations,
+                SourceCleanlinessPolicy,
                 CheatBuildMode
             });
         }

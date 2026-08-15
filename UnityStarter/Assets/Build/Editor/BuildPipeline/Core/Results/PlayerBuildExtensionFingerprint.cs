@@ -12,7 +12,6 @@ namespace Build.Pipeline.Editor
     {
         internal const int MaximumExtensionCount = 64;
         internal const string InvalidEvidencePrefix = "invalid:";
-        private const int FormatVersion = 1;
         private const int MaximumEvidenceTextCharacters = 4096;
         internal const long MaximumExtensionAssetBytes = 64L * 1024L * 1024L;
         internal const long MaximumTotalExtensionAssetBytes = 256L * 1024L * 1024L;
@@ -71,7 +70,6 @@ namespace Build.Pipeline.Editor
         {
             var builder = new StringBuilder(1024);
             Append(builder, "player-build-extensions");
-            Append(builder, FormatVersion.ToString(CultureInfo.InvariantCulture));
             if (configuration == null)
             {
                 Append(builder, "0");
@@ -226,7 +224,6 @@ namespace Build.Pipeline.Editor
         {
             var builder = new StringBuilder(1024);
             Append(builder, "invalid-player-build-extensions");
-            Append(builder, FormatVersion.ToString(CultureInfo.InvariantCulture));
             Append(builder, failure?.GetType().FullName ?? string.Empty);
             Append(builder, LimitEvidenceText(failure?.Message));
             if (request == null)

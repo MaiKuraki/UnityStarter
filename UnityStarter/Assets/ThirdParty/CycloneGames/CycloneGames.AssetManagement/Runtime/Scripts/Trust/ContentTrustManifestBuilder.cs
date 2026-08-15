@@ -41,6 +41,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                     $"Content trust manifest entry count cannot exceed {ContentTrustManifestValidation.MAX_ENTRY_COUNT}.");
             }
 
+            if (entry.HashAlgorithm != ContentTrustHashAlgorithm.Sha256)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(entry),
+                    entry.HashAlgorithm,
+                    "Content trust manifests only accept cryptographic SHA-256 entries. XxHash64 and None are legacy wire values that verification rejects.");
+            }
+
             ContentTrustFileEntry normalizedEntry = ContentTrustManifestValidation.NormalizeEntry(in entry);
             if (normalizedEntry.SizeBytes >
                 ContentTrustManifestValidation.MAX_TOTAL_CONTENT_SIZE_BYTES - _totalContentSizeBytes)
@@ -64,6 +72,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 throw new ArgumentException("Manifest root directory cannot be null or empty.", nameof(rootDirectory));
             }
 
+            if (hashAlgorithm != ContentTrustHashAlgorithm.Sha256)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(hashAlgorithm),
+                    hashAlgorithm,
+                    "Content trust manifests only accept cryptographic SHA-256 hashes.");
+            }
+
             string normalizedLocation = ContentTrustManifestValidation.NormalizeRequiredPath(
                 relativeLocation,
                 nameof(relativeLocation));
@@ -73,11 +89,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 throw new FileNotFoundException("Manifest file entry does not exist.", fullPath);
             }
 
-            string expectedHashHex = null;
-            if (hashAlgorithm != ContentTrustHashAlgorithm.None)
-            {
-                expectedHashHex = FileHasher.ComputeHex(fullPath, ToFileHashAlgorithm(hashAlgorithm));
-            }
+            string expectedHashHex = FileHasher.ComputeHex(fullPath, FileHashAlgorithm.Sha256);
 
             var fileInfo = new FileInfo(fullPath);
             return AddEntry(new ContentTrustFileEntry(
@@ -100,19 +112,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         {
             _entries.Clear();
             _totalContentSizeBytes = 0L;
-        }
-
-        private static FileHashAlgorithm ToFileHashAlgorithm(ContentTrustHashAlgorithm algorithm)
-        {
-            switch (algorithm)
-            {
-                case ContentTrustHashAlgorithm.Sha256:
-                    return FileHashAlgorithm.Sha256;
-                case ContentTrustHashAlgorithm.XxHash64:
-                    return FileHashAlgorithm.XxHash64;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(algorithm), algorithm, "Unsupported manifest file hash algorithm.");
-            }
         }
     }
 }

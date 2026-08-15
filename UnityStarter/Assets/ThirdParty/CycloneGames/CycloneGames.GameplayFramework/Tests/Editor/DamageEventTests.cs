@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.GameplayFramework.Runtime;
 using NUnit.Framework;
 using UnityEngine;
@@ -47,6 +48,48 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.AreEqual(origin, damageEvent.Origin);
             Assert.AreEqual(2f, damageEvent.InnerRadius);
             Assert.AreEqual(8f, damageEvent.OuterRadius);
+        }
+
+        [Test]
+        public void DefaultValue_IsRejectedAsUninitialized()
+        {
+            DamageEvent damageEvent = default;
+
+            Assert.AreEqual(
+                DamageEventValidationResult.Uninitialized,
+                damageEvent.Validate());
+        }
+
+        [Test]
+        public void MakePointDamage_RejectsNonFiniteVectors()
+        {
+            Assert.Throws<ArgumentException>(() => DamageEvent.MakePointDamage(
+                new Vector3(float.NaN, 0f, 0f),
+                Vector3.up,
+                Vector3.forward));
+            Assert.Throws<ArgumentException>(() => DamageEvent.MakePointDamage(
+                Vector3.zero,
+                new Vector3(0f, float.PositiveInfinity, 0f),
+                Vector3.forward));
+            Assert.Throws<ArgumentException>(() => DamageEvent.MakePointDamage(
+                Vector3.zero,
+                Vector3.up,
+                new Vector3(0f, 0f, float.NegativeInfinity)));
+        }
+
+        [Test]
+        public void MakeRadialDamage_RejectsNonFiniteAndUnorderedGeometry()
+        {
+            Assert.Throws<ArgumentException>(() =>
+                DamageEvent.MakeRadialDamage(new Vector3(float.NaN, 0f, 0f), 0f, 1f));
+            Assert.Throws<ArgumentException>(() =>
+                DamageEvent.MakeRadialDamage(Vector3.zero, float.PositiveInfinity, 1f));
+            Assert.Throws<ArgumentException>(() =>
+                DamageEvent.MakeRadialDamage(Vector3.zero, 0f, float.NaN));
+            Assert.Throws<ArgumentException>(() =>
+                DamageEvent.MakeRadialDamage(Vector3.zero, -1f, 1f));
+            Assert.Throws<ArgumentException>(() =>
+                DamageEvent.MakeRadialDamage(Vector3.zero, 2f, 1f));
         }
 
         private sealed class TestDamageType : IDamageType

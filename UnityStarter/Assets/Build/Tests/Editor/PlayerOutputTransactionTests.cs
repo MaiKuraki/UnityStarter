@@ -16,6 +16,9 @@ namespace Build.Pipeline.Tests.Editor
 {
     public sealed class PlayerOutputTransactionTests
     {
+        private const string CompatibilityIdentityDomain =
+            "player-output-compatibility";
+
         private string sandboxRoot;
         private string projectRoot;
         private string buildRoot;
@@ -242,29 +245,79 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void BeginIncremental_WhenPipelineCompatibilityRevisionChanges_RequiresCleanUpgrade()
+        public void BeginIncremental_WhenPipelineImplementationFingerprintChanges_RequiresClean()
         {
             PublishOwnedOutput("published");
             RewritePublishedCompatibility(identity =>
-                identity.playerPipelineCompatibilityRevision++);
+                identity.pipelineImplementationFingerprint = new string('A', 64));
 
             InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
                 () => BeginTransaction(CreateRequest(BuildIncrementality.Incremental)));
 
             Assert.That(
                 exception.Message,
-                Does.Contain("PlayerPipelineCompatibilityRevision"));
+                Does.Contain("PipelineImplementationFingerprint"));
             Assert.That(exception.Message, Does.Contain("Clean"));
             Assert.That(File.ReadAllText(outputPath), Is.EqualTo("published"));
             AssertNoTransactionScratch();
         }
 
-        [Test]
-        public void CleanCommit_UpgradesPipelineCompatibilityRevision()
+        [TestCase(BuildIncrementality.Clean)]
+        [TestCase(BuildIncrementality.Incremental)]
+        public void Begin_WhenOwnerDoesNotMatchCurrentDocumentContract_FailsWithoutMutation(
+            BuildIncrementality incrementality)
         {
             PublishOwnedOutput("published");
+            string ownerPath = GetOwnerPath();
+            string ownerJson = File.ReadAllText(ownerPath);
+            string unsupported = ownerJson.Replace(
+                "  \"documentType\": \"player-output-owner\",\r\n",
+                string.Empty);
+            if (string.Equals(unsupported, ownerJson, StringComparison.Ordinal))
+            {
+                unsupported = ownerJson.Replace(
+                    "  \"documentType\": \"player-output-owner\",\n",
+                    string.Empty);
+            }
+
+            Assert.That(unsupported, Is.Not.EqualTo(ownerJson));
+            File.WriteAllText(ownerPath, unsupported);
+
+            Assert.Catch(() => BeginTransaction(CreateRequest(incrementality)));
+            Assert.That(File.ReadAllText(outputPath), Is.EqualTo("published"));
+            Assert.That(File.ReadAllText(ownerPath), Is.EqualTo(unsupported));
+            AssertNoTransactionScratch();
+        }
+
+        [Test]
+        public void BeginIncremental_WhenBuildPurposeChanges_RequiresCleanIsolatedOutput()
+        {
+            BuildRequest previewRequest = CreateRequest(
+                BuildIncrementality.Clean,
+                purpose: BuildPurpose.LocalReleasePreview);
+            using (PlayerOutputTransaction transaction = BeginTransaction(previewRequest))
+            {
+                File.WriteAllText(transaction.StageOutputPath, "preview");
+                transaction.Commit();
+            }
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BeginTransaction(CreateRequest(BuildIncrementality.Incremental)));
+
+            Assert.That(exception.Message, Does.Contain("BuildPurpose"));
+            Assert.That(exception.Message, Does.Contain("Clean"));
+            Assert.That(File.ReadAllText(outputPath), Is.EqualTo("preview"));
+            AssertNoTransactionScratch();
+        }
+
+        [Test]
+        public void CleanCommit_ReplacesPipelineImplementationFingerprint()
+        {
+            PublishOwnedOutput("published");
+            const string differentFingerprint =
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
             RewritePublishedCompatibility(identity =>
-                identity.playerPipelineCompatibilityRevision++);
+                identity.pipelineImplementationFingerprint = differentFingerprint);
             BuildRequest cleanRequest = CreateRequest(BuildIncrementality.Clean);
 
             using (PlayerOutputTransaction transaction = BeginTransaction(cleanRequest))
@@ -276,8 +329,11 @@ namespace Build.Pipeline.Tests.Editor
             OwnerRecord owner = JsonUtility.FromJson<OwnerRecord>(
                 File.ReadAllText(GetOwnerPath()));
             Assert.That(
-                owner.compatibilityIdentity.playerPipelineCompatibilityRevision,
-                Is.EqualTo(PlayerOutputTransaction.PlayerPipelineCompatibilityRevision));
+                owner.compatibilityIdentity.pipelineImplementationFingerprint,
+                Has.Length.EqualTo(64));
+            Assert.That(
+                owner.compatibilityIdentity.pipelineImplementationFingerprint,
+                Is.Not.EqualTo(differentFingerprint));
             Assert.That(File.ReadAllText(outputPath), Is.EqualTo("upgraded"));
             Assert.DoesNotThrow(() =>
             {
@@ -289,11 +345,11 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void Begin_WhenPipelineCompatibilityRevisionIsInvalid_FailsClosed()
+        public void Begin_WhenPipelineImplementationFingerprintIsInvalid_FailsClosed()
         {
             PublishOwnedOutput("published");
             RewritePublishedCompatibility(identity =>
-                identity.playerPipelineCompatibilityRevision = 0);
+                identity.pipelineImplementationFingerprint = string.Empty);
 
             InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
                 () => BeginTransaction(CreateRequest(BuildIncrementality.Clean)));
@@ -334,7 +390,7 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void CleanCommit_PersistsVersionedCompatibilityIdentity()
+        public void CleanCommit_PersistsCurrentCompatibilityIdentity()
         {
             PublishOwnedOutput("published");
 
@@ -342,12 +398,11 @@ namespace Build.Pipeline.Tests.Editor
                 File.ReadAllText(GetOwnerPath()));
 
             Assert.That(owner, Is.Not.Null);
-            Assert.That(owner.formatVersion, Is.EqualTo(1));
+            Assert.That(owner.documentType, Is.EqualTo("player-output-owner"));
             Assert.That(owner.compatibilityIdentity, Is.Not.Null);
-            Assert.That(owner.compatibilityIdentity.formatVersion, Is.EqualTo(1));
             Assert.That(
-                owner.compatibilityIdentity.playerPipelineCompatibilityRevision,
-                Is.EqualTo(PlayerOutputTransaction.PlayerPipelineCompatibilityRevision));
+                owner.compatibilityIdentity.pipelineImplementationFingerprint,
+                Has.Length.EqualTo(64));
             Assert.That(
                 owner.compatibilityIdentity.unityVersion,
                 Is.EqualTo(Application.unityVersion));
@@ -368,6 +423,9 @@ namespace Build.Pipeline.Tests.Editor
                 owner.compatibilityIdentity.applicationIdentifier,
                 Is.EqualTo("com.example.test"));
             Assert.That(owner.compatibilityIdentity.exportAndroidProject, Is.False);
+            Assert.That(
+                owner.compatibilityIdentity.buildPurpose,
+                Is.EqualTo(BuildPurpose.Release.ToString()));
             Assert.That(
                 owner.compatibilityIdentity.playerExtensionFingerprint,
                 Has.Length.EqualTo(64));
@@ -907,7 +965,8 @@ namespace Build.Pipeline.Tests.Editor
             string productName = "TestProduct",
             string applicationIdentifier = "com.example.test",
             bool exportAndroidProject = false,
-            NamedBuildTarget? namedTarget = null)
+            NamedBuildTarget? namedTarget = null,
+            BuildPurpose purpose = BuildPurpose.Release)
         {
             return new BuildRequest(
                 companyName,
@@ -929,7 +988,7 @@ namespace Build.Pipeline.Tests.Editor
                 exportAndroidProject: exportAndroidProject,
                 allowExternalOutput: false,
                 cheatOverride: null,
-                batchMode: true,
+                batchMode: purpose != BuildPurpose.LocalReleasePreview,
                 applicationVersion: "1.0.0",
                 identityOverride: BuildIdentityOverride.Empty,
                 steps: new[]
@@ -938,7 +997,9 @@ namespace Build.Pipeline.Tests.Editor
                         BuildStepTypeIds.Player,
                         BuildStepTypeIds.Player,
                         incrementality: incrementality)
-                });
+                },
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: purpose);
         }
 
         private static PlayerOutputTransaction BeginTransaction(BuildRequest request)
@@ -1018,13 +1079,8 @@ namespace Build.Pipeline.Tests.Editor
             CompatibilityIdentityRecord identity)
         {
             var builder = new StringBuilder(512);
-            AppendCompatibilityValue(
-                builder,
-                identity.formatVersion.ToString(CultureInfo.InvariantCulture));
-            AppendCompatibilityValue(
-                builder,
-                identity.playerPipelineCompatibilityRevision.ToString(
-                    CultureInfo.InvariantCulture));
+            AppendCompatibilityValue(builder, CompatibilityIdentityDomain);
+            AppendCompatibilityValue(builder, identity.pipelineImplementationFingerprint);
             AppendCompatibilityValue(builder, identity.unityVersion);
             AppendCompatibilityValue(builder, identity.buildTarget);
             AppendCompatibilityValue(builder, identity.namedBuildTarget);
@@ -1038,6 +1094,7 @@ namespace Build.Pipeline.Tests.Editor
             AppendCompatibilityValue(builder, identity.debugBuild);
             AppendCompatibilityValue(builder, identity.deleteDebugFiles);
             AppendCompatibilityValue(builder, identity.cheatEnabled);
+            AppendCompatibilityValue(builder, identity.buildPurpose);
             AppendCompatibilityValue(builder, identity.playerExtensionFingerprint);
             return ComputeTextHash(builder.ToString());
         }
@@ -1142,7 +1199,7 @@ namespace Build.Pipeline.Tests.Editor
         [Serializable]
         private sealed class OwnerRecord
         {
-            public int formatVersion = -1;
+            public string documentType = string.Empty;
             public string kind = string.Empty;
             public string transactionId = string.Empty;
             public bool hasIdentity = false;
@@ -1154,8 +1211,7 @@ namespace Build.Pipeline.Tests.Editor
         [Serializable]
         private sealed class CompatibilityIdentityRecord
         {
-            public int formatVersion = -1;
-            public int playerPipelineCompatibilityRevision = -1;
+            public string pipelineImplementationFingerprint = string.Empty;
             public string unityVersion = string.Empty;
             public string buildTarget = string.Empty;
             public string namedBuildTarget = string.Empty;
@@ -1169,6 +1225,7 @@ namespace Build.Pipeline.Tests.Editor
             public bool debugBuild = false;
             public bool deleteDebugFiles = false;
             public bool cheatEnabled = false;
+            public string buildPurpose = string.Empty;
             public string playerExtensionFingerprint = string.Empty;
             public string digest = string.Empty;
         }

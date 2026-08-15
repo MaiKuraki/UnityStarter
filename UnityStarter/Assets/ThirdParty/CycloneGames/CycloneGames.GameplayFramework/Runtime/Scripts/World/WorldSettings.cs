@@ -23,20 +23,335 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
             string location,
+            IWorldSettingsLeaseRegistrar leaseRegistrar,
             CancellationToken cancellationToken) where T : UnityEngine.Object;
     }
 
     /// <summary>
-    /// Immutable runtime view of a <see cref="WorldSettings"/> asset. The world owns this
-    /// object and disposes it when the world stops, releasing every external asset lease in
-    /// reverse acquisition order.
+    /// Core-owned transfer point for one external asset lease per resolve call. Core reserves the
+    /// slot before invoking the resolver, so the first non-null registration cannot fail because
+    /// of capacity. A resolver that creates multiple handles must combine them into one lease,
+    /// then register it before any await, cancellation observation, validation, or callback that
+    /// can fail. The resolver must not dispose a registered lease.
     /// </summary>
-    public sealed class WorldDefinition : IDisposable
+    public interface IWorldSettingsLeaseRegistrar
+    {
+        void Register(IDisposable lease);
+    }
+
+    /// <summary>
+    /// Retryable, owner-thread-bound ownership container for external WorldSettings leases whose
+    /// rollback could not be confirmed. Successful disposal clears each slot immediately; a
+    /// failed slot remains quarantined until a later <see cref="Dispose"/> call succeeds.
+    /// </summary>
+    public sealed class WorldSettingsLeaseQuarantine :
+        IWorldSettingsLeaseRegistrar,
+        IDisposable
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         private readonly IDisposable[] leases;
         private readonly int ownerThreadId;
-        private int leaseCount;
+        private int upperBound;
+        private int pendingLeaseCount;
+        private int activeRegistrationIndex = -1;
+        private bool isDisposed;
+
+        internal WorldSettingsLeaseQuarantine(int capacity)
+        {
+            if (capacity <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
+            leases = new IDisposable[capacity];
+            ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+        }
+
+        public int PendingLeaseCount
+        {
+            get
+            {
+                AssertOwnerThread();
+                return pendingLeaseCount;
+            }
+        }
+
+        public bool IsDisposed
+        {
+            get
+            {
+                AssertOwnerThread();
+                return isDisposed;
+            }
+        }
+
+        public void Register(IDisposable lease)
+        {
+            AssertOwnerThread();
+            if (lease == null)
+            {
+                return;
+            }
+            if (isDisposed || activeRegistrationIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    "WorldSettings lease registration is not active.");
+            }
+
+            if (leases[activeRegistrationIndex] != null)
+            {
+                throw new InvalidOperationException(
+                    "A WorldSettings resolver may register only one lease per resolve call.");
+            }
+
+            leases[activeRegistrationIndex] = lease;
+            pendingLeaseCount++;
+        }
+
+        public void Dispose()
+        {
+            AssertOwnerThread();
+            if (isDisposed)
+            {
+                return;
+            }
+
+            CompleteRegistration();
+
+            OutOfMemoryException terminalOutOfMemory = null;
+            for (int index = upperBound - 1; index >= 0; index--)
+            {
+                IDisposable lease = leases[index];
+                if (lease == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    lease.Dispose();
+                    leases[index] = null;
+                    pendingLeaseCount--;
+                }
+                catch (Exception exception)
+                {
+                    if (!TryCaptureOutOfMemory(ref terminalOutOfMemory, exception))
+                    {
+                        try
+                        {
+                            Log.Error(
+                                exception,
+                                "WorldSettings external asset lease cleanup failed; the lease remains quarantined for retry.");
+                        }
+                        catch (Exception loggingException)
+                        {
+                            TryCaptureOutOfMemory(
+                                ref terminalOutOfMemory,
+                                loggingException);
+                        }
+                    }
+                }
+            }
+
+            while (upperBound > 0 && leases[upperBound - 1] == null)
+            {
+                upperBound--;
+            }
+
+            isDisposed = pendingLeaseCount == 0;
+            if (terminalOutOfMemory != null)
+            {
+                throw terminalOutOfMemory;
+            }
+        }
+
+        internal void AssertOwnerThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "WorldSettings lease ownership must be accessed on the thread that began resolution.");
+            }
+        }
+
+        internal void BeginRegistration()
+        {
+            AssertOwnerThread();
+            if (isDisposed || activeRegistrationIndex >= 0 || upperBound >= leases.Length)
+            {
+                throw new InvalidOperationException(
+                    "WorldSettings lease ownership cannot reserve another registration.");
+            }
+
+            activeRegistrationIndex = upperBound++;
+        }
+
+        internal void CompleteRegistration()
+        {
+            AssertOwnerThread();
+            if (activeRegistrationIndex < 0)
+            {
+                return;
+            }
+
+            if (leases[activeRegistrationIndex] == null &&
+                activeRegistrationIndex == upperBound - 1)
+            {
+                upperBound--;
+            }
+
+            activeRegistrationIndex = -1;
+        }
+
+        private static bool TryCaptureOutOfMemory(
+            ref OutOfMemoryException terminalOutOfMemory,
+            Exception exception)
+        {
+            OutOfMemoryException captured = FindOutOfMemory(exception);
+            if (captured == null)
+            {
+                return false;
+            }
+
+            if (terminalOutOfMemory == null)
+            {
+                terminalOutOfMemory = captured;
+            }
+
+            return true;
+        }
+
+        private static OutOfMemoryException FindOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemoryException)
+            {
+                return outOfMemoryException;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int index = 0; index < aggregateException.InnerExceptions.Count; index++)
+                {
+                    OutOfMemoryException nested = FindOutOfMemory(
+                        aggregateException.InnerExceptions[index]);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reports a resolution failure whose external leases could not all be rolled back. The
+    /// owning GameInstance adopts those handles before the exception leaves the start transaction.
+    /// </summary>
+    public sealed class WorldSettingsLeaseCleanupException : Exception
+    {
+        private readonly WorldSettingsLeaseQuarantine leaseQuarantine;
+        private bool ownershipTransferred;
+
+        internal WorldSettingsLeaseCleanupException(
+            WorldSettingsLeaseQuarantine leaseQuarantine)
+            : base(
+                "WorldSettings resolution failed and one or more external asset leases remain quarantined.")
+        {
+            this.leaseQuarantine = leaseQuarantine ??
+                throw new ArgumentNullException(nameof(leaseQuarantine));
+        }
+
+        public Exception ResolutionFailure { get; private set; }
+        public Exception CleanupFailure { get; private set; }
+        public int PendingLeaseCount => leaseQuarantine.PendingLeaseCount;
+
+        internal void Initialize(Exception resolutionFailure, Exception cleanupFailure)
+        {
+            ResolutionFailure = resolutionFailure;
+            CleanupFailure = cleanupFailure;
+        }
+
+        internal WorldSettingsLeaseQuarantine TakeLeaseQuarantine()
+        {
+            if (ownershipTransferred)
+            {
+                throw new InvalidOperationException(
+                    "WorldSettings lease quarantine ownership was already transferred.");
+            }
+
+            ownershipTransferred = true;
+            return leaseQuarantine;
+        }
+    }
+
+    /// <summary>
+    /// Out-of-memory variant of rollback failure. The first cleanup OOM remains available through
+    /// <see cref="CleanupFailure"/>, while the owning GameInstance adopts failed handles before
+    /// this exception leaves the start transaction.
+    /// </summary>
+    public sealed class WorldSettingsLeaseCleanupOutOfMemoryException : OutOfMemoryException
+    {
+        private readonly WorldSettingsLeaseQuarantine leaseQuarantine;
+        private bool ownershipTransferred;
+
+        internal WorldSettingsLeaseCleanupOutOfMemoryException(
+            WorldSettingsLeaseQuarantine leaseQuarantine)
+            : base(
+                "WorldSettings resolution rollback encountered out-of-memory and retained unresolved external asset leases.")
+        {
+            this.leaseQuarantine = leaseQuarantine ??
+                throw new ArgumentNullException(nameof(leaseQuarantine));
+        }
+
+        public Exception ResolutionFailure { get; private set; }
+        public Exception CleanupFailure { get; private set; }
+        public OutOfMemoryException OutOfMemoryFailure { get; private set; }
+        public int PendingLeaseCount => leaseQuarantine.PendingLeaseCount;
+
+        internal void Initialize(
+            Exception resolutionFailure,
+            Exception cleanupFailure,
+            OutOfMemoryException outOfMemoryFailure)
+        {
+            ResolutionFailure = resolutionFailure;
+            CleanupFailure = cleanupFailure;
+            OutOfMemoryFailure = outOfMemoryFailure ??
+                throw new ArgumentNullException(nameof(outOfMemoryFailure));
+        }
+
+        internal WorldSettingsLeaseQuarantine TakeLeaseQuarantine()
+        {
+            if (ownershipTransferred)
+            {
+                throw new InvalidOperationException(
+                    "WorldSettings lease quarantine ownership was already transferred.");
+            }
+
+            ownershipTransferred = true;
+            return leaseQuarantine;
+        }
+    }
+
+    /// <summary>
+    /// Read-only runtime view resolved from a <see cref="WorldSettings"/> asset. World is the
+    /// sole lifetime owner; consumers cannot dispose the underlying external asset leases.
+    /// </summary>
+    public interface IWorldDefinition
+    {
+        GameMode GameModeClass { get; }
+        PlayerController PlayerControllerClass { get; }
+        Pawn PawnClass { get; }
+        PlayerState PlayerStateClass { get; }
+        CameraManager CameraManagerClass { get; }
+        SpectatorPawn SpectatorPawnClass { get; }
+    }
+
+    internal sealed class WorldDefinition : IWorldDefinition, IDisposable
+    {
+        private readonly WorldSettingsLeaseQuarantine leaseQuarantine;
         private bool isDisposed;
 
         internal WorldDefinition(
@@ -46,61 +361,113 @@ namespace CycloneGames.GameplayFramework.Runtime
             PlayerState playerStateClass,
             CameraManager cameraManagerClass,
             SpectatorPawn spectatorPawnClass,
-            IDisposable[] leases,
-            int leaseCount)
+            WorldSettingsLeaseQuarantine leaseQuarantine)
         {
-            GameModeClass = gameModeClass;
-            PlayerControllerClass = playerControllerClass;
-            PawnClass = pawnClass;
-            PlayerStateClass = playerStateClass;
-            CameraManagerClass = cameraManagerClass;
-            SpectatorPawnClass = spectatorPawnClass;
-            this.leases = leases ?? Array.Empty<IDisposable>();
-            this.leaseCount = leaseCount;
-            ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            this.gameModeClass = gameModeClass;
+            this.playerControllerClass = playerControllerClass;
+            this.pawnClass = pawnClass;
+            this.playerStateClass = playerStateClass;
+            this.cameraManagerClass = cameraManagerClass;
+            this.spectatorPawnClass = spectatorPawnClass;
+            this.leaseQuarantine = leaseQuarantine ??
+                throw new ArgumentNullException(nameof(leaseQuarantine));
         }
 
-        public GameMode GameModeClass { get; }
-        public PlayerController PlayerControllerClass { get; }
-        public Pawn PawnClass { get; }
-        public PlayerState PlayerStateClass { get; }
-        public CameraManager CameraManagerClass { get; }
-        public SpectatorPawn SpectatorPawnClass { get; }
-        public bool IsDisposed => isDisposed;
+        private readonly GameMode gameModeClass;
+        private readonly PlayerController playerControllerClass;
+        private readonly Pawn pawnClass;
+        private readonly PlayerState playerStateClass;
+        private readonly CameraManager cameraManagerClass;
+        private readonly SpectatorPawn spectatorPawnClass;
+
+        public GameMode GameModeClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return gameModeClass;
+            }
+        }
+
+        public PlayerController PlayerControllerClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return playerControllerClass;
+            }
+        }
+
+        public Pawn PawnClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return pawnClass;
+            }
+        }
+
+        public PlayerState PlayerStateClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return playerStateClass;
+            }
+        }
+
+        public CameraManager CameraManagerClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return cameraManagerClass;
+            }
+        }
+
+        public SpectatorPawn SpectatorPawnClass
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return spectatorPawnClass;
+            }
+        }
+
+        public bool IsDisposed
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return isDisposed;
+            }
+        }
+
+        public int PendingLeaseCount
+        {
+            get
+            {
+                leaseQuarantine.AssertOwnerThread();
+                return leaseQuarantine.PendingLeaseCount;
+            }
+        }
 
         public void Dispose()
         {
+            leaseQuarantine.AssertOwnerThread();
             if (isDisposed)
             {
                 return;
             }
 
-            if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
+            try
             {
-                throw new InvalidOperationException(
-                    "WorldDefinition must be disposed on the thread that resolved it.");
+                leaseQuarantine.Dispose();
             }
-
-            isDisposed = true;
-            for (int i = leaseCount - 1; i >= 0; i--)
+            finally
             {
-                try
-                {
-                    leases[i]?.Dispose();
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        "WorldDefinition failed to dispose an external asset lease; remaining leases will still be released.");
-                }
-                finally
-                {
-                    leases[i] = null;
-                }
+                isDisposed = leaseQuarantine.IsDisposed;
             }
-
-            leaseCount = 0;
         }
     }
 
@@ -114,35 +481,29 @@ namespace CycloneGames.GameplayFramework.Runtime
         [SerializeField] private GameMode gameModeClass;
         [SerializeField] private WorldSettingsReferenceSource gameModeSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string gameModeAssetLocation;
-        [SerializeField] private string gameModeAssetGuid;
 
         [Header("Player")]
         [SerializeField] private PlayerController playerControllerClass;
         [SerializeField] private WorldSettingsReferenceSource playerControllerSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string playerControllerAssetLocation;
-        [SerializeField] private string playerControllerAssetGuid;
 
         [SerializeField] private Pawn pawnClass;
         [SerializeField] private WorldSettingsReferenceSource pawnSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string pawnAssetLocation;
-        [SerializeField] private string pawnAssetGuid;
 
         [SerializeField] private PlayerState playerStateClass;
         [SerializeField] private WorldSettingsReferenceSource playerStateSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string playerStateAssetLocation;
-        [SerializeField] private string playerStateAssetGuid;
 
         [Header("Camera")]
         [SerializeField] private CameraManager cameraManagerClass;
         [SerializeField] private WorldSettingsReferenceSource cameraManagerSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string cameraManagerAssetLocation;
-        [SerializeField] private string cameraManagerAssetGuid;
 
         [Header("Spectator")]
         [SerializeField] private SpectatorPawn spectatorPawnClass;
         [SerializeField] private WorldSettingsReferenceSource spectatorPawnSource = WorldSettingsReferenceSource.DirectReference;
         [SerializeField] private string spectatorPawnAssetLocation;
-        [SerializeField] private string spectatorPawnAssetGuid;
 
         // These properties expose authoring data only. Runtime code consumes WorldDefinition.
         public GameMode GameModeClass => gameModeClass;
@@ -184,43 +545,46 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>
         /// Resolves this authoring asset into an immutable runtime definition. Expected
         /// configuration failures throw <see cref="InvalidOperationException"/>; cancellation
-        /// is propagated unchanged. Every partially acquired lease is released before failure.
+        /// is propagated unchanged when rollback succeeds. GameInstance adopts any unresolved
+        /// rollback handles before the diagnostic lease-cleanup exception leaves startup.
         /// </summary>
-        public async UniTask<WorldDefinition> ResolveDefinitionAsync(
+        internal async UniTask<WorldDefinition> ResolveDefinitionAsync(
             IWorldSettingsReferenceResolver resolver = null,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await UniTask.SwitchToMainThread(cancellationToken);
 
-            var leases = new IDisposable[ReferenceCount];
-            int leaseCount = 0;
+            var leaseQuarantine = new WorldSettingsLeaseQuarantine(ReferenceCount);
+            var rollbackFailure = new WorldSettingsLeaseCleanupException(leaseQuarantine);
+            var rollbackOutOfMemory =
+                new WorldSettingsLeaseCleanupOutOfMemoryException(leaseQuarantine);
 
             try
             {
                 ResolvedReference<GameMode> gameMode = await ResolveRequiredReferenceAsync(
-                    "GameModeClass", gameModeSource, gameModeClass, gameModeAssetLocation, resolver, cancellationToken);
-                AddLease(gameMode.Lease, leases, ref leaseCount);
+                    "GameModeClass", gameModeSource, gameModeClass, gameModeAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 ResolvedReference<PlayerController> playerController = await ResolveRequiredReferenceAsync(
-                    "PlayerControllerClass", playerControllerSource, playerControllerClass, playerControllerAssetLocation, resolver, cancellationToken);
-                AddLease(playerController.Lease, leases, ref leaseCount);
+                    "PlayerControllerClass", playerControllerSource, playerControllerClass, playerControllerAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 ResolvedReference<Pawn> pawn = await ResolveRequiredReferenceAsync(
-                    "PawnClass", pawnSource, pawnClass, pawnAssetLocation, resolver, cancellationToken);
-                AddLease(pawn.Lease, leases, ref leaseCount);
+                    "PawnClass", pawnSource, pawnClass, pawnAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 ResolvedReference<PlayerState> playerState = await ResolveRequiredReferenceAsync(
-                    "PlayerStateClass", playerStateSource, playerStateClass, playerStateAssetLocation, resolver, cancellationToken);
-                AddLease(playerState.Lease, leases, ref leaseCount);
+                    "PlayerStateClass", playerStateSource, playerStateClass, playerStateAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 ResolvedReference<CameraManager> cameraManager = await ResolveOptionalReferenceAsync(
-                    "CameraManagerClass", cameraManagerSource, cameraManagerClass, cameraManagerAssetLocation, resolver, cancellationToken);
-                AddLease(cameraManager.Lease, leases, ref leaseCount);
+                    "CameraManagerClass", cameraManagerSource, cameraManagerClass, cameraManagerAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 ResolvedReference<SpectatorPawn> spectatorPawn = await ResolveOptionalReferenceAsync(
-                    "SpectatorPawnClass", spectatorPawnSource, spectatorPawnClass, spectatorPawnAssetLocation, resolver, cancellationToken);
-                AddLease(spectatorPawn.Lease, leases, ref leaseCount);
+                    "SpectatorPawnClass", spectatorPawnSource, spectatorPawnClass, spectatorPawnAssetLocation,
+                    resolver, leaseQuarantine, cancellationToken);
 
                 return new WorldDefinition(
                     gameMode.Asset,
@@ -229,17 +593,93 @@ namespace CycloneGames.GameplayFramework.Runtime
                     playerState.Asset,
                     cameraManager.Asset,
                     spectatorPawn.Asset,
-                    leases,
-                    leaseCount);
+                    leaseQuarantine);
             }
-            catch
+            catch (Exception resolutionFailure)
             {
                 // An arbitrary resolver may fault or cancel from a worker thread. Rollback owns
                 // Unity-related leases, so cleanup must return to the main thread first.
-                await UniTask.SwitchToMainThread();
-                DisposeLeases(leases, leaseCount);
+                try
+                {
+                    await UniTask.SwitchToMainThread();
+                }
+                catch (Exception cleanupFailure)
+                {
+                    OutOfMemoryException terminalOutOfMemory =
+                        FindOutOfMemory(resolutionFailure) ??
+                        FindOutOfMemory(cleanupFailure);
+                    if (terminalOutOfMemory != null)
+                    {
+                        rollbackOutOfMemory.Initialize(
+                            resolutionFailure,
+                            cleanupFailure,
+                            terminalOutOfMemory);
+                        throw rollbackOutOfMemory;
+                    }
+
+                    rollbackFailure.Initialize(resolutionFailure, cleanupFailure);
+                    throw rollbackFailure;
+                }
+
+                leaseQuarantine.CompleteRegistration();
+                if (leaseQuarantine.PendingLeaseCount == 0)
+                {
+                    throw;
+                }
+
+                OutOfMemoryException cleanupOutOfMemory = null;
+                try
+                {
+                    leaseQuarantine.Dispose();
+                }
+                catch (OutOfMemoryException exception)
+                {
+                    cleanupOutOfMemory = exception;
+                }
+
+                if (!leaseQuarantine.IsDisposed)
+                {
+                    OutOfMemoryException terminalOutOfMemory =
+                        FindOutOfMemory(resolutionFailure) ??
+                        cleanupOutOfMemory;
+                    if (terminalOutOfMemory != null)
+                    {
+                        rollbackOutOfMemory.Initialize(
+                            resolutionFailure,
+                            cleanupOutOfMemory,
+                            terminalOutOfMemory);
+                        throw rollbackOutOfMemory;
+                    }
+
+                    rollbackFailure.Initialize(resolutionFailure, cleanupFailure: null);
+                    throw rollbackFailure;
+                }
+
                 throw;
             }
+        }
+
+        private static OutOfMemoryException FindOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemoryException)
+            {
+                return outOfMemoryException;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int index = 0; index < aggregateException.InnerExceptions.Count; index++)
+                {
+                    OutOfMemoryException nested = FindOutOfMemory(
+                        aggregateException.InnerExceptions[index]);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return null;
         }
 
         public bool Validate(bool logWarnings = true)
@@ -260,14 +700,15 @@ namespace CycloneGames.GameplayFramework.Runtime
             T directReference,
             string location,
             IWorldSettingsReferenceResolver resolver,
+            WorldSettingsLeaseQuarantine leaseQuarantine,
             CancellationToken cancellationToken) where T : UnityEngine.Object
         {
             ResolvedReference<T> result = await ResolveReferenceAsync(
-                label, source, directReference, location, resolver, cancellationToken, optional: false);
+                label, source, directReference, location, resolver, leaseQuarantine,
+                cancellationToken, optional: false);
 
             if (result.Asset == null)
             {
-                result.Lease?.Dispose();
                 throw new InvalidOperationException($"WorldSettings '{name}' requires a valid {label}.");
             }
 
@@ -280,9 +721,12 @@ namespace CycloneGames.GameplayFramework.Runtime
             T directReference,
             string location,
             IWorldSettingsReferenceResolver resolver,
+            WorldSettingsLeaseQuarantine leaseQuarantine,
             CancellationToken cancellationToken) where T : UnityEngine.Object
         {
-            return ResolveReferenceAsync(label, source, directReference, location, resolver, cancellationToken, optional: true);
+            return ResolveReferenceAsync(
+                label, source, directReference, location, resolver, leaseQuarantine,
+                cancellationToken, optional: true);
         }
 
         private async UniTask<ResolvedReference<T>> ResolveReferenceAsync<T>(
@@ -291,6 +735,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             T directReference,
             string location,
             IWorldSettingsReferenceResolver resolver,
+            WorldSettingsLeaseQuarantine leaseQuarantine,
             CancellationToken cancellationToken,
             bool optional) where T : UnityEngine.Object
         {
@@ -303,7 +748,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     throw new InvalidOperationException($"WorldSettings '{name}' has no direct reference for {label}.");
                 }
 
-                return new ResolvedReference<T>(directReference, null);
+                return new ResolvedReference<T>(directReference);
             }
 
             if (string.IsNullOrWhiteSpace(location))
@@ -323,43 +768,29 @@ namespace CycloneGames.GameplayFramework.Runtime
                     $"WorldSettings '{name}' requires a resolver for source '{source}' ({label}).");
             }
 
-            WorldSettingsAssetLoadResult<T> loadResult = await resolver.ResolveAsync<T>(location, cancellationToken);
-            IDisposable pendingLease = loadResult.Lease;
-            try
-            {
-                // Resolver implementations may complete on a worker thread. Validation touches
-                // UnityEngine.Object and cleanup may release Unity-owned resources, so marshal
-                // without cancellation before inspecting or transferring the returned lease.
-                await UniTask.SwitchToMainThread();
-                cancellationToken.ThrowIfCancellationRequested();
+            leaseQuarantine.BeginRegistration();
+            WorldSettingsAssetLoadResult<T> loadResult = await resolver.ResolveAsync<T>(
+                location,
+                leaseQuarantine,
+                cancellationToken);
 
-                if (!loadResult.Success || loadResult.Asset == null)
-                {
-                    string error = string.IsNullOrWhiteSpace(loadResult.Error)
-                        ? "Unknown resolver failure."
-                        : loadResult.Error;
-                    throw new InvalidOperationException(
-                        $"WorldSettings '{name}' could not resolve {label} from '{location}': {error}");
-                }
+            // Resolver implementations may complete on a worker thread. Validation touches
+            // UnityEngine.Object and cleanup may release Unity-owned resources, so marshal
+            // without cancellation before inspecting the returned asset.
+            await UniTask.SwitchToMainThread();
+            leaseQuarantine.CompleteRegistration();
+            cancellationToken.ThrowIfCancellationRequested();
 
-                var resolved = new ResolvedReference<T>(loadResult.Asset, pendingLease);
-                pendingLease = null;
-                return resolved;
-            }
-            finally
+            if (!loadResult.Success || loadResult.Asset == null)
             {
-                if (pendingLease != null)
-                {
-                    try
-                    {
-                        pendingLease.Dispose();
-                    }
-                    catch (Exception exception)
-                    {
-                        Log.Error(exception, "WorldSettings failed to dispose an uncommitted external asset lease.");
-                    }
-                }
+                string error = string.IsNullOrWhiteSpace(loadResult.Error)
+                    ? "Unknown resolver failure."
+                    : loadResult.Error;
+                throw new InvalidOperationException(
+                    $"WorldSettings '{name}' could not resolve {label} from '{location}': {error}");
             }
+
+            return new ResolvedReference<T>(loadResult.Asset);
         }
 
         private bool ValidateReference<T>(
@@ -407,63 +838,28 @@ namespace CycloneGames.GameplayFramework.Runtime
                 : !string.IsNullOrWhiteSpace(assetLocation);
         }
 
-        private static void AddLease(IDisposable lease, IDisposable[] leases, ref int leaseCount)
-        {
-            if (lease == null)
-            {
-                return;
-            }
-
-            leases[leaseCount++] = lease;
-        }
-
-        private static void DisposeLeases(IDisposable[] leases, int leaseCount)
-        {
-            for (int i = leaseCount - 1; i >= 0; i--)
-            {
-                try
-                {
-                    leases[i]?.Dispose();
-                }
-                catch (Exception exception)
-                {
-                    Log.Error(
-                        exception,
-                        "WorldSettings reference-resolution rollback failed to dispose an acquired lease.");
-                }
-                finally
-                {
-                    leases[i] = null;
-                }
-            }
-        }
-
         private readonly struct ResolvedReference<T> where T : UnityEngine.Object
         {
-            public ResolvedReference(T asset, IDisposable lease)
+            public ResolvedReference(T asset)
             {
                 Asset = asset;
-                Lease = lease;
             }
 
             public T Asset { get; }
-            public IDisposable Lease { get; }
         }
     }
 
     public readonly struct WorldSettingsAssetLoadResult<T> where T : UnityEngine.Object
     {
-        public WorldSettingsAssetLoadResult(bool success, T asset, string error, IDisposable lease = null)
+        public WorldSettingsAssetLoadResult(bool success, T asset, string error)
         {
             Success = success;
             Asset = asset;
             Error = error;
-            Lease = lease;
         }
 
         public bool Success { get; }
         public T Asset { get; }
         public string Error { get; }
-        public IDisposable Lease { get; }
     }
 }

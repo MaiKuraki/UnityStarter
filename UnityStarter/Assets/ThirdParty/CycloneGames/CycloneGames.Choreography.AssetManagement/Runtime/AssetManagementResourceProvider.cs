@@ -69,6 +69,34 @@ namespace CycloneGames.Choreography.AssetManagement
             }
         }
 
+        /// <summary>
+        /// Terminal failed handle returned when a request is rejected at the retained-request ceiling or the
+        /// backend returns a null handle. It carries no lease or backend handle, so Release is a safe no-op.
+        /// </summary>
+        private sealed class FailedResourceHandle : IChoreographyResourceHandle
+        {
+            public ChoreographyResourceReference Reference { get; }
+
+            public bool IsDone => true;
+
+            public bool Succeeded => false;
+
+            public float Progress => 0f;
+
+            public string Error { get; }
+
+            public FailedResourceHandle(in ChoreographyResourceReference reference, string error)
+            {
+                Reference = reference;
+                Error = error;
+            }
+
+            public void Release()
+            {
+                // Nothing to release: rejected or backend-null requests never acquired a backend handle or a lease count.
+            }
+        }
+
         private readonly IAssetPackage _package;
         private readonly string _owner;
         private readonly int _maximumRetainedRequestCount;
@@ -142,7 +170,9 @@ namespace CycloneGames.Choreography.AssetManagement
             if (_entries.Count >= _maximumRetainedRequestCount)
             {
                 _rejectedRequestCount++;
-                return null;
+                return new FailedResourceHandle(
+                    in reference,
+                    $"The retained request ceiling of {_maximumRetainedRequestCount} has been reached; the request was rejected.");
             }
 
             entry = new ResourceEntry(this, reference)
@@ -173,7 +203,9 @@ namespace CycloneGames.Choreography.AssetManagement
                 EndPending(entry);
                 entry.CompletionObserved = true;
                 _failedRequestCount++;
-                return null;
+                return new FailedResourceHandle(
+                    in reference,
+                    "The asset package returned a null backend handle for the requested reference.");
             }
             _entries[reference] = entry;
             _activeLeaseCount++;

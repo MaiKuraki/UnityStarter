@@ -4,6 +4,13 @@ namespace CycloneGames.Networking.Replication
 {
     public readonly struct NetworkReplicationSelection
     {
+        private const NetworkInterestReason KnownReasons =
+            NetworkInterestReason.Always
+            | NetworkInterestReason.Owner
+            | NetworkInterestReason.Team
+            | NetworkInterestReason.Area
+            | NetworkInterestReason.Manual;
+
         public readonly ulong ObjectId;
         public readonly int SourceIndex;
         public readonly NetworkChannel Channel;
@@ -21,6 +28,36 @@ namespace CycloneGames.Networking.Replication
             float score,
             bool requiresFullState)
         {
+            if (objectId == 0UL)
+            {
+                throw new ArgumentOutOfRangeException(nameof(objectId));
+            }
+
+            if (sourceIndex < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sourceIndex));
+            }
+
+            if (channel < NetworkChannel.Reliable || channel > NetworkChannel.UnreliableSequenced)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channel));
+            }
+
+            if (reason == NetworkInterestReason.None || (reason & ~KnownReasons) != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(reason));
+            }
+
+            if (estimatedPayloadBytes < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(estimatedPayloadBytes));
+            }
+
+            if (score < 0f || !float.IsFinite(score))
+            {
+                throw new ArgumentOutOfRangeException(nameof(score));
+            }
+
             ObjectId = objectId;
             SourceIndex = sourceIndex;
             Channel = channel;
@@ -28,6 +65,62 @@ namespace CycloneGames.Networking.Replication
             EstimatedPayloadBytes = estimatedPayloadBytes;
             Score = score;
             RequiresFullState = requiresFullState;
+        }
+
+        private NetworkReplicationSelection(
+            ulong objectId,
+            int sourceIndex,
+            NetworkChannel channel,
+            NetworkInterestReason reason,
+            int estimatedPayloadBytes,
+            float score,
+            bool requiresFullState,
+            byte validatedPlannerInput)
+        {
+            _ = validatedPlannerInput;
+            ObjectId = objectId;
+            SourceIndex = sourceIndex;
+            Channel = channel;
+            Reason = reason;
+            EstimatedPayloadBytes = estimatedPayloadBytes;
+            Score = score;
+            RequiresFullState = requiresFullState;
+        }
+
+        internal static bool TryCreateFromPlannerInput(
+            ulong objectId,
+            int sourceIndex,
+            NetworkChannel channel,
+            NetworkInterestReason reason,
+            int estimatedPayloadBytes,
+            float score,
+            bool requiresFullState,
+            out NetworkReplicationSelection selection)
+        {
+            if (objectId == 0UL
+                || sourceIndex < 0
+                || channel < NetworkChannel.Reliable
+                || channel > NetworkChannel.UnreliableSequenced
+                || reason == NetworkInterestReason.None
+                || (reason & ~KnownReasons) != 0
+                || estimatedPayloadBytes < 0
+                || score < 0f
+                || !float.IsFinite(score))
+            {
+                selection = default;
+                return false;
+            }
+
+            selection = new NetworkReplicationSelection(
+                objectId,
+                sourceIndex,
+                channel,
+                reason,
+                estimatedPayloadBytes,
+                score,
+                requiresFullState,
+                validatedPlannerInput: 0);
+            return true;
         }
     }
 
@@ -59,6 +152,11 @@ namespace CycloneGames.Networking.Replication
             ref NetworkSendBudget budget,
             Span<NetworkReplicationSelection> results)
         {
+            if (!observer.IsValid)
+            {
+                throw new ArgumentException("Replication observer is invalid.", nameof(observer));
+            }
+
             if (serverTick < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(serverTick));
@@ -79,15 +177,23 @@ namespace CycloneGames.Networking.Replication
                 }
 
                 float score = CalculateScore(replicatedObject, reason, serverTick);
-                InsertCandidate(
-                    new NetworkReplicationSelection(
+                if (!NetworkReplicationSelection.TryCreateFromPlannerInput(
                         replicatedObject.ObjectId,
                         i,
                         replicatedObject.Policy.Channel,
                         reason,
                         replicatedObject.EstimatedPayloadBytes,
                         score,
-                        replicatedObject.RequiresFullState),
+                        replicatedObject.RequiresFullState,
+                        out NetworkReplicationSelection selection))
+                {
+                    // Evaluators are replaceable extension points. Invalid evaluator output must not
+                    // escape as a selection or consume the observer's send budget.
+                    continue;
+                }
+
+                InsertCandidate(
+                    selection,
                     results,
                     ref candidateCount);
             }

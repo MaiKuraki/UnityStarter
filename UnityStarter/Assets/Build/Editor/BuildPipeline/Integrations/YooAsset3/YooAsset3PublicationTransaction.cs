@@ -204,7 +204,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private const string PublicationIdPrefix = "asset-content:yooasset:";
         internal const string StateRootRelativePath = ".buildpipeline/transactions/yooasset3";
 
-        private const int JournalFormatVersion = 1;
+        private const string JournalDocumentType = "yooasset-publication-transaction";
         private const int MaximumJournalBytes = 1024 * 1024;
         private const int MaximumOperationCount = 512;
         private const int MaximumCopiedEntries = 250000;
@@ -220,6 +220,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private const string RollbackRefreshPendingPhase = "RollbackRefreshPending";
         private const string ActivationRefreshPendingPhase = "ActivationRefreshPending";
         private const string DownstreamActivePhase = "DownstreamActive";
+        private const string SourceQualificationSuspendingPhase = "SourceQualificationSuspending";
+        private const string SourceQualificationSuspendedPhase = "SourceQualificationSuspended";
+        private const string SourceQualificationResumingPhase = "SourceQualificationResuming";
         private const string AwaitingDecisionPhase = "AwaitingDecision";
         private const string RefreshPendingPhase = "RefreshPending";
         private const string CommittedPhase = "Committed";
@@ -241,6 +244,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private bool prepared;
         private bool completed;
         private bool disposed;
+        private bool sourceQualificationScopeActive;
+        private string sourceQualificationResumePhase = string.Empty;
 
         private YooAsset3PublicationTransaction(
             string projectRoot,
@@ -382,7 +387,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             var journal = new Journal
             {
-                formatVersion = JournalFormatVersion,
+                documentType = JournalDocumentType,
                 invocationId = normalizedInvocationId,
                 transactionId = transactionId,
                 phase = PreparedPhase,
@@ -437,8 +442,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 "YooAsset publication work root",
                 65);
 
-            foreach (YooAsset3PublicationJournalOperation operation in value.operations)
+            for (int operationIndex = 0; operationIndex < value.operations.Length; operationIndex++)
             {
+                YooAsset3PublicationJournalOperation operation = value.operations[operationIndex];
                 BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     operation.target,
                     $"YooAsset publication target '{operation.packageName}'");
@@ -456,6 +462,20 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     $"YooAsset published ownership marker '{operation.packageName}'");
                 if (operation.managesSiblingMeta)
                 {
+                    SourceQualificationPaths sourceQualificationPaths =
+                        GetSourceQualificationPaths(value, operationIndex);
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
+                        sourceQualificationPaths.OperationRoot,
+                        $"YooAsset source qualification operation root '{operation.packageName}'");
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
+                        sourceQualificationPaths.InstalledDirectory,
+                        $"YooAsset source qualification installed directory '{operation.packageName}'");
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
+                        sourceQualificationPaths.InstalledMeta,
+                        $"YooAsset source qualification installed meta '{operation.packageName}'");
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
+                        sourceQualificationPaths.OriginalMeta,
+                        $"YooAsset source qualification original meta '{operation.packageName}'");
                     BuildPathPolicy.EnsureWin32MaxPathBudget(
                         operation.targetMeta,
                         $"YooAsset published sibling meta '{operation.packageName}'");
@@ -546,7 +566,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 GetStateRelativePath(invocationId));
             if (!string.Equals(recovered.phase, RefreshPendingPhase, StringComparison.Ordinal)
                 && !string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal)
-                && !string.Equals(recovered.phase, RollbackRefreshPendingPhase, StringComparison.Ordinal))
+                && !string.Equals(recovered.phase, RollbackRefreshPendingPhase, StringComparison.Ordinal)
+                && !IsSourceQualificationPhase(recovered.phase))
             {
                 if (CaptureActivatedSiblingMetasForRollback(recovered))
                 {
@@ -560,7 +581,17 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 WriteJournal(recovered, journalPath, createNew: false);
             }
 
-            if (string.Equals(recovered.phase, DownstreamActivePhase, StringComparison.Ordinal))
+            if (IsSourceQualificationPhase(recovered.phase))
+            {
+                if (decision == BuildPublicationDecision.Commit)
+                {
+                    throw new InvalidOperationException(
+                        "Committed terminal barrier conflicts with a YooAsset publication that was suspended for source qualification.");
+                }
+
+                Rollback(recovered, journalPath, refreshAssets);
+            }
+            else if (string.Equals(recovered.phase, DownstreamActivePhase, StringComparison.Ordinal))
             {
                 if (decision == BuildPublicationDecision.Commit)
                 {
@@ -939,6 +970,705 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             ValidateDownstreamInputs(journal, afterRefresh: true);
+        }
+
+        internal IDisposable SuspendForSourceQualification()
+        {
+            ThrowIfDisposed();
+            if (!HasDownstreamInputs)
+            {
+                return SourceQualificationScope.Empty;
+            }
+
+            if (sourceQualificationScopeActive)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset bundled inputs are already suspended for source qualification.");
+            }
+
+            bool downstreamActive = string.Equals(
+                journal.phase,
+                DownstreamActivePhase,
+                StringComparison.Ordinal);
+            bool preparedOnly = string.Equals(
+                journal.phase,
+                PreparedPhase,
+                StringComparison.Ordinal);
+            if (!prepared || (!downstreamActive && !preparedOnly))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset bundled inputs can only be suspended for source qualification from phase '{PreparedPhase}' or '{DownstreamActivePhase}', " +
+                    $"but the transaction is in phase '{journal.phase}'.");
+            }
+
+            if (downstreamActive)
+            {
+                ValidateDownstreamInputs(journal, afterRefresh: true);
+            }
+            else
+            {
+                ValidatePreparedForSourceQualification(journal);
+            }
+
+            sourceQualificationResumePhase = journal.phase;
+            journal.phase = SourceQualificationSuspendingPhase;
+            WriteJournal(journal, activeJournalPath, createNew: false);
+
+            try
+            {
+                string suspensionRoot = GetSourceQualificationRoot(journal);
+                EnsureSourceQualificationRootCanBeCreated(journal, suspensionRoot);
+                Directory.CreateDirectory(suspensionRoot);
+                YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, suspensionRoot);
+
+                for (int index = journal.operations.Length - 1; index >= 0; index--)
+                {
+                    YooAsset3PublicationJournalOperation operation = journal.operations[index];
+                    if (!operation.managesSiblingMeta)
+                    {
+                        continue;
+                    }
+
+                    SuspendBundledOperation(
+                        journal,
+                        operation,
+                        index,
+                        downstreamActive);
+                }
+
+                ValidateSourceQualificationSuspended(
+                    journal,
+                    downstreamActive);
+                journal.phase = SourceQualificationSuspendedPhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                sourceQualificationScopeActive = true;
+                return new SourceQualificationScope(this);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset could not restore the exact pre-build bundled source tree for source qualification. " +
+                    "The durable publication journal was retained so normal build rollback or workspace recovery can restore the original state.",
+                    exception);
+            }
+        }
+
+        private void ResumeAfterSourceQualification()
+        {
+            ThrowIfDisposed();
+            if (!sourceQualificationScopeActive)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset source qualification suspension is not active.");
+            }
+
+            if (!string.Equals(journal.phase, SourceQualificationSuspendedPhase, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification suspension cannot resume from phase '{journal.phase}'.");
+            }
+
+            bool downstreamActive = string.Equals(
+                sourceQualificationResumePhase,
+                DownstreamActivePhase,
+                StringComparison.Ordinal);
+            bool preparedOnly = string.Equals(
+                sourceQualificationResumePhase,
+                PreparedPhase,
+                StringComparison.Ordinal);
+            if (!downstreamActive && !preparedOnly)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset source qualification suspension lost its resume phase.");
+            }
+
+            ValidateSourceQualificationSuspended(
+                journal,
+                downstreamActive);
+            journal.phase = SourceQualificationResumingPhase;
+            WriteJournal(journal, activeJournalPath, createNew: false);
+
+            try
+            {
+                for (int index = 0; index < journal.operations.Length; index++)
+                {
+                    YooAsset3PublicationJournalOperation operation = journal.operations[index];
+                    if (!operation.managesSiblingMeta)
+                    {
+                        continue;
+                    }
+
+                    ResumeBundledOperation(
+                        journal,
+                        operation,
+                        index,
+                        downstreamActive);
+                }
+
+                if (downstreamActive)
+                {
+                    ValidateDownstreamInputs(journal, afterRefresh: true);
+                }
+                else
+                {
+                    ValidatePreparedForSourceQualification(journal);
+                }
+
+                DeleteSourceQualificationRoot(journal);
+                journal.phase = sourceQualificationResumePhase;
+                WriteJournal(journal, activeJournalPath, createNew: false);
+                sourceQualificationScopeActive = false;
+                sourceQualificationResumePhase = string.Empty;
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset could not reactivate its bundled downstream inputs after source qualification. " +
+                    "The durable publication journal was retained so normal build rollback or workspace recovery can restore the original state.",
+                    exception);
+            }
+        }
+
+        private static void SuspendBundledOperation(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation,
+            int operationIndex,
+            bool downstreamActive)
+        {
+            SourceQualificationPaths paths = GetSourceQualificationPaths(
+                value,
+                operationIndex);
+            EnsureSourceQualificationPathsAbsent(value, operation, paths);
+            Directory.CreateDirectory(paths.OperationRoot);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(
+                value.projectRoot,
+                paths.OperationRoot);
+
+            if (downstreamActive)
+            {
+                ValidateActivatedBundledOperation(value, operation);
+                Directory.Move(operation.target, paths.InstalledDirectory);
+            }
+            else
+            {
+                ValidatePreparedBundledOperation(value, operation);
+                Directory.Move(operation.stage, paths.InstalledDirectory);
+            }
+
+            ValidateInstalledPublicationAt(
+                operation,
+                paths.InstalledDirectory,
+                value.projectRoot,
+                value.transactionId);
+
+            if (!downstreamActive)
+            {
+                ValidateSourceQualificationOperationSuspended(
+                    value,
+                    operation,
+                    paths,
+                    downstreamActive: false);
+                return;
+            }
+
+            if (operation.targetInitiallyExisted)
+            {
+                ValidateOriginalPublicationAt(
+                    operation,
+                    operation.backup,
+                    value.projectRoot);
+                Directory.Move(operation.backup, operation.target);
+                ValidateOriginalPublicationAt(
+                    operation,
+                    operation.target,
+                    value.projectRoot);
+
+                ValidateMetaFile(
+                    value.projectRoot,
+                    operation.protectedMeta,
+                    true,
+                    operation.originalMetaLength,
+                    operation.originalMetaSha256,
+                    "protected bundled publication meta before source qualification");
+                File.Move(operation.protectedMeta, paths.OriginalMeta);
+            }
+            else
+            {
+                EnsureDirectoryPathAbsent(operation.backup, "YooAsset bundled backup");
+                ValidateMetaFile(
+                    value.projectRoot,
+                    operation.targetMeta,
+                    true,
+                    operation.installedMetaLength,
+                    operation.installedMetaSha256,
+                    "installed bundled publication meta before source qualification");
+                File.Move(operation.targetMeta, paths.InstalledMeta);
+            }
+
+            ValidateSourceQualificationOperationSuspended(
+                value,
+                operation,
+                paths,
+                downstreamActive: true);
+        }
+
+        private static void ResumeBundledOperation(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation,
+            int operationIndex,
+            bool downstreamActive)
+        {
+            SourceQualificationPaths paths = GetSourceQualificationPaths(
+                value,
+                operationIndex);
+            ValidateSourceQualificationOperationSuspended(
+                value,
+                operation,
+                paths,
+                downstreamActive);
+
+            if (!downstreamActive)
+            {
+                Directory.Move(paths.InstalledDirectory, operation.stage);
+                ValidatePreparedBundledOperation(value, operation);
+                if (Directory.EnumerateFileSystemEntries(paths.OperationRoot).Any())
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset source qualification holding directory retained unknown evidence: '{paths.OperationRoot}'.");
+                }
+
+                Directory.Delete(paths.OperationRoot, false);
+                return;
+            }
+
+            if (operation.targetInitiallyExisted)
+            {
+                Directory.Move(operation.target, operation.backup);
+                ValidateOriginalPublicationAt(
+                    operation,
+                    operation.backup,
+                    value.projectRoot);
+                File.Move(paths.OriginalMeta, operation.protectedMeta);
+                ValidateMetaFile(
+                    value.projectRoot,
+                    operation.protectedMeta,
+                    true,
+                    operation.originalMetaLength,
+                    operation.originalMetaSha256,
+                    "protected bundled publication meta after source qualification");
+            }
+
+            Directory.Move(paths.InstalledDirectory, operation.target);
+            if (!operation.targetInitiallyExisted)
+            {
+                File.Move(paths.InstalledMeta, operation.targetMeta);
+            }
+
+            ValidateActivatedBundledOperation(value, operation);
+            if (Directory.EnumerateFileSystemEntries(paths.OperationRoot).Any())
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding directory retained unknown evidence: '{paths.OperationRoot}'.");
+            }
+
+            Directory.Delete(paths.OperationRoot, false);
+        }
+
+        private static void ValidateSourceQualificationSuspended(
+            Journal value,
+            bool downstreamActive)
+        {
+            string suspensionRoot = GetSourceQualificationRoot(value);
+            YooAsset3BuildSafety.ValidateNoPathRedirection(
+                value.projectRoot,
+                suspensionRoot);
+            if (!Directory.Exists(suspensionRoot) || File.Exists(suspensionRoot))
+            {
+                throw new DirectoryNotFoundException(
+                    $"YooAsset source qualification holding root does not exist: '{suspensionRoot}'.");
+            }
+
+            int expectedOperationCount = 0;
+            for (int index = 0; index < value.operations.Length; index++)
+            {
+                YooAsset3PublicationJournalOperation operation = value.operations[index];
+                if (!operation.managesSiblingMeta)
+                {
+                    continue;
+                }
+
+                expectedOperationCount++;
+                ValidateSourceQualificationOperationSuspended(
+                    value,
+                    operation,
+                    GetSourceQualificationPaths(value, index),
+                    downstreamActive);
+            }
+
+            if (Directory.GetFileSystemEntries(suspensionRoot).Length != expectedOperationCount)
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding root contains unknown evidence: '{suspensionRoot}'.");
+            }
+        }
+
+        private static void ValidateSourceQualificationOperationSuspended(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation,
+            SourceQualificationPaths paths,
+            bool downstreamActive)
+        {
+            YooAsset3BuildSafety.ValidateNoPathRedirection(
+                value.projectRoot,
+                paths.OperationRoot);
+            if (!Directory.Exists(paths.OperationRoot) || File.Exists(paths.OperationRoot))
+            {
+                throw new DirectoryNotFoundException(
+                    $"YooAsset source qualification operation root does not exist: '{paths.OperationRoot}'.");
+            }
+
+            ValidateOriginalPublicationAt(
+                operation,
+                operation.target,
+                value.projectRoot);
+            ValidateInstalledPublicationAt(
+                operation,
+                paths.InstalledDirectory,
+                value.projectRoot,
+                value.transactionId);
+            EnsureDirectoryPathAbsent(operation.stage, "YooAsset bundled stage");
+            EnsureDirectoryPathAbsent(operation.backup, "YooAsset bundled backup");
+            EnsureFilePathAbsent(operation.protectedMeta, "YooAsset protected bundled meta");
+
+            if (!downstreamActive)
+            {
+                EnsureFilePathAbsent(paths.InstalledMeta, "YooAsset source qualification installed meta");
+                EnsureFilePathAbsent(paths.OriginalMeta, "YooAsset source qualification original meta");
+                if (Directory.GetFileSystemEntries(paths.OperationRoot).Length != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset source qualification operation root contains unknown evidence: '{paths.OperationRoot}'.");
+                }
+
+                return;
+            }
+
+            if (operation.targetInitiallyExisted)
+            {
+                ValidateMetaFile(
+                    value.projectRoot,
+                    paths.OriginalMeta,
+                    true,
+                    operation.originalMetaLength,
+                    operation.originalMetaSha256,
+                    "source qualification protected original bundled meta");
+                EnsureFilePathAbsent(paths.InstalledMeta, "YooAsset source qualification installed meta");
+            }
+            else
+            {
+                ValidateMetaFile(
+                    value.projectRoot,
+                    paths.InstalledMeta,
+                    true,
+                    operation.installedMetaLength,
+                    operation.installedMetaSha256,
+                    "source qualification installed bundled meta");
+                EnsureFilePathAbsent(paths.OriginalMeta, "YooAsset source qualification original meta");
+            }
+
+            if (Directory.GetFileSystemEntries(paths.OperationRoot).Length != 2)
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification operation root contains unknown evidence: '{paths.OperationRoot}'.");
+            }
+        }
+
+        private static void ValidateActivatedBundledOperation(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation)
+        {
+            ValidateInstalledPublicationAt(
+                operation,
+                operation.target,
+                value.projectRoot,
+                value.transactionId);
+            ValidateInstalledSiblingMeta(value, operation);
+            EnsureDirectoryPathAbsent(operation.stage, "YooAsset bundled stage");
+
+            if (operation.targetInitiallyExisted)
+            {
+                ValidateOriginalPublicationAt(
+                    operation,
+                    operation.backup,
+                    value.projectRoot);
+                ValidateMetaFile(
+                    value.projectRoot,
+                    operation.protectedMeta,
+                    true,
+                    operation.originalMetaLength,
+                    operation.originalMetaSha256,
+                    "protected bundled publication meta after source qualification");
+            }
+            else
+            {
+                EnsureDirectoryPathAbsent(operation.backup, "YooAsset bundled backup");
+                EnsureFilePathAbsent(operation.protectedMeta, "YooAsset protected bundled meta");
+            }
+        }
+
+        private static void ValidatePreparedForSourceQualification(Journal value)
+        {
+            foreach (YooAsset3PublicationJournalOperation operation in value.operations)
+            {
+                if (!string.Equals(operation.state, PreparedState, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset prepared source qualification found a non-prepared operation for package '{operation.packageName}'.");
+                }
+
+                if (operation.managesSiblingMeta)
+                {
+                    ValidatePreparedBundledOperation(value, operation);
+                }
+                else
+                {
+                    ValidateInstalledPublicationAt(
+                        operation,
+                        operation.stage,
+                        value.projectRoot,
+                        value.transactionId);
+                    ValidateOriginalPublicationAt(
+                        operation,
+                        operation.target,
+                        value.projectRoot);
+                }
+            }
+        }
+
+        private static void ValidatePreparedBundledOperation(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation)
+        {
+            if (!string.Equals(operation.state, PreparedState, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset bundled operation is not prepared for source qualification: '{operation.packageName}'.");
+            }
+
+            ValidateInstalledPublicationAt(
+                operation,
+                operation.stage,
+                value.projectRoot,
+                value.transactionId);
+            ValidateOriginalPublicationAt(
+                operation,
+                operation.target,
+                value.projectRoot);
+            EnsureDirectoryPathAbsent(operation.backup, "YooAsset bundled backup");
+            EnsureFilePathAbsent(operation.protectedMeta, "YooAsset protected bundled meta");
+        }
+
+        private static void NormalizeSourceQualificationForRollback(Journal value)
+        {
+            if (!IsSourceQualificationPhase(value.phase))
+            {
+                return;
+            }
+
+            for (int index = value.operations.Length - 1; index >= 0; index--)
+            {
+                YooAsset3PublicationJournalOperation operation = value.operations[index];
+                if (!operation.managesSiblingMeta)
+                {
+                    continue;
+                }
+
+                SourceQualificationPaths paths = GetSourceQualificationPaths(value, index);
+                ValidateSourceQualificationPath(value, paths.OperationRoot);
+                if (Directory.Exists(paths.InstalledDirectory))
+                {
+                    EnsureDirectoryPathAbsent(operation.stage, "YooAsset bundled stage during recovery");
+                    if (IsInstalledPublicationAtTarget(value, operation))
+                    {
+                        throw new InvalidOperationException(
+                            $"YooAsset source qualification recovery found both active and held installed publications for package '{operation.packageName}'.");
+                    }
+
+                    Directory.Move(paths.InstalledDirectory, operation.stage);
+                }
+                else if (File.Exists(paths.InstalledDirectory))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset source qualification installed holding path became a file: '{paths.InstalledDirectory}'.");
+                }
+
+                if (File.Exists(paths.OriginalMeta))
+                {
+                    if (Directory.Exists(operation.backup))
+                    {
+                        EnsureFilePathAbsent(
+                            operation.protectedMeta,
+                            "YooAsset protected bundled meta during recovery");
+                        File.Move(paths.OriginalMeta, operation.protectedMeta);
+                    }
+                }
+                else if (Directory.Exists(paths.OriginalMeta))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset source qualification original meta holding path became a directory: '{paths.OriginalMeta}'.");
+                }
+
+                if (File.Exists(paths.InstalledMeta))
+                {
+                    if (IsInstalledPublicationAtTarget(value, operation))
+                    {
+                        EnsureFilePathAbsent(
+                            operation.targetMeta,
+                            "YooAsset installed bundled meta during recovery");
+                        File.Move(paths.InstalledMeta, operation.targetMeta);
+                    }
+                }
+                else if (Directory.Exists(paths.InstalledMeta))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset source qualification installed meta holding path became a directory: '{paths.InstalledMeta}'.");
+                }
+            }
+        }
+
+        private static bool IsInstalledPublicationAtTarget(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation)
+        {
+            if (!Directory.Exists(operation.target))
+            {
+                if (File.Exists(operation.target))
+                {
+                    throw new InvalidOperationException(
+                        $"YooAsset bundled target became a file during source qualification recovery: '{operation.target}'.");
+                }
+
+                return false;
+            }
+
+            YooAsset3PublicationOwnership.PublicationSnapshot actual =
+                YooAsset3PublicationOwnership.CaptureExisting(
+                    value.projectRoot,
+                    operation.target,
+                    operation.kind,
+                    operation.packageName);
+            return actual.Owned
+                   && string.Equals(actual.PackageVersion, operation.packageVersion, StringComparison.Ordinal)
+                   && string.Equals(actual.CryptographyAdapterId, operation.cryptographyAdapterId, StringComparison.Ordinal)
+                   && string.Equals(actual.RuntimeDecryptContractId, operation.runtimeDecryptContractId, StringComparison.Ordinal)
+                   && string.Equals(actual.TransactionId, value.transactionId, StringComparison.Ordinal)
+                   && string.Equals(actual.ContentIdentity, operation.installedContentIdentity, StringComparison.OrdinalIgnoreCase)
+                   && actual.EntryCount == operation.installedEntryCount;
+        }
+
+        private static void EnsureSourceQualificationRootCanBeCreated(
+            Journal value,
+            string suspensionRoot)
+        {
+            ValidateSourceQualificationPath(value, suspensionRoot);
+            if (Directory.Exists(suspensionRoot) || File.Exists(suspensionRoot))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding root is not empty: '{suspensionRoot}'.");
+            }
+        }
+
+        private static void EnsureSourceQualificationPathsAbsent(
+            Journal value,
+            YooAsset3PublicationJournalOperation operation,
+            SourceQualificationPaths paths)
+        {
+            ValidateSourceQualificationPath(value, paths.OperationRoot);
+            EnsureDirectoryPathAbsent(paths.OperationRoot, "YooAsset source qualification operation root");
+            EnsureDirectoryPathAbsent(paths.InstalledDirectory, "YooAsset source qualification installed directory");
+            EnsureFilePathAbsent(paths.InstalledMeta, "YooAsset source qualification installed meta");
+            EnsureFilePathAbsent(paths.OriginalMeta, "YooAsset source qualification original meta");
+            if (!operation.managesSiblingMeta)
+            {
+                throw new InvalidOperationException(
+                    "Only YooAsset bundled operations may enter source qualification suspension.");
+            }
+        }
+
+        private static void DeleteSourceQualificationRoot(Journal value)
+        {
+            string suspensionRoot = GetSourceQualificationRoot(value);
+            ValidateSourceQualificationPath(value, suspensionRoot);
+            if (!Directory.Exists(suspensionRoot) && !File.Exists(suspensionRoot))
+            {
+                return;
+            }
+
+            if (File.Exists(suspensionRoot))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding root became a file: '{suspensionRoot}'.");
+            }
+
+            if (Directory.EnumerateFileSystemEntries(suspensionRoot).Any())
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding root retained evidence: '{suspensionRoot}'.");
+            }
+
+            Directory.Delete(suspensionRoot, false);
+        }
+
+        private static string GetSourceQualificationRoot(Journal value)
+        {
+            return Path.GetFullPath(Path.Combine(
+                value.workRoot,
+                "source-qualification"));
+        }
+
+        private static SourceQualificationPaths GetSourceQualificationPaths(
+            Journal value,
+            int operationIndex)
+        {
+            string operationRoot = Path.GetFullPath(Path.Combine(
+                GetSourceQualificationRoot(value),
+                operationIndex.ToString("D3", CultureInfo.InvariantCulture)));
+            return new SourceQualificationPaths(
+                operationRoot,
+                Path.Combine(operationRoot, "installed"),
+                Path.Combine(operationRoot, "installed.meta"),
+                Path.Combine(operationRoot, "original.meta"));
+        }
+
+        private static void ValidateSourceQualificationPath(
+            Journal value,
+            string path)
+        {
+            if (!YooAsset3BuildSafety.IsStrictDescendant(value.workRoot, path))
+            {
+                throw new InvalidOperationException(
+                    $"YooAsset source qualification holding path escaped its transaction work root: '{path}'.");
+            }
+
+            YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, path);
+        }
+
+        private static void EnsureDirectoryPathAbsent(string path, string description)
+        {
+            if (Directory.Exists(path) || File.Exists(path))
+            {
+                throw new InvalidOperationException(
+                    $"{description} must be absent: '{path}'.");
+            }
+        }
+
+        private static void EnsureFilePathAbsent(string path, string description)
+        {
+            if (File.Exists(path) || Directory.Exists(path))
+            {
+                throw new InvalidOperationException(
+                    $"{description} must be absent: '{path}'.");
+            }
         }
 
         internal void Complete(Action refreshAssets)
@@ -1836,7 +2566,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string journalPath,
             Action refreshAssets)
         {
-            CaptureActivatedSiblingMetasForRollback(recovered);
+            bool sourceQualificationPhase = IsSourceQualificationPhase(recovered.phase);
+            if (sourceQualificationPhase)
+            {
+                NormalizeSourceQualificationForRollback(recovered);
+            }
+            else
+            {
+                CaptureActivatedSiblingMetasForRollback(recovered);
+            }
+
             recovered.phase = RollingBackPhase;
             var failures = new List<Exception>();
             try
@@ -2555,6 +3294,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             Journal recovered;
             try
             {
+                BuildJsonDocumentContract.Validate<Journal>(
+                    json,
+                    JournalDocumentType,
+                    "YooAsset publication journal");
                 recovered = JsonUtility.FromJson<Journal>(json);
             }
             catch (Exception exception)
@@ -2562,26 +3305,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException($"YooAsset publication journal is not valid JSON: '{journalPath}'.", exception);
             }
 
-            if (recovered == null || recovered.formatVersion != JournalFormatVersion ||
+            if (recovered == null ||
+                !string.Equals(recovered.documentType, JournalDocumentType, StringComparison.Ordinal) ||
                 !IsValidInvocationId(recovered.invocationId) ||
                 recovered.sequence <= 0 ||
-                recovered.operationRecords == null || recovered.operationRecords.Length == 0 ||
-                recovered.operationRecords.Length > MaximumOperationCount ||
+                recovered.operations == null || recovered.operations.Length == 0 ||
+                recovered.operations.Length > MaximumOperationCount ||
                 !IsTransactionId(recovered.transactionId) ||
                 !IsKnownPhase(recovered.phase))
             {
                 throw new InvalidOperationException($"YooAsset publication journal has an unsupported or incomplete format: '{journalPath}'.");
-            }
-
-            try
-            {
-                recovered.operations = DeserializeOperations(recovered.operationRecords);
-            }
-            catch (Exception exception)
-            {
-                throw new InvalidOperationException(
-                    $"YooAsset publication journal contains invalid operation records: '{journalPath}'.",
-                    exception);
             }
 
             if (!YooAsset3BuildSafety.PathsEqual(projectRoot, recovered.projectRoot))
@@ -2902,7 +3635,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalDirectory);
             YooAsset3BuildSafety.ValidateNoPathRedirection(value.projectRoot, journalPath);
             value.sequence = checked(value.sequence + 1);
-            value.operationRecords = SerializeOperations(value.operations);
             value.checksum = ComputeChecksum(value);
             string json = JsonUtility.ToJson(value, true);
             byte[] bytes = new UTF8Encoding(false).GetBytes(json);
@@ -2972,60 +3704,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
-        private static string[] SerializeOperations(YooAsset3PublicationJournalOperation[] operations)
-        {
-            if (operations == null || operations.Length == 0 || operations.Length > MaximumOperationCount)
-            {
-                throw new InvalidOperationException("YooAsset publication journal has no valid operations to persist.");
-            }
-
-            var records = new string[operations.Length];
-            for (int index = 0; index < operations.Length; index++)
-            {
-                if (operations[index] == null)
-                {
-                    throw new InvalidOperationException("YooAsset publication journal contains a null operation.");
-                }
-
-                records[index] = JsonUtility.ToJson(operations[index], false);
-                if (string.IsNullOrWhiteSpace(records[index]))
-                {
-                    throw new InvalidOperationException("YooAsset publication operation could not be serialized.");
-                }
-            }
-
-            return records;
-        }
-
-        private static YooAsset3PublicationJournalOperation[] DeserializeOperations(string[] records)
-        {
-            if (records == null || records.Length == 0 || records.Length > MaximumOperationCount)
-            {
-                throw new InvalidOperationException("YooAsset publication journal operation count is invalid.");
-            }
-
-            var operations = new YooAsset3PublicationJournalOperation[records.Length];
-            for (int index = 0; index < records.Length; index++)
-            {
-                if (string.IsNullOrWhiteSpace(records[index]))
-                {
-                    throw new InvalidOperationException("YooAsset publication journal contains an empty operation record.");
-                }
-
-                operations[index] = JsonUtility.FromJson<YooAsset3PublicationJournalOperation>(records[index]);
-                if (operations[index] == null)
-                {
-                    throw new InvalidOperationException("YooAsset publication journal contains an invalid operation record.");
-                }
-            }
-
-            return operations;
-        }
-
         private static string ComputeChecksum(Journal value)
         {
             var builder = new StringBuilder();
-            AppendChecksumValue(builder, value.formatVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, value.documentType);
             AppendChecksumValue(builder, value.sequence.ToString(CultureInfo.InvariantCulture));
             AppendChecksumValue(builder, value.invocationId);
             AppendChecksumValue(builder, value.transactionId);
@@ -3130,6 +3812,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                    string.Equals(value, RollbackRefreshPendingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, ActivationRefreshPendingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, DownstreamActivePhase, StringComparison.Ordinal) ||
+                   string.Equals(value, SourceQualificationSuspendingPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, SourceQualificationSuspendedPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, SourceQualificationResumingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, AwaitingDecisionPhase, StringComparison.Ordinal) ||
                    string.Equals(value, RefreshPendingPhase, StringComparison.Ordinal) ||
                    string.Equals(value, CommittedPhase, StringComparison.Ordinal);
@@ -3143,6 +3828,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                    string.Equals(value, InstalledState, StringComparison.Ordinal);
         }
 
+        private static bool IsSourceQualificationPhase(string value)
+        {
+            return string.Equals(value, SourceQualificationSuspendingPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, SourceQualificationSuspendedPhase, StringComparison.Ordinal) ||
+                   string.Equals(value, SourceQualificationResumingPhase, StringComparison.Ordinal);
+        }
+
         private void ThrowIfDisposed()
         {
             if (disposed)
@@ -3151,10 +3843,48 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
+        private sealed class SourceQualificationScope : IDisposable
+        {
+            internal static readonly IDisposable Empty = new SourceQualificationScope(null);
+            private YooAsset3PublicationTransaction owner;
+
+            internal SourceQualificationScope(YooAsset3PublicationTransaction owner)
+            {
+                this.owner = owner;
+            }
+
+            public void Dispose()
+            {
+                YooAsset3PublicationTransaction current = owner;
+                owner = null;
+                current?.ResumeAfterSourceQualification();
+            }
+        }
+
+        private readonly struct SourceQualificationPaths
+        {
+            internal SourceQualificationPaths(
+                string operationRoot,
+                string installedDirectory,
+                string installedMeta,
+                string originalMeta)
+            {
+                OperationRoot = operationRoot;
+                InstalledDirectory = installedDirectory;
+                InstalledMeta = installedMeta;
+                OriginalMeta = originalMeta;
+            }
+
+            internal string OperationRoot { get; }
+            internal string InstalledDirectory { get; }
+            internal string InstalledMeta { get; }
+            internal string OriginalMeta { get; }
+        }
+
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public long sequence;
             public string invocationId;
             public string transactionId;
@@ -3163,8 +3893,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             public string buildOutputRoot;
             public string bundledFileRoot;
             public string workRoot;
-            public string[] operationRecords;
-            [NonSerialized] public YooAsset3PublicationJournalOperation[] operations;
+            public YooAsset3PublicationJournalOperation[] operations;
             public string checksum;
         }
 

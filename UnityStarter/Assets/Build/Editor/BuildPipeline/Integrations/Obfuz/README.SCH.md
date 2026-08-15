@@ -47,7 +47,7 @@ Obfuz 缺失时，Player Extension Descriptor 不可用，已选择的现有 Con
 
 Marker 有意不包含 Serialized Tuning Field。Obfuz Rule 与 Vendor Option 属于 Vendor-owned Project Settings；Pipeline Membership 属于 Marker Asset。该分离让选择在 BuildData 中可审查，并避免复制 Vendor Configuration。
 
-Player Extension Provenance 包含稳定 Provider ID `obfuz`、Compatibility ID `obfuz-player-v1`、Configuration Asset Path、GUID/Local File ID、File Hash、Size 与 Unity Dependency Hash。因此 Marker 必须保持为持久 Main Asset，不能是 Transient Object 或 Sub-asset。
+Player Extension Provenance 包含稳定 Provider ID `obfuz`、Compatibility ID `obfuz-player`、Configuration Asset Path、GUID/Local File ID、File Hash、Size 与 Unity Dependency Hash。因此 Marker 必须保持为持久 Main Asset，不能是 Transient Object 或 Sub-asset。
 
 Player Extension List 最多允许 64 项，并拒绝重复 Provider ID。不要把 Secret 或 Key 放入 Marker Asset；它没有承载 Secret 的契约。
 

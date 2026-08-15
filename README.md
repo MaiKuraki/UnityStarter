@@ -64,7 +64,7 @@ The [Module Map](#module-map) is the primary index for gameplay, content, UI/inp
 | Unity version source | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
 | CycloneGames module folders | `UnityStarter/Assets/ThirdParty/CycloneGames/` |
 | Assembly definitions | Package and project assembly boundaries are declared by `.asmdef` files under `UnityStarter/Assets/`. |
-| Analyzer rules | 20+ implemented `CycloneGames.Analyzers` rules |
+| Analyzer rules | 20+ implemented `CycloneGames.Analyzers` rules, staged project-wide by `Assets/Default.ruleset` (Unity auto-applies a root-level ruleset with this exact name) |
 | Standalone tools | Go tools with Windows executables under `Tools/Executable/Windows/` |
 
 ## Architecture Principles
@@ -155,7 +155,7 @@ Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbiliti
 | **Choreography** | Engine-free action presentation scheduling for animation, audio, VFX, gameplay-event markers, and preload coordination. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.md) |
 | **GameplayTags** | Hierarchical tags, generated constants, query helpers, editor tooling, and integration points. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md) |
 | **RPGFoundation** | RPG movement and interaction foundations that can integrate with other gameplay packages. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.md) |
-| **UIFramework** | Window management, UI flow, presentation patterns, and asset-backed UI loading that delegates handle ownership and eviction decisions to `AssetManagement`'s W-TinyLFU cache. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
+| **UIFramework** | Window management, UI flow, presentation patterns, and asset-backed UI loading that delegates handle ownership and eviction decisions to `AssetManagement`'s segmented-LRU (SLRU) cache. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
 | **Foundation2D** | 2D foundation package and samples for derived projects. | [Folder](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
 ### AI
@@ -169,7 +169,7 @@ Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbiliti
 
 | Module | Role | Docs |
 | --- | --- | --- |
-| **AssetManagement** | Interface-first asset loading abstraction with W-TinyLFU-inspired caching, `CacheRetention` policies/scheduler, provider abstraction, diagnostics, and async loading flows. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
+| **AssetManagement** | Interface-first asset loading abstraction with bounded segmented-LRU (SLRU) caching, `CacheRetention` policies/scheduler, provider abstraction, diagnostics, and async loading flows. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
 | **DataTable** | Designer-facing data pipeline with optional Luban, MessagePack, and asset-management bridges. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.md) |
 | **GameplayTags.DataTable** | DataTable integration for GameplayTags authoring and loading. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.DataTable/README.md) |
 | **Choreography.AssetManagement** | Optional Choreography resource provider bridge for `CycloneGames.AssetManagement`. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography.AssetManagement/README.md) |
@@ -207,7 +207,7 @@ Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbiliti
 | --- | --- | --- |
 | **Build** | Project-owned player build pipeline, version info, optional hot-update hooks, and CI-facing methods. | [README](UnityStarter/Assets/Build/README.md) |
 | **Tools** | Go tools for project rename, package trimming, cleanup, file trees, and asset processing. | [README](Tools/README.md) |
-| **Analyzers** | Unity-focused Roslyn analyzer rules for performance, safety, async, and conventions. | [README](UnityStarter/Analyzers/CycloneGames.Analyzers/README.md) |
+| **Analyzers** | Unity-focused Roslyn analyzer rules for performance, safety, async, and conventions. The project-wide severity policy lives in `Assets/Default.ruleset`. | [README](UnityStarter/Analyzers/CycloneGames.Analyzers/README.md) |
 
 ## Networking Status
 

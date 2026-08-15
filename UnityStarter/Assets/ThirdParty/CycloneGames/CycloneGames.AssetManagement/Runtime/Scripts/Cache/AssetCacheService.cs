@@ -274,8 +274,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         private int _peakIdleCount;
         private long _peakIdleBytesApprox;
 
-        // Mutations are main-thread-affine because eviction releases Unity/provider resources. The monitor only
-        // protects cold diagnostic snapshots and does not make provider operations safe on worker threads.
+        // All cache mutations and telemetry snapshots run inside _gate. Mutations are main-thread-affine because
+        // eviction releases Unity/provider resources (AssetRuntimeGuard.EnsureMainThread), so the monitor has no
+        // contention on its intended call paths. It does not make provider operations safe on worker threads.
         private readonly object _gate = new object();
         // 0 = active, 1 = shutdown requested with cleanup pending, 2 = cleanup completed.
         private int _disposed;

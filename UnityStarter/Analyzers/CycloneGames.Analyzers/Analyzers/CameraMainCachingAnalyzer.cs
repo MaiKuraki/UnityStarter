@@ -31,6 +31,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
         {
             var memberAccess = (MemberAccessExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(memberAccess.SyntaxTree)) return;
             if (memberAccess.Name.Identifier.Text != "main") return;
 
             var symbolInfo = context.SemanticModel.GetSymbolInfo(memberAccess);

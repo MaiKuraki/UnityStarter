@@ -16,12 +16,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private static readonly string[] ManagedPropertyNames =
         {
             "worldSettings",
+            "terminalCleanupOwner",
             "netMode",
             "autoStart",
             "localPlayerCount",
         };
 
         private SerializedProperty worldSettingsProperty;
+        private SerializedProperty terminalCleanupOwnerProperty;
         private SerializedProperty netModeProperty;
         private SerializedProperty autoStartProperty;
         private SerializedProperty localPlayerCountProperty;
@@ -29,6 +31,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private void OnEnable()
         {
             worldSettingsProperty = serializedObject.FindProperty("worldSettings");
+            terminalCleanupOwnerProperty = serializedObject.FindProperty("terminalCleanupOwner");
             netModeProperty = serializedObject.FindProperty("netMode");
             autoStartProperty = serializedObject.FindProperty("autoStart");
             localPlayerCountProperty = serializedObject.FindProperty("localPlayerCount");
@@ -43,6 +46,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 new Color(0.42f, 0.78f, 1f, 1f));
 
             EditorGUILayout.PropertyField(worldSettingsProperty);
+            EditorGUILayout.PropertyField(terminalCleanupOwnerProperty);
             EditorGUILayout.PropertyField(netModeProperty);
             EditorGUILayout.PropertyField(autoStartProperty);
 
@@ -61,6 +65,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
 
             DrawConfigurationStatus();
+            DrawTerminalCleanupOwnerStatus();
             DrawRemainingProperties();
             serializedObject.ApplyModifiedProperties();
 
@@ -94,10 +99,49 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     MessageType.Error);
             }
 
-            if (settings.UsesExternalReferences && target.GetType() == typeof(GameplayWorldHost))
+            if (settings.UsesExternalReferences)
             {
                 EditorGUILayout.HelpBox(
-                    "This WorldSettings uses external locations. Derive GameplayWorldHost and override CreateReferenceResolver, or compose GameInstance directly with a resolver.",
+                    "This WorldSettings uses external locations. Configure the host with a GameplayWorldComposition that provides IWorldSettingsReferenceResolver before startup.",
+                    MessageType.Warning);
+            }
+
+        }
+
+        private void DrawTerminalCleanupOwnerStatus()
+        {
+            if (terminalCleanupOwnerProperty.hasMultipleDifferentValues)
+            {
+                EditorGUILayout.HelpBox(
+                    "Selected hosts use different terminal cleanup owners.",
+                    MessageType.Info);
+                return;
+            }
+
+            var cleanupOwner = terminalCleanupOwnerProperty.objectReferenceValue as
+                GameplayWorldTerminalCleanupOwner;
+            if (cleanupOwner == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "Assign an application-lifetime terminal cleanup owner, or configure one explicitly before startup.",
+                    MessageType.Warning);
+                return;
+            }
+
+            bool invalidHierarchy = cleanupOwner.transform.parent != null;
+            for (int index = 0; !invalidHierarchy && index < targets.Length; index++)
+            {
+                GameplayWorldHost host = targets[index] as GameplayWorldHost;
+                invalidHierarchy = host != null &&
+                    (ReferenceEquals(cleanupOwner.gameObject, host.gameObject) ||
+                     cleanupOwner.transform.IsChildOf(host.transform) ||
+                     host.transform.IsChildOf(cleanupOwner.transform));
+            }
+
+            if (invalidHierarchy)
+            {
+                EditorGUILayout.HelpBox(
+                    "The terminal cleanup owner must use an independent root hierarchy so it can outlive this Scene host.",
                     MessageType.Error);
             }
         }
@@ -126,9 +170,18 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 "Controls operate only in Play Mode and do not modify serialized authoring data.",
                 new Color(0.50f, 0.58f, 0.38f, 1f));
 
+            if (!Application.isPlaying)
+            {
+                EditorGUILayout.HelpBox(
+                    "Runtime state and controls are available in Play Mode.",
+                    MessageType.Info);
+                return;
+            }
+
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.EnumPopup("Host State", host.State);
+                EditorGUILayout.Toggle("Explicit Composition", host.HasExplicitComposition);
                 EditorGUILayout.ObjectField("Game Mode", host.CurrentWorld?.GameMode, typeof(GameMode), true);
                 EditorGUILayout.IntField("Effective Local Players", host.EffectiveLocalPlayerCount);
             }

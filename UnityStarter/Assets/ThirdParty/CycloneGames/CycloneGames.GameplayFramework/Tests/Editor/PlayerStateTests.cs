@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.GameplayFramework.Runtime;
 using NUnit.Framework;
 using UnityEngine;
@@ -25,13 +26,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             PlayerState source = CreatePlayerState("Source");
             source.SetPlayerName("PlayerOne");
             source.SetPlayerId(42);
-            Assert.IsTrue(source.TryRestoreSnapshot(new PlayerStateSnapshot
-            {
-                PlayerName = "PlayerOne",
-                PlayerId = 42,
-                IsSpectator = true,
-                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion,
-            }, out _));
+            Assert.IsTrue(source.TryRestoreSnapshot(
+                new PlayerStateSnapshot("PlayerOne", 42, isSpectator: true),
+                out _));
 
             PlayerStateSnapshot snapshot = source.CaptureSnapshot();
             PlayerState target = CreatePlayerState("Target");
@@ -40,28 +37,16 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.AreEqual("PlayerOne", target.GetPlayerName());
             Assert.AreEqual(42, target.GetPlayerId());
             Assert.IsTrue(target.IsSpectator());
-            Assert.AreEqual(PlayerStateSnapshot.CurrentSchemaVersion, snapshot.SchemaVersion);
         }
 
         [Test]
-        public void Snapshot_RejectsEveryNonCurrentSchema()
+        public void Snapshot_RejectsInvalidRuntimeValues()
         {
             PlayerState state = CreatePlayerState("State");
-            Assert.IsFalse(state.TryRestoreSnapshot(new PlayerStateSnapshot
-            {
-                SchemaVersion = 0,
-                PlayerName = "Invalid",
-                PlayerId = 7,
-            }, out string missingVersionError));
-            StringAssert.Contains("Unsupported", missingVersionError);
-
-            Assert.IsFalse(state.TryRestoreSnapshot(new PlayerStateSnapshot
-            {
-                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion + 1,
-                PlayerName = "Future",
-                PlayerId = 8,
-            }, out string error));
-            StringAssert.Contains("Unsupported", error);
+            Assert.IsFalse(state.TryRestoreSnapshot(
+                new PlayerStateSnapshot("Invalid", -1, isSpectator: false),
+                out string error));
+            StringAssert.Contains("negative", error);
             Assert.IsNull(state.GetPlayerName());
         }
 
@@ -69,12 +54,9 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         public void CopyProperties_CopiesIdentityWithoutPawn()
         {
             PlayerState source = CreatePlayerState("Source");
-            source.TryRestoreSnapshot(new PlayerStateSnapshot
-            {
-                PlayerName = "CopiedPlayer",
-                PlayerId = 11,
-                IsSpectator = true,
-            }, out _);
+            source.TryRestoreSnapshot(
+                new PlayerStateSnapshot("CopiedPlayer", 11, isSpectator: true),
+                out _);
             PlayerState target = CreatePlayerState("Target");
 
             target.CopyProperties(source);
@@ -120,11 +102,27 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 state.SetPlayerName(new string('x', PlayerLoginRequest.MaxPlayerNameLength + 1)));
         }
 
+        [Test]
+        public void SuccessfulLoginResult_RequiresLiveController()
+        {
+            Assert.Throws<System.ArgumentNullException>(() => PlayerLoginResult.Success(null));
+
+            var gameObject = new GameObject("DestroyedController");
+            objects.Add(gameObject);
+            PlayerController controller = gameObject.AddComponent<PlayerController>();
+            UnityLifecycleTestUtility.InvokeAwake(controller);
+            Object.DestroyImmediate(gameObject);
+
+            Assert.Throws<System.ArgumentNullException>(() => PlayerLoginResult.Success(controller));
+        }
+
         private PlayerState CreatePlayerState(string name)
         {
             var gameObject = new GameObject(name);
             objects.Add(gameObject);
-            return gameObject.AddComponent<PlayerState>();
+            PlayerState playerState = gameObject.AddComponent<PlayerState>();
+            UnityLifecycleTestUtility.InvokeAwake(playerState);
+            return playerState;
         }
     }
 }

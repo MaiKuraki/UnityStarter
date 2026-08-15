@@ -4,12 +4,13 @@ namespace Build.Pipeline.Editor
 {
     internal static class BuildResultManifestFormat
     {
-        internal const int CurrentVersion = 1;
+        internal const string DocumentType = "build-result";
+        internal const string StartedDocumentType = "build-run-started";
 
         [Serializable]
         internal sealed class Document
         {
-            public int formatVersion;
+            public string documentType;
             public string operation;
             public string runId;
             public bool succeeded;
@@ -21,6 +22,8 @@ namespace Build.Pipeline.Editor
             public string namedBuildTarget;
             public string scriptingBackend;
             public bool debugBuild;
+            public string buildPurpose;
+            public bool releaseBaselinePolicyEligible;
             public bool deleteDebugFiles;
             public bool exportAndroidProject;
             public bool allowExternalOutput;
@@ -31,6 +34,7 @@ namespace Build.Pipeline.Editor
             public BuildIdentityEntry effectiveIdentity;
             public string identityOrigin;
             public CiIdentityEntry ciIdentity;
+            public SourceWorkspaceEntry sourceWorkspace;
             public string buildRoot;
             public string outputPath;
             public string outputDirectory;
@@ -38,7 +42,6 @@ namespace Build.Pipeline.Editor
             public string[] buildScenePaths;
             public string cheatBuildMode;
             public bool cheatEnabled;
-            public int playerPipelineCompatibilityRevision;
             public string playerExtensionFingerprint;
             public string failure;
             public string[] nonFatalFailures;
@@ -118,6 +121,27 @@ namespace Build.Pipeline.Editor
         {
             public string provider;
             public string runId;
+        }
+
+        [Serializable]
+        internal sealed class SourceWorkspaceEntry
+        {
+            public string policy;
+            public bool required;
+            public string overallStatus;
+            public string failureCode;
+            public WorkspaceComponentEntry trackedChanges;
+            public WorkspaceComponentEntry untrackedChanges;
+            public WorkspaceComponentEntry submodules;
+            public WorkspaceComponentEntry gitLfs;
+        }
+
+        [Serializable]
+        internal sealed class WorkspaceComponentEntry
+        {
+            public string status;
+            public bool hasChangeCount;
+            public int changeCount;
         }
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.GameplayFramework.Runtime;
 using NUnit.Framework;
 using Unity.PerformanceTesting;
@@ -75,6 +76,38 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 .IterationsPerMeasurement(100)
                 .GC()
                 .Run();
+        }
+
+        [Test]
+        public void ActorTick_OneThousandOptInActors_SteadyStateAllocatesZeroManagedBytesInEditorMono()
+        {
+            const int actorCount = 1_000;
+            const int iterationCount = 100;
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            NoOpTickActor prefab = testWorld.CreateAuthoringActor<NoOpTickActor>("NoOpTickActorPrefab");
+            prefab.Configure();
+            for (int i = 0; i < actorCount; i++)
+            {
+                testWorld.World.SpawnActor(prefab);
+            }
+
+            for (int i = 0; i < 5; i++)
+            {
+                testWorld.Instance.Tick(ActorTickPhase.Update, 1f / 60f);
+            }
+
+            _ = GC.GetAllocatedBytesForCurrentThread();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterationCount; i++)
+            {
+                testWorld.Instance.Tick(ActorTickPhase.Update, 1f / 60f);
+            }
+            long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.That(
+                allocatedBytes,
+                Is.Zero,
+                "The warmed Editor Mono Actor Tick path allocated managed memory.");
         }
 
         private sealed class NoOpCameraMode : CameraMode

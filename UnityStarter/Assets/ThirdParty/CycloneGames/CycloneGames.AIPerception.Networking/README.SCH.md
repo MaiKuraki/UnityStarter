@@ -264,7 +264,7 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 ### Interest filtering
 
-`AIPerceptionNetworkObserverResolver` 把 candidate 转换为 `NetworkReplicationObserver`，observer 转换为 `NetworkReplicatedObject`，然后调用 `INetworkInterestEvaluator`。AIPerception 与 Networking 共享相同语义：按 connection/player ID 匹配 owner、认证与 interest layer、team relevance、area relevance 和 `IncludeOwner` 支持。
+`AIPerceptionNetworkObserverResolver` 把 candidate 转换为 `NetworkReplicationObserver`，observer 转换为 `NetworkReplicatedObject`，然后调用 `INetworkInterestEvaluator`。AIPerception 与 Networking 共享相同语义：按 connection/player ID 匹配 owner、认证与 interest layer、team relevance、area relevance 和 `IncludeOwner` 支持。Observer 与 source team ID 必须非负，candidate transport connection ID 必须为正；resolver 会在构造共享 replication value 前排除无效 candidate。
 
 ### Profile 与 scheduling
 

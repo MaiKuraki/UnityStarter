@@ -34,7 +34,7 @@ It also requires a provisioned and saved Obfuz configuration and the generated `
 5. Create `CycloneGames/Build/Hot Update/HybridCLR + Obfuz`.
 6. Assign project asmdef assets below `Assets/` and two separate build-exclusive output folders below `Assets/`.
 7. Assign the configuration to one `hot-update` invocation and select `Clean`.
-8. Save authoring assets, confirm Workspace Safety is `Clean`, then run Preflight.
+8. Save authoring assets, confirm Source Qualification is `Verified Clean` and Build Transaction Safety is `Clean`, then run Preflight.
 
 The configuration inherits the standard HybridCLR fields and directory safety rules. Existing non-empty output folders must carry valid Build ownership evidence.
 

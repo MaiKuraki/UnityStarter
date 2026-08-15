@@ -7,9 +7,9 @@ namespace Build.Pipeline.Editor
     [Serializable]
     internal sealed class AddressablesArtifactManifest
     {
-        public int formatVersion;
+        public string documentType;
         public string buildTarget;
-        public string contentVersion;
+        public string contentIdentity;
         public string incrementality;
         public string unityVersion;
         public string activeProfileId;
@@ -30,7 +30,7 @@ namespace Build.Pipeline.Editor
 
     internal static class AddressablesArtifactManifestFormat
     {
-        internal const int CurrentVersion = 1;
+        internal const string DocumentType = "addressables-artifact-manifest";
         internal const string FileName = "AddressablesArtifacts.json";
 
         internal static string Serialize(
@@ -42,7 +42,7 @@ namespace Build.Pipeline.Editor
                 throw new ArgumentNullException(nameof(manifest));
             }
 
-            manifest.formatVersion = CurrentVersion;
+            manifest.documentType = DocumentType;
             return JsonUtility.ToJson(manifest, prettyPrint);
         }
 
@@ -53,6 +53,10 @@ namespace Build.Pipeline.Editor
             AddressablesArtifactManifest manifest;
             try
             {
+                BuildJsonDocumentContract.Validate<AddressablesArtifactManifest>(
+                    json,
+                    DocumentType,
+                    sourceDescription);
                 manifest = JsonUtility.FromJson<AddressablesArtifactManifest>(json);
             }
             catch (Exception exception)
@@ -63,11 +67,13 @@ namespace Build.Pipeline.Editor
             }
 
             if (manifest == null
-                || manifest.formatVersion != CurrentVersion)
+                || !string.Equals(
+                    manifest.documentType,
+                    DocumentType,
+                    StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"{sourceDescription} uses an unsupported format. "
-                    + $"Expected formatVersion {CurrentVersion}.");
+                    $"{sourceDescription} does not match the current Addressables artifact contract.");
             }
 
             return manifest;

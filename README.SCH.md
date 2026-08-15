@@ -64,7 +64,7 @@ UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项
 | Unity 版本来源 | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
 | CycloneGames 模块目录 | `UnityStarter/Assets/ThirdParty/CycloneGames/` |
 | Assembly definitions | Package 与项目 assembly boundary 由 `UnityStarter/Assets/` 下的 `.asmdef` 文件声明。 |
-| Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则 |
+| Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则，由 `Assets/Default.ruleset` 项目级分阶段强制（Unity 会自动应用 Assets 根下这个名字的 ruleset） |
 | 独立工具 | `Tools/Executable/Windows/` 下的 Go 工具 Windows 可执行文件 |
 
 ## 架构原则
@@ -155,7 +155,7 @@ flowchart TD
 | **Choreography** | 引擎无关的 action presentation scheduling，用于 animation、audio、VFX、gameplay-event markers 与 preload coordination。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.SCH.md) |
 | **GameplayTags** | 层级 tags、generated constants、query helpers、editor tooling 与 integration points。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
 | **RPGFoundation** | RPG movement 与 interaction foundations，可与其他 gameplay packages 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.SCH.md) |
-| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` W-TinyLFU cache 的 asset-backed UI loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` segmented-LRU (SLRU) cache 的 asset-backed UI loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
 | **Foundation2D** | 面向派生项目的 2D foundation package 与 samples。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
 ### AI
@@ -169,7 +169,7 @@ flowchart TD
 
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **AssetManagement** | Interface-first asset loading abstraction，包含 W-TinyLFU-inspired caching、`CacheRetention` policies/scheduler、provider abstraction、diagnostics 和 async loading flows。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
+| **AssetManagement** | Interface-first asset loading abstraction，包含 bounded segmented-LRU (SLRU) caching、`CacheRetention` policies/scheduler、provider abstraction、diagnostics 和 async loading flows。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
 | **DataTable** | 面向策划配置的数据管线，支持可选 Luban、MessagePack 与 asset-management bridges。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.SCH.md) |
 | **GameplayTags.DataTable** | GameplayTags authoring 与 loading 的 DataTable integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.DataTable/README.SCH.md) |
 | **Choreography.AssetManagement** | `CycloneGames.AssetManagement` 的可选 Choreography resource provider bridge。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography.AssetManagement/README.SCH.md) |
@@ -207,7 +207,7 @@ flowchart TD
 | --- | --- | --- |
 | **Build** | 项目自有 player build pipeline、version info、可选 hot-update hooks 与 CI-facing methods。 | [README.SCH](UnityStarter/Assets/Build/README.SCH.md) |
 | **Tools** | 用于项目改名、package trimming、cleanup、file trees 与 asset processing 的 Go tools。 | [README.SCH](Tools/README.SCH.md) |
-| **Analyzers** | 面向 Unity performance、safety、async 与 conventions 的 Roslyn analyzer rules。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
+| **Analyzers** | 面向 Unity performance、safety、async 与 conventions 的 Roslyn analyzer rules。项目级 severity 策略位于 `Assets/Default.ruleset`。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
 
 ## Networking 状态
 

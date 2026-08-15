@@ -16,7 +16,8 @@ namespace Build.Pipeline.Editor
     /// </summary>
     internal sealed class GlobalBuildStateTransaction
     {
-        private const int FormatVersion = 1;
+        private const string JournalDocumentType = "global-build-state-transaction";
+        private const string EnvelopeDocumentType = "global-build-state-envelope";
         private const string StateDirectoryRelativePath = ".buildpipeline/transactions/global-state";
         private const string PlayerSettingsRelativePath =
             "ProjectSettings/ProjectSettings.asset";
@@ -248,7 +249,7 @@ namespace Build.Pipeline.Editor
 
             journal = new Journal
             {
-                formatVersion = FormatVersion,
+                documentType = JournalDocumentType,
                 transactionId = transactionId,
                 projectRoot = NormalizeAbsolutePath(projectRoot),
                 transactionDirectory = transactionDirectoryRelativePath,
@@ -1931,7 +1932,7 @@ namespace Build.Pipeline.Editor
 
             var envelope = new JournalEnvelope
             {
-                formatVersion = FormatVersion,
+                documentType = EnvelopeDocumentType,
                 payloadBase64 = Convert.ToBase64String(payloadBytes),
                 sha256 = ComputeSha256(payloadBytes)
             };
@@ -1984,7 +1985,12 @@ namespace Build.Pipeline.Editor
             JournalEnvelope envelope;
             try
             {
-                envelope = JsonUtility.FromJson<JournalEnvelope>(Encoding.UTF8.GetString(envelopeBytes));
+                string envelopeJson = Encoding.UTF8.GetString(envelopeBytes);
+                BuildJsonDocumentContract.Validate<JournalEnvelope>(
+                    envelopeJson,
+                    EnvelopeDocumentType,
+                    "Global-state journal envelope");
+                envelope = JsonUtility.FromJson<JournalEnvelope>(envelopeJson);
             }
             catch (Exception exception)
             {
@@ -1992,7 +1998,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (envelope == null
-                || envelope.formatVersion != FormatVersion
+                || !string.Equals(
+                    envelope.documentType,
+                    EnvelopeDocumentType,
+                    StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(envelope.payloadBase64)
                 || string.IsNullOrWhiteSpace(envelope.sha256))
             {
@@ -2018,7 +2027,12 @@ namespace Build.Pipeline.Editor
             Journal parsed;
             try
             {
-                parsed = JsonUtility.FromJson<Journal>(Encoding.UTF8.GetString(payloadBytes));
+                string payloadJson = Encoding.UTF8.GetString(payloadBytes);
+                BuildJsonDocumentContract.Validate<Journal>(
+                    payloadJson,
+                    JournalDocumentType,
+                    "Global-state journal payload");
+                parsed = JsonUtility.FromJson<Journal>(payloadJson);
             }
             catch (Exception exception)
             {
@@ -2035,7 +2049,10 @@ namespace Build.Pipeline.Editor
 
         private void ValidateJournal(Journal candidate)
         {
-            if (candidate.formatVersion != FormatVersion
+            if (!string.Equals(
+                    candidate.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || !IsGuidN(candidate.transactionId)
                 || candidate.sequence <= 0
                 || !IsKnownGlobalPhase(candidate.phase))
@@ -3243,7 +3260,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class JournalEnvelope
         {
-            public int formatVersion;
+            public string documentType;
             public string payloadBase64;
             public string sha256;
         }
@@ -3251,7 +3268,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string transactionId;
             public string projectRoot;
             public string transactionDirectory;

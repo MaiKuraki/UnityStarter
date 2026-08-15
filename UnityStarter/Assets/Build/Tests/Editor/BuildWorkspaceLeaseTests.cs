@@ -145,7 +145,7 @@ namespace Build.Pipeline.Editor.Tests
                 Assert.That(
                     json,
                     Is.EqualTo(
-                        "{\"formatVersion\":1,\"runId\":\"release-42\",\"operation\":\"recovery\",\"pid\":4242," +
+                        "{\"documentType\":\"build-workspace-lease\",\"runId\":\"release-42\",\"operation\":\"recovery\",\"pid\":4242," +
                         "\"startedUtc\":\"2026-08-07T01:02:03.0000000Z\"}"));
                 Assert.That(lease.StartedUtc, Is.EqualTo(startedUtc));
             }

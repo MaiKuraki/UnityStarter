@@ -2,13 +2,10 @@
     "name": "CycloneGames.GameplayFramework.Runtime",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.GameplayFramework.Core",
         "UniTask",
-        "Unity.Burst",
         "Unity.Mathematics",
-        "Unity.Cinemachine",
-        "CycloneGames.Logging.Core",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.Factory.Unity.Runtime"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

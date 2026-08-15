@@ -13,10 +13,9 @@ namespace Build.Pipeline.Editor
     {
         private bool DrawWorkspaceHealth()
         {
-            RefreshWorkspaceSnapshotIfRequired();
             BuildInspectorStatus status = GetWorkspaceInspectorStatus();
             showWorkspaceDetails = BuildInspectorUi.DrawFoldoutHeader(
-                "Workspace Safety",
+                "Build Transaction Safety",
                 showWorkspaceDetails,
                 BuildInspectorUi.SafetyColor,
                 status,
@@ -83,15 +82,6 @@ namespace Build.Pipeline.Editor
             return isReady;
         }
 
-        private void RefreshWorkspaceSnapshotIfRequired()
-        {
-            if (Event.current.type == EventType.Layout
-                && EditorApplication.timeSinceStartup >= nextWorkspaceInspectionTime)
-            {
-                RefreshWorkspaceSnapshot();
-            }
-        }
-
         private BuildInspectorStatus GetWorkspaceInspectorStatus()
         {
             if (workspaceSnapshot == null)
@@ -117,7 +107,6 @@ namespace Build.Pipeline.Editor
 
         private void RefreshWorkspaceSnapshot()
         {
-            nextWorkspaceInspectionTime = EditorApplication.timeSinceStartup + 2d;
             workspaceInspectionError = null;
             try
             {

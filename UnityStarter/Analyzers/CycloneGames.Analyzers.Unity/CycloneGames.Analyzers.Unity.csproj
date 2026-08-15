@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>netstandard2.0</TargetFramework>
+        <LangVersion>9</LangVersion>
+        <Nullable>enable</Nullable>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+        <DevelopmentDependency>true</DevelopmentDependency>
+        <RootNamespace>CycloneGames.Analyzers</RootNamespace>
+        <AssemblyName>CycloneGames.Analyzers</AssemblyName>
+        <Deterministic>true</Deterministic>
+        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="..\CycloneGames.Analyzers\Analyzers\**\*.cs"
+                 Link="Analyzers\%(RecursiveDir)%(Filename)%(Extension)" />
+        <Compile Include="..\CycloneGames.Analyzers\Core\**\*.cs"
+                 Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="3.8.0" PrivateAssets="all" />
+        <PackageReference Update="NETStandard.Library" PrivateAssets="all" />
+    </ItemGroup>
+
+    <PropertyGroup>
+        <!--
+          Unity project root: explicit, overridable discovery point. The default assumes this analyzer project
+          sits two levels below the Unity project root (Analyzers/<Solution>/<Project>). Consumers that relocate
+          the analyzer project pass -p:UnityProjectRoot=<path-to-unity-project>, where the value is the directory
+          that contains ProjectSettings/ProjectVersion.txt. The CycloneGames.Analyzers.Verifier tool always
+          supplies this value from its own marker-based discovery, so the installer follows the real project even
+          after renames and moves.
+        -->
+        <UnityProjectRoot Condition="'$(UnityProjectRoot)' == ''">$(MSBuildThisFileDirectory)..\..</UnityProjectRoot>
+        <UnityAnalyzerDirectory>$(UnityProjectRoot)\Assets\Analyzers</UnityAnalyzerDirectory>
+        <UnityAnalyzerPath>$(UnityAnalyzerDirectory)\CycloneGames.Analyzers.dll</UnityAnalyzerPath>
+    </PropertyGroup>
+
+    <Target Name="ValidateUnityProjectRoot" BeforeTargets="InstallUnityAnalyzer">
+        <Error Condition="!Exists('$(UnityProjectRoot)\ProjectSettings\ProjectVersion.txt')"
+               Text="UnityProjectRoot '$(UnityProjectRoot)' does not contain ProjectSettings/ProjectVersion.txt. Override it with -p:UnityProjectRoot=&lt;path-to-unity-project&gt;." />
+    </Target>
+
+    <Target Name="InstallUnityAnalyzer"
+            AfterTargets="Build"
+            Condition="'$(Configuration)' == 'Release'">
+        <MakeDir Directories="$(UnityAnalyzerDirectory)" />
+        <Copy SourceFiles="$(TargetPath)"
+              DestinationFiles="$(UnityAnalyzerPath)"
+              SkipUnchangedFiles="true" />
+    </Target>
+
+</Project>

@@ -44,6 +44,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeMethod(SyntaxNodeAnalysisContext context)
         {
             var methodDecl = (MethodDeclarationSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(methodDecl.SyntaxTree)) return;
             var methodName = methodDecl.Identifier.Text;
 
             if (!IsHotPathMethod(methodName)) return;

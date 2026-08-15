@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
-using Unity.Burst;
-using Unity.Mathematics;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -31,17 +30,21 @@ namespace CycloneGames.GameplayFramework.Runtime
         Destroyed = 5,
     }
 
+    public delegate void DamageEventHandler(
+        float damage,
+        in DamageEvent damageEvent,
+        Controller eventInstigator,
+        Actor damageCauser);
+
     /// <summary>
     /// Unity-facing gameplay object. Actor provides world membership, lifecycle, transform,
     /// lightweight tags, visibility, and damage hooks. Network migration and persistence are
     /// integration responsibilities.
     /// </summary>
+    [DisallowMultipleComponent]
     public class Actor : MonoBehaviour
     {
         private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
-
-        public const int MaxActorTags = 64;
-        public const int MaxActorTagLength = 128;
 
         [SerializeField] private float initialLifeSpanSec;
         [SerializeField] private bool bCanBeDamaged = true;
@@ -56,23 +59,180 @@ namespace CycloneGames.GameplayFramework.Runtime
         private List<Renderer> rendererBuffer;
         private CancellationTokenSource lifeSpanCancellation;
         private double lifeSpanDeadline;
+        private bool lifeSpanCancellationCommitted;
+        private bool lifeSpanCleanupInProgress;
+        private int actorOwnerThreadId;
         private ActorLifecycleState lifecycleState = ActorLifecycleState.Constructed;
         private EndPlayReason endPlayReason;
+        private int stableInstanceId;
         private bool worldUnboundNotified;
         private bool actorTickEnabled;
         private bool actorTickStateInitialized;
+        private Action<Actor>[] destroyedObservers = Array.Empty<Action<Actor>>();
+        private Action[] ownerChangedObservers = Array.Empty<Action>();
+        private DamageEventHandler[] pointDamageObservers = Array.Empty<DamageEventHandler>();
+        private DamageEventHandler[] radialDamageObservers = Array.Empty<DamageEventHandler>();
 
-        public event Action<Actor> OnDestroyed;
-        public event Action OwnerChanged;
-        public event Action<float, DamageEvent, Controller, Actor> OnTakePointDamage;
-        public event Action<float, DamageEvent, Controller, Actor> OnTakeRadialDamage;
+        public event Action<Actor> OnDestroyed
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                destroyedObservers = AddDestroyedObservers(destroyedObservers, value);
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                destroyedObservers = RemoveDestroyedObservers(destroyedObservers, value);
+            }
+        }
 
-        public World World => world;
-        public ActorLifecycleState LifecycleState => lifecycleState;
-        public bool HasBegunPlay => lifecycleState == ActorLifecycleState.Playing;
-        public bool CanEverTick => PrimaryTickPhase != ActorTickPhase.None;
-        public ActorTickPhase TickPhase => PrimaryTickPhase;
-        public bool IsTickEnabledAtStart => StartWithTickEnabled;
+        public event Action OwnerChanged
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                ownerChangedObservers = AddActionObservers(ownerChangedObservers, value);
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                ownerChangedObservers = RemoveActionObservers(ownerChangedObservers, value);
+            }
+        }
+
+        public event DamageEventHandler OnTakePointDamage
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                pointDamageObservers = AddDamageObservers(pointDamageObservers, value);
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                pointDamageObservers = RemoveDamageObservers(pointDamageObservers, value);
+            }
+        }
+
+        public event DamageEventHandler OnTakeRadialDamage
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                radialDamageObservers = AddDamageObservers(radialDamageObservers, value);
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                radialDamageObservers = RemoveDamageObservers(radialDamageObservers, value);
+            }
+        }
+
+        public World World
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return world;
+            }
+        }
+
+        public ActorLifecycleState LifecycleState
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return lifecycleState;
+            }
+        }
+
+        public bool HasBegunPlay
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return lifecycleState == ActorLifecycleState.Playing;
+            }
+        }
+
+        public bool CanEverTick
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return PrimaryTickPhase != ActorTickPhase.None;
+            }
+        }
+
+        public ActorTickPhase TickPhase
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return PrimaryTickPhase;
+            }
+        }
+
+        public bool IsTickEnabledAtStart
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return StartWithTickEnabled;
+            }
+        }
+
+        public World GetWorld()
+        {
+            AssertActorOwnerThread();
+            return world;
+        }
+
+        public GameInstance GetGameInstance()
+        {
+            AssertActorOwnerThread();
+            return world?.GetGameInstance();
+        }
+
+        public GameMode GetAuthGameMode()
+        {
+            AssertActorOwnerThread();
+            return world?.GetAuthGameMode();
+        }
+
+        public T GetAuthGameMode<T>() where T : GameMode
+        {
+            AssertActorOwnerThread();
+            return world?.GetAuthGameMode<T>();
+        }
+
+        public GameState GetGameState()
+        {
+            AssertActorOwnerThread();
+            return world?.GetGameState();
+        }
+
+        public T GetGameState<T>() where T : GameState
+        {
+            AssertActorOwnerThread();
+            return world?.GetGameState<T>();
+        }
+
+        /// <summary>
+        /// Returns the Unity instance identifier captured while the Actor is alive. Destruction
+        /// bookkeeping uses the cached value because native Unity object access is no longer
+        /// valid once OnDestroy has begun.
+        /// </summary>
+        internal int GetStableInstanceId()
+        {
+            if (stableInstanceId == 0)
+            {
+                stableInstanceId = GetInstanceID();
+            }
+
+            return stableInstanceId;
+        }
 
         #region Primary tick
         /// <summary>
@@ -81,6 +241,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public bool IsActorTickEnabled()
         {
+            AssertActorOwnerThread();
             return CanEverTick && actorTickEnabled;
         }
 
@@ -89,7 +250,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void SetActorTickEnabled(bool enabled)
         {
-            world?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (enabled && !CanEverTick)
             {
                 throw new InvalidOperationException(
@@ -116,8 +277,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void SetActorTickPhase(ActorTickPhase phase)
         {
+            AssertActorOwnerThread();
             ValidateTickPhase(phase);
-            world?.AssertOwnerThread();
             if (PrimaryTickPhase == phase)
             {
                 return;
@@ -147,7 +308,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected void ConfigureActorTick(ActorTickPhase phase, bool startWithTickEnabled)
         {
             ValidateTickPhase(phase);
-            world?.AssertOwnerThread();
+            AssertActorOwnerThread();
 
             ActorTickPhase previousPhase = PrimaryTickPhase;
             bool previousEnabled = IsActorTickEnabled();
@@ -199,8 +360,17 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region Owner and instigator
-        public Actor GetOwner() => owner;
-        public T GetOwner<T>() where T : Actor => owner as T;
+        public Actor GetOwner()
+        {
+            AssertActorOwnerThread();
+            return owner;
+        }
+
+        public T GetOwner<T>() where T : Actor
+        {
+            AssertActorOwnerThread();
+            return owner as T;
+        }
 
         /// <summary>
         /// Changes the lifetime owner reference. A World-bound Actor must be mutated on the
@@ -208,11 +378,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void SetOwner(Actor newOwner)
         {
-            world?.AssertOwnerThread();
+            AssertActorOwnerThread();
             if (ReferenceEquals(newOwner, this))
             {
                 throw new InvalidOperationException("An Actor cannot own itself.");
             }
+
+            ValidateWorldRelationship(newOwner, world, "Owner");
 
             if (ReferenceEquals(owner, newOwner))
             {
@@ -220,11 +392,32 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             owner = newOwner;
-            OwnerChanged?.Invoke();
+            Action[] observers = ownerChangedObservers;
+            for (int i = 0; i < observers.Length; i++)
+            {
+                try
+                {
+                    observers[i].Invoke();
+                }
+                catch (Exception exception)
+                {
+                    ThrowNestedOutOfMemory(exception);
+                    Log.Error(exception, $"Actor '{name}' OwnerChanged observer failed.");
+                }
+            }
         }
 
-        public Actor GetInstigator() => instigator;
-        public T GetInstigator<T>() where T : Actor => instigator as T;
+        public Actor GetInstigator()
+        {
+            AssertActorOwnerThread();
+            return instigator;
+        }
+
+        public T GetInstigator<T>() where T : Actor
+        {
+            AssertActorOwnerThread();
+            return instigator as T;
+        }
 
         /// <summary>
         /// Changes the instigator reference. A World-bound Actor must be mutated on the
@@ -232,26 +425,103 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void SetInstigator(Actor newInstigator)
         {
-            world?.AssertOwnerThread();
+            AssertActorOwnerThread();
+            ValidateWorldRelationship(newInstigator, world, "Instigator");
             instigator = newInstigator;
+        }
+
+        private static void ValidateWorldRelationship(Actor relatedActor, World expectedWorld, string relationship)
+        {
+            if (ReferenceEquals(relatedActor, null))
+            {
+                return;
+            }
+
+            if (relatedActor == null)
+            {
+                throw new InvalidOperationException($"{relationship} must be null or reference a live Actor.");
+            }
+
+            if (!ReferenceEquals(relatedActor.world, expectedWorld))
+            {
+                throw new InvalidOperationException($"{relationship} must be null or belong to the same World.");
+            }
         }
         #endregion
 
         #region Name and transform
-        public string GetName() => gameObject.name;
-        public Vector3 GetActorLocation() => transform.position;
-        public Quaternion GetActorRotation() => transform.rotation;
-        public Vector3 GetActorScale() => transform.localScale;
-        public float GetYaw() => transform.eulerAngles.y;
-        public Vector3 GetActorForwardVector() => transform.forward;
-        public Vector3 GetActorRightVector() => transform.right;
-        public Vector3 GetActorUpVector() => transform.up;
-        public void SetActorLocation(Vector3 newLocation) => transform.position = newLocation;
-        public void SetActorRotation(Quaternion newRotation) => transform.rotation = newRotation;
-        public void SetActorScale(Vector3 newScale) => transform.localScale = newScale;
+        // These reads forward to Unity-native gameObject/transform state and use a lenient
+        // thread check (AssertActorReadThread) so they remain callable in editor contexts
+        // (Gizmos, inspectors) before Awake binds the lifecycle owner thread, while still
+        // rejecting worker-thread access once the owner thread is bound.
+        public string GetName()
+        {
+            AssertActorReadThread();
+            return gameObject.name;
+        }
+
+        public Vector3 GetActorLocation()
+        {
+            AssertActorReadThread();
+            return transform.position;
+        }
+
+        public Quaternion GetActorRotation()
+        {
+            AssertActorReadThread();
+            return transform.rotation;
+        }
+
+        public Vector3 GetActorScale()
+        {
+            AssertActorReadThread();
+            return transform.localScale;
+        }
+
+        public float GetYaw()
+        {
+            AssertActorReadThread();
+            return transform.eulerAngles.y;
+        }
+
+        public Vector3 GetActorForwardVector()
+        {
+            AssertActorReadThread();
+            return transform.forward;
+        }
+
+        public Vector3 GetActorRightVector()
+        {
+            AssertActorReadThread();
+            return transform.right;
+        }
+
+        public Vector3 GetActorUpVector()
+        {
+            AssertActorReadThread();
+            return transform.up;
+        }
+        public void SetActorLocation(Vector3 newLocation)
+        {
+            AssertActorOwnerThread();
+            transform.position = newLocation;
+        }
+
+        public void SetActorRotation(Quaternion newRotation)
+        {
+            AssertActorOwnerThread();
+            transform.rotation = newRotation;
+        }
+
+        public void SetActorScale(Vector3 newScale)
+        {
+            AssertActorOwnerThread();
+            transform.localScale = newScale;
+        }
 
         public void SetActorLocationAndRotation(Vector3 newLocation, Quaternion newRotation)
         {
+            AssertActorOwnerThread();
             transform.SetPositionAndRotation(newLocation, newRotation);
         }
         #endregion
@@ -271,10 +541,15 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region Visibility
-        public bool IsHidden() => bHidden;
+        public bool IsHidden()
+        {
+            AssertActorOwnerThread();
+            return bHidden;
+        }
 
         public virtual void SetActorHiddenInGame(bool hidden)
         {
+            AssertActorOwnerThread();
             ApplyActorHiddenInGame(hidden, forceRendererSync: false);
         }
 
@@ -303,10 +578,18 @@ namespace CycloneGames.GameplayFramework.Runtime
         #endregion
 
         #region Tags
-        public int TagCount => tags?.Count ?? 0;
+        public int TagCount
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return tags?.Count ?? 0;
+            }
+        }
 
         public string GetTagAt(int index)
         {
+            AssertActorOwnerThread();
             if (tags == null || index < 0 || index >= tags.Count)
             {
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -317,14 +600,20 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool ActorHasTag(string tag)
         {
+            AssertActorOwnerThread();
             if (tags == null || string.IsNullOrEmpty(tag))
             {
                 return false;
             }
 
-            for (int i = 0; i < tags.Count; i++)
+            return ContainsTag(tags, tag);
+        }
+
+        private static bool ContainsTag(List<string> source, string tag)
+        {
+            for (int i = 0; i < source.Count; i++)
             {
-                if (string.Equals(tags[i], tag, StringComparison.Ordinal))
+                if (string.Equals(source[i], tag, StringComparison.Ordinal))
                 {
                     return true;
                 }
@@ -335,16 +624,18 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool AddTag(string tag)
         {
+            AssertActorOwnerThread();
             ValidateTag(tag);
             tags ??= new List<string>(4);
-            if (ActorHasTag(tag))
+            if (ContainsTag(tags, tag))
             {
                 return false;
             }
 
-            if (tags.Count >= MaxActorTags)
+            if (tags.Count >= ActorTagLimits.MaximumTagCount)
             {
-                throw new InvalidOperationException($"Actor tag capacity ({MaxActorTags}) was exceeded.");
+                throw new InvalidOperationException(
+                    $"Actor tag capacity ({ActorTagLimits.MaximumTagCount}) was exceeded.");
             }
 
             tags.Add(tag);
@@ -353,11 +644,13 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool RemoveTag(string tag)
         {
+            AssertActorOwnerThread();
             return tags != null && tags.Remove(tag);
         }
 
         public int CopyTagsTo(string[] destination, int destinationIndex = 0)
         {
+            AssertActorOwnerThread();
             if (destination == null)
             {
                 throw new ArgumentNullException(nameof(destination));
@@ -377,12 +670,34 @@ namespace CycloneGames.GameplayFramework.Runtime
             return count;
         }
 
-        public void ReplaceTags(IReadOnlyList<string> replacement)
+        public int CopyTagsTo(Span<string> destination)
         {
-            int count = replacement?.Count ?? 0;
-            if (count > MaxActorTags)
+            AssertActorOwnerThread();
+            int count = TagCount;
+            if (destination.Length < count)
             {
-                throw new ArgumentException($"At most {MaxActorTags} Actor tags are allowed.", nameof(replacement));
+                throw new ArgumentException(
+                    "Destination span is smaller than the Actor tag count.",
+                    nameof(destination));
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                destination[i] = tags[i];
+            }
+
+            return count;
+        }
+
+        public void ReplaceTags(ReadOnlySpan<string> replacement)
+        {
+            AssertActorOwnerThread();
+            int count = replacement.Length;
+            if (count > ActorTagLimits.MaximumTagCount)
+            {
+                throw new ArgumentException(
+                    $"At most {ActorTagLimits.MaximumTagCount} Actor tags are allowed.",
+                    nameof(replacement));
             }
 
             // Validate the complete input before mutating the current tag set.
@@ -391,17 +706,28 @@ namespace CycloneGames.GameplayFramework.Runtime
                 ValidateTag(replacement[i]);
             }
 
-            tags?.Clear();
             if (count == 0)
             {
+                tags?.Clear();
                 return;
             }
 
-            tags ??= new List<string>(count);
+            if (tags == null)
+            {
+                tags = new List<string>(count);
+            }
+            else if (tags.Capacity < count)
+            {
+                // Capacity growth is the only allocation this operation can require. Complete
+                // it before clearing so an allocation failure leaves every existing tag intact.
+                tags.Capacity = count;
+            }
+
+            tags.Clear();
             for (int i = 0; i < count; i++)
             {
                 string tag = replacement[i];
-                if (!ActorHasTag(tag))
+                if (!ContainsTag(tags, tag))
                 {
                     tags.Add(tag);
                 }
@@ -410,38 +736,63 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private static void ValidateTag(string tag)
         {
-            if (string.IsNullOrWhiteSpace(tag))
+            if (ActorTagLimits.TryValidate(tag, out ActorTagValidationResult result))
             {
-                throw new ArgumentException("Actor tags cannot be null, empty, or whitespace.", nameof(tag));
+                return;
             }
 
-            if (tag.Length > MaxActorTagLength)
+            switch (result)
             {
-                throw new ArgumentException(
-                    $"Actor tags cannot exceed {MaxActorTagLength} characters.",
-                    nameof(tag));
+                case ActorTagValidationResult.NullOrWhiteSpace:
+                    throw new ArgumentException(
+                        "Actor tags cannot be null, empty, or whitespace.",
+                        nameof(tag));
+                case ActorTagValidationResult.TooLong:
+                    throw new ArgumentException(
+                        $"Actor tags cannot exceed {ActorTagLimits.MaximumTagLength} characters.",
+                        nameof(tag));
+                default:
+                    throw new InvalidOperationException("Actor tag validation returned an invalid result.");
             }
         }
         #endregion
 
         #region Damage
-        public bool CanBeDamaged() => bCanBeDamaged;
-        public void SetCanBeDamaged(bool value) => bCanBeDamaged = value;
+        public bool CanBeDamaged()
+        {
+            AssertActorOwnerThread();
+            return bCanBeDamaged;
+        }
+        public void SetCanBeDamaged(bool value)
+        {
+            AssertActorOwnerThread();
+            bCanBeDamaged = value;
+        }
 
         public virtual float TakeDamage(
             float damageAmount,
             Controller eventInstigator = null,
             Actor damageCauser = null)
         {
+            AssertActorOwnerThread();
             return TakeDamage(damageAmount, DamageEvent.MakeGenericDamage(), eventInstigator, damageCauser);
         }
 
         public virtual float TakeDamage(
             float damageAmount,
-            DamageEvent damageEvent,
+            in DamageEvent damageEvent,
             Controller eventInstigator = null,
             Actor damageCauser = null)
         {
+            AssertActorOwnerThread();
+            DamageEventValidationResult validationResult = damageEvent.Validate();
+            if (validationResult != DamageEventValidationResult.Valid)
+            {
+                throw new ArgumentException(
+                    $"Damage event is invalid ({validationResult}).",
+                    nameof(damageEvent));
+            }
+
             if (!bCanBeDamaged || damageAmount <= 0f || float.IsNaN(damageAmount) || float.IsInfinity(damageAmount))
             {
                 return 0f;
@@ -456,16 +807,55 @@ namespace CycloneGames.GameplayFramework.Runtime
             switch (damageEvent.EventType)
             {
                 case EDamageEventType.Point:
-                    ReceivePointDamage(actualDamage, damageEvent, eventInstigator, damageCauser);
-                    OnTakePointDamage?.Invoke(actualDamage, damageEvent, eventInstigator, damageCauser);
+                    try
+                    {
+                        ReceivePointDamage(actualDamage, in damageEvent, eventInstigator, damageCauser);
+                    }
+                    catch (Exception exception)
+                    {
+                        ThrowNestedOutOfMemory(exception);
+                        Log.Error(exception, $"Actor '{name}' point-damage receiver failed.");
+                    }
+
+                    InvokeDamageObservers(
+                        pointDamageObservers,
+                        actualDamage,
+                        in damageEvent,
+                        eventInstigator,
+                        damageCauser,
+                        "OnTakePointDamage");
                     break;
                 case EDamageEventType.Radial:
-                    ReceiveRadialDamage(actualDamage, damageEvent, eventInstigator, damageCauser);
-                    OnTakeRadialDamage?.Invoke(actualDamage, damageEvent, eventInstigator, damageCauser);
+                    try
+                    {
+                        ReceiveRadialDamage(actualDamage, in damageEvent, eventInstigator, damageCauser);
+                    }
+                    catch (Exception exception)
+                    {
+                        ThrowNestedOutOfMemory(exception);
+                        Log.Error(exception, $"Actor '{name}' radial-damage receiver failed.");
+                    }
+
+                    InvokeDamageObservers(
+                        radialDamageObservers,
+                        actualDamage,
+                        in damageEvent,
+                        eventInstigator,
+                        damageCauser,
+                        "OnTakeRadialDamage");
                     break;
             }
 
-            ReceiveAnyDamage(actualDamage, eventInstigator, damageCauser);
+            try
+            {
+                ReceiveAnyDamage(actualDamage, eventInstigator, damageCauser);
+            }
+            catch (Exception exception)
+            {
+                ThrowNestedOutOfMemory(exception);
+                Log.Error(exception, $"Actor '{name}' generic-damage receiver failed.");
+            }
+
             return actualDamage;
         }
 
@@ -475,49 +865,253 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
 
         protected virtual void ReceiveAnyDamage(float damage, Controller eventInstigator, Actor damageCauser) { }
-        protected virtual void ReceivePointDamage(float damage, DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
-        protected virtual void ReceiveRadialDamage(float damage, DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
-        #endregion
+        protected virtual void ReceivePointDamage(float damage, in DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
+        protected virtual void ReceiveRadialDamage(float damage, in DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
 
-        #region Orientation
-        public Vector3 GetOrientation()
+        private void InvokeDamageObservers(
+            DamageEventHandler[] observers,
+            float damage,
+            in DamageEvent damageEvent,
+            Controller eventInstigator,
+            Actor damageCauser,
+            string eventName)
         {
-            float3 result = QuaternionToEulerXYZBurst(new quaternion(
-                transform.rotation.x,
-                transform.rotation.y,
-                transform.rotation.z,
-                transform.rotation.w));
-            return new Vector3(result.x, result.y, result.z);
+            for (int i = 0; i < observers.Length; i++)
+            {
+                try
+                {
+                    observers[i].Invoke(
+                        damage,
+                        in damageEvent,
+                        eventInstigator,
+                        damageCauser);
+                }
+                catch (Exception exception)
+                {
+                    ThrowNestedOutOfMemory(exception);
+                    Log.Error(exception, $"Actor '{name}' {eventName} observer failed.");
+                }
+            }
         }
 
-        public static Vector3 QuaternionToEulerXYZ(Quaternion rotation)
+        private static void ThrowNestedOutOfMemory(Exception exception)
         {
-            float3 result = QuaternionToEulerXYZBurst(new quaternion(rotation.x, rotation.y, rotation.z, rotation.w));
-            return new Vector3(result.x, result.y, result.z);
+            OutOfMemoryException outOfMemory = FindTerminalOutOfMemory(exception);
+            if (outOfMemory != null)
+            {
+                throw outOfMemory;
+            }
         }
 
-        [BurstCompile]
-        public static float3 QuaternionToEulerXYZBurst(in quaternion q)
+        private static Action<Actor>[] AddDestroyedObservers(
+            Action<Actor>[] current,
+            Action<Actor> value)
         {
-            float pitch = math.degrees(math.atan2(
-                2f * q.value.x * q.value.w - 2f * q.value.y * q.value.z,
-                1f - 2f * q.value.x * q.value.x - 2f * q.value.z * q.value.z));
-            float yaw = math.degrees(math.atan2(
-                2f * q.value.y * q.value.w - 2f * q.value.x * q.value.z,
-                1f - 2f * q.value.y * q.value.y - 2f * q.value.z * q.value.z));
-            float roll = math.degrees(math.asin(math.clamp(
-                2f * q.value.x * q.value.y + 2f * q.value.z * q.value.w,
-                -1f,
-                1f)));
-            return new float3(pitch, yaw, roll);
+            if (value == null)
+            {
+                return current;
+            }
+
+            Delegate[] additions = value.GetInvocationList();
+            var next = new Action<Actor>[checked(current.Length + additions.Length)];
+            Array.Copy(current, next, current.Length);
+            for (int i = 0; i < additions.Length; i++)
+            {
+                next[current.Length + i] = (Action<Actor>)additions[i];
+            }
+
+            return next;
+        }
+
+        private static Action<Actor>[] RemoveDestroyedObservers(
+            Action<Actor>[] current,
+            Action<Actor> value)
+        {
+            if (value == null || current.Length == 0)
+            {
+                return current;
+            }
+
+            Delegate[] removals = value.GetInvocationList();
+            for (int start = current.Length - removals.Length; start >= 0; start--)
+            {
+                bool matches = true;
+                for (int i = 0; i < removals.Length; i++)
+                {
+                    if (!current[start + i].Equals(removals[i]))
+                    {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (!matches)
+                {
+                    continue;
+                }
+
+                if (removals.Length == current.Length)
+                {
+                    return Array.Empty<Action<Actor>>();
+                }
+
+                var next = new Action<Actor>[current.Length - removals.Length];
+                Array.Copy(current, 0, next, 0, start);
+                Array.Copy(
+                    current,
+                    start + removals.Length,
+                    next,
+                    start,
+                    current.Length - start - removals.Length);
+                return next;
+            }
+
+            return current;
+        }
+
+        private static Action[] AddActionObservers(
+            Action[] current,
+            Action value)
+        {
+            if (value == null)
+            {
+                return current;
+            }
+
+            Delegate[] additions = value.GetInvocationList();
+            var next = new Action[checked(current.Length + additions.Length)];
+            Array.Copy(current, next, current.Length);
+            for (int i = 0; i < additions.Length; i++)
+            {
+                next[current.Length + i] = (Action)additions[i];
+            }
+
+            return next;
+        }
+
+        private static Action[] RemoveActionObservers(
+            Action[] current,
+            Action value)
+        {
+            if (value == null || current.Length == 0)
+            {
+                return current;
+            }
+
+            Delegate[] removals = value.GetInvocationList();
+            for (int start = current.Length - removals.Length; start >= 0; start--)
+            {
+                bool matches = true;
+                for (int i = 0; i < removals.Length; i++)
+                {
+                    if (!current[start + i].Equals(removals[i]))
+                    {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (!matches)
+                {
+                    continue;
+                }
+
+                if (removals.Length == current.Length)
+                {
+                    return Array.Empty<Action>();
+                }
+
+                var next = new Action[current.Length - removals.Length];
+                Array.Copy(current, 0, next, 0, start);
+                Array.Copy(
+                    current,
+                    start + removals.Length,
+                    next,
+                    start,
+                    current.Length - start - removals.Length);
+                return next;
+            }
+
+            return current;
+        }
+
+        private static DamageEventHandler[] AddDamageObservers(
+            DamageEventHandler[] current,
+            DamageEventHandler value)
+        {
+            if (value == null)
+            {
+                return current;
+            }
+
+            Delegate[] additions = value.GetInvocationList();
+            var next = new DamageEventHandler[checked(current.Length + additions.Length)];
+            Array.Copy(current, next, current.Length);
+            for (int i = 0; i < additions.Length; i++)
+            {
+                next[current.Length + i] = (DamageEventHandler)additions[i];
+            }
+
+            return next;
+        }
+
+        private static DamageEventHandler[] RemoveDamageObservers(
+            DamageEventHandler[] current,
+            DamageEventHandler value)
+        {
+            if (value == null || current.Length == 0)
+            {
+                return current;
+            }
+
+            Delegate[] removals = value.GetInvocationList();
+            for (int start = current.Length - removals.Length; start >= 0; start--)
+            {
+                bool matches = true;
+                for (int i = 0; i < removals.Length; i++)
+                {
+                    if (!current[start + i].Equals(removals[i]))
+                    {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (!matches)
+                {
+                    continue;
+                }
+
+                if (removals.Length == current.Length)
+                {
+                    return Array.Empty<DamageEventHandler>();
+                }
+
+                var next = new DamageEventHandler[current.Length - removals.Length];
+                Array.Copy(current, 0, next, 0, start);
+                Array.Copy(
+                    current,
+                    start + removals.Length,
+                    next,
+                    start,
+                    current.Length - start - removals.Length);
+                return next;
+            }
+
+            return current;
         }
         #endregion
 
         #region Lifespan
-        public float GetLifeSpan() => initialLifeSpanSec;
+        public float GetLifeSpan()
+        {
+            AssertActorOwnerThread();
+            return initialLifeSpanSec;
+        }
 
         public float GetRemainingLifeSpan()
         {
+            AssertActorOwnerThread();
             if (lifeSpanCancellation == null || lifeSpanDeadline <= 0d)
             {
                 return 0f;
@@ -528,23 +1122,34 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void SetLifeSpan(float newLifeSpan)
         {
+            AssertActorOwnerThread();
             if (float.IsNaN(newLifeSpan) || float.IsInfinity(newLifeSpan) || newLifeSpan < 0f)
             {
                 throw new ArgumentOutOfRangeException(nameof(newLifeSpan));
             }
 
-            initialLifeSpanSec = newLifeSpan;
+            if (lifeSpanCleanupInProgress)
+            {
+                throw new InvalidOperationException(
+                    "A new Actor lifespan cannot begin while the previous lifespan owner is being released.");
+            }
+
             CancelLifeSpan();
 
             if (newLifeSpan <= 0.001f || lifecycleState == ActorLifecycleState.Destroyed)
             {
+                initialLifeSpanSec = newLifeSpan;
                 return;
             }
 
-            lifeSpanDeadline = Time.timeAsDouble + newLifeSpan;
-            lifeSpanCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            double deadline = Time.timeAsDouble + newLifeSpan;
+            CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 this.GetCancellationTokenOnDestroy());
-            ExpireAfterAsync(newLifeSpan, lifeSpanCancellation).Forget();
+            lifeSpanCancellation = cancellation;
+            lifeSpanCancellationCommitted = false;
+            lifeSpanDeadline = deadline;
+            initialLifeSpanSec = newLifeSpan;
+            ExpireAfterAsync(newLifeSpan, cancellation).Forget();
         }
 
         private async UniTask ExpireAfterAsync(float seconds, CancellationTokenSource cancellation)
@@ -559,18 +1164,60 @@ namespace CycloneGames.GameplayFramework.Runtime
 
                 if (ReferenceEquals(lifeSpanCancellation, cancellation))
                 {
-                    lifeSpanCancellation = null;
-                    lifeSpanDeadline = 0d;
-                    cancellation.Dispose();
+                    var terminalExceptions = new TerminalExceptionAccumulator();
+                    bool disposed = false;
+                    if (lifeSpanCleanupInProgress)
+                    {
+                        terminalExceptions.CaptureForPropagation(
+                            new InvalidOperationException(
+                                "Actor lifespan expiration re-entered owner cleanup."));
+                    }
+                    else
+                    {
+                        lifeSpanCleanupInProgress = true;
+                        try
+                        {
+                            lifeSpanCancellationCommitted = true;
+                            lifeSpanDeadline = 0d;
+                            try
+                            {
+                                cancellation.Dispose();
+                                disposed = true;
+                            }
+                            catch (Exception exception)
+                            {
+                                terminalExceptions.CaptureForPropagation(exception);
+                            }
 
-                    if (world != null)
-                    {
-                        world.DestroyActor(this, EndPlayReason.Destroyed);
+                            if (disposed && ReferenceEquals(lifeSpanCancellation, cancellation))
+                            {
+                                lifeSpanCancellation = null;
+                                lifeSpanCancellationCommitted = false;
+                            }
+                        }
+                        finally
+                        {
+                            lifeSpanCleanupInProgress = false;
+                        }
                     }
-                    else if (this != null)
+
+                    try
                     {
-                        Destroy(gameObject);
+                        if (world != null)
+                        {
+                            world.DestroyActor(this, EndPlayReason.Destroyed);
+                        }
+                        else if (this != null)
+                        {
+                            Destroy(gameObject);
+                        }
                     }
+                    catch (Exception exception)
+                    {
+                        terminalExceptions.CaptureForPropagation(exception);
+                    }
+
+                    terminalExceptions.ThrowIfCaptured();
                 }
             }
             catch (OperationCanceledException)
@@ -582,21 +1229,79 @@ namespace CycloneGames.GameplayFramework.Runtime
         private void CancelLifeSpan()
         {
             CancellationTokenSource cancellation = lifeSpanCancellation;
-            lifeSpanCancellation = null;
-            lifeSpanDeadline = 0d;
             if (cancellation == null)
             {
+                lifeSpanDeadline = 0d;
+                lifeSpanCancellationCommitted = false;
                 return;
             }
 
-            cancellation.Cancel();
-            cancellation.Dispose();
+            if (lifeSpanCleanupInProgress)
+            {
+                throw new InvalidOperationException(
+                    "Actor lifespan owner cleanup cannot be re-entered.");
+            }
+
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            bool disposed = false;
+            lifeSpanCleanupInProgress = true;
+            try
+            {
+                if (!lifeSpanCancellationCommitted)
+                {
+                    try
+                    {
+                        cancellation.Cancel();
+                        lifeSpanCancellationCommitted = true;
+                        lifeSpanDeadline = 0d;
+                    }
+                    catch (Exception exception)
+                    {
+                        if (cancellation.IsCancellationRequested)
+                        {
+                            lifeSpanCancellationCommitted = true;
+                            lifeSpanDeadline = 0d;
+                        }
+
+                        terminalExceptions.CaptureForPropagation(exception);
+                    }
+                }
+
+                if (lifeSpanCancellationCommitted)
+                {
+                    try
+                    {
+                        cancellation.Dispose();
+                        disposed = true;
+                    }
+                    catch (Exception exception)
+                    {
+                        terminalExceptions.CaptureForPropagation(exception);
+                    }
+                }
+
+                if (lifeSpanCancellationCommitted &&
+                    disposed &&
+                    ReferenceEquals(lifeSpanCancellation, cancellation))
+                {
+                    lifeSpanCancellation = null;
+                    lifeSpanDeadline = 0d;
+                    lifeSpanCancellationCommitted = false;
+                }
+            }
+            finally
+            {
+                lifeSpanCleanupInProgress = false;
+            }
+
+            terminalExceptions.ThrowIfCaptured();
         }
         #endregion
 
         #region World and lifecycle
         public virtual void FellOutOfWorld()
         {
+            AssertActorOwnerThread();
             if (world != null)
             {
                 world.DestroyActor(this, EndPlayReason.Destroyed);
@@ -607,11 +1312,20 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        public virtual void OutsideWorldBounds() { }
-        public virtual bool HasAuthority() => world == null || world.IsAuthority;
+        public virtual void OutsideWorldBounds()
+        {
+            AssertActorOwnerThread();
+        }
+
+        public virtual bool HasAuthority()
+        {
+            AssertActorOwnerThread();
+            return world == null || world.IsAuthority;
+        }
 
         protected virtual void Awake()
         {
+            BindActorOwnerThread();
             lifecycleState = ActorLifecycleState.Initialized;
             InitializeActorTickState();
         }
@@ -630,29 +1344,9 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void BindToWorld(World targetWorld, bool allowReentry)
         {
-            if (targetWorld == null)
-            {
-                throw new ArgumentNullException(nameof(targetWorld));
-            }
-
-            if (world != null && !ReferenceEquals(world, targetWorld))
-            {
-                throw new InvalidOperationException("Actor already belongs to another World.");
-            }
-
-            if (lifecycleState == ActorLifecycleState.Ending ||
-                lifecycleState == ActorLifecycleState.Destroyed)
-            {
-                throw new InvalidOperationException("An ended Actor cannot enter a World.");
-            }
-
+            PrepareForWorldRegistration(targetWorld, allowReentry);
             if (lifecycleState == ActorLifecycleState.Ended)
             {
-                if (!allowReentry)
-                {
-                    throw new InvalidOperationException("An ended World-owned Actor cannot enter another World.");
-                }
-
                 lifecycleState = ActorLifecycleState.Initialized;
             }
             else if (lifecycleState == ActorLifecycleState.Constructed)
@@ -663,6 +1357,109 @@ namespace CycloneGames.GameplayFramework.Runtime
             world = targetWorld;
             worldUnboundNotified = false;
             InitializeActorTickState();
+        }
+
+        /// <summary>
+        /// Establishes the World-authorized owner thread and validates registration without
+        /// publishing the Actor into that World. This is the only pre-binding path allowed to
+        /// initialize lifecycle ownership when Unity has not invoked Awake yet.
+        /// </summary>
+        internal void PrepareForWorldRegistration(World targetWorld, bool allowReentry)
+        {
+            if (targetWorld == null)
+            {
+                throw new ArgumentNullException(nameof(targetWorld));
+            }
+
+            targetWorld.AssertOwnerThread();
+            BindActorOwnerThread();
+            if (world != null && !ReferenceEquals(world, targetWorld))
+            {
+                throw new InvalidOperationException("Actor already belongs to another World.");
+            }
+
+            ValidateWorldRelationship(owner, targetWorld, "Owner");
+            ValidateWorldRelationship(instigator, targetWorld, "Instigator");
+            if (lifecycleState == ActorLifecycleState.Ending ||
+                lifecycleState == ActorLifecycleState.Destroyed)
+            {
+                throw new InvalidOperationException("An ended Actor cannot enter a World.");
+            }
+
+            if (lifecycleState == ActorLifecycleState.Ended && !allowReentry)
+            {
+                throw new InvalidOperationException(
+                    "An ended World-owned Actor cannot enter another World.");
+            }
+        }
+
+        /// <summary>
+        /// Enforces the Actor's World owner thread, or the Unity lifecycle thread captured by
+        /// Awake/World binding while the Actor is not currently registered.
+        /// </summary>
+        protected void AssertActorOwnerThread()
+        {
+            World currentWorld = world;
+            if (currentWorld != null)
+            {
+                currentWorld.AssertOwnerThread();
+                return;
+            }
+
+            int expectedThreadId = actorOwnerThreadId;
+            if (expectedThreadId == 0)
+            {
+                throw new InvalidOperationException(
+                    "Actor lifecycle ownership has not been initialized.");
+            }
+
+            if (Thread.CurrentThread.ManagedThreadId != expectedThreadId)
+            {
+                throw new InvalidOperationException(
+                    "Actor live state must be accessed on its Unity lifecycle owner thread.");
+            }
+        }
+
+        /// <summary>
+        /// Enforces the owner-thread contract for read accessors while allowing reads before the
+        /// Actor's lifecycle owner thread has been bound (for example editor Gizmos and
+        /// inspectors that read Unity-native state before Awake). Once bound, a read from a
+        /// different thread still fails immediately.
+        /// </summary>
+        protected void AssertActorReadThread()
+        {
+            World currentWorld = world;
+            if (currentWorld != null)
+            {
+                currentWorld.AssertOwnerThread();
+                return;
+            }
+
+            int expectedThreadId = actorOwnerThreadId;
+            if (expectedThreadId == 0)
+            {
+                // Not yet bound to a lifecycle owner thread; there is no captured thread to
+                // validate against, so the read is allowed.
+                return;
+            }
+
+            if (Thread.CurrentThread.ManagedThreadId != expectedThreadId)
+            {
+                throw new InvalidOperationException(
+                    "Actor live state must be accessed on its Unity lifecycle owner thread.");
+            }
+        }
+
+        private void BindActorOwnerThread()
+        {
+            int currentThreadId = Thread.CurrentThread.ManagedThreadId;
+            if (actorOwnerThreadId != 0 && actorOwnerThreadId != currentThreadId)
+            {
+                throw new InvalidOperationException(
+                    "Actor lifecycle ownership cannot move between threads.");
+            }
+
+            actorOwnerThreadId = currentThreadId;
         }
 
         internal void NotifyWorldBeginPlay()
@@ -691,23 +1488,31 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
+            var terminalExceptions = new TerminalExceptionAccumulator();
             try
             {
                 NotifyEndPlay(reason);
             }
-            finally
+            catch (Exception exception)
             {
-                try
-                {
-                    NotifyWorldUnboundOnce(reason);
-                }
-                finally
-                {
-                    world = null;
-                    actorTickEnabled = false;
-                    actorTickStateInitialized = false;
-                }
+                terminalExceptions.CaptureForPropagation(exception);
             }
+
+            try
+            {
+                NotifyWorldUnboundOnce(reason);
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.CaptureForPropagation(exception);
+            }
+
+            owner = null;
+            instigator = null;
+            world = null;
+            actorTickEnabled = false;
+            actorTickStateInitialized = false;
+            terminalExceptions.ThrowIfCaptured();
         }
 
         protected virtual void BeginPlay() { }
@@ -765,14 +1570,27 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected virtual void OnDestroy()
         {
-            CancelLifeSpan();
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            try
+            {
+                CancelLifeSpan();
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Actor lifespan cancellation failed during destruction.");
+            }
+
             try
             {
                 NotifyEndPlay(EndPlayReason.Destroyed);
             }
             catch (Exception exception)
             {
-                Log.Error(exception, $"Actor '{name}' EndPlay callback failed during destruction.");
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Actor EndPlay callback failed during destruction.");
             }
 
             try
@@ -781,7 +1599,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Log.Error(exception, $"Actor '{name}' World-unbound callback failed during destruction.");
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Actor World-unbound callback failed during destruction.");
             }
 
             World previousWorld = world;
@@ -792,32 +1612,141 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Log.Error(exception, $"Actor '{name}' destruction bookkeeping notification failed.");
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "Actor destruction bookkeeping notification failed.");
             }
 
             lifecycleState = ActorLifecycleState.Destroyed;
-            Action<Actor> destroyedHandlers = OnDestroyed;
-            OnDestroyed = null;
-            OnTakePointDamage = null;
-            OnTakeRadialDamage = null;
-            OwnerChanged = null;
+            Action<Actor>[] destroyedHandlers = destroyedObservers;
+            destroyedObservers = Array.Empty<Action<Actor>>();
+            pointDamageObservers = Array.Empty<DamageEventHandler>();
+            radialDamageObservers = Array.Empty<DamageEventHandler>();
+            ownerChangedObservers = Array.Empty<Action>();
             owner = null;
             instigator = null;
             actorTickEnabled = false;
             actorTickStateInitialized = false;
             rendererBuffer?.Clear();
 
-            if (destroyedHandlers != null)
+            for (int i = 0; i < destroyedHandlers.Length; i++)
             {
                 try
                 {
-                    destroyedHandlers.Invoke(this);
+                    destroyedHandlers[i].Invoke(this);
                 }
                 catch (Exception exception)
                 {
-                    Log.Error(exception, $"Actor '{name}' OnDestroyed observer failed.");
+                    terminalExceptions.HandleAndLog(
+                        exception,
+                        "Actor OnDestroyed observer failed.");
                 }
             }
+
+            terminalExceptions.ThrowIfCaptured();
+        }
+
+        /// <summary>
+        /// Accumulates terminal callback failures without allocating a delegate or collection.
+        /// Normal extension failures are logged and isolated; the first nested or direct
+        /// OutOfMemoryException is rethrown only after required cleanup has completed.
+        /// </summary>
+        protected struct TerminalExceptionAccumulator
+        {
+            private Exception firstPropagatedException;
+            private OutOfMemoryException firstOutOfMemory;
+
+            public void CaptureForPropagation(Exception exception)
+            {
+                if (exception == null)
+                {
+                    return;
+                }
+
+                firstPropagatedException ??= exception;
+                CaptureOutOfMemory(exception);
+            }
+
+            public void HandleAndLog(Exception exception, string failureDescription)
+            {
+                if (exception == null || CaptureOutOfMemory(exception))
+                {
+                    return;
+                }
+
+                try
+                {
+                    Log.Error(exception, failureDescription);
+                }
+                catch (Exception loggingException)
+                {
+                    CaptureOutOfMemory(loggingException);
+                }
+            }
+
+            public void LogFailure(string failureDescription)
+            {
+                try
+                {
+                    Log.Error(failureDescription);
+                }
+                catch (Exception loggingException)
+                {
+                    CaptureOutOfMemory(loggingException);
+                }
+            }
+
+            public void ThrowIfCaptured()
+            {
+                if (firstOutOfMemory != null)
+                {
+                    throw firstOutOfMemory;
+                }
+
+                if (firstPropagatedException != null)
+                {
+                    throw firstPropagatedException;
+                }
+            }
+
+            private bool CaptureOutOfMemory(Exception exception)
+            {
+                OutOfMemoryException captured = FindTerminalOutOfMemory(exception);
+                if (captured == null)
+                {
+                    return false;
+                }
+
+                firstOutOfMemory ??= captured;
+                return true;
+            }
+        }
+
+        protected static OutOfMemoryException FindTerminalOutOfMemory(Exception exception)
+        {
+            if (exception is OutOfMemoryException outOfMemory)
+            {
+                return outOfMemory;
+            }
+
+            if (exception is AggregateException aggregateException)
+            {
+                for (int i = 0; i < aggregateException.InnerExceptions.Count; i++)
+                {
+                    OutOfMemoryException nested = FindTerminalOutOfMemory(
+                        aggregateException.InnerExceptions[i]);
+                    if (nested != null)
+                    {
+                        return nested;
+                    }
+                }
+
+                return null;
+            }
+
+            return exception.InnerException != null
+                ? FindTerminalOutOfMemory(exception.InnerException)
+                : null;
         }
         #endregion
     }

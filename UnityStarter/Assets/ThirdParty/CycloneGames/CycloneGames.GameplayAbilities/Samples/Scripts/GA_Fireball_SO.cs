@@ -72,8 +72,12 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private GameObject FindTarget(GameObject caster)
         {
-            // Sample scene lookup. Production abilities should use a project targeting service.
+            // Sample-scene placeholder: the target is resolved by name for this demo only.
+            // CG0010 (GameObject.Find in production code) is suppressed for exactly this
+            // statement; production abilities must inject a project targeting service.
+#pragma warning disable CG0010
             GameObject enemy = GameObject.Find("Enemy");
+#pragma warning restore CG0010
             return enemy;
         }
 

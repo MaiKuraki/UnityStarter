@@ -173,20 +173,20 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             builder.AddEntry(new ContentTrustFileEntry(
                 "maximum.bundle",
                 ContentTrustManifestValidation.MAX_TOTAL_CONTENT_SIZE_BYTES,
-                ContentTrustHashAlgorithm.None,
-                null));
+                ContentTrustHashAlgorithm.Sha256,
+                GetValidExpectedHash(ContentTrustHashAlgorithm.Sha256)));
 
             Assert.Throws<InvalidOperationException>(() => builder.AddEntry(new ContentTrustFileEntry(
                 "overflow.bundle",
                 1L,
-                ContentTrustHashAlgorithm.None,
-                null)));
+                ContentTrustHashAlgorithm.Sha256,
+                GetValidExpectedHash(ContentTrustHashAlgorithm.Sha256))));
             builder.ClearEntries();
             Assert.DoesNotThrow(() => builder.AddEntry(new ContentTrustFileEntry(
                 "reset.bundle",
                 1L,
-                ContentTrustHashAlgorithm.None,
-                null)));
+                ContentTrustHashAlgorithm.Sha256,
+                GetValidExpectedHash(ContentTrustHashAlgorithm.Sha256))));
 
             var maximumManifest = new ContentTrustManifest(
                 "2026.07.09",

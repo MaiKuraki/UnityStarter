@@ -334,7 +334,7 @@ namespace Build.Pipeline.Tests.Editor
             string scratchPath = Path.Combine(publicationRoot, scratchFileName);
             AddressablesBuilder.WriteNewTextDurably(
                 scratchPath,
-                "{\"contentVersion\":\"interrupted\"}");
+                "{\"contentIdentity\":\"interrupted\"}");
 
             AddressablesBuilder.WriteVersionArtifactDurably(projectRoot, path, "current");
 
@@ -381,7 +381,7 @@ namespace Build.Pipeline.Tests.Editor
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
                     projectRoot,
                     path,
-                    expectedContentVersion: null));
+                    expectedContentIdentity: null));
         }
 
         [Test]
@@ -394,7 +394,7 @@ namespace Build.Pipeline.Tests.Editor
                 AddressablesBuilder.ReadAndValidateVersionArtifact(
                     projectRoot,
                     path,
-                    expectedContentVersion: null));
+                    expectedContentIdentity: null));
         }
 
         [TestCase(AddressablesPublicationTransaction.BackupMovedCheckpoint)]
@@ -791,7 +791,7 @@ namespace Build.Pipeline.Tests.Editor
             var manifest = new AddressablesArtifactManifest
             {
                 buildTarget = "StandaloneWindows64",
-                contentVersion = "test",
+                contentIdentity = "test",
                 files = new[]
                 {
                     new AddressablesArtifactManifestEntry

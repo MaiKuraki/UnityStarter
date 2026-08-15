@@ -7,6 +7,23 @@ namespace CycloneGames.Networking.Tests.Editor
     public sealed class MessageValidatorTests
     {
         [Test]
+        public void MessageSecurityPolicyRejectsEmptyAndUndefinedDirectionMasks()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MessageSecurityPolicy(
+                NetworkMessageDirectionMask.None,
+                maxPayloadSize: 1,
+                requireAuthenticatedConnection: true,
+                requireEncryptedTransport: false,
+                enableReplayProtection: true));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MessageSecurityPolicy(
+                (NetworkMessageDirectionMask)0x80,
+                maxPayloadSize: 1,
+                requireAuthenticatedConnection: true,
+                requireEncryptedTransport: false,
+                enableReplayProtection: true));
+        }
+
+        [Test]
         public void ValidateBuffer_Rejects_Overflowing_Range()
         {
             var validator = new MessageValidator(maxPayloadSize: 16, minPayloadSize: 1);
