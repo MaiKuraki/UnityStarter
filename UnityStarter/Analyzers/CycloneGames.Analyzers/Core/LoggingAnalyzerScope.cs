@@ -73,6 +73,7 @@ namespace CycloneGames.Analyzers
         internal static bool ShouldAnalyze(Compilation compilation, SyntaxTree syntaxTree)
         {
             return IsEnforcedAssembly(compilation.AssemblyName) &&
+                   AnalyzerSourceScope.IsRepositoryOwned(syntaxTree) &&
                    !IsExemptPath(syntaxTree.FilePath);
         }
 

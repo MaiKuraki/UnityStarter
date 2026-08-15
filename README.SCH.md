@@ -64,7 +64,7 @@ UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项
 | Unity 版本来源 | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
 | CycloneGames 模块目录 | `UnityStarter/Assets/ThirdParty/CycloneGames/` |
 | Assembly definitions | Package 与项目 assembly boundary 由 `UnityStarter/Assets/` 下的 `.asmdef` 文件声明。 |
-| Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则 |
+| Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则，由 `Assets/Default.ruleset` 项目级分阶段强制（Unity 会自动应用 Assets 根下这个名字的 ruleset） |
 | 独立工具 | `Tools/Executable/Windows/` 下的 Go 工具 Windows 可执行文件 |
 
 ## 架构原则
@@ -207,7 +207,7 @@ flowchart TD
 | --- | --- | --- |
 | **Build** | 项目自有 player build pipeline、version info、可选 hot-update hooks 与 CI-facing methods。 | [README.SCH](UnityStarter/Assets/Build/README.SCH.md) |
 | **Tools** | 用于项目改名、package trimming、cleanup、file trees 与 asset processing 的 Go tools。 | [README.SCH](Tools/README.SCH.md) |
-| **Analyzers** | 面向 Unity performance、safety、async 与 conventions 的 Roslyn analyzer rules。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
+| **Analyzers** | 面向 Unity performance、safety、async 与 conventions 的 Roslyn analyzer rules。项目级 severity 策略位于 `Assets/Default.ruleset`。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
 
 ## Networking 状态
 

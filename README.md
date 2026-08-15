@@ -64,7 +64,7 @@ The [Module Map](#module-map) is the primary index for gameplay, content, UI/inp
 | Unity version source | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
 | CycloneGames module folders | `UnityStarter/Assets/ThirdParty/CycloneGames/` |
 | Assembly definitions | Package and project assembly boundaries are declared by `.asmdef` files under `UnityStarter/Assets/`. |
-| Analyzer rules | 20+ implemented `CycloneGames.Analyzers` rules |
+| Analyzer rules | 20+ implemented `CycloneGames.Analyzers` rules, staged project-wide by `Assets/Default.ruleset` (Unity auto-applies a root-level ruleset with this exact name) |
 | Standalone tools | Go tools with Windows executables under `Tools/Executable/Windows/` |
 
 ## Architecture Principles
@@ -207,7 +207,7 @@ Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbiliti
 | --- | --- | --- |
 | **Build** | Project-owned player build pipeline, version info, optional hot-update hooks, and CI-facing methods. | [README](UnityStarter/Assets/Build/README.md) |
 | **Tools** | Go tools for project rename, package trimming, cleanup, file trees, and asset processing. | [README](Tools/README.md) |
-| **Analyzers** | Unity-focused Roslyn analyzer rules for performance, safety, async, and conventions. | [README](UnityStarter/Analyzers/CycloneGames.Analyzers/README.md) |
+| **Analyzers** | Unity-focused Roslyn analyzer rules for performance, safety, async, and conventions. The project-wide severity policy lives in `Assets/Default.ruleset`. | [README](UnityStarter/Analyzers/CycloneGames.Analyzers/README.md) |
 
 ## Networking Status
 

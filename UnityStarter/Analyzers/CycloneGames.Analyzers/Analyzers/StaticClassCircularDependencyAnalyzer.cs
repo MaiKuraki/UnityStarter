@@ -50,6 +50,7 @@ namespace CycloneGames.Analyzers
             ConcurrentDictionary<string, ConcurrentDictionary<string, List<InvocationExpressionSyntax>>> callGraph)
         {
             if (ctx.Node is not InvocationExpressionSyntax invocation) return;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(invocation.SyntaxTree)) return;
             if (ctx.ContainingSymbol?.ContainingType is not INamedTypeSymbol callerType) return;
             if (!callerType.IsStatic) return;
 

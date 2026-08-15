@@ -15,9 +15,9 @@ namespace CycloneGames.Analyzers.Tests
     {
         private const string RuntimeAssembly = "CycloneGames.Feature.Runtime";
         private const string RuntimePath =
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Runtime/Consumer.cs";
+            "Assets/ThirdParty/CycloneGames/Feature/Runtime/Consumer.cs";
         private const string FacadePath =
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Runtime/Diagnostics/FeatureLog.cs";
+            "Assets/ThirdParty/CycloneGames/Feature/Runtime/Diagnostics/FeatureLog.cs";
 
         private static readonly ImmutableArray<MetadataReference> PlatformReferences =
             LoadPlatformReferences();
@@ -211,10 +211,10 @@ namespace CycloneGames.Analyzers.Tests
 
         [TestCase(
             "CycloneGames.Feature.Samples",
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Samples/Consumer.cs")]
+            "Assets/ThirdParty/CycloneGames/Feature/Samples/Consumer.cs")]
         [TestCase(
             "CycloneGames.Feature.Benchmarks",
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Benchmarks/Consumer.cs")]
+            "Assets/ThirdParty/CycloneGames/Feature/Benchmarks/Consumer.cs")]
         public async Task ReportsCreateOutsideFacadeInCopyableSampleAndBenchmarkCode(
             string assemblyName,
             string sourcePath)
@@ -241,6 +241,7 @@ namespace CycloneGames.Analyzers.Tests
             string assemblyName = RuntimeAssembly,
             string sourcePath = RuntimePath)
         {
+            sourcePath = AnalyzerTestPaths.ResolveProjectRelativePath(sourcePath);
             SyntaxTree sourceTree = CSharpSyntaxTree.ParseText(
                 source,
                 new CSharpParseOptions(LanguageVersion.CSharp10),

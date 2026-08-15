@@ -1,0 +1,13 @@
+using UnityEngine;
+
+namespace CycloneGames.Analyzers.UnityIntegration
+{
+    public static class ForbiddenUnityApiViolation
+    {
+        public static GameObject FindExpectedViolation()
+        {
+            // The real Unity compiler verification must report CG0010 here.
+            return GameObject.Find("AnalyzerVerificationTarget");
+        }
+    }
+}

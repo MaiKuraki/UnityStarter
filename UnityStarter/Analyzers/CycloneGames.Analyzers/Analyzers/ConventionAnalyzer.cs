@@ -29,6 +29,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeField(SyntaxNodeAnalysisContext context)
         {
             var field = (FieldDeclarationSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(field.SyntaxTree)) return;
             if (!field.Modifiers.Any(SyntaxKind.PublicKeyword)) return;
             if (field.Modifiers.Any(SyntaxKind.ConstKeyword) || field.Modifiers.Any(SyntaxKind.StaticKeyword)) return;
             if (IsAllowedDirectory(field.SyntaxTree.FilePath)) return;
@@ -51,6 +52,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeUsing(SyntaxNodeAnalysisContext context)
         {
             var usingDirective = (UsingDirectiveSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(usingDirective.SyntaxTree)) return;
             if (usingDirective.StaticKeyword.IsKind(SyntaxKind.None)) return;
             if (IsAllowedDirectory(usingDirective.SyntaxTree.FilePath)) return;
 
@@ -63,6 +65,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeAttribute(SyntaxNodeAnalysisContext context)
         {
             var attribute = (AttributeSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(attribute.SyntaxTree)) return;
             if (!IsFrameworkPath(attribute.SyntaxTree.FilePath)) return;
 
             var symbol = context.SemanticModel.GetSymbolInfo(attribute).Symbol;
@@ -76,6 +79,7 @@ namespace CycloneGames.Analyzers
         private static void AnalyzeRegions(SyntaxTreeAnalysisContext context)
         {
             var filePath = context.Tree.FilePath;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(context.Tree)) return;
             if (IsAllowedDirectory(filePath)) return;
 
             var root = context.Tree.GetRoot(context.CancellationToken);

@@ -30,6 +30,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeMethod(SyntaxNodeAnalysisContext context)
         {
             var methodDecl = (MethodDeclarationSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(methodDecl.SyntaxTree)) return;
 
             // Must be async
             if (!methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword)) return;
