@@ -334,6 +334,7 @@ namespace Build.Pipeline.Editor
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             IReadOnlyList<HybridCLROutputTarget> outputTargets = CreateManagedOutputTargets(config, projectRoot);
+            generation.ValidateNoOutputTargetOverlap(outputTargets);
             HybridCLROutputTransaction transaction = HybridCLROutputTransaction.Begin(projectRoot, outputTargets);
             try
             {
@@ -368,8 +369,38 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private sealed class HybridCLROutputPublication : IBuildDownstreamInputPublication
+        private sealed class HybridCLROutputPublication : IBuildSourceQualificationPublication
         {
+            private sealed class SourceQualificationSuspension : IDisposable
+            {
+                private IDisposable outputSuspension;
+                private IDisposable generationSuspension;
+
+                internal SourceQualificationSuspension(
+                    IDisposable outputSuspension,
+                    IDisposable generationSuspension)
+                {
+                    this.outputSuspension = outputSuspension;
+                    this.generationSuspension = generationSuspension;
+                }
+
+                public void Dispose()
+                {
+                    IDisposable currentGeneration = generationSuspension;
+                    IDisposable currentOutput = outputSuspension;
+                    generationSuspension = null;
+                    outputSuspension = null;
+
+                    // Generation produced the staged output inputs, so it must return to
+                    // publication-ready state before those outputs are installed again.
+                    // If it cannot resume, leave the output transaction suspended. The
+                    // publication owner will then roll both transactions back in dependency
+                    // order instead of exposing an output whose generation state is unknown.
+                    currentGeneration?.Dispose();
+                    currentOutput?.Dispose();
+                }
+            }
+
             private HybridCLROutputTransaction transaction;
             private HybridCLRGenerationTransaction generation;
             private bool activated;
@@ -401,6 +432,36 @@ namespace Build.Pipeline.Editor
                 transaction.ActivateForDownstream();
                 activated = true;
                 AssetDatabase.Refresh();
+            }
+
+            public IDisposable SuspendForSourceQualification()
+            {
+                ThrowIfDisposed();
+                if (!activated)
+                {
+                    throw new InvalidOperationException(
+                        "HybridCLR outputs must be activated before source qualification can suspend them.");
+                }
+
+                generation.ValidateActive();
+                IDisposable outputSuspension =
+                    transaction.SuspendForSourceQualification();
+                try
+                {
+                    IDisposable generationSuspension =
+                        generation.SuspendForSourceQualification();
+                    return new SourceQualificationSuspension(
+                        outputSuspension,
+                        generationSuspension);
+                }
+                catch
+                {
+                    // The generation transaction may have stopped at any durable suspension
+                    // checkpoint. Do not reinstall downstream outputs against that unknown
+                    // state. Publication disposal owns the fail-closed output -> generation
+                    // rollback and retains either journal if recovery cannot complete.
+                    throw;
+                }
             }
 
             public void Publish()

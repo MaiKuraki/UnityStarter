@@ -2,7 +2,10 @@
     "name": "CycloneGames.DeterministicMath.Tests.Editor",
     "rootNamespace": "CycloneGames.DeterministicMath.Tests.Editor",
     "references": [
-        "CycloneGames.DeterministicMath.Core"
+        "CycloneGames.DeterministicMath.Core",
+        "Unity.Burst",
+        "Unity.Collections",
+        "Unity.Jobs"
     ],
     "includePlatforms": [
         "Editor"

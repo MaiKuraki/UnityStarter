@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.rpg-foundation-interaction-deterministic-math",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.RPGFoundation.Interaction.DeterministicMath",
+  "description": "Deterministic fixed-point authority integration for CycloneGames.RPGFoundation Interaction.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.rpg-foundation": "1.0.0",
+    "com.cyclone-games.deterministic-math": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "RPGFoundation",
+    "Interaction",
+    "DeterministicMath",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

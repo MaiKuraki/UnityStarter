@@ -143,14 +143,31 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             GameplayWorldHost[] hosts,
             List<GameplayFrameworkValidationIssue> issues)
         {
-            int enabledAutoStartCount = 0;
+            var enabledAutoStartCountByScene = new Dictionary<int, int>(hosts.Length);
+            var authoringData = new HostAuthoringData[hosts.Length];
             for (int i = 0; i < hosts.Length; i++)
             {
                 GameplayWorldHost host = hosts[i];
-                if (host != null && host.isActiveAndEnabled && host.AutoStart)
+                if (host == null)
                 {
-                    enabledAutoStartCount++;
+                    continue;
                 }
+
+                HostAuthoringData data = ReadHostAuthoringData(host);
+                authoringData[i] = data;
+                if (!host.isActiveAndEnabled || !data.AutoStart)
+                {
+                    continue;
+                }
+
+                var scene = host.gameObject.scene;
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    continue;
+                }
+
+                enabledAutoStartCountByScene.TryGetValue(scene.handle, out int count);
+                enabledAutoStartCountByScene[scene.handle] = count + 1;
             }
 
             for (int i = 0; i < hosts.Length; i++)
@@ -161,7 +178,8 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     continue;
                 }
 
-                if (host.WorldSettings == null)
+                HostAuthoringData data = authoringData[i];
+                if (data.WorldSettings == null)
                 {
                     issues.Add(new GameplayFrameworkValidationIssue(
                         GameplayFrameworkValidationSeverity.Error,
@@ -170,22 +188,73 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     continue;
                 }
 
-                if (host.WorldSettings.UsesExternalReferences && host.GetType() == typeof(GameplayWorldHost))
+                if (data.TerminalCleanupOwner == null)
+                {
+                    issues.Add(new GameplayFrameworkValidationIssue(
+                        GameplayFrameworkValidationSeverity.Warning,
+                        "GameplayWorldHost requires an application-lifetime terminal cleanup owner, either as an authoring reference or through explicit composition before startup.",
+                        host));
+                }
+                else if (data.TerminalCleanupOwner.transform.parent != null ||
+                         ReferenceEquals(data.TerminalCleanupOwner.gameObject, host.gameObject) ||
+                         data.TerminalCleanupOwner.transform.IsChildOf(host.transform) ||
+                         host.transform.IsChildOf(data.TerminalCleanupOwner.transform))
                 {
                     issues.Add(new GameplayFrameworkValidationIssue(
                         GameplayFrameworkValidationSeverity.Error,
-                        "GameplayWorldHost cannot resolve external WorldSettings locations without a project-specific resolver override.",
+                        "GameplayWorldHost terminal cleanup owner must use an independent root hierarchy that outlives the Scene host.",
                         host));
                 }
 
-                if (enabledAutoStartCount > 1 && host.isActiveAndEnabled && host.AutoStart)
+                if (data.WorldSettings.UsesExternalReferences)
+                {
+                    issues.Add(new GameplayFrameworkValidationIssue(
+                        GameplayFrameworkValidationSeverity.Warning,
+                        "GameplayWorldHost requires a GameplayWorldComposition with IWorldSettingsReferenceResolver before starting these external WorldSettings locations.",
+                        host));
+                }
+
+                var hostScene = host.gameObject.scene;
+                if (host.isActiveAndEnabled &&
+                    data.AutoStart &&
+                    hostScene.IsValid() &&
+                    hostScene.isLoaded &&
+                    enabledAutoStartCountByScene.TryGetValue(hostScene.handle, out int autoStartCount) &&
+                    autoStartCount > 1)
                 {
                     issues.Add(new GameplayFrameworkValidationIssue(
                         GameplayFrameworkValidationSeverity.Error,
-                        "Multiple enabled GameplayWorldHost components will auto-start in the loaded scenes. Scene Actor ownership would be ambiguous.",
+                        "Multiple enabled GameplayWorldHost components will auto-start in the same Scene. Scene-scoped Actor ownership would conflict.",
                         host));
                 }
             }
+        }
+
+        private static HostAuthoringData ReadHostAuthoringData(GameplayWorldHost host)
+        {
+            var serializedHost = new SerializedObject(host);
+            return new HostAuthoringData(
+                serializedHost.FindProperty("worldSettings").objectReferenceValue as WorldSettings,
+                serializedHost.FindProperty("terminalCleanupOwner").objectReferenceValue as
+                    GameplayWorldTerminalCleanupOwner,
+                serializedHost.FindProperty("autoStart").boolValue);
+        }
+
+        private readonly struct HostAuthoringData
+        {
+            public HostAuthoringData(
+                WorldSettings worldSettings,
+                GameplayWorldTerminalCleanupOwner terminalCleanupOwner,
+                bool autoStart)
+            {
+                WorldSettings = worldSettings;
+                TerminalCleanupOwner = terminalCleanupOwner;
+                AutoStart = autoStart;
+            }
+
+            public WorldSettings WorldSettings { get; }
+            public GameplayWorldTerminalCleanupOwner TerminalCleanupOwner { get; }
+            public bool AutoStart { get; }
         }
 
         private static void ValidateReference<T>(

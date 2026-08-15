@@ -148,7 +148,7 @@ namespace Build.VersionControl.Editor
 
         public IVersionControlProvider Create(string projectRoot)
         {
-            return new VersionControlProviderPerforce();
+            return new VersionControlProviderPerforce(projectRoot);
         }
     }
 }

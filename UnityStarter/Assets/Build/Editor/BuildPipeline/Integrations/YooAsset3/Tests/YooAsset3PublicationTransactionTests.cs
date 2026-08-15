@@ -684,6 +684,124 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         }
 
         [Test]
+        public void SourceQualification_FromPreparedPhase_RestoresExactBundledSourceAndThenRestoresStage()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(
+                CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
+            WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
+            YooAsset3PublicationTransaction transaction =
+                YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            string originalMeta = File.ReadAllText(bundled.targetMeta);
+            WriteFile(output.stage, "payload.txt", "new-output");
+            WriteFile(bundled.stage, "payload.txt", "new-bundle");
+            transaction.SealReadyDirectories();
+
+            using (transaction.SuspendForSourceQualification())
+            {
+                Assert.That(ReadFile(bundled.target, "payload.txt"), Is.EqualTo("old-bundle"));
+                Assert.That(File.ReadAllText(bundled.targetMeta), Is.EqualTo(originalMeta));
+                Assert.That(Directory.Exists(bundled.stage), Is.False);
+                Assert.That(Directory.Exists(bundled.backup), Is.False);
+                Assert.That(File.Exists(bundled.protectedMeta), Is.False);
+                Assert.That(
+                    Directory.GetFileSystemEntries(
+                        bundledFileRoot,
+                        ".yoo-*",
+                        SearchOption.TopDirectoryOnly),
+                    Is.Empty);
+            }
+
+            Assert.That(ReadFile(bundled.stage, "payload.txt"), Is.EqualTo("new-bundle"));
+            Assert.That(ReadFile(bundled.target, "payload.txt"), Is.EqualTo("old-bundle"));
+            Assert.That(ReadFile(output.stage, "payload.txt"), Is.EqualTo("new-output"));
+            transaction.Abort(NoOp);
+            transaction.Dispose();
+        }
+
+        [Test]
+        public void SourceQualification_FromDownstreamActive_RestoresExactBundledSourceAndReactivatesWithoutRefresh()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(
+                CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
+            WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
+            YooAsset3PublicationTransaction transaction =
+                YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            string originalMeta = File.ReadAllText(bundled.targetMeta);
+            WriteFile(output.stage, "payload.txt", "new-output");
+            WriteFile(bundled.stage, "payload.txt", "new-bundle");
+            transaction.SealReadyDirectories();
+
+            int refreshCount = 0;
+            transaction.ActivateDownstreamInputs(() => refreshCount++);
+            using (transaction.SuspendForSourceQualification())
+            {
+                Assert.That(ReadFile(bundled.target, "payload.txt"), Is.EqualTo("old-bundle"));
+                Assert.That(File.ReadAllText(bundled.targetMeta), Is.EqualTo(originalMeta));
+                Assert.That(Directory.Exists(bundled.stage), Is.False);
+                Assert.That(Directory.Exists(bundled.backup), Is.False);
+                Assert.That(File.Exists(bundled.protectedMeta), Is.False);
+                Assert.That(
+                    Directory.GetFileSystemEntries(
+                        bundledFileRoot,
+                        ".yoo-*",
+                        SearchOption.TopDirectoryOnly),
+                    Is.Empty);
+                Assert.That(refreshCount, Is.EqualTo(1));
+            }
+
+            Assert.That(refreshCount, Is.EqualTo(1));
+            Assert.That(ReadFile(bundled.target, "payload.txt"), Is.EqualTo("new-bundle"));
+            Assert.That(ReadFile(bundled.backup, "payload.txt"), Is.EqualTo("old-bundle"));
+            Assert.That(ReadFile(output.stage, "payload.txt"), Is.EqualTo("new-output"));
+            transaction.ValidateActivatedInputs();
+            transaction.Abort(NoOp);
+            transaction.Dispose();
+        }
+
+        [Test]
+        public void RecoverPending_FromSuspendedSourceQualification_RestoresAbsentBundledSource()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(
+                CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
+            YooAsset3PublicationTransaction transaction =
+                YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            WriteFile(output.stage, "payload.txt", "new-output");
+            WriteFile(bundled.stage, "payload.txt", "new-bundle");
+            transaction.SealReadyDirectories();
+            const string installedMeta =
+                "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nfolderAsset: yes\n";
+            transaction.ActivateDownstreamInputs(() =>
+                File.WriteAllText(bundled.targetMeta, installedMeta));
+
+            transaction.SuspendForSourceQualification();
+
+            Assert.That(Directory.Exists(bundled.target), Is.False);
+            Assert.That(File.Exists(bundled.targetMeta), Is.False);
+            Assert.That(Directory.Exists(bundled.stage), Is.False);
+            Assert.That(
+                Directory.GetFileSystemEntries(
+                    bundledFileRoot,
+                    ".yoo-*",
+                    SearchOption.TopDirectoryOnly),
+                Is.Empty);
+            YooAsset3PublicationTransaction.RecoverPending(projectRoot, NoOp);
+
+            Assert.That(Directory.Exists(bundled.target), Is.False);
+            Assert.That(File.Exists(bundled.targetMeta), Is.False);
+            Assert.That(File.Exists(GetJournalPath()), Is.False);
+            transaction.Dispose();
+        }
+
+        [Test]
         public void TerminalCommit_AfterDownstreamActivation_PublishesRemainingOutput()
         {
             YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));

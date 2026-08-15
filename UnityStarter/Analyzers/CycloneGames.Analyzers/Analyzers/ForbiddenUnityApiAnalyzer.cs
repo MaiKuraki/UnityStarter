@@ -124,6 +124,8 @@ namespace CycloneGames.Analyzers
         private void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
         {
             var invocation = (InvocationExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(invocation.SyntaxTree)) return;
+
             var symbolInfo = context.SemanticModel.GetSymbolInfo(invocation);
             var methodSymbol = symbolInfo.Symbol as IMethodSymbol;
             if (methodSymbol == null) return;
@@ -222,6 +224,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
         {
             var memberAccess = (MemberAccessExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(memberAccess.SyntaxTree)) return;
 
             if (memberAccess.Name.Identifier.Text.StartsWith("Load"))
             {

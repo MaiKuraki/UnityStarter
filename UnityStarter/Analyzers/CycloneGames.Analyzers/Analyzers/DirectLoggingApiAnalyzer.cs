@@ -40,7 +40,7 @@ namespace CycloneGames.Analyzers
             }
 
             var analyzedTrees = context.Compilation.SyntaxTrees
-                .Where(tree => !LoggingAnalyzerScope.IsExemptPath(tree.FilePath))
+                .Where(tree => LoggingAnalyzerScope.ShouldAnalyze(context.Compilation, tree))
                 .ToImmutableHashSet();
 
             if (analyzedTrees.Count == 0)

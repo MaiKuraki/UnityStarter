@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.GameplayFramework.Integrations.GameplayTags.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.GameplayTags.Tests.Editor",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags",
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

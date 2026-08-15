@@ -130,7 +130,14 @@ Assets/Settings/Build/WindowsRelease.asset
 | `Product Name` | 产品名与默认 artifact 名称 | 包括 content-only Profile 在内都应配置 portable 文件名 |
 | `Application Identifier` | Android 与 Apple 通用 application identity | 至少两个以 `.` 分隔的 ASCII identifier segment |
 | `Runtime Version Info` | 临时 runtime `VersionInfoData` 目标 | 只用于 Player，并由 transaction 管理 |
+| `Source Cleanliness Policy` | 版本控制工作区资格判定 | `Require Clean` 是安全默认值；本地例外永远不会放宽 batch mode 或 Qualified Release request |
 | `Cheat Build Mode` | 每次构建独立的 `ENABLE_CHEAT` 请求 | 在所选 Target 上事务化应用并于构建后恢复；与 HybridCLR 解耦 |
+
+Qualified Release 和 batch-mode request 无论保存的策略为何都必须验证源码工作区为干净。`Allow Dirty Development` 只允许本地交互式 Development request 在 Dirty 或 Unknown 状态继续。`Allow Dirty Local Release` 还允许本地 Development，并在 Qualified Release 被阻止时让 Inspector 的 **Release** 操作路由到下文所述的隔离 Local Release Player；它不会放宽 CI 或直接入口使用的正式 Release request。Enum 数值为 `Require Clean = 0`、`Allow Dirty Development = 1`、`Allow Dirty Local Release = 2`；未包含该字段的 Profile 仍保持安全默认行为。
+
+Inspector 还提供 **Local Optimized Preview**，用于 checkout 正在变化时验证 Release-like Player 优化、裁剪和运行表现。`Allow Dirty Local Release` 会让 **Release (Local Dirty)** 操作复用同一个受保护 purpose：只运行一个 `Clean` Player invocation，保持 `DebugBuild = false`，把输出强制隔离到 `<BuildRoot>/LocalPreview`，完整记录 Dirty 或 Unknown 源码证据，并明确标记为不可分发。它不能通过 batch mode 或命令行运行，不能导出 Android Project、使用外部输出、包含 Content/Hot Update/Custom invocation、发布 HybridCLR Release Baseline，或复用正式 Release Player 输出。需要 Content、Hot Update、Custom step 或 Incremental Player 输出的 Recipe 在工作区干净前仍保持阻止状态。
+
+资格判定覆盖包含 Unity 项目的整个版本控制 worktree，而不只检查 `Assets/`。因此同仓库中的 `Tools/`、`Docs/` 等兄弟区域发生变更时，Qualified Release 默认也会被阻止。只有建立机器可读、能完整声明所有构建输入的 scope 后，才适合安全缩小范围。
 
 `Runtime Version Info` 的默认路径是：
 
@@ -177,12 +184,13 @@ Preset 是 authoring helper，不是另一套 runner。它会写入 Saved Recipe
 
 Inspector 以状态为中心：
 
-- **Build Readiness** 汇总 Recipe、Validation、Workspace、未保存 authoring 和 Active Target。
+- **Build Readiness** 分别汇总 Source Qualification、Build Transaction Safety、Recipe Validation、未保存 authoring 和 Active Target。
 - **Compiled Summary** 显示识别出的 Preset、预期输出和拓扑编译后的执行计划。
-- **Workspace Safety** 根据 durable transaction evidence 显示 `Clean`、`Busy`、`Recovery Required` 或 `Blocked`。
+- **Source Qualification** 异步预览 tracked、untracked、submodule 和 Git LFS evidence，不会在 IMGUI 中运行 VCS 命令，并分别显示 Release、Development 与 Local Optimized Preview decision。
+- **Build Transaction Safety** 根据 durable transaction 与 lease evidence 显示 `Clean`、`Busy`、`Recovery Required` 或 `Blocked`。
 - **Validation** 解释缺失 Scene、非法 identity、不可用 Step/provider、错误 config 类型、dependency 和 output path 问题。
 
-Unity 正在编译、刷新资产或构建 Player，Workspace 不为 Clean，Validation 失败，或者本次 selection 的 authoring 资产 dirty 时，Build 按钮都会禁用。
+Release、Android Export 和 focused non-Development action 会在缓存预览不是 verified-clean 时禁用；只有显式本地 Development 例外可以继续，符合条件的 Local Optimized Preview 则因 Player-only 输出隔离且不可分发而保持可用。若自定义 Provider 没有实现可选的 thread-safe preview capability，Inspector 会显示 `RUNNER CHECK`，不会错误禁用按钮。预览不是授权证据：Runner 会在 Preflight 捕获新的权威 source snapshot，并在任何 deferred publication 提交前再次验证受保护构建。
 
 **第六步：显式保存 Authoring**
 
@@ -197,7 +205,8 @@ Focused build 可以选择 retained invocation。如果 retained config 是 dirt
 按目标 membership 选择操作：
 
 - **Run Saved Recipe** 执行所有 enabled invocation。
-- **Release** 创建非 Development Player request。
+- **Release** 创建 Qualified Release；选择 `Allow Dirty Local Release` 且源码不干净时，Inspector 会明确显示 **Release (Local Dirty)** 并改为运行隔离的本地 Player。
+- **Local Optimized Preview** 只运行一个 Clean Player invocation，使用 Release-like 优化并写入隔离的不可分发输出。
 - **Development** 创建 Development request。
 - **Focused Output** 不修改 Profile，只运行一个标准非 Player 子集。
 - **Exact Invocation** 运行一个非 Player invocation 及其传递 `Required` dependency。
@@ -241,6 +250,12 @@ Windows 最小示例：
 <BuildRoot>/<Platform>/<Release|Development>/<Artifact>
 ```
 
+Local Optimized Preview 始终忽略外部输出覆盖，并使用：
+
+```text
+<BuildRoot>/LocalPreview/<Platform>/Release/<Artifact>
+```
+
 每次命令行调用都会先在 Unity 项目根目录建立：
 
 ```text
@@ -256,7 +271,7 @@ Windows 最小示例：
 | 信息或状态 | 处理方式 |
 | --- | --- |
 | `SAVE REQUIRED` | 保存 Profile 和本次运行选中的全部配置资产 |
-| `Workspace Safety must report Clean` | 打开 Workspace Health；只有 durable evidence 明确允许时才执行 Recovery |
+| `Build Transaction Safety must report Clean` | 打开 Workspace Health；只有 durable evidence 明确允许时才执行 Recovery |
 | Active target 与 requested target 不一致 | 等待 Editor 平台切换完成，或用匹配的 `-buildTarget` 启动 batch mode |
 | Configuration is required | 创建并分配 provider-specific config |
 | Provider adapter is unavailable | 安装兼容可选包/integration，或从 selection 移除该 invocation |
@@ -361,8 +376,9 @@ flowchart TD
     A["获取项目级 Workspace Lease"] --> B["要求 Editor 空闲且 Workspace 干净"]
     B --> C["捕获 ProjectSettings Guard"]
     C --> D["验证路径并捕获 Recipe Provenance"]
-    D --> E["解析源码、构建号和包版本身份"]
-    E --> F["编译 DAG 并汇总 Preflight 错误"]
+    D --> E["解析源码、工作区、构建号与包版本身份"]
+    E --> S["执行 Source Cleanliness 门禁"]
+    S --> F["编译 DAG 并汇总 Preflight 错误"]
     F --> G{"动态 Requirements"}
     G -->|"UnityGlobalState"| H["应用带 Journal 的全局状态"]
     G -->|"VersionInfoAsset"| I["临时安装 VersionInfoData"]
@@ -371,7 +387,9 @@ flowchart TD
     G -->|"无状态要求"| J
     J --> K["验证并恢复项目状态"]
     K --> L["再次验证 Recipe Provenance"]
-    L --> M["封闭 Context 并验证证据容量"]
+    L --> T["暂停事务拥有的下游输出并执行终态 Source Qualification"]
+    T --> U["精确恢复下游输出"]
+    U --> M["封闭 Context 并验证证据容量"]
     M --> N{"是否存在失败"}
     N -->|"是"| O["Dispose 暂存发布并回滚"]
     N -->|"否"| P["通过统一持久屏障提交所有发布"]
@@ -403,13 +421,21 @@ flowchart TD
 
 某些 publication 实现 `IBuildDownstreamInputPublication`。它们可以把 staged 数据可逆地暴露给后续 invocation，例如供资源构建消费的 HybridCLR DLL，或构建 Player 时使用的 YooAsset bundled 文件。这不等于提前提交输出。
 
+Additive source-qualification capability 可以在终态 VCS snapshot 捕获期间，把这些事务拥有的输入暂时恢复到精确的 pre-run 状态，再在 Context 封闭与发布前恢复 staged 新输出。Suspension 是同步、带 journal、经过 identity 校验的事务过程，不会通过路径或 change-count 白名单从源码证据中扣除变更。
+
+HybridCLR 会把该能力组合到最终输出事务和生成事务：先暂停输出、再暂停生成输入；恢复时先恢复生成输入、再恢复输出。精确的文件/目录树 identity 与可移植的路径重叠检查可防止任一事务隐藏或接管不相关的 checkout 变更。
+
 Publication barrier 先写入一个持久 `Prepared` decision，发布所有参与者，再记录持久 `Committed` decision。提交前失败会回滚全部参与者。提交后恢复只会完成所有参与者，不会尝试相互矛盾的回滚。
 
 ### Provenance 与确定性证据
 
 Preflight 捕获选中图及配置 provenance：invocation 身份、类型、incrementality、依赖、配置资产路径/GUID/file ID/type、资产摘要和依赖对象摘要。它会在状态修改前、每个 invocation 前以及 publication 前检查。脏资产或已变化的配置会 fail closed。
 
-Result Manifest 记录编译顺序、步骤结果、有效版本身份、Provider 结果、警告和规范化失败。`formatVersion = 1` 是当前持久化文档的格式契约，用于验证 Evidence 与 Journal；它不是 `BuildData` Authoring Schema，也不提供自动迁移。
+Full Result Manifest 记录编译顺序、步骤结果、有效版本身份、build purpose、Release Baseline Policy 资格、Provider 结果、警告、规范化失败和脱敏的源码工作区快照。
+
+所有 Build 自有 JSON 只存在一份当前文档契约。每个文档都以精确的 `documentType` 开始，并拒绝重复或未知 member、注释、错误 token 类型、超深嵌套与尾随内容；恢复或删除授权需要时，还必须绑定 ownership checksum 或完整 tree identity。管线不包含历史 reader、数字 wire version、自动迁移或兼容 DTO。任何不符合当前契约的制品都会在零修改状态下被拒绝。
+
+该策略只适用于 Build 自有且可重建的状态：result、journal、ownership marker、publication manifest 与 release baseline。它不会替代应用版本、package 版本、source revision、provider compatibility identity 或 Unity 强制要求的 `.meta` 文件格式。升级 Build 模块前，Workspace Health 必须为 `Clean`；待恢复事务和过期的可重建输出必须由创建它们的 checkout 及 ownership-aware 工具完成恢复或清理。升级后若仍残留旧证据，当前管线只会零修改地拒绝它；应回到原 checkout 恢复或清理，或者在明确完成人工 ownership 审查后将其隔离，再执行一次 Clean build。不得原地解释或接管旧制品。
 
 ### 当前架构限制
 
@@ -700,7 +726,7 @@ Runtime 加载是另一项职责。内容构建成功不代表 Player 已包含�
 4. 保持 invocation ID 稳定。它参与默认输出路径、事务证据、来源信息和 CI 归档身份。
 5. 按下文 Provider 语义选择 `Clean` 或 `Incremental`。
 6. 保存 Profile 和配置资产。
-7. 确认 Workspace Safety 为 `Clean`，且 Preflight 没有包、依赖、路径或所有权错误。
+7. 确认 Source Qualification 为 `Verified Clean`、Build Transaction Safety 为 `Clean`，且 Preflight 没有包、依赖、路径或所有权错误。
 8. 运行 Saved Recipe、Focused Content 构建或精确的非 Player invocation。
 
 独立发布内容时使用 **Content Only**；Player 必须消费本 invocation 准备的数据时使用 **Player + Content**。**Full Player** 还会加入[热更新与混淆](#6-热更新与混淆)所述的热更新依赖图。
@@ -1191,7 +1217,7 @@ if (git status --porcelain) {
 }
 ```
 
-请在 Unity 创建构建证据或输出前执行守卫，或者直接使用新创建的干净 checkout。
+请在 Unity 创建构建证据或输出前执行守卫，或者直接使用新创建的干净 checkout。该 shell 检查只是提前反馈，不是 Release 门禁本身。Pipeline 会使用有界、非交互命令捕获 tracked、untracked、submodule 与 Git LFS 状态；要求干净时，只要状态为 Dirty 或无法确认就会 fail closed。
 
 ### 规范调用与优先级
 
@@ -1314,9 +1340,14 @@ CI 通常只覆盖 Build Number 与完整的 CI 来源对：
 
 源码覆盖组必须全有或全无：`-pipelineSourceProvider`、`-pipelineSourceRevision`、`-pipelineSourceBranch` 必须一起出现；CI 组同样必须成对出现。可检测 Git 时，显式源码身份必须等于检测快照。若外部脚本确需传入，应使用 `git rev-parse --short=12 HEAD` 计算 Revision，不能传完整 commit hash。
 
-只有刻意导出的无 VCS 工作区才使用完整源码组：
+Git Provider 会围绕身份解析捕获两次必须一致的 porcelain-v2 快照，递归检查 submodule，并直接查询有界的 `git lfs status --json`，不会枚举 LFS tracked path。命令超时、缺少 `git`/`git-lfs`、输出超预算、输出格式非法、命令非零退出或快照变化，都会产生稳定 `failureCode` 与 `Unknown` 状态。Required-clean request 会同时拒绝 `Dirty` 与 `Unknown`。
+
+Perforce Provider 会比较两次有界、只读的 `p4 -ztag status` 快照；该命令同时覆盖 opened file 与 reconcile candidate，再按受支持 action 区分 tracked/untracked。Submodule 与 Git LFS 为 `NotApplicable`。任何非零退出、快照变化、error record、非空但无法识别的 tagged schema、超时或命令缺失都会返回 `Unknown`，绝不会假定干净。Perforce 安装与 Server 版本必须先在 Release Agent 上完成验证。
+
+显式源码身份不会绕过工作区验证。无 VCS 导出只能用于显式放宽的本地 Development request；Release 必须使用能够证明工作区干净的受支持 Provider。若只是为 Development 导出保留身份，可使用完整源码组：
 
 ```text
+-pipelineDevelopment
 -pipelineBuildNumber 1204
 -pipelineSourceProvider ExportArchive
 -pipelineSourceRevision release-2026.08.09
@@ -1582,7 +1613,7 @@ sequenceDiagram
 - 空的无 owner 目录可以被接管；
 - ownership sidecar 与持久 journal 支持回滚或 committed completion。
 
-Compatibility 包含 pipeline revision、Unity 版本、target/backend、artifact 形态与名称、产品身份、Android export、debug 选项、Cheat 状态和 Player-extension fingerprint。任一不匹配都要求使用 Clean。
+Compatibility 包含自动派生的 pipeline implementation fingerprint、build purpose、Unity 版本、target/backend、artifact 形态与名称、产品身份、Android export、debug 选项、Cheat 状态和 Player-extension fingerprint。任一不匹配都要求使用 Clean。当前 ownership document 会把该 identity 与完整输出树及 checksum 绑定。Ownership-aware full-clean 工具只接受这份精确的当前文档，并拒绝 duplicate、unknown、malformed 或 stale evidence。
 
 Content 与 hot-update Provider 对各自输出根实现等价的 staging 和 recovery 契约。Provider 特定的 Clean/Incremental 语义必须另行说明。
 
@@ -1596,9 +1627,11 @@ Content 与 hot-update Provider 对各自输出根实现等价的 staging 和 re
 | `.buildpipeline/results/<runId>.log` | 有界的结构化事件日志 |
 | `.buildpipeline/results/<runId>.json` | 必需终态 manifest；早期失败为 partial，完成 Runner 调用后为 full |
 
-Started marker 只有在终态 manifest 持久写入、反序列化、契约验证且日志 flush 后才删除。终态证据记录 request 身份、target/backend、版本和 CI 身份、已选 recipe 与配置 provenance、编译后步骤结果、Provider package 结果、警告、输出路径及规范化失败。
+Started marker 只有在终态 manifest 持久写入、反序列化、契约验证且日志 flush 后才删除。Full terminal manifest 记录 request 身份、target/backend、版本和 CI 身份、已选 recipe 与配置 provenance、编译后步骤结果、Provider package 结果、警告、输出路径、规范化失败及源码工作区快照。
 
-`formatVersion = 1` 是每种持久化表示的当前验证契约，使 Reader 能拒绝不支持或已损坏的 Evidence。它不是 `BuildData` Authoring Schema，也不提供自动迁移。
+Full result document 包含 `buildPurpose`、`releaseBaselinePolicyEligible` 与 `sourceWorkspace` envelope。Baseline eligibility 只表示 request purpose 与 source policy 是否允许参与正式 Release baseline，不表示已经请求、生成或耐久发布 HybridCLR baseline；实际 baseline 必须以 provider-specific publication evidence 为准。`sourceWorkspace` 包含 `policy`、`required`、`overallStatus`、`failureCode`，以及 `trackedChanges`、`untrackedChanges`、`submodules`、`gitLfs` 四个 component。每个 component 记录稳定的 `status`，并用 `hasChangeCount` 与 `changeCount` 表达可选汇总数量。Manifest 刻意不记录变更路径、文件内容、命令行、环境变量或 stderr，避免形成源码或凭据泄露通道。
+
+Full manifest 会与 Runner 使用的冻结快照比对。在 request 或 source capture 之前创建的 `partial = true` early terminal manifest 会省略 `sourceWorkspace`，因为此时 `policy` 与 `required` 尚不可知；消费方必须把字段缺失视为 `Unknown` 并 fail closed。Request 已存在但工作区捕获不可用时，Runner terminal manifest 会记录 `Unknown/MetadataUnavailable`。自动化决策只接受当前 `build-result` 文档契约。
 
 退出码：
 
@@ -1831,12 +1864,12 @@ Player Extension 是由 `player` 生命周期消费的有序配置，适用于�
 ```csharp
 [PlayerBuildExtensionAdapterRegistration(
     "my-player-extension",
-    "my-player-extension-contract-v1",
+    "my-player-extension-contract",
     ConfigurationType = typeof(MyPlayerExtensionConfig))]
 public sealed class MyPlayerExtensionAdapter : IPlayerBuildExtensionAdapter
 {
     public string ProviderId => "my-player-extension";
-    public string CompatibilityId => "my-player-extension-contract-v1";
+    public string CompatibilityId => "my-player-extension-contract";
 
     public IReadOnlyList<string> Validate(PlayerBuildExtensionRequest request) =>
         Array.Empty<string>();
@@ -1955,6 +1988,7 @@ Provider 是否可用仍取决于相应可选 assembly/package 是否已安装�
 | Product Identity | Company Name | 仅在已选 requirement 需要 Unity global/Player state 时应用 |
 | Product Identity | Product Name | 也用于默认 Player artifact 名称 |
 | Product Identity | Application Identifier | 按 Player application identifier 验证 |
+| Source Control | Source Cleanliness Policy | Qualified Release 与 batch mode 始终要求 verified-clean；`Allow Dirty Local Release` 只把 Inspector Release 路由到隔离且不可分发的本地 Player |
 | Player Options | Cheat Build Mode | 控制 Player 构建的 invocation-local `ENABLE_CHEAT` |
 | Build Recipe | Invocations | 稳定 ID、step type、强类型 config、incrementality 和依赖声明 |
 
@@ -1989,6 +2023,7 @@ flowchart LR
 | --- | --- |
 | Build Saved Recipe | 要求 profile 与已选 config 已保存，然后运行全部 enabled invocation |
 | Release / Development | 使用相应 Player option 策略运行已保存 recipe |
+| Local Optimized Preview | 只运行一个 Clean Player invocation；Release-like 优化、隔离输出、不可分发且不发布 Release Baseline |
 | Focused Output | 不修改 profile，运行 Hot Update Only、Content Only 或 Content + Hot Update |
 | Build Selected Invocation | 运行一个非 Player invocation 及其传递 `Required` 闭包 |
 | Workspace Health | 零写入检查，只在安全时提供显式恢复 |
@@ -2080,6 +2115,7 @@ Android 显式 package 路径必须以 `.apk` 或 `.aab` 结尾。Android projec
 | `Temp/BuildPipeline/Workspace/lease.json` | 诊断 Lease 元数据 |
 | `Assets/Build/Runtime/Resources/VersionInfoData.asset` | 默认临时 runtime version 输入；事务性恢复或删除 |
 | `<PlayerOutput>.buildpipeline-player-owner.json` | Player 输出所有权与增量兼容 sidecar |
+| `<BuildRoot>/LocalPreview` | 隔离且不可分发的 Local Optimized Preview 输出；只能按正常 ownership-aware 输出规则安全删除 |
 
 结果历史当前没有自动 prune 策略。不能为了让 CI 解除阻塞而手工删除事务状态和 ownership sidecar。
 
@@ -2094,7 +2130,7 @@ Step 状态为 `Succeeded`、`Skipped` 和 `Failed`。
 | `2` | 结果证据失败 |
 | `3` | Workspace busy |
 
-Terminal Manifest 使用 `formatVersion = 1`。若干独立所有的 Journal 与 Ownership 格式也使用相同数值。每一个都是用于安全解析和恢复的严格当前文档契约；它不是通用 `BuildData` Schema，也不提供自动迁移。
+结果 evidence family 只接受当前 `build-result` 文档契约。所有 Build 自有 journal 与 ownership document 同样只有一份当前契约；不匹配的制品会 fail closed，且不会被迁移、改写或接管。
 
 **核心预算**
 
@@ -2160,9 +2196,9 @@ Assets/Build/Tests/Editor/
 ### 快速排查
 
 1. 停止同一项目的其他 Unity 构建进程。
-2. 打开 `BuildData` Inspector，读取 **Build Readiness** 与 **Workspace Safety**。
+2. 打开 `BuildData` Inspector，读取 **Build Readiness**、**Source Qualification** 与 **Build Transaction Safety**。
 3. 保留 Unity Editor Log 和 `.buildpipeline/results/`。
-4. Workspace 不是 Clean 时，打开 Workspace Health 检查 Recovery Evidence。
+4. Build Transaction Safety 不是 Clean 时，打开 Workspace Health 检查 Recovery Evidence；Source Qualification 为 Dirty 或 Unknown 时，检查聚合 component count 与 VCS failure code，并为 Release/CI 恢复干净 worktree。
 5. 只能通过 Inspector 或 `-pipelineRecoverOnly` 执行恢复。
 6. Recovery 显示 Clean 后，再使用同一个 Profile 与 Target 重试。
 7. Incremental 兼容性提示 Owned Baseline 或 Output 不匹配时，明确改用 `Clean`。
@@ -2288,6 +2324,8 @@ Player Extension 不会切换持久化 Obfuz Settings。选中 Extension 时，`
 
 不完整的 Source/CI Group 会被拒绝；显式 Source Identity 与可检测仓库 Identity 不一致时也会被拒绝。
 
+如果 Manifest 的 `sourceWorkspace` 为 `Dirty` 或 `Unknown`，先查看稳定 `failureCode`，再恢复干净 checkout、可用 VCS 工具以及一致的 submodule/LFS 状态。不要绕过 Qualified Release 门禁；需要在本地验证 Release-like Player 优化时，可以使用 **Local Optimized Preview**，或为 Profile 选择 `Allow Dirty Local Release` 后点击 **Release (Local Dirty)**。两者都使用隔离且不可分发的 Clean Player purpose。需要运行完整的本地 Development Recipe 时，使用 `Allow Dirty Development` 或 `Allow Dirty Local Release`。
+
 **Evidence 与磁盘错误**
 
 必需 Evidence 包含：
@@ -2298,7 +2336,7 @@ Player Extension 不会切换持久化 Obfuz Settings。选中 Extension 时，`
 <BuildRoot>/.buildpipeline/results/<run-id>.json
 ```
 
-Terminal Manifest 会经过容量检查、写入、重新读取，并与冻结的期望结果比较。Disk Full、Permission、Path Occupation、Serialization Capacity 或 Confirmation Failure 都会产生 Exit Code `2`。
+Terminal Manifest 会经过容量检查、写入、重新读取，并与冻结的期望结果比较。Disk Full、Permission、Path Occupation、Serialization Capacity 或 Confirmation Failure 都会产生 Exit Code `2`。源码工作区只记录状态、稳定 failure code 与汇总数量，不包含变更路径、文件内容、stderr、命令参数或凭据。
 
 如果 Terminal Evidence 在后期失败，Artifact 可能已经跨过 Publication Barrier。不能自动重建或覆盖。请保留 Output 与 Log，检查 Workspace Health；修复 Evidence Fault 后，再决定是否用新 Version 重新发布。
 

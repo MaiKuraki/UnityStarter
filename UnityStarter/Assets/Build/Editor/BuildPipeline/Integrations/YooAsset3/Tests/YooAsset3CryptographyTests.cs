@@ -135,7 +135,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             var manifest = new TestManifestCryptography();
             YooAsset3CryptographyBinding binding = YooAsset3CryptographyBinding.Create(
                 "test-apply",
-                "test-runtime-v1",
+                "test-runtime",
                 bundle,
                 manifest,
                 manifest);
@@ -190,7 +190,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
     public sealed class ValidCryptographyAdapter : IYooAsset3CryptographyAdapter
     {
         public const string Id = "test-valid-crypto";
-        public const string RuntimeContract = "test-valid-runtime-v1";
+        public const string RuntimeContract = "test-valid-runtime";
 
         public string AdapterId => Id;
         public string RuntimeDecryptContractId => RuntimeContract;
@@ -213,13 +213,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
     [YooAssetCryptographyAdapterRegistration(
         "test-duplicate-crypto",
         typeof(DuplicateCryptographyConfiguration),
-        "test-duplicate-runtime-v1")]
+        "test-duplicate-runtime")]
     public sealed class DuplicateCryptographyAdapterA : TestCryptographyAdapterBase { }
 
     [YooAssetCryptographyAdapterRegistration(
         "test-duplicate-crypto",
         typeof(DuplicateCryptographyConfiguration),
-        "test-duplicate-runtime-v1")]
+        "test-duplicate-runtime")]
     public sealed class DuplicateCryptographyAdapterB : TestCryptographyAdapterBase { }
 
     public sealed class MismatchedCryptographyConfiguration : YooAssetCryptographyConfiguration
@@ -235,11 +235,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
     [YooAssetCryptographyAdapterRegistration(
         "test-type-mismatch",
         typeof(RegisteredMismatchedCryptographyConfiguration),
-        "test-type-mismatch-runtime-v1")]
+        "test-type-mismatch-runtime")]
     public sealed class MismatchedCryptographyAdapter : TestCryptographyAdapterBase
     {
         public override string AdapterId => "test-type-mismatch";
-        public override string RuntimeDecryptContractId => "test-type-mismatch-runtime-v1";
+        public override string RuntimeDecryptContractId => "test-type-mismatch-runtime";
     }
 
     public sealed class EmptyRuntimeContractConfiguration : YooAssetCryptographyConfiguration
@@ -250,7 +250,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
     [YooAssetCryptographyAdapterRegistration(
         "test-empty-runtime",
         typeof(EmptyRuntimeContractConfiguration),
-        "test-runtime-registration-v1")]
+        "test-runtime-registration")]
     public sealed class EmptyRuntimeContractAdapter : TestCryptographyAdapterBase
     {
         public override string AdapterId => "test-empty-runtime";
@@ -260,7 +260,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
     public abstract class TestCryptographyAdapterBase : IYooAsset3CryptographyAdapter
     {
         public virtual string AdapterId => "test-duplicate-crypto";
-        public virtual string RuntimeDecryptContractId => "test-duplicate-runtime-v1";
+        public virtual string RuntimeDecryptContractId => "test-duplicate-runtime";
         public void Validate(YooAsset3CryptographyRequest request) { }
         public IBundleEncryptor CreateBundleEncryptor(YooAsset3CryptographyRequest request) => new TestBundleEncryptor();
         public IManifestEncryptor CreateManifestEncryptor(YooAsset3CryptographyRequest request) => new TestManifestCryptography();

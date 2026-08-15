@@ -1,0 +1,28 @@
+{
+    "name": "CycloneGames.GameplayFramework.Editor.Integrations.Cinemachine",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Editor.Integrations.Cinemachine",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine",
+        "Unity.Cinemachine"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_CINEMACHINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.cinemachine",
+            "expression": "[3.0.0,4.0.0)",
+            "define": "CYCLONEGAMES_HAS_CINEMACHINE"
+        }
+    ],
+    "noEngineReferences": false
+}

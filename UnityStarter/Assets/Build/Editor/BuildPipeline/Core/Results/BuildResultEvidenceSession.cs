@@ -303,7 +303,7 @@ namespace Build.Pipeline.Editor
                 BuildResultEvidencePolicy.NormalizeException(failure);
             var manifest = new EarlyTerminalManifest
             {
-                formatVersion = BuildResultManifestFormat.CurrentVersion,
+                documentType = BuildResultManifestFormat.DocumentType,
                 operation = Operation,
                 runId = RunId,
                 succeeded = succeeded,
@@ -487,21 +487,21 @@ namespace Build.Pipeline.Editor
                 succeeded = !expectedResult.Succeeded,
                 partial = true,
                 debugBuild = !terminalContext.Request.DebugBuild,
+                releaseBaselinePolicyEligible = !terminalContext.Request.CanPublishReleaseBaseline,
                 deleteDebugFiles = !terminalContext.Request.DeleteDebugFiles,
                 exportAndroidProject = !terminalContext.Request.ExportAndroidProject,
                 allowExternalOutput = !terminalContext.Request.AllowExternalOutput,
                 outputIsFolder = !terminalContext.Request.OutputIsFolder,
                 cheatEnabled = !terminalContext.Request.CheatEnabled,
-                playerPipelineCompatibilityRevision = -1,
                 playerExtensionFingerprint = "<invalid>"
             };
             DeserializeTerminalManifest(json, manifest, "full build");
 
             var violations = new List<string>();
             RequireEqual(
-                manifest.formatVersion,
-                BuildResultManifestFormat.CurrentVersion,
-                "formatVersion",
+                manifest.documentType,
+                BuildResultManifestFormat.DocumentType,
+                "documentType",
                 violations);
             RequireEqual(manifest.operation, "build", "operation", violations);
             RequireEqual(manifest.runId, RunId, "runId", violations);
@@ -542,6 +542,7 @@ namespace Build.Pipeline.Editor
             RequireObject(manifest.detectedIdentity, "detectedIdentity", violations);
             RequireObject(manifest.effectiveIdentity, "effectiveIdentity", violations);
             RequireObject(manifest.ciIdentity, "ciIdentity", violations);
+            RequireObject(manifest.sourceWorkspace, "sourceWorkspace", violations);
             RequireArray(manifest.buildScenePaths, "buildScenePaths", violations);
             RequireArray(manifest.nonFatalFailures, "nonFatalFailures", violations);
             RequireArray(manifest.recipeInvocations, "recipeInvocations", violations);
@@ -599,6 +600,16 @@ namespace Build.Pipeline.Editor
                 violations);
             RequireEqual(manifest.debugBuild, request.DebugBuild, "debugBuild", violations);
             RequireEqual(
+                manifest.buildPurpose,
+                request.Purpose.ToString(),
+                "buildPurpose",
+                violations);
+            RequireEqual(
+                manifest.releaseBaselinePolicyEligible,
+                request.CanPublishReleaseBaseline,
+                "releaseBaselinePolicyEligible",
+                violations);
+            RequireEqual(
                 manifest.deleteDebugFiles,
                 request.DeleteDebugFiles,
                 "deleteDebugFiles",
@@ -654,10 +665,9 @@ namespace Build.Pipeline.Editor
                 request.CheatEnabled,
                 "cheatEnabled",
                 violations);
-            RequireEqual(
-                manifest.playerPipelineCompatibilityRevision,
-                PlayerOutputTransaction.PlayerPipelineCompatibilityRevision,
-                "playerPipelineCompatibilityRevision",
+            ValidateSourceWorkspace(
+                manifest.sourceWorkspace,
+                BuildResultManifestWriter.CreateSourceWorkspaceEntry(request, version),
                 violations);
             RequireEqual(
                 manifest.playerExtensionFingerprint,
@@ -692,9 +702,9 @@ namespace Build.Pipeline.Editor
 
             var violations = new List<string>();
             RequireEqual(
-                manifest.formatVersion,
-                BuildResultManifestFormat.CurrentVersion,
-                "formatVersion",
+                manifest.documentType,
+                BuildResultManifestFormat.DocumentType,
+                "documentType",
                 violations);
             RequireEqual(manifest.operation, Operation, "operation", violations);
             RequireEqual(manifest.runId, RunId, "runId", violations);
@@ -802,6 +812,21 @@ namespace Build.Pipeline.Editor
         {
             try
             {
+                if (manifest is BuildResultManifestFormat.Document)
+                {
+                    BuildJsonDocumentContract.Validate<BuildResultManifestFormat.Document>(
+                        json,
+                        BuildResultManifestFormat.DocumentType,
+                        "Full build result manifest");
+                }
+                else if (manifest is EarlyTerminalManifest)
+                {
+                    BuildJsonDocumentContract.Validate<EarlyTerminalManifest>(
+                        json,
+                        BuildResultManifestFormat.DocumentType,
+                        "Early terminal build result manifest");
+                }
+
                 JsonUtility.FromJsonOverwrite(json, manifest);
             }
             catch (Exception exception)
@@ -828,8 +853,7 @@ namespace Build.Pipeline.Editor
             }
 
             throw new BuildResultEvidenceException(
-                $"Required {contractName} manifest violates format contract " +
-                $"{BuildResultManifestFormat.CurrentVersion}: " +
+                $"Required {contractName} manifest violates the current document contract: " +
                 string.Join("; ", violations) + $". Path: '{ManifestPath}'.");
         }
 
@@ -992,6 +1016,31 @@ namespace Build.Pipeline.Editor
                     violations,
                     (manifest.ciIdentity.provider, "ciIdentity.provider"),
                     (manifest.ciIdentity.runId, "ciIdentity.runId"));
+            }
+
+            if (manifest.sourceWorkspace != null)
+            {
+                RequireNonEmptyStrings(
+                    violations,
+                    (manifest.sourceWorkspace.policy, "sourceWorkspace.policy"),
+                    (manifest.sourceWorkspace.overallStatus, "sourceWorkspace.overallStatus"),
+                    (manifest.sourceWorkspace.failureCode, "sourceWorkspace.failureCode"));
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.trackedChanges,
+                    "sourceWorkspace.trackedChanges",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.untrackedChanges,
+                    "sourceWorkspace.untrackedChanges",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.submodules,
+                    "sourceWorkspace.submodules",
+                    violations);
+                ValidateWorkspaceComponent(
+                    manifest.sourceWorkspace.gitLfs,
+                    "sourceWorkspace.gitLfs",
+                    violations);
             }
 
             if (manifest.recipeInvocations != null)
@@ -1450,6 +1499,97 @@ namespace Build.Pipeline.Editor
                 (identity.sourceCommitDate, prefix + ".sourceCommitDate"));
         }
 
+        private static void ValidateSourceWorkspace(
+            BuildResultManifestFormat.SourceWorkspaceEntry actual,
+            BuildResultManifestFormat.SourceWorkspaceEntry expected,
+            ICollection<string> violations)
+        {
+            if (actual == null || expected == null)
+            {
+                return;
+            }
+
+            RequireEqual(actual.policy, expected.policy, "sourceWorkspace.policy", violations);
+            RequireEqual(actual.required, expected.required, "sourceWorkspace.required", violations);
+            RequireEqual(
+                actual.overallStatus,
+                expected.overallStatus,
+                "sourceWorkspace.overallStatus",
+                violations);
+            RequireEqual(
+                actual.failureCode,
+                expected.failureCode,
+                "sourceWorkspace.failureCode",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.trackedChanges,
+                expected.trackedChanges,
+                "sourceWorkspace.trackedChanges",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.untrackedChanges,
+                expected.untrackedChanges,
+                "sourceWorkspace.untrackedChanges",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.submodules,
+                expected.submodules,
+                "sourceWorkspace.submodules",
+                violations);
+            ValidateWorkspaceComponentEqual(
+                actual.gitLfs,
+                expected.gitLfs,
+                "sourceWorkspace.gitLfs",
+                violations);
+        }
+
+        private static void ValidateWorkspaceComponent(
+            BuildResultManifestFormat.WorkspaceComponentEntry component,
+            string prefix,
+            ICollection<string> violations)
+        {
+            if (component == null)
+            {
+                violations.Add(prefix + " is missing");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(component.status))
+            {
+                violations.Add(prefix + ".status is missing");
+            }
+
+            if (component.changeCount < 0
+                || (!component.hasChangeCount && component.changeCount != 0))
+            {
+                violations.Add(prefix + ".changeCount is invalid");
+            }
+        }
+
+        private static void ValidateWorkspaceComponentEqual(
+            BuildResultManifestFormat.WorkspaceComponentEntry actual,
+            BuildResultManifestFormat.WorkspaceComponentEntry expected,
+            string prefix,
+            ICollection<string> violations)
+        {
+            if (actual == null || expected == null)
+            {
+                return;
+            }
+
+            RequireEqual(actual.status, expected.status, prefix + ".status", violations);
+            RequireEqual(
+                actual.hasChangeCount,
+                expected.hasChangeCount,
+                prefix + ".hasChangeCount",
+                violations);
+            RequireEqual(
+                actual.changeCount,
+                expected.changeCount,
+                prefix + ".changeCount",
+                violations);
+        }
+
         private void Append(string phase, string message)
         {
             ThrowIfDisposed();
@@ -1683,7 +1823,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class StartedMarker
         {
-            public int formatVersion = BuildResultManifestFormat.CurrentVersion;
+            public string documentType = BuildResultManifestFormat.StartedDocumentType;
             public string operation;
             public string runId;
             public string startedUtc;
@@ -1695,7 +1835,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class EarlyTerminalManifest
         {
-            public int formatVersion;
+            public string documentType;
             public string operation;
             public string runId;
             public bool succeeded;

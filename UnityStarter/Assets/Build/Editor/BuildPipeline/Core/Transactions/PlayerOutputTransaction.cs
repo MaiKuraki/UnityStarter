@@ -41,10 +41,10 @@ namespace Build.Pipeline.Editor
         private const string PrepareAnchorPendingCheckpoint = "prepare-anchor-pending";
         private const string PreparePayloadPendingCheckpoint = "prepare-payload-pending";
 
-        private const int JournalFormatVersion = 1;
-        private const int OwnerFormatVersion = 1;
-        private const int CompatibilityIdentityFormatVersion = 1;
-        internal const int PlayerPipelineCompatibilityRevision = 1;
+        private const string JournalDocumentType = "player-output-transaction";
+        private const string OwnerDocumentType = "player-output-owner";
+        private const string CompatibilityIdentityDomain =
+            "player-output-compatibility";
         private const string StateRelativePath = ".buildpipeline/transactions/player";
         private const string JournalFileName = "active.json";
         private const string LockFileName = "active.lock";
@@ -578,7 +578,7 @@ namespace Build.Pipeline.Editor
         {
             return new Journal
             {
-                formatVersion = JournalFormatVersion,
+                documentType = JournalDocumentType,
                 transactionId = transactionId,
                 checkpoint = checkpoint,
                 projectRoot = Path.GetFullPath(request.ProjectRoot),
@@ -1001,13 +1001,18 @@ namespace Build.Pipeline.Editor
             RestoreOriginal(journal, request);
             if (journal.hadOriginal && journal.originalWasOwned)
             {
-                WriteOwner(
-                    ownerPath,
-                    "published",
-                    journal.originalOwnerTransactionId,
-                    journal.originalIdentity,
-                    journal.originalCompatibilityIdentity);
+                RestoreOriginalOwner(ownerPath, journal);
             }
+        }
+
+        private static void RestoreOriginalOwner(string ownerPath, Journal journal)
+        {
+            WriteOwner(
+                ownerPath,
+                "published",
+                journal.originalOwnerTransactionId,
+                journal.originalIdentity,
+                journal.originalCompatibilityIdentity);
         }
 
         private static void ResolvePreCheckpointPromotedOutput(
@@ -1232,7 +1237,10 @@ namespace Build.Pipeline.Editor
         private static void ValidateJournal(string projectRoot, Journal journal)
         {
             if (journal == null
-                || journal.formatVersion != JournalFormatVersion
+                || !string.Equals(
+                    journal.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || !IsTransactionId(journal.transactionId)
                 || string.IsNullOrWhiteSpace(journal.checkpoint))
             {
@@ -1720,6 +1728,10 @@ namespace Build.Pipeline.Editor
         private static Journal ReadJournal(string path)
         {
             string json = ReadBoundedText(path);
+            BuildJsonDocumentContract.Validate<Journal>(
+                json,
+                JournalDocumentType,
+                "Player output transaction journal");
             Journal journal = JsonUtility.FromJson<Journal>(json);
             if (journal == null)
             {
@@ -1750,7 +1762,7 @@ namespace Build.Pipeline.Editor
             ValidateCompatibilityIdentity(compatibilityIdentity);
             var owner = new Owner
             {
-                formatVersion = OwnerFormatVersion,
+                documentType = OwnerDocumentType,
                 kind = kind,
                 transactionId = transactionId,
                 hasIdentity = identity != null,
@@ -1866,9 +1878,8 @@ namespace Build.Pipeline.Editor
 
             var identity = new CompatibilityIdentity
             {
-                formatVersion = CompatibilityIdentityFormatVersion,
-                playerPipelineCompatibilityRevision =
-                    PlayerPipelineCompatibilityRevision,
+                pipelineImplementationFingerprint =
+                    ResolvePipelineImplementationFingerprint(),
                 unityVersion = Application.unityVersion,
                 buildTarget = request.Target.ToString(),
                 namedBuildTarget = request.NamedTarget.TargetName,
@@ -1882,6 +1893,7 @@ namespace Build.Pipeline.Editor
                 debugBuild = request.DebugBuild,
                 deleteDebugFiles = request.DeleteDebugFiles,
                 cheatEnabled = request.CheatEnabled,
+                buildPurpose = request.Purpose.ToString(),
                 playerExtensionFingerprint = RequirePlayerExtensionFingerprint(
                     playerExtensionFingerprint),
                 digest = string.Empty
@@ -1898,9 +1910,9 @@ namespace Build.Pipeline.Editor
             var differences = new List<string>();
             AddCompatibilityDifference(
                 differences,
-                "PlayerPipelineCompatibilityRevision",
-                existing.playerPipelineCompatibilityRevision,
-                requested.playerPipelineCompatibilityRevision);
+                "PipelineImplementationFingerprint",
+                existing.pipelineImplementationFingerprint,
+                requested.pipelineImplementationFingerprint);
             AddCompatibilityDifference(
                 differences,
                 "UnityVersion",
@@ -1968,6 +1980,11 @@ namespace Build.Pipeline.Editor
                 requested.cheatEnabled);
             AddCompatibilityDifference(
                 differences,
+                "BuildPurpose",
+                existing.buildPurpose,
+                requested.buildPurpose);
+            AddCompatibilityDifference(
+                differences,
                 "PlayerExtensionFingerprint",
                 existing.playerExtensionFingerprint,
                 requested.playerExtensionFingerprint);
@@ -2021,9 +2038,10 @@ namespace Build.Pipeline.Editor
         {
             ValidateCompatibilityIdentity(left);
             ValidateCompatibilityIdentity(right);
-            return left.formatVersion == right.formatVersion
-                   && left.playerPipelineCompatibilityRevision ==
-                   right.playerPipelineCompatibilityRevision
+            return string.Equals(
+                       left.pipelineImplementationFingerprint,
+                       right.pipelineImplementationFingerprint,
+                       StringComparison.Ordinal)
                    && string.Equals(
                        left.unityVersion,
                        right.unityVersion,
@@ -2041,6 +2059,10 @@ namespace Build.Pipeline.Editor
                    && left.deleteDebugFiles == right.deleteDebugFiles
                    && left.cheatEnabled == right.cheatEnabled
                    && string.Equals(
+                       left.buildPurpose,
+                       right.buildPurpose,
+                       StringComparison.Ordinal)
+                   && string.Equals(
                        left.playerExtensionFingerprint,
                        right.playerExtensionFingerprint,
                        StringComparison.Ordinal)
@@ -2050,8 +2072,8 @@ namespace Build.Pipeline.Editor
         private static void ValidateCompatibilityIdentity(CompatibilityIdentity identity)
         {
             if (identity == null
-                || identity.formatVersion != CompatibilityIdentityFormatVersion
-                || identity.playerPipelineCompatibilityRevision <= 0
+                || identity.pipelineImplementationFingerprint == null
+                || identity.pipelineImplementationFingerprint.Length != 64
                 || string.IsNullOrWhiteSpace(identity.unityVersion)
                 || identity.unityVersion.Length > 128
                 || string.IsNullOrWhiteSpace(identity.buildTarget)
@@ -2062,6 +2084,12 @@ namespace Build.Pipeline.Editor
                 || identity.companyName == null
                 || identity.productName == null
                 || identity.applicationIdentifier == null
+                || string.IsNullOrWhiteSpace(identity.buildPurpose)
+                || !Enum.TryParse(
+                    identity.buildPurpose,
+                    ignoreCase: false,
+                    out BuildPurpose parsedPurpose)
+                || !Enum.IsDefined(typeof(BuildPurpose), parsedPurpose)
                 || identity.playerExtensionFingerprint == null
                 || identity.playerExtensionFingerprint.Length != 64
                 || identity.digest == null
@@ -2099,13 +2127,10 @@ namespace Build.Pipeline.Editor
         private static string ComputeCompatibilityDigest(CompatibilityIdentity identity)
         {
             var builder = new StringBuilder(512);
+            AppendCompatibilityValue(builder, CompatibilityIdentityDomain);
             AppendCompatibilityValue(
                 builder,
-                identity.formatVersion.ToString(CultureInfo.InvariantCulture));
-            AppendCompatibilityValue(
-                builder,
-                identity.playerPipelineCompatibilityRevision.ToString(
-                    CultureInfo.InvariantCulture));
+                identity.pipelineImplementationFingerprint);
             AppendCompatibilityValue(builder, identity.unityVersion);
             AppendCompatibilityValue(builder, identity.buildTarget);
             AppendCompatibilityValue(builder, identity.namedBuildTarget);
@@ -2119,8 +2144,20 @@ namespace Build.Pipeline.Editor
             AppendCompatibilityValue(builder, identity.debugBuild);
             AppendCompatibilityValue(builder, identity.deleteDebugFiles);
             AppendCompatibilityValue(builder, identity.cheatEnabled);
+            AppendCompatibilityValue(builder, identity.buildPurpose);
             AppendCompatibilityValue(builder, identity.playerExtensionFingerprint);
             return ComputeTextHash(builder.ToString());
+        }
+
+        private static string ResolvePipelineImplementationFingerprint()
+        {
+            string moduleIdentity = typeof(PlayerOutputTransaction)
+                .Assembly
+                .ManifestModule
+                .ModuleVersionId
+                .ToString("N");
+            return ComputeTextHash(
+                CompatibilityIdentityDomain + "\n" + moduleIdentity);
         }
 
         private static string RequirePlayerExtensionFingerprint(string fingerprint)
@@ -2217,7 +2254,10 @@ namespace Build.Pipeline.Editor
         private static void ValidatePublishedOwner(Owner owner)
         {
             if (owner == null
-                || owner.formatVersion != OwnerFormatVersion
+                || !string.Equals(
+                    owner.documentType,
+                    OwnerDocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(owner.kind, "published", StringComparison.Ordinal)
                 || !IsTransactionId(owner.transactionId)
                 || !owner.hasIdentity
@@ -2252,8 +2292,31 @@ namespace Build.Pipeline.Editor
                     path);
             }
 
-            string json = ReadBoundedText(path);
+            return ReadOwnerBytes(ReadBoundedBytes(path));
+        }
+
+        private static Owner ReadOwnerBytes(byte[] sourceBytes)
+        {
+            if (sourceBytes == null
+                || sourceBytes.Length == 0
+                || sourceBytes.Length > MaximumJournalBytes)
+            {
+                throw new InvalidOperationException(
+                    "Player output ownership marker bytes are outside the supported budget.");
+            }
+
+            string json = StrictUtf8.GetString(sourceBytes);
+            BuildJsonDocumentContract.Validate<Owner>(
+                json,
+                OwnerDocumentType,
+                "Player output ownership marker");
             Owner owner = JsonUtility.FromJson<Owner>(json);
+            VerifyOwnerChecksum(owner);
+            return owner;
+        }
+
+        private static void VerifyOwnerChecksum(Owner owner)
+        {
             if (owner == null)
             {
                 throw new InvalidOperationException(
@@ -2269,8 +2332,6 @@ namespace Build.Pipeline.Editor
                 throw new InvalidOperationException(
                     "Player output ownership marker checksum verification failed.");
             }
-
-            return owner;
         }
 
         private static void ValidateOwner(
@@ -2281,7 +2342,10 @@ namespace Build.Pipeline.Editor
             CompatibilityIdentity expectedCompatibilityIdentity)
         {
             if (owner == null
-                || owner.formatVersion != OwnerFormatVersion
+                || !string.Equals(
+                    owner.documentType,
+                    OwnerDocumentType,
+                    StringComparison.Ordinal)
                 || !string.Equals(owner.transactionId, transactionId, StringComparison.Ordinal)
                 || (requiredKind != null
                     && !string.Equals(owner.kind, requiredKind, StringComparison.Ordinal)))
@@ -2318,6 +2382,11 @@ namespace Build.Pipeline.Editor
 
         private static void WriteJsonAtomically(string path, string json)
         {
+            WriteBytesAtomically(path, StrictUtf8.GetBytes(json));
+        }
+
+        private static void WriteBytesAtomically(string path, byte[] bytes)
+        {
             BuildPathPolicy.EnsureWin32MaxPathBudget(
                 path,
                 "Player transaction JSON",
@@ -2342,7 +2411,6 @@ namespace Build.Pipeline.Editor
                 backupPath,
                 "Player transaction JSON backup file");
             DeleteFileStrict(temporaryPath);
-            byte[] bytes = StrictUtf8.GetBytes(json);
             using (var stream = new FileStream(
                        temporaryPath,
                        FileMode.CreateNew,
@@ -2421,6 +2489,11 @@ namespace Build.Pipeline.Editor
 
         private static string ReadBoundedText(string path)
         {
+            return StrictUtf8.GetString(ReadBoundedBytes(path));
+        }
+
+        private static byte[] ReadBoundedBytes(string path)
+        {
             var info = new FileInfo(path);
             if (!info.Exists || info.Length <= 0 || info.Length > MaximumJournalBytes)
             {
@@ -2435,7 +2508,7 @@ namespace Build.Pipeline.Editor
                     $"Transaction JSON file changed while it was read: '{path}'.");
             }
 
-            return StrictUtf8.GetString(bytes);
+            return bytes;
         }
 
         private static void DeleteDirectoryStrict(string path, BuildRequest request)
@@ -2784,7 +2857,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string transactionId;
             public string checkpoint;
             public string projectRoot;
@@ -2810,7 +2883,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Owner
         {
-            public int formatVersion;
+            public string documentType;
             public string kind;
             public string transactionId;
             public bool hasIdentity;
@@ -2822,8 +2895,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class CompatibilityIdentity
         {
-            public int formatVersion;
-            public int playerPipelineCompatibilityRevision;
+            public string pipelineImplementationFingerprint;
             public string unityVersion;
             public string buildTarget;
             public string namedBuildTarget;
@@ -2837,6 +2909,7 @@ namespace Build.Pipeline.Editor
             public bool debugBuild;
             public bool deleteDebugFiles;
             public bool cheatEnabled;
+            public string buildPurpose;
             public string playerExtensionFingerprint;
             public string digest;
         }

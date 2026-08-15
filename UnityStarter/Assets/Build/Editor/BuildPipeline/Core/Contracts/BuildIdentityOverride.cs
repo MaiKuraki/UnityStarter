@@ -94,8 +94,9 @@ namespace Build.Pipeline.Editor
 
     public enum BuildIdentityOrigin
     {
-        VersionControl,
-        ExplicitOverride,
-        LocalDevelopment
+        VersionControl = 0,
+        ExplicitOverride = 1,
+        LocalDevelopment = 2,
+        LocalPreview = 3
     }
 }

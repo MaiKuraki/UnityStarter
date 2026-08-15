@@ -875,7 +875,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             RequireArtifact(bundledPackageDirectory, "BuiltinCatalog.bytes");
         }
 
-        private sealed class YooAsset3DeferredPublication : IBuildDownstreamInputPublication
+        private sealed class YooAsset3DeferredPublication : IBuildSourceQualificationPublication
         {
             private YooAsset3PublicationTransaction transaction;
             private readonly Action validatePublishedState;
@@ -934,6 +934,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 transaction.ActivateDownstreamInputs(AssetDatabase.Refresh);
                 transaction.ValidateActivatedInputs();
                 activated = true;
+            }
+
+            public IDisposable SuspendForSourceQualification()
+            {
+                if (transaction == null)
+                {
+                    throw new ObjectDisposedException(nameof(YooAsset3DeferredPublication));
+                }
+
+                if (completed)
+                {
+                    throw new InvalidOperationException(
+                        "A completed YooAsset publication cannot be suspended for source qualification.");
+                }
+
+                return transaction.SuspendForSourceQualification();
             }
 
             public IDisposable BeginPlayerBuild()

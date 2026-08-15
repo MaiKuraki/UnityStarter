@@ -510,6 +510,138 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(request.DebugBuild, Is.EqualTo(debugBuild));
         }
 
+        [TestCase(BuildSourceCleanlinessPolicy.RequireClean, false, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.RequireClean, true, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyDevelopment, false, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyDevelopment, true, false)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease, false, true)]
+        [TestCase(BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease, true, false)]
+        public void BuildRequest_RequireCleanSource_ReleaseCannotBeRelaxedAndDevelopmentRequiresOptIn(
+            BuildSourceCleanlinessPolicy policy,
+            bool debugBuild,
+            bool expected)
+        {
+            var serialized = new SerializedObject(buildData);
+            serialized.FindProperty("sourceCleanlinessPolicy").enumValueIndex = (int)policy;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            var extra = new List<string>();
+            if (debugBuild)
+            {
+                extra.Add(BuildCommandLineOptionNames.Development);
+            }
+
+            BuildRequest request = BuildRequestFactory.CreateForCommandLine(
+                buildData,
+                ParseCommandLine(extra.ToArray()));
+
+            Assert.That(request.SourceCleanlinessPolicy, Is.EqualTo(policy));
+            Assert.That(request.RequireCleanSource, Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void BuildSourceCleanlinessPolicy_SerializedValuesRemainStable()
+        {
+            Assert.That((int)BuildSourceCleanlinessPolicy.RequireClean, Is.Zero);
+            Assert.That(
+                (int)BuildSourceCleanlinessPolicy.AllowDirtyDevelopment,
+                Is.EqualTo(1));
+            Assert.That(
+                (int)BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease,
+                Is.EqualTo(2));
+        }
+
+        [Test]
+        public void BuildPurpose_PublicValuesRemainStable()
+        {
+            Assert.That((int)BuildPurpose.Release, Is.Zero);
+            Assert.That((int)BuildPurpose.Development, Is.EqualTo(1));
+            Assert.That((int)BuildPurpose.LocalReleasePreview, Is.EqualTo(2));
+            Assert.That((int)BuildIdentityOrigin.VersionControl, Is.Zero);
+            Assert.That((int)BuildIdentityOrigin.ExplicitOverride, Is.EqualTo(1));
+            Assert.That((int)BuildIdentityOrigin.LocalDevelopment, Is.EqualTo(2));
+            Assert.That((int)BuildIdentityOrigin.LocalPreview, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void CreateLocalReleasePreview_PlayerOnly_UsesIsolatedOptimizedOutput()
+        {
+            SetRecipe(new[]
+            {
+                new BuildRecipeInvocation(
+                    "player-client",
+                    BuildStepTypeIds.Player,
+                    incrementality: BuildIncrementality.Clean)
+            });
+
+            BuildRequest request = BuildRequestFactory.CreateLocalReleasePreview(
+                buildData,
+                BuildTarget.StandaloneWindows64,
+                invocationIdsOverride: null);
+
+            Assert.That(request.Purpose, Is.EqualTo(BuildPurpose.LocalReleasePreview));
+            Assert.That(request.DebugBuild, Is.False);
+            Assert.That(request.DeleteDebugFiles, Is.True);
+            Assert.That(request.RequireCleanSource, Is.False);
+            Assert.That(request.CanPublishReleaseBaseline, Is.False);
+            Assert.DoesNotThrow(
+                () => BuildRequestFactory.ValidateLocalReleasePreviewRequest(request));
+            Assert.That(request.Steps.Count, Is.EqualTo(1));
+            Assert.That(request.Steps[0].StepTypeId, Is.EqualTo(BuildStepTypeIds.Player));
+            StringAssert.Contains(
+                Path.Combine("Build", "LocalPreview", "Windows", "Release"),
+                request.OutputPath);
+        }
+
+        [Test]
+        public void CreateLocalReleasePreview_PlayerWithRequiredContent_FailsClosed()
+        {
+            SetRecipe(new[]
+            {
+                new BuildRecipeInvocation(
+                    "content",
+                    BuildStepTypeIds.AssetContent,
+                    enabled: false),
+                new BuildRecipeInvocation(
+                    "player-client",
+                    BuildStepTypeIds.Player,
+                    dependencies: new[]
+                    {
+                        new BuildInvocationDependency(
+                            "content",
+                            BuildDependencyMode.Required)
+                    })
+            });
+
+            BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+                BuildRequestFactory.CreateLocalReleasePreview(
+                    buildData,
+                    BuildTarget.StandaloneWindows64,
+                    invocationIdsOverride: null));
+            StringAssert.Contains("cannot include required content", exception.Message);
+        }
+
+        [Test]
+        public void CreateLocalReleasePreview_DisabledPlayer_FailsClosed()
+        {
+            SetRecipe(new[]
+            {
+                new BuildRecipeInvocation(
+                    "player-client",
+                    BuildStepTypeIds.Player,
+                    enabled: false,
+                    incrementality: BuildIncrementality.Clean)
+            });
+
+            BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+                BuildRequestFactory.CreateLocalReleasePreview(
+                    buildData,
+                    BuildTarget.StandaloneWindows64,
+                    invocationIdsOverride: null));
+
+            StringAssert.Contains("requires one Player invocation", exception.Message);
+        }
+
         private BuildRequest CreateCommandLineRequest(params string[] extraArguments)
         {
             return BuildRequestFactory.CreateForCommandLine(

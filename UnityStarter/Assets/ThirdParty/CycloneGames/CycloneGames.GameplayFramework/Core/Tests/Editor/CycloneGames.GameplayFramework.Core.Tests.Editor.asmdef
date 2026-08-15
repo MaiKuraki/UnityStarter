@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.GameplayFramework.Core.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Core.Tests",
+    "references": [
+        "CycloneGames.GameplayFramework.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

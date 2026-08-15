@@ -25,9 +25,29 @@ namespace CycloneGames.Networking.Replication
             bool isAuthenticated = true,
             ConnectionQuality quality = ConnectionQuality.Good)
         {
-            if (viewRadius < 0f || float.IsNaN(viewRadius))
+            if (connectionId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(connectionId));
+            }
+
+            if (teamId < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(teamId));
+            }
+
+            if (!position.IsFinite())
+            {
+                throw new ArgumentOutOfRangeException(nameof(position));
+            }
+
+            if (viewRadius < 0f || !float.IsFinite(viewRadius))
             {
                 throw new ArgumentOutOfRangeException(nameof(viewRadius));
+            }
+
+            if (quality < ConnectionQuality.Excellent || quality > ConnectionQuality.Disconnected)
+            {
+                throw new ArgumentOutOfRangeException(nameof(quality));
             }
 
             ConnectionId = connectionId;
@@ -39,6 +59,15 @@ namespace CycloneGames.Networking.Replication
             IsAuthenticated = isAuthenticated;
             Quality = quality;
         }
+
+        public bool IsValid =>
+            ConnectionId > 0
+            && TeamId >= 0
+            && Position.IsFinite()
+            && ViewRadius >= 0f
+            && float.IsFinite(ViewRadius)
+            && Quality >= ConnectionQuality.Excellent
+            && Quality <= ConnectionQuality.Disconnected;
     }
 
     public readonly struct NetworkReplicatedObject
@@ -75,6 +104,26 @@ namespace CycloneGames.Networking.Replication
                 throw new ArgumentOutOfRangeException(nameof(objectId));
             }
 
+            if (!position.IsFinite())
+            {
+                throw new ArgumentOutOfRangeException(nameof(position));
+            }
+
+            if (ownerConnectionId < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(ownerConnectionId));
+            }
+
+            if (teamId < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(teamId));
+            }
+
+            if (lastSentTick < NEVER_SENT)
+            {
+                throw new ArgumentOutOfRangeException(nameof(lastSentTick));
+            }
+
             if (estimatedPayloadBytes < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(estimatedPayloadBytes));
@@ -97,8 +146,16 @@ namespace CycloneGames.Networking.Replication
         {
             get
             {
-                return OwnerConnectionId != 0 || OwnerPlayerId != 0UL;
+                return OwnerConnectionId > 0 || OwnerPlayerId != 0UL;
             }
         }
+
+        public bool IsValid =>
+            ObjectId != 0UL
+            && Position.IsFinite()
+            && OwnerConnectionId >= 0
+            && TeamId >= 0
+            && LastSentTick >= NEVER_SENT
+            && EstimatedPayloadBytes >= 0;
     }
 }

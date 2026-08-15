@@ -18,7 +18,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public long sequence;
             public string transactionId;
             public string phase;
@@ -50,7 +50,8 @@ namespace Build.Pipeline.Editor
         internal const string StateRelativePath =
             ".buildpipeline/transactions/hybridclr-release-baseline";
 
-        private const int JournalFormatVersion = 1;
+        private const string JournalDocumentType =
+            "hybridclr-release-baseline-transaction";
         private const string LockFileName = "build.lock";
         private const string ActiveJournalFileName = "active.json";
         private const string JournalTemporaryPrefix = ActiveJournalFileName + ".tmp-";
@@ -123,7 +124,7 @@ namespace Build.Pipeline.Editor
                 string transactionId = Guid.NewGuid().ToString("N");
                 var journal = new Journal
                 {
-                    formatVersion = JournalFormatVersion,
+                    documentType = JournalDocumentType,
                     transactionId = transactionId,
                     phase = PreparingPhase,
                     projectRoot = projectRoot,
@@ -674,8 +675,12 @@ namespace Build.Pipeline.Editor
             Journal journal;
             try
             {
-                journal = JsonUtility.FromJson<Journal>(
-                    File.ReadAllText(journalPath, StrictUtf8));
+                string json = File.ReadAllText(journalPath, StrictUtf8);
+                BuildJsonDocumentContract.Validate<Journal>(
+                    json,
+                    JournalDocumentType,
+                    "HybridCLR release-baseline transaction journal");
+                journal = JsonUtility.FromJson<Journal>(json);
             }
             catch (Exception exception)
             {
@@ -685,7 +690,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (journal == null
-                || journal.formatVersion != JournalFormatVersion
+                || !string.Equals(
+                    journal.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || journal.sequence <= 0
                 || journal.sequence > MaximumJournalSequence
                 || string.IsNullOrWhiteSpace(journal.transactionId)

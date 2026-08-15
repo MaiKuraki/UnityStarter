@@ -40,3 +40,4 @@ MonoBehaviour:
     incrementality: 0
     dependencies: []
   cheatBuildMode: 0
+  sourceCleanlinessPolicy: 2

@@ -2,7 +2,9 @@
     "name": "CycloneGames.GameplayFramework.Tests.PlayMode",
     "rootNamespace": "CycloneGames.GameplayFramework.Tests.PlayMode",
     "references": [
-        "CycloneGames.GameplayFramework.Runtime"
+        "CycloneGames.GameplayFramework.Core",
+        "CycloneGames.GameplayFramework.Runtime",
+        "UniTask"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

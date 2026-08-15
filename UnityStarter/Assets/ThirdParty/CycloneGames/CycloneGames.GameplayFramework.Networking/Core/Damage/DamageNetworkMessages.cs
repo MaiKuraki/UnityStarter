@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayFramework.Networking
     /// <see cref="DefaultServerDamageValidator"/> emits <see cref="Accepted"/>, <see cref="InvalidPayload"/>,
     /// <see cref="OwnershipMismatch"/>, <see cref="TargetNotDamageable"/>, <see cref="OutOfRange"/> and
     /// <see cref="OnCooldown"/>; <see cref="TargetNotFound"/> and <see cref="Custom"/> are produced by the
-    /// integration layer and game-specific validators.
+        /// integration layer and game-specific validators.
     /// </summary>
     public enum ServerDamageRejectReason : byte
     {
@@ -29,7 +29,10 @@ namespace CycloneGames.GameplayFramework.Networking
         /// Rejected by a game-specific <see cref="IServerDamageValidator"/> rule (friendly fire, invulnerability,
         /// line-of-sight, resource cost, etc.). Reserved so custom validators can reject without growing this enum.
         /// </summary>
-        Custom = 8
+        Custom = 8,
+
+        /// <summary>The bounded authoritative cooldown tracker has no capacity for a new instigator.</summary>
+        CooldownCapacityReached = 9
     }
 
     /// <summary>
@@ -116,6 +119,7 @@ namespace CycloneGames.GameplayFramework.Networking
     {
         public static void WriteDamageRequest(this INetWriter writer, in DamageRequestMessage message)
         {
+            ValidateDamageRequest(in message);
             writer.WriteUInt(message.Sequence);
             writer.WriteInt(message.InstigatorActorId);
             writer.WriteInt(message.TargetActorId);
@@ -129,6 +133,7 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public static DamageRequestMessage ReadDamageRequest(this INetReader reader)
         {
+            RequireExactPayloadSize(reader, GameplayFrameworkNetworkProtocol.DamageRequestPayloadBytes);
             DamageRequestMessage message;
             message.Sequence = reader.ReadUInt();
             message.InstigatorActorId = reader.ReadInt();
@@ -139,12 +144,14 @@ namespace CycloneGames.GameplayFramework.Networking
             message.ShotOrigin = ReadFiniteVector3(reader, "ShotOrigin");
             message.HitLocation = ReadFiniteVector3(reader, "HitLocation");
             message.ClientTimeSeconds = ReadFiniteFloat(reader, "ClientTimeSeconds");
+            ValidateDamageRequest(in message);
+            RequireFullyConsumed(reader);
             return message;
         }
 
         public static void WriteDamageResult(this INetWriter writer, in DamageResultMessage message)
         {
-            ValidateResultCode(message.ResultCode);
+            ValidateDamageResult(in message);
             writer.WriteUInt(message.RequestSequence);
             writer.WriteInt(message.InstigatorActorId);
             writer.WriteInt(message.TargetActorId);
@@ -156,6 +163,7 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public static DamageResultMessage ReadDamageResult(this INetReader reader)
         {
+            RequireExactPayloadSize(reader, GameplayFrameworkNetworkProtocol.DamageResultPayloadBytes);
             DamageResultMessage message;
             message.RequestSequence = reader.ReadUInt();
             message.InstigatorActorId = reader.ReadInt();
@@ -164,7 +172,66 @@ namespace CycloneGames.GameplayFramework.Networking
             message.ResultCode = ReadResultCode(reader);
             message.DamageEventType = reader.ReadByte();
             message.HitLocation = ReadFiniteVector3(reader, "HitLocation");
+            ValidateDamageResult(in message);
+            RequireFullyConsumed(reader);
             return message;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void ValidateDamageRequest(in DamageRequestMessage message)
+        {
+            if (message.InstigatorActorId <= 0
+                || message.TargetActorId <= 0
+                || message.InstigatorActorId == message.TargetActorId
+                || message.WeaponOrAbilityId < 0)
+            {
+                ThrowInvalidRequestIdentifiers();
+            }
+
+            if (message.RequestedDamage < 0f
+                || !float.IsFinite(message.RequestedDamage)
+                || !message.ShotOrigin.IsFinite()
+                || !message.HitLocation.IsFinite()
+                || message.ClientTimeSeconds < 0f
+                || !float.IsFinite(message.ClientTimeSeconds))
+            {
+                ThrowInvalidDamageRequest();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void ValidateDamageResult(in DamageResultMessage message)
+        {
+            ValidateResultCode(message.ResultCode);
+            if (message.AppliedDamage < 0f ||
+                float.IsNaN(message.AppliedDamage) ||
+                float.IsInfinity(message.AppliedDamage))
+            {
+                ThrowInvalidAppliedDamage();
+            }
+
+            if (!message.HitLocation.IsFinite())
+            {
+                ThrowNotFinite("HitLocation");
+            }
+
+            if (message.InstigatorActorId < 0 || message.TargetActorId < 0)
+            {
+                ThrowInvalidRejectedActorIdentifiers();
+            }
+
+            if (message.ResultCode != ServerDamageRejectReason.Accepted && message.AppliedDamage != 0f)
+            {
+                ThrowRejectedDamageIsNonZero();
+            }
+
+            if (message.ResultCode == ServerDamageRejectReason.Accepted &&
+                (message.InstigatorActorId <= 0 ||
+                 message.TargetActorId <= 0 ||
+                 message.InstigatorActorId == message.TargetActorId))
+            {
+                ThrowInvalidAcceptedActorIdentifiers();
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -209,7 +276,7 @@ namespace CycloneGames.GameplayFramework.Networking
         {
             byte value = (byte)resultCode;
             if (value == (byte)ServerDamageRejectReason.Unknown
-                || value > (byte)ServerDamageRejectReason.Custom)
+                || value > (byte)ServerDamageRejectReason.CooldownCapacityReached)
             {
                 ThrowInvalidResultCode(value);
             }
@@ -225,6 +292,84 @@ namespace CycloneGames.GameplayFramework.Networking
         private static void ThrowInvalidResultCode(byte value)
         {
             throw new System.InvalidOperationException("Damage result contains an invalid result code: " + value + ".");
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void RequireExactPayloadSize(INetReader reader, int expectedBytes)
+        {
+            if (reader == null)
+            {
+                throw new System.ArgumentNullException(nameof(reader));
+            }
+
+            if (reader.Remaining != expectedBytes)
+            {
+                ThrowInvalidPayloadSize(expectedBytes, reader.Remaining);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void RequireFullyConsumed(INetReader reader)
+        {
+            if (reader.Remaining != 0)
+            {
+                ThrowTrailingPayload(reader.Remaining);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidAppliedDamage()
+        {
+            throw new System.InvalidOperationException("Damage result AppliedDamage must be finite and non-negative.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowRejectedDamageIsNonZero()
+        {
+            throw new System.InvalidOperationException("A rejected damage result must have zero AppliedDamage.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidAcceptedActorIdentifiers()
+        {
+            throw new System.InvalidOperationException(
+                "An accepted damage result requires distinct positive instigator and target Actor IDs.");
+        }
+
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidRequestIdentifiers()
+        {
+            throw new System.InvalidOperationException(
+                "A damage request requires distinct positive Actor IDs and a non-negative weapon or ability ID.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidDamageRequest()
+        {
+            throw new System.InvalidOperationException(
+                "Damage request values must be finite, and damage and client time must be non-negative.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidRejectedActorIdentifiers()
+        {
+            throw new System.InvalidOperationException(
+                "Damage result Actor IDs cannot be negative; zero is reserved for unresolved rejected results.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidPayloadSize(int expectedBytes, int actualBytes)
+        {
+            throw new System.InvalidOperationException(
+                "Damage payload length must be exactly " + expectedBytes + " bytes; received " + actualBytes + ".");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowTrailingPayload(int trailingBytes)
+        {
+            throw new System.InvalidOperationException(
+                "Damage payload contains " + trailingBytes + " trailing bytes.");
         }
     }
 }

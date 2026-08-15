@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using UnityEngine;
+using Build.VersionControl.Editor;
 using BuildIdentityEntry = Build.Pipeline.Editor.BuildResultManifestFormat.BuildIdentityEntry;
 using CiIdentityEntry = Build.Pipeline.Editor.BuildResultManifestFormat.CiIdentityEntry;
 using DependencyEntry = Build.Pipeline.Editor.BuildResultManifestFormat.DependencyEntry;
@@ -200,7 +201,7 @@ namespace Build.Pipeline.Editor
                 BuildResultEvidencePolicy.CreateDiagnosticBudget();
             var manifest = new ManifestDocument
             {
-                formatVersion = BuildResultManifestFormat.CurrentVersion,
+                documentType = BuildResultManifestFormat.DocumentType,
                 operation = "build",
                 runId = provisionalResult.RunId,
                 succeeded = false,
@@ -214,6 +215,8 @@ namespace Build.Pipeline.Editor
                 namedBuildTarget = context.Request.NamedTarget.TargetName,
                 scriptingBackend = context.Request.ScriptingBackend.ToString(),
                 debugBuild = context.Request.DebugBuild,
+                buildPurpose = context.Request.Purpose.ToString(),
+                releaseBaselinePolicyEligible = context.Request.CanPublishReleaseBaseline,
                 deleteDebugFiles = context.Request.DeleteDebugFiles,
                 exportAndroidProject = context.Request.ExportAndroidProject,
                 allowExternalOutput = context.Request.AllowExternalOutput,
@@ -246,6 +249,7 @@ namespace Build.Pipeline.Editor
                     provider = version?.CiProvider ?? string.Empty,
                     runId = version?.CiRunId ?? string.Empty
                 },
+                sourceWorkspace = CreateSourceWorkspaceEntry(context.Request, version),
                 buildRoot = context.Request.BuildRoot,
                 outputPath = provisionalResult.OutputPath,
                 outputDirectory = context.Request.OutputDirectory,
@@ -253,8 +257,6 @@ namespace Build.Pipeline.Editor
                 buildScenePaths = context.Request.BuildScenePaths.ToArray(),
                 cheatBuildMode = context.Request.CheatBuildMode.ToString(),
                 cheatEnabled = context.Request.CheatEnabled,
-                playerPipelineCompatibilityRevision =
-                    PlayerOutputTransaction.PlayerPipelineCompatibilityRevision,
                 playerExtensionFingerprint =
                     PlayerBuildExtensionFingerprint.ResolveForEvidence(context),
                 failure = string.Empty,
@@ -275,6 +277,43 @@ namespace Build.Pipeline.Editor
                 manifest,
                 provisionalResult.ResultManifestPath,
                 provisionalResult.OutputPath);
+        }
+
+        internal static BuildResultManifestFormat.SourceWorkspaceEntry CreateSourceWorkspaceEntry(
+            BuildRequest request,
+            BuildVersionContext version)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            VersionControlWorkspaceEvidence evidence = version?.SourceWorkspace
+                ?? VersionControlWorkspaceEvidence.Unknown(
+                    VersionControlWorkspaceEvidence.MetadataUnavailable);
+            return new BuildResultManifestFormat.SourceWorkspaceEntry
+            {
+                policy = request.SourceCleanlinessPolicy.ToString(),
+                required = request.RequireCleanSource,
+                overallStatus = evidence.OverallStatus.ToString(),
+                failureCode = evidence.FailureCode,
+                trackedChanges = CreateWorkspaceComponentEntry(evidence.TrackedChanges),
+                untrackedChanges = CreateWorkspaceComponentEntry(evidence.UntrackedChanges),
+                submodules = CreateWorkspaceComponentEntry(evidence.Submodules),
+                gitLfs = CreateWorkspaceComponentEntry(evidence.GitLfs)
+            };
+        }
+
+        private static BuildResultManifestFormat.WorkspaceComponentEntry CreateWorkspaceComponentEntry(
+            VersionControlWorkspaceComponentEvidence evidence)
+        {
+            return new BuildResultManifestFormat.WorkspaceComponentEntry
+            {
+                status = evidence?.Status.ToString()
+                    ?? VersionControlWorkspaceComponentStatus.Unknown.ToString(),
+                hasChangeCount = evidence?.ChangeCount.HasValue ?? false,
+                changeCount = evidence?.ChangeCount ?? 0
+            };
         }
 
         internal static void ValidatePublicationCapacity(

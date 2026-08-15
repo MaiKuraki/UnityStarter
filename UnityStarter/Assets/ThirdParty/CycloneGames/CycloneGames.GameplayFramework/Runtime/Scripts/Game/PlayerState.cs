@@ -1,24 +1,9 @@
 using System;
-using System.Runtime.Serialization;
+using CycloneGames.GameplayFramework.Core;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    /// <summary>
-    /// Versioned, bounded DTO for persistence and network adapters. Restore accepts only the
-    /// current schema so adapters cannot silently interpret an incompatible payload.
-    /// </summary>
-    [DataContract]
-    public sealed class PlayerStateSnapshot
-    {
-        public const int CurrentSchemaVersion = 1;
-
-        [DataMember(Order = 1)] public int SchemaVersion { get; set; } = CurrentSchemaVersion;
-        [DataMember(Order = 2)] public string PlayerName { get; set; }
-        [DataMember(Order = 3)] public int PlayerId { get; set; }
-        [DataMember(Order = 4)] public bool IsSpectator { get; set; }
-    }
-
     /// <summary>
     /// Stable participant identity and shared state. It survives Pawn replacement but remains
     /// scoped to one World unless an explicit travel adapter copies a snapshot.
@@ -31,14 +16,37 @@ namespace CycloneGames.GameplayFramework.Runtime
         private bool bIsSpectator;
         private Pawn pawnPrivate;
         private object identityLockOwner;
+        private Action<PlayerState, Pawn, Pawn> pawnSetObservers;
 
-        public event Action<PlayerState, Pawn, Pawn> OnPawnSetEvent;
+        public event Action<PlayerState, Pawn, Pawn> OnPawnSetEvent
+        {
+            add
+            {
+                AssertActorOwnerThread();
+                pawnSetObservers += value;
+            }
+            remove
+            {
+                AssertActorOwnerThread();
+                pawnSetObservers -= value;
+            }
+        }
 
-        public Pawn GetPawn() => pawnPrivate;
-        public T GetPawn<T>() where T : Pawn => pawnPrivate as T;
+        public Pawn GetPawn()
+        {
+            AssertActorOwnerThread();
+            return pawnPrivate;
+        }
+
+        public T GetPawn<T>() where T : Pawn
+        {
+            AssertActorOwnerThread();
+            return pawnPrivate as T;
+        }
 
         internal Pawn SetPawnSilently(Pawn newPawn)
         {
+            AssertActorOwnerThread();
             Pawn previousPawn = pawnPrivate;
             pawnPrivate = newPawn;
             return previousPawn;
@@ -46,16 +54,22 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void PublishPawnChanged(Pawn newPawn, Pawn oldPawn)
         {
+            AssertActorOwnerThread();
             if (!ReferenceEquals(newPawn, oldPawn))
             {
-                OnPawnSetEvent?.Invoke(this, newPawn, oldPawn);
+                pawnSetObservers?.Invoke(this, newPawn, oldPawn);
             }
         }
 
-        public string GetPlayerName() => playerName;
+        public string GetPlayerName()
+        {
+            AssertActorOwnerThread();
+            return playerName;
+        }
 
         public void SetPlayerName(string newName)
         {
+            AssertActorOwnerThread();
             if (newName != null && newName.Length > PlayerLoginRequest.MaxPlayerNameLength)
             {
                 throw new ArgumentException(
@@ -66,11 +80,24 @@ namespace CycloneGames.GameplayFramework.Runtime
             playerName = newName;
         }
 
-        public int GetPlayerId() => playerId;
-        public bool IsIdentityLocked => identityLockOwner != null;
+        public int GetPlayerId()
+        {
+            AssertActorOwnerThread();
+            return playerId;
+        }
+
+        public bool IsIdentityLocked
+        {
+            get
+            {
+                AssertActorOwnerThread();
+                return identityLockOwner != null;
+            }
+        }
 
         public void SetPlayerId(int newId)
         {
+            AssertActorOwnerThread();
             if (newId < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(newId));
@@ -87,6 +114,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void LockIdentity(object owner, int expectedPlayerId)
         {
+            AssertActorOwnerThread();
             if (owner == null)
             {
                 throw new ArgumentNullException(nameof(owner));
@@ -108,6 +136,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void UnlockIdentity(object owner)
         {
+            AssertActorOwnerThread();
             if (identityLockOwner == null)
             {
                 return;
@@ -122,10 +151,15 @@ namespace CycloneGames.GameplayFramework.Runtime
             identityLockOwner = null;
         }
 
-        public bool IsSpectator() => bIsSpectator;
+        public bool IsSpectator()
+        {
+            AssertActorOwnerThread();
+            return bIsSpectator;
+        }
 
         protected internal void SetIsSpectator(bool spectator)
         {
+            AssertActorOwnerThread();
             if (identityLockOwner != null && spectator != bIsSpectator)
             {
                 throw new InvalidOperationException(
@@ -137,6 +171,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         internal void SetRegisteredSpectatorStatus(object owner, bool spectator)
         {
+            AssertActorOwnerThread();
             if (identityLockOwner == null)
             {
                 throw new InvalidOperationException("PlayerState is not registered in a GameSession.");
@@ -151,59 +186,63 @@ namespace CycloneGames.GameplayFramework.Runtime
             bIsSpectator = spectator;
         }
 
-        public virtual void CopyProperties(PlayerState other)
+        public void CopyProperties(PlayerState other)
         {
-            if (other == null)
+            AssertActorOwnerThread();
+            if (ReferenceEquals(other, null) || other == null)
             {
                 throw new ArgumentNullException(nameof(other));
             }
 
-            if (identityLockOwner != null && playerId != other.playerId)
+            other.AssertActorOwnerThread();
+
+            PlayerStateSnapshot snapshot = other.CaptureSnapshot();
+            if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
+            {
+                throw new InvalidOperationException(
+                    $"Source PlayerState contains invalid snapshot data: {validationResult}.");
+            }
+
+            if (identityLockOwner != null && playerId != snapshot.PlayerId)
             {
                 throw new InvalidOperationException(
                     "PlayerId cannot change while the PlayerState is registered in a GameSession.");
             }
 
-            if (identityLockOwner != null && bIsSpectator != other.bIsSpectator)
+            if (identityLockOwner != null && bIsSpectator != snapshot.IsSpectator)
             {
                 throw new InvalidOperationException(
                     "Spectator status must be changed through the registered GameSession.");
             }
 
-            playerName = other.playerName;
-            playerId = other.playerId;
-            bIsSpectator = other.bIsSpectator;
+            playerName = snapshot.PlayerName;
+            playerId = snapshot.PlayerId;
+            bIsSpectator = snapshot.IsSpectator;
         }
 
-        public virtual PlayerStateSnapshot CaptureSnapshot()
+        public PlayerStateSnapshot CaptureSnapshot()
         {
-            return new PlayerStateSnapshot
-            {
-                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion,
-                PlayerName = playerName,
-                PlayerId = playerId,
-                IsSpectator = bIsSpectator,
-            };
+            AssertActorOwnerThread();
+            return new PlayerStateSnapshot(playerName, playerId, bIsSpectator);
         }
 
-        public virtual bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
+        public bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
         {
-            if (snapshot == null)
+            AssertActorOwnerThread();
+            if (!snapshot.TryValidate(out PlayerStateSnapshotValidationResult validationResult))
             {
-                error = "PlayerState snapshot is required.";
-                return false;
-            }
-
-            if (snapshot.SchemaVersion != PlayerStateSnapshot.CurrentSchemaVersion)
-            {
-                error = $"Unsupported PlayerState schema version {snapshot.SchemaVersion}.";
-                return false;
-            }
-
-            if (snapshot.PlayerId < 0)
-            {
-                error = "PlayerId cannot be negative.";
-                return false;
+                switch (validationResult)
+                {
+                    case PlayerStateSnapshotValidationResult.InvalidPlayerId:
+                        error = "PlayerId cannot be negative.";
+                        return false;
+                    case PlayerStateSnapshotValidationResult.PlayerNameTooLong:
+                        error = $"PlayerName exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.";
+                        return false;
+                    default:
+                        error = "PlayerState snapshot validation failed.";
+                        return false;
+                }
             }
 
             if (identityLockOwner != null && snapshot.PlayerId != playerId)
@@ -218,13 +257,6 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            if (snapshot.PlayerName != null &&
-                snapshot.PlayerName.Length > PlayerLoginRequest.MaxPlayerNameLength)
-            {
-                error = $"PlayerName exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.";
-                return false;
-            }
-
             playerName = snapshot.PlayerName;
             playerId = snapshot.PlayerId;
             bIsSpectator = snapshot.IsSpectator;
@@ -234,10 +266,21 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected override void OnDestroy()
         {
-            OnPawnSetEvent = null;
-            base.OnDestroy();
+            var terminalExceptions = new TerminalExceptionAccumulator();
+            pawnSetObservers = null;
+            try
+            {
+                base.OnDestroy();
+            }
+            catch (Exception exception)
+            {
+                terminalExceptions.HandleAndLog(
+                    exception,
+                    "PlayerState base Actor cleanup failed during destruction.");
+            }
+
             pawnPrivate = null;
-            identityLockOwner = null;
+            terminalExceptions.ThrowIfCaptured();
         }
     }
 }

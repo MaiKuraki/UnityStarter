@@ -34,7 +34,7 @@ Provider Catalog 要求以下全部 Editor Type：
 5. 创建 `CycloneGames/Build/Hot Update/HybridCLR + Obfuz`。
 6. 分配 `Assets/` 下的项目 asmdef 资产和两个分离的 Build 独占输出目录。
 7. 将配置分配给一个 `hot-update` invocation，并选择 `Clean`。
-8. 保存 Authoring Asset，确认 Workspace Safety 为 `Clean`，再运行 Preflight。
+8. 保存 Authoring Asset，确认 Source Qualification 为 `Verified Clean`、Build Transaction Safety 为 `Clean`，再运行 Preflight。
 
 配置继承标准 HybridCLR 字段和目录安全规则。已有非空输出目录必须带合法 Build Ownership Evidence。
 

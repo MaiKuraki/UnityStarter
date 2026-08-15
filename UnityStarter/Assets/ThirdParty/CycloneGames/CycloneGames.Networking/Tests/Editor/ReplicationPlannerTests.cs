@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.Networking.Replication;
 using NUnit.Framework;
 
@@ -5,6 +6,134 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class ReplicationPlannerTests
     {
+        [Test]
+        public void ReplicationValuesRejectNonFiniteAndUndefinedInputs()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationPolicy(
+                (NetworkReplicationInterest)0x80,
+                NetworkChannel.Reliable));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationPolicy(
+                NetworkReplicationInterest.Always,
+                (NetworkChannel)99));
+            Assert.Throws<ArgumentOutOfRangeException>(() => NetworkReplicationPolicy.Area(float.PositiveInfinity));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationPolicy(
+                NetworkReplicationInterest.Always,
+                priority: float.PositiveInfinity));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationObserver(
+                0,
+                1UL,
+                0,
+                NetworkVector3.Zero,
+                10f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationObserver(
+                1,
+                1UL,
+                0,
+                new NetworkVector3(float.NaN, 0f, 0f),
+                10f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationObserver(
+                1,
+                1UL,
+                0,
+                NetworkVector3.Zero,
+                float.PositiveInfinity));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationObserver(
+                1,
+                1UL,
+                -1,
+                NetworkVector3.Zero,
+                10f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationObserver(
+                1,
+                1UL,
+                0,
+                NetworkVector3.Zero,
+                10f,
+                quality: (ConnectionQuality)99));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicatedObject(
+                1UL,
+                NetworkReplicationPolicy.Always(),
+                new NetworkVector3(float.PositiveInfinity, 0f, 0f)));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicatedObject(
+                1UL,
+                NetworkReplicationPolicy.Always(),
+                NetworkVector3.Zero,
+                ownerConnectionId: -1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicatedObject(
+                1UL,
+                NetworkReplicationPolicy.Always(),
+                NetworkVector3.Zero,
+                teamId: -1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicatedObject(
+                1UL,
+                NetworkReplicationPolicy.Always(),
+                NetworkVector3.Zero,
+                lastSentTick: -2));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationSelection(
+                1UL,
+                0,
+                NetworkChannel.Reliable,
+                NetworkInterestReason.None,
+                1,
+                1f,
+                requiresFullState: false));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicationSelection(
+                1UL,
+                0,
+                NetworkChannel.Reliable,
+                NetworkInterestReason.Always,
+                1,
+                float.PositiveInfinity,
+                requiresFullState: false));
+        }
+
+        [Test]
+        public void PlannerRejectsDefaultObserverValue()
+        {
+            var planner = new NetworkReplicationPlanner();
+            var budget = new NetworkSendBudget(0, 0);
+
+            Assert.Throws<ArgumentException>(() => planner.BuildPlan(
+                default,
+                ReadOnlySpan<NetworkReplicatedObject>.Empty,
+                serverTick: 0,
+                ref budget,
+                Span<NetworkReplicationSelection>.Empty));
+        }
+
+        [TestCase(NetworkInterestReason.None)]
+        [TestCase((NetworkInterestReason)0x80)]
+        public void PlannerFailsClosedWhenCustomEvaluatorReturnsInvalidReason(
+            NetworkInterestReason invalidReason)
+        {
+            var planner = new NetworkReplicationPlanner(new FixedReasonInterestEvaluator(invalidReason));
+            var observer = new NetworkReplicationObserver(
+                connectionId: 1,
+                playerId: 1UL,
+                teamId: 0,
+                position: NetworkVector3.Zero,
+                viewRadius: 10f);
+            NetworkReplicatedObject[] objects =
+            {
+                new NetworkReplicatedObject(
+                    1UL,
+                    NetworkReplicationPolicy.Always(),
+                    NetworkVector3.Zero,
+                    estimatedPayloadBytes: 8)
+            };
+            var budget = new NetworkSendBudget(maxBytes: 8, maxMessages: 1);
+            var results = new NetworkReplicationSelection[1];
+
+            int count = planner.BuildPlan(observer, objects, serverTick: 0, ref budget, results);
+
+            Assert.AreEqual(0, count);
+            Assert.AreEqual(8, budget.RemainingBytes);
+            Assert.AreEqual(1, budget.RemainingMessages);
+            Assert.AreEqual(default(NetworkReplicationSelection), results[0]);
+        }
+
         [Test]
         public void InterestEvaluator_UsesAreaOwnerAuthAndLayers()
         {
@@ -169,6 +298,25 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(1, count);
             Assert.AreEqual(2UL, results[0].ObjectId);
             Assert.IsTrue(results[0].RequiresFullState);
+        }
+
+        private sealed class FixedReasonInterestEvaluator : INetworkInterestEvaluator
+        {
+            private readonly NetworkInterestReason _reason;
+
+            public FixedReasonInterestEvaluator(NetworkInterestReason reason)
+            {
+                _reason = reason;
+            }
+
+            public bool IsInterested(
+                in NetworkReplicationObserver observer,
+                in NetworkReplicatedObject replicatedObject,
+                out NetworkInterestReason reason)
+            {
+                reason = _reason;
+                return true;
+            }
         }
     }
 }

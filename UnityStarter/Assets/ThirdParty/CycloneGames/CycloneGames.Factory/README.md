@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Factory provides explicit creation contracts and bounded object pools for pure C# and Unity. The pure-C# core exposes `IFactory` and `ObjectPool` with ownership tracking, capacity policy, diagnostics, and deterministic cleanup; Unity object creation is isolated in a dedicated adapter assembly; an optional Native Collections assembly adds dense unmanaged pools with stable handles for high-volume DOD workloads.
+CycloneGames.Factory provides explicit creation contracts, terminal Unity object lifetime contracts, and bounded object pools for pure C# and Unity. The pure-C# core exposes `IFactory` and `ObjectPool` with ownership tracking, capacity policy, diagnostics, and deterministic cleanup; Unity object creation and release are isolated in a dedicated adapter assembly; an optional Native Collections assembly adds dense unmanaged pools with stable handles for high-volume DOD workloads.
 
 ## Table of Contents
 
@@ -27,6 +27,7 @@ Use this module when creation policy must be injected, when a hot path needs bou
 ### Key Features
 
 - **`IFactory<TValue>` / `IFactory<TArg, TValue>`** — minimal creation contracts for parameterless and argument-based construction.
+- **`IUnityObjectSpawner` / `IUnityObjectLifetime`** — main-thread Unity creation and symmetric terminal-release contracts.
 - **`ObjectPool<TArg, TValue>`** — single-owner managed pool with lifecycle callbacks, capacity policy, diagnostics, and quarantine on failure.
 - **`FastObjectPool<T>`** — parameterless pool base for `Component`-style items that do not need spawn arguments.
 - **`MonoPrefabFactory<T>` / `MonoFastPool<T>`** — Unity main-thread adapters for prefab instantiation and `Component` pooling.
@@ -37,7 +38,7 @@ Use this module when creation policy must be injected, when a hot path needs bou
 | Assembly | Path | Purpose |
 | --- | --- | --- |
 | `CycloneGames.Factory.Runtime` | `Runtime/Scripts/` (excludes `Unity/`) | Pure-C# factories, `PoolBase`, `ObjectPool`, `FastObjectPool`. `noEngineReferences: true`. |
-| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`, `DefaultUnityObjectSpawner`, `MonoPrefabFactory<T>`, `MonoFastPool<T>`. References the core assembly and `UnityEngine`. |
+| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`, `IUnityObjectLifetime`, `DefaultUnityObjectSpawner`, `MonoPrefabFactory<T>`, `MonoFastPool<T>`. References the core assembly and `UnityEngine`. |
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`, `NativeDensePool<T>`, `NativeDenseColumnPool2/3/4`. Compiled only when `PRESENT_COLLECTIONS` is defined by the installed `com.unity.collections` package. |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | Core and Unity adapter contract tests. |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership and handle tests. Active only when Collections is installed. |
@@ -259,7 +260,7 @@ The callback may despawn the current item but may not mutate other active items.
 
 ### Unity adapter composition
 
-Unity-facing APIs are main-thread-only. Inject a custom `IUnityObjectSpawner` when creation must pass through another verified boundary.
+Unity-facing APIs are main-thread-only. Inject a custom `IUnityObjectSpawner` when only creation varies. Use `IUnityObjectLifetime` when one owner must route both creation and permanent release through the same boundary.
 
 ```csharp
 using CycloneGames.Factory.Runtime;
@@ -273,6 +274,18 @@ var pool = new ObjectPool<BulletSpawn, Bullet>(
 ```
 
 `DefaultUnityObjectSpawner` rejects a null origin and delegates to `Object.Instantiate`. `MonoPrefabFactory<T>` creates inactive instances so the pool controls activation. `MonoFastPool<T>` is a lightweight `Component` pool that handles activation, optional reparenting, and `Object.Destroy` during permanent cleanup — it does not require an `IFactory` because it owns creation directly.
+
+For a non-pooled Unity lifetime, depend on the stronger contract:
+
+```csharp
+IUnityObjectLifetime lifetime = new DefaultUnityObjectSpawner();
+Transform instance = lifetime.Create(prefab.transform);
+
+// The composition owner ends this instance permanently.
+lifetime.Release(instance);
+```
+
+`Release` destroys the owning `GameObject` when passed a `Component`, and destroys other Unity object types directly. It uses deferred `Object.Destroy` in Play Mode and immediate destruction in Edit Mode. The call is terminal: a released instance is never returned to a pool or offered for reuse.
 
 ### Custom `FastObjectPool<T>` subclass
 
@@ -447,7 +460,7 @@ The module has no static cache, global registry, hidden preference, background t
 
 ### Platform and AOT
 
-The core uses no reflection, dynamic code generation, filesystem, sockets, native plugins, or runtime type discovery. IL2CPP stripping still requires product code to keep the closed generic forms reachable. The Unity adapter relies only on standard Unity object APIs. DOD support follows the installed Collections package and target platform capabilities.
+The core uses no reflection, dynamic code generation, filesystem, sockets, native plugins, or runtime type discovery. IL2CPP stripping still requires product code to keep the closed generic forms reachable. The Unity adapter relies only on standard Unity object APIs. `Create` and `Release` each perform one interface dispatch when called through their contracts; they are lifecycle cold paths and add no module-owned tracking collection. DOD support follows the installed Collections package and target platform capabilities.
 
 Windows, Linux, macOS, iOS, Android, WebGL, Dedicated Server, and console targets require their own Player/AOT evidence. Editor compilation or EditMode tests do not certify those targets. WebGL receives no special threading assumption because deployment settings can change available capabilities; the single-owner contract remains valid in either case.
 
@@ -471,7 +484,7 @@ Run focused tests from Unity Test Runner:
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Factory.Tests.Editor -testResults <result-path> -quit
 ```
 
-When `com.unity.collections` is installed, also run `CycloneGames.Factory.DOD.Tests.Editor`. The managed suite covers reference identity, capacity exhaustion, duplicate return, spawn rollback, quarantine, callback reentrancy, self-return iteration, disposal, and a prewarmed current-thread allocation assertion. DOD tests cover handle invalidation, swap-and-pop, batch churn, SoA streams, capacity, and diagnostics.
+When `com.unity.collections` is installed, also run `CycloneGames.Factory.DOD.Tests.Editor`. The managed suite covers reference identity, capacity exhaustion, duplicate return, spawn rollback, quarantine, callback reentrancy, self-return iteration, disposal, the Unity create/release contract, and a prewarmed current-thread allocation assertion. DOD tests cover handle invalidation, swap-and-pop, batch churn, SoA streams, capacity, and diagnostics.
 
 For a performance claim, measure a declared workload in the target Player build and record warmup, GC, CPU distribution, peak memory, backend, device, and Unity version. For IL2CPP/AOT support, build and smoke-test the affected target with the current stripping configuration.
 

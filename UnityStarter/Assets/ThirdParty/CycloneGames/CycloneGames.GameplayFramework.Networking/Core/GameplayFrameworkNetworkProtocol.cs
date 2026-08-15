@@ -1,12 +1,13 @@
 using System;
 using CycloneGames.Networking;
+using CycloneGames.Networking.Security;
 
 namespace CycloneGames.GameplayFramework.Networking
 {
     public static class GameplayFrameworkNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.GameplayFramework";
-        public const byte PROTOCOL_VERSION = 1;
+        public const byte PROTOCOL_VERSION = 2;
 
         public const ushort MESSAGE_ID_BASE = 11000;
         public const ushort MESSAGE_ID_MAX = 11999;
@@ -19,21 +20,21 @@ namespace CycloneGames.GameplayFramework.Networking
         // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
         private const ulong ACTOR_MIGRATION_STATE_SCHEMA_V1 = 0x06A6A8934573CD8EUL;
         private const ulong DAMAGE_REQUEST_SCHEMA_V1 = 0x43A411569257B773UL;
-        private const ulong DAMAGE_RESULT_SCHEMA_V1 = 0x937BD1B6AA2D5D2BUL;
+        private const ulong DAMAGE_RESULT_SCHEMA_V2 = 0x937BD2B6AA2D5EDEUL;
 
         private const string DAMAGE_REQUEST_WIRE_SCHEMA_V1 =
             "DamageRequestMessage:v1|Sequence:u32le@0|InstigatorActorId:i32le@4|" +
             "TargetActorId:i32le@8|WeaponOrAbilityId:i32le@12|DamageEventType:u8@16|" +
             "RequestedDamage:f32le@17|ShotOrigin:f32le[3]@21|HitLocation:f32le[3]@33|" +
             "ClientTimeSeconds:f32le@45|size:49";
-        private const string DAMAGE_RESULT_WIRE_SCHEMA_V1 =
-            "DamageResultMessage:v1|RequestSequence:u32le@0|InstigatorActorId:i32le@4|" +
+        private const string DAMAGE_RESULT_WIRE_SCHEMA_V2 =
+            "DamageResultMessage:v2|RequestSequence:u32le@0|InstigatorActorId:i32le@4|" +
             "TargetActorId:i32le@8|AppliedDamage:f32le@12|ResultCode:u8@16|" +
             "DamageEventType:u8@17|HitLocation:f32le[3]@18|size:30";
-        private const string SERVER_DAMAGE_RESULT_CODE_WIRE_SCHEMA_V1 =
+        private const string SERVER_DAMAGE_RESULT_CODE_WIRE_SCHEMA_V2 =
             "ServerDamageRejectReason:u8|Unknown=0|Accepted=1|InvalidPayload=2|" +
             "OwnershipMismatch=3|TargetNotDamageable=4|OutOfRange=5|OnCooldown=6|" +
-            "TargetNotFound=7|Custom=8";
+            "TargetNotFound=7|Custom=8|CooldownCapacityReached=9";
 
         public static readonly ulong DamageWireSchemaFingerprint = ComputeDamageWireSchemaFingerprint();
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
@@ -82,7 +83,7 @@ namespace CycloneGames.GameplayFramework.Networking
                     MsgActorMigrationState,
                     ACTOR_MIGRATION_STATE_SCHEMA_V1,
                     NetworkChannel.Reliable,
-                    NetworkConstants.DefaultMaxPayloadSize * 4)
+                    ActorMigrationNetworkingExtensions.MaximumEncodedSize)
                 .AddMessage(
                     "DamageRequestMessage:v1",
                     MsgDamageRequest,
@@ -90,9 +91,9 @@ namespace CycloneGames.GameplayFramework.Networking
                     NetworkChannel.Reliable,
                     DamageRequestPayloadBytes)
                 .AddMessage(
-                    "DamageResultMessage:v1",
+                    "DamageResultMessage:v2",
                     MsgDamageResult,
-                    DAMAGE_RESULT_SCHEMA_V1,
+                    DAMAGE_RESULT_SCHEMA_V2,
                     NetworkChannel.Reliable,
                     DamageResultPayloadBytes);
 
@@ -104,9 +105,9 @@ namespace CycloneGames.GameplayFramework.Networking
             const ulong offsetBasis = 14695981039346656037UL;
             ulong hash = AppendAscii(offsetBasis, DAMAGE_REQUEST_WIRE_SCHEMA_V1);
             hash = AppendDelimiter(hash);
-            hash = AppendAscii(hash, DAMAGE_RESULT_WIRE_SCHEMA_V1);
+            hash = AppendAscii(hash, DAMAGE_RESULT_WIRE_SCHEMA_V2);
             hash = AppendDelimiter(hash);
-            hash = AppendAscii(hash, SERVER_DAMAGE_RESULT_CODE_WIRE_SCHEMA_V1);
+            hash = AppendAscii(hash, SERVER_DAMAGE_RESULT_CODE_WIRE_SCHEMA_V2);
             return hash == 0UL ? offsetBasis : hash;
         }
 
@@ -139,6 +140,71 @@ namespace CycloneGames.GameplayFramework.Networking
                 hash ^= 0xFF;
                 return hash * prime;
             }
+        }
+    }
+
+    /// <summary>
+    /// Installs fail-closed policies for every GameplayFramework wire contract. Migration direction is
+    /// deployment-specific and therefore must be supplied explicitly by the composition root.
+    /// </summary>
+    public static class GameplayFrameworkNetworkSecurityPolicies
+    {
+        private const NetworkMessageDirectionMask DamageResultDirections =
+            NetworkMessageDirectionMask.ServerToClient | NetworkMessageDirectionMask.ServerBroadcast;
+
+        public static void Configure(
+            INetworkSecurityPolicyConfigurable configurable,
+            NetworkMessageDirectionMask migrationDirections,
+            bool requireEncryptedTransport = false,
+            bool requireSignature = false)
+        {
+            if (configurable == null)
+            {
+                throw new ArgumentNullException(nameof(configurable));
+            }
+
+            if (migrationDirections == NetworkMessageDirectionMask.None
+                || (migrationDirections & ~NetworkMessageDirectionMask.Any) != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(migrationDirections));
+            }
+
+            configurable.SetMessageSecurityPolicy(
+                GameplayFrameworkNetworkProtocol.MsgActorMigrationState,
+                CreatePolicy(
+                    migrationDirections,
+                    ActorMigrationNetworkingExtensions.MaximumEncodedSize,
+                    requireEncryptedTransport,
+                    requireSignature));
+            configurable.SetMessageSecurityPolicy(
+                GameplayFrameworkNetworkProtocol.MsgDamageRequest,
+                CreatePolicy(
+                    NetworkMessageDirectionMask.ClientToServer,
+                    GameplayFrameworkNetworkProtocol.DamageRequestPayloadBytes,
+                    requireEncryptedTransport,
+                    requireSignature));
+            configurable.SetMessageSecurityPolicy(
+                GameplayFrameworkNetworkProtocol.MsgDamageResult,
+                CreatePolicy(
+                    DamageResultDirections,
+                    GameplayFrameworkNetworkProtocol.DamageResultPayloadBytes,
+                    requireEncryptedTransport,
+                    requireSignature));
+        }
+
+        private static MessageSecurityPolicy CreatePolicy(
+            NetworkMessageDirectionMask directions,
+            int maxPayloadSize,
+            bool requireEncryptedTransport,
+            bool requireSignature)
+        {
+            return new MessageSecurityPolicy(
+                directions,
+                maxPayloadSize,
+                requireAuthenticatedConnection: true,
+                requireEncryptedTransport: requireEncryptedTransport,
+                enableReplayProtection: true,
+                requireSignature: requireSignature);
         }
     }
 }

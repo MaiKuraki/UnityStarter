@@ -160,7 +160,9 @@ namespace Build.Pipeline.Tests.Editor
                     batchMode: true,
                     applicationVersion: "1.0.0",
                     identityOverride: BuildIdentityOverride.Empty,
-                    steps: new[] { playerInvocation });
+                    steps: new[] { playerInvocation },
+                    sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                    purpose: BuildPurpose.Release);
 
                 AddressablesBuildConfig configuration = null;
                 AssetContentBuildRequest[] contentRequests;

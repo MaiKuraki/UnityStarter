@@ -105,6 +105,8 @@ namespace Build.Pipeline.Tests.Editor
         [TestCase(370f, 2, 104f, 0)]
         [TestCase(242f, 2, 104f, 1)]
         [TestCase(241f, 2, 104f, 2)]
+        [TestCase(272f, 0, 160f, 0)]
+        [TestCase(271f, 0, 160f, 1)]
         public void ResolveFieldLayout_PreservesMinimumInteractiveWidths(
             float availableWidth,
             int actionCount,

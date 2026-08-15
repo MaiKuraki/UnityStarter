@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.Playables;
 
@@ -19,37 +20,118 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// which ships with com.unity.modules.director (always present in Unity 2019.1+).
     /// You only need a SignalAsset asset (right-click in Project > Create > Timeline > Signal) to emit.
     /// </summary>
-    public class TimelineCameraActionReceiver : MonoBehaviour, INotificationReceiver
+    public sealed class TimelineCameraActionReceiver : MonoBehaviour, INotificationReceiver
     {
+        public const int MaximumSignalMappingCount = 256;
+
         [Serializable]
         public struct SignalMapping
         {
             [Tooltip("Drag the SignalAsset that this Timeline marker emits.")]
-            public ScriptableObject Signal;
+            [SerializeField] private ScriptableObject signal;
 
             [Tooltip("The action key to look up in CameraActionBinding.")]
-            public string ActionKey;
+            [SerializeField] private string actionKey;
 
             [Tooltip("If true, StopAction is called; if false, PlayAction is called.")]
-            public bool StopOnReceive;
+            [SerializeField] private bool stopOnReceive;
 
             [Tooltip("Duration override in seconds. Non-positive = use entry default.")]
-            public float DurationOverride;
+            [SerializeField] private float durationOverride;
+
+            public ScriptableObject Signal => signal;
+            public string ActionKey => actionKey;
+            public bool StopOnReceive => stopOnReceive;
+            public float DurationOverride => durationOverride;
+
+            public SignalMapping(
+                ScriptableObject signal,
+                string actionKey,
+                bool stopOnReceive,
+                float durationOverride)
+            {
+                ValidateValues(signal, actionKey, durationOverride, nameof(signal));
+                this.signal = signal;
+                this.actionKey = actionKey;
+                this.stopOnReceive = stopOnReceive;
+                this.durationOverride = durationOverride;
+            }
+
+            internal void Validate(int index)
+            {
+                ValidateValues(
+                    signal,
+                    actionKey,
+                    durationOverride,
+                    $"signalMappings[{index}]");
+            }
+
+            private static void ValidateValues(
+                ScriptableObject signal,
+                string actionKey,
+                float durationOverride,
+                string parameterName)
+            {
+                if (signal == null)
+                {
+                    throw new ArgumentNullException(
+                        parameterName,
+                        "Timeline signal mappings require a signal asset.");
+                }
+                if (!(signal is INotification))
+                {
+                    throw new ArgumentException(
+                        "Timeline signal assets must implement INotification.",
+                        parameterName);
+                }
+                if (string.IsNullOrWhiteSpace(actionKey))
+                {
+                    throw new ArgumentException(
+                        "Timeline camera action keys must contain at least one non-whitespace character.",
+                        parameterName);
+                }
+                if (float.IsNaN(durationOverride) || float.IsInfinity(durationOverride))
+                {
+                    throw new ArgumentOutOfRangeException(
+                        parameterName,
+                        "Timeline camera action duration overrides must be finite.");
+                }
+            }
         }
 
         [SerializeField] private CameraActionBinding actionBinding;
         [SerializeField] private List<SignalMapping> signalMappings = new List<SignalMapping>(8);
+        private SignalMapping[] runtimeMappings;
+        private Dictionary<int, int> signalLookup;
+        private int ownerThreadId;
+        private bool isInitialized;
 
         private void Awake()
         {
+            BindOwnerThread();
+            BuildRuntimeMappings(
+                out SignalMapping[] localMappings,
+                out Dictionary<int, int> localLookup);
             if (actionBinding == null)
+            {
                 actionBinding = GetComponent<CameraActionBinding>();
+            }
+
+            if (actionBinding == null)
+            {
+                throw new InvalidOperationException(
+                    "TimelineCameraActionReceiver requires a CameraActionBinding.");
+            }
+
+            runtimeMappings = localMappings;
+            signalLookup = localLookup;
+            isInitialized = true;
         }
 
         // INotificationReceiver — called by PlayableDirector whenever a signal fires on any track
         public void OnNotify(Playable origin, INotification notification, object context)
         {
-            if (actionBinding == null) return;
+            AssertReady();
 
             // SignalAsset is a ScriptableObject that implements INotification, so casting via
             // UnityEngine.Object lets us compare by asset reference without a hard dependency
@@ -57,22 +139,92 @@ namespace CycloneGames.GameplayFramework.Runtime
             UnityEngine.Object notifObject = notification as UnityEngine.Object;
             if (notifObject == null) return;
 
-            for (int i = 0; i < signalMappings.Count; i++)
+            if (!signalLookup.TryGetValue(notifObject.GetInstanceID(), out int mappingIndex))
             {
-                SignalMapping mapping = signalMappings[i];
-                if (mapping.Signal != notifObject) continue;
-                if (string.IsNullOrEmpty(mapping.ActionKey)) continue;
+                return;
+            }
 
-                if (mapping.StopOnReceive)
+            SignalMapping mapping = runtimeMappings[mappingIndex];
+            if (mapping.StopOnReceive)
+            {
+                actionBinding.StopAction(mapping.ActionKey);
+            }
+            else
+            {
+                float duration = mapping.DurationOverride > 0f ? mapping.DurationOverride : -1f;
+                actionBinding.PlayAction(mapping.ActionKey, duration);
+            }
+        }
+
+        private void BuildRuntimeMappings(
+            out SignalMapping[] localMappings,
+            out Dictionary<int, int> localLookup)
+        {
+            int mappingCount = signalMappings?.Count ?? 0;
+            if (mappingCount > MaximumSignalMappingCount)
+            {
+                throw new InvalidOperationException(
+                    $"TimelineCameraActionReceiver supports at most {MaximumSignalMappingCount} signal mappings.");
+            }
+
+            localMappings = new SignalMapping[mappingCount];
+            localLookup = new Dictionary<int, int>(mappingCount);
+            for (int index = 0; index < mappingCount; index++)
+            {
+                SignalMapping mapping = signalMappings[index];
+                try
                 {
-                    actionBinding.StopAction(mapping.ActionKey);
+                    mapping.Validate(index);
                 }
-                else
+                catch (Exception exception) when (!(exception is OutOfMemoryException))
                 {
-                    float duration = mapping.DurationOverride > 0f ? mapping.DurationOverride : -1f;
-                    actionBinding.PlayAction(mapping.ActionKey, duration);
+                    throw new InvalidOperationException(
+                        $"Timeline camera signal mapping {index} is invalid.",
+                        exception);
                 }
-                break;
+
+                int signalId = mapping.Signal.GetInstanceID();
+                if (localLookup.ContainsKey(signalId))
+                {
+                    throw new InvalidOperationException(
+                        $"TimelineCameraActionReceiver contains duplicate signal mapping at index {index}.");
+                }
+
+                localMappings[index] = mapping;
+                localLookup.Add(signalId, index);
+            }
+        }
+
+        private void BindOwnerThread()
+        {
+            int currentThreadId = Thread.CurrentThread.ManagedThreadId;
+            if (ownerThreadId != 0 && ownerThreadId != currentThreadId)
+            {
+                throw new InvalidOperationException(
+                    "TimelineCameraActionReceiver Unity lifecycle moved to a different owner thread.");
+            }
+
+            ownerThreadId = currentThreadId;
+        }
+
+        private void AssertOwnerThread()
+        {
+            int expectedThreadId = ownerThreadId;
+            if (expectedThreadId == 0 ||
+                Thread.CurrentThread.ManagedThreadId != expectedThreadId)
+            {
+                throw new InvalidOperationException(
+                    "TimelineCameraActionReceiver live state must be accessed on its Awake owner thread.");
+            }
+        }
+
+        private void AssertReady()
+        {
+            AssertOwnerThread();
+            if (!isInitialized || runtimeMappings == null || signalLookup == null)
+            {
+                throw new InvalidOperationException(
+                    "TimelineCameraActionReceiver live state is not available before Awake completes successfully.");
             }
         }
     }

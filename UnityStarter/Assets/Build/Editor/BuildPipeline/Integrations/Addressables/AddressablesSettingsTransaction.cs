@@ -17,7 +17,10 @@ namespace Build.Pipeline.Editor
     /// </summary>
     internal sealed class AddressablesSettingsTransaction : IDisposable
     {
-        private const int FormatVersion = 1;
+        private const string JournalDocumentType =
+            "addressables-settings-transaction";
+        private const string EnvelopeDocumentType =
+            "addressables-settings-envelope";
         private const string PreparingPhase = "Preparing";
         private const string ActivePhase = "Active";
         private const string RestoredPhase = "Restored";
@@ -97,7 +100,7 @@ namespace Build.Pipeline.Editor
             string transactionId = Guid.NewGuid().ToString("N");
             var journal = new Journal
             {
-                formatVersion = FormatVersion,
+                documentType = JournalDocumentType,
                 transactionId = transactionId,
                 projectRoot = NormalizePath(normalizedProjectRoot),
                 transactionDirectoryName = "transaction-" + transactionId,
@@ -662,7 +665,10 @@ namespace Build.Pipeline.Editor
             Journal journal)
         {
             if (journal == null
-                || journal.formatVersion != FormatVersion
+                || !string.Equals(
+                    journal.documentType,
+                    JournalDocumentType,
+                    StringComparison.Ordinal)
                 || !IsGuidN(journal.transactionId)
                 || !string.Equals(journal.projectRoot, NormalizePath(projectRoot), StringComparison.Ordinal)
                 || !string.Equals(
@@ -910,7 +916,7 @@ namespace Build.Pipeline.Editor
             byte[] payloadBytes = StrictUtf8.GetBytes(payload);
             var envelope = new JournalEnvelope
             {
-                formatVersion = FormatVersion,
+                documentType = EnvelopeDocumentType,
                 payloadBase64 = Convert.ToBase64String(payloadBytes),
                 sha256 = ComputeSha256(payloadBytes)
             };
@@ -930,7 +936,12 @@ namespace Build.Pipeline.Editor
             JournalEnvelope envelope;
             try
             {
-                envelope = JsonUtility.FromJson<JournalEnvelope>(DecodeStrictUtf8(bytes));
+                string envelopeJson = DecodeStrictUtf8(bytes);
+                BuildJsonDocumentContract.Validate<JournalEnvelope>(
+                    envelopeJson,
+                    EnvelopeDocumentType,
+                    "Addressables settings journal envelope");
+                envelope = JsonUtility.FromJson<JournalEnvelope>(envelopeJson);
             }
             catch (Exception exception)
             {
@@ -940,7 +951,10 @@ namespace Build.Pipeline.Editor
             }
 
             if (envelope == null
-                || envelope.formatVersion != FormatVersion
+                || !string.Equals(
+                    envelope.documentType,
+                    EnvelopeDocumentType,
+                    StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(envelope.payloadBase64)
                 || !IsSha256(envelope.sha256))
             {
@@ -964,7 +978,12 @@ namespace Build.Pipeline.Editor
 
             try
             {
-                return JsonUtility.FromJson<Journal>(DecodeStrictUtf8(payload));
+                string payloadJson = DecodeStrictUtf8(payload);
+                BuildJsonDocumentContract.Validate<Journal>(
+                    payloadJson,
+                    JournalDocumentType,
+                    "Addressables settings journal payload");
+                return JsonUtility.FromJson<Journal>(payloadJson);
             }
             catch (Exception exception)
             {
@@ -1598,7 +1617,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class JournalEnvelope
         {
-            public int formatVersion;
+            public string documentType;
             public string payloadBase64;
             public string sha256;
         }
@@ -1606,7 +1625,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int formatVersion;
+            public string documentType;
             public string transactionId;
             public string projectRoot;
             public string transactionDirectoryName;

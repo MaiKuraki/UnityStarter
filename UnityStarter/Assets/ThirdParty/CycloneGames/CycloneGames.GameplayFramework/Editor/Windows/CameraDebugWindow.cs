@@ -4,6 +4,24 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
+    internal static class CameraDebugSampling
+    {
+        public static float GetElapsedSeconds(double previousTime, double currentTime)
+        {
+            if (double.IsNaN(previousTime) ||
+                double.IsInfinity(previousTime) ||
+                double.IsNaN(currentTime) ||
+                double.IsInfinity(currentTime) ||
+                currentTime <= previousTime)
+            {
+                return 0f;
+            }
+
+            double elapsed = currentTime - previousTime;
+            return elapsed >= float.MaxValue ? float.MaxValue : (float)elapsed;
+        }
+    }
+
     public class CameraDebugWindow : EditorWindow
     {
         private const int DefaultCapacity = 600;
@@ -55,7 +73,8 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private float angularSpeedWarning = 180f;
         private float angularSpeedCritical = 320f;
 
-        private float nextSampleTime;
+        private double nextSampleTime;
+        private double previousSampleTime;
 
         private float[] timeBuffer;
         private float[] fovBuffer;
@@ -68,6 +87,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private int sampleCount;
 
         private bool hasPreviousPose;
+        private bool hasPreviousSampleTime;
         private CameraPose previousPose;
         private bool hasPreviousBlendAlpha;
         private float previousBlendAlpha;
@@ -120,7 +140,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 wasPlaying = isPlaying;
                 hasRuntimeStateFingerprint = false;
                 nextRuntimeStatePollTime = 0d;
-                nextSampleTime = 0f;
+                nextSampleTime = 0d;
                 if (isPlaying)
                 {
                     ResetSamplingState();
@@ -154,15 +174,21 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 return;
             }
 
-            float interval = 1f / Mathf.Max(1f, sampleRateHz);
-            if (Time.realtimeSinceStartup < nextSampleTime)
+            double currentTime = Time.realtimeSinceStartupAsDouble;
+            double interval = 1d / Mathf.Max(1f, sampleRateHz);
+            if (currentTime < nextSampleTime)
             {
                 return;
             }
 
-            nextSampleTime = Time.realtimeSinceStartup + interval;
-            if (CaptureSample(interval))
+            nextSampleTime = currentTime + interval;
+            float elapsedSeconds = hasPreviousSampleTime
+                ? CameraDebugSampling.GetElapsedSeconds(previousSampleTime, currentTime)
+                : 0f;
+            if (CaptureSample(elapsedSeconds, currentTime))
             {
+                previousSampleTime = currentTime;
+                hasPreviousSampleTime = true;
                 Repaint();
                 return;
             }
@@ -210,10 +236,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private void ResetSamplingState()
         {
-            nextSampleTime = 0f;
+            nextSampleTime = 0d;
+            previousSampleTime = 0d;
             writeIndex = 0;
             sampleCount = 0;
             hasPreviousPose = false;
+            hasPreviousSampleTime = false;
             previousPose = default;
             hasPreviousBlendAlpha = false;
             previousBlendAlpha = 0f;
@@ -221,7 +249,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             latestFovDelta = 0f;
         }
 
-        private bool CaptureSample(float deltaTime)
+        private bool CaptureSample(float deltaTime, double sampleTime)
         {
             if (!targetManager.HasCurrentPose) return false;
 
@@ -231,11 +259,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             float linearSpeed = 0f;
             float angularSpeed = 0f;
             float fovDelta = 0f;
-            if (samplingMode == SamplingMode.Full && hasPreviousPose)
+            if (samplingMode == SamplingMode.Full && hasPreviousPose && deltaTime > 0f)
             {
-                float dt = Mathf.Max(0.0001f, deltaTime);
-                linearSpeed = Vector3.Distance(previousPose.Position, pose.Position) / dt;
-                angularSpeed = Quaternion.Angle(previousPose.Rotation, pose.Rotation) / dt;
+                linearSpeed = Vector3.Distance(previousPose.Position, pose.Position) / deltaTime;
+                angularSpeed = Quaternion.Angle(previousPose.Rotation, pose.Rotation) / deltaTime;
             }
 
             if (hasPreviousPose)
@@ -243,7 +270,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 fovDelta = Mathf.Abs(pose.Fov - previousPose.Fov);
             }
 
-            timeBuffer[writeIndex] = Time.realtimeSinceStartup;
+            timeBuffer[writeIndex] = (float)sampleTime;
             fovBuffer[writeIndex] = pose.Fov;
             blendAlphaBuffer[writeIndex] = blend.NormalizedTime;
             blendRemainingBuffer[writeIndex] = blend.Remaining;
@@ -400,8 +427,21 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         protected virtual void DrawEditableSamplingSettings()
         {
             EditorGUILayout.LabelField("Sampling", EditorStyles.boldLabel);
-            samplingMode = (SamplingMode)EditorGUILayout.EnumPopup("Mode", samplingMode);
-            sampleRateHz = EditorGUILayout.Slider("Sample Rate (Hz)", sampleRateHz, 5f, 120f);
+            SamplingMode nextSamplingMode =
+                (SamplingMode)EditorGUILayout.EnumPopup("Mode", samplingMode);
+            if (nextSamplingMode != samplingMode)
+            {
+                samplingMode = nextSamplingMode;
+                ResetSamplingState();
+            }
+
+            float nextSampleRateHz =
+                EditorGUILayout.Slider("Sample Rate (Hz)", sampleRateHz, 5f, 120f);
+            if (!Mathf.Approximately(nextSampleRateHz, sampleRateHz))
+            {
+                sampleRateHz = nextSampleRateHz;
+                nextSampleTime = 0d;
+            }
 
             int newCapacity = EditorGUILayout.IntSlider("Buffer Capacity", capacity, MinCapacity, MaxCapacity);
             if (newCapacity != capacity)

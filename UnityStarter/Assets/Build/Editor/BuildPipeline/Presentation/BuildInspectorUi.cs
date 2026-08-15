@@ -425,6 +425,49 @@ namespace Build.Pipeline.Editor
             return EditorGUIUtility.currentViewWidth < NarrowInspectorViewWidth;
         }
 
+        internal static void DrawResponsivePropertyField(
+            SerializedProperty property,
+            GUIContent label,
+            GUIContent labelWidthReference = null,
+            float minimumFieldWidth = MinimumObjectFieldWidth)
+        {
+            if (property == null)
+            {
+                throw new ArgumentNullException(nameof(property));
+            }
+
+            GUIContent safeLabel = label ?? GUIContent.none;
+            GUIContent safeLabelWidthReference = labelWidthReference ?? safeLabel;
+            float requiredLabelWidth = Mathf.Ceil(
+                Mathf.Max(
+                    EditorStyles.label.CalcSize(safeLabel).x,
+                    EditorStyles.label.CalcSize(safeLabelWidthReference).x) + 4f);
+            BuildInspectorFieldLayoutMode layout = ResolveFieldLayout(
+                GetEstimatedContentWidth(),
+                actionCount: 0,
+                inlineLabelWidth: requiredLabelWidth,
+                minimumFieldWidth: minimumFieldWidth);
+            if (layout != BuildInspectorFieldLayoutMode.Inline)
+            {
+                EditorGUILayout.LabelField(safeLabel, EditorStyles.label);
+                EditorGUILayout.PropertyField(property, GUIContent.none, true);
+                return;
+            }
+
+            float previousLabelWidth = EditorGUIUtility.labelWidth;
+            try
+            {
+                EditorGUIUtility.labelWidth = Mathf.Max(
+                    previousLabelWidth,
+                    requiredLabelWidth);
+                EditorGUILayout.PropertyField(property, safeLabel, true);
+            }
+            finally
+            {
+                EditorGUIUtility.labelWidth = previousLabelWidth;
+            }
+        }
+
         internal static BuildInspectorObjectFieldResult DrawObjectFieldWithActions(
             GUIContent label,
             UnityEngine.Object value,

@@ -349,7 +349,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: "0.1.0",
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: Array.Empty<BuildStepInvocation>());
+                steps: Array.Empty<BuildStepInvocation>(),
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
             return new BuildExecutionContext(request, "test-run", new NoOpEventSink());
         }
 

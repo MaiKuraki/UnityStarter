@@ -18,6 +18,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
         private const string PackageRoot =
             "Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework";
         private const string SamplesFolder = PackageRoot + "/Samples";
+        private const string DocumentationFolder = PackageRoot + "/Documents~";
         private const string RuntimeAssemblyName = "CycloneGames.UIFramework.Runtime";
 
         private readonly List<UnityEngine.Object> _ownedObjects =
@@ -207,12 +208,10 @@ namespace CycloneGames.UIFramework.Tests.Editor
         [Test]
         public void CreatorAtomicWrite_DoesNotReplaceExistingScriptOrOrphanMetadata()
         {
-            string assetPath = SamplesFolder + "/__UIWindowCreatorAtomicWriteProbe.cs";
+            string assetPath = DocumentationFolder + "/__UIWindowCreatorAtomicWriteProbe.cs";
             string absolutePath = ToAbsoluteAssetPath(assetPath);
-            AssetDatabase.DeleteAsset(assetPath);
             DeleteFileIfPresent(absolutePath);
             DeleteFileIfPresent(absolutePath + ".meta");
-            AssetDatabase.StartAssetEditing();
             try
             {
                 UIWindowCreatorWindow.WriteAssetText(assetPath, "first\n", false);
@@ -236,16 +235,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
             }
             finally
             {
-                try
-                {
-                    DeleteFileIfPresent(absolutePath);
-                    DeleteFileIfPresent(absolutePath + ".meta");
-                }
-                finally
-                {
-                    AssetDatabase.StopAssetEditing();
-                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-                }
+                DeleteFileIfPresent(absolutePath);
+                DeleteFileIfPresent(absolutePath + ".meta");
             }
         }
 

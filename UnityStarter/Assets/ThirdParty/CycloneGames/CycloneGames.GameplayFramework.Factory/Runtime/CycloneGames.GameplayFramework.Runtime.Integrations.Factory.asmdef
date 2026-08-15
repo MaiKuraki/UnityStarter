@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.Factory",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.Factory",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -61,9 +61,13 @@ namespace CycloneGames.GameplayAbilities.Sample
         // A placeholder for a real AI targeting system.
         private GameObject FindTarget(GameObject caster)
         {
-            // For this example, we'll simply find the Player object by name.
-            // A real game would use a more robust system (e.g., threat table, proximity checks).
+            // Sample-scene placeholder: the target is resolved by name for this demo only. A real game
+            // would use a more robust system (e.g., a threat table or proximity checks). CG0010
+            // (GameObject.Find in production code) is suppressed for exactly this statement;
+            // production abilities must inject a project targeting service.
+#pragma warning disable CG0010
             return GameObject.Find("Player");
+#pragma warning restore CG0010
         }
 
         public override GameplayAbility CreateRuntimeInstance()

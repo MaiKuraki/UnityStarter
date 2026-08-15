@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unity auto-applies a ruleset named "Default.ruleset" located at the root of the Assets folder to every
+  assembly in the project, so the file name is the activation contract, not a free choice. This file is the
+  project-wide CycloneGames.Analyzers enforcement policy: it stages rules between Warning (known migration
+  debt) and Error (clean policy). Change severities here only after the owning module removes its debt, and
+  keep this file in sync with the contract test
+  CycloneGames.Analyzers.Tests/UnityActivationArtifactTests.UnityActivationUsesAnExplicitStagedEnforcementPolicy
+  and the analyzer documentation at Analyzers/CycloneGames.Analyzers/README.md.
+-->
+<RuleSet Name="CycloneGames staged analyzer enforcement"
+         Description="Project-wide Unity analyzer policy, auto-applied by Unity because the file is named Default.ruleset at the Assets root. Rules with known migration debt remain visible as warnings until their owners remove the debt and promote them to errors."
+         ToolsVersion="15.0">
+  <Rules AnalyzerId="CycloneGames.Analyzers" RuleNamespace="CycloneGames.Analyzers">
+    <Rule Id="CG0010" Action="Error" />
+    <Rule Id="CG0011" Action="Warning" />
+    <Rule Id="CG0013" Action="Warning" />
+  </Rules>
+</RuleSet>

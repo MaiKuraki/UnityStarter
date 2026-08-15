@@ -66,6 +66,68 @@ namespace Build.Pipeline.Editor
                 identityOverride: BuildIdentityOverride.Empty);
         }
 
+        internal static BuildRequest CreateLocalReleasePreview(
+            BuildData buildData,
+            BuildTarget target,
+            IReadOnlyList<string> invocationIdsOverride)
+        {
+            if (buildData == null)
+            {
+                throw new ArgumentNullException(nameof(buildData));
+            }
+
+            IReadOnlyList<string> effectiveInvocationIds = invocationIdsOverride;
+            if (effectiveInvocationIds == null)
+            {
+                effectiveInvocationIds = ResolveLocalPreviewPlayerSelection(buildData);
+            }
+            else if (!BuildRecipeSelection.TryExpandRequiredClosure(
+                         buildData.RecipeInvocations,
+                         effectiveInvocationIds,
+                         out effectiveInvocationIds,
+                         out string selectionError))
+            {
+                throw new BuildFailedException(selectionError);
+            }
+
+            BuildAuthoringAssetGuard.EnsureSaved(buildData, effectiveInvocationIds);
+            NamedBuildTarget namedTarget = GetNamedBuildTarget(target);
+            bool outputIsFolder = IsFolderOutput(
+                target,
+                requestedOutput: null,
+                exportAndroidProject: false);
+            string requestedOutput = GetDefaultRelativeOutput(
+                target,
+                buildData.ProductName,
+                debugBuild: false,
+                exportAndroidProject: false);
+            return Create(
+                buildData,
+                target,
+                namedTarget,
+                PlayerSettings.GetScriptingBackend(namedTarget),
+                requestedOutput,
+                outputRelativeToBuildRoot: true,
+                outputIsFolder,
+                deleteDebugFiles: true,
+                debugBuild: false,
+                exportAndroidProject: false,
+                allowExternalOutput: false,
+                cheatOverride: null,
+                applicationVersionOverride: null,
+                outputBasePathOverride: Path.Combine(
+                    buildData.OutputBasePath,
+                    "LocalPreview"),
+                versionInfoAssetPathOverride: null,
+                effectiveInvocationIds,
+                commandLineRecipeOverride: null,
+                stepConfigurationPathOverrides: null,
+                stepIncrementalityOverrides: null,
+                stepDependencyOverrides: null,
+                identityOverride: BuildIdentityOverride.Empty,
+                purpose: BuildPurpose.LocalReleasePreview);
+        }
+
         public static BuildRequest CreateForCommandLine(
             BuildData buildData,
             BuildCommandLineOptions options)
@@ -139,6 +201,55 @@ namespace Build.Pipeline.Editor
             IReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>> stepDependencyOverrides,
             BuildIdentityOverride identityOverride)
         {
+            return Create(
+                buildData,
+                target,
+                namedTarget,
+                scriptingBackend,
+                requestedOutput,
+                outputRelativeToBuildRoot,
+                outputIsFolder,
+                deleteDebugFiles,
+                debugBuild,
+                exportAndroidProject,
+                allowExternalOutput,
+                cheatOverride,
+                applicationVersionOverride,
+                outputBasePathOverride,
+                versionInfoAssetPathOverride,
+                invocationIdsOverride,
+                commandLineRecipeOverride,
+                stepConfigurationPathOverrides,
+                stepIncrementalityOverrides,
+                stepDependencyOverrides,
+                identityOverride,
+                debugBuild ? BuildPurpose.Development : BuildPurpose.Release);
+        }
+
+        private static BuildRequest Create(
+            BuildData buildData,
+            BuildTarget target,
+            NamedBuildTarget namedTarget,
+            ScriptingImplementation scriptingBackend,
+            string requestedOutput,
+            bool outputRelativeToBuildRoot,
+            bool outputIsFolder,
+            bool deleteDebugFiles,
+            bool debugBuild,
+            bool exportAndroidProject,
+            bool allowExternalOutput,
+            bool? cheatOverride,
+            string applicationVersionOverride,
+            string outputBasePathOverride,
+            string versionInfoAssetPathOverride,
+            IReadOnlyList<string> invocationIdsOverride,
+            IReadOnlyList<BuildCommandLineRecipeInvocation> commandLineRecipeOverride,
+            IReadOnlyDictionary<string, string> stepConfigurationPathOverrides,
+            IReadOnlyDictionary<string, BuildIncrementality> stepIncrementalityOverrides,
+            IReadOnlyDictionary<string, IReadOnlyList<BuildInvocationDependency>> stepDependencyOverrides,
+            BuildIdentityOverride identityOverride,
+            BuildPurpose purpose)
+        {
             if (buildData == null)
             {
                 throw new ArgumentNullException(nameof(buildData));
@@ -174,6 +285,11 @@ namespace Build.Pipeline.Editor
                 stepIncrementalityOverrides,
                 stepDependencyOverrides);
 
+            if (purpose == BuildPurpose.LocalReleasePreview)
+            {
+                ValidateLocalReleasePreview(invocations);
+            }
+
             ValidateAndroidExportRecipe(invocations, exportAndroidProject);
             string versionInfoAssetPath = string.IsNullOrWhiteSpace(versionInfoAssetPathOverride)
                 ? buildData.VersionInfoAssetPath
@@ -201,7 +317,152 @@ namespace Build.Pipeline.Editor
                 Application.isBatchMode,
                 applicationVersion,
                 identityOverride ?? throw new ArgumentNullException(nameof(identityOverride)),
-                invocations);
+                invocations,
+                buildData.SourceCleanlinessPolicy,
+                purpose);
+        }
+
+        private static IReadOnlyList<string> ResolveLocalPreviewPlayerSelection(
+            BuildData buildData)
+        {
+            if (TryResolveLocalReleasePreviewSelection(
+                    buildData,
+                    out IReadOnlyList<string> selected,
+                    out string error))
+            {
+                return selected;
+            }
+
+            throw new BuildFailedException(error);
+        }
+
+        internal static bool TryResolveLocalReleasePreviewSelection(
+            BuildData buildData,
+            out IReadOnlyList<string> selected,
+            out string error)
+        {
+            selected = Array.Empty<string>();
+            error = string.Empty;
+            if (buildData == null)
+            {
+                error = "Local Release Preview requires a build profile.";
+                return false;
+            }
+
+            string playerInvocationId = null;
+            IReadOnlyList<BuildRecipeInvocation> authored = buildData.RecipeInvocations;
+            for (int index = 0; index < authored.Count; index++)
+            {
+                BuildRecipeInvocation invocation = authored[index];
+                if (invocation == null
+                    || !invocation.Enabled
+                    || !string.Equals(
+                        invocation?.StepTypeId,
+                        BuildStepTypeIds.Player,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (playerInvocationId != null)
+                {
+                    error = "Local Release Preview requires one unambiguous Player invocation.";
+                    return false;
+                }
+
+                playerInvocationId = invocation.InvocationId;
+            }
+
+            if (string.IsNullOrWhiteSpace(playerInvocationId))
+            {
+                error = "Local Release Preview requires one Player invocation.";
+                return false;
+            }
+
+            if (!BuildRecipeSelection.TryExpandRequiredClosure(
+                    authored,
+                    new[] { playerInvocationId },
+                    out selected,
+                    out error))
+            {
+                return false;
+            }
+
+            if (selected.Count != 1)
+            {
+                error = "Local Release Preview cannot include required content, hot-update, or custom invocations.";
+                return false;
+            }
+
+            for (int index = 0; index < authored.Count; index++)
+            {
+                BuildRecipeInvocation invocation = authored[index];
+                if (!string.Equals(
+                        invocation?.InvocationId,
+                        playerInvocationId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (invocation.Incrementality != BuildIncrementality.Clean)
+                {
+                    error = "Local Release Preview requires a Clean Player invocation.";
+                    return false;
+                }
+
+                return true;
+            }
+
+            error = "Local Release Preview Player invocation could not be resolved.";
+            return false;
+        }
+
+        private static void ValidateLocalReleasePreview(
+            IReadOnlyList<BuildStepInvocation> invocations)
+        {
+            if (invocations == null || invocations.Count != 1
+                || !string.Equals(
+                    invocations[0]?.StepTypeId,
+                    BuildStepTypeIds.Player,
+                    StringComparison.OrdinalIgnoreCase)
+                || invocations[0].Incrementality != BuildIncrementality.Clean)
+            {
+                throw new BuildFailedException(
+                    "Local Release Preview is an isolated, non-distributable Clean Player-only build. " +
+                    "Content, hot-update, custom, incremental, and required non-Player invocations are not allowed.");
+            }
+        }
+
+        internal static void ValidateLocalReleasePreviewRequest(BuildRequest request)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            if (request.Purpose != BuildPurpose.LocalReleasePreview)
+            {
+                return;
+            }
+
+            if (request.BatchMode
+                || request.DebugBuild
+                || !request.DeleteDebugFiles
+                || request.ExportAndroidProject
+                || request.AllowExternalOutput
+                || request.CanPublishReleaseBaseline
+                || !string.Equals(
+                    Path.GetFileName(request.BuildRoot),
+                    "LocalPreview",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BuildFailedException(
+                    "Local Release Preview must remain an interactive, optimized, isolated, " +
+                    "non-distributable request rooted below a LocalPreview directory.");
+            }
+
+            ValidateLocalReleasePreview(request.Steps);
         }
 
         private static IReadOnlyList<BuildStepInvocation> ResolveStepInvocations(

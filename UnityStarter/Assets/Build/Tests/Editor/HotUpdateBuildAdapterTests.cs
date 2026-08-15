@@ -291,7 +291,9 @@ namespace Build.Pipeline.Tests.Editor
                 batchMode: false,
                 applicationVersion: "1.0.0",
                 identityOverride: BuildIdentityOverride.Empty,
-                steps: invocations);
+                steps: invocations,
+                sourceCleanlinessPolicy: BuildSourceCleanlinessPolicy.RequireClean,
+                purpose: BuildPurpose.Release);
             return new BuildExecutionContext(
                 request,
                 "tests-hot-update-run",

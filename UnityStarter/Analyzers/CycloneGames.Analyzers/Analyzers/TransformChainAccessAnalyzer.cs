@@ -52,6 +52,7 @@ namespace CycloneGames.Analyzers
         private void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
         {
             var memberAccess = (MemberAccessExpressionSyntax)context.Node;
+            if (!AnalyzerSourceScope.IsRepositoryOwned(memberAccess.SyntaxTree)) return;
 
             // We want: something.transform . position/rotation/localPosition/etc.
             // Pattern: (ComponentRef).transform.PROPERTY

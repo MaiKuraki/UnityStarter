@@ -15,9 +15,9 @@ namespace CycloneGames.Analyzers.Tests
     public sealed class DirectLoggingApiAnalyzerTests
     {
         private const string RuntimeAssembly = "CycloneGames.Feature.Runtime";
-        private const string RuntimePath = "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Runtime/Consumer.cs";
+        private const string RuntimePath = "Assets/ThirdParty/CycloneGames/Feature/Runtime/Consumer.cs";
         private const string EditorAssembly = "CycloneGames.Feature.Editor";
-        private const string EditorPath = "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Editor/Consumer.cs";
+        private const string EditorPath = "Assets/ThirdParty/CycloneGames/Feature/Editor/Consumer.cs";
 
         private static readonly ImmutableArray<MetadataReference> PlatformReferences = LoadPlatformReferences();
         private static readonly MetadataReference FrameworkReference = CreateFrameworkReference();
@@ -308,10 +308,10 @@ namespace CycloneGames.Analyzers.Tests
 
         [TestCase(
             "CycloneGames.Feature.Samples",
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Samples/Consumer.cs")]
+            "Assets/ThirdParty/CycloneGames/Feature/Samples/Consumer.cs")]
         [TestCase(
             "CycloneGames.Feature.Benchmarks",
-            "C:/repo/Assets/ThirdParty/CycloneGames/Feature/Benchmarks/Consumer.cs")]
+            "Assets/ThirdParty/CycloneGames/Feature/Benchmarks/Consumer.cs")]
         public async Task ReportsInCopyableSampleAndBenchmarkCode(
             string assemblyName,
             string sourcePath)
@@ -358,7 +358,7 @@ namespace CycloneGames.Analyzers.Tests
             ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
                 source,
                 assemblyName: "CycloneGames.Logging.Unity.Samples",
-                sourcePath: "C:/repo/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/Samples/Consumer.cs");
+                sourcePath: "Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/Samples/Consumer.cs");
 
             AssertDiagnosticIds(
                 diagnostics,
@@ -397,16 +397,16 @@ namespace CycloneGames.Analyzers.Tests
                 DiagnosticIds.DirectLoggingApi);
         }
 
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Test/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Test~/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tests/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tests~/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tool/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tool~/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tools/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/Tools~/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/CodeGen/Consumer.cs")]
-        [TestCase("C:/repo/Assets/ThirdParty/CycloneGames/Feature/CodeGen~/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Test/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Test~/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tests/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tests~/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tool/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tool~/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tools/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tools~/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/CodeGen/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/CodeGen~/Consumer.cs")]
         public async Task DoesNotReportInAllowlistedSourcePath(string sourcePath)
         {
             const string source = """
@@ -479,6 +479,7 @@ namespace CycloneGames.Analyzers.Tests
             bool includeHotPathAnalyzer = false)
         {
             var parseOptions = new CSharpParseOptions(LanguageVersion.CSharp10);
+            sourcePath = AnalyzerTestPaths.ResolveProjectRelativePath(sourcePath);
             SyntaxTree sourceTree = CSharpSyntaxTree.ParseText(source, parseOptions, sourcePath);
 
             var references = PlatformReferences.Add(FrameworkReference);
