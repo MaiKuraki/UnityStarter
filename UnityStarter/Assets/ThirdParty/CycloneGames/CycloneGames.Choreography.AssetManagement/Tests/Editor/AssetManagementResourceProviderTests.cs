@@ -40,6 +40,7 @@ namespace CycloneGames.Choreography.AssetManagement.Tests
         private sealed class ControlledAssetPackage : IAssetPackage
         {
             public readonly ControlledAssetHandle Handle = new ControlledAssetHandle();
+            public bool ReturnNullHandle;
             public int LoadCount;
 
             public string Name => "ChoreographyTests";
@@ -65,6 +66,11 @@ namespace CycloneGames.Choreography.AssetManagement.Tests
                 where TAsset : UnityEngine.Object
             {
                 LoadCount++;
+                if (ReturnNullHandle)
+                {
+                    return null;
+                }
+
                 return (IAssetHandle<TAsset>)(object)Handle;
             }
 
@@ -214,6 +220,50 @@ namespace CycloneGames.Choreography.AssetManagement.Tests
                     typeof(string)
                 }),
                 Is.Not.Null);
+        }
+
+        [Test]
+        public void Load_ReturnsFailedHandle_WhenRetainedRequestCeilingIsReached()
+        {
+            var package = new ControlledAssetPackage();
+            var provider = new AssetManagementResourceProvider(package, "ChoreographyTests", maximumRetainedRequestCount: 1);
+            var first = new ChoreographyResourceReference("a", ChoreographyResourceKind.Generic);
+            var second = new ChoreographyResourceReference("b", ChoreographyResourceKind.Generic);
+            IChoreographyResourceHandle lease = provider.Load(in first);
+
+            IChoreographyResourceHandle rejected = provider.Load(in second);
+
+            Assert.That(rejected, Is.Not.Null);
+            Assert.That(rejected.IsDone, Is.True);
+            Assert.That(rejected.Succeeded, Is.False);
+            Assert.That(rejected.Error, Is.Not.Null.And.Not.Empty);
+            Assert.That(provider.GetMemoryStats().RejectedRequestCount, Is.EqualTo(1));
+
+            rejected.Release();
+            Assert.That(provider.GetMemoryStats().ActiveLeaseCount, Is.EqualTo(1));
+            lease.Release();
+        }
+
+        [Test]
+        public void Load_ReturnsFailedHandle_WhenBackendReturnsNullHandle()
+        {
+            var package = new ControlledAssetPackage { ReturnNullHandle = true };
+            var provider = new AssetManagementResourceProvider(package);
+            var reference = new ChoreographyResourceReference("asset", ChoreographyResourceKind.Generic);
+
+            IChoreographyResourceHandle lease = provider.Load(in reference);
+
+            Assert.That(lease, Is.Not.Null);
+            Assert.That(lease.IsDone, Is.True);
+            Assert.That(lease.Succeeded, Is.False);
+            Assert.That(lease.Error, Is.Not.Null.And.Not.Empty);
+
+            ChoreographyAssetManagementMemoryStats stats = provider.GetMemoryStats();
+            Assert.That(stats.FailedRequestCount, Is.EqualTo(1));
+            Assert.That(stats.PendingRequestCount, Is.Zero);
+            Assert.That(stats.RetainedRequestCount, Is.Zero);
+
+            lease.Release();
         }
     }
 }
