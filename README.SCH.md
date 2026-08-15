@@ -155,7 +155,7 @@ flowchart TD
 | **Choreography** | 引擎无关的 action presentation scheduling，用于 animation、audio、VFX、gameplay-event markers 与 preload coordination。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.SCH.md) |
 | **GameplayTags** | 层级 tags、generated constants、query helpers、editor tooling 与 integration points。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
 | **RPGFoundation** | RPG movement 与 interaction foundations，可与其他 gameplay packages 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.SCH.md) |
-| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` W-TinyLFU cache 的 asset-backed UI loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` segmented-LRU (SLRU) cache 的 asset-backed UI loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
 | **Foundation2D** | 面向派生项目的 2D foundation package 与 samples。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
 ### AI
@@ -169,7 +169,7 @@ flowchart TD
 
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **AssetManagement** | Interface-first asset loading abstraction，包含 W-TinyLFU-inspired caching、`CacheRetention` policies/scheduler、provider abstraction、diagnostics 和 async loading flows。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
+| **AssetManagement** | Interface-first asset loading abstraction，包含 bounded segmented-LRU (SLRU) caching、`CacheRetention` policies/scheduler、provider abstraction、diagnostics 和 async loading flows。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
 | **DataTable** | 面向策划配置的数据管线，支持可选 Luban、MessagePack 与 asset-management bridges。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.SCH.md) |
 | **GameplayTags.DataTable** | GameplayTags authoring 与 loading 的 DataTable integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.DataTable/README.SCH.md) |
 | **Choreography.AssetManagement** | `CycloneGames.AssetManagement` 的可选 Choreography resource provider bridge。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography.AssetManagement/README.SCH.md) |
