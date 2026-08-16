@@ -1,0 +1,49 @@
+# Roslyn analyzer pipeline. Pure .NET 8 - no Unity Editor or license required,
+# so this workflow is the cheapest and fastest validation for the repository.
+name: UnityStarter Analyzers
+
+on:
+  push:
+    paths:
+      - 'UnityStarter/Analyzers/**'
+      - 'UnityStarter/Assets/Analyzers/**'
+      - 'UnityStarter/Assets/Default.ruleset'
+  pull_request:
+    paths:
+      - 'UnityStarter/Analyzers/**'
+      - 'UnityStarter/Assets/Analyzers/**'
+      - 'UnityStarter/Assets/Default.ruleset'
+  workflow_dispatch:
+
+concurrency:
+  group: analyzers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + test (.NET 8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Release
+        working-directory: UnityStarter/Analyzers
+        run: dotnet build CycloneGames.Analyzers.sln -c Release
+
+      - name: Test Release
+        working-directory: UnityStarter/Analyzers
+        run: dotnet test CycloneGames.Analyzers.sln -c Release --no-build --logger "trx;LogFileName=results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-test-results
+          path: '**/TestResults/**/*.trx'
+          if-no-files-found: warn
+          retention-days: 14
