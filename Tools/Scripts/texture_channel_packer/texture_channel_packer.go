@@ -1,7 +1,7 @@
 // Package texture_channel_packer packs multiple images into RGBA channels of a single texture,
 // commonly used in Unity game development for HDRP/URP Mask Maps and packed textures.
 //
-// The command is dispatched in-process by cmd/unitystarter_tools.
+// The command is dispatched in-process by cmd/dev-tools.
 //
 // Supports PNG and JPEG input. Output is always PNG (lossless, alpha-preserving).
 // Memory-efficient: loads one source at a time, processes channels sequentially.

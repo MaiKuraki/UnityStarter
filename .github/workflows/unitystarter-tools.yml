@@ -54,20 +54,21 @@ jobs:
         shell: bash
         working-directory: Tools/Scripts
         run: |
-          go run ./cmd/unitystarter_tools --list
-          go run ./cmd/unitystarter_tools generate_file_tree --ci --depth 1 --target . --o smoke.md
+          go run ./cmd/unity-project-tools --list
+          go run ./cmd/dev-tools --list
+          go run ./cmd/dev-tools generate_file_tree --ci --depth 1 --target . --o smoke.md
           rm -f smoke.md
-          go run ./cmd/unitystarter_tools unity_video_webm_converter --help
-          video_exit=$(go run ./cmd/unitystarter_tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
+          go run ./cmd/dev-tools unity_video_webm_converter --help
+          video_exit=$(go run ./cmd/dev-tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
           test "$video_exit" -eq 2
-          go run ./cmd/unitystarter_tools audio_volume_normalizer --help
-          audio_exit=$(go run ./cmd/unitystarter_tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
+          go run ./cmd/dev-tools audio_volume_normalizer --help
+          audio_exit=$(go run ./cmd/dev-tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
           test "$audio_exit" -eq 2
 
       - name: Upload platform bundle
         uses: actions/upload-artifact@v4
         with:
-          name: unitystarter-tools-${{ matrix.goos }}
+          name: unity-project-tools-${{ matrix.goos }}
           path: Tools/Executable/${{ matrix.goos }}/**/*
           if-no-files-found: error
           retention-days: 30
@@ -118,12 +119,13 @@ jobs:
         shell: bash
         working-directory: Tools/Scripts
         run: |
-          go run ./cmd/unitystarter_tools --list
-          go run ./cmd/unitystarter_tools generate_file_tree --ci --depth 1 --target . --o smoke.md
+          go run ./cmd/unity-project-tools --list
+          go run ./cmd/dev-tools --list
+          go run ./cmd/dev-tools generate_file_tree --ci --depth 1 --target . --o smoke.md
           rm -f smoke.md
-          go run ./cmd/unitystarter_tools unity_video_webm_converter --help
-          video_exit=$(go run ./cmd/unitystarter_tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
+          go run ./cmd/dev-tools unity_video_webm_converter --help
+          video_exit=$(go run ./cmd/dev-tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
           test "$video_exit" -eq 2
-          go run ./cmd/unitystarter_tools audio_volume_normalizer --help
-          audio_exit=$(go run ./cmd/unitystarter_tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
+          go run ./cmd/dev-tools audio_volume_normalizer --help
+          audio_exit=$(go run ./cmd/dev-tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
           test "$audio_exit" -eq 2
