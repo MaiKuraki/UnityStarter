@@ -2,7 +2,7 @@
 // Packages/manifest.json. It fails closed on ambiguous policy, source references,
 // lock-file drift, backup failures, malformed JSON, or non-durable writes.
 //
-// The command is dispatched in-process by cmd/unitystarter_tools.
+// The command is dispatched in-process by cmd/unity-project-tools.
 package remove_unity_packages
 
 import (

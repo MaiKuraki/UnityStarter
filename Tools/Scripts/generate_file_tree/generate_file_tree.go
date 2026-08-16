@@ -2,10 +2,10 @@
 // Supports multiple profiles for different detail levels, depth limits, file extension
 // filters, and .treeignore files for project-specific exclusions.
 //
-// The command is dispatched in-process by cmd/unitystarter_tools.
+// The command is dispatched in-process by cmd/dev-tools.
 //
 // Interactive: Run with -i for profile selection menu.
-// CLI:         unitystarter_tools generate_file_tree -profile standard -depth 5 -o tree.md
+// CLI:         dev-tools generate_file_tree -profile standard -depth 5 -o tree.md
 package generate_file_tree
 
 import (

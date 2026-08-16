@@ -2,6 +2,11 @@
 #
 # Get latest from https://github.com/github/gitignore/blob/main/Unity.gitignore
 #
+# Unity license and activation files - account-bound credentials, NEVER commit.
+# Store license content as a CI secret (e.g. GitHub Actions UNITY_LICENSE) instead.
+*.ulf
+Unity_v*.ulf
+*.alf
 /[Ll]ibrary/
 /[Tt]emp/
 /[Oo]bj/
