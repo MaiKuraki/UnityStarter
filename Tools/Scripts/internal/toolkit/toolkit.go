@@ -1,5 +1,5 @@
 // Package toolkit provides the shared command registry and dispatch contract for the
-// unitystarter_tools single-binary entry point.
+// tool binaries (unity-project-tools and dev-tools).
 package toolkit
 
 import (
@@ -8,10 +8,13 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 )
 
-// Version is the unitystarter_tools release version.
-const Version = "2.0.0"
+// Version is the shared release version of both tool binaries.
+// The tools have not shipped yet, so the baseline starts at 0.1.0.
+const Version = "0.1.0"
 
 // Exit codes shared by every tool command.
 const (
@@ -30,18 +33,18 @@ type Command struct {
 
 // Dispatch routes the command line to a registered command and returns its exit code.
 // Every tool executes in-process: there are no child processes, downloads, or temporary files.
-func Dispatch(args []string, commands []Command, stdout, stderr io.Writer) int {
+func Dispatch(programName string, args []string, commands []Command, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		writeUsage(stderr, commands)
+		writeUsage(programName, stderr, commands)
 		return 2
 	}
 
 	switch args[0] {
 	case "-h", "--help", "help":
-		writeUsage(stdout, commands)
+		writeUsage(programName, stdout, commands)
 		return 0
 	case "--version", "version":
-		fmt.Fprintf(stdout, "unitystarter_tools %s\n", Version)
+		fmt.Fprintf(stdout, "%s %s\n", programName, Version)
 		return 0
 	case "--list", "list":
 		writeCommandList(stdout, commands)
@@ -59,13 +62,13 @@ func Dispatch(args []string, commands []Command, stdout, stderr io.Writer) int {
 	return 2
 }
 
-func writeUsage(w io.Writer, commands []Command) {
-	fmt.Fprintf(w, "unitystarter_tools %s\n\n", Version)
-	fmt.Fprintln(w, "Usage: unitystarter_tools <command> [arguments]")
+func writeUsage(programName string, w io.Writer, commands []Command) {
+	fmt.Fprintf(w, "%s %s\n\n", programName, Version)
+	fmt.Fprintf(w, "Usage: %s <command> [arguments]\n", programName)
 	fmt.Fprintln(w)
 	writeCommandList(w, commands)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run 'unitystarter_tools <command> --help' for command-specific help.")
+	fmt.Fprintf(w, "Run '%s <command> --help' for command-specific help.\n", programName)
 }
 
 // WaitForExit pauses an interactive session until the user presses Enter, so the
@@ -76,11 +79,65 @@ func WaitForExit() {
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
-func writeCommandList(w io.Writer, commands []Command) {
+// InteractiveMenu runs when the binary is launched without arguments on an
+// interactive terminal (for example, double-clicking the Windows executable). It
+// lists the commands, runs the selected one in-process, and returns to the menu
+// until the user quits. Non-terminal invocations keep the usage/exit-2 contract
+// and never reach this function.
+func InteractiveMenu(programName string, commands []Command, stdin io.Reader, stdout io.Writer) int {
+	reader := bufio.NewReader(stdin)
+	for {
+		fmt.Fprintf(stdout, "%s %s\n\n", programName, Version)
+		writeCommandList(stdout, commands)
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Enter a number or command name, or q to quit:")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return ExitSuccess // closed input (Ctrl+Z / EOF)
+		}
+		choice := strings.TrimSpace(line)
+		if choice == "" {
+			continue
+		}
+		if choice == "q" || choice == "quit" || choice == "exit" {
+			return ExitSuccess
+		}
+		selected := matchMenuChoice(commands, choice)
+		if selected == nil {
+			fmt.Fprintf(stdout, "Unknown command %q.\n\n", choice)
+			continue
+		}
+		code := selected.Run(nil)
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "[%s] finished with exit code %d\n\n", selected.Name, code)
+	}
+}
+
+func matchMenuChoice(commands []Command, choice string) *Command {
+	if index, err := strconv.Atoi(choice); err == nil {
+		sorted := sortedCommands(commands)
+		if index >= 1 && index <= len(sorted) {
+			return &sorted[index-1]
+		}
+		return nil
+	}
+	for i := range commands {
+		if commands[i].Name == choice {
+			return &commands[i]
+		}
+	}
+	return nil
+}
+
+func sortedCommands(commands []Command) []Command {
 	sorted := make([]Command, len(commands))
 	copy(sorted, commands)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	for _, command := range sorted {
-		fmt.Fprintf(w, "  %-26s %s\n", command.Name, command.Summary)
+	return sorted
+}
+
+func writeCommandList(w io.Writer, commands []Command) {
+	for index, command := range sortedCommands(commands) {
+		fmt.Fprintf(w, "  %2d. %-26s %s\n", index+1, command.Name, command.Summary)
 	}
 }

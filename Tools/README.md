@@ -1,6 +1,7 @@
 # Unity Starter Tools
 
-One cross-platform Go executable (`unitystarter_tools`) that carries every repository tool in-process.
+Two cross-platform Go executables that carry every repository tool in-process, split by domain:
+`unity-project-tools` (Unity project tools) and `dev-tools` (general-purpose media/file tools).
 No PowerShell, no child-process launchers, no runtime downloads, no Go installation required to run
 prebuilt binaries.
 
@@ -9,19 +10,21 @@ prebuilt binaries.
 ## Overview
 
 ```bash
-unitystarter_tools --list
-unitystarter_tools rename_project --dry-run
-unitystarter_tools remove_unity_packages --allow-package com.unity.2d.sprite --dry-run
-unitystarter_tools unity_project_full_clean --dry-run
-unitystarter_tools generate_file_tree --ci --depth 2 --target . --o tree.md
-unitystarter_tools unity_video_webm_converter --ci --input Assets/Movies --output Assets/Movies/webm --jobs 8
-unitystarter_tools audio_volume_normalizer --ci --input Assets/Audio --format ogg --jobs 8
+unity-project-tools --list
+unity-project-tools rename_project --dry-run
+unity-project-tools remove_unity_packages --allow-package com.unity.2d.sprite --dry-run
+unity-project-tools unity_project_full_clean --dry-run
+
+dev-tools --list
+dev-tools generate_file_tree --ci --depth 2 --target . --o tree.md
+dev-tools unity_video_webm_converter --ci --input Assets/Movies --output Assets/Movies/webm --jobs 8
+dev-tools audio_volume_normalizer --ci --input Assets/Audio --format ogg --jobs 8
 ```
 
 The first token selects a tool; every following argument is forwarded unchanged and each tool returns a
 portable exit code (`0` success, `1` failure, `2` usage error, `130` cancelled by signal), which makes
-the binary safe to embed in CI pipelines on every platform. `unitystarter_tools --help` lists all commands and
-`unitystarter_tools <command> --help` shows command-specific flags.
+both binaries safe to embed in CI pipelines on every platform. `<binary> --help` lists its commands and
+`<binary> <command> --help` shows command-specific flags.
 
 ## Layout
 
@@ -33,20 +36,28 @@ Tools/
       toolkit/                     # command registry + dispatch contract
       safefs/                      # build-tagged safe filesystem moves
     cmd/
-      unitystarter_tools/          # the single shipped binary
+      unity-project-tools/          # Unity project tools binary
+      dev-tools/          # general-purpose tools binary
       toolsbuild/                  # cross-compile release bundler
     <tool>/                        # one package per tool, Run(args) int
   Executable/
-    <OS>/<GOARCH>/                 # prebuilt unitystarter_tools + toolsbuild
+    <OS>/<GOARCH>/                 # prebuilt unity-project-tools + dev-tools + toolsbuild
 ```
 
 ## Commands
+
+### unity-project-tools (Unity project tools)
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
 | `rename_project` | Rename a UnityStarter-derived project transactionally | `--dry-run` for a complete read-only plan; journaled with backups and rollback; re-runnable — renaming again reuses the persisted state and fresh fallback detection |
 | `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--apply`, `--dry-run`; fails closed |
-| `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--include-build-outputs` |
+| `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--include-build-outputs`; interactive mode types `CLEAN` to confirm; fails closed while Unity is running or recovery evidence exists |
+
+### dev-tools (general-purpose tools)
+
+| Command | Purpose | Notes |
+| --- | --- | --- |
 | `generate_file_tree` | Generate a Markdown directory tree | `--profile`, `--target`, `--depth`, `--ext`, `--ignore`, `--ci`, `-i` |
 | `texture_channel_packer` | Pack images into RGBA texture channels | `-r/-g/-b/-a`, `-o`, `-size`, `-preset`, `-ci`, `--dry-run` |
 | `audio_volume_normalizer` | Category-aware audio loudness normalization | `--ci --input <dir> [--format wav\|ogg] [--jobs N]` (`--input` required in CI mode); parallel worker pool (default CPU count), Ctrl+C/SIGTERM cancel; requires FFmpeg |
@@ -57,7 +68,10 @@ Tools/
 ### Prebuilt binaries (no Go required)
 
 Each platform bundle under `Tools/Executable/<OS>/<GOARCH>/` contains the standalone
-`unitystarter_tools` executable plus `toolsbuild` for producing further bundles. The Windows bundle is
+`unity-project-tools` and `dev-tools` executables plus `toolsbuild` for producing further
+bundles. On Windows, double-clicking either executable opens an interactive command menu for its
+own tool family (pick a tool by number or name, `q` to quit); running them with arguments keeps
+the pure CLI behavior. The Windows bundle is
 committed; macOS and Linux bundles are produced with one command (below) or downloaded from the CI
 workflow's Artifacts (each platform runner uploads the bundle it built and verified).
 
@@ -65,7 +79,7 @@ workflow's Artifacts (each platform runner uploads the bundle it built and verif
 
 ```bash
 cd Tools/Scripts
-go build -mod=readonly -trimpath -buildvcs=false -o unitystarter_tools.exe ./cmd/unitystarter_tools
+go build -mod=readonly -trimpath -buildvcs=false -o unity-project-tools.exe ./cmd/unity-project-tools
 ```
 
 The module declares `go 1.25.0` because the destructive-filesystem tools rely on the Go 1.25 `os.Root`
@@ -108,7 +122,7 @@ Jenkins, TeamCity, GitLab CI, or a local shell:
 ```bash
 go build ./... && go vet ./...
 go run ./cmd/toolsbuild --targets "$(go env GOOS)/$(go env GOARCH)" --verify
-go run ./cmd/unitystarter_tools --list
+go run ./cmd/unity-project-tools --list
 ```
 
 ## Prerequisites
@@ -120,7 +134,8 @@ go run ./cmd/unitystarter_tools --list
 
 ## Design Notes
 
-- **Single binary, in-process dispatch**: one artifact per platform, identical UX everywhere.
+- **Two binaries, in-process dispatch**: one artifact per tool family per platform; the Unity
+  project tools and the general-purpose tools never share a binary, and the UX is identical everywhere.
 - **Deterministic builds**: `-mod=readonly`, pinned `go.sum`, `-trimpath`, `-buildvcs=false`.
 - **Fails closed**: destructive tools keep their journal/backup/lease safety machinery, and every command
   returns a portable exit code.

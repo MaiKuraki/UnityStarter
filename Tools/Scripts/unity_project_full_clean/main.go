@@ -214,9 +214,11 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var ciMode bool
 	var dryRun bool
 	var includeBuildOutputs bool
+	var resolveStaleQuarantine bool
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode")
 	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without deleting")
 	flags.BoolVar(&includeBuildOutputs, "include-build-outputs", false, "Delete only output trees proven to be Build-owned")
+	flags.BoolVar(&resolveStaleQuarantine, "resolve-stale-quarantine", false, "Complete interrupted cleanups by removing stale quarantine entries")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -239,6 +241,10 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitFailure
 	}
 
+	if resolveStaleQuarantine {
+		return runQuarantineResolution(projectRoot, dryRun, stdout)
+	}
+
 	lease, err := acquireBuildWorkspaceLease(projectRoot)
 	if err != nil {
 		logging.Errorf("Build workspace is busy or unsafe; cleanup refused: %v", err)
@@ -250,6 +256,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		}
 	}()
 
+	logging.Info("validating Build workspace safety (Unity activity, recovery evidence)")
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil {
 		logging.Errorf("Unity activity cannot be proven idle: %v", err)
 		return toolkit.ExitFailure
@@ -266,11 +273,13 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitFailure
 	}
 
+	logging.Info("inspecting Build-owned outputs")
 	ownedOutputs, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Foreign or invalid build output blocks cleanup: %v", err)
 		return toolkit.ExitFailure
 	}
+	logging.Info("scanning cache inventory (Library/Temp/Obj/Build); large projects take a while")
 	items, err := collectCleanItems(projectRoot, ownedOutputs, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Cleanup inventory rejected: %v", err)
@@ -289,9 +298,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		if includeBuildOutputs {
 			fmt.Fprint(stdout, " and Build-owned publications")
 		}
-		fmt.Fprint(stdout, ": ")
+		fmt.Fprint(stdout, " (anything else cancels): ")
 		var confirmation string
-		if _, err := fmt.Fscan(os.Stdin, &confirmation); err != nil || confirmation != "CLEAN" {
+		if _, err := fmt.Fscan(os.Stdin, &confirmation); err != nil || !strings.EqualFold(confirmation, "CLEAN") {
 			fmt.Fprintln(stdout, "Cleanup cancelled.")
 			return toolkit.ExitSuccess
 		}
@@ -1380,6 +1389,7 @@ func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuil
 		if err != nil || !info.IsDir() {
 			continue
 		}
+		logging.Info("inventorying cache directory", "path", relative)
 		item, err := inventoryItem(projectRoot, path, "cache directory")
 		if err != nil {
 			return nil, err
@@ -1402,6 +1412,7 @@ func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuil
 					if child.Name() == "Workspace" {
 						continue
 					}
+					logging.Info("inventorying temporary cache", "path", "BuildPipeline/"+child.Name())
 					item, err := inventoryItem(projectRoot, filepath.Join(buildTemp, child.Name()), "temporary cache")
 					if err != nil {
 						return nil, err
@@ -1410,6 +1421,7 @@ func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuil
 				}
 				continue
 			}
+			logging.Info("inventorying temporary cache", "path", entry.Name())
 			item, err := inventoryItem(projectRoot, filepath.Join(tempRoot, entry.Name()), "temporary cache")
 			if err != nil {
 				return nil, err
@@ -1532,7 +1544,122 @@ func ensureNoStaleCleanupQuarantine(projectRoot string) error {
 		return err
 	}
 	if len(entries) != 0 {
-		return fmt.Errorf("cleanup quarantine contains recovery evidence: %s", filepath.Join(root, entries[0].Name()))
+		return fmt.Errorf("cleanup quarantine contains recovery evidence: %s (review its transaction.json, then delete the quarantine entry manually or run --resolve-stale-quarantine to complete the interrupted cleanup)", filepath.Join(root, entries[0].Name()))
+	}
+	return nil
+}
+
+// runQuarantineResolution completes interrupted cleanups by removing the stale quarantine
+// entries. It only ever deletes files already staged inside the quarantine - never the
+// original cache paths - and fails closed on any ambiguity.
+func runQuarantineResolution(projectRoot string, dryRun bool, stdout io.Writer) int {
+	lease, err := acquireBuildWorkspaceLease(projectRoot)
+	if err != nil {
+		logging.Errorf("Build workspace is busy or unsafe; quarantine resolution refused: %v", err)
+		return toolkit.ExitFailure
+	}
+	defer func() {
+		if err := lease.release(); err != nil {
+			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
+		}
+	}()
+	if running, pid, err := checkUnityRunning(projectRoot); err != nil {
+		logging.Errorf("Unity activity cannot be proven idle: %v", err)
+		return toolkit.ExitFailure
+	} else if running {
+		logging.Errorf("Unity Editor is active for this project (PID %d). Quarantine resolution refused; there is no force mode.", pid)
+		return toolkit.ExitFailure
+	}
+	if err := resolveStaleQuarantines(projectRoot, dryRun, stdout); err != nil {
+		logging.Errorf("Stale cleanup quarantine resolution failed: %v", err)
+		return toolkit.ExitFailure
+	}
+	return toolkit.ExitSuccess
+}
+
+func resolveStaleQuarantines(projectRoot string, dryRun bool, stdout io.Writer) error {
+	root := filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath))
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(stdout, "No cleanup quarantine exists; nothing to resolve.")
+		return nil
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("cleanup quarantine root is unreadable, redirected, or not a directory: %s", root)
+	}
+	if err := ensurePathSegmentsNotRedirected(projectRoot, root); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(stdout, "No stale cleanup quarantine entries; nothing to resolve.")
+		return nil
+	}
+	osRoot, err := os.OpenRoot(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer osRoot.Close()
+
+	resolved := 0
+	for _, entry := range entries {
+		entryPath := filepath.Join(root, entry.Name())
+		if !entry.IsDir() {
+			return fmt.Errorf("unexpected non-directory entry in cleanup quarantine: %s", entryPath)
+		}
+		if err := validateStaleQuarantineJournal(entryPath); err != nil {
+			return fmt.Errorf("quarantine entry %s cannot be resolved: %v", entry.Name(), err)
+		}
+		entryInfo, err := os.Lstat(entryPath)
+		if err != nil || !entryInfo.IsDir() || entryInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("quarantine entry %s is unreadable, redirected, or not a directory", entry.Name())
+		}
+		if redirected, err := pathIsReparsePoint(entryPath); err != nil || redirected {
+			return fmt.Errorf("quarantine entry %s is redirected or unreadable", entry.Name())
+		}
+		relative, err := filepath.Rel(projectRoot, entryPath)
+		if err != nil {
+			return err
+		}
+		if dryRun {
+			fmt.Fprintf(stdout, "[Dry Run] Would resolve stale cleanup quarantine: %s\n", entryPath)
+			resolved++
+			continue
+		}
+		var removed int
+		if err := removeRootedTree(osRoot, relative, 0, &removed); err != nil {
+			return fmt.Errorf("failed to remove stale cleanup quarantine %s: %w", entryPath, err)
+		}
+		fmt.Fprintf(stdout, "[Resolved] Removed stale cleanup quarantine: %s\n", entryPath)
+		resolved++
+	}
+	if resolved != 0 {
+		fmt.Fprintf(stdout, "Resolved %d stale cleanup quarantine entry/entries.\n", resolved)
+	}
+	return nil
+}
+
+func validateStaleQuarantineJournal(entryPath string) error {
+	journalPath := filepath.Join(entryPath, "transaction.json")
+	data, err := os.ReadFile(journalPath)
+	if err != nil {
+		return fmt.Errorf("transaction journal unreadable: %v", err)
+	}
+	if len(data) > maximumOwnerBytes {
+		return fmt.Errorf("transaction journal exceeds %d bytes", maximumOwnerBytes)
+	}
+	var journal quarantineJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return fmt.Errorf("transaction journal invalid: %v", err)
+	}
+	if journal.DocumentType != "build-cleanup-quarantine" {
+		return fmt.Errorf("transaction journal has unexpected documentType %q", journal.DocumentType)
+	}
+	if len(journal.Entries) == 0 || len(journal.Entries) > maximumCleanEntries {
+		return fmt.Errorf("transaction journal entry count %d is not plausible", len(journal.Entries))
 	}
 	return nil
 }

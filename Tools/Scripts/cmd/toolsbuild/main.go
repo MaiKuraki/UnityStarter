@@ -1,6 +1,7 @@
-// toolsbuild cross-compiles the unitystarter_tools single binary and itself for every supported
-// target into Tools/Executable/<OS>/<GOARCH>/. It is the only supported way to produce release
-// binaries and works identically in local shells and CI runners - no PowerShell, no Makefiles.
+// toolsbuild cross-compiles both tool binaries (unity-project-tools and dev-tools) plus
+// itself for every supported target into Tools/Executable/<OS>/<GOARCH>/. It is the only
+// supported way to produce release binaries and works identically in local shells and CI
+// runners - no PowerShell, no Makefiles.
 //
 // Usage:
 //
@@ -63,15 +64,21 @@ func run(args []string) int {
 	}
 
 	var currentPlatformBinary string
+	var currentPlatformUtilsBinary string
 	for _, t := range targets {
 		platformDir := filepath.Join(outputDir, t.goos, t.goarch)
 		if err := os.MkdirAll(platformDir, 0o755); err != nil {
 			logging.Error("cannot create platform directory", "path", platformDir, "error", err)
 			return 1
 		}
-		toolsBinary := filepath.Join(platformDir, "unitystarter_tools"+suffix(t.goos))
+		toolsBinary := filepath.Join(platformDir, "unity-project-tools"+suffix(t.goos))
+		utilsBinary := filepath.Join(platformDir, "dev-tools"+suffix(t.goos))
 		builderBinary := filepath.Join(platformDir, "toolsbuild"+suffix(t.goos))
-		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/unitystarter_tools", toolsBinary, t); err != nil {
+		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/unity-project-tools", toolsBinary, t); err != nil {
+			logging.Error("build failed", "target", t.goos+"/"+t.goarch, "error", err)
+			return 1
+		}
+		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/dev-tools", utilsBinary, t); err != nil {
 			logging.Error("build failed", "target", t.goos+"/"+t.goarch, "error", err)
 			return 1
 		}
@@ -80,8 +87,10 @@ func run(args []string) int {
 			return 1
 		}
 		logging.Info("built", "target", t.goos+"/"+t.goarch, "output", toolsBinary)
+		logging.Info("built", "target", t.goos+"/"+t.goarch, "output", utilsBinary)
 		if t.goos == runtime.GOOS && t.goarch == runtime.GOARCH {
 			currentPlatformBinary = toolsBinary
+			currentPlatformUtilsBinary = utilsBinary
 		}
 	}
 
@@ -90,12 +99,14 @@ func run(args []string) int {
 			logging.Error("--verify requires the current platform to be part of --targets")
 			return 2
 		}
-		command := exec.Command(currentPlatformBinary, "--list")
-		command.Stdout = os.Stdout
-		command.Stderr = os.Stderr
-		if err := command.Run(); err != nil {
-			logging.Error("verification failed", "error", err)
-			return 1
+		for _, binary := range []string{currentPlatformBinary, currentPlatformUtilsBinary} {
+			command := exec.Command(binary, "--list")
+			command.Stdout = os.Stdout
+			command.Stderr = os.Stderr
+			if err := command.Run(); err != nil {
+				logging.Error("verification failed", "binary", binary, "error", err)
+				return 1
+			}
 		}
 	}
 
