@@ -20,7 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"cyclonegames.tools/scripts/internal/logging"
 	"cyclonegames.tools/scripts/internal/safefs"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 const (
@@ -121,6 +123,7 @@ func Run(arguments []string) int {
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
+	logging.Command("remove_unity_packages")
 	flags := flag.NewFlagSet("remove_unity_packages", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var allowed stringListFlag
@@ -139,17 +142,17 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	flags.BoolVar(&listMode, "list", false, "List packages with built-in source-reference signatures")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return toolkit.ExitSuccess
 		}
-		return 2
+		return toolkit.ExitUsage
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintf(stderr, "[ERROR] Unexpected positional arguments: %s\n", strings.Join(flags.Args(), " "))
-		return 2
+		logging.Errorf("Unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+		return toolkit.ExitUsage
 	}
 	if dryRun && apply {
-		fmt.Fprintln(stderr, "[ERROR] -dry-run and -apply are mutually exclusive.")
-		return 2
+		logging.Errorf("-dry-run and -apply are mutually exclusive.")
+		return toolkit.ExitUsage
 	}
 	if listMode {
 		ids := make([]string, 0, len(sourceSignatures))
@@ -161,34 +164,34 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		for _, packageID := range ids {
 			fmt.Fprintf(stdout, "  %s\n", packageID)
 		}
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	projectRoot, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cannot resolve current directory: %v\n", err)
-		return 1
+		logging.Errorf("Cannot resolve current directory: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot, err = validateUnityProjectRoot(projectRoot)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 	var workspaceLease *buildWorkspaceLease
 	if apply {
 		workspaceLease, err = acquireBuildWorkspaceLease(projectRoot)
 		if err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Build workspace is busy or unsafe; package mutation refused: %v\n", err)
-			return 1
+			logging.Errorf("Build workspace is busy or unsafe; package mutation refused: %v", err)
+			return toolkit.ExitFailure
 		}
 		defer func() {
 			if err := workspaceLease.release(); err != nil {
-				fmt.Fprintf(stderr, "[WARNING] Failed to release Build workspace lease cleanly: %v\n", err)
+				logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
 			}
 		}()
 		if err := ensurePackageMutationReady(projectRoot); err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Package mutation safety check failed: %v\n", err)
-			return 1
+			logging.Errorf("Package mutation safety check failed: %v", err)
+			return toolkit.ExitFailure
 		}
 	}
 
@@ -197,8 +200,8 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if profilePath != "" {
 		profile, profileErr := readRemovalProfile(profilePath)
 		if profileErr != nil {
-			fmt.Fprintf(stderr, "[ERROR] Removal profile rejected: %v\n", profileErr)
-			return 1
+			logging.Errorf("Removal profile rejected: %v", profileErr)
+			return toolkit.ExitFailure
 		}
 		policyPackages = append(policyPackages, profile.Packages...)
 		policyReferenced = append(policyReferenced, profile.AllowReferencedPackages...)
@@ -211,35 +214,35 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		if err == nil {
 			err = errors.New("no packages were authorized; use -allow-package or -profile")
 		}
-		fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 	overrideSet, err := validatedPackageSet(policyReferenced, "reference override")
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 	for packageID := range overrideSet {
 		if !removeSet[packageID] {
-			fmt.Fprintf(stderr, "[ERROR] Reference override '%s' is not an authorized removal.\n", packageID)
-			return 1
+			logging.Errorf("Reference override '%s' is not an authorized removal.", packageID)
+			return toolkit.ExitFailure
 		}
 	}
 
 	manifestPath := filepath.Join(projectRoot, "Packages", "manifest.json")
 	if err := ensureProjectFileNotRedirected(projectRoot, manifestPath); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Manifest path rejected: %v\n", err)
-		return 1
+		logging.Errorf("Manifest path rejected: %v", err)
+		return toolkit.ExitFailure
 	}
 	manifestBytes, err := readBoundedFile(manifestPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cannot read manifest: %v\n", err)
-		return 1
+		logging.Errorf("Cannot read manifest: %v", err)
+		return toolkit.ExitFailure
 	}
 	document, err := parseManifest(manifestBytes)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Manifest rejected: %v\n", err)
-		return 1
+		logging.Errorf("Manifest rejected: %v", err)
+		return toolkit.ExitFailure
 	}
 
 	var removals []string
@@ -250,57 +253,57 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	for packageID := range removeSet {
 		if !contains(removals, packageID) {
-			fmt.Fprintf(stderr, "[ERROR] Authorized package is absent from manifest: %s\n", packageID)
-			return 1
+			logging.Errorf("Authorized package is absent from manifest: %s", packageID)
+			return toolkit.ExitFailure
 		}
 	}
 	sort.Strings(removals)
 
 	lockPath := filepath.Join(projectRoot, "Packages", "packages-lock.json")
 	if err := ensureNoPackageTransactionEvidence(filepath.Dir(lockPath), lockPath); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Incomplete prior package-removal transaction requires manual recovery before another mutation: %v\n", err)
-		return 1
+		logging.Errorf("Incomplete prior package-removal transaction requires manual recovery before another mutation: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoStalePackageStages(filepath.Dir(lockPath)); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Incomplete prior package stage requires manual recovery before another mutation: %v\n", err)
-		return 1
+		logging.Errorf("Incomplete prior package stage requires manual recovery before another mutation: %v", err)
+		return toolkit.ExitFailure
 	}
 	lockBytes, lockExists, err := readOptionalBoundedFile(lockPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cannot inspect packages-lock.json: %v\n", err)
-		return 1
+		logging.Errorf("Cannot inspect packages-lock.json: %v", err)
+		return toolkit.ExitFailure
 	}
 	if lockExists {
 		if err := ensureProjectFileNotRedirected(projectRoot, lockPath); err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Lock path rejected: %v\n", err)
-			return 1
+			logging.Errorf("Lock path rejected: %v", err)
+			return toolkit.ExitFailure
 		}
 	}
 	if lockExists {
 		if !allowLockRegeneration {
-			fmt.Fprintln(stderr, "[ERROR] packages-lock.json exists. Refusing to create manifest/lock drift. Review the change and pass -allow-lock-regeneration or authorize it in the profile.")
-			return 1
+			logging.Errorf("packages-lock.json exists. Refusing to create manifest/lock drift. Review the change and pass -allow-lock-regeneration or authorize it in the profile.")
+			return toolkit.ExitFailure
 		}
 		if err := validateLockGraph(lockBytes, removeSet); err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Lock graph rejected the removal: %v\n", err)
-			return 1
+			logging.Errorf("Lock graph rejected the removal: %v", err)
+			return toolkit.ExitFailure
 		}
 	}
 
 	evidence, err := validateSourceEvidencePolicy(projectRoot, removeSet, overrideSet)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 
 	updatedManifest, err := document.without(removeSet)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cannot construct updated manifest: %v\n", err)
-		return 1
+		logging.Errorf("Cannot construct updated manifest: %v", err)
+		return toolkit.ExitFailure
 	}
 	if _, err := parseManifest(updatedManifest); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Updated manifest failed read-back validation: %v\n", err)
-		return 1
+		logging.Errorf("Updated manifest failed read-back validation: %v", err)
+		return toolkit.ExitFailure
 	}
 
 	fmt.Fprintf(stdout, "Project: %s\n", projectRoot)
@@ -315,23 +318,23 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	if dryRun || !apply {
 		fmt.Fprintln(stdout, "[Preview] Validation passed; no files were modified. Pass -apply to commit this exact policy.")
-		return 0
+		return toolkit.ExitSuccess
 	}
 	if err := ensurePackageMutationReady(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Project activity changed before package commit; no package target was modified: %v\n", err)
-		return 1
+		logging.Errorf("Project activity changed before package commit; no package target was modified: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := workspaceLease.validate(); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build workspace lease identity changed before package commit; no package target was modified: %v\n", err)
-		return 1
+		logging.Errorf("Build workspace lease identity changed before package commit; no package target was modified: %v", err)
+		return toolkit.ExitFailure
 	}
 	if _, err := validateSourceEvidencePolicy(projectRoot, removeSet, overrideSet); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Source dependency evidence changed before package commit; no package target was modified: %v\n", err)
-		return 1
+		logging.Errorf("Source dependency evidence changed before package commit; no package target was modified: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := ensureRemovalPreimageUnchanged(projectRoot, manifestPath, manifestBytes, lockPath, lockBytes, lockExists); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Package files changed after validation; no package target was modified: %v\n", err)
-		return 1
+		logging.Errorf("Package files changed after validation; no package target was modified: %v", err)
+		return toolkit.ExitFailure
 	}
 
 	validateMutationEvidence := func() error {
@@ -349,14 +352,14 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	backupPaths, err := commitManifestTransaction(projectRoot, manifestPath, manifestBytes, updatedManifest, lockPath, lockBytes, lockExists, validateMutationEvidence)
 	if err != nil {
 		if len(backupPaths) != 0 {
-			fmt.Fprintf(stderr, "[ERROR] Package transaction did not reach a verified terminal state: %v. Recovery backups: %s\n", err, strings.Join(backupPaths, ", "))
+			logging.Errorf("Package transaction did not reach a verified terminal state: %v. Recovery backups: %s", err, strings.Join(backupPaths, ", "))
 		} else {
-			fmt.Fprintf(stderr, "[ERROR] Package transaction was rejected before target mutation: %v\n", err)
+			logging.Errorf("Package transaction was rejected before target mutation: %v", err)
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 	fmt.Fprintf(stdout, "[OK] Updated manifest atomically. Mandatory backups: %s\n", strings.Join(backupPaths, ", "))
-	return 0
+	return toolkit.ExitSuccess
 }
 
 func validateUnityProjectRoot(path string) (string, error) {

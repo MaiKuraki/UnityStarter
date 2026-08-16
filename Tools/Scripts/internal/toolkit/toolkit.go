@@ -3,8 +3,10 @@
 package toolkit
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 )
 
@@ -64,6 +66,14 @@ func writeUsage(w io.Writer, commands []Command) {
 	writeCommandList(w, commands)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Run 'unitystarter_tools <command> --help' for command-specific help.")
+}
+
+// WaitForExit pauses an interactive session until the user presses Enter, so the
+// console window stays readable after the tool finishes. CI modes never call this.
+func WaitForExit() {
+	fmt.Println()
+	fmt.Print("Press Enter to exit...")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
 func writeCommandList(w io.Writer, commands []Command) {

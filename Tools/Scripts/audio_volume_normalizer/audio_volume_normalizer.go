@@ -188,12 +188,6 @@ func displayIntroAndConfirm() bool {
 	return strings.ToLower(response) == "y"
 }
 
-// waitForExit function pauses until the user presses Enter.
-func waitForExit() {
-	fmt.Println("\nPress Enter to exit...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
-}
-
 // Run executes the audio normalizer and returns its process exit code.
 func Run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -239,7 +233,7 @@ func runInteractiveFlow(ctx context.Context, workerCount int) int {
 	// Display the introduction and wait for confirmation before doing anything else.
 	if !displayIntroAndConfirm() {
 		fmt.Println("Operation cancelled by user.")
-		waitForExit()
+		toolkit.WaitForExit()
 		return 1
 	}
 
@@ -248,7 +242,7 @@ func runInteractiveFlow(ctx context.Context, workerCount int) int {
 	// Verify that ffmpeg is available in the system's PATH.
 	if !commandExists("ffmpeg") {
 		logging.Error("ffmpeg not found in PATH")
-		waitForExit()
+		toolkit.WaitForExit()
 		return 1
 	}
 
@@ -256,7 +250,7 @@ func runInteractiveFlow(ctx context.Context, workerCount int) int {
 	rootDir, err := os.Getwd()
 	if err != nil {
 		logging.Error("cannot get working directory", "error", err)
-		waitForExit()
+		toolkit.WaitForExit()
 		return 1
 	}
 	fmt.Printf("Scanning for audio files in [%s] and its subdirectories...\n", rootDir)
@@ -307,14 +301,14 @@ func processDirectory(ctx context.Context, rootDir string, workerCount int, wait
 	if err != nil {
 		logging.Error("file scan failed", "error", err)
 		if waitAfter {
-			waitForExit()
+			toolkit.WaitForExit()
 		}
 		return 1
 	}
 	if totalFiles == 0 {
 		fmt.Println("No audio files found to process.")
 		if waitAfter {
-			waitForExit()
+			toolkit.WaitForExit()
 		}
 		return 1
 	}
@@ -416,7 +410,7 @@ func processDirectory(ctx context.Context, rootDir string, workerCount int, wait
 	}
 
 	if waitAfter {
-		waitForExit()
+		toolkit.WaitForExit()
 	}
 	if cancelled {
 		return toolkit.ExitCancelled

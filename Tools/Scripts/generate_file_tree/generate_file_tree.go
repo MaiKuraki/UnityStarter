@@ -20,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 // ============================================================
@@ -507,14 +510,14 @@ func runInteractive() {
 
 	content, st := generate(cfg, p.name)
 	if err := writeOutput(content, cfg.outputFile); err != nil {
-		fmt.Printf("[ERROR] %v\n", err)
-		waitForKeyPress()
+		logging.Errorf("%v", err)
+		toolkit.WaitForExit()
 		return
 	}
 
 	duration := time.Since(startTime)
 	printSummary(cfg.outputFile, p.name, st, duration, cfg)
-	waitForKeyPress()
+	toolkit.WaitForExit()
 }
 
 // ============================================================
@@ -557,17 +560,13 @@ func printSummary(outputFile, profileName string, st stats, duration time.Durati
 	fmt.Printf("  Time:        %s\n", duration.Round(time.Millisecond))
 }
 
-func waitForKeyPress() {
-	fmt.Println("\nPress Enter to exit...")
-	stdinReader.ReadBytes('\n')
-}
-
 // ============================================================
 // Entry Point
 // ============================================================
 
 // Run executes the file-tree generator and returns its process exit code.
 func Run(args []string) int {
+	logging.Command("generate_file_tree")
 	var (
 		profileName string
 		targetDir   string
@@ -597,15 +596,15 @@ func Run(args []string) int {
 	flags.BoolVar(&interactive, "i", false, "Interactive mode with profile selection")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return toolkit.ExitSuccess
 		}
-		return 2
+		return toolkit.ExitUsage
 	}
 
 	// Interactive mode
 	if interactive {
 		runInteractive()
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	// Resolve target directory
@@ -616,8 +615,8 @@ func Run(args []string) int {
 			var err error
 			targetDir, err = os.Getwd()
 			if err != nil {
-				fmt.Printf("[ERROR] Cannot get current directory: %v\n", err)
-				return 1
+				logging.Errorf("cannot get current directory: %v", err)
+				return toolkit.ExitFailure
 			}
 		}
 	}
@@ -625,11 +624,11 @@ func Run(args []string) int {
 	// Validate target
 	info, err := os.Stat(targetDir)
 	if err != nil || !info.IsDir() {
-		fmt.Printf("[ERROR] Target is not a valid directory: %s\n", targetDir)
+		logging.Errorf("target is not a valid directory: %s", targetDir)
 		if !ciMode {
-			waitForKeyPress()
+			toolkit.WaitForExit()
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 
 	// Resolve absolute path
@@ -650,12 +649,12 @@ func Run(args []string) int {
 	}
 	p, ok := findProfile(profileName)
 	if !ok {
-		fmt.Printf("[ERROR] Unknown profile: %s\n", profileName)
+		logging.Errorf("unknown profile: %s", profileName)
 		fmt.Println("Available profiles: minimal, standard, detailed, full")
 		if !ciMode {
-			waitForKeyPress()
+			toolkit.WaitForExit()
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 
 	// Build config
@@ -672,18 +671,18 @@ func Run(args []string) int {
 	content, st := generate(cfg, profileName)
 
 	if err := writeOutput(content, cfg.outputFile); err != nil {
-		fmt.Printf("[ERROR] Cannot write output file: %v\n", err)
+		logging.Errorf("cannot write output file: %v", err)
 		if !ciMode {
-			waitForKeyPress()
+			toolkit.WaitForExit()
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 
 	duration := time.Since(startTime)
 	printSummary(cfg.outputFile, profileName, st, duration, cfg)
 
 	if !ciMode {
-		waitForKeyPress()
+		toolkit.WaitForExit()
 	}
-	return 0
+	return toolkit.ExitSuccess
 }

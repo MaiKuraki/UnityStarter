@@ -22,6 +22,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 // ============================================================
@@ -357,7 +360,7 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) {
 
 	out, log, err := packChannels(outW, outH, sources)
 	if err != nil {
-		fmt.Printf("\n[ERROR] %v\n", err)
+		logging.Errorf("%v", err)
 		return
 	}
 
@@ -369,7 +372,7 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) {
 	fmt.Print("\nEncoding PNG...")
 	f, err := os.Create(outPath)
 	if err != nil {
-		fmt.Printf("\n[ERROR] Cannot create output file: %v\n", err)
+		logging.Errorf("cannot create output file: %v", err)
 		return
 	}
 
@@ -378,13 +381,13 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) {
 	if err := encoder.Encode(writer, out); err != nil {
 		f.Close()
 		os.Remove(outPath) // clean up partial file
-		fmt.Printf("\n[ERROR] PNG encode failed: %v\n", err)
+		logging.Errorf("png encode failed: %v", err)
 		return
 	}
 	if err := writer.Flush(); err != nil {
 		f.Close()
 		os.Remove(outPath)
-		fmt.Printf("\n[ERROR] Write failed: %v\n", err)
+		logging.Errorf("write failed: %v", err)
 		return
 	}
 	f.Close()
@@ -512,9 +515,9 @@ func runInteractive() {
 	// Determine output size
 	outW, outH, err := detectOutputSize(sources)
 	if err != nil {
-		fmt.Printf("\n[ERROR] %v\n", err)
+		logging.Errorf("%v", err)
 		fmt.Println("At least one channel must have a source image.")
-		waitForKeyPress()
+		toolkit.WaitForExit()
 		return
 	}
 
@@ -527,13 +530,13 @@ func runInteractive() {
 	confirm = strings.TrimSpace(strings.ToLower(confirm))
 	if confirm == "n" || confirm == "no" {
 		fmt.Println("Operation cancelled.")
-		waitForKeyPress()
+		toolkit.WaitForExit()
 		return
 	}
 
 	// Execute
 	executePack(sources, outW, outH, outPath)
-	waitForKeyPress()
+	toolkit.WaitForExit()
 }
 
 // ============================================================
@@ -562,17 +565,13 @@ func formatPresetLabels(labels [4]string) string {
 	return fmt.Sprintf("R=%s, G=%s, B=%s, A=%s", labels[0], labels[1], labels[2], labels[3])
 }
 
-func waitForKeyPress() {
-	fmt.Println("\nPress Enter to exit...")
-	stdinReader.ReadBytes('\n')
-}
-
 // ============================================================
 // Entry Point
 // ============================================================
 
 // Run executes the channel packer and returns its process exit code.
 func Run(args []string) int {
+	logging.Command("texture_channel_packer")
 	var (
 		redSpec    string
 		greenSpec  string
@@ -598,15 +597,15 @@ func Run(args []string) int {
 	flags.BoolVar(&dryRun, "dry-run", false, "Preview only, don't write output")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return toolkit.ExitSuccess
 		}
-		return 2
+		return toolkit.ExitUsage
 	}
 
 	// If no channel flags provided, run interactive mode
 	if redSpec == "" && greenSpec == "" && blueSpec == "" && alphaSpec == "" && !ciMode {
 		runInteractive()
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	// CLI mode
@@ -621,8 +620,8 @@ func Run(args []string) int {
 	for ci := 0; ci < 4; ci++ {
 		if sources[ci].FilePath != "" {
 			if _, err := os.Stat(sources[ci].FilePath); err != nil {
-				fmt.Printf("[ERROR] %s channel: file not found: %s\n", channelLetters[ci], sources[ci].FilePath)
-				return 1
+				logging.Errorf("%s channel: file not found: %s", channelLetters[ci], sources[ci].FilePath)
+				return toolkit.ExitFailure
 			}
 		}
 	}
@@ -632,24 +631,24 @@ func Run(args []string) int {
 	if sizeSpec != "" {
 		parts := strings.SplitN(strings.ToLower(sizeSpec), "x", 2)
 		if len(parts) != 2 {
-			fmt.Println("[ERROR] Invalid size format. Use WxH (e.g. 2048x2048)")
-			return 1
+			logging.Errorf("invalid size format; use WxH (e.g. 2048x2048)")
+			return toolkit.ExitFailure
 		}
 		w, err1 := strconv.Atoi(parts[0])
 		h, err2 := strconv.Atoi(parts[1])
 		if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
-			fmt.Println("[ERROR] Invalid size values. Width and height must be positive integers.")
-			return 1
+			logging.Errorf("invalid size values; width and height must be positive integers")
+			return toolkit.ExitFailure
 		}
 		if w > 16384 || h > 16384 {
-			fmt.Println("[WARNING] Texture dimensions exceed 16384. This will require significant memory.")
+			logging.Warnf("texture dimensions exceed 16384; this will require significant memory")
 		}
 		outW, outH = w, h
 	} else {
 		w, h, err := detectOutputSize(sources)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\nUse -size WxH to specify output dimensions.\n", err)
-			return 1
+			logging.Errorf("%v; use -size WxH to specify output dimensions", err)
+			return toolkit.ExitFailure
 		}
 		outW, outH = w, h
 	}
@@ -673,7 +672,7 @@ func Run(args []string) int {
 
 	if dryRun {
 		fmt.Println("\n[Dry Run] No output file written.")
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	// Confirm in non-CI mode
@@ -683,10 +682,10 @@ func Run(args []string) int {
 		confirm = strings.TrimSpace(strings.ToLower(confirm))
 		if confirm == "n" || confirm == "no" {
 			fmt.Println("Operation cancelled.")
-			return 0
+			return toolkit.ExitSuccess
 		}
 	}
 
 	executePack(sources, outW, outH, outPath)
-	return 0
+	return toolkit.ExitSuccess
 }

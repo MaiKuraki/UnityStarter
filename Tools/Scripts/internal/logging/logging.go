@@ -3,6 +3,7 @@
 package logging
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 )
@@ -22,3 +23,9 @@ func Warn(msg string, args ...any) { logger.Warn(msg, args...) }
 
 // Error logs at the error level.
 func Error(msg string, args ...any) { logger.Error(msg, args...) }
+
+// Warnf logs a printf-style formatted message at the warning level.
+func Warnf(format string, args ...any) { logger.Warn(fmt.Sprintf(format, args...)) }
+
+// Errorf logs a printf-style formatted message at the error level.
+func Errorf(format string, args ...any) { logger.Error(fmt.Sprintf(format, args...)) }

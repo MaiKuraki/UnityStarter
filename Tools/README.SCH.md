@@ -56,7 +56,7 @@ Tools/
 
 `Tools/Executable/<OS>/<GOARCH>/` 下每个平台包都包含独立的 `unitystarter_tools` 可执行文件以及用于
 继续产出更多平台包的 `toolsbuild`。Windows 包随仓库提交；macOS/Linux 包用一条命令即可生成（见下），
-或从 CI 产物下载。
+或从 CI 工作流的 Artifacts 下载（每个平台 runner 都会上传其构建并验证过的平台包）。
 
 ### 从源码构建
 
@@ -81,14 +81,22 @@ go run ./cmd/toolsbuild --verify               # 顺带冒烟测试当前平台�
 `toolsbuild` 交叉编译静态二进制（`CGO_ENABLED=0`、`-trimpath`、`-buildvcs=false`、strip）到
 `Tools/Executable/<OS>/<GOARCH>/`，任何失败都返回非零，可直接作为 CI 发布步骤使用，无需任何脚本层。
 分发的 `toolsbuild` 可执行文件也可独立运行：它按自身所在路径（而非工作目录）定位模块根，因此在任意目录下执行
-`Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` 都能工作。请在终端中运行而不是双击——
-它是 CLI 程序，控制台窗口会在结束后立即关闭。
+`Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` 都能工作。它是 CLI 程序，控制台窗口
+会在结束后立即关闭，请在终端中运行以查看输出。
 
 ## CI/CD
 
-`.github/workflows/unitystarter-tools.yml` 提供 GitHub Actions 示例：构建并 vet 模块、通过
-`toolsbuild --verify` 产出当前平台包、运行冒烟命令。同样三条命令可在 Jenkins、TeamCity、GitLab CI
-或本地 shell 原样运行：
+`.github/workflows/unitystarter-tools.yml` 会在每次触及 `Tools/` 的 push/PR（以及手动触发）时运行，
+两个 job 并行：
+
+- `build`：托管的 Ubuntu/Windows/macOS runner 构建并 vet 模块、检查 `gofmt` 清洁度、运行 `go test`、
+  通过 `toolsbuild --verify` 产出并验证当前平台包、运行冒烟命令，并把各平台包上传为工作流 Artifact
+  （在工作流运行页下载，保留 30 天）。
+- `linux-distros`：同样的检查在真实的 Debian（bookworm）与 Arch Linux 容器内再跑一遍，同时覆盖
+  稳定基线发行版与滚动更新发行版。
+
+运行采用 `concurrency` 自动取消旧推送、25 分钟超时上限、`fail-fast: false`（不会因首个平台失败而截断
+其余平台的结果）。同样的核心命令可在 Jenkins、TeamCity、GitLab CI 或本地 shell 原样运行：
 
 ```bash
 go build ./... && go vet ./...

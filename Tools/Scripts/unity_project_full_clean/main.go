@@ -22,7 +22,9 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"cyclonegames.tools/scripts/internal/logging"
 	"cyclonegames.tools/scripts/internal/safefs"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 const (
@@ -206,6 +208,7 @@ func Run(arguments []string) int {
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
+	logging.Command("unity_project_full_clean")
 	flags := flag.NewFlagSet("unity_project_full_clean", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var ciMode bool
@@ -216,69 +219,69 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	flags.BoolVar(&includeBuildOutputs, "include-build-outputs", false, "Delete only output trees proven to be Build-owned")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return toolkit.ExitSuccess
 		}
-		return 2
+		return toolkit.ExitUsage
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintf(stderr, "[ERROR] Unexpected positional arguments: %s\n", strings.Join(flags.Args(), " "))
-		return 2
+		logging.Errorf("Unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+		return toolkit.ExitUsage
 	}
 
 	projectRoot, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cannot resolve current directory: %v\n", err)
-		return 1
+		logging.Errorf("Cannot resolve current directory: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot, err = validateProjectRoot(projectRoot)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 
 	lease, err := acquireBuildWorkspaceLease(projectRoot)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build workspace is busy or unsafe; cleanup refused: %v\n", err)
-		return 1
+		logging.Errorf("Build workspace is busy or unsafe; cleanup refused: %v", err)
+		return toolkit.ExitFailure
 	}
 	defer func() {
 		if err := lease.release(); err != nil {
-			fmt.Fprintf(stderr, "[WARNING] Failed to release Build workspace lease cleanly: %v\n", err)
+			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
 		}
 	}()
 
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Unity activity cannot be proven idle: %v\n", err)
-		return 1
+		logging.Errorf("Unity activity cannot be proven idle: %v", err)
+		return toolkit.ExitFailure
 	} else if running {
-		fmt.Fprintf(stderr, "[ERROR] Unity Editor is active for this project (PID %d). Cleanup refused; there is no force mode.\n", pid)
-		return 1
+		logging.Errorf("Unity Editor is active for this project (PID %d). Cleanup refused; there is no force mode.", pid)
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoPendingRecovery(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Pending or ambiguous Build recovery evidence blocks cleanup: %v\n", err)
-		return 1
+		logging.Errorf("Pending or ambiguous Build recovery evidence blocks cleanup: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoStaleCleanupQuarantine(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Stale or ambiguous cleanup quarantine requires explicit recovery: %v\n", err)
-		return 1
+		logging.Errorf("Stale or ambiguous cleanup quarantine requires explicit recovery: %v", err)
+		return toolkit.ExitFailure
 	}
 
 	ownedOutputs, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Foreign or invalid build output blocks cleanup: %v\n", err)
-		return 1
+		logging.Errorf("Foreign or invalid build output blocks cleanup: %v", err)
+		return toolkit.ExitFailure
 	}
 	items, err := collectCleanItems(projectRoot, ownedOutputs, includeBuildOutputs)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cleanup inventory rejected: %v\n", err)
-		return 1
+		logging.Errorf("Cleanup inventory rejected: %v", err)
+		return toolkit.ExitFailure
 	}
 	printPreview(stdout, projectRoot, items, ownedOutputs, includeBuildOutputs)
 	if len(items) == 0 || dryRun {
 		if dryRun {
 			fmt.Fprintln(stdout, "[Dry Run] Lease and safety validation passed; no files were deleted.")
 		}
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	if !ciMode {
@@ -290,60 +293,60 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		var confirmation string
 		if _, err := fmt.Fscan(os.Stdin, &confirmation); err != nil || confirmation != "CLEAN" {
 			fmt.Fprintln(stdout, "Cleanup cancelled.")
-			return 0
+			return toolkit.ExitSuccess
 		}
 	}
 
 	// Close the TOCTOU window as far as the EditorInstance contract permits.
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil || running {
 		if err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Unity activity changed before deletion: %v\n", err)
+			logging.Errorf("Unity activity changed before deletion: %v", err)
 		} else {
-			fmt.Fprintf(stderr, "[ERROR] Unity Editor started before deletion (PID %d). Nothing was deleted.\n", pid)
+			logging.Errorf("Unity Editor started before deletion (PID %d). Nothing was deleted.", pid)
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoPendingRecovery(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build recovery state changed before deletion: %v\n", err)
-		return 1
+		logging.Errorf("Build recovery state changed before deletion: %v", err)
+		return toolkit.ExitFailure
 	}
 	recheckedOwnedOutputs, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build output ownership changed before deletion: %v\n", err)
-		return 1
+		logging.Errorf("Build output ownership changed before deletion: %v", err)
+		return toolkit.ExitFailure
 	}
 	if !cleanItemInventoriesEqual(ownedOutputs, recheckedOwnedOutputs) {
-		fmt.Fprintln(stderr, "[ERROR] Build output ownership targets changed after preview; nothing was deleted.")
-		return 1
+		logging.Errorf("Build output ownership targets changed after preview; nothing was deleted.")
+		return toolkit.ExitFailure
 	}
 	recheckedItems, err := collectCleanItems(projectRoot, recheckedOwnedOutputs, includeBuildOutputs)
 	if err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cleanup inventory changed before deletion: %v\n", err)
-		return 1
+		logging.Errorf("Cleanup inventory changed before deletion: %v", err)
+		return toolkit.ExitFailure
 	}
 	if !cleanItemInventoriesEqual(items, recheckedItems) {
-		fmt.Fprintln(stderr, "[ERROR] Cleanup targets changed after preview; nothing was deleted.")
-		return 1
+		logging.Errorf("Cleanup targets changed after preview; nothing was deleted.")
+		return toolkit.ExitFailure
 	}
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil || running {
 		if err != nil {
-			fmt.Fprintf(stderr, "[ERROR] Unity activity changed during final ownership validation: %v\n", err)
+			logging.Errorf("Unity activity changed during final ownership validation: %v", err)
 		} else {
-			fmt.Fprintf(stderr, "[ERROR] Unity Editor started during final ownership validation (PID %d). Nothing was deleted.\n", pid)
+			logging.Errorf("Unity Editor started during final ownership validation (PID %d). Nothing was deleted.", pid)
 		}
-		return 1
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoPendingRecovery(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build recovery state changed during final ownership validation: %v\n", err)
-		return 1
+		logging.Errorf("Build recovery state changed during final ownership validation: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := lease.validate(); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Build workspace lease identity changed before quarantine: %v\n", err)
-		return 1
+		logging.Errorf("Build workspace lease identity changed before quarantine: %v", err)
+		return toolkit.ExitFailure
 	}
 	if err := ensureNoStaleCleanupQuarantine(projectRoot); err != nil {
-		fmt.Fprintf(stderr, "[ERROR] Cleanup quarantine state changed before claim: %v\n", err)
-		return 1
+		logging.Errorf("Cleanup quarantine state changed before claim: %v", err)
+		return toolkit.ExitFailure
 	}
 	items = recheckedItems
 
@@ -351,9 +354,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	deleted, failed, freed := executeQuarantinedCleanup(projectRoot, lease, items, stdout)
 	fmt.Fprintf(stdout, "Deleted %d items; failed %d; reclaimed %s; elapsed %s.\n", deleted, failed, formatSize(freed), time.Since(start).Round(time.Millisecond))
 	if failed != 0 {
-		return 1
+		return toolkit.ExitFailure
 	}
-	return 0
+	return toolkit.ExitSuccess
 }
 
 func validateProjectRoot(path string) (string, error) {

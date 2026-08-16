@@ -20,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 // ============================================================
@@ -962,7 +965,7 @@ func promptValidatedInput(
 		if err := validate(input); err != nil {
 			fmt.Printf("\nInvalid input: '%s'\n", input)
 			fmt.Println(err)
-			waitForKeyPress()
+			toolkit.WaitForExit()
 			continue
 		}
 
@@ -4643,11 +4646,6 @@ func recoverIncompleteTransaction(
 // Utilities
 // ============================================================
 
-func waitForKeyPress() {
-	fmt.Println("\nPress Enter to continue...")
-	stdinReader.ReadBytes('\n')
-}
-
 func clearScreen() {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -4689,28 +4687,28 @@ func runRenameTool(args []string) (exitCode int) {
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printRenameUsage()
-			return 0
+			return toolkit.ExitSuccess
 		}
-		fmt.Printf("Error: %v\n\n", err)
+		logging.Errorf("%v", err)
 		printRenameUsage()
-		return 2
+		return toolkit.ExitUsage
 	}
 
 	projectRoot, err := findProjectRoot()
 	if err != nil {
-		fmt.Println("Error:", err)
-		return 1
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot, err = filepath.Abs(projectRoot)
 	if err != nil {
-		fmt.Println("Error resolving Unity project root:", err)
-		return 1
+		logging.Errorf("cannot resolve Unity project root: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot = filepath.Clean(projectRoot)
 	identitySnapshot, err := loadTemplateIdentityRegistry(projectRoot)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	fileSystemRoot := identitySnapshot.WorkspaceRoot
 	if len(identitySnapshot.DeclaredExternalTargets) == 0 {
@@ -4719,31 +4717,31 @@ func runRenameTool(args []string) (exitCode int) {
 
 	fileSystem, err := newRootedRenameFileSystem(fileSystemRoot)
 	if err != nil {
-		fmt.Println("Error opening rooted template workspace filesystem:", err)
-		return 1
+		logging.Errorf("cannot open rooted template workspace filesystem: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot, err = filepath.EvalSymlinks(projectRoot)
 	if err != nil {
 		_ = fileSystem.Close()
-		fmt.Println("Error canonicalizing Unity project root:", err)
-		return 1
+		logging.Errorf("cannot canonicalize Unity project root: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot, err = filepath.Abs(projectRoot)
 	if err != nil {
 		_ = fileSystem.Close()
-		fmt.Println("Error resolving canonical Unity project root:", err)
-		return 1
+		logging.Errorf("cannot resolve canonical Unity project root: %v", err)
+		return toolkit.ExitFailure
 	}
 	projectRoot = filepath.Clean(projectRoot)
 	if err := ensurePathInsideProject(fileSystem.rootPath, projectRoot); err != nil {
 		_ = fileSystem.Close()
-		fmt.Println("Error validating Unity project inside template workspace:", err)
-		return 1
+		logging.Errorf("unity project is outside the template workspace: %v", err)
+		return toolkit.ExitFailure
 	}
 	fmt.Printf("Found Unity project root at: %s\n", projectRoot)
 	defer func() {
 		if closeErr := fileSystem.Close(); closeErr != nil {
-			fmt.Printf("Error closing rooted Unity project filesystem: %v\n", closeErr)
+			logging.Errorf("cannot close rooted Unity project filesystem: %v", closeErr)
 			if exitCode == 0 {
 				exitCode = 1
 			}
@@ -4752,11 +4750,11 @@ func runRenameTool(args []string) (exitCode int) {
 	projectLock, err := acquireProjectLock(fileSystem, projectRoot)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	defer func() {
 		if releaseErr := releaseProjectLock(fileSystem, projectLock); releaseErr != nil {
-			fmt.Printf("Error releasing rename project lock: %v\n", releaseErr)
+			logging.Errorf("cannot release rename project lock: %v", releaseErr)
 			if exitCode == 0 {
 				exitCode = 1
 			}
@@ -4770,30 +4768,30 @@ func runRenameTool(args []string) (exitCode int) {
 		journalPath, journal, inspectErr := findIncompleteTransactionWithFS(fileSystem, projectRoot)
 		if inspectErr != nil {
 			log.Printf("Error inspecting previous rename transactions: %v\n", inspectErr)
-			return 1
+			return toolkit.ExitFailure
 		}
 		if journal != nil {
 			log.Printf("Error: incomplete rename transaction requires recovery before dry-run: %s\n", journalPath)
-			return 1
+			return toolkit.ExitFailure
 		}
 	} else {
 		log, err = NewLogger(fileSystem, logPath)
 		if err != nil {
-			fmt.Println("Error:", err)
-			return 1
+			logging.Errorf("%v", err)
+			return toolkit.ExitFailure
 		}
 		defer log.Close()
 		log.Printf("=== Rename Project Tool started at %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
 		if recoverErr := recoverIncompleteTransaction(fileSystem, projectRoot, log); recoverErr != nil {
 			log.Printf("Error recovering an incomplete rename transaction: %v\n", recoverErr)
-			return 1
+			return toolkit.ExitFailure
 		}
 	}
 
 	oldName, oldCompanyName, oldAppName, oldApplicationIdentifier, err := getCurrentProjectInfo(projectRoot)
 	if err != nil {
 		log.Printf("Error getting current project info: %v\n", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	log.Println("\nCurrent project settings:")
 	log.Printf("  Project Folder: %s\n", oldName)
@@ -4837,7 +4835,7 @@ func runRenameTool(args []string) (exitCode int) {
 	if newProjectName == oldName && newCompanyName == oldCompanyName &&
 		newAppName == oldAppName && newApplicationIdentifier == oldApplicationIdentifier {
 		log.Println("\nNo changes needed - all values are unchanged.")
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	request := RenameRequest{
@@ -4853,27 +4851,27 @@ func runRenameTool(args []string) (exitCode int) {
 	plan, err := buildRenamePlan(projectRoot, request)
 	if err != nil {
 		log.Printf("Error preparing rename plan: %v\n", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	printRenamePlan(log, plan)
 
 	if dryRun {
 		log.Println("\nDry run complete. No project files, logs, backups, state, or transaction temporary files were written. The project lock will now be released.")
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	fmt.Print("\nProceed with this validated transaction? (y/N): ")
 	confirm, _ := stdinReader.ReadString('\n')
 	if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
 		log.Println("\nOperation cancelled by user.")
-		return 0
+		return toolkit.ExitSuccess
 	}
 
 	transactionDir, err := executeRenamePlan(fileSystem, plan, log)
 	if err != nil {
 		log.Printf("Rename transaction failed: %v\n", err)
 		log.Printf("Transaction evidence: %s\n", transactionDir)
-		return 1
+		return toolkit.ExitFailure
 	}
 
 	log.Println("\n===========================================")
@@ -4886,10 +4884,11 @@ func runRenameTool(args []string) (exitCode int) {
 	log.Printf("  Transaction:    %s\n", transactionDir)
 	log.Printf("  Log:            %s\n", logPath)
 	log.Println("\nPlease open the project in Unity Editor and perform the documented validation steps.")
-	return 0
+	return toolkit.ExitSuccess
 }
 
 // Run executes the project rename tool and returns its process exit code.
 func Run(args []string) int {
+	logging.Command("rename_project")
 	return runRenameTool(args)
 }

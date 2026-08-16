@@ -58,7 +58,8 @@ Tools/
 
 Each platform bundle under `Tools/Executable/<OS>/<GOARCH>/` contains the standalone
 `unitystarter_tools` executable plus `toolsbuild` for producing further bundles. The Windows bundle is
-committed; macOS and Linux bundles are produced with one command (below) or downloaded from CI artifacts.
+committed; macOS and Linux bundles are produced with one command (below) or downloaded from the CI
+workflow's Artifacts (each platform runner uploads the bundle it built and verified).
 
 ### Build from source
 
@@ -85,14 +86,24 @@ into `Tools/Executable/<OS>/<GOARCH>/` and exits non-zero on any failure, so it 
 CI release step without any scripting layer. The distributed `toolsbuild` executable is also runnable
 on its own: it locates the module root from its own path (not the working directory), so a terminal
 command like `Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` works from any
-directory. Run it from a terminal rather than double-clicking — it is a CLI program, and the console
-window closes as soon as it finishes.
+directory. It is a CLI program whose console window closes as soon as it finishes, so run it from a
+terminal to see its output.
 
 ## CI/CD
 
-An example GitHub Actions workflow lives at `.github/workflows/unitystarter-tools.yml`: it builds and
-vets the module, produces the current-platform bundle through `toolsbuild --verify`, and runs smoke
-commands. The same three commands work verbatim on Jenkins, TeamCity, GitLab CI, or a local shell:
+The workflow at `.github/workflows/unitystarter-tools.yml` runs on every push/PR touching `Tools/`
+(plus manual dispatch). Two jobs run in parallel:
+
+- `build`: hosted Ubuntu/Windows/macOS runners build and vet the module, check `gofmt` cleanliness,
+  run `go test`, produce and verify the current-platform bundle through `toolsbuild --verify`, run the
+  smoke commands, and upload the per-platform bundle as a workflow Artifact (download from the
+  workflow run page, kept for 30 days).
+- `linux-distros`: the same checks run inside real Debian (bookworm) and Arch Linux containers,
+  covering both a stable baseline distribution and a rolling-release distribution.
+
+Runs auto-cancel on newer pushes (`concurrency`), are capped at 25 minutes, and never short-circuit
+on the first platform failure (`fail-fast: false`). The same core commands work verbatim on
+Jenkins, TeamCity, GitLab CI, or a local shell:
 
 ```bash
 go build ./... && go vet ./...

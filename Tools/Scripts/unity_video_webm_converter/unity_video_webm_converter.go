@@ -299,7 +299,7 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 	if ctx.Err() != nil {
 		fmt.Println("  Cancelled by signal.")
 	}
-	waitForExit()
+	toolkit.WaitForExit()
 	if ctx.Err() != nil {
 		return toolkit.ExitCancelled
 	}
@@ -1041,15 +1041,9 @@ func readLine(reader *bufio.Reader) (string, error) {
 	return strings.TrimSpace(text), nil
 }
 
-func waitForExit() {
-	fmt.Println()
-	fmt.Print("Press Enter to exit...")
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-}
-
 func failWithMessage(message string) int {
 	fmt.Println(message)
-	waitForExit()
+	toolkit.WaitForExit()
 	return 1
 }
 

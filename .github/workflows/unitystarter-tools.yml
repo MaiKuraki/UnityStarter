@@ -1,0 +1,129 @@
+name: UnityStarter Tools
+
+on:
+  push:
+    paths:
+      - 'Tools/**'
+  pull_request:
+    paths:
+      - 'Tools/**'
+  workflow_dispatch:
+
+concurrency:
+  group: tools-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }})
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+          - os: windows-latest
+            goos: windows
+          - os: macos-latest
+            goos: darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: Tools/Scripts/go.sum
+
+      - name: Build, vet, format and test
+        shell: bash
+        working-directory: Tools/Scripts
+        run: |
+          go build ./...
+          go vet ./...
+          test -z "$(gofmt -l .)"
+          go test ./...
+
+      - name: Build release bundle with smoke verification
+        shell: bash
+        working-directory: Tools/Scripts
+        run: go run ./cmd/toolsbuild --targets "$(go env GOOS)/$(go env GOARCH)" --verify
+
+      - name: Smoke commands
+        shell: bash
+        working-directory: Tools/Scripts
+        run: |
+          go run ./cmd/unitystarter_tools --list
+          go run ./cmd/unitystarter_tools generate_file_tree --ci --depth 1 --target . --o smoke.md
+          rm -f smoke.md
+          go run ./cmd/unitystarter_tools unity_video_webm_converter --help
+          video_exit=$(go run ./cmd/unitystarter_tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
+          test "$video_exit" -eq 2
+          go run ./cmd/unitystarter_tools audio_volume_normalizer --help
+          audio_exit=$(go run ./cmd/unitystarter_tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
+          test "$audio_exit" -eq 2
+
+      - name: Upload platform bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: unitystarter-tools-${{ matrix.goos }}
+          path: Tools/Executable/${{ matrix.goos }}/**/*
+          if-no-files-found: error
+          retention-days: 30
+
+  linux-distros:
+    name: linux (${{ matrix.distro }} container)
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            image: debian:bookworm
+            setup: 'apt-get update && apt-get install -y --no-install-recommends ca-certificates git'
+          - distro: archlinux
+            image: archlinux:latest
+            setup: 'pacman -Sy --noconfirm ca-certificates git'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install prerequisites
+        shell: bash
+        run: ${{ matrix.setup }}
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: Tools/Scripts/go.sum
+
+      - name: Build, vet, format and test
+        shell: bash
+        working-directory: Tools/Scripts
+        run: |
+          go build ./...
+          go vet ./...
+          test -z "$(gofmt -l .)"
+          go test ./...
+
+      - name: Build and verify current-platform bundle
+        shell: bash
+        working-directory: Tools/Scripts
+        run: go run ./cmd/toolsbuild --targets "$(go env GOOS)/$(go env GOARCH)" --verify
+
+      - name: Smoke commands
+        shell: bash
+        working-directory: Tools/Scripts
+        run: |
+          go run ./cmd/unitystarter_tools --list
+          go run ./cmd/unitystarter_tools generate_file_tree --ci --depth 1 --target . --o smoke.md
+          rm -f smoke.md
+          go run ./cmd/unitystarter_tools unity_video_webm_converter --help
+          video_exit=$(go run ./cmd/unitystarter_tools unity_video_webm_converter --ci 2>/dev/null; echo $?)
+          test "$video_exit" -eq 2
+          go run ./cmd/unitystarter_tools audio_volume_normalizer --help
+          audio_exit=$(go run ./cmd/unitystarter_tools audio_volume_normalizer --ci --format mp3 2>/dev/null; echo $?)
+          test "$audio_exit" -eq 2
