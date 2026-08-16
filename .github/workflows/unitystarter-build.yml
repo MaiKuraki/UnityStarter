@@ -1,0 +1,55 @@
+# Player build smoke through game-ci. Deliberately NOT triggered on every push:
+# Unity builds are heavy (minutes, GBs of editor image), so this runs on a weekly
+# schedule plus manual dispatch. Requires the same license secrets as the test workflow.
+# SECURITY: never commit .ulf/.alf files (or any license content) to the repository,
+# even a private one - store license content only as the UNITY_LICENSE GitHub secret.
+name: UnityStarter Build
+
+on:
+  schedule:
+    - cron: '0 4 * * 1' # weekly, Monday 04:00 UTC (after the test run)
+  workflow_dispatch:
+    inputs:
+      targetPlatform:
+        description: 'Build target'
+        required: true
+        type: choice
+        default: StandaloneWindows64
+        options: [StandaloneWindows64, StandaloneLinux64, WebGL]
+
+concurrency:
+  group: unity-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ github.event.inputs.targetPlatform || 'StandaloneWindows64' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: UnityStarter/Library
+          key: Library-UnityStarter-2022.3.62f3-${{ hashFiles('UnityStarter/Packages/packages-lock.json') }}
+          restore-keys: |
+            Library-UnityStarter-2022.3.62f3-
+
+      - uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: UnityStarter
+          unityVersion: 2022.3.62f3
+          targetPlatform: ${{ github.event.inputs.targetPlatform || 'StandaloneWindows64' }}
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnityStarter-build-${{ github.event.inputs.targetPlatform || 'StandaloneWindows64' }}
+          path: UnityStarter/build/**
+          if-no-files-found: error
+          retention-days: 30

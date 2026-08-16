@@ -1,0 +1,73 @@
+# Unity EditMode/PlayMode tests through game-ci on a Linux editor container.
+# Requires Unity license secrets on the GitHub repository:
+#   - Professional: store the contents of the .ulf license file as UNITY_LICENSE.
+#   - Personal:     generate an activation file once with
+#                   game-ci/unity-request-activation-file and store it as UNITY_LICENSE.
+# SECURITY: never commit .ulf/.alf files (or any license content) to the repository,
+# even a private one. They are account-bound credentials: committing them shares your
+# Unity seat, risks activation lockouts, and violates the Unity license terms.
+# GitHub secrets are encrypted, injected only at runtime, and masked in logs.
+name: UnityStarter Unity Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'UnityStarter/Assets/**'
+      - 'UnityStarter/Packages/**'
+      - 'UnityStarter/ProjectSettings/**'
+  pull_request:
+    paths:
+      - 'UnityStarter/Assets/**'
+      - 'UnityStarter/Packages/**'
+      - 'UnityStarter/ProjectSettings/**'
+  schedule:
+    - cron: '0 20 * * 1' # weekly, Monday 20:00 UTC
+  workflow_dispatch:
+    inputs:
+      testMode:
+        description: 'Test mode'
+        required: true
+        type: choice
+        default: editmode
+        options: [editmode, playmode, all]
+
+concurrency:
+  group: unity-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ github.event.inputs.testMode || 'editmode' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: UnityStarter/Library
+          key: Library-UnityStarter-2022.3.62f3-${{ hashFiles('UnityStarter/Packages/packages-lock.json') }}
+          restore-keys: |
+            Library-UnityStarter-2022.3.62f3-
+
+      - uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: UnityStarter
+          unityVersion: 2022.3.62f3
+          testMode: ${{ github.event.inputs.testMode || 'editmode' }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: UnityStarter Tests
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-test-results-${{ github.event.inputs.testMode || 'editmode' }}
+          path: UnityStarter/artifacts
+          if-no-files-found: warn
+          retention-days: 14
