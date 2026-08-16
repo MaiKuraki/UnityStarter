@@ -1,25 +1,28 @@
 # Unity Starter 工具
 
-一个跨平台 Go 可执行文件（`unitystarter_tools`），在进程内承载全部仓库工具。
-不依赖 PowerShell、没有子进程启动器、运行时不下载任何东西、使用预编译产物无需安装 Go。
+两个跨平台 Go 可执行文件，按职责在进程内承载全部仓库工具：`unity-project-tools`（Unity 项目工具）
+与 `dev-tools`（通用媒体/文件工具）。不依赖 PowerShell、没有子进程启动器、运行时不下载
+任何东西、使用预编译产物无需安装 Go。
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 ## 概览
 
 ```bash
-unitystarter_tools --list
-unitystarter_tools rename_project --dry-run
-unitystarter_tools remove_unity_packages --allow-package com.unity.2d.sprite --dry-run
-unitystarter_tools unity_project_full_clean --dry-run
-unitystarter_tools generate_file_tree --ci --depth 2 --target . --o tree.md
-unitystarter_tools unity_video_webm_converter --ci --input Assets/Movies --output Assets/Movies/webm --jobs 8
-unitystarter_tools audio_volume_normalizer --ci --input Assets/Audio --format ogg --jobs 8
+unity-project-tools --list
+unity-project-tools rename_project --dry-run
+unity-project-tools remove_unity_packages --allow-package com.unity.2d.sprite --dry-run
+unity-project-tools unity_project_full_clean --dry-run
+
+dev-tools --list
+dev-tools generate_file_tree --ci --depth 2 --target . --o tree.md
+dev-tools unity_video_webm_converter --ci --input Assets/Movies --output Assets/Movies/webm --jobs 8
+dev-tools audio_volume_normalizer --ci --input Assets/Audio --format ogg --jobs 8
 ```
 
 第一个参数选择工具；其余参数原样转发，每个工具返回可移植退出码（`0` 成功、`1` 失败、`2` 用法错误、
-`130` 信号取消），因此二进制可以安全嵌入任何平台的 CI 流水线。`unitystarter_tools --help` 列出全部命令，
-`unitystarter_tools <command> --help` 显示各命令专属参数。
+`130` 信号取消），因此两个二进制都可以安全嵌入任何平台的 CI 流水线。`<二进制> --help` 列出其全部命令，
+`<二进制> <command> --help` 显示各命令专属参数。
 
 ## 目录结构
 
@@ -31,20 +34,28 @@ Tools/
       toolkit/                     # 命令注册表 + 派发契约
       safefs/                      # build-tag 安全文件系统移动
     cmd/
-      unitystarter_tools/          # 唯一发布的二进制
+      unity-project-tools/          # Unity 项目工具二进制
+      dev-tools/          # 通用工具二进制
       toolsbuild/                  # 交叉编译发布打包器
     <tool>/                        # 每个工具一个 package，Run(args) int
   Executable/
-    <OS>/<GOARCH>/                 # 预编译 unitystarter_tools + toolsbuild
+    <OS>/<GOARCH>/                 # 预编译 unity-project-tools + dev-tools + toolsbuild
 ```
 
 ## 命令
+
+### unity-project-tools（Unity 项目工具）
 
 | 命令 | 用途 | 备注 |
 | --- | --- | --- |
 | `rename_project` | 事务化改名 UnityStarter 派生项目 | `--dry-run` 完整只读预演；带日志、备份与回滚；可重复执行——再次改名会复用持久化状态并启用全新回退探测 |
 | `remove_unity_packages` | 从 `Packages/manifest.json` 删除显式授权的 Unity 包 | `--allow-package`、`--allow-referenced-package`、`--profile`、`--apply`、`--dry-run`；fail-closed |
-| `unity_project_full_clean` | 删除已验证缓存与 Build 所有的输出 | `--ci`、`--dry-run`、`--include-build-outputs` |
+| `unity_project_full_clean` | 删除已验证缓存与 Build 所有的输出 | `--ci`、`--dry-run`、`--include-build-outputs`；交互模式输入 `CLEAN` 确认；Unity 运行中或存在恢复证据时 fail-closed |
+
+### dev-tools（通用工具）
+
+| 命令 | 用途 | 备注 |
+| --- | --- | --- |
 | `generate_file_tree` | 生成 Markdown 目录树 | `--profile`、`--target`、`--depth`、`--ext`、`--ignore`、`--ci`、`-i` |
 | `texture_channel_packer` | 把多张图打包进 RGBA 通道 | `-r/-g/-b/-a`、`-o`、`-size`、`-preset`、`-ci`、`--dry-run` |
 | `audio_volume_normalizer` | 按类别做音频响度归一化 | `--ci --input <dir> [--format wav\|ogg] [--jobs N]`（CI 模式 `--input` 必填）；并行 worker 池（默认 CPU 数），Ctrl+C/SIGTERM 可取消；需要 FFmpeg |
@@ -54,15 +65,17 @@ Tools/
 
 ### 预编译产物（无需 Go）
 
-`Tools/Executable/<OS>/<GOARCH>/` 下每个平台包都包含独立的 `unitystarter_tools` 可执行文件以及用于
-继续产出更多平台包的 `toolsbuild`。Windows 包随仓库提交；macOS/Linux 包用一条命令即可生成（见下），
-或从 CI 工作流的 Artifacts 下载（每个平台 runner 都会上传其构建并验证过的平台包）。
+`Tools/Executable/<OS>/<GOARCH>/` 下每个平台包都包含独立的 `unity-project-tools` 与 `dev-tools`
+可执行文件，以及用于继续产出更多平台包的 `toolsbuild`。Windows 包随仓库提交；macOS/Linux 包用一条命令
+即可生成（见下），或从 CI 工作流的 Artifacts 下载（每个平台 runner 都会上传其构建并验证过的平台包）。
+在 Windows 上双击任一可执行文件都会打开其自身工具族的交互式命令菜单（按编号或名称选择工具，`q` 退出）；
+带参数运行时仍是纯 CLI。
 
 ### 从源码构建
 
 ```bash
 cd Tools/Scripts
-go build -mod=readonly -trimpath -buildvcs=false -o unitystarter_tools.exe ./cmd/unitystarter_tools
+go build -mod=readonly -trimpath -buildvcs=false -o unity-project-tools.exe ./cmd/unity-project-tools
 ```
 
 模块声明 `go 1.25.0`，因为破坏性文件系统工具依赖 Go 1.25 的 `os.Root` API。任何 1.21 及以上的 Go
@@ -101,7 +114,7 @@ go run ./cmd/toolsbuild --verify               # 顺带冒烟测试当前平台�
 ```bash
 go build ./... && go vet ./...
 go run ./cmd/toolsbuild --targets "$(go env GOOS)/$(go env GOARCH)" --verify
-go run ./cmd/unitystarter_tools --list
+go run ./cmd/unity-project-tools --list
 ```
 
 ## 前置条件
@@ -112,7 +125,7 @@ go run ./cmd/unitystarter_tools --list
 
 ## 设计说明
 
-- **单二进制、进程内派发**：每平台一个产物，所有平台体验一致。
+- **双二进制、进程内派发**：每个工具族每平台一个产物——Unity 项目工具与通用工具不共享二进制，所有平台体验一致。
 - **确定性构建**：`-mod=readonly`、锁定 `go.sum`、`-trimpath`、`-buildvcs=false`。
 - **Fail-closed**：破坏性工具保留日志/备份/租约安全机制，每个命令返回可移植退出码。
 - **有界并行**：FFmpeg 类工具用有界 worker 池处理文件（`--jobs`，默认 CPU 数，收敛到 1..64），不再顺序执行或无限派生进程。
