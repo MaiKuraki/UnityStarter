@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "workspaceRoot": ".",
+  "targets": [
+    {
+      "id": "build-data-identity",
+      "kind": "unityScriptAssets",
+      "scope": "project",
+      "availability": "required",
+      "path": "Assets/Build/Editor/BuildPipeline/Authoring/BuildData.cs",
+      "minimumMatches": 1,
+      "fields": [
+        { "name": "companyName", "valueTemplate": "${companyName}" },
+        { "name": "productName", "valueTemplate": "${productName}" },
+        { "name": "applicationIdentifier", "valueTemplate": "${applicationIdentifier}" }
+      ]
+    }
+  ]
+}
