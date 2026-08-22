@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
+using YooAsset;
 using YooAsset.Editor;
 
 namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
