@@ -7,6 +7,7 @@ using UnityEngine;
 
 namespace CycloneGames.UIFramework.Editor
 {
+    [InitializeOnLoad]
     internal static class UIWindowAssemblyValidator
     {
         private const string RuntimeAssemblyName = "CycloneGames.UIFramework.Runtime";
@@ -112,6 +113,21 @@ namespace CycloneGames.UIFramework.Editor
             s_activeEditorAssemblies.Clear();
         }
 
+        static UIWindowAssemblyValidator()
+        {
+            // The active-assembly list is cached. Rebuild it after every compilation so a runtime assembly
+            // that just gained its first script (or just changed platforms/defines) is never reported as
+            // "not active" from a stale graph.
+            CompilationPipeline.compilationFinished -= OnCompilationFinished;
+            CompilationPipeline.compilationFinished += OnCompilationFinished;
+        }
+
+        private static void OnCompilationFinished(object context)
+        {
+            s_activeEditorAssembliesBuilt = false;
+            s_activeEditorAssemblies.Clear();
+        }
+
         internal static void Validate(
             in UIWindowCreationPaths paths,
             bool useMvp,
@@ -188,27 +204,32 @@ namespace CycloneGames.UIFramework.Editor
                     $"- {label} assembly '{assembly.Name}' does not compile in the Editor, so post-compile prefab binding cannot complete.");
             }
 
-            bool isActive = false;
-            bool activeQueryFailed = false;
-            try
+            // A plain runtime assembly with no defineConstraints/versionDefines has nothing to gate it out
+            // of the build, so "not in the graph right now" is a false signal for it: it may simply be an
+            // empty assembly waiting for its first generated script, or a just-referenced assembly that has
+            // not compiled yet. Only conditionally-activated assemblies can legitimately be inactive, so only
+            // those are checked against the live compilation graph.
+            if (assembly.HasConditionalActivation)
             {
-                isActive = IsActiveInCurrentEditorCompilation(assembly.Name);
-            }
-            catch (Exception exception)
-            {
-                activeQueryFailed = true;
-                errors.Add(
-                    $"- {label} assembly '{assembly.Name}' could not be checked against Unity's current Editor compilation graph: {exception.Message}");
-            }
+                bool isActive = false;
+                bool activeQueryFailed = false;
+                try
+                {
+                    isActive = IsActiveInCurrentEditorCompilation(assembly.Name);
+                }
+                catch (Exception exception)
+                {
+                    activeQueryFailed = true;
+                    errors.Add(
+                        $"- {label} assembly '{assembly.Name}' could not be checked against Unity's current Editor compilation graph: {exception.Message}");
+                }
 
-            if (!isActive && !activeQueryFailed)
-            {
-                string conditionHint = assembly.HasConditionalActivation
-                    ? " Its defineConstraints/versionDefines are not satisfied in the current Editor compilation."
-                    : string.Empty;
-                errors.Add(
-                    $"- {label} assembly '{assembly.Name}' is not active in Unity's current Editor compilation graph." +
-                    conditionHint);
+                if (!isActive && !activeQueryFailed)
+                {
+                    errors.Add(
+                        $"- {label} assembly '{assembly.Name}' is not active in Unity's current Editor compilation graph. " +
+                        "Its defineConstraints/versionDefines are not satisfied in the current Editor compilation.");
+                }
             }
 
             if (!CanReference(assembly, runtimeAssembly))
@@ -256,7 +277,7 @@ namespace CycloneGames.UIFramework.Editor
             out string error)
         {
             target = default;
-            if (!UIWindowCreationValidator.TryValidateAssetFilePath(
+            if (!UIWindowPathUtility.TryValidateAssetFilePath(
                     outputFilePath,
                     ".cs",
                     out string canonicalPath,
@@ -433,7 +454,12 @@ namespace CycloneGames.UIFramework.Editor
 
             s_definitionsByName.Clear();
             s_definitionsByGuid.Clear();
-            string[] guids = AssetDatabase.FindAssets("t:AssemblyDefinitionAsset");
+            // FindAssets only searches Assets/ by default, so include Packages/ explicitly. The runtime
+            // assembly lives under Packages/ when the framework is referenced as a UPM package, and the
+            // creator still needs its asmdef metadata to validate the generated script's references.
+            string[] guids = AssetDatabase.FindAssets(
+                "t:AssemblyDefinitionAsset",
+                new[] { "Assets", "Packages" });
             for (int i = 0; i < guids.Length; i++)
             {
                 string assetPath = AssetDatabase.GUIDToAssetPath(guids[i]);
@@ -500,33 +526,28 @@ namespace CycloneGames.UIFramework.Editor
         {
             text = string.Empty;
             error = string.Empty;
-            if (!UIWindowCreationValidator.TryGetAbsoluteAssetPath(assetPath, out string absolutePath, out error))
-            {
-                return false;
-            }
 
-            FileInfo file = new FileInfo(absolutePath);
-            if (!file.Exists)
+            // Assembly boundaries can live under Packages/ (UPM, registry, git) as well as Assets/.
+            // Reading through the asset database avoids the Assets/-only path check that rejects packaged
+            // asmdef/asmref files, while leaving the output-folder validation (TryResolveAssetPath) strictly
+            // Assets/-only. This only reads assembly-definition metadata; it does not change which assets the
+            // creator writes to or selects.
+            TextAsset textAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(assetPath);
+            if (textAsset == null)
             {
                 error = $"Assembly boundary file '{assetPath}' does not exist.";
                 return false;
             }
-            if (file.Length > MaxAssemblyDefinitionBytes)
+
+            text = textAsset.text ?? string.Empty;
+            if (text.Length > MaxAssemblyDefinitionBytes)
             {
                 error = $"Assembly boundary file '{assetPath}' exceeds {MaxAssemblyDefinitionBytes} bytes.";
+                text = string.Empty;
                 return false;
             }
 
-            try
-            {
-                text = File.ReadAllText(absolutePath);
-                return true;
-            }
-            catch (Exception exception)
-            {
-                error = $"Could not read assembly boundary '{assetPath}': {exception.Message}";
-                return false;
-            }
+            return true;
         }
 
         private static bool IsEditorOnly(string[] includePlatforms)

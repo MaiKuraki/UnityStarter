@@ -117,10 +117,12 @@ namespace CycloneGames.AssetManagement.Editor
                 if (newObj != null)
                 {
                     var path = AssetDatabase.GetAssetPath(newObj);
-                    guidProp.stringValue = AssetDatabase.AssetPathToGUID(path);
-                    // A newly selected object has no provider-neutral runtime key. Clearing the previous value
-                    // prevents a location for another asset from surviving the reassignment silently.
-                    locationProp.stringValue = string.Empty;
+                    string selectedGuid = AssetDatabase.AssetPathToGUID(path);
+                    guidProp.stringValue = selectedGuid;
+                    // Auto-derive the provider runtime location when a registered resolver owns this asset
+                    // (e.g. a YooAsset address or asset path). When no resolver owns it the location stays
+                    // empty so the explicit "runtime location required" guidance remains visible.
+                    locationProp.stringValue = AssetRefLocationResolverRegistry.Resolve(selectedGuid, path) ?? string.Empty;
                 }
                 else
                 {

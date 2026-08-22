@@ -237,6 +237,7 @@ namespace CycloneGames.UIFramework.Editor
             UIWindowConfiguration.PrefabSource.PrefabReference;
         private bool _autoFillPathLocation = true;
         private string _runtimeLocation = string.Empty;
+        private bool _showLocationOverride;
         private Vector2 _scroll;
         private string _settingsPath;
         private bool _snapshotDirty = true;
@@ -630,9 +631,33 @@ namespace CycloneGames.UIFramework.Editor
 
                 case UIWindowConfiguration.PrefabSource.AssetReference:
                     EditorGUILayout.HelpBox(
-                        "Stores an explicit provider location plus the Editor GUID. Use the exact address expected by the configured IUIWindowAssetProvider.",
+                        "Stores the Editor GUID plus a provider runtime location. The location is auto-derived from the active asset management integration (for example a YooAsset address or asset path).",
                         MessageType.None);
-                    DrawRuntimeLocationField("Provider Location", "Provider-specific location or address. This field is required.");
+
+                    string autoPreview = GetAutoDerivedLocationPreview();
+                    if (string.IsNullOrEmpty(autoPreview))
+                    {
+                        DrawAlert(
+                            "Location cannot be auto-derived",
+                            "No asset management integration owns this prefab folder, or it is not covered by a YooAsset collector. Configure the collector, or use the manual override below.");
+                    }
+                    else
+                    {
+                        DrawPreviewRow("Auto-derived location", autoPreview);
+                    }
+
+                    _showLocationOverride = EditorGUILayout.Foldout(
+                        _showLocationOverride,
+                        "Manual override (advanced)",
+                        true);
+                    if (_showLocationOverride)
+                    {
+                        DrawRuntimeLocationField(
+                            "Provider Location",
+                            "Optional override for the provider-specific location or address. Leave empty to keep the auto-derived value.",
+                            required: false);
+                    }
+
                     DrawPreviewRow("Editor metadata", "Generated prefab GUID");
                     break;
 
@@ -669,7 +694,7 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.Space(8f);
         }
 
-        private void DrawRuntimeLocationField(string label, string tooltip)
+        private void DrawRuntimeLocationField(string label, string tooltip, bool required = true)
         {
             string newLocation = EditorGUILayout.TextField(
                 new GUIContent(label, tooltip),
@@ -683,12 +708,33 @@ namespace CycloneGames.UIFramework.Editor
             string trimmed = _runtimeLocation != null ? _runtimeLocation.Trim() : string.Empty;
             if (string.IsNullOrEmpty(trimmed))
             {
-                DrawAlert("Runtime location required", "Enter the exact location understood by the configured window asset provider.");
+                if (required)
+                {
+                    DrawAlert("Runtime location required", "Enter the exact location understood by the configured window asset provider.");
+                }
+                else
+                {
+                    DrawPreviewRow("Runtime location", "Auto-derived at creation");
+                }
             }
             else
             {
                 DrawPreviewRow("Runtime location", trimmed);
             }
+        }
+
+        private string GetAutoDerivedLocationPreview()
+        {
+            CreatorSnapshot snapshot = GetSnapshot();
+            if (!snapshot.HasPaths)
+            {
+                return null;
+            }
+
+            // The generated prefab does not exist yet, so only its future path is known. Resolvers that key
+            // off the asset path (for example YooAsset collectors) can still answer; the GUID is unknown until
+            // creation and is passed as null.
+            return UIWindowLocationResolverRegistry.Resolve(null, snapshot.Paths.PrefabFilePath);
         }
 
         private void DrawMvpSection()
@@ -1279,11 +1325,9 @@ namespace CycloneGames.UIFramework.Editor
 
         private static bool IsSourceReady(UIWindowCreationRequest request)
         {
-            if (request.SourceMode == UIWindowConfiguration.PrefabSource.AssetReference)
-            {
-                return !string.IsNullOrWhiteSpace(request.RuntimeLocation);
-            }
-
+            // AssetReference derives its provider location at creation time from the registered asset
+            // management integration, so an explicit runtime location is an optional override rather
+            // than a prerequisite.
             if (request.SourceMode == UIWindowConfiguration.PrefabSource.PathLocation &&
                 !request.AutoFillLocationFromPrefabPath)
             {
@@ -1354,7 +1398,7 @@ namespace CycloneGames.UIFramework.Editor
                     return "Direct generated prefab reference";
                 case UIWindowConfiguration.PrefabSource.AssetReference:
                     return string.IsNullOrWhiteSpace(_runtimeLocation)
-                        ? "Provider location required"
+                        ? "Auto-derived provider location"
                         : "Provider location: " + _runtimeLocation.Trim();
                 case UIWindowConfiguration.PrefabSource.PathLocation:
                     if (_autoFillPathLocation)

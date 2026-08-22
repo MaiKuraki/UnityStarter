@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.UIFramework.Editor.Integrations.AssetManagement",
+    "rootNamespace": "CycloneGames.UIFramework.Editor.Integrations",
+    "references": [
+        "CycloneGames.UIFramework.Editor",
+        "CycloneGames.AssetManagement.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.asset-management",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+        }
+    ],
+    "noEngineReferences": false
+}
