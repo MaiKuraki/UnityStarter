@@ -107,8 +107,7 @@ namespace CycloneGames.UIFramework.Editor
 
             if (GUILayout.Button("Find in Open Scenes"))
             {
-                _target = UnityEngine.Object.FindFirstObjectByType<UIManager>(
-                    FindObjectsInactive.Include);
+                _target = FindUIManagerInOpenScenes();
                 ClearSnapshot();
             }
 
@@ -201,6 +200,17 @@ namespace CycloneGames.UIFramework.Editor
             RefreshSnapshot();
             Repaint();
         }
+
+        // Editor-only diagnostic fallback. This runs only when the "Find in Open Scenes" button is
+        // pressed, never per-frame or in a hot path. UIManager exposes no runtime registry to consult
+        // (it is an optional MonoBehaviour host whose authority lives in UIService), so the scene-wide
+        // lookup is the intended contract here rather than a cost to optimize away.
+#pragma warning disable CG0011
+        private static UIManager FindUIManagerInOpenScenes()
+        {
+            return UnityEngine.Object.FindFirstObjectByType<UIManager>(FindObjectsInactive.Include);
+        }
+#pragma warning restore CG0011
 
         private void OnPlayModeStateChanged(PlayModeStateChange state)
         {

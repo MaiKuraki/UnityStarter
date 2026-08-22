@@ -361,6 +361,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
             var request = new AssetContentBuildRequest(
+                InvocationId,
                 BuildTarget.StandaloneWindows64,
                 "1.0.0",
                 projectRoot,

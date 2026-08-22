@@ -1,17 +1,13 @@
 {
-    "name": "CycloneGames.AssetManagement.Runtime.Providers.Addressables",
+    "name": "CycloneGames.AssetManagement.Editor.Providers.Addressables",
     "rootNamespace": "",
     "references": [
-        "UniTask",
-        "UniTask.Addressables",
-        "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.IO.Core",
-        "CycloneGames.IO.SystemIO",
-        "CycloneGames.Logging.Core",
-        "Unity.Addressables",
-        "Unity.ResourceManager"
+        "CycloneGames.AssetManagement.Editor",
+        "Unity.Addressables.Editor"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,

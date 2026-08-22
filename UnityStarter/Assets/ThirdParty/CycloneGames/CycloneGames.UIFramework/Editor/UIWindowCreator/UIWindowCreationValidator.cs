@@ -101,11 +101,6 @@ namespace CycloneGames.UIFramework.Editor
             {
                 scratchErrors.Add("- UILayer configuration is required");
             }
-            if (request.SourceMode == UIWindowConfiguration.PrefabSource.AssetReference &&
-                string.IsNullOrWhiteSpace(request.RuntimeLocation))
-            {
-                scratchErrors.Add("- AssetReference requires an explicit provider runtime location");
-            }
             if (request.SourceMode == UIWindowConfiguration.PrefabSource.PathLocation &&
                 !request.AutoFillLocationFromPrefabPath &&
                 string.IsNullOrWhiteSpace(request.RuntimeLocation))
@@ -156,6 +151,19 @@ namespace CycloneGames.UIFramework.Editor
                 return "Files Already Exist:\n\nThe following files would be overwritten:\n" +
                        string.Join("\n", scratchErrors) +
                        "\n\nPlease delete or rename them first, or choose a different window name.";
+            }
+
+            if (request.SourceMode == UIWindowConfiguration.PrefabSource.AssetReference &&
+                string.IsNullOrWhiteSpace(request.RuntimeLocation))
+            {
+                string autoDerived = UIWindowLocationResolverRegistry.Resolve(null, paths.PrefabFilePath);
+                if (string.IsNullOrEmpty(autoDerived))
+                {
+                    return "Asset Reference Requires a Location:\n\n" +
+                           "No asset management integration could auto-derive a provider location for the generated prefab. " +
+                           "Configure the active integration (for example a YooAsset collector that covers the prefab folder) " +
+                           "or enter a manual override.";
+                }
             }
 
             UIWindowAssemblyValidator.Validate(paths, request.UseMvp, scratchErrors);
@@ -322,29 +330,11 @@ namespace CycloneGames.UIFramework.Editor
             out string canonicalPath,
             out string error)
         {
-            canonicalPath = string.Empty;
-            if (!TryResolveAssetPath(assetPath, out canonicalPath, out _, out error))
-            {
-                return false;
-            }
-
-            if (string.IsNullOrEmpty(requiredExtension) ||
-                !requiredExtension.StartsWith(".", StringComparison.Ordinal))
-            {
-                error = "A required file extension must begin with '.'.";
-                return false;
-            }
-
-            if (!string.Equals(
-                    Path.GetExtension(canonicalPath),
-                    requiredExtension,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                error = $"Asset path '{assetPath}' must use the '{requiredExtension}' extension.";
-                return false;
-            }
-
-            return true;
+            return UIWindowPathUtility.TryValidateAssetFilePath(
+                assetPath,
+                requiredExtension,
+                out canonicalPath,
+                out error);
         }
 
         internal static bool TryGetAbsoluteAssetPath(
@@ -352,7 +342,7 @@ namespace CycloneGames.UIFramework.Editor
             out string absolutePath,
             out string error)
         {
-            return TryResolveAssetPath(assetPath, out _, out absolutePath, out error);
+            return UIWindowPathUtility.TryGetAbsoluteAssetPath(assetPath, out absolutePath, out error);
         }
 
         internal static bool TryEnsureOutputAvailable(
@@ -361,32 +351,11 @@ namespace CycloneGames.UIFramework.Editor
             out string absolutePath,
             out string error)
         {
-            absolutePath = string.Empty;
-            if (!TryValidateAssetFilePath(
-                    assetPath,
-                    requiredExtension,
-                    out string canonicalPath,
-                    out error) ||
-                !TryGetAbsoluteAssetPath(canonicalPath, out absolutePath, out error))
-            {
-                return false;
-            }
-
-            bool assetExists = File.Exists(absolutePath);
-            bool metaExists = File.Exists(absolutePath + ".meta");
-            if (!assetExists && !metaExists)
-            {
-                return true;
-            }
-
-            string collision = assetExists && metaExists
-                ? "asset and metadata files"
-                : assetExists
-                    ? "asset file"
-                    : "orphan metadata file";
-            error = $"Output '{canonicalPath}' already has an existing {collision}.";
-            absolutePath = string.Empty;
-            return false;
+            return UIWindowPathUtility.TryEnsureOutputAvailable(
+                assetPath,
+                requiredExtension,
+                out absolutePath,
+                out error);
         }
 
         private static bool TryNormalizeAssetFolderPath(
@@ -394,102 +363,7 @@ namespace CycloneGames.UIFramework.Editor
             out string normalized,
             out string error)
         {
-            normalized = string.Empty;
-            error = string.Empty;
-            if (string.IsNullOrEmpty(path))
-            {
-                error = "A selected output folder has no project asset path.";
-                return false;
-            }
-
-            string trimmed = path.EndsWith("/", StringComparison.Ordinal)
-                ? path.Substring(0, path.Length - 1)
-                : path;
-            string probe = string.Equals(trimmed, "Assets", StringComparison.Ordinal)
-                ? "Assets/__uiwindow_creator_folder_probe__.tmp"
-                : trimmed + "/__uiwindow_creator_folder_probe__.tmp";
-            if (!TryResolveAssetPath(probe, out string canonicalProbe, out _, out error))
-            {
-                return false;
-            }
-
-            int separator = canonicalProbe.LastIndexOf('/');
-            normalized = canonicalProbe.Substring(0, separator + 1);
-            return true;
-        }
-
-        private static bool TryResolveAssetPath(
-            string assetPath,
-            out string canonicalPath,
-            out string absolutePath,
-            out string error)
-        {
-            const int maxAssetPathLength = 1024;
-            canonicalPath = string.Empty;
-            absolutePath = string.Empty;
-            error = string.Empty;
-
-            if (string.IsNullOrEmpty(assetPath) || assetPath.Length > maxAssetPathLength)
-            {
-                error = $"Asset path is empty or exceeds {maxAssetPathLength} characters.";
-                return false;
-            }
-            if (!assetPath.StartsWith("Assets/", StringComparison.Ordinal) ||
-                assetPath.IndexOf('\\') >= 0 ||
-                assetPath.EndsWith("/", StringComparison.Ordinal))
-            {
-                error = $"Asset path '{assetPath}' must be a canonical file path under Assets/.";
-                return false;
-            }
-
-            for (int i = 0; i < assetPath.Length; i++)
-            {
-                if (char.IsControl(assetPath[i]))
-                {
-                    error = "Asset paths cannot contain control characters.";
-                    return false;
-                }
-            }
-
-            try
-            {
-                string assetsRoot = Path.GetFullPath(Application.dataPath)
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                absolutePath = Path.GetFullPath(Path.Combine(
-                    assetsRoot,
-                    assetPath.Substring("Assets/".Length).Replace('/', Path.DirectorySeparatorChar)));
-                StringComparison pathComparison = Application.platform == RuntimePlatform.WindowsEditor
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
-                string rootPrefix = assetsRoot + Path.DirectorySeparatorChar;
-                if (!absolutePath.StartsWith(rootPrefix, pathComparison))
-                {
-                    error = $"Asset path '{assetPath}' escapes the project Assets root.";
-                    absolutePath = string.Empty;
-                    return false;
-                }
-
-                string relative = absolutePath.Substring(rootPrefix.Length)
-                    .Replace(Path.DirectorySeparatorChar, '/')
-                    .Replace(Path.AltDirectorySeparatorChar, '/');
-                canonicalPath = "Assets/" + relative;
-                if (!string.Equals(assetPath, canonicalPath, StringComparison.Ordinal))
-                {
-                    error = $"Asset path '{assetPath}' is not canonical. Expected '{canonicalPath}'.";
-                    canonicalPath = string.Empty;
-                    absolutePath = string.Empty;
-                    return false;
-                }
-
-                return true;
-            }
-            catch (Exception exception)
-            {
-                error = $"Asset path '{assetPath}' is invalid: {exception.Message}";
-                canonicalPath = string.Empty;
-                absolutePath = string.Empty;
-                return false;
-            }
+            return UIWindowPathUtility.TryNormalizeAssetFolderPath(path, out normalized, out error);
         }
 
         private static void AddIfExists(List<string> results, string label, string path)
