@@ -214,7 +214,7 @@ namespace CycloneGames.UIFramework.Editor
 
                 case UIWindowConfiguration.PrefabSource.AssetReference:
                     prefabRefProperty.objectReferenceValue = null;
-                    SetAssetRef(assetRefProperty, runtimeLocation?.Trim() ?? string.Empty, guid);
+                    SetAssetRef(assetRefProperty, ResolveAssetReferenceLocation(runtimeLocation, guid, prefabAssetPath), guid);
                     locationProperty.stringValue = string.Empty;
                     break;
 
@@ -234,6 +234,23 @@ namespace CycloneGames.UIFramework.Editor
         private static UIWindow ResolveWindowComponent(GameObject prefab)
         {
             return prefab != null ? prefab.GetComponent<UIWindow>() : null;
+        }
+
+        private static string ResolveAssetReferenceLocation(
+            string runtimeLocation,
+            string guid,
+            string prefabAssetPath)
+        {
+            string explicitLocation = runtimeLocation?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(explicitLocation))
+            {
+                return explicitLocation;
+            }
+
+            // No manual override. Derive the provider runtime location from the active asset management
+            // integration when one is installed; otherwise leave it empty so the "runtime location required"
+            // guidance stays visible instead of writing a guessed address.
+            return UIWindowLocationResolverRegistry.Resolve(guid, prefabAssetPath) ?? string.Empty;
         }
 
         private static void ClearAssetRef(SerializedProperty assetRefProperty)

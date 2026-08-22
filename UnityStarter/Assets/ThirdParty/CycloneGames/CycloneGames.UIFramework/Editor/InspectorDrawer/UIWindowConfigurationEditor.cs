@@ -43,6 +43,9 @@ namespace CycloneGames.UIFramework.Editor
         private string _cachedEditorGuid;
         private GameObject _cachedTrackedPrefab;
         private bool _cachedTrackedPrefabHasWindow;
+        private string _cachedDerivedLocationGuid;
+        private string _cachedDerivedLocation;
+        private bool _locationSyncSavePending;
 
         private void OnEnable()
         {
@@ -58,6 +61,8 @@ namespace CycloneGames.UIFramework.Editor
             _cachedEditorGuid = null;
             _cachedTrackedPrefab = null;
             _cachedTrackedPrefabHasWindow = false;
+            _cachedDerivedLocationGuid = null;
+            _cachedDerivedLocation = string.Empty;
         }
 
         public override void OnInspectorGUI()
@@ -251,38 +256,140 @@ namespace CycloneGames.UIFramework.Editor
             SerializedProperty location = _prefabAssetRef.FindPropertyRelative("location");
             SerializedProperty editorGuid = _prefabAssetRef.FindPropertyRelative("editorGuid");
 
-            EditorGUILayout.PropertyField(location, new GUIContent(
-                "Runtime Location",
-                "Exact address consumed by the configured runtime asset provider."));
-
             GameObject trackedPrefab = ResolveTrackedPrefab(editorGuid);
             EditorGUI.showMixedValue = editorGuid.hasMultipleDifferentValues;
             EditorGUI.BeginChangeCheck();
             GameObject selectedPrefab = EditorGUILayout.ObjectField(
                 new GUIContent(
                     "Editor Prefab",
-                    "Optional project prefab used only for authoring validation. Its GUID is not a runtime address."),
+                    "Optional project prefab used for authoring validation and to auto-derive the runtime location."),
                 trackedPrefab,
                 typeof(GameObject),
                 false) as GameObject;
             if (EditorGUI.EndChangeCheck())
             {
-                editorGuid.stringValue = selectedPrefab == null
+                string newGuid = selectedPrefab == null
                     ? string.Empty
                     : AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(selectedPrefab));
+                editorGuid.stringValue = newGuid;
+                _cachedDerivedLocationGuid = null;
+                location.stringValue = DeriveLocation(newGuid);
                 _cachedEditorGuid = null;
                 _cachedTrackedPrefab = selectedPrefab;
                 _cachedTrackedPrefabHasWindow =
                     selectedPrefab != null && selectedPrefab.TryGetComponent(out UIWindow _);
+                // Both the Editor GUID and the auto-derived location changed here, and this write is the one
+                // path the collector-config sync below cannot reach (its value is already equal). Save it
+                // explicitly so assigning a prefab does not leave the change pending a Ctrl+S.
+                ScheduleDelayedSave();
             }
-
             EditorGUI.showMixedValue = false;
+
+            DrawReadOnlyRuntimeLocation(location, editorGuid);
+            EditorGUILayout.Space(4f);
+
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.PropertyField(editorGuid, new GUIContent(
                     "Editor GUID",
                     "Stable Editor-only project identity retained when the prefab moves."));
             }
+        }
+
+        private void DrawReadOnlyRuntimeLocation(SerializedProperty location, SerializedProperty editorGuid)
+        {
+            bool previousMixed = EditorGUI.showMixedValue;
+            EditorGUI.showMixedValue = location.hasMultipleDifferentValues;
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.TextField(
+                    new GUIContent(
+                        "Runtime Location",
+                        "Auto-derived from the selected prefab through the active asset provider (for example a YooAsset address). Not editable here."),
+                    location.stringValue);
+            }
+            EditorGUI.showMixedValue = previousMixed;
+
+            if (editorGuid.hasMultipleDifferentValues || string.IsNullOrWhiteSpace(editorGuid.stringValue))
+            {
+                return;
+            }
+
+            string derived = DeriveLocation(editorGuid.stringValue);
+            if (string.IsNullOrWhiteSpace(derived))
+            {
+                if (string.IsNullOrWhiteSpace(location.stringValue))
+                {
+                    EditorGUILayout.HelpBox(
+                        "No active asset provider owns this prefab. Ensure a YooAsset collector (or another provider) covers it.",
+                        MessageType.Warning);
+                }
+                else
+                {
+                    // The prefab was previously owned by a provider but no longer is. Keep the stored location:
+                    // silently wiping it would break a still-valid runtime reference and hide the mismatch.
+                    EditorGUILayout.HelpBox(
+                        "The active asset provider no longer owns this prefab. The stored location is preserved.",
+                        MessageType.Warning);
+                }
+
+                return;
+            }
+
+            // Keep the stored location in lock-step with the provider. This covers collector-config changes
+            // that the prefab-move postprocessor cannot observe; there is no manual sync step to forget.
+            if (!string.Equals(location.stringValue, derived, System.StringComparison.Ordinal))
+            {
+                location.stringValue = derived;
+                ScheduleDelayedSave();
+            }
+        }
+
+        private void ScheduleDelayedSave()
+        {
+            if (_locationSyncSavePending)
+            {
+                return;
+            }
+
+            _locationSyncSavePending = true;
+            EditorApplication.delayCall += () =>
+            {
+                _locationSyncSavePending = false;
+                AssetDatabase.SaveAssets();
+            };
+        }
+
+        private string DeriveLocation(string guid)
+        {
+            if (string.IsNullOrWhiteSpace(guid))
+            {
+                return string.Empty;
+            }
+
+            if (string.Equals(_cachedDerivedLocationGuid, guid, System.StringComparison.Ordinal))
+            {
+                return _cachedDerivedLocation;
+            }
+
+            _cachedDerivedLocationGuid = guid;
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path))
+            {
+                _cachedDerivedLocation = string.Empty;
+                return _cachedDerivedLocation;
+            }
+
+            try
+            {
+                _cachedDerivedLocation = UIWindowLocationResolverRegistry.Resolve(guid, path) ?? string.Empty;
+            }
+            catch
+            {
+                _cachedDerivedLocation = string.Empty;
+            }
+
+            return _cachedDerivedLocation;
         }
 
         private GameObject ResolveTrackedPrefab(SerializedProperty editorGuid)
@@ -438,7 +545,9 @@ namespace CycloneGames.UIFramework.Editor
 
             if (string.IsNullOrWhiteSpace(location.stringValue))
             {
-                EditorGUILayout.HelpBox("Runtime Location is required.", MessageType.Warning);
+                EditorGUILayout.HelpBox(
+                    "Runtime Location could not be auto-derived. Assign an Editor Prefab covered by an active asset provider (for example a YooAsset collector), then re-derive.",
+                    MessageType.Warning);
             }
 
             if (string.IsNullOrWhiteSpace(editorGuid.stringValue))
