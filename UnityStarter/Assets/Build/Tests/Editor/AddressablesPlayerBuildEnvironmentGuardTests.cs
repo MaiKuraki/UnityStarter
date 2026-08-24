@@ -179,7 +179,8 @@ namespace Build.Pipeline.Tests.Editor
                             projectRoot,
                             configuration,
                             BuildIncrementality.Clean,
-                            batchMode: true)
+                            batchMode: true,
+                            purpose: BuildPurpose.Release)
                     };
                 }
                 else

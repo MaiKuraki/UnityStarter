@@ -367,7 +367,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 projectRoot,
                 null,
                 BuildIncrementality.Incremental,
-                true);
+                true,
+                BuildPurpose.Release);
 
             YooAsset3PackageBuildPlan execution = transaction.CreateExecutionPlan(
                 request,

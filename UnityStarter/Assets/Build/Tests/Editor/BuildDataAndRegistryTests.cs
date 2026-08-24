@@ -775,7 +775,8 @@ namespace Build.Pipeline.Tests.Editor
                     projectRoot,
                     configuration,
                     BuildIncrementality.Clean,
-                    batchMode: false);
+                    batchMode: false,
+                    purpose: BuildPurpose.Release);
                 var secondRequest = new AssetContentBuildRequest(
                     "content-dlc",
                     BuildTarget.StandaloneWindows64,
@@ -783,7 +784,8 @@ namespace Build.Pipeline.Tests.Editor
                     projectRoot,
                     configuration,
                     BuildIncrementality.Clean,
-                    batchMode: false);
+                    batchMode: false,
+                    purpose: BuildPurpose.Release);
 
                 string first = adapter.GetExclusiveOutputPaths(firstRequest).Single();
                 string second = adapter.GetExclusiveOutputPaths(secondRequest).Single();

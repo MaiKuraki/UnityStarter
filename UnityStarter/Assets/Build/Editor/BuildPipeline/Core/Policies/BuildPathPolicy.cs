@@ -156,7 +156,7 @@ namespace Build.Pipeline.Editor
                 || value.EndsWith(".", StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    $"{name} may not start or end with whitespace or a period.",
+                    $"{name} '{value}' may not start or end with whitespace or a period.",
                     nameof(value));
             }
 

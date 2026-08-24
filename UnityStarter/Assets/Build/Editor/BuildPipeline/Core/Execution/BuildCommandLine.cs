@@ -69,6 +69,7 @@ namespace Build.Pipeline.Editor
             }
         }
         public bool RecoverOnly { get; internal set; }
+        public bool ReplaceExactVersion { get; internal set; }
 
         internal List<BuildCommandLineRecipeInvocation> MutableRecipeInvocations => recipeInvocations;
         internal List<string> MutableSelectedInvocationIds => selectedInvocationIds;
@@ -119,6 +120,7 @@ namespace Build.Pipeline.Editor
         public const string DisableCheat = Prefix + "DisableCheat";
         public const string AllowExternalOutput = Prefix + "AllowExternalOutput";
         public const string RecoverOnly = Prefix + "RecoverOnly";
+        public const string ReplaceExactVersion = Prefix + "ReplaceExactVersion";
     }
 
     public static class BuildCommandLine
@@ -163,7 +165,8 @@ namespace Build.Pipeline.Editor
             BuildCommandLineOptionNames.EnableCheat,
             BuildCommandLineOptionNames.DisableCheat,
             BuildCommandLineOptionNames.AllowExternalOutput,
-            BuildCommandLineOptionNames.RecoverOnly
+            BuildCommandLineOptionNames.RecoverOnly,
+            BuildCommandLineOptionNames.ReplaceExactVersion
         };
 
         public static BuildCommandLineOptions Parse(IReadOnlyList<string> arguments)
@@ -333,6 +336,10 @@ namespace Build.Pipeline.Editor
             else if (argument.Equals(BuildCommandLineOptionNames.RecoverOnly, StringComparison.OrdinalIgnoreCase))
             {
                 options.RecoverOnly = true;
+            }
+            else if (argument.Equals(BuildCommandLineOptionNames.ReplaceExactVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                options.ReplaceExactVersion = true;
             }
         }
 

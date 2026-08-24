@@ -1547,6 +1547,15 @@ namespace Build.Pipeline.Editor
                 BuildPathPolicy.ValidatePortableProjectRelativePath(
                     relative,
                     "Player output entry");
+                // The stage payload path is longer than the published path by the
+                // ".bps-<identity>-<transactionId>" scratch prefix. Hash-named YooAsset
+                // bundles (BundleName_HashName) can make a stage file path exceed the
+                // Win32 MAX_PATH budget even when the published path fits, which would
+                // otherwise surface later as a misleading DirectoryNotFoundException
+                // from FileStream. Reject it here with an actionable PathTooLongException.
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
+                    path,
+                    "Player output entry");
                 if (!portableNames.Add(relative))
                 {
                     throw new InvalidOperationException(

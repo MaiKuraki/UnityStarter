@@ -460,6 +460,24 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
+        public async UniTask<string> RequestPackageVersionAsync(
+            CancellationToken cancellationToken = default)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDestroyed();
+
+            RequestPackageVersionOperation operation = _rawPackage.RequestPackageVersionAsync();
+            await operation;
+            if (operation.Status != EOperationStatus.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    operation.Error ?? $"YooAsset package '{Name}' failed to request its package version.");
+            }
+
+            return operation.PackageVersion;
+        }
+
         public UniTask<bool> ClearAllCacheFilesAsync(
             CancellationToken cancellationToken = default)
         {
