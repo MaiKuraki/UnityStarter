@@ -234,6 +234,31 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void Parse_ReplaceExactVersion_IsParsedAsFlag()
+        {
+            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+            {
+                BuildCommandLineOptionNames.BuildTarget,
+                nameof(BuildTarget.StandaloneWindows64),
+                BuildCommandLineOptionNames.ReplaceExactVersion
+            });
+
+            Assert.That(options.ReplaceExactVersion, Is.True);
+        }
+
+        [Test]
+        public void Parse_WithoutReplaceExactVersion_DefaultsToFalse()
+        {
+            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+            {
+                BuildCommandLineOptionNames.BuildTarget,
+                nameof(BuildTarget.StandaloneWindows64)
+            });
+
+            Assert.That(options.ReplaceExactVersion, Is.False);
+        }
+
+        [Test]
         public void Parse_Recipe_AllowsRepeatedStepTypeWithDistinctInvocationIds()
         {
             BuildCommandLineOptions options = BuildCommandLine.Parse(new[]

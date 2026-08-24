@@ -268,7 +268,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         public IReadOnlyList<YooAsset3PackagePublication> Packages => packages;
-        internal bool HasDownstreamInputs => packages.Any(package => package.BundledOperation != null);
+        // A bundled target only counts as a downstream input when it manages sibling
+        // meta, i.e. it lives under Assets/StreamingAssets and will be swept into the
+        // Player by Unity. Bundled targets elsewhere are not copied into the Player,
+        // so they must not trigger downstream activation. This aligns with the
+        // managesSiblingMeta filter in ActivateDownstreamInputs and the defensive
+        // continue in HidePublicationArtifacts.
+        internal bool HasDownstreamInputs => packages.Any(package =>
+            package.BundledOperation != null && package.BundledOperation.managesSiblingMeta);
         internal string PublicationId => publicationId;
         internal string StateRelativePath => stateRelativePath;
 

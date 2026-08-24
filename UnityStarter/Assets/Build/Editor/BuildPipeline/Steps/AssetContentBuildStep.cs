@@ -170,7 +170,9 @@ namespace Build.Pipeline.Editor
                 context.Request.ProjectRoot,
                 configuration,
                 invocation.Incrementality,
-                context.Request.BatchMode);
+                context.Request.BatchMode,
+                context.Request.Purpose,
+                context.Request.ReplaceExactVersion);
         }
     }
 }
