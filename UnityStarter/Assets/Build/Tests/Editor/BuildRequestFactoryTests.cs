@@ -475,6 +475,23 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(request.IdentityOverride.CiRunId, Is.EqualTo("job-17"));
         }
 
+        [Test]
+        public void CreateForCommandLine_WithReplaceExactVersion_PreservesExplicitFlag()
+        {
+            BuildRequest request = CreateCommandLineRequest(
+                BuildCommandLineOptionNames.ReplaceExactVersion);
+
+            Assert.That(request.ReplaceExactVersion, Is.True);
+        }
+
+        [Test]
+        public void CreateForCommandLine_WithoutReplaceExactVersion_DefaultsToFalse()
+        {
+            BuildRequest request = CreateCommandLineRequest();
+
+            Assert.That(request.ReplaceExactVersion, Is.False);
+        }
+
         [TestCase(CheatBuildMode.Disabled, false, null, false)]
         [TestCase(CheatBuildMode.DevelopmentBuilds, true, null, true)]
         [TestCase(CheatBuildMode.Enabled, false, null, true)]
@@ -618,7 +635,45 @@ namespace Build.Pipeline.Tests.Editor
                     buildData,
                     BuildTarget.StandaloneWindows64,
                     invocationIdsOverride: null));
-            StringAssert.Contains("cannot include required content", exception.Message);
+            StringAssert.Contains("enabled asset-content", exception.Message);
+        }
+
+        [Test]
+        public void CreateLocalReleasePreview_PlayerWithEnabledContent_IncludesContent()
+        {
+            SetRecipe(new[]
+            {
+                new BuildRecipeInvocation(
+                    "content",
+                    BuildStepTypeIds.AssetContent,
+                    enabled: true,
+                    incrementality: BuildIncrementality.Clean),
+                new BuildRecipeInvocation(
+                    "player-client",
+                    BuildStepTypeIds.Player,
+                    incrementality: BuildIncrementality.Clean,
+                    dependencies: new[]
+                    {
+                        new BuildInvocationDependency(
+                            "content",
+                            BuildDependencyMode.IfSelected)
+                    })
+            });
+
+            BuildRequest request = BuildRequestFactory.CreateLocalReleasePreview(
+                buildData,
+                BuildTarget.StandaloneWindows64,
+                invocationIdsOverride: null);
+
+            Assert.That(request.Steps.Count, Is.EqualTo(2));
+            Assert.That(
+                request.Steps[0].StepTypeId,
+                Is.EqualTo(BuildStepTypeIds.AssetContent));
+            Assert.That(
+                request.Steps[1].StepTypeId,
+                Is.EqualTo(BuildStepTypeIds.Player));
+            Assert.DoesNotThrow(
+                () => BuildRequestFactory.ValidateLocalReleasePreviewRequest(request));
         }
 
         [Test]

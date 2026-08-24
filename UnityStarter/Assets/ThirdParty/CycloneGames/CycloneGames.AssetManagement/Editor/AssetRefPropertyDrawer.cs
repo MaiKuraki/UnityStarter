@@ -131,7 +131,10 @@ namespace CycloneGames.AssetManagement.Editor
                 }
             }
 
-            EditorGUI.PropertyField(locationRect, locationProp, s_RuntimeLocationLabel);
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUI.PropertyField(locationRect, locationProp, s_RuntimeLocationLabel);
+            }
 
             EditorGUI.EndProperty();
         }

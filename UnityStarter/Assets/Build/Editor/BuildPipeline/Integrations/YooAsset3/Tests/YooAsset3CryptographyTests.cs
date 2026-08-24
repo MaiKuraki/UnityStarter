@@ -164,7 +164,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 Environment.CurrentDirectory,
                 null,
                 BuildIncrementality.Clean,
-                false);
+                false,
+                BuildPurpose.Release);
         }
 
         private static YooAssetPackageProfile CreateProfile(

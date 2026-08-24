@@ -318,7 +318,8 @@ namespace Build.Pipeline.Editor
             BuildIdentityOverride identityOverride,
             IReadOnlyList<BuildStepInvocation> steps,
             BuildSourceCleanlinessPolicy sourceCleanlinessPolicy,
-            BuildPurpose purpose)
+            BuildPurpose purpose,
+            bool replaceExactVersion = false)
         {
             CompanyName = companyName ?? string.Empty;
             ProductName = productName ?? string.Empty;
@@ -365,6 +366,7 @@ namespace Build.Pipeline.Editor
             }
 
             Purpose = purpose;
+            ReplaceExactVersion = replaceExactVersion;
             if (sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.RequireClean
                 && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyDevelopment
                 && sourceCleanlinessPolicy != BuildSourceCleanlinessPolicy.AllowDirtyLocalRelease)
@@ -416,6 +418,7 @@ namespace Build.Pipeline.Editor
         public BuildIdentityOverride IdentityOverride { get; }
         public BuildSourceCleanlinessPolicy SourceCleanlinessPolicy { get; }
         public BuildPurpose Purpose { get; }
+        public bool ReplaceExactVersion { get; }
         public bool RequireCleanSource { get; }
         public bool CanPublishReleaseBaseline =>
             Purpose == BuildPurpose.Release && RequireCleanSource;
