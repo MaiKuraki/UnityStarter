@@ -18,6 +18,8 @@ namespace Build.Pipeline.Editor
 
     /// <summary>
     /// Describes one provider-independent content build invocation.
+    /// <see cref="Purpose"/> lets adapters distinguish release builds (immutable by
+    /// default) from local previews (overwritable) without mutating shared profile assets.
     /// </summary>
     public sealed class AssetContentBuildRequest
     {
@@ -28,7 +30,9 @@ namespace Build.Pipeline.Editor
             string projectRoot,
             AssetContentBuildConfiguration configuration,
             BuildIncrementality incrementality,
-            bool batchMode)
+            bool batchMode,
+            BuildPurpose purpose,
+            bool replaceExactVersion = false)
         {
             if (string.IsNullOrWhiteSpace(invocationId))
             {
@@ -45,6 +49,8 @@ namespace Build.Pipeline.Editor
             ProviderId = configuration?.ProviderId ?? string.Empty;
             Incrementality = incrementality;
             BatchMode = batchMode;
+            Purpose = purpose;
+            ReplaceExactVersion = replaceExactVersion;
         }
 
         public string InvocationId { get; }
@@ -55,6 +61,24 @@ namespace Build.Pipeline.Editor
         public AssetContentBuildConfiguration Configuration { get; }
         public BuildIncrementality Incrementality { get; }
         public bool BatchMode { get; }
+        public BuildPurpose Purpose { get; }
+        public bool ReplaceExactVersion { get; }
+
+        /// <summary>
+        /// True when the invocation is an interactive local iteration (a non-batch
+        /// development build or a local release preview). Local iterations use a stable,
+        /// non-version-controlled version and are intentionally overwritable so repeated
+        /// builds in the same workspace do not collide with committed output.
+        /// </summary>
+        public bool IsLocalIteration =>
+            !BatchMode && (Purpose == BuildPurpose.Development || Purpose == BuildPurpose.LocalReleasePreview);
+
+        /// <summary>
+        /// True when the invocation is a local release preview. Local previews use a
+        /// stable, non-version-controlled version and are intentionally overwritable so
+        /// repeated previews in the same workspace do not collide with committed output.
+        /// </summary>
+        public bool IsLocalPreview => Purpose == BuildPurpose.LocalReleasePreview;
     }
 
     /// <summary>

@@ -20,6 +20,12 @@ namespace CycloneGames.AssetManagement.Runtime
         UniTask UnloadUnusedProviderAssetsAsync();
 
         /// <summary>
+        /// Requests the provider's current package version. The returned token must then be passed to
+        /// <see cref="UpdatePackageManifestAsync"/> to activate the matching manifest.
+        /// </summary>
+        UniTask<string> RequestPackageVersionAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Activates a manifest version obtained by product code through an authenticated, response-size-bounded
         /// version service. Provider-native version requests are intentionally not exposed because their response
         /// buffering cannot enforce the framework's authentication and response-size boundaries.

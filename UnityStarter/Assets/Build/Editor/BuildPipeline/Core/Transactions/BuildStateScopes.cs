@@ -972,6 +972,23 @@ namespace Build.Pipeline.Editor
                 }
             }
 
+            // Interactive local iterations (local release previews and non-batch
+            // development builds) never consume the version-controlled commit-count
+            // version namespace. Route them to the stable local version even when VC
+            // metadata is available, so repeated local builds in the same workspace
+            // reuse a dedicated, overwritable version instead of colliding with an
+            // existing commit-count directory. An explicit source-identity override
+            // still wins because it intentionally pins a specific version.
+            if (!request.BatchMode
+                && (request.Purpose == BuildPurpose.LocalReleasePreview
+                    || request.Purpose == BuildPurpose.Development)
+                && !identityOverride.HasSourceIdentity)
+            {
+                string localVersionReason = detectionFailure
+                    ?? "Local iterative build resolves a stable, non-version-controlled local version.";
+                return CreateLocalVersion(request, identityOverride, localVersionReason);
+            }
+
             if (metadata == null)
             {
                 if (identityOverride.HasSourceIdentity
@@ -1038,6 +1055,14 @@ namespace Build.Pipeline.Editor
                 identityOverride.CiRunId);
         }
 
+        // Reserved build-number sentinels for interactive local iterations.
+        // They are intentionally placed far above any realistic version-control
+        // commit count so a repeated local build can never collide with a committed
+        // release/CI package directory, and each local purpose gets its own stable
+        // slot so Development and LocalReleasePreview output never overwrite each other.
+        private const long LocalDevelopmentBuildNumber = 9000001L;
+        private const long LocalPreviewBuildNumber = 9000002L;
+
         private static BuildVersionContext CreateLocalVersion(
             BuildRequest request,
             BuildIdentityOverride identityOverride,
@@ -1051,7 +1076,8 @@ namespace Build.Pipeline.Editor
                 "[BuildPipeline] Using explicit " + displayName +
                 " version metadata. " + reason);
             const string CommitCount = "0";
-            long buildNumber = identityOverride.BuildNumber ?? 1L;
+            long buildNumber = identityOverride.BuildNumber
+                ?? (localPreview ? LocalPreviewBuildNumber : LocalDevelopmentBuildNumber);
             ValidateNativeBuildNumber(request.Target, buildNumber);
             return new BuildVersionContext(
                 request.ApplicationVersion,

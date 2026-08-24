@@ -31,7 +31,7 @@ namespace Build.Pipeline.Tests.Editor
                 null);
 
             Assert.That(result.ProviderId, Is.EqualTo("LocalDevelopment"));
-            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.1"));
+            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.9000001"));
             Assert.That(result.CommitHash, Is.EqualTo("local"));
             Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.LocalDevelopment));
         }
@@ -47,7 +47,7 @@ namespace Build.Pipeline.Tests.Editor
                 null);
 
             Assert.That(result.ProviderId, Is.EqualTo("LocalPreview"));
-            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.1"));
+            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.9000002"));
             Assert.That(result.CommitHash, Is.EqualTo("local-preview"));
             Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.LocalPreview));
             Assert.That(result.SourceWorkspace.IsVerifiedClean, Is.False);

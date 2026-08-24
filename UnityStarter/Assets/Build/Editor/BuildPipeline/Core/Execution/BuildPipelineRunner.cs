@@ -163,7 +163,8 @@ namespace Build.Pipeline.Editor
                     using (ProjectSettingsStateGuard.AuthorizationWindow authorization =
                            projectSettingsGuard.BeginAuthorization(
                                "ProjectSettings/ProjectSettings.asset",
-                               "ProjectSettings/EditorBuildSettings.asset"))
+                               "ProjectSettings/EditorBuildSettings.asset",
+                               "ProjectSettings/UnityConnectSettings.asset"))
                     {
                         globalStateScope = BuildGlobalStateScope.CaptureAndApply(
                             request,

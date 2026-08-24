@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEngine;
 using YooAsset;
 using YooAsset.Editor;
 
@@ -461,7 +462,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                             bundledFileRoot,
                             packagePlan);
                     }
-                    ValidateVersionCollision(packagePlan, warnings);
+                    ValidateVersionCollision(request, packagePlan, warnings);
                     packagePlans.Add(packagePlan);
                 }
                 catch (Exception exception)
@@ -664,6 +665,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         private static void ValidateVersionCollision(
+            AssetContentBuildRequest request,
             YooAsset3PackageBuildPlan packagePlan,
             List<string> warnings)
         {
@@ -679,7 +681,19 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 return;
             }
 
-            if (packagePlan.Profile.versionCollisionPolicy == YooAssetVersionCollisionPolicy.FailIfVersionExists)
+            // Local iterations (non-batch development builds and local release previews)
+            // are intentionally overwritable: they reuse a stable, non-version-controlled
+            // local version, so a repeated build in the same workspace collides with its
+            // own prior output. An explicit ReplaceExactVersion flag authorizes the same
+            // behavior for controlled CI re-publishing of an identical version. We honor
+            // the override for the exact, build-owned output without mutating the shared
+            // profile, which keeps real/release builds immutable under the
+            // FailIfVersionExists default.
+            YooAssetVersionCollisionPolicy effectivePolicy =
+                (request.IsLocalIteration || request.ReplaceExactVersion)
+                    ? YooAssetVersionCollisionPolicy.ReplaceExactVersion
+                    : packagePlan.Profile.versionCollisionPolicy;
+            if (effectivePolicy == YooAssetVersionCollisionPolicy.FailIfVersionExists)
             {
                 throw new InvalidOperationException(
                     $"Exact package version already exists: '{outputDirectory}'. Choose a new version or explicitly select ReplaceExactVersion.");
@@ -875,7 +889,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             RequireArtifact(bundledPackageDirectory, "BuiltinCatalog.bytes");
         }
 
-        private sealed class YooAsset3DeferredPublication : IBuildSourceQualificationPublication
+        // Internal (rather than private) so the integration test assembly can drive
+        // PlayerBuildSession through InternalsVisibleTo without running YooAsset or
+        // AssetDatabase.Refresh. Production callers still reach these types only
+        // through YooAsset3BuildAdapter.BeginPlayerBuild.
+        internal sealed class YooAsset3DeferredPublication : IBuildSourceQualificationPublication
         {
             private YooAsset3PublicationTransaction transaction;
             private readonly Action validatePublishedState;
@@ -1035,20 +1053,168 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 return failure;
             }
 
-            private sealed class PlayerBuildSession : IDisposable
+            internal sealed class PlayerBuildSession : IDisposable
             {
                 private YooAsset3DeferredPublication owner;
+                private readonly List<PublicationRelocation> relocations = new List<PublicationRelocation>();
 
                 internal PlayerBuildSession(YooAsset3DeferredPublication owner)
                 {
                     this.owner = owner;
+                    if (owner != null)
+                    {
+                        HidePublicationArtifacts();
+                    }
                 }
 
                 public void Dispose()
                 {
+                    RestorePublicationArtifacts();
                     YooAsset3DeferredPublication current = owner;
                     owner = null;
                     current?.transaction.ValidateActivatedInputs();
+                }
+
+                // The bundled package directory carries a ".yoo-pub.json" ownership marker, and its
+                // ".yoo-backup-<transactionId>-<n>" sibling holds the previously installed package version
+                // while the deferred transaction keeps it for rollback. Unity copies every entry under
+                // Assets/StreamingAssets into the Player, and the core output transaction rejects dot-prefixed
+                // entry names as non-portable. Move the marker file and the backup/stage directories out of
+                // StreamingAssets for the duration of the Player build and restore them afterwards so the
+                // ownership evidence and deferred rollback state remain intact.
+                private void HidePublicationArtifacts()
+                {
+                    string relocationRoot = Path.GetFullPath(Path.Combine(
+                        Application.dataPath,
+                        "..",
+                        "Temp",
+                        "BuildPipeline",
+                        "YooAssetPublicationMarkers"));
+                    Directory.CreateDirectory(relocationRoot);
+
+                    foreach (YooAsset3PackagePublication package in owner.transaction.Packages)
+                    {
+                        YooAsset3PublicationJournalOperation operation = package.BundledOperation;
+                        if (operation == null)
+                        {
+                            continue;
+                        }
+
+                        // Only bundled targets under Assets/StreamingAssets are copied into the
+                        // Player by Unity. When managesSiblingMeta is false the target lives
+                        // elsewhere, so neither its marker nor its backup/stage/protectedMeta
+                        // siblings can pollute the Player output and relocating them would only
+                        // add a cross-volume failure surface.
+                        if (!operation.managesSiblingMeta)
+                        {
+                            continue;
+                        }
+
+                        RelocateIfPresent(
+                            Path.Combine(
+                                operation.target,
+                                YooAsset3PublicationOwnership.MarkerFileName),
+                            relocationRoot,
+                            isDirectory: false);
+
+                        // The backup directory holds the prior package version, and its ".root-meta"
+                        // sibling preserves the protected target meta. Neither may be swept into the
+                        // Player. The stage directory is normally absent here (it was moved to the
+                        // target during activation) but is relocated defensively for other phases.
+                        RelocateIfPresent(operation.backup, relocationRoot, isDirectory: true);
+                        RelocateIfPresent(operation.protectedMeta, relocationRoot, isDirectory: false);
+                        RelocateIfPresent(operation.stage, relocationRoot, isDirectory: true);
+                    }
+                }
+
+                private void RelocateIfPresent(string originalPath, string relocationRoot, bool isDirectory)
+                {
+                    bool exists = isDirectory
+                        ? Directory.Exists(originalPath)
+                        : File.Exists(originalPath);
+                    if (!exists)
+                    {
+                        return;
+                    }
+
+                    string relocatedPath = Path.Combine(
+                        relocationRoot,
+                        Guid.NewGuid().ToString("N") + (isDirectory ? ".dir" : ".file"));
+                    if (!string.Equals(
+                            Path.GetPathRoot(originalPath),
+                            Path.GetPathRoot(relocatedPath),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Refusing to relocate a YooAsset publication artifact across volumes. " +
+                            $"Source='{originalPath}', destination='{relocatedPath}'. " +
+                            "Configure the bundled file root on the same volume as the Unity project Temp directory.");
+                    }
+
+                    if (isDirectory)
+                    {
+                        Directory.Move(originalPath, relocatedPath);
+                    }
+                    else
+                    {
+                        File.Move(originalPath, relocatedPath);
+                    }
+
+                    relocations.Add(new PublicationRelocation(originalPath, relocatedPath, isDirectory));
+                }
+
+                private void RestorePublicationArtifacts()
+                {
+                    var failures = new List<Exception>();
+                    for (int index = relocations.Count - 1; index >= 0; index--)
+                    {
+                        PublicationRelocation relocation = relocations[index];
+                        bool exists = relocation.IsDirectory
+                            ? Directory.Exists(relocation.RelocatedPath)
+                            : File.Exists(relocation.RelocatedPath);
+                        if (!exists)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            if (relocation.IsDirectory)
+                            {
+                                Directory.Move(relocation.RelocatedPath, relocation.OriginalPath);
+                            }
+                            else
+                            {
+                                File.Move(relocation.RelocatedPath, relocation.OriginalPath);
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            failures.Add(exception);
+                        }
+                    }
+
+                    relocations.Clear();
+                    if (failures.Count > 0)
+                    {
+                        throw new AggregateException(
+                            "YooAsset Player build publication artifact restoration did not complete for every relocated entry.",
+                            failures);
+                    }
+                }
+
+                private readonly struct PublicationRelocation
+                {
+                    public PublicationRelocation(string originalPath, string relocatedPath, bool isDirectory)
+                    {
+                        OriginalPath = originalPath;
+                        RelocatedPath = relocatedPath;
+                        IsDirectory = isDirectory;
+                    }
+
+                    public string OriginalPath { get; }
+                    public string RelocatedPath { get; }
+                    public bool IsDirectory { get; }
                 }
             }
         }
