@@ -2,9 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using YooAsset.Editor;
 
-namespace Build.Pipeline.Editor.Integrations.YooAsset3
+namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
 {
     internal static class YooAsset3BuildSafety
     {
@@ -60,27 +59,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             return resolved;
-        }
-
-        public static string ResolveBuildOutputRoot(string projectRoot, string configuredPath)
-        {
-            return YooAssetBuildRootPolicy.ResolveBuildOutputRoot(projectRoot, configuredPath);
-        }
-
-        public static string ResolveBundledFileRoot(string projectRoot, string configuredPath)
-        {
-            if (string.IsNullOrWhiteSpace(configuredPath))
-            {
-                string defaultRoot = Path.GetFullPath(
-                    BundleBuilderHelper.GetStreamingAssetsRoot());
-                return YooAssetBuildRootPolicy.ValidateBundledFileRoot(
-                    projectRoot,
-                    defaultRoot);
-            }
-
-            return YooAssetBuildRootPolicy.ResolveConfiguredBundledFileRoot(
-                projectRoot,
-                configuredPath);
         }
 
         public static void ValidateNoPathRedirection(string projectRoot, string targetPath)
@@ -201,44 +179,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             return string.Join(";", normalizedTags);
-        }
-
-        public static void ValidatePackageOutputPath(
-            string buildOutputRoot,
-            YooAsset3PackageBuildPlan packagePlan)
-        {
-            string packageRoot = Path.GetFullPath(packagePlan.Parameters.GetPackageRootDirectory());
-            string outputDirectory = Path.GetFullPath(packagePlan.OutputPackageDirectory);
-            string parentDirectory = Path.GetDirectoryName(outputDirectory);
-
-            if (!IsStrictDescendant(buildOutputRoot, packageRoot) ||
-                string.IsNullOrEmpty(parentDirectory) ||
-                !PathsEqual(packageRoot, parentDirectory))
-            {
-                throw new InvalidOperationException(
-                    $"Unsafe YooAsset version output path for package '{packagePlan.PackageName}': '{outputDirectory}'.");
-            }
-        }
-
-        public static void ValidateBundledPackagePath(
-            string projectRoot,
-            string bundledFileRoot,
-            YooAsset3PackageBuildPlan packagePlan)
-        {
-            string bundledPackageDirectory = Path.GetFullPath(packagePlan.BundledPackageDirectory);
-            string parentDirectory = Path.GetDirectoryName(bundledPackageDirectory);
-            if (string.IsNullOrEmpty(parentDirectory) ||
-                !PathsEqual(bundledFileRoot, parentDirectory) ||
-                !IsStrictDescendant(bundledFileRoot, bundledPackageDirectory))
-            {
-                throw new InvalidOperationException(
-                    $"Unsafe YooAsset bundled package path for package '{packagePlan.PackageName}': '{bundledPackageDirectory}'.");
-            }
-
-            // YooAsset can delete or overwrite this directory depending on the
-            // explicit bundled-copy option. Refuse path redirection before its
-            // task receives control.
-            EnsureNoReparsePoints(projectRoot, bundledPackageDirectory);
         }
 
         public static void DeleteOwnedDirectory(
@@ -374,7 +314,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             return fileCount;
         }
 
-        private static void EnsureNoReparsePoints(string approvedRoot, string target)
+        internal static void EnsureNoReparsePoints(string approvedRoot, string target)
         {
             EnsureNoReparsePointsInPath(approvedRoot, target);
 

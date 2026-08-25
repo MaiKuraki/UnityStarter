@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using Build.Pipeline.Editor.Integrations.YooAsset3Core;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -960,6 +961,103 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 YooAssetBuildConfig.ProviderIdValue);
 
             Assert.That(adapter, Is.InstanceOf<YooAsset3BuildAdapter>());
+        }
+
+        [Test]
+        public void Publish_WhenCheckpointTerminatesAfterBackupPending_RetainsJournalForRecovery()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.None));
+            WriteOwnedPublication(plan.Packages[0], false, "payload.txt", "old");
+            YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            WriteFile(transaction.Packages[0].OutputOperation.stage, "payload.txt", "new");
+            transaction.SealReadyDirectories();
+
+            BeginBarrier();
+            YooAsset3SimulatedTerminationException exception =
+                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+                    transaction.Publish(
+                        validatePublishedState: null,
+                        refreshAssets: NoOp,
+                        checkpoint: TerminateAt("BackupPending:PackageOne")));
+
+            StringAssert.Contains("BackupPending:PackageOne", exception.Message);
+            Assert.That(File.Exists(GetJournalPath()), Is.True);
+
+            YooAsset3PublicationTransaction.RecoverPending(projectRoot, NoOp);
+
+            Assert.That(ReadFile(plan.Packages[0].OutputPackageDirectory, "payload.txt"), Is.EqualTo("old"));
+            Assert.That(Directory.Exists(transaction.Packages[0].OutputOperation.stage), Is.False);
+            Assert.That(File.Exists(GetJournalPath()), Is.False);
+        }
+
+        [Test]
+        public void ActivateDownstreamInputs_WhenCheckpointTerminatesBeforeRefresh_RollsBackOnRecovery()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
+            WriteOwnedPublication(plan.Packages[0], false, "payload.txt", "old-output");
+            WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
+
+            YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            WriteFile(output.stage, "payload.txt", "new-output");
+            WriteFile(bundled.stage, "payload.txt", "new-bundle");
+            transaction.SealReadyDirectories();
+
+            YooAsset3SimulatedTerminationException exception =
+                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+                    transaction.ActivateDownstreamInputs(NoOp, TerminateAt("PreRefresh")));
+
+            StringAssert.Contains("PreRefresh", exception.Message);
+            Assert.That(File.Exists(GetJournalPath()), Is.True);
+
+            YooAsset3PublicationTransaction.RecoverPending(projectRoot, NoOp);
+
+            Assert.That(ReadFile(plan.Packages[0].OutputPackageDirectory, "payload.txt"), Is.EqualTo("old-output"));
+            Assert.That(ReadFile(plan.Packages[0].BundledPackageDirectory, "payload.txt"), Is.EqualTo("old-bundle"));
+            Assert.That(File.Exists(GetJournalPath()), Is.False);
+        }
+
+        [Test]
+        public void Complete_WhenCheckpointTerminatesDuringRefresh_RerunsCompletionOnRecovery()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.None));
+            WriteOwnedPublication(plan.Packages[0], false, "payload.txt", "old");
+            YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            transaction.Prepare();
+            WriteFile(transaction.Packages[0].OutputOperation.stage, "payload.txt", "new");
+            transaction.SealReadyDirectories();
+
+            TerminalBarrierHarness barrier = BeginBarrier();
+            transaction.Publish(validatePublishedState: null, refreshAssets: NoOp);
+            barrier.CommitDecision();
+
+            YooAsset3SimulatedTerminationException exception =
+                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+                    transaction.Complete(NoOp, TerminateAt("CommitRefreshPreRefresh")));
+
+            StringAssert.Contains("CommitRefreshPreRefresh", exception.Message);
+            Assert.That(File.Exists(GetJournalPath()), Is.True);
+            Assert.That(ReadFile(transaction.Packages[0].OutputOperation.target, "payload.txt"), Is.EqualTo("new"));
+
+            YooAsset3PublicationTransaction.RecoverPending(projectRoot, NoOp);
+
+            Assert.That(ReadFile(plan.Packages[0].OutputPackageDirectory, "payload.txt"), Is.EqualTo("new"));
+            Assert.That(File.Exists(GetJournalPath()), Is.False);
+            barrier.Complete();
+        }
+
+        private static Action<string> TerminateAt(string checkpointName)
+        {
+            return node =>
+            {
+                if (string.Equals(node, checkpointName, StringComparison.Ordinal))
+                {
+                    throw new YooAsset3SimulatedTerminationException(node);
+                }
+            };
         }
 
         private YooAsset3BuildPlan CreatePlan(params YooAsset3PackageBuildPlan[] packages)
