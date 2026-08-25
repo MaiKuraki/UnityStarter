@@ -47,14 +47,13 @@ namespace Build.Pipeline.Editor
                     "The integration never allows the package to rewrite the backend during a nested Player build.");
             }
 
-            string commandType = request.Invocation.Incrementality ==
-                                 BuildIncrementality.Incremental
-                ? "HybridCLR.Editor.Commands.CompileDllCommand"
-                : "HybridCLR.Editor.Commands.PrebuildCommand";
-            if (ReflectionCache.GetType(commandType) == null)
+            string supportFailure = HybridCLRVersionSupport.ValidateSupport(
+                request.Invocation.Incrementality);
+            if (supportFailure != null)
             {
                 errors.Add(
-                    "HybridCLR is not installed or its supported editor API is unavailable.");
+                    "HybridCLR is not installed or its supported editor API is unavailable: " +
+                    supportFailure);
             }
 
             if (config.GetHotUpdateAssemblyNames().Count == 0)

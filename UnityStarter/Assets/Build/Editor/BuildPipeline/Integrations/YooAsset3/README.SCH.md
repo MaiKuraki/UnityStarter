@@ -12,7 +12,9 @@
 
 - 卸载 YooAsset 不会破坏 Build Core Assembly；
 - `YooAssetBuildConfig` 仍是可序列化 authoring type，但选中的 invocation 会因没有注册 Adapter 而在 Preflight 失败；
-- YooAsset Recovery Participant 也会在 package gate 不满足时消失，因此卸载或升级包前必须完成 Workspace Recovery。
+- YooAsset 发布恢复核心位于 Core Assembly 的 `Integrations/YooAsset3Core/`，因此卸载或升级包后，尚未完成的发布仍可恢复。
+
+恢复核心是 `YooAsset3RecoveryCoordinator`（`[BuildRecoveryRegistration("YooAsset3", 100)]`）。它持有 durable journal、所有权 marker、路径安全原语以及全部回滚/提交恢复逻辑，与 `AddressablesRecoveryCoordinator` 对齐。受门控 Integration Assembly 只保留构建期路径解析、Package Plan Factory、Cryptography Registry 与事务生命周期，并通过 `Build.Pipeline.Editor.Integrations.YooAsset3Core` 命名空间引用 Core 类型。
 
 不要在 PlayerSettings 中手工添加 `BUILD_PIPELINE_HAS_YOOASSET_3`。Capability 应由 Package Presence 和 Version 管理。
 
@@ -128,7 +130,7 @@ YooAsset Transaction Evidence 位于：
 <UnityProject>/.buildpipeline/transactions/yooasset3/<invocation-id>/
 ```
 
-Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切换 Target。不要删除 Journal，也不要在 Recovery Pending 时移除 Package。Recovery Participant 属于受门控 Integration Assembly；如果它在恢复前被移除，需要重新安装兼容 YooAsset 包。
+Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切换 Target。不要删除 Journal。恢复核心位于 Core Assembly（`YooAsset3RecoveryCoordinator`），因此卸载或升级 YooAsset 包后发布恢复仍然可用。
 
 ## 故障排查与验证边界
 
@@ -155,4 +157,5 @@ Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切�
 - `YooAsset3BuildPlan.cs`
 - `YooAsset3Cryptography.cs`
 - `YooAsset3PublicationTransaction.cs`
-- `YooAsset3RecoveryParticipant.cs`
+- `../YooAsset3Core/YooAsset3RecoveryCoordinator.cs`
+- `../YooAsset3Core/YooAsset3PublicationRecovery.cs`

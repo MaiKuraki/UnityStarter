@@ -12,8 +12,10 @@ namespace CycloneGames.AssetManagement.Editor
     /// PropertyDrawer for <see cref="AssetRef{T}"/> and <see cref="AssetRef"/> (non-generic).
     /// Renders an ObjectField filtered by the generic type constraint and an explicit provider runtime location.
     /// <para>
-    /// The GUID is an Editor authoring aid. The runtime location remains explicit because Resources paths,
-    /// Addressables addresses, and YooAsset addresses are not interchangeable.
+    /// The GUID is an Editor authoring aid used only to preserve and display the Unity reference. The runtime
+    /// location is an explicit, user-editable provider key and is never auto-rewritten by this drawer because
+    /// Resources paths, Addressables addresses, and YooAsset addresses are not interchangeable. When a GUID is
+    /// set but the location is empty, a resolver suggestion is shown as a best-effort placeholder, not a write-back.
     /// </para>
     /// </summary>
     [CustomPropertyDrawer(typeof(AssetRef<>), true)]
@@ -118,11 +120,10 @@ namespace CycloneGames.AssetManagement.Editor
                 {
                     var path = AssetDatabase.GetAssetPath(newObj);
                     string selectedGuid = AssetDatabase.AssetPathToGUID(path);
+                    // Only the authoring GUID is written here. The runtime location stays an
+                    // explicit, user-edited provider key, per the README contract; the drawer
+                    // never rewrites provider addresses.
                     guidProp.stringValue = selectedGuid;
-                    // Auto-derive the provider runtime location when a registered resolver owns this asset
-                    // (e.g. a YooAsset address or asset path). When no resolver owns it the location stays
-                    // empty so the explicit "runtime location required" guidance remains visible.
-                    locationProp.stringValue = AssetRefLocationResolverRegistry.Resolve(selectedGuid, path) ?? string.Empty;
                 }
                 else
                 {
@@ -131,12 +132,59 @@ namespace CycloneGames.AssetManagement.Editor
                 }
             }
 
-            using (new EditorGUI.DisabledScope(true))
+            // When a GUID is set but the location is still empty, surface the resolver's
+            // suggestion as a non-destructive placeholder (tooltip + grey overlay) instead
+            // of writing it back. A throwing third-party resolver is swallowed so it can
+            // never break the inspector.
+            bool hasEmptyLocationAfterEdit = !hasMixedValues &&
+                                             !string.IsNullOrEmpty(guidProp.stringValue) &&
+                                             string.IsNullOrWhiteSpace(locationProp.stringValue);
+            string suggestedLocation = null;
+            if (hasEmptyLocationAfterEdit)
             {
-                EditorGUI.PropertyField(locationRect, locationProp, s_RuntimeLocationLabel);
+                try
+                {
+                    string guidPath = AssetDatabase.GUIDToAssetPath(guidProp.stringValue);
+                    suggestedLocation = AssetRefLocationResolverRegistry.Resolve(
+                        guidProp.stringValue,
+                        guidPath);
+                }
+                catch
+                {
+                    suggestedLocation = null;
+                }
+            }
+
+            GUIContent locationLabel = s_RuntimeLocationLabel;
+            if (!string.IsNullOrEmpty(suggestedLocation))
+            {
+                locationLabel = new GUIContent(
+                    s_RuntimeLocationLabel.text,
+                    s_RuntimeLocationLabel.tooltip + "\nSuggested location: " + suggestedLocation);
+            }
+
+            EditorGUI.PropertyField(locationRect, locationProp, locationLabel);
+
+            if (!string.IsNullOrEmpty(suggestedLocation))
+            {
+                DrawLocationPlaceholder(locationRect, suggestedLocation);
             }
 
             EditorGUI.EndProperty();
+        }
+
+        private static void DrawLocationPlaceholder(Rect locationRect, string text)
+        {
+            var placeholderRect = new Rect(
+                locationRect.x + EditorGUIUtility.labelWidth + 4f,
+                locationRect.y,
+                locationRect.width - EditorGUIUtility.labelWidth - 8f,
+                locationRect.height);
+
+            Color previousContentColor = GUI.contentColor;
+            GUI.contentColor = new Color(0.5f, 0.5f, 0.5f, 0.6f);
+            EditorGUI.LabelField(placeholderRect, text, EditorStyles.label);
+            GUI.contentColor = previousContentColor;
         }
     }
 }
