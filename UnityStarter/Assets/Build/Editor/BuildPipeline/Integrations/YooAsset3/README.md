@@ -12,7 +12,9 @@ This boundary has three consequences:
 
 - uninstalling YooAsset does not break the core Build assembly;
 - `YooAssetBuildConfig` remains a serializable authoring type, but a selected invocation fails preflight because no adapter is registered;
-- the YooAsset recovery participant is also absent while the package gate is unsatisfied, so complete Workspace Recovery before uninstalling or upgrading the package.
+- the YooAsset publication recovery core lives in the core assembly under `Integrations/YooAsset3Core/`, so a pending publication can still be recovered after the package is uninstalled or upgraded.
+
+The recovery core is `YooAsset3RecoveryCoordinator` (`[BuildRecoveryRegistration("YooAsset3", 100)]`). It owns the durable journal, ownership markers, path-safety primitives, and all rollback/commit recovery logic, mirroring `AddressablesRecoveryCoordinator`. The gated integration assembly keeps only the build-time path resolution, package plan factory, cryptography registry, and the transaction lifecycle; it references the core types through the `Build.Pipeline.Editor.Integrations.YooAsset3Core` namespace.
 
 Do not add `BUILD_PIPELINE_HAS_YOOASSET_3` manually to PlayerSettings. Package presence and version own the capability.
 
@@ -128,7 +130,7 @@ YooAsset transaction evidence lives under:
 <UnityProject>/.buildpipeline/transactions/yooasset3/<invocation-id>/
 ```
 
-After a crash, use Workspace Health and explicit recovery before retrying or switching target. Do not delete journals or remove the package while recovery is pending. Because the recovery participant belongs to the gated integration assembly, reinstall a compatible YooAsset package if the assembly was removed before recovery completed.
+After a crash, use Workspace Health and explicit recovery before retrying or switching target. Do not delete journals while recovery is pending. The recovery core lives in the core assembly (`YooAsset3RecoveryCoordinator`), so publication recovery still works after the YooAsset package is uninstalled or upgraded.
 
 ## Troubleshooting and validation boundary
 
@@ -155,4 +157,5 @@ Static source inspection and package-independent transaction tests do not prove 
 - `YooAsset3BuildPlan.cs`
 - `YooAsset3Cryptography.cs`
 - `YooAsset3PublicationTransaction.cs`
-- `YooAsset3RecoveryParticipant.cs`
+- `../YooAsset3Core/YooAsset3RecoveryCoordinator.cs`
+- `../YooAsset3Core/YooAsset3PublicationRecovery.cs`

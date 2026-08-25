@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using Build.Pipeline.Editor.Integrations.YooAsset3Core;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -92,6 +94,77 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             {
                 transaction.Abort(NoOp);
             }
+        }
+
+        [Test]
+        public void PlayerBuildSession_RestoreFailureIsRetryable()
+        {
+            YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
+            WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
+            YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
+            string relocationRoot = Path.GetFullPath(Path.Combine(
+                Application.dataPath,
+                "..",
+                "Temp",
+                "BuildPipeline",
+                "YooAssetPublicationMarkers"));
+            Directory.CreateDirectory(relocationRoot);
+            try
+            {
+                transaction.Prepare();
+                YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+                YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+                WriteFile(output.stage, "payload.txt", "new-output");
+                WriteFile(bundled.stage, "payload.txt", "new-bundle");
+                transaction.SealReadyDirectories();
+                transaction.ActivateDownstreamInputs(NoOp);
+
+                var deferred = new YooAsset3BuildAdapter.YooAsset3DeferredPublication(transaction, NoOp);
+                string markerPath = Path.Combine(
+                    bundled.target,
+                    YooAsset3PublicationOwnership.MarkerFileName);
+                Assert.That(File.Exists(markerPath), Is.True, "precondition: published marker exists");
+
+                string[] relocatedBefore = Directory.GetFiles(
+                    relocationRoot,
+                    "*.file",
+                    SearchOption.TopDirectoryOnly);
+                var session = new YooAsset3BuildAdapter.YooAsset3DeferredPublication.PlayerBuildSession(deferred);
+                string relocatedMarker = Directory.GetFiles(
+                        relocationRoot,
+                        "*.file",
+                        SearchOption.TopDirectoryOnly)
+                    .Where(path => !relocatedBefore.Contains(path, StringComparer.Ordinal))
+                    .FirstOrDefault(IsOwnershipMarker);
+                Assert.That(relocatedMarker, Is.Not.Null, "the relocated ownership marker must be discoverable");
+                Assert.That(File.Exists(markerPath), Is.False, "marker must be relocated during the Player build");
+
+                using (new FileStream(
+                           relocatedMarker,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.None))
+                {
+                    Assert.Throws<AggregateException>(() => session.Dispose());
+                }
+
+                Assert.That(File.Exists(markerPath), Is.False, "marker stays relocated after a failed restore");
+
+                Assert.DoesNotThrow(() => session.Dispose());
+                Assert.That(File.Exists(markerPath), Is.True, "marker is restored after the lock is released");
+                Assert.That(Directory.Exists(bundled.backup), Is.True, "backup is restored");
+                Assert.That(File.Exists(bundled.protectedMeta), Is.True, "protected meta is restored");
+            }
+            finally
+            {
+                transaction.Abort(NoOp);
+            }
+        }
+
+        private static bool IsOwnershipMarker(string path)
+        {
+            string content = File.ReadAllText(path);
+            return content.IndexOf("yooasset-publication-owner", StringComparison.Ordinal) >= 0;
         }
 
         [Test]

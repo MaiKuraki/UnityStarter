@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
 
-namespace Build.Pipeline.Editor.Integrations.YooAsset3
+namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
 {
     internal static class YooAsset3PublicationOwnership
     {
