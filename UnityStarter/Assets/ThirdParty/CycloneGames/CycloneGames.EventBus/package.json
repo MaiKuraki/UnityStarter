@@ -1,0 +1,22 @@
+{
+  "name": "com.cyclone-games.event-bus",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.EventBus",
+  "description": "Lightweight, allocation-conscious event bus and in-process command publisher for Unity, with optional R3, VitalRouter and CycloneGames.Logging integrations.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "EventBus",
+    "PubSub",
+    "Command",
+    "Messaging"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

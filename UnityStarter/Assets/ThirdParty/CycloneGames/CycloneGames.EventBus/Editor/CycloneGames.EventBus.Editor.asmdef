@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.EventBus.Editor",
+    "rootNamespace": "CycloneGames.EventBus.Editor",
+    "references": [
+        "CycloneGames.EventBus.Core",
+        "CycloneGames.EventBus.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
