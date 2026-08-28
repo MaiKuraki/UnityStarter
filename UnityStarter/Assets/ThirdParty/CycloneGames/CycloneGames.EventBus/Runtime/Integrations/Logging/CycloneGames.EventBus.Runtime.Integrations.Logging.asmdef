@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.EventBus.Runtime.Integrations.Logging",
+    "rootNamespace": "CycloneGames.EventBus.Runtime.Integrations.Logging",
+    "references": [
+        "CycloneGames.EventBus.Core",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

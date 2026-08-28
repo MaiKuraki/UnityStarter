@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.EventBus.Runtime.Integrations.VitalRouter",
+    "rootNamespace": "CycloneGames.EventBus.Runtime.Integrations.VitalRouter",
+    "references": [
+        "CycloneGames.EventBus.Core",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VitalRouter.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
