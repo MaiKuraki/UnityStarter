@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.atlas-pipeline",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.AtlasPipeline",
+  "description": "Data-driven sprite import and SpriteAtlas (V2) generation pipeline for Unity. Deterministic output, incremental indexing, batch-friendly import, zero-allocation hot paths, and build-time validation designed for large-scale 2D projects.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0",
+    "com.cyclone-games.logging.unity": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "AtlasPipeline",
+    "SpriteAtlas",
+    "Texture",
+    "Build"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

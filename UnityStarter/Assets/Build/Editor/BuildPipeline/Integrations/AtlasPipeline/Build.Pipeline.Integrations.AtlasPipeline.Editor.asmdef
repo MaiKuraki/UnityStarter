@@ -1,0 +1,27 @@
+{
+    "name": "Build.Pipeline.Integrations.AtlasPipeline.Editor",
+    "rootNamespace": "Build.Pipeline.Editor.Integrations.AtlasPipeline",
+    "references": [
+        "Build.Pipeline.Editor",
+        "CycloneGames.AtlasPipeline.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "BUILD_PIPELINE_HAS_ATLAS_PIPELINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.atlas-pipeline",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "BUILD_PIPELINE_HAS_ATLAS_PIPELINE"
+        }
+    ],
+    "noEngineReferences": false
+}
