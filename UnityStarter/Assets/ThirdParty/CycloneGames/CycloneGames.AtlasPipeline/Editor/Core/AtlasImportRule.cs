@@ -39,6 +39,27 @@ namespace CycloneGames.AtlasPipeline
     }
 
     /// <summary>
+    /// How atlas keys — and therefore the generated .spriteatlasv2 file names — are cased.
+    /// </summary>
+    public enum AtlasKeyCasing
+    {
+        /// <summary>
+        /// Keep whatever casing the source art and rule groups use. Atlas keys of two spellings
+        /// differing only by case still converge on one bucket, but the output file name depends on
+        /// which spelling wins, and that is not obvious from the rule configuration.
+        /// </summary>
+        Preserve = 0,
+
+        /// <summary>
+        /// Lowercase every atlas key. The output file name becomes predictable from the rule
+        /// configuration alone, and two groups spelled "UI" and "ui" resolve to one file name instead
+        /// of racing. Recommended for new projects; enabling it on an existing project renames every
+        /// atlas file.
+        /// </summary>
+        Lower = 1,
+    }
+
+    /// <summary>
     /// One data-driven import and atlas rule. Rules are matched by normalized folder prefix and
     /// keep the importer/postprocessor free of per-project branching.
     /// </summary>
@@ -96,6 +117,14 @@ namespace CycloneGames.AtlasPipeline
         public IReadOnlyList<string> ExcludedNameKeywords => excludedNameKeywords;
 
         private string _resolvedSourceFolder;
+
+        /// <summary>
+        /// Position of this rule in the pipeline's resolved rule list, assigned every time that list
+        /// is rebuilt. It is a cache key: atlas buckets store it so the rule that owns an atlas can be
+        /// resolved by index instead of re-running path matching over every member of the atlas.
+        /// Not serialized — it is derived from the owning settings asset on every load.
+        /// </summary>
+        internal int PipelineIndex { get; set; } = -1;
 
         public string NormalizedSourceFolder
         {

@@ -7,6 +7,7 @@ using UnityEditor.U2D;
 using UnityEngine;
 using UnityEngine.U2D;
 using CycloneGames.Logging;
+using CycloneGames.AtlasPipeline.Pure;
 
 namespace CycloneGames.AtlasPipeline
 {
@@ -20,17 +21,73 @@ namespace CycloneGames.AtlasPipeline
     {
         public const string SettingsAssetPath = AtlasPipelineSettings.DefaultAssetPath;
 
-        private static readonly Dictionary<string, HashSet<string>> AtlasToAssets =
-            new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        private const double MaxEditorFrameBudgetSeconds = 0.008d;
 
-        private static readonly Dictionary<string, string> AssetToAtlas =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Fallback atlas size when no rule owns an atlas. Matches Unity's default.</summary>
+        private const int DefaultAtlasMaxTextureSize = 2048;
 
-        private static readonly HashSet<string> DirtyAtlasKeys =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// Committed record of every atlas the current configuration should produce. It is the
+        /// cross-machine baseline: CI compares against it to detect stale atlases without generating
+        /// anything, and it gives a fresh editor session the configuration snapshot that
+        /// <see cref="HandleSettingsChanged"/> needs to avoid dirtying every atlas.
+        /// </summary>
+        public const string ManifestPath = "Assets/Settings/AtlasPipelineManifest.txt";
+
+        /// <summary>
+        /// Written into the manifest so a manifest produced by an incompatible generator can be
+        /// rejected instead of silently misread.
+        /// </summary>
+        private const string ManifestGeneratorVersion = "CycloneGames.AtlasPipeline/2";
+
+        /// <summary>Cap on how many atlas keys are listed in one drift message.</summary>
+        private const int MaxLoggedManifestKeys = 10;
+
+        /// <summary>
+        /// Cap on how many oversized sprite names go into one warning. A misconfigured rule can flag
+        /// thousands at once, and one log line per sprite would bury everything else.
+        /// </summary>
+        private const int MaxLoggedOversizedSprites = 8;
+
+        /// <summary>
+        /// Cached so sorting sub-sprites does not allocate a delegate per atlas per pass.
+        /// </summary>
+        private static readonly Comparison<Sprite> SpriteNameComparison =
+            (left, right) => string.CompareOrdinal(left?.name, right?.name);
+
+        /// <summary>
+        /// Source-asset to atlas mapping and the dirty set. Replaces three parallel static
+        /// collections: a single owner means membership, ordering, fingerprints and dirty tracking
+        /// can never disagree with each other, and the per-bucket ordered list is cached instead of
+        /// being rebuilt and re-sorted for every atlas on every pass.
+        /// </summary>
+        private static readonly AtlasIndex Index = new AtlasIndex();
 
         private static readonly List<AtlasImportRule> RuleCache =
             new List<AtlasImportRule>();
+
+        // Reused across passes. EditorApplication.update polls every frame, so anything allocated
+        // per pass is allocated hundreds of times a minute while an artist imports art.
+        private static readonly List<string> DirtyKeyBuffer = new List<string>();
+        private static readonly List<string> RemovedKeyBuffer = new List<string>();
+        private static readonly List<Sprite> SpriteBuffer = new List<Sprite>();
+        private static readonly List<Sprite> SubSpriteBuffer = new List<Sprite>();
+        private static readonly List<AtlasSpriteIdentity> CurrentIdentityBuffer =
+            new List<AtlasSpriteIdentity>();
+        private static readonly List<AtlasSpriteIdentity> ExpectedIdentityBuffer =
+            new List<AtlasSpriteIdentity>();
+        private static readonly List<string> OversizedSpriteBuffer = new List<string>();
+
+        /// <summary>
+        /// First spelling seen for each sprite name in the atlas being generated, used to flag names
+        /// that differ only by letter case. Reused across atlases.
+        /// </summary>
+        private static readonly Dictionary<string, string> SpriteNameSpelling =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly List<string> CaseVariantNameSamples = new List<string>();
+        private static int _caseVariantNameCount;
+
+        private static Sprite[] _spriteArrayBuffer = Array.Empty<Sprite>();
 
         private static readonly List<string> GeneratedAtlasPaths =
             new List<string>();
@@ -38,6 +95,44 @@ namespace CycloneGames.AtlasPipeline
             new List<string>();
         private static readonly List<string> PendingAtlasConfigure =
             new List<string>();
+
+        /// <summary>
+        /// Fingerprint of every atlas written (or verified) during this session, keyed by atlas key.
+        /// A regeneration pass compares it and skips atlases whose content cannot have changed, which
+        /// is the difference between a settings change costing a handful of hash comparisons and
+        /// costing a full reload of every sprite in the project.
+        /// Session-local by construction: it is rebuilt from scratch after every domain reload and is
+        /// never persisted, so a wrong entry can only cause extra work, never a missed regeneration.
+        /// </summary>
+        private static readonly Dictionary<string, long> GeneratedFingerprints =
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Rule fingerprints the atlases currently on disk were generated with, keyed by AtlasGroup
+        /// (globally unique across rules, enforced by build validation). Compared against the live
+        /// rules when settings change, so editing one rule dirties only the atlases that rule owns.
+        /// </summary>
+        private static readonly Dictionary<string, int> GeneratedRuleFingerprints =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+
+        private static int _generatedGlobalFingerprint;
+
+        /// <summary>
+        /// Tracks PerSprite atlas keys back to the first asset that claimed them. PerSprite keys are
+        /// the file stem alone, so two "btn.png" in different folders collapse into one atlas and one
+        /// set of sprites silently never ships. Recorded during indexing — no extra scan needed.
+        /// </summary>
+        private static readonly Dictionary<string, string> PerSpriteKeyOwners =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> CollidedAtlasKeys =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Atlas keys whose content exceeds the configured max texture size. Unity drops the
+        /// overflow silently and the loss only shows up as white quads at runtime, so it is collected
+        /// during generation and promoted to a build failure.
+        /// </summary>
+        private static readonly List<string> CapacityOverflowAtlases = new List<string>();
 
         private static AtlasPipelineSettings _settingsCache;
         private static bool _initialized;
@@ -48,8 +143,6 @@ namespace CycloneGames.AtlasPipeline
         private static bool _spritePackerPromptScheduled;
         private static bool _projectChangedRefreshScheduled;
         private static int _batchedEditingDepth;
-
-        private const double MaxEditorFrameBudgetSeconds = 0.008d;
 
         private static readonly HashSet<string> TextureSizeWarnings =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -98,9 +191,21 @@ namespace CycloneGames.AtlasPipeline
             EnsureInitialized();
             return new AtlasPipelineSnapshot(
                 RuleCache.Count,
-                AssetToAtlas.Count,
-                AtlasToAssets.Count,
-                DirtyAtlasKeys.Count);
+                Index.AssetCount,
+                Index.BucketCount,
+                Index.DirtyCount);
+        }
+
+        /// <summary>
+        /// Atlas keys where two different source assets resolve to one output file, which silently
+        /// drops one set of sprites. Empty unless a rule uses PerSprite granularity.
+        /// </summary>
+        public static IReadOnlyList<string> GetCollidedAtlasKeys()
+        {
+            var keys = new List<string>(CollidedAtlasKeys.Count);
+            keys.AddRange(CollidedAtlasKeys);
+            keys.Sort(StringComparer.Ordinal);
+            return keys;
         }
 
         [InitializeOnLoadMethod]
@@ -112,7 +217,7 @@ namespace CycloneGames.AtlasPipeline
 
         private static void OnEditorUpdate()
         {
-            if (DirtyAtlasKeys.Count == 0
+            if (Index.DirtyCount == 0
                 || EditorApplication.isCompiling
                 || EditorApplication.isUpdating
                 || EditorApplication.isPlayingOrWillChangePlaymode
@@ -208,25 +313,368 @@ namespace CycloneGames.AtlasPipeline
             RefreshRuleOrder();
         }
 
+        /// <summary>
+        /// Drops every cached view of the project, including the fingerprints that let a regeneration
+        /// pass skip unchanged atlases. Conservative by design: after this call the next pass
+        /// regenerates everything it is asked to, with no chance of a stale skip.
+        /// </summary>
         public static void InvalidateCache()
         {
             _settingsCache = null;
             _initialized = false;
             RuleCache.Clear();
             ClearIndex();
+            GeneratedFingerprints.Clear();
+            GeneratedRuleFingerprints.Clear();
+            _generatedGlobalFingerprint = AtlasHash.NullHash;
         }
 
         /// <summary>
-        /// Entry point called after the user edits settings. Rebuilds the index and marks every
-        /// atlas dirty: rule-level changes (rotation / pixel-art / format) affect packing config and
-        /// only take effect by regenerating. Runs progressively under the background time budget,
-        /// so it stays responsive even with tens of thousands of assets.
+        /// Entry point called after the user edits settings.
+        /// Dirtying every atlas on any settings edit was the previous behaviour, and on a large
+        /// project it turned a single format change into a full regeneration of every atlas in the
+        /// project. The rules are now diffed against the configuration the atlases on disk were
+        /// generated with, so only atlases owned by a changed rule are queued. Global settings
+        /// (padding, rotation, tight packing, output folder, include-in-build) still dirty
+        /// everything, because they feed every atlas.
         /// </summary>
         public static void HandleSettingsChanged()
         {
-            InvalidateCache();
-            RebuildIndex(markDirty: true);
+            // Read the previous configuration before dropping the cache. The settings object has
+            // already been mutated by the inspector at this point, so the only reliable record of
+            // "what the atlases on disk were built with" is the snapshot committed by the last
+            // generation pass.
+            var previousRuleFingerprints =
+                new Dictionary<string, int>(GeneratedRuleFingerprints, StringComparer.Ordinal);
+            int previousGlobalFingerprint = _generatedGlobalFingerprint;
+
+            _settingsCache = null;
+            _initialized = false;
+            RuleCache.Clear();
+
+            EnsureSettingsAsset();
+            BuildIndexFromAssetDatabase(markDirty: false, clearDirtyKeys: true);
+            _initialized = true;
+
+            ApplyConfigurationDelta(previousRuleFingerprints, previousGlobalFingerprint);
             ScheduleProcessing();
+        }
+
+        /// <summary>
+        /// Marks the atlases affected by a settings change. Falls back to dirtying everything when
+        /// there is no trustworthy baseline — the first settings edit of a session has nothing to
+        /// diff against. A missed regeneration ships a stale atlas; an unnecessary one only costs
+        /// time, so the fallback is always "regenerate".
+        /// </summary>
+        private static void ApplyConfigurationDelta(
+            Dictionary<string, int> previousRuleFingerprints,
+            int previousGlobalFingerprint)
+        {
+            if (previousRuleFingerprints.Count == 0)
+            {
+                Index.MarkAllDirty();
+                return;
+            }
+
+            bool globalChanged = previousGlobalFingerprint != ComputeGlobalFingerprint();
+            IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                AtlasBucket bucket = buckets[i];
+                AtlasImportRule rule = ResolveAtlasRule(bucket.Key);
+                if (rule == null || globalChanged)
+                {
+                    Index.MarkDirty(bucket.Key);
+                    continue;
+                }
+
+                if (!previousRuleFingerprints.TryGetValue(rule.AtlasGroup, out int previous)
+                    || previous != ComputeRuleFingerprint(rule))
+                {
+                    Index.MarkDirty(bucket.Key);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records the configuration that the atlases on disk now correspond to, so the next settings
+        /// change can diff against it instead of dirtying everything.
+        /// </summary>
+        private static void CommitConfigurationSnapshot()
+        {
+            GeneratedRuleFingerprints.Clear();
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                AtlasImportRule rule = RuleCache[i];
+                if (rule == null)
+                {
+                    continue;
+                }
+
+                // First rule wins on a duplicate group. Build validation already rejects that
+                // configuration; an arbitrary but stable choice keeps the delta deterministic.
+                if (!GeneratedRuleFingerprints.ContainsKey(rule.AtlasGroup))
+                {
+                    GeneratedRuleFingerprints.Add(
+                        rule.AtlasGroup,
+                        ComputeRuleFingerprint(rule));
+                }
+            }
+
+            _generatedGlobalFingerprint = ComputeGlobalFingerprint();
+        }
+
+        /// <summary>
+        /// Fingerprint of the rule fields that change a generated atlas. Source-import-only fields
+        /// (mipmaps, readability) are excluded: those change the asset's dependency hash, which is
+        /// folded into the per-atlas fingerprint separately and covers them more precisely.
+        /// </summary>
+        private static int ComputeRuleFingerprint(AtlasImportRule rule)
+        {
+            if (rule == null)
+            {
+                return AtlasHash.NullHash;
+            }
+
+            int hash = AtlasHash.BeginFnv1a();
+            AppendFnv(ref hash, (int)rule.AndroidFormat);
+            AppendFnv(ref hash, (int)rule.IphoneFormat);
+            AppendFnv(ref hash, (int)rule.WebglFormat);
+            AppendFnv(ref hash, (int)rule.StandaloneFormat);
+            AppendFnv(ref hash, rule.PixelArt ? 1 : 0);
+            AppendFnv(ref hash, rule.CompressionQuality);
+            AppendFnv(ref hash, rule.AtlasMaxTextureSize);
+            AppendFnv(ref hash, (int)rule.FilterMode);
+            AppendFnv(ref hash, (int)rule.WrapMode);
+            AppendFnv(ref hash, (int)rule.AtlasRotationMode);
+            AppendFnv(ref hash, (int)rule.AtlasGranularity);
+            AppendFnv(ref hash, (int)rule.SpriteMode);
+            AtlasHash.AppendFnv1a(ref hash, rule.AtlasGroup);
+            return hash;
+        }
+
+        /// <summary>Global settings that feed every atlas: a change here dirties all of them.</summary>
+        private static int ComputeGlobalFingerprint()
+        {
+            AtlasPipelineSettings settings = _settingsCache;
+            if (settings == null)
+            {
+                return AtlasHash.NullHash;
+            }
+
+            int hash = AtlasHash.BeginFnv1a();
+            AppendFnv(ref hash, settings.AtlasPadding);
+            AppendFnv(ref hash, settings.EnableRotation ? 1 : 0);
+            AppendFnv(ref hash, settings.EnableTightPacking ? 1 : 0);
+            AppendFnv(ref hash, settings.BlockOffset);
+            AppendFnv(ref hash, settings.IncludeInBuild ? 1 : 0);
+            AtlasHash.AppendFnv1a(ref hash, settings.NormalizedOutputAtlasFolder);
+            return hash;
+        }
+
+        /// <summary>
+        /// Fingerprint of the whole resolved rule list. Rule order is deterministic (folder
+        /// specificity, then keyword count, then configuration index), so this value is reproducible
+        /// across machines and is what lets the manifest detect any rule edit.
+        /// </summary>
+        private static int ComputeRuleSetFingerprint()
+        {
+            int hash = AtlasHash.BeginFnv1a();
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                AppendFnv(ref hash, ComputeRuleFingerprint(RuleCache[i]));
+                AtlasHash.AppendFnv1a(ref hash, '\u001F');
+            }
+
+            return hash;
+        }
+
+        private static void AppendFnv(ref int hash, int value)
+        {
+            uint bits = (uint)value;
+            for (int shift = 0; shift < 32; shift += 8)
+            {
+                AtlasHash.AppendFnv1a(ref hash, (char)((bits >> shift) & 0xFFu));
+            }
+        }
+
+        /// <summary>
+        /// Builds the manifest for the current index.
+        /// The content hashes are pure functions of the ordered member list and the governing rule
+        /// configuration, so two machines with the same sources and settings produce byte-identical
+        /// manifests. Source pixel content is deliberately excluded: repainting a texture does not
+        /// change which packables an atlas holds, so it does not make the atlas stale.
+        /// </summary>
+        private static AtlasManifest BuildManifest()
+        {
+            string outputFolder = _settingsCache != null
+                ? _settingsCache.NormalizedOutputAtlasFolder
+                : string.Empty;
+
+            var entries = new List<AtlasManifestEntry>(Index.BucketCount);
+            IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                AtlasBucket bucket = buckets[i];
+                if (bucket.Count == 0)
+                {
+                    continue;
+                }
+
+                AtlasImportRule rule = ResolveAtlasRule(bucket.Key);
+                entries.Add(new AtlasManifestEntry(
+                    bucket.Key,
+                    BuildAtlasAssetPath(outputFolder, bucket.Key),
+                    bucket.Count,
+                    bucket.ComputeContentHash(ComputeRuleFingerprint(rule)),
+
+                    // Always one page today: a SpriteAtlas packs into a single texture, and an atlas
+                    // that needs more already fails the build through the capacity check. The field
+                    // is carried so the format does not have to change if auto-splitting is added.
+                    1,
+                    bucket.RuleId));
+            }
+
+            return new AtlasManifest(
+                AtlasManifest.CurrentSchemaVersion,
+                ManifestGeneratorVersion,
+                AtlasHash.Combine64(
+                    ComputeGlobalFingerprint(),
+                    ComputeRuleSetFingerprint()),
+                entries);
+        }
+
+        /// <summary>
+        /// Writes the manifest for the current index. Called only after a complete generation pass:
+        /// a partial pass would record atlases that were never actually written.
+        /// </summary>
+        public static void WriteManifest()
+        {
+            if (_settingsCache == null)
+            {
+                return;
+            }
+
+            string absolute = ToAbsolutePath(ManifestPath);
+            if (string.IsNullOrEmpty(absolute))
+            {
+                return;
+            }
+
+            string directory = Path.GetDirectoryName(absolute);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            // LF only and no BOM. The file is committed, so a CRLF or BOM difference between a
+            // Windows developer machine and a Linux CI agent would show up as a whole-file diff on
+            // every change and turn every merge into a conflict.
+            File.WriteAllText(
+                absolute,
+                AtlasManifestSerializer.Write(BuildManifest()),
+                new UTF8Encoding(false));
+            AssetDatabase.ImportAsset(ManifestPath, ImportAssetOptions.ForceUpdate);
+        }
+
+        /// <summary>
+        /// Reads the committed manifest, or null when it does not exist yet. A missing manifest is a
+        /// normal state for a fresh clone, not an error.
+        /// </summary>
+        public static AtlasManifest ReadManifest(ICollection<string> errors = null)
+        {
+            string absolute = ToAbsolutePath(ManifestPath);
+            if (string.IsNullOrEmpty(absolute) || !File.Exists(absolute))
+            {
+                return null;
+            }
+
+            return AtlasManifestSerializer.Read(File.ReadAllText(absolute), errors);
+        }
+
+        /// <summary>
+        /// Compares the committed manifest against the current index and reports the difference.
+        /// Generates and writes nothing, so it is safe to run on a CI agent or in an editor right
+        /// after a pull.
+        /// Only structural drift is reported — added, removed, or reconfigured atlases. Repainting a
+        /// source image is not drift, because the atlas holds the same packables either way.
+        /// </summary>
+        public static IReadOnlyList<string> ValidateManifestDrift()
+        {
+            EnsureInitialized();
+
+            var errors = new List<string>();
+            AtlasManifest recorded = ReadManifest(errors);
+            var drift = new List<string>(errors);
+            if (recorded == null)
+            {
+                if (drift.Count == 0)
+                {
+                    drift.Add(
+                        $"No atlas manifest found at '{ManifestPath}'. Run a full atlas "
+                        + "regeneration and commit the manifest so CI can detect stale atlases.");
+                }
+
+                return drift;
+            }
+
+            if (recorded.SchemaVersion != AtlasManifest.CurrentSchemaVersion)
+            {
+                drift.Add(
+                    $"Atlas manifest schema {recorded.SchemaVersion} predates the supported "
+                    + $"version {AtlasManifest.CurrentSchemaVersion}. Regenerate the atlases and "
+                    + "commit the new manifest.");
+                return drift;
+            }
+
+            AtlasManifestDelta delta = AtlasManifestComparer.Compare(recorded, BuildManifest());
+            if (delta.IsUpToDate)
+            {
+                return drift;
+            }
+
+            if (delta.Added.Count > 0)
+            {
+                drift.Add($"{delta.Added.Count} atlas(es) are absent from the manifest: "
+                          + SummarizeKeys(delta.Added));
+            }
+
+            if (delta.Removed.Count > 0)
+            {
+                drift.Add($"{delta.Removed.Count} atlas(es) no longer exist: "
+                          + SummarizeKeys(delta.Removed));
+            }
+
+            if (delta.Changed.Count > 0)
+            {
+                drift.Add($"{delta.Changed.Count} atlas(es) are stale: "
+                          + SummarizeKeys(delta.Changed));
+            }
+
+            drift.Add("Regenerate the atlases and commit the updated manifest.");
+            return drift;
+        }
+
+        private static string SummarizeKeys(IReadOnlyList<string> keys)
+        {
+            if (keys.Count <= MaxLoggedManifestKeys)
+            {
+                return string.Join(", ", keys);
+            }
+
+            var builder = new StringBuilder();
+            for (int i = 0; i < MaxLoggedManifestKeys; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append(keys[i]);
+            }
+
+            builder.Append(" ... and ").Append(keys.Count - MaxLoggedManifestKeys).Append(" more");
+            return builder.ToString();
         }
 
         public static void EnsureInitialized()
@@ -450,6 +898,10 @@ namespace CycloneGames.AtlasPipeline
                 return errors;
             }
 
+            // Atlas-key collisions are discovered while indexing, so the index has to exist before
+            // they can be reported. EnsureInitialized is a no-op once the index is built.
+            EnsureInitialized();
+
             RefreshRuleOrder();
 
             if (!IsUsingSupportedSpriteAtlasMode())
@@ -491,12 +943,16 @@ namespace CycloneGames.AtlasPipeline
             // so two rules with the same group write into the same .spriteatlasv2, and the winning
             // format is decided by whichever rule ResolveAtlasRule picks. Requiring a globally
             // unique AtlasGroup removes this silent merge at the root.
+            // Case-insensitive on purpose: atlas keys are compared case-insensitively throughout the
+            // index, so two groups spelled "UI" and "ui" would pass an ordinal check here and then
+            // silently merge into one atlas. The check has to use the same notion of equality as the
+            // bucket map, or it validates a guarantee the pipeline does not actually provide.
             var atlasGroupOwners =
-                new Dictionary<string, AtlasImportRule>(StringComparer.Ordinal);
+                new Dictionary<string, AtlasImportRule>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < RuleCache.Count; i++)
             {
                 AtlasImportRule rule = RuleCache[i];
-                string groupKey = SanitizeAtlasPart(rule.AtlasGroup);
+                string groupKey = AtlasPathUtility.SanitizePart(rule.AtlasGroup);
                 if (atlasGroupOwners.TryGetValue(groupKey, out AtlasImportRule owner))
                 {
                     errors.Add(
@@ -523,13 +979,70 @@ namespace CycloneGames.AtlasPipeline
                     continue;
                 }
 
-                if (PathsOverlap(overlapOutputFolder, sourceFolder))
+                if (AtlasPathUtility.PathsOverlap(overlapOutputFolder, sourceFolder))
                 {
                     errors.Add(
                         $"Output atlas folder '{overlapOutputFolder}' overlaps with import rule "
                         + $"'{RuleCache[i].Name}' source folder '{sourceFolder}'. Every source "
                         + "image inside the output folder is treated as an intrusion and would "
                         + "be moved to quarantine. Choose a disjoint output folder.");
+                }
+            }
+
+            // PerSprite atlas keys are the file stem alone, so two identically named files in
+            // different folders merge into one atlas. There is no warning at runtime for the sprites
+            // that never ship, so block it here. Detection happens during indexing — no extra scan.
+            IReadOnlyList<string> collidedKeys = GetCollidedAtlasKeys();
+            for (int i = 0; i < collidedKeys.Count; i++)
+            {
+                errors.Add(
+                    $"Atlas key '{collidedKeys[i]}' is claimed by more than one source asset. "
+                    + "PerSprite granularity builds the atlas key from the file name alone, so "
+                    + "identically named files under different folders collapse into a single atlas "
+                    + "and one set of sprites is silently lost. Rename the files, or switch the "
+                    + "rule to PerChildFolder granularity.");
+            }
+
+            // Case-variant source paths. On Windows and on default macOS volumes these are one file,
+            // so such a project cannot be checked out correctly there: one developer sees one asset,
+            // a Linux CI agent sees two, and the atlases do not match. This is invisible until
+            // something renders wrong on only some machines, so block it.
+            if (Index.CaseVariantCount > 0)
+            {
+                errors.Add(
+                    $"{Index.CaseVariantCount} source asset(s) differ from another asset only by "
+                    + "letter case (for example " + SummarizeKeys(Index.CaseVariantSamples)
+                    + "). Windows and default macOS volumes treat these as one file, so the project "
+                    + "checks out differently per machine and generates different atlases. Give the "
+                    + "files distinct names.");
+            }
+
+            // A global exclude that swallows a rule's source folder disables that rule silently — the
+            // rule still validates, still shows up in the window, and simply matches nothing.
+            IReadOnlyList<string> globalExcludes = _settingsCache.GlobalExcludedFolderPaths;
+            for (int i = 0; i < globalExcludes.Count; i++)
+            {
+                string exclude = AtlasPathUtility.NormalizeAndTrim(globalExcludes[i]);
+                if (string.IsNullOrEmpty(exclude))
+                {
+                    continue;
+                }
+
+                for (int r = 0; r < RuleCache.Count; r++)
+                {
+                    string sourceFolder = RuleCache[r].NormalizedSourceFolder;
+                    if (string.IsNullOrEmpty(sourceFolder))
+                    {
+                        continue;
+                    }
+
+                    if (AtlasPathUtility.IsUnderFolder(sourceFolder, exclude))
+                    {
+                        errors.Add(
+                            $"Global exclude folder '{exclude}' contains import rule "
+                            + $"'{RuleCache[r].Name}' source folder '{sourceFolder}'. The rule "
+                            + "would silently match nothing. Remove the exclude or move the rule.");
+                    }
                 }
             }
 
@@ -628,9 +1141,23 @@ namespace CycloneGames.AtlasPipeline
             // instead of as missing sprites at runtime.
             VerifyExpectedAtlases(failures);
 
+            // Capacity overflow is only knowable once the sprite rects are loaded, so it is collected
+            // during generation and promoted to a failure here. Unity packs one texture per atlas and
+            // silently drops whatever does not fit; shipping that means shipping missing sprites that
+            // only show up as white quads at runtime.
+            AppendCapacityFailures(failures);
+
             // Sweep orphan atlases: stale .spriteatlasv2 files left in the output folder after a
             // rule rename/deletion would otherwise ship in the player forever.
             SweepOrphanAtlases();
+
+            // Only record the manifest once everything succeeded. A partial pass would commit
+            // fingerprints for atlases that were never written, which is the one thing the manifest
+            // must never claim.
+            if (failures.Count == 0)
+            {
+                WriteManifest();
+            }
 
             if (failures.Count > 0)
             {
@@ -647,18 +1174,33 @@ namespace CycloneGames.AtlasPipeline
             }
         }
 
-        public static void ProcessAllDirtyAtlases()
+        /// <summary>
+        /// Regenerates every atlas the index expects.
+        /// </summary>
+        /// <param name="force">
+        /// Bypasses the per-atlas fingerprint and reloads every sprite. Use it when on-disk state may
+        /// have drifted in a way the fingerprint cannot see, for example after manually editing a
+        /// .spriteatlasv2 file. Normal passes leave it off.
+        /// </param>
+        public static void ProcessAllDirtyAtlases(bool force = false)
         {
             RebuildIndex(markDirty: true);
 
             // The manual entry point collects failures too, so the window cannot report "all
             // rebuilt" while some atlases actually failed.
             var failures = new List<string>();
-            ProcessDirtyAtlases(failures: failures);
+            ProcessDirtyAtlases(failures: failures, force: force);
 
-            // Same as the build path: post-generation check + orphan sweep.
+            // Same as the build path: post-generation check + capacity + orphan sweep.
             VerifyExpectedAtlases(failures);
+            AppendCapacityFailures(failures);
             SweepOrphanAtlases();
+
+            // See the build path: the manifest is only trustworthy after a clean, complete pass.
+            if (failures.Count == 0)
+            {
+                WriteManifest();
+            }
 
             if (failures.Count > 0)
             {
@@ -666,6 +1208,24 @@ namespace CycloneGames.AtlasPipeline
                     "[CycloneGames Atlas Pipeline] Atlas regeneration finished with "
                     + $"{failures.Count} failure(s):{Environment.NewLine}"
                     + string.Join(Environment.NewLine, failures));
+            }
+        }
+
+        private static void AppendCapacityFailures(ICollection<string> failures)
+        {
+            if (CapacityOverflowAtlases.Count == 0)
+            {
+                return;
+            }
+
+            CapacityOverflowAtlases.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < CapacityOverflowAtlases.Count; i++)
+            {
+                failures?.Add(
+                    $"Atlas '{CapacityOverflowAtlases[i]}' does not fit its configured max texture "
+                    + "size: Unity packs one texture per atlas and silently drops the sprites that "
+                    + "do not fit, so they would ship as missing. Raise 'Atlas Max' on the owning "
+                    + "rule, or split the source folder with a finer atlas granularity.");
             }
         }
 
@@ -682,20 +1242,26 @@ namespace CycloneGames.AtlasPipeline
             }
 
             string folder = settings.NormalizedOutputAtlasFolder;
-            foreach (KeyValuePair<string, HashSet<string>> entry in AtlasToAssets)
+
+            // GetBuckets returns them in atlas-key order, so a failure list is identical across
+            // machines and CI logs stay diffable.
+            IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
+            for (int i = 0; i < buckets.Count; i++)
             {
-                if (entry.Value.Count == 0)
+                AtlasBucket bucket = buckets[i];
+                if (bucket.Count == 0)
                 {
-                    // An empty set is the normal path for an atlas that was just cleared and deleted.
+                    // An empty bucket is the normal path for an atlas that was just cleared and
+                    // deleted.
                     continue;
                 }
 
-                string expectedPath = BuildAtlasAssetPath(folder, entry.Key);
+                string expectedPath = BuildAtlasAssetPath(folder, bucket.Key);
                 if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(expectedPath) == null)
                 {
                     failures?.Add(
-                        $"Expected atlas '{expectedPath}' (key '{entry.Key}', "
-                        + $"{entry.Value.Count} sprite(s)) was not generated. "
+                        $"Expected atlas '{expectedPath}' (key '{bucket.Key}', "
+                        + $"{bucket.Count} sprite(s)) was not generated. "
                         + "Anything loading atlases by path at runtime will fail.");
                 }
             }
@@ -726,9 +1292,10 @@ namespace CycloneGames.AtlasPipeline
             }
 
             var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, HashSet<string>> entry in AtlasToAssets)
+            IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
+            for (int i = 0; i < buckets.Count; i++)
             {
-                expected.Add(BuildAtlasAssetPath(folder, entry.Key));
+                expected.Add(BuildAtlasAssetPath(folder, buckets[i].Key));
             }
 
             // Enumerate the filesystem directly instead of using FindAssets: it avoids search-type
@@ -1189,10 +1756,9 @@ namespace CycloneGames.AtlasPipeline
                     continue;
                 }
 
-                if (string.Equals(path, outputFolder, StringComparison.OrdinalIgnoreCase)
-                    || path.StartsWith(
-                        outputFolder + "/",
-                        StringComparison.OrdinalIgnoreCase))
+                // Allocation-free folder test: StartsWith(outputFolder + "/") built a new string per
+                // imported asset, on the path that runs for every image import.
+                if (AtlasPathUtility.IsUnderFolder(path, outputFolder))
                 {
                     OutputFolderIntrusions.Add(path);
                 }
@@ -1332,8 +1898,10 @@ namespace CycloneGames.AtlasPipeline
             }
             else
             {
-                AtlasToAssets.Clear();
-                AssetToAtlas.Clear();
+                // Keep the dirty set: a project-changed rescan must not discard regeneration work
+                // that is still queued from the asset changes that triggered it.
+                Index.ClearMembership();
+                ResetCollisionTracking();
             }
 
             RefreshRuleOrder();
@@ -1371,9 +1939,18 @@ namespace CycloneGames.AtlasPipeline
 
         private static void ClearIndex()
         {
-            AtlasToAssets.Clear();
-            AssetToAtlas.Clear();
-            DirtyAtlasKeys.Clear();
+            Index.Clear();
+            ResetCollisionTracking();
+        }
+
+        /// <summary>
+        /// Drops the per-scan diagnostics that are rebuilt while indexing. Called on every index
+        /// rebuild so a deleted or renamed source asset cannot leave a stale collision report behind.
+        /// </summary>
+        private static void ResetCollisionTracking()
+        {
+            PerSpriteKeyOwners.Clear();
+            CollidedAtlasKeys.Clear();
         }
 
         private static bool IndexAsset(string assetPath)
@@ -1416,79 +1993,182 @@ namespace CycloneGames.AtlasPipeline
                 return;
             }
 
-            if (AssetToAtlas.TryGetValue(assetPath, out string previousKey))
+            Index.Add(assetPath, atlasKey, markDirty);
+
+            if (Index.TryGetBucket(atlasKey, out AtlasBucket bucket))
             {
-                if (!string.Equals(previousKey, atlasKey, StringComparison.OrdinalIgnoreCase)
-                    && AtlasToAssets.TryGetValue(previousKey, out HashSet<string> previousSet))
+                // Keep the owning-rule shortcut in sync. It turns "which rule configures this atlas"
+                // from a sorted scan over every member plus a rule match per member into an index
+                // lookup, and the rule is what supplies the atlas size, formats and rotation.
+                bucket.RuleId = rule.PipelineIndex;
+            }
+
+            // PerSprite keys are the file stem alone, so two "btn.png" under different folders
+            // collapse into one atlas and one set of sprites silently never ships. There is no
+            // runtime error for it, so it is detected here and blocked by build validation.
+            if (rule.AtlasGranularity == AtlasGranularity.PerSprite)
+            {
+                if (PerSpriteKeyOwners.TryGetValue(atlasKey, out string owner))
                 {
-                    previousSet.Remove(assetPath);
-                    if (markDirty)
+                    if (!string.Equals(owner, assetPath, StringComparison.OrdinalIgnoreCase))
                     {
-                        DirtyAtlasKeys.Add(previousKey);
+                        CollidedAtlasKeys.Add(atlasKey);
                     }
                 }
-            }
-
-            AssetToAtlas[assetPath] = atlasKey;
-            if (!AtlasToAssets.TryGetValue(atlasKey, out HashSet<string> atlasSet))
-            {
-                atlasSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                AtlasToAssets.Add(atlasKey, atlasSet);
-            }
-
-            if (atlasSet.Add(assetPath) && markDirty)
-            {
-                DirtyAtlasKeys.Add(atlasKey);
+                else
+                {
+                    PerSpriteKeyOwners.Add(atlasKey, assetPath);
+                }
             }
         }
 
         private static bool RemoveAsset(string assetPath)
         {
-            if (!AssetToAtlas.TryGetValue(assetPath, out string atlasKey))
-            {
-                return false;
-            }
-
-            AssetToAtlas.Remove(assetPath);
-            if (AtlasToAssets.TryGetValue(atlasKey, out HashSet<string> atlasSet))
-            {
-                atlasSet.Remove(assetPath);
-            }
-
-            DirtyAtlasKeys.Add(atlasKey);
-            return true;
+            return Index.Remove(assetPath, markDirty: true, out _);
         }
 
         private static string ResolveAtlasKey(AtlasImportRule rule, string assetPath)
         {
-            if (rule.AtlasGranularity == AtlasGranularity.None)
+            // Both switches live on the settings asset rather than the rule: flipping either renames
+            // every atlas in the project, which is a project-wide decision.
+            bool collisionSafe = _settingsCache != null && _settingsCache.CollisionSafeAtlasKeys;
+            AtlasKeyCasing casing = _settingsCache != null
+                ? _settingsCache.AtlasKeyCasing
+                : AtlasKeyCasing.Preserve;
+            return ResolveAtlasKey(rule, assetPath, collisionSafe, casing);
+        }
+
+        /// <summary>
+        /// Pure atlas-key computation. Split out from the settings-aware overload so the naming rules
+        /// — the thing that decides which file an atlas lands in, and therefore every runtime path
+        /// built from it — can be unit tested without an asset database.
+        /// </summary>
+        internal static string ResolveAtlasKey(
+            AtlasImportRule rule,
+            string assetPath,
+            bool collisionSafe)
+        {
+            return ResolveAtlasKey(rule, assetPath, collisionSafe, AtlasKeyCasing.Preserve);
+        }
+
+        internal static string ResolveAtlasKey(
+            AtlasImportRule rule,
+            string assetPath,
+            bool collisionSafe,
+            AtlasKeyCasing casing)
+        {
+            if (rule == null || rule.AtlasGranularity == AtlasGranularity.None)
             {
                 return null;
             }
 
-            string group = SanitizeAtlasPart(rule.AtlasGroup);
+            // Normalize defensively. Every caller already normalizes, but a single raw path slipping
+            // through would silently produce a different atlas key, and the key is the output file
+            // name. Normalize returns the same instance when there is nothing to replace, so the
+            // cost is one scan of a path-sized string.
+            assetPath = AtlasPathUtility.Normalize(assetPath);
+
+            string group = AtlasPathUtility.SanitizePart(rule.AtlasGroup);
+            if (rule.AtlasGranularity == AtlasGranularity.PerSourceFolder)
+            {
+                return ApplyKeyCasing(group, casing);
+            }
+
+            // Everything below works on the part of the path under the rule folder. Taking ranges
+            // instead of building an intermediate relative path avoids one allocation per asset per
+            // rule, which is the dominant cost on a full rescan of a large art tree.
             string folder = rule.NormalizedSourceFolder;
-            string relative = assetPath.Substring(folder.Length).TrimStart('/');
+
+            // Callers only ever resolve a rule for a path it matches, but the atlas key is the output
+            // file name, so a mis-resolved rule must not be allowed to slice an unrelated path into a
+            // garbage key. Fall back to the group when the path is not actually under the folder.
+            if (!AtlasPathUtility.IsUnderFolder(assetPath, folder))
+            {
+                return ApplyKeyCasing(group, casing);
+            }
+
+            int relativeStart = folder.Length;
+            if (relativeStart >= assetPath.Length)
+            {
+                return ApplyKeyCasing(group, casing);
+            }
+
+            if (assetPath[relativeStart] == '/')
+            {
+                relativeStart++;
+            }
 
             if (rule.AtlasGranularity == AtlasGranularity.PerSprite)
             {
-                // Take only the final segment (file name) without splitting into an array; this is
-                // equivalent to the original segments[last].
-                string spriteName = SanitizeAtlasPart(
-                    Path.GetFileNameWithoutExtension(relative));
-                return $"{group}_{spriteName}";
-            }
+                AtlasPathUtility.GetStemRange(assetPath, out int stemStart, out int stemLength);
+                string spriteName = stemLength > 0
+                    ? assetPath.Substring(stemStart, stemLength)
+                    : string.Empty;
 
-            if (rule.AtlasGranularity == AtlasGranularity.PerChildFolder)
-            {
-                int firstSlash = relative.IndexOf('/');
-                string child = firstSlash >= 0
-                    ? SanitizeAtlasPart(relative.Substring(0, firstSlash))
+                if (!collisionSafe)
+                {
+                    // Historical behaviour: the stem alone. Two "btn.png" under different folders
+                    // collapse into one atlas and one set of sprites silently never ships. Detected
+                    // during indexing and reported by ValidateForBuild.
+                    return ApplyKeyCasing(
+                        group + "_" + AtlasPathUtility.SanitizePart(spriteName),
+                        casing);
+                }
+
+                // Fold the directory below the rule folder into the key (slashes become underscores)
+                // so identically named files land in different atlases.
+                int directoryEnd = stemStart > 0 ? stemStart - 1 : -1;
+                string directoryPart = directoryEnd >= relativeStart
+                    ? assetPath.Substring(relativeStart, directoryEnd - relativeStart)
+                        .Replace('/', '_')
                     : "Root";
-                return $"{group}_{child}";
+
+                return ApplyKeyCasing(
+                    group
+                    + "_" + AtlasPathUtility.SanitizePart(directoryPart)
+                    + "_" + AtlasPathUtility.SanitizePart(spriteName),
+                    casing);
             }
 
-            return group;
+            // PerChildFolder: the first path segment below the rule folder, or "Root" when the file
+            // sits directly inside it.
+            int firstSlash = IndexOfSeparator(assetPath, relativeStart);
+            string child = firstSlash >= 0
+                ? assetPath.Substring(relativeStart, firstSlash - relativeStart)
+                : "Root";
+            return ApplyKeyCasing(group + "_" + AtlasPathUtility.SanitizePart(child), casing);
+        }
+
+        /// <summary>
+        /// Applies the project's atlas-key casing policy. The key becomes the generated file name, so
+        /// lowercasing it makes the output predictable from the rule configuration alone instead of
+        /// depending on which spelling of a group or folder happened to be indexed first.
+        /// Sprite names are never touched: they are looked up by name at runtime and are case
+        /// sensitive there.
+        /// </summary>
+        private static string ApplyKeyCasing(string key, AtlasKeyCasing casing)
+        {
+            if (string.IsNullOrEmpty(key) || casing != AtlasKeyCasing.Lower)
+            {
+                return key;
+            }
+
+            // Invariant, never culture-sensitive: a Turkish locale must not turn "I" into "ı".
+            return key.ToLowerInvariant();
+        }
+
+        private static int IndexOfSeparator(string path, int startIndex)
+        {
+            for (int i = startIndex < 0 ? 0 : startIndex; i < path.Length; i++)
+            {
+                char c = path[i];
+                if (c == '/' || c == '\\')
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         /// <summary>
@@ -1497,94 +2177,17 @@ namespace CycloneGames.AtlasPipeline
         /// </summary>
         private static string BuildAtlasAssetPath(string outputFolder, string atlasKey)
         {
-            return outputFolder + "/" + SanitizeAtlasPart(atlasKey) + ".spriteatlasv2";
-        }
-
-        /// <summary>
-        /// Whether two Assets/-relative directories are equal or one is an ancestor of the other.
-        /// Used by the output-folder vs. source-folder overlap check: when they overlap, every
-        /// source image is treated as an intrusion and moved to quarantine, i.e. the whole art
-        /// folder is emptied.
-        /// </summary>
-        private static bool PathsOverlap(string a, string b)
-        {
-            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
-            {
-                return false;
-            }
-
-            if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (b.Length > a.Length
-                && b.StartsWith(a, StringComparison.OrdinalIgnoreCase)
-                && b[a.Length] == '/')
-            {
-                return true;
-            }
-
-            return a.Length > b.Length
-                   && a.StartsWith(b, StringComparison.OrdinalIgnoreCase)
-                   && a[b.Length] == '/';
-        }
-
-        private static string SanitizeAtlasPart(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return "Atlas";
-            }
-
-            // Fast path: most groups/sprite names are already clean ("UI", "Scene", "icon_01"),
-            // so return them as-is and skip the StringBuilder allocation. The slow path runs only
-            // when the value contains illegal characters or leading/trailing underscores.
-            bool needsSanitize = false;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (!(char.IsLetterOrDigit(c) || c == '_' || c == '-'))
-                {
-                    needsSanitize = true;
-                    break;
-                }
-            }
-
-            if (!needsSanitize && value[0] != '_' && value[value.Length - 1] != '_')
-            {
-                return value;
-            }
-
-            var builder = new StringBuilder(value.Length);
-            bool previousWasSeparator = false;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (char.IsLetterOrDigit(c) || c == '_' || c == '-')
-                {
-                    builder.Append(c);
-                    previousWasSeparator = false;
-                    continue;
-                }
-
-                if (!previousWasSeparator)
-                {
-                    builder.Append('_');
-                    previousWasSeparator = true;
-                }
-            }
-
-            string result = builder.ToString().Trim('_');
-            return string.IsNullOrEmpty(result) ? "Atlas" : result;
+            return outputFolder + "/" + AtlasPathUtility.SanitizePart(atlasKey)
+                   + ".spriteatlasv2";
         }
 
         private static void ProcessDirtyAtlases(
             int? maxCount = null,
             double? timeBudgetSeconds = null,
-            ICollection<string> failures = null)
+            ICollection<string> failures = null,
+            bool force = false)
         {
-            if (DirtyAtlasKeys.Count == 0)
+            if (Index.DirtyCount == 0)
             {
                 return;
             }
@@ -1592,20 +2195,24 @@ namespace CycloneGames.AtlasPipeline
             AtlasPipelineSettings settings = _settingsCache;
             if (settings == null || !settings.AutoGenerateAtlases)
             {
-                DirtyAtlasKeys.Clear();
+                Index.ClearDirty();
                 return;
             }
 
             EnsureAssetFolderExists(settings.NormalizedOutputAtlasFolder);
 
-            var keys = new string[DirtyAtlasKeys.Count];
-            DirtyAtlasKeys.CopyTo(keys);
-            DirtyAtlasKeys.Clear();
+            // TakeDirtyKeys sorts before handing the keys over, so atlases are always written in
+            // atlas-key order. HashSet iteration order is an implementation detail and must never
+            // leak into generation order, or the same project would produce different results on
+            // different machines.
+            List<string> keys = DirtyKeyBuffer;
+            Index.TakeDirtyKeys(keys);
             GeneratedAtlasPaths.Clear();
             DeletedAtlasPaths.Clear();
             PendingAtlasConfigure.Clear();
+            CapacityOverflowAtlases.Clear();
 
-            int processCount = keys.Length;
+            int processCount = keys.Count;
             if (maxCount.HasValue && processCount > maxCount.Value)
             {
                 processCount = maxCount.Value;
@@ -1637,11 +2244,11 @@ namespace CycloneGames.AtlasPipeline
 
                 try
                 {
-                    GenerateAtlas(keys[i]);
+                    GenerateAtlas(keys[i], force);
                 }
                 catch (Exception exception)
                 {
-                    DirtyAtlasKeys.Add(keys[i]);
+                    Index.MarkDirty(keys[i]);
                     string failure =
                         $"Failed to generate atlas '{keys[i]}': {exception.Message}";
                     AtlasPipelineLog.Channel.Error($"[CycloneGames Atlas Pipeline] {failure}");
@@ -1663,11 +2270,11 @@ namespace CycloneGames.AtlasPipeline
                 }
             }
 
-            if (processed < keys.Length)
+            if (processed < keys.Count)
             {
-                for (int i = processed; i < keys.Length; i++)
+                for (int i = processed; i < keys.Count; i++)
                 {
-                    DirtyAtlasKeys.Add(keys[i]);
+                    Index.MarkDirty(keys[i]);
                 }
             }
 
@@ -1709,25 +2316,73 @@ namespace CycloneGames.AtlasPipeline
                 EndBatchedAssetEditing();
             }
 
+            // Buckets that lost every member are dropped so a long editor session does not
+            // accumulate thousands of empty entries; their atlas files were deleted above.
+            RemovedKeyBuffer.Clear();
+            Index.RemoveEmptyBuckets(RemovedKeyBuffer);
+            for (int i = 0; i < RemovedKeyBuffer.Count; i++)
+            {
+                GeneratedFingerprints.Remove(RemovedKeyBuffer[i]);
+            }
+
+            // The atlases on disk now correspond to the current configuration; the next settings
+            // change diffs against this.
+            CommitConfigurationSnapshot();
+
             LogAtlasChangesSummary();
         }
 
-        private static void GenerateAtlas(string atlasKey)
+        /// <summary>
+        /// Generates one atlas. The three early-outs are ordered cheapest-first: a content
+        /// fingerprint that loads nothing, then a packable comparison that loads sprites but writes
+        /// nothing, then the actual write.
+        /// </summary>
+        private static void GenerateAtlas(string atlasKey, bool force)
         {
             AtlasPipelineSettings settings = _settingsCache;
-            if (settings == null || !AtlasToAssets.TryGetValue(atlasKey, out HashSet<string> assetSet))
+            if (settings == null
+                || !Index.TryGetBucket(atlasKey, out AtlasBucket bucket))
             {
                 return;
             }
 
-            var orderedAssetPaths = new List<string>(assetSet);
-            orderedAssetPaths.Sort(StringComparer.Ordinal);
+            AtlasImportRule rule = ResolveAtlasRule(atlasKey);
+            int atlasMaxSize = rule != null
+                ? rule.AtlasMaxTextureSize
+                : DefaultAtlasMaxTextureSize;
+            int padding = settings.AtlasPadding < 0 ? 0 : settings.AtlasPadding;
+            string outputPath = BuildAtlasAssetPath(
+                settings.NormalizedOutputAtlasFolder,
+                atlasKey);
 
-            var sprites = new List<Sprite>(assetSet.Count);
-            var orderedAssetSprites = new List<Sprite>();
-            foreach (string assetPath in orderedAssetPaths)
+            // Cheapest check first: ordered membership plus owning-rule configuration plus the
+            // import state of every source asset. When nothing that feeds packing changed, the file
+            // on disk is already correct and we return without loading a single sprite. This is what
+            // keeps a settings-driven regeneration pass cheap on a project with tens of thousands of
+            // images, where loading every sprite just to compare packables dominated the pass.
+            long fingerprint = ComputeAtlasFingerprint(bucket, rule);
+            if (!force
+                && GeneratedFingerprints.TryGetValue(atlasKey, out long recorded)
+                && recorded == fingerprint
+                && File.Exists(ToAbsolutePath(outputPath)))
             {
-                if (!IsSupportedImagePath(assetPath))
+                return;
+            }
+
+            // The ordered member list is cached on the bucket and only rebuilt when membership
+            // changes, so the common incremental pass no longer pays for a copy plus a sort here.
+            IReadOnlyList<string> orderedAssetPaths = bucket.GetOrdered();
+            SpriteBuffer.Clear();
+            long requiredArea = 0L;
+            OversizedSpriteBuffer.Clear();
+            SpriteNameSpelling.Clear();
+            CaseVariantNameSamples.Clear();
+            _caseVariantNameCount = 0;
+
+            for (int i = 0; i < orderedAssetPaths.Count; i++)
+            {
+                string assetPath = orderedAssetPaths[i];
+                if (!AtlasPathUtility.IsSupportedImagePath(assetPath))
                 {
                     continue;
                 }
@@ -1738,58 +2393,95 @@ namespace CycloneGames.AtlasPipeline
                     continue;
                 }
 
-                orderedAssetSprites.Clear();
-                for (int i = 0; i < assets.Length; i++)
+                SubSpriteBuffer.Clear();
+                for (int a = 0; a < assets.Length; a++)
                 {
-                    if (assets[i] is Sprite sprite && sprite != null)
+                    if (assets[a] is Sprite sprite && sprite != null)
                     {
-                        orderedAssetSprites.Add(sprite);
+                        SubSpriteBuffer.Add(sprite);
                     }
                 }
 
-                orderedAssetSprites.Sort(
-                    (left, right) => string.CompareOrdinal(left.name, right.name));
-                sprites.AddRange(orderedAssetSprites);
+                // Sub-sprites of one sheet are ordered by name so a multi-sprite sheet contributes
+                // its packables in a machine-independent order.
+                SubSpriteBuffer.Sort(SpriteNameComparison);
+
+                for (int s = 0; s < SubSpriteBuffer.Count; s++)
+                {
+                    Sprite sprite = SubSpriteBuffer[s];
+                    SpriteBuffer.Add(sprite);
+
+                    int width = Mathf.RoundToInt(sprite.rect.width);
+                    int height = Mathf.RoundToInt(sprite.rect.height);
+                    requiredArea += AtlasCapacityPlanner.ComputePaddedArea(
+                        width,
+                        height,
+                        padding);
+
+                    if (AtlasCapacityPlanner.IsSpriteTooLarge(
+                            width,
+                            height,
+                            atlasMaxSize,
+                            padding))
+                    {
+                        OversizedSpriteBuffer.Add(sprite.name);
+                    }
+
+                    RecordSpriteNameSpelling(sprite.name);
+                }
             }
 
-            // Overflow check: sprites larger than the atlas limit cannot be packed — Unity silently
-            // drops them and they show up as white quads at runtime, one of the hardest bugs to
-            // trace with tens of thousands of assets, so warn explicitly.
-            AtlasImportRule overflowRule = ResolveAtlasRule(atlasKey);
-            int atlasMaxSize = overflowRule != null
-                ? overflowRule.AtlasMaxTextureSize
-                : 2048;
-            for (int i = 0; i < sprites.Count; i++)
+            // Two sprites whose names differ only by letter case ("Idle_0" and "idle_0") are legal
+            // everywhere, and runtime lookup by name is case sensitive, so whichever one
+            // GetSprite returns depends on packable order rather than on the name that was asked
+            // for. Worth reporting: it looks like a random wrong sprite at runtime.
+            if (_caseVariantNameCount > 0)
             {
-                Sprite oversized = sprites[i];
-                if (oversized == null)
-                {
-                    continue;
-                }
-
-                if (oversized.rect.width > atlasMaxSize
-                    || oversized.rect.height > atlasMaxSize)
-                {
-                    AtlasPipelineLog.Channel.Warning(
-                        $"[CycloneGames Atlas Pipeline] Sprite '{oversized.name}' "
-                        + $"({(int)oversized.rect.width}x{(int)oversized.rect.height}) exceeds "
-                        + $"the atlas max texture size {atlasMaxSize} of atlas '{atlasKey}'. "
-                        + "Unity will silently drop it from the packed atlas; shrink the "
-                        + "source image or raise 'Atlas Max' on the owning rule.");
-                }
+                AtlasPipelineLog.Channel.Warning(
+                    $"[CycloneGames Atlas Pipeline] Atlas '{atlasKey}' contains "
+                    + $"{_caseVariantNameCount} sprite name(s) that differ from another name only by "
+                    + "letter case (for example " + SummarizeKeys(CaseVariantNameSamples)
+                    + "). Give them distinct names.");
             }
 
-            string outputPath = BuildAtlasAssetPath(
-                settings.NormalizedOutputAtlasFolder,
-                atlasKey);
-            if (sprites.Count == 0)
+            // A sprite that cannot fit even into an empty atlas is dropped by Unity silently and
+            // shows up as a white quad at runtime — one of the hardest failures to trace in a large
+            // art set, so it is reported explicitly.
+            if (OversizedSpriteBuffer.Count > 0)
+            {
+                LogOversizedSprites(atlasKey, atlasMaxSize, padding);
+            }
+
+            if (SpriteBuffer.Count == 0)
             {
                 if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(outputPath) != null)
                 {
                     DeletedAtlasPaths.Add(outputPath);
                 }
 
+                GeneratedFingerprints[atlasKey] = fingerprint;
                 return;
+            }
+
+            // Capacity budget: unlike the per-sprite check above, this catches the aggregate case
+            // where every sprite fits individually but the atlas as a whole does not. Unity clamps an
+            // atlas to a single texture of the configured max size and drops the overflow.
+            AtlasCapacityReport capacity = AtlasCapacityPlanner.Evaluate(
+                new AtlasCapacityRequest(
+                    SpriteBuffer.Count,
+                    requiredArea,
+                    atlasMaxSize,
+                    padding));
+            if (capacity.RequiresSplitting)
+            {
+                CapacityOverflowAtlases.Add(atlasKey);
+                AtlasPipelineLog.Channel.Warning(
+                    $"[CycloneGames Atlas Pipeline] Atlas '{atlasKey}' needs about "
+                    + $"{capacity.PageCount} pages at {atlasMaxSize}px "
+                    + $"({capacity.RequiredArea}px of padded content against "
+                    + $"{capacity.UsableAreaPerPage}px usable per page). A SpriteAtlas is packed "
+                    + "into one texture, so Unity silently drops the overflow. Raise 'Atlas Max' on "
+                    + "the owning rule or split the source folder with a finer granularity.");
             }
 
             SpriteAtlasAsset v2Asset = SpriteAtlasAsset.Load(outputPath);
@@ -1797,9 +2489,10 @@ namespace CycloneGames.AtlasPipeline
             bool existed = v2Asset != null;
             if (existed
                 && masterAtlas != null
-                && AtlasPackablesMatch(masterAtlas, sprites)
+                && AtlasPackablesMatch(masterAtlas)
                 && AtlasConfigurationMatches(outputPath, atlasKey))
             {
+                GeneratedFingerprints[atlasKey] = fingerprint;
                 return;
             }
 
@@ -1827,7 +2520,16 @@ namespace CycloneGames.AtlasPipeline
                 }
             }
 
-            v2Asset.Add(sprites.ToArray());
+            // The array is resized only when the count changes, so repeated passes over the same
+            // atlas reuse one allocation. It is built here rather than earlier because only the
+            // write path needs an array.
+            if (_spriteArrayBuffer.Length != SpriteBuffer.Count)
+            {
+                _spriteArrayBuffer = new Sprite[SpriteBuffer.Count];
+            }
+
+            SpriteBuffer.CopyTo(_spriteArrayBuffer);
+            v2Asset.Add(_spriteArrayBuffer);
             SpriteAtlasAsset.Save(v2Asset, outputPath);
 
             // Release the newly created wrapper right after Save. Without this, a full rebuild of
@@ -1840,6 +2542,95 @@ namespace CycloneGames.AtlasPipeline
 
             GeneratedAtlasPaths.Add(outputPath);
             PendingAtlasConfigure.Add(atlasKey);
+            GeneratedFingerprints[atlasKey] = fingerprint;
+        }
+
+        /// <summary>
+        /// Fingerprint of everything that feeds the packed result of one atlas: the ordered member
+        /// list, the owning rule's configuration, and the import state of every source asset.
+        /// The first two are pure and reproducible across machines. The dependency hashes come from
+        /// Unity's import cache and are only ever compared within one editor session, which is all
+        /// they are used for — the worst case for a wrong value is an extra regeneration, never a
+        /// missed one.
+        /// </summary>
+        private static long ComputeAtlasFingerprint(AtlasBucket bucket, AtlasImportRule rule)
+        {
+            long content = bucket.ComputeContentHash(ComputeRuleFingerprint(rule));
+
+            // XOR rather than a running hash: the set of sources is order-independent, so the value
+            // must not change when only the member order changes. Order is already covered by
+            // content, and mixing two order-sensitive hashes here would make the fingerprint depend
+            // on it twice.
+            long dependencies = AtlasHash.NullHash;
+            IReadOnlyList<string> members = bucket.GetOrdered();
+            for (int i = 0; i < members.Count; i++)
+            {
+                dependencies ^= AssetDatabase.GetAssetDependencyHash(members[i]).GetHashCode();
+            }
+
+            return AtlasHash.Combine64(content, dependencies);
+        }
+
+        private static void RecordSpriteNameSpelling(string spriteName)
+        {
+            if (string.IsNullOrEmpty(spriteName))
+            {
+                return;
+            }
+
+            if (SpriteNameSpelling.TryGetValue(spriteName, out string firstSpelling))
+            {
+                if (!string.Equals(firstSpelling, spriteName, StringComparison.Ordinal))
+                {
+                    _caseVariantNameCount++;
+                    if (CaseVariantNameSamples.Count < MaxLoggedManifestKeys)
+                    {
+                        CaseVariantNameSamples.Add(firstSpelling + " / " + spriteName);
+                    }
+                }
+
+                return;
+            }
+
+            SpriteNameSpelling.Add(spriteName, spriteName);
+        }
+
+        private static void LogOversizedSprites(string atlasKey, int atlasMaxSize, int padding)
+        {
+            OversizedSpriteBuffer.Sort(StringComparer.Ordinal);
+
+            var builder = new StringBuilder();
+            builder.Append("[CycloneGames Atlas Pipeline] ")
+                .Append(OversizedSpriteBuffer.Count)
+                .Append(" sprite(s) in atlas '")
+                .Append(atlasKey)
+                .Append("' exceed the usable ")
+                .Append(atlasMaxSize)
+                .Append("px limit (padding ")
+                .Append(padding)
+                .Append("px per side):");
+
+            int logged = Math.Min(OversizedSpriteBuffer.Count, MaxLoggedOversizedSprites);
+            for (int i = 0; i < logged; i++)
+            {
+                builder.AppendLine();
+                builder.Append("  ").Append(OversizedSpriteBuffer[i]);
+            }
+
+            if (OversizedSpriteBuffer.Count > logged)
+            {
+                builder.AppendLine();
+                builder.Append("  ... and ")
+                    .Append(OversizedSpriteBuffer.Count - logged)
+                    .Append(" more.");
+            }
+
+            builder.AppendLine();
+            builder.Append(
+                "Unity silently drops them from the packed atlas; shrink the source images or raise "
+                + "'Atlas Max' on the owning rule.");
+
+            AtlasPipelineLog.Channel.Warning(builder.ToString());
         }
 
         private static void LogAtlasChangesSummary()
@@ -1932,46 +2723,52 @@ namespace CycloneGames.AtlasPipeline
                 atlasMaxSize));
         }
 
-        private static bool AtlasPackablesMatch(SpriteAtlas atlas, List<Sprite> expectedSprites)
+        /// <summary>
+        /// Compares the atlas's current packables against the sprites in <see cref="SpriteBuffer"/>.
+        /// Both sides are reduced to <see cref="AtlasSpriteIdentity"/> — source asset path plus sprite
+        /// name — and compared as sorted lists.
+        /// Identifying a packable by path plus name rather than by name alone is what keeps two
+        /// identically named sub-sprites from different sheets ("idle_0" in two character sheets)
+        /// from being mistaken for each other, which used to leave the atlas silently stale.
+        /// The identity struct carries its own hashes and falls back to exact string comparison, so
+        /// after the buffers warm up the whole comparison allocates nothing.
+        /// </summary>
+        /// <remarks>
+        /// Reads <see cref="SpriteBuffer"/>: only valid while called from <see cref="GenerateAtlas"/>.
+        /// </remarks>
+        private static bool AtlasPackablesMatch(SpriteAtlas atlas)
         {
             UnityEngine.Object[] current = atlas.GetPackables();
-            if (current == null || current.Length != expectedSprites.Count)
+            if (current == null)
             {
                 return false;
             }
 
-            // Compare by "asset path + sprite name" rather than sprite.name alone: identically named
-            // sub-sprites in different textures (two sprite sheets both having idle_0) were mistaken
-            // for "the same packables" in the old implementation, silently leaving the atlas stale
-            // (BUG-004).
-            var currentKeys = new List<string>(current.Length);
+            CurrentIdentityBuffer.Clear();
             for (int i = 0; i < current.Length; i++)
             {
                 if (current[i] is Sprite sprite && sprite != null)
                 {
-                    currentKeys.Add(BuildSpriteIdentity(sprite));
+                    CurrentIdentityBuffer.Add(BuildSpriteIdentity(sprite));
                 }
             }
 
-            if (currentKeys.Count != expectedSprites.Count)
+            if (CurrentIdentityBuffer.Count != SpriteBuffer.Count)
             {
                 return false;
             }
 
-            var expectedKeys = new List<string>(expectedSprites.Count);
-            for (int i = 0; i < expectedSprites.Count; i++)
+            ExpectedIdentityBuffer.Clear();
+            for (int i = 0; i < SpriteBuffer.Count; i++)
             {
-                expectedKeys.Add(BuildSpriteIdentity(expectedSprites[i]));
+                ExpectedIdentityBuffer.Add(BuildSpriteIdentity(SpriteBuffer[i]));
             }
 
-            currentKeys.Sort(StringComparer.Ordinal);
-            expectedKeys.Sort(StringComparer.Ordinal);
-            for (int i = 0; i < currentKeys.Count; i++)
+            CurrentIdentityBuffer.Sort();
+            ExpectedIdentityBuffer.Sort();
+            for (int i = 0; i < CurrentIdentityBuffer.Count; i++)
             {
-                if (!string.Equals(
-                        currentKeys[i],
-                        expectedKeys[i],
-                        StringComparison.Ordinal))
+                if (CurrentIdentityBuffer[i] != ExpectedIdentityBuffer[i])
                 {
                     return false;
                 }
@@ -1980,13 +2777,31 @@ namespace CycloneGames.AtlasPipeline
             return true;
         }
 
-        private static string BuildSpriteIdentity(Sprite sprite)
+        private static AtlasSpriteIdentity BuildSpriteIdentity(Sprite sprite)
         {
             // GetAssetPath on a sub-sprite returns its main texture path, the stable identity we want.
-            string assetPath = AssetDatabase.GetAssetPath(sprite);
-            return string.IsNullOrEmpty(assetPath)
-                ? sprite.name
-                : assetPath + "/" + sprite.name;
+            return new AtlasSpriteIdentity(
+                AssetDatabase.GetAssetPath(sprite),
+                sprite.name);
+        }
+
+        /// <summary>
+        /// Converts an Assets/-relative path to an absolute path without going through the asset
+        /// database, so the existence check in the fingerprint fast path stays cheap enough to run
+        /// for every atlas on every pass.
+        /// Returns null when the path is not under Assets/.
+        /// </summary>
+        private static string ToAbsolutePath(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath)
+                || !assetPath.StartsWith("Assets/", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return Path.GetFullPath(Path.Combine(
+                Application.dataPath,
+                assetPath.Substring("Assets/".Length).Replace('/', Path.DirectorySeparatorChar)));
         }
 
         private static bool AtlasConfigurationMatches(string outputPath, string atlasKey)
@@ -2176,34 +2991,58 @@ namespace CycloneGames.AtlasPipeline
 
         private static AtlasImportRule ResolveAtlasRule(string atlasKey)
         {
-            if (!AtlasToAssets.TryGetValue(atlasKey, out HashSet<string> atlasSet))
+            if (!Index.TryGetBucket(atlasKey, out AtlasBucket bucket))
             {
                 return null;
             }
 
-            // Determinism: HashSet iteration order is not stable. Sort first, then return the first
-            // resolvable rule so the same config resolves to the same rule on any machine and in any
-            // run order. (The AtlasGroup uniqueness check already blocks "same key hits different
-            // rules" at the root, but this keeps cross-run consistency defensively.)
-            var sortedPaths = new string[atlasSet.Count];
-            atlasSet.CopyTo(sortedPaths);
-            Array.Sort(sortedPaths, StringComparer.Ordinal);
-
-            foreach (string path in sortedPaths)
+            // Fast path: the owning rule was recorded when the members were indexed. Without it,
+            // every atlas generation paid for a sorted copy of the whole member list plus a rule
+            // match per member, just to answer "which rule configures this atlas".
+            int ruleId = bucket.RuleId;
+            if (ruleId >= 0 && ruleId < RuleCache.Count)
             {
-                AtlasImportRule rule = ResolveRule(path);
-                if (rule != null)
-                {
-                    return rule;
-                }
+                return RuleCache[ruleId];
             }
 
-            return null;
+            // Cache miss: the first pass after a settings reload, or an atlas indexed before the
+            // rule list was rebuilt. Recompute deterministically — sorted members, first resolvable
+            // rule — and store the result. Determinism matters because the rule supplies the atlas
+            // size, formats and rotation; two machines disagreeing here would produce different
+            // atlases from identical input.
+            AtlasImportRule resolved = null;
+            IReadOnlyList<string> members = bucket.GetOrdered();
+            for (int i = 0; i < members.Count && resolved == null; i++)
+            {
+                resolved = ResolveRule(members[i]);
+            }
+
+            bucket.RuleId = resolved != null ? resolved.PipelineIndex : -1;
+            return resolved;
         }
 
-        private static AtlasImportRule ResolveRule(string assetPath)
+        /// <summary>
+        /// Resolves the rule that governs a source asset, or null when none does.
+        /// This is the single entry point for "does the pipeline own this asset": everything that asks
+        /// that question — indexing, import-setting application, rename scanning, atlas key resolution
+        /// — must go through here, so a new exclusion rule only ever has to be added once.
+        /// </summary>
+        internal static AtlasImportRule ResolveRule(string assetPath)
         {
             string path = NormalizeAssetPath(assetPath);
+            if (IsGloballyExcluded(path))
+            {
+                return null;
+            }
+
+            // Self-heal rather than return "no rule": callers such as the rename scan reach this
+            // without going through EnsureInitialized, and an empty rule cache would make every asset
+            // look unowned — silently, which is the worst way to fail.
+            if (RuleCache.Count == 0 && _settingsCache != null)
+            {
+                RefreshRuleOrder();
+            }
+
             for (int i = 0; i < RuleCache.Count; i++)
             {
                 if (RuleCache[i].MatchesPath(path) && !RuleCache[i].IsPathExcluded(path))
@@ -2213,6 +3052,68 @@ namespace CycloneGames.AtlasPipeline
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Folders the pipeline ignores outright, whatever the rules say: no atlas membership, no
+        /// import settings, no rename prompts.
+        /// The atlas output folder is always excluded here and is deliberately not part of the
+        /// configurable list — the tool's own output must never be able to feed back into its input,
+        /// and a setting someone can clear is not a guarantee.
+        /// </summary>
+        internal static bool IsGloballyExcluded(string normalizedAssetPath)
+        {
+            AtlasPipelineSettings settings = _settingsCache;
+            if (settings == null)
+            {
+                return false;
+            }
+
+            return IsGloballyExcluded(
+                normalizedAssetPath,
+                settings.NormalizedOutputAtlasFolder,
+                settings.GlobalExcludedFolderPaths);
+        }
+
+        /// <summary>
+        /// Pure exclusion test. Split out from the settings-aware overload so the rule "what does the
+        /// pipeline refuse to touch" can be unit tested without an asset database.
+        /// </summary>
+        internal static bool IsGloballyExcluded(
+            string normalizedAssetPath,
+            string outputFolder,
+            IReadOnlyList<string> globalExcludes)
+        {
+            if (string.IsNullOrEmpty(normalizedAssetPath))
+            {
+                return true;
+            }
+
+            // The output folder is checked first and is not configurable: the tool's own output must
+            // never be able to become its own input.
+            outputFolder = AtlasPathUtility.NormalizeAndTrim(outputFolder);
+            if (!string.IsNullOrEmpty(outputFolder)
+                && AtlasPathUtility.IsUnderFolder(normalizedAssetPath, outputFolder))
+            {
+                return true;
+            }
+
+            if (globalExcludes == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < globalExcludes.Count; i++)
+            {
+                string exclude = AtlasPathUtility.NormalizeAndTrim(globalExcludes[i]);
+                if (!string.IsNullOrEmpty(exclude)
+                    && AtlasPathUtility.IsUnderFolder(normalizedAssetPath, exclude))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void RefreshRuleOrder()
@@ -2296,6 +3197,19 @@ namespace CycloneGames.AtlasPipeline
                 //    tiebreaker.
                 return configurationOrder[left].CompareTo(configurationOrder[right]);
             });
+
+            // Publish the new positions and drop the per-atlas rule shortcuts. Rule ids are indices
+            // into RuleCache, so after a reorder the same index points at a different rule; resolving
+            // the wrong one would write the wrong packing configuration into an atlas.
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                if (RuleCache[i] != null)
+                {
+                    RuleCache[i].PipelineIndex = i;
+                }
+            }
+
+            Index.ResetRuleIds();
         }
 
         private static void EnsureAssetFolderExists(string assetFolder)
@@ -2324,9 +3238,7 @@ namespace CycloneGames.AtlasPipeline
 
         private static string NormalizeAssetPath(string assetPath)
         {
-            return string.IsNullOrEmpty(assetPath)
-                ? string.Empty
-                : assetPath.Replace('\\', '/');
+            return AtlasPathUtility.Normalize(assetPath);
         }
     }
 

@@ -5,6 +5,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.Logging;
+using CycloneGames.AtlasPipeline.Pure;
 
 namespace CycloneGames.AtlasPipeline
 {
@@ -216,11 +217,11 @@ namespace CycloneGames.AtlasPipeline
                         continue;
                     }
 
-                    // The scan must match ResolveRule: MatchesPath && !IsPathExcluded &&
-                    // granularity != None. Checking only IsPathExcluded would pull in files this
-                    // rule does not govern (IsPathExcluded returns false for non-matching paths),
-                    // producing false positives that block the build.
-                    if (!rule.MatchesPath(path) || rule.IsPathExcluded(path))
+                    // Route through the pipeline's single resolution entry point rather than
+                    // reimplementing "which rule owns this asset". A second copy of that logic would
+                    // silently drift and, worse, would bypass global excludes, so files the pipeline
+                    // ignores would still be flagged as needing a rename.
+                    if (!ReferenceEquals(AtlasPipeline.ResolveRule(path), rule))
                     {
                         continue;
                     }
@@ -465,10 +466,10 @@ namespace CycloneGames.AtlasPipeline
 
         internal static bool IsSupportedImagePath(string assetPath)
         {
-            string extension = Path.GetExtension(assetPath);
-            return string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
-                   || string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase)
-                   || string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase);
+            // Delegates to the shared implementation so there is exactly one place to extend when a
+            // format is added. The old version built an extension substring per asset, which showed
+            // up in the profile of every full project scan.
+            return AtlasPathUtility.IsSupportedImagePath(assetPath);
         }
     }
 }
