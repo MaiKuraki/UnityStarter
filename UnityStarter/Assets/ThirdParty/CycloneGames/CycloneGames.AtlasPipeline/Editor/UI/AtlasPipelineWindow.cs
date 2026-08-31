@@ -4,6 +4,7 @@ using System.IO;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
+using CycloneGames.AtlasPipeline.Pure;
 
 namespace CycloneGames.AtlasPipeline
 {
@@ -20,10 +21,15 @@ namespace CycloneGames.AtlasPipeline
         private SerializedProperty _atlasPaddingProperty;
         private SerializedProperty _enableRotationProperty;
         private SerializedProperty _enableTightPackingProperty;
+        private SerializedProperty _enableAlphaDilationProperty;
         private SerializedProperty _blockOffsetProperty;
         private SerializedProperty _includeInBuildProperty;
         private SerializedProperty _asciiOnlyNamesProperty;
-        private SerializedProperty _rulesProperty;
+        private SerializedProperty _atlasKeyCasingProperty;
+        private SerializedProperty _collisionSafeAtlasKeysProperty;
+        private SerializedProperty _autoPageOverflowingAtlasesProperty;
+        private SerializedProperty _globalExcludedFolderPathsProperty;
+        private SerializedProperty _ruleAssetsProperty;
 
         private ReorderableList _rulesList;
         private Vector2 _scrollPosition;
@@ -31,21 +37,43 @@ namespace CycloneGames.AtlasPipeline
         private bool _showRules = true;
         private bool _showPacking = true;
         private bool _showValidation = true;
+        private bool _showExclusions = false;
         private string _feedbackTitle = string.Empty;
         private string _feedbackMessage = string.Empty;
         private bool _settingsSaveScheduled;
+        private bool _rulesChanged;
         private readonly HashSet<int> _expandedRules = new HashSet<int>();
+
+        // The overrides intro text lives on AtlasPipelineUi as a cached GUIContent, so the string
+        // that gets measured and the string that gets drawn are literally the same object.
+
+        // Row accounting for ComputeRuleElementHeight. Each value is the number of NextLine
+        // advances the matching section performs in DrawRuleAssetElement. The ReorderableList has
+        // no auto-layout for its elements, so these must be kept in step with the draw code by
+        // hand — the section comments there name the same groups.
+        private const int IdentityRows = 5;         // name/group, folder, path label, subfolder, foldout
+        private const int SpriteImportRows = 5;     // mode/ppu, pixel art, filter/wrap, mip/read, compression/granularity
+        private const int AtlasCompositionRows = 3; // atlas max, recommended/warn, platform format row
+        private const int OverridesRows = 5;        // section label, size header, size row, toggles, rotation
+        private const int ListCount = 3;            // path keywords, excluded folders, excluded keywords
+
+        /// <summary>Each list draws a section header plus the row its Add button sits on.</summary>
+        private const int PerListChromeRows = 2;
+
+        /// <summary>Bottom breathing room inside the rule card, after the last list.</summary>
+        private const float RuleElementBottomPadding = 8f;
+
+        /// <summary>
+        /// Memoised width and height of the overrides intro label. The height callback runs before
+        /// the draw pass and therefore has no element rect to measure against, so both sides read
+        /// the same cached value instead of each guessing a width — see
+        /// <see cref="MeasureIntroHeight"/>.
+        /// </summary>
+        private float _introWidth = -1f;
+        private float _introHeight;
+
         private IReadOnlyList<string> _cachedValidationErrors = new List<string>();
         private bool _validationCacheDirty = true;
-        private static readonly int[] MaxTextureSizeOptions =
-        {
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-        };
-
         [MenuItem("Tools/CycloneGames/Atlas Pipeline/Open Atlas Pipeline")]
         public static void ShowWindow()
         {
@@ -62,6 +90,10 @@ namespace CycloneGames.AtlasPipeline
             _settingsObject = new SerializedObject(AtlasPipeline.Settings);
             CacheProperties();
             BuildRulesList();
+
+            // The collector probe is cached per (window lifetime, output folder); a project change
+            // re-probes so editing the YooAsset collector config is picked up without reopening.
+            _collectorProbeDone = false;
             EditorApplication.projectChanged += OnProjectChanged;
 
             // Force index initialization in OnEnable so the first OnGUI frame does not stall on a
@@ -82,6 +114,7 @@ namespace CycloneGames.AtlasPipeline
             // changes are coalesced through delayCall into a single rescan.
             AtlasPipeline.HandleProjectChanged();
             _validationCacheDirty = true;
+            _collectorProbeDone = false;
 
             // Clear the folder-resolution cache of the rule instances this window holds: a folder
             // rename is an external event, and the window's instances are not replaced when the
@@ -98,10 +131,14 @@ namespace CycloneGames.AtlasPipeline
                 return;
             }
 
+            // Iterate the rule assets, not the resolved rule list: the two can have different
+            // indices when a rule asset reference is missing, and this window is the only place
+            // that has to care.
             var settings = (AtlasPipelineSettings)_settingsObject.targetObject;
-            for (int i = 0; i < settings.ImportRules.Count; i++)
+            IReadOnlyList<AtlasRuleAsset> assets = settings.RuleAssets;
+            for (int i = 0; i < assets.Count; i++)
             {
-                settings.ImportRules[i]?.RefreshResolvedFolder();
+                assets[i]?.Rule?.RefreshResolvedFolder();
             }
         }
 
@@ -118,9 +155,10 @@ namespace CycloneGames.AtlasPipeline
             }
 
             var settings = (AtlasPipelineSettings)_settingsObject.targetObject;
-            for (int i = 0; i < settings.ImportRules.Count; i++)
+            IReadOnlyList<AtlasRuleAsset> assets = settings.RuleAssets;
+            for (int i = 0; i < assets.Count; i++)
             {
-                AtlasImportRule rule = settings.ImportRules[i];
+                AtlasImportRule rule = assets[i]?.Rule;
                 if (rule == null)
                 {
                     continue;
@@ -134,6 +172,7 @@ namespace CycloneGames.AtlasPipeline
                         StringComparison.Ordinal))
                 {
                     rule.UpdateSourceFolderPath(resolved);
+                    EditorUtility.SetDirty(assets[i]);
                 }
             }
         }
@@ -159,6 +198,7 @@ namespace CycloneGames.AtlasPipeline
 
             DrawSummary();
             DrawGeneral();
+            DrawExclusions();
             DrawRules();
             DrawPacking();
             DrawValidation();
@@ -167,13 +207,19 @@ namespace CycloneGames.AtlasPipeline
 
             EditorGUILayout.EndScrollView();
 
-            if (_settingsObject.ApplyModifiedProperties())
+            bool settingsChanged = _settingsObject.ApplyModifiedProperties();
+            if (settingsChanged || _rulesChanged)
             {
                 HealStaleSourceFolderPaths();
-                EditorUtility.SetDirty(_settingsObject.targetObject);
+                if (settingsChanged)
+                {
+                    EditorUtility.SetDirty(_settingsObject.targetObject);
+                }
+
                 ScheduleSettingsSave();
                 AtlasPipeline.HandleSettingsChanged();
                 _validationCacheDirty = true;
+                _rulesChanged = false;
                 Repaint();
             }
         }
@@ -229,32 +275,67 @@ namespace CycloneGames.AtlasPipeline
             AtlasInspectorUiUtility.BeginPanel();
             EditorGUILayout.PropertyField(
                 _autoImportProperty,
-                new GUIContent("Auto Import Sprites"));
+                AtlasPipelineUi.AutoImport);
             EditorGUILayout.PropertyField(
                 _autoGenerateAtlasesProperty,
-                new GUIContent("Auto Generate Atlases"));
+                AtlasPipelineUi.AutoGenerateAtlases);
             EditorGUILayout.PropertyField(
                 _asciiOnlyNamesProperty,
-                new GUIContent(
-                    "ASCII-Only Names",
-                    "When enabled, atlas source file names may only contain ASCII letters, "
-                    + "digits, underscores and dashes. Non-ASCII names (Chinese, full-width "
-                    + "characters, emoji) enter the rename review flow and block the build "
-                    + "validation. Recommended for multi-platform projects."));
+                AtlasPipelineUi.AsciiOnlyNames);
+            EditorGUILayout.PropertyField(
+                _atlasKeyCasingProperty,
+                AtlasPipelineUi.AtlasKeyCasing);
+            EditorGUILayout.PropertyField(
+                _collisionSafeAtlasKeysProperty,
+                AtlasPipelineUi.CollisionSafeKeys);
+            EditorGUILayout.PropertyField(
+                _autoPageOverflowingAtlasesProperty,
+                AtlasPipelineUi.AutoPageOverflowing);
             DrawFolderObjectField(
                 _outputAtlasFolderProperty,
-                new GUIContent("Output Atlas Folder"));
+                AtlasPipelineUi.OutputAtlasFolder);
+            AtlasInspectorUiUtility.EndPanel();
+            EditorGUILayout.Space(4f);
+        }
+
+        /// <summary>
+        /// Folders the pipeline ignores entirely, whatever the rules say. The atlas output folder is
+        /// always excluded on top of this list and is deliberately not shown here, because it is not
+        /// configurable.
+        /// </summary>
+        private void DrawExclusions()
+        {
+            int excludeCount = _globalExcludedFolderPathsProperty?.arraySize ?? 0;
+            _showExclusions = AtlasInspectorUiUtility.DrawFoldoutHeader(
+                "Global Exclusions",
+                _showExclusions,
+                AtlasInspectorUiUtility.WarningColor,
+                _folderBadge.Get(excludeCount),
+                AtlasInspectorUiUtility.WarningColor);
+            if (!_showExclusions)
+            {
+                return;
+            }
+
+            AtlasInspectorUiUtility.BeginPanel();
+            EditorGUILayout.HelpBox(
+                "Assets under these folders are ignored completely: no atlas membership, no "
+                + "import settings, no rename prompts. The atlas output folder is always excluded "
+                + "and cannot be removed from that guarantee.",
+                MessageType.Info);
+            DrawStringFolderList(_globalExcludedFolderPathsProperty);
             AtlasInspectorUiUtility.EndPanel();
             EditorGUILayout.Space(4f);
         }
 
         private void DrawRules()
         {
+            int count = _ruleAssetsProperty?.arraySize ?? 0;
             _showRules = AtlasInspectorUiUtility.DrawFoldoutHeader(
                 "Import Rules",
                 _showRules,
                 AtlasInspectorUiUtility.ImportColor,
-                _rulesProperty != null ? _rulesProperty.arraySize.ToString() + " RULES" : "0 RULES",
+                _ruleBadge.Get(count),
                 AtlasInspectorUiUtility.ImportColor);
             if (!_showRules)
             {
@@ -286,26 +367,204 @@ namespace CycloneGames.AtlasPipeline
             }
 
             AtlasInspectorUiUtility.BeginPanel();
+
+            // Layout density: these four together decide how much of each page is sprite pixels
+            // versus empty space.
+            EditorGUILayout.LabelField("Layout Density", EditorStyles.miniBoldLabel);
             EditorGUILayout.PropertyField(
                 _atlasPaddingProperty,
-                new GUIContent("Padding"));
+                AtlasPipelineUi.Padding);
             EditorGUILayout.PropertyField(
                 _blockOffsetProperty,
-                new GUIContent("Block Offset"));
+                AtlasPipelineUi.BlockOffset);
             EditorGUILayout.PropertyField(
                 _enableRotationProperty,
-                new GUIContent(
-                    "Default Enable Rotation",
-                    "Used when an import rule's Atlas Rotation is set to Inherit. "
-                    + "Pixel Art rules always disable rotation regardless of this setting."));
+                AtlasPipelineUi.RotationDefault);
+
+            DrawToggleGuidance(AtlasPipelineUi.RotationGuidance);
+
             EditorGUILayout.PropertyField(
                 _enableTightPackingProperty,
-                new GUIContent("Tight Packing"));
+                AtlasPipelineUi.TightPacking);
+
+            DrawToggleGuidance(AtlasPipelineUi.TightPackingGuidance);
+
+            EditorGUILayout.Space(4f);
+
+            // Edge quality: dilation is the anti-seam measure. It writes only into padding,
+            // never into the sprite's own pixels.
+            EditorGUILayout.LabelField("Edge Quality", EditorStyles.miniBoldLabel);
+            EditorGUILayout.PropertyField(
+                _enableAlphaDilationProperty,
+                AtlasPipelineUi.AlphaDilationDefault);
+
+            DrawToggleGuidance(AtlasPipelineUi.AlphaDilationGuidance);
+
+            EditorGUILayout.Space(4f);
+
+            // Distribution: the one setting with a real project-level consequence, so it gets the
+            // full explanation plus detection of an asset-management system.
+            EditorGUILayout.LabelField("Distribution", EditorStyles.miniBoldLabel);
             EditorGUILayout.PropertyField(
                 _includeInBuildProperty,
-                new GUIContent("Include In Build"));
+                AtlasPipelineUi.IncludeInBuildDefault);
+
+            DrawToggleGuidance(AtlasPipelineUi.IncludeInBuildGuidance);
+
+            DrawAssetManagementHint();
+
             AtlasInspectorUiUtility.EndPanel();
             EditorGUILayout.Space(4f);
+        }
+
+        /// <summary>
+        /// Structured "On / When On / When Off / Tip" guidance for an atlas packing toggle. One
+        /// HelpBox per toggle so the whole panel reads as a stack of related blocks rather than a
+        /// pile of chevrons; bold prefixes give a scannable hierarchy; single line breaks, no blank
+        /// lines between sections. The Tip paragraph uses its own bold label so it is unambiguously
+        /// separate from the On/When sections above it.
+        /// The content and the style both come from <see cref="AtlasPipelineUi"/>: the text is
+        /// pre-built rich text and the style is the cached HelpBox derivative with rich text on,
+        /// so a repaint allocates nothing.
+        /// </summary>
+        private static void DrawToggleGuidance(GUIContent guidance)
+        {
+            GUILayout.Box(
+                guidance,
+                AtlasPipelineUi.RichHelpBoxStyle,
+                AtlasPipelineUi.ExpandWidth);
+        }
+
+        /// <summary>
+        /// Warns when the atlas output folder is actually collected by YooAsset while atlases are
+        /// also baked into the installer — the combination that ships the same textures twice.
+        /// The probe deliberately does NOT warn on "YooAsset is installed" alone: plenty of projects
+        /// use it for scenes and audio while their atlases stay baked, and a warning there would be
+        /// noise. A collector path covering the output folder is the precise signal that generated
+        /// atlases really flow through YooAsset.
+        /// Addressables is deliberately not probed: its entries reference assets by GUID, generated
+        /// atlases are uncommitted and therefore per-machine, so the interaction there is a design
+        /// question documented in the README rather than something a presence check can settle.
+        /// </summary>
+        private void DrawAssetManagementHint()
+        {
+            if (!_includeInBuildProperty.boolValue)
+            {
+                return;
+            }
+
+            string outputFolder = _outputAtlasFolderProperty.stringValue ?? string.Empty;
+            if (!_collectorProbeDone
+                || !string.Equals(_collectorProbeFolder, outputFolder, StringComparison.Ordinal))
+            {
+                _collectorProbeDone = true;
+                _collectorProbeFolder = outputFolder;
+                _detectedCollectorPath = FindYooCollectorCoveringOutput(outputFolder);
+            }
+
+            if (string.IsNullOrEmpty(_detectedCollectorPath))
+            {
+                return;
+            }
+
+            EditorGUILayout.HelpBox(
+                $"The atlas output folder is collected by YooAsset (collector path "
+                + $"'{_detectedCollectorPath}'), and Include In Build is on: the same atlas "
+                + "textures are baked into the installer and shipped again in the bundle. Turn "
+                + "Include In Build off, and force it on only for the rules whose atlases must "
+                + "ship with the installer.",
+                MessageType.Warning);
+        }
+
+        private bool _collectorProbeDone;
+        private string _collectorProbeFolder;
+        private string _detectedCollectorPath;
+
+        /// <summary>
+        /// The YooAsset collector path that covers the atlas output folder, or null when YooAsset is
+        /// absent or nothing it collects overlaps the output folder.
+        /// Zero coupling by construction: the collector setting is located by name and read as
+        /// serialized text, so this assembly never loads a YooAsset type and the asmdef stays clean.
+        /// </summary>
+        private static string FindYooCollectorCoveringOutput(string outputFolder)
+        {
+            if (string.IsNullOrEmpty(outputFolder))
+            {
+                return null;
+            }
+
+            string[] guids = AssetDatabase.FindAssets("AssetBundleCollectorSetting");
+            if (guids == null || guids.Length == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string settingPath = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.IsNullOrEmpty(settingPath) || !File.Exists(settingPath))
+                {
+                    continue;
+                }
+
+                foreach (string collectedPath in EnumerateYooCollectPaths(settingPath))
+                {
+                    if (FoldersOverlap(outputFolder, collectedPath))
+                    {
+                        return collectedPath;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Reads CollectPath values straight out of the collector setting's serialized text. A line
+        /// parse rather than a deserialization: the field name has been stable across YooAsset
+        /// versions, and a format change degrades to "no hint" rather than an error.
+        /// </summary>
+        private static IEnumerable<string> EnumerateYooCollectPaths(string settingPath)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(settingPath);
+            }
+            catch (Exception)
+            {
+                yield break;
+            }
+
+            const string marker = "CollectPath:";
+            for (int i = 0; i < lines.Length; i++)
+            {
+                int index = lines[i].IndexOf(marker, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                string value = lines[i].Substring(index + marker.Length).Trim();
+                if (value.Length > 0)
+                {
+                    yield return value;
+                }
+            }
+        }
+
+        private static bool FoldersOverlap(string left, string right)
+        {
+            left = AtlasPathUtility.NormalizeAndTrim(left);
+            right = AtlasPathUtility.NormalizeAndTrim(right);
+            if (left.Length == 0 || right.Length == 0)
+            {
+                return false;
+            }
+
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+                   || AtlasPathUtility.IsUnderFolder(left + "/_", right)
+                   || AtlasPathUtility.IsUnderFolder(right + "/_", left);
         }
 
         private void DrawValidation()
@@ -327,7 +586,7 @@ namespace CycloneGames.AtlasPipeline
                 "Build Validation",
                 _showValidation,
                 valid ? AtlasInspectorUiUtility.SuccessColor : AtlasInspectorUiUtility.WarningColor,
-                valid ? "READY" : errors.Count + (errors.Count == 1 ? " ISSUE" : " ISSUES"),
+                valid ? "READY" : _issueBadge.Get(errors.Count),
                 valid ? AtlasInspectorUiUtility.SuccessColor : AtlasInspectorUiUtility.WarningColor);
             if (!_showValidation)
             {
@@ -415,22 +674,31 @@ namespace CycloneGames.AtlasPipeline
             _atlasPaddingProperty = _settingsObject.FindProperty("atlasPadding");
             _enableRotationProperty = _settingsObject.FindProperty("enableRotation");
             _enableTightPackingProperty = _settingsObject.FindProperty("enableTightPacking");
+            _enableAlphaDilationProperty = _settingsObject.FindProperty("enableAlphaDilation");
             _blockOffsetProperty = _settingsObject.FindProperty("blockOffset");
             _includeInBuildProperty = _settingsObject.FindProperty("includeInBuild");
             _asciiOnlyNamesProperty = _settingsObject.FindProperty("asciiOnlyNames");
-            _rulesProperty = _settingsObject.FindProperty("importRules");
+            _atlasKeyCasingProperty = _settingsObject.FindProperty("atlasKeyCasing");
+            _collisionSafeAtlasKeysProperty = _settingsObject.FindProperty("collisionSafeAtlasKeys");
+            _autoPageOverflowingAtlasesProperty =
+                _settingsObject.FindProperty("autoPageOverflowingAtlases");
+            _globalExcludedFolderPathsProperty =
+                _settingsObject.FindProperty("globalExcludedFolderPaths");
+            _ruleAssetsProperty = _settingsObject.FindProperty("ruleAssets");
         }
 
         private void BuildRulesList()
         {
-            if (_settingsObject == null || _rulesProperty == null)
+            if (_settingsObject == null || _ruleAssetsProperty == null)
             {
                 return;
             }
 
+            // Each rule is its own asset, edited through its own SerializedObject. The settings
+            // object only owns the ordered list of references.
             _rulesList = new ReorderableList(
                 _settingsObject,
-                _rulesProperty,
+                _ruleAssetsProperty,
                 true,
                 true,
                 true,
@@ -439,61 +707,167 @@ namespace CycloneGames.AtlasPipeline
             {
                 EditorGUI.LabelField(
                     rect,
-                    $"Sprite Import Rules ({_rulesProperty.arraySize})",
+                    $"Import Rules ({_ruleAssetsProperty.arraySize})",
                     EditorStyles.boldLabel);
             };
             _rulesList.elementHeightCallback = ComputeRuleElementHeight;
-            _rulesList.drawElementCallback = DrawRuleElement;
+            _rulesList.drawElementCallback = DrawRuleAssetElement;
             _rulesList.onAddCallback = list =>
             {
+                AtlasRuleAsset asset = CreateRuleAsset(list.serializedProperty.arraySize + 1);
+                if (asset == null)
+                {
+                    return;
+                }
+
                 int index = list.serializedProperty.arraySize;
                 list.serializedProperty.InsertArrayElementAtIndex(index);
-
-                SerializedProperty element = list.serializedProperty.GetArrayElementAtIndex(index);
-                element.FindPropertyRelative("name").stringValue = $"Rule {index + 1}";
-                element.FindPropertyRelative("sourceFolder").stringValue = string.Empty;
-                element.FindPropertyRelative("spriteMode").enumValueIndex = 0;
-                element.FindPropertyRelative("pixelsPerUnit").floatValue = 100f;
-                element.FindPropertyRelative("androidFormat").enumValueIndex =
-                    (int)AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Android);
-                element.FindPropertyRelative("iphoneFormat").enumValueIndex =
-                    (int)AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Iphone);
-                element.FindPropertyRelative("webglFormat").enumValueIndex =
-                    (int)AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Webgl);
-                element.FindPropertyRelative("standaloneFormat").enumValueIndex =
-                    (int)AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Standalone);
-                element.FindPropertyRelative("pixelArt").boolValue = false;
-                element.FindPropertyRelative("mipmaps").boolValue = false;
-                element.FindPropertyRelative("readable").boolValue = false;
-                element.FindPropertyRelative("filterMode").intValue = (int)FilterMode.Bilinear;
-                element.FindPropertyRelative("wrapMode").intValue = (int)TextureWrapMode.Clamp;
-                element.FindPropertyRelative("compressionQuality").intValue =
-                    AtlasPlatformFormats.DefaultCompressionQuality;
-                element.FindPropertyRelative("atlasGranularity").enumValueIndex = (int)AtlasGranularity.PerSourceFolder;
-                element.FindPropertyRelative("recommendedMaxTextureSize").intValue = 2048;
-                element.FindPropertyRelative("atlasMaxTextureSize").intValue = 2048;
-                element.FindPropertyRelative("warnTextureSize").boolValue = true;
-                element.FindPropertyRelative("atlasRotationMode").enumValueIndex =
-                    (int)AtlasRotationMode.Inherit;
-                element.FindPropertyRelative("atlasGroup").stringValue = "General";
-                element.FindPropertyRelative("pathKeywords").arraySize = 0;
-                element.FindPropertyRelative("excludedFolderPaths").arraySize = 0;
-                element.FindPropertyRelative("excludedNameKeywords").arraySize = 0;
+                list.serializedProperty.GetArrayElementAtIndex(index)
+                    .objectReferenceValue = asset;
+                _rulesChanged = true;
             };
         }
 
-        private void DrawRuleElement(
+        /// <summary>
+        /// Creates a rule asset with the same defaults the old inline "+" used to write, so a new
+        /// rule behaves identically whichever way it was added.
+        /// </summary>
+        private static AtlasRuleAsset CreateRuleAsset(int ruleNumber)
+        {
+            AtlasPipeline.EnsureAssetFolderExists(AtlasPipeline.DefaultRuleFolder);
+            string path = AtlasPipeline.DefaultRuleFolder + "/Rule " + ruleNumber + ".asset";
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) != null)
+            {
+                path = AssetDatabase.GenerateUniqueAssetPath(path);
+            }
+
+            var asset = ScriptableObject.CreateInstance<AtlasRuleAsset>();
+            AtlasImportRule rule = AtlasImportRule.Create(
+                "Rule " + ruleNumber,
+                string.Empty,
+                AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Android),
+                AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Iphone),
+                AtlasGranularity.PerSourceFolder,
+                "General",
+                webglFormat: AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Webgl),
+                standaloneFormat: AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Standalone),
+                atlasMaxTextureSize: 2048);
+            asset.Initialize(rule);
+            AssetDatabase.CreateAsset(asset, path);
+            AssetDatabase.SaveAssets();
+            return asset;
+        }
+
+        /// <summary>
+        /// Cached SerializedObject plus pre-resolved child properties for one rule asset.
+        /// SerializedProperty lookups by name allocate, and the draw path touches ~30 child
+        /// properties per rule per pass — so they are resolved exactly once here and reused.
+        /// Rebuilt automatically if the target asset is destroyed or reimported.
+        /// </summary>
+        private sealed class RuleView
+        {
+            public SerializedObject Object;
+            public SerializedProperty Name;
+            public SerializedProperty AtlasGroup;
+            public SerializedProperty SourceFolder;
+            public SerializedProperty SourceFolderGuid;
+            public SerializedProperty OutputSubfolder;
+            public SerializedProperty SpriteMode;
+            public SerializedProperty PixelsPerUnit;
+            public SerializedProperty PixelArt;
+            public SerializedProperty FilterMode;
+            public SerializedProperty WrapMode;
+            public SerializedProperty Mipmaps;
+            public SerializedProperty Readable;
+            public SerializedProperty CompressionQuality;
+            public SerializedProperty AtlasGranularity;
+            public SerializedProperty AtlasMax;
+            public SerializedProperty RecommendedMax;
+            public SerializedProperty WarnTextureSize;
+            public SerializedProperty AndroidFormat;
+            public SerializedProperty IphoneFormat;
+            public SerializedProperty WebglFormat;
+            public SerializedProperty AndroidSize;
+            public SerializedProperty IphoneSize;
+            public SerializedProperty WebglSize;
+            public SerializedProperty StandaloneSize;
+            public SerializedProperty IncludeInBuild;
+            public SerializedProperty AlphaDilation;
+            public SerializedProperty AtlasRotation;
+            public SerializedProperty PathKeywords;
+            public SerializedProperty ExcludedFolders;
+            public SerializedProperty ExcludedKeywords;
+        }
+
+        private readonly UiCountText _folderBadge = new UiCountText("FOLDER", "FOLDERS");
+        private readonly UiCountText _ruleBadge = new UiCountText("RULE", "RULES");
+        private readonly UiCountText _issueBadge = new UiCountText("ISSUE", "ISSUES");
+
+        private readonly Dictionary<AtlasRuleAsset, RuleView> _ruleViews =
+            new Dictionary<AtlasRuleAsset, RuleView>();
+
+        private RuleView GetRuleView(AtlasRuleAsset asset)
+        {
+            if (_ruleViews.TryGetValue(asset, out RuleView existing)
+                && existing.Object != null
+                && existing.Object.targetObject != null)
+            {
+                return existing;
+            }
+
+            var view = new RuleView
+            {
+                Object = new SerializedObject(asset),
+            };
+            SerializedProperty root = view.Object.FindProperty("rule");
+            view.Name = root.FindPropertyRelative("name");
+            view.AtlasGroup = root.FindPropertyRelative("atlasGroup");
+            view.SourceFolder = root.FindPropertyRelative("sourceFolder");
+            view.SourceFolderGuid = root.FindPropertyRelative("sourceFolderGuid");
+            view.OutputSubfolder = root.FindPropertyRelative("outputSubfolder");
+            view.SpriteMode = root.FindPropertyRelative("spriteMode");
+            view.PixelsPerUnit = root.FindPropertyRelative("pixelsPerUnit");
+            view.PixelArt = root.FindPropertyRelative("pixelArt");
+            view.FilterMode = root.FindPropertyRelative("filterMode");
+            view.WrapMode = root.FindPropertyRelative("wrapMode");
+            view.Mipmaps = root.FindPropertyRelative("mipmaps");
+            view.Readable = root.FindPropertyRelative("readable");
+            view.CompressionQuality = root.FindPropertyRelative("compressionQuality");
+            view.AtlasGranularity = root.FindPropertyRelative("atlasGranularity");
+            view.AtlasMax = root.FindPropertyRelative("atlasMaxTextureSize");
+            view.RecommendedMax = root.FindPropertyRelative("recommendedMaxTextureSize");
+            view.WarnTextureSize = root.FindPropertyRelative("warnTextureSize");
+            view.AndroidFormat = root.FindPropertyRelative("androidFormat");
+            view.IphoneFormat = root.FindPropertyRelative("iphoneFormat");
+            view.WebglFormat = root.FindPropertyRelative("webglFormat");
+            view.AndroidSize = root.FindPropertyRelative("androidAtlasMaxSize");
+            view.IphoneSize = root.FindPropertyRelative("iphoneAtlasMaxSize");
+            view.WebglSize = root.FindPropertyRelative("webglAtlasMaxSize");
+            view.StandaloneSize = root.FindPropertyRelative("standaloneAtlasMaxSize");
+            view.IncludeInBuild = root.FindPropertyRelative("includeInBuildOverride");
+            view.AlphaDilation = root.FindPropertyRelative("alphaDilationOverride");
+            view.AtlasRotation = root.FindPropertyRelative("atlasRotationMode");
+            view.PathKeywords = root.FindPropertyRelative("pathKeywords");
+            view.ExcludedFolders = root.FindPropertyRelative("excludedFolderPaths");
+            view.ExcludedKeywords = root.FindPropertyRelative("excludedNameKeywords");
+            _ruleViews[asset] = view;
+            return view;
+        }
+
+        private void DrawRuleAssetElement(
             Rect rect,
             int index,
             bool isActive,
             bool isFocused)
         {
-            if (_rulesProperty == null)
+            if (_ruleAssetsProperty == null)
             {
                 return;
             }
 
-            SerializedProperty element = _rulesProperty.GetArrayElementAtIndex(index);
+            SerializedProperty assetReference =
+                _ruleAssetsProperty.GetArrayElementAtIndex(index);
+            AtlasRuleAsset asset = assetReference.objectReferenceValue as AtlasRuleAsset;
             float line = EditorGUIUtility.singleLineHeight;
             float spacing = EditorGUIUtility.standardVerticalSpacing;
 
@@ -501,26 +875,80 @@ namespace CycloneGames.AtlasPipeline
             rect.width -= 4f;
             rect.y += spacing;
 
+            if (asset == null)
+            {
+                // A missing reference (deleted rule asset, or a merge that dropped the file) must be
+                // visible and fixable, not silently skipped: the pipeline ignores it, but the empty
+                // row is the only hint the list is shorter than it looks.
+                UnityEngine.Object dropped = EditorGUI.ObjectField(
+                    new Rect(rect.x, rect.y, rect.width, line),
+                    "Missing rule asset",
+                    null,
+                    typeof(AtlasRuleAsset),
+                    false);
+                if (dropped is AtlasRuleAsset restored)
+                {
+                    assetReference.objectReferenceValue = restored;
+                    _rulesChanged = true;
+                }
+
+                return;
+            }
+
+            RuleView view = GetRuleView(asset);
+            view.Object.Update();
+
+            DrawRuleElement(rect, index, view, line, spacing);
+
+            if (view.Object.ApplyModifiedProperties())
+            {
+                EditorUtility.SetDirty(asset);
+                ScheduleSettingsSave();
+                _rulesChanged = true;
+                _validationCacheDirty = true;
+            }
+        }
+
+        /// <summary>
+        /// Draws one rule. All child properties come pre-resolved from the rule's
+        /// <see cref="RuleView"/> — no per-frame name lookups or allocations.
+        /// </summary>
+        /// <remarks>
+        /// Layout is grouped into four sections, each with a clear purpose:
+        ///   Identity — Rule Name, Atlas Group, Source Folder (always visible).
+        ///   Sprite Import — direct sprite-import settings.
+        ///   Atlas Composition — granularity, shared Atlas Max, recommended-max warning,
+        ///     per-platform format dropdowns (direct, not overrides).
+        ///   Overrides (per-rule) — every field that says "Inherit" lives here. Two kinds of
+        ///     Inherit share the section: the project-wide settings (Include In Build, Alpha
+        ///     Dilation, Atlas Rotation) and the per-rule refinements (Per-Platform Atlas Size).
+        ///     New override fields added in the future go in this same group.
+        ///   Keywords & Excludes — path keywords, excluded folders, excluded keywords.
+        /// </remarks>
+        private void DrawRuleElement(
+            Rect rect,
+            int index,
+            RuleView view,
+            float line,
+            float spacing)
+        {
             DrawPropertyPair(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("name"),
-                new GUIContent("Rule Name"),
-                element.FindPropertyRelative("atlasGroup"),
-                new GUIContent("Atlas Group"));
+                view.Name,
+                AtlasPipelineUi.RuleName,
+                view.AtlasGroup,
+                AtlasPipelineUi.AtlasGroup);
 
             SerializedProperty sourceFolderProperty =
-                element.FindPropertyRelative("sourceFolder");
+                view.SourceFolder;
             SerializedProperty sourceFolderGuidProperty =
-                element.FindPropertyRelative("sourceFolderGuid");
+                view.SourceFolderGuid;
             DrawFolderObjectField(
                 new Rect(rect.x, rect.y, rect.width, line),
                 sourceFolderProperty,
-                new GUIContent(
-                    "Source Folder",
-                    "The folder reference is stored by GUID, so renaming the folder "
-                    + "in the Project window keeps the rule pointing at it."),
+                AtlasPipelineUi.SourceFolder,
                 sourceFolderGuidProperty,
                 ResolveRuleSourceFolderPath(index));
             NextLine(ref rect, line, spacing);
@@ -530,6 +958,16 @@ namespace CycloneGames.AtlasPipeline
                 ResolveRuleSourceFolderPath(index));
             NextLine(ref rect, line, spacing);
 
+            // Which package this rule ships in. Kept above the foldout rather than among the
+            // advanced settings: it is a distribution decision, and a project splitting atlases
+            // across asset packages needs it visible on every rule at a glance.
+            DrawSinglePropertyField(
+                ref rect,
+                line,
+                spacing,
+                view.OutputSubfolder,
+                AtlasPipelineUi.OutputSubfolder);
+
             bool expanded = _expandedRules.Contains(index);
             DrawAdvancedFoldout(
                 new Rect(rect.x, rect.y, rect.width, line),
@@ -537,107 +975,264 @@ namespace CycloneGames.AtlasPipeline
                 expanded);
             NextLine(ref rect, line, spacing);
 
+            // Reading the local `expanded` — not the set — is what makes the click frame safe.
+            // It still holds the value the ReorderableList sized this element from, so:
+            //   collapsing: still true, the body is drawn into a rect that is still tall enough,
+            //               and the next pass draws the element short.
+            //   expanding:  still false, so we stop here instead of pushing the body into the
+            //               shrunken rect, and the next pass draws the element tall.
+            // Either way this pass only ever draws into the height it was actually given.
             if (!expanded)
             {
                 return;
             }
 
+            // ── Direct: sprite import ──────────────────────────────────────────────
             DrawPropertyPair(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("spriteMode"),
-                new GUIContent("Sprite Mode"),
-                element.FindPropertyRelative("pixelsPerUnit"),
-                new GUIContent("Pixels Per Unit"));
+                view.SpriteMode,
+                AtlasPipelineUi.SpriteMode,
+                view.PixelsPerUnit,
+                AtlasPipelineUi.PixelsPerUnit);
 
             DrawSinglePropertyField(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("pixelArt"),
-                new GUIContent(
-                    "Pixel Art (Uncompressed)",
-                    "Forces both the source texture and generated atlas to RGBA32 "
-                    + "(uncompressed) on all platforms, avoiding compressed-source "
-                    + "packing artifacts for pixel art."));
+                view.PixelArt,
+                AtlasPipelineUi.PixelArt);
+
+            DrawPropertyPair(
+                ref rect,
+                line,
+                spacing,
+                view.FilterMode,
+                AtlasPipelineUi.FilterMode,
+                view.WrapMode,
+                AtlasPipelineUi.WrapMode);
+
+            DrawPropertyPair(
+                ref rect,
+                line,
+                spacing,
+                view.Mipmaps,
+                AtlasPipelineUi.Mipmaps,
+                view.Readable,
+                AtlasPipelineUi.Readable);
+
+            DrawPropertyPair(
+                ref rect,
+                line,
+                spacing,
+                view.CompressionQuality,
+                AtlasPipelineUi.CompressionQuality,
+                view.AtlasGranularity,
+                AtlasPipelineUi.AtlasGranularity);
+
+            // ── Direct: atlas composition ──────────────────────────────────────────
+            DrawSinglePropertyField(
+                ref rect,
+                line,
+                spacing,
+                view.AtlasMax,
+                AtlasPipelineUi.AtlasMax);
+
+            DrawPropertyPair(
+                ref rect,
+                line,
+                spacing,
+                view.RecommendedMax,
+                AtlasPipelineUi.RecommendedMax,
+                view.WarnTextureSize,
+                AtlasPipelineUi.WarnTextureSize);
 
             DrawPlatformFormatRow(
                 ref rect,
                 line,
                 spacing,
-                element);
+                view);
+
+            // ── Overrides (per-rule) ────────────────────────────────────────────────
+            // All "Inherit" fields live here, and the intro text sits inside the section so the
+            // explanation is adjacent to what it explains. Two kinds of Inherit share this
+            // section: the project-wide settings (Include In Build, Alpha Dilation, Atlas
+            // Rotation) and the per-rule refinements (Per-Platform Atlas Size). New override
+            // fields added in the future go in this same group.
+            DrawSectionLabel(
+                ref rect,
+                line,
+                spacing,
+                "Overrides (per-rule)");
+
+            // The intro's height is measured with CalcHeight so wide windows get one line and
+            // narrow windows get two — no fixed two-row reservation, which is where the extra
+            // blank space under the Inherit text came from. Measuring against rect.width also
+            // seeds the cache the height callback reads, so both agree on the line count.
+            float introHeight = MeasureIntroHeight(rect.width);
+            EditorGUI.LabelField(
+                new Rect(rect.x, rect.y, rect.width, introHeight),
+                AtlasPipelineUi.RuleOverridesIntro,
+                EditorStyles.wordWrappedMiniLabel);
+            rect.y += introHeight + spacing;
+
+            DrawPerPlatformAtlasSizeRow(
+                ref rect,
+                line,
+                spacing,
+                view);
+
+            DrawRuleToggleOverrideRow(
+                ref rect,
+                line,
+                spacing,
+                view);
 
             DrawSinglePropertyField(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("atlasRotationMode"),
-                new GUIContent(
-                    "Atlas Rotation",
-                    "Inherit uses the global default; Enabled forces rotation; "
-                    + "Disabled disables rotation for this rule. Pixel Art rules "
-                    + "always disable rotation to avoid non-integer texel sampling."));
+                view.AtlasRotation,
+                AtlasPipelineUi.AtlasRotationRule);
 
+            // ── Keywords & Excludes ─────────────────────────────────────────────────
             DrawPathKeywordList(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("pathKeywords"));
-
-            DrawPropertyPair(
-                ref rect,
-                line,
-                spacing,
-                element.FindPropertyRelative("mipmaps"),
-                new GUIContent("Mipmaps"),
-                element.FindPropertyRelative("readable"),
-                new GUIContent("Readable"));
-
-            DrawPropertyPair(
-                ref rect,
-                line,
-                spacing,
-                element.FindPropertyRelative("filterMode"),
-                new GUIContent("Filter Mode"),
-                element.FindPropertyRelative("wrapMode"),
-                new GUIContent("Wrap Mode"));
-
-            DrawPropertyPair(
-                ref rect,
-                line,
-                spacing,
-                element.FindPropertyRelative("compressionQuality"),
-                new GUIContent("Compression Quality"),
-                element.FindPropertyRelative("atlasGranularity"),
-                new GUIContent("Atlas Granularity"));
-
-            DrawMaxTextureSizePair(
-                ref rect,
-                line,
-                spacing,
-                element);
-
-            DrawSinglePropertyField(
-                ref rect,
-                line,
-                spacing,
-                element.FindPropertyRelative("warnTextureSize"),
-                new GUIContent(
-                    "Warn Texture Size",
-                    "When enabled, oversized source textures are reported in a single dialog."));
+                view.PathKeywords);
 
             DrawExcludedFolderList(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("excludedFolderPaths"));
+                view.ExcludedFolders);
 
             DrawExcludedKeywordList(
                 ref rect,
                 line,
                 spacing,
-                element.FindPropertyRelative("excludedNameKeywords"));
+                view.ExcludedKeywords);
+        }
+
+        private static void DrawSectionLabel(
+            ref Rect rect,
+            float line,
+            float spacing,
+            string label)
+        {
+            EditorGUI.LabelField(
+                new Rect(rect.x, rect.y, rect.width, line),
+                label,
+                EditorStyles.miniBoldLabel);
+            NextLine(ref rect, line, spacing);
+        }
+
+        /// <summary>
+        /// Per-platform atlas size overrides. Zero means "inherit the rule's Atlas Max", shown as
+        /// "Inherit" so the sentinel value never appears as a bare number.
+        /// </summary>
+        private static void DrawPerPlatformAtlasSizeRow(
+            ref Rect rect,
+            float line,
+            float spacing,
+            RuleView view)
+        {
+            EditorGUI.LabelField(
+                new Rect(rect.x, rect.y, rect.width, line),
+                "Atlas Size Per Platform",
+                EditorStyles.miniBoldLabel);
+            NextLine(ref rect, line, spacing);
+
+            SerializedProperty[] sizeProperties =
+            {
+                view.AndroidSize,
+                view.IphoneSize,
+                view.WebglSize,
+                view.StandaloneSize,
+            };
+            GUIContent[] labels = AtlasPipelineUi.PlatformLabels;
+
+            float columnGap = 6f;
+            float columnWidth = (rect.width - columnGap * 3f) / 4f;
+            for (int i = 0; i < sizeProperties.Length; i++)
+            {
+                DrawAtlasSizePopup(
+                    new Rect(rect.x + (columnWidth + columnGap) * i, rect.y, columnWidth, line),
+                    sizeProperties[i],
+                    labels[i]);
+            }
+
+            NextLine(ref rect, line, spacing);
+        }
+
+        /// <summary>
+        /// The two tri-state toggles that override global defaults: include-in-build and alpha
+        /// dilation. Drawn as one row because neither needs a full line of its own.
+        /// </summary>
+        private static void DrawRuleToggleOverrideRow(
+            ref Rect rect,
+            float line,
+            float spacing,
+            RuleView view)
+        {
+            float columnGap = 6f;
+            float columnWidth = (rect.width - columnGap) / 2f;
+
+            DrawToggleOverridePopup(
+                new Rect(rect.x, rect.y, columnWidth, line),
+                view.IncludeInBuild,
+                AtlasPipelineUi.IncludeInBuildOverride);
+            DrawToggleOverridePopup(
+                new Rect(rect.x + columnWidth + columnGap, rect.y, columnWidth, line),
+                view.AlphaDilation,
+                AtlasPipelineUi.AlphaDilationOverride);
+
+            NextLine(ref rect, line, spacing);
+        }
+
+        private static void DrawToggleOverridePopup(
+            Rect rect,
+            SerializedProperty property,
+            GUIContent label)
+        {
+            var options = AtlasPipelineUi.ToggleOptions;
+            int index = Mathf.Clamp(property.enumValueIndex, 0, 2);
+            int newIndex = EditorGUI.Popup(rect, label, index, options);
+            if (newIndex != index)
+            {
+                property.enumValueIndex = newIndex;
+            }
+        }
+
+        private static void DrawAtlasSizePopup(
+            Rect rect,
+            SerializedProperty property,
+            GUIContent label)
+        {
+            int currentValue = property.intValue;
+            int selectedIndex = currentValue > 0
+                ? Array.IndexOf(AtlasPipelineUi.SizeValues, currentValue)
+                : 0;
+            if (selectedIndex < 0)
+            {
+                // A non-power-of-two value set by hand: show it as-is is impossible in a popup, so
+                // fall back to the nearest option and let validation complain about the original.
+                selectedIndex = 3;
+            }
+
+            var options = AtlasPipelineUi.SizePopupOptions;
+
+            int newIndex = EditorGUI.Popup(rect, label,
+                selectedIndex,
+                options);
+            if (newIndex == selectedIndex)
+            {
+                return;
+            }
+
+            property.intValue = newIndex == 0 ? 0 : AtlasPipelineUi.SizeValues[newIndex - 1];
         }
 
         private static void DrawPropertyPair(
@@ -677,62 +1272,27 @@ namespace CycloneGames.AtlasPipeline
             NextLine(ref rect, line, spacing);
         }
 
-        private static void DrawMaxTextureSizePair(
-            ref Rect rect,
-            float line,
-            float spacing,
-            SerializedProperty element)
-        {
-            float columnGap = 8f;
-            float columnWidth = (rect.width - columnGap) * 0.5f;
-            Rect leftRect = new Rect(rect.x, rect.y, columnWidth, line);
-            Rect rightRect = new Rect(
-                rect.x + columnWidth + columnGap,
-                rect.y,
-                rect.width - columnWidth - columnGap,
-                line);
-
-            DrawMaxTextureSizePopup(
-                leftRect,
-                element.FindPropertyRelative("recommendedMaxTextureSize"),
-                new GUIContent(
-                    "Recommended Max",
-                    "Maximum source texture size before the importer warns the developer."));
-            DrawMaxTextureSizePopup(
-                rightRect,
-                element.FindPropertyRelative("atlasMaxTextureSize"),
-                new GUIContent(
-                    "Atlas Max",
-                    "Maximum generated SpriteAtlas texture size."));
-
-            NextLine(ref rect, line, spacing);
-        }
-
         private static void DrawMaxTextureSizePopup(
             Rect rect,
             SerializedProperty property,
             GUIContent label)
         {
             int currentValue = property.intValue;
-            int selectedIndex = Array.IndexOf(MaxTextureSizeOptions, currentValue);
+            int selectedIndex = Array.IndexOf(AtlasPipelineUi.SizeValues, currentValue);
             if (selectedIndex < 0)
             {
                 selectedIndex = 3;
-                property.intValue = MaxTextureSizeOptions[selectedIndex];
+                property.intValue = AtlasPipelineUi.SizeValues[selectedIndex];
             }
 
-            GUIContent[] options = new GUIContent[MaxTextureSizeOptions.Length];
-            for (int i = 0; i < MaxTextureSizeOptions.Length; i++)
-            {
-                options[i] = new GUIContent(MaxTextureSizeOptions[i].ToString());
-            }
+            GUIContent[] options = AtlasPipelineUi.SizeOptions;
 
             int newIndex = EditorGUI.Popup(rect, label, selectedIndex, options);
             if (newIndex >= 0
-                && newIndex < MaxTextureSizeOptions.Length
+                && newIndex < AtlasPipelineUi.SizeValues.Length
                 && newIndex != selectedIndex)
             {
-                property.intValue = MaxTextureSizeOptions[newIndex];
+                property.intValue = AtlasPipelineUi.SizeValues[newIndex];
             }
         }
 
@@ -779,9 +1339,9 @@ namespace CycloneGames.AtlasPipeline
             ref Rect rect,
             float line,
             float spacing,
-            SerializedProperty element)
+            RuleView view)
         {
-            if (element.FindPropertyRelative("pixelArt").boolValue)
+            if (view.PixelArt.boolValue)
             {
                 EditorGUI.LabelField(
                     new Rect(rect.x, rect.y, rect.width, line),
@@ -796,17 +1356,15 @@ namespace CycloneGames.AtlasPipeline
 
             DrawPlatformFormatPopup(
                 new Rect(rect.x, rect.y, columnWidth, line),
-                element.FindPropertyRelative("androidFormat"),
-                "Android",
-                AtlasPlatform.Android,
-                "Texture format used by the Android player.");
+                view.AndroidFormat,
+                AtlasPipelineUi.FormatAndroid,
+                AtlasPlatform.Android);
 
             DrawPlatformFormatPopup(
                 new Rect(rect.x + columnWidth + columnGap, rect.y, columnWidth, line),
-                element.FindPropertyRelative("iphoneFormat"),
-                "iPhone",
-                AtlasPlatform.Iphone,
-                "Texture format used by the iOS player.");
+                view.IphoneFormat,
+                AtlasPipelineUi.FormatIphone,
+                AtlasPlatform.Iphone);
 
             DrawPlatformFormatPopup(
                 new Rect(
@@ -814,11 +1372,9 @@ namespace CycloneGames.AtlasPipeline
                     rect.y,
                     columnWidth,
                     line),
-                element.FindPropertyRelative("webglFormat"),
-                "WebGL",
-                AtlasPlatform.Webgl,
-                "Texture format used by WebGL. ASTC is recommended for Android/iOS browsers; "
-                + "DXT5/DXT1 is available for desktop browsers.");
+                view.WebglFormat,
+                AtlasPipelineUi.FormatWebgl,
+                AtlasPlatform.Webgl);
 
             NextLine(ref rect, line, spacing);
         }
@@ -826,9 +1382,8 @@ namespace CycloneGames.AtlasPipeline
         private static void DrawPlatformFormatPopup(
             Rect rect,
             SerializedProperty property,
-            string label,
-            AtlasPlatform platform,
-            string tooltip)
+            GUIContent label,
+            AtlasPlatform platform)
         {
             IReadOnlyList<AtlasTextureFormat> formats =
                 AtlasPlatformFormats.GetSupportedFormats(platform);
@@ -860,16 +1415,11 @@ namespace CycloneGames.AtlasPipeline
                 EditorUtility.SetDirty(property.serializedObject.targetObject);
             }
 
-            GUIContent[] displayNames = new GUIContent[formats.Count];
-            for (int i = 0; i < formats.Count; i++)
-            {
-                displayNames[i] = new GUIContent(
-                    AtlasPlatformFormats.GetDisplayName(formats[i]));
-            }
+            GUIContent[] displayNames = AtlasPipelineUi.GetFormatOptions(platform);
 
             int newIndex = EditorGUI.Popup(
                 rect,
-                new GUIContent(label, tooltip),
+                label,
                 selectedIndex,
                 displayNames);
             if (newIndex < 0 || newIndex >= formats.Count || newIndex == selectedIndex)
@@ -895,6 +1445,18 @@ namespace CycloneGames.AtlasPipeline
             GUI.color = previousColor;
         }
 
+        /// <summary>
+        /// Draws the Advanced Settings foldout and records a state change. It deliberately does
+        /// NOT abort the pass: the caller decides what to draw from the pre-change value, see the
+        /// comment at the call site.
+        /// <para>
+        /// The obvious remedy here was <c>GUIUtility.ExitGUI()</c>, and it does stop the pass —
+        /// but it works by throwing, and unwinding an exception through the enclosing scroll view
+        /// leaves the GUILayout clip stack unbalanced. That is what produced the stall and the
+        /// misplaced layout on toggle. Changing the state and asking for a repaint costs one
+        /// frame of the old height and leaves the GUI in a consistent state.
+        /// </para>
+        /// </summary>
         private void DrawAdvancedFoldout(
             Rect rect,
             int index,
@@ -991,6 +1553,11 @@ namespace CycloneGames.AtlasPipeline
             float spacing,
             SerializedProperty keywordsProperty)
         {
+            if (keywordsProperty == null)
+            {
+                return;
+            }
+
             EditorGUI.LabelField(
                 new Rect(rect.x, rect.y, rect.width, line),
                 "Excluded Keywords",
@@ -1024,43 +1591,166 @@ namespace CycloneGames.AtlasPipeline
             NextLine(ref rect, line, spacing);
         }
 
-        private float ComputeRuleElementHeight(int index)
+        /// <summary>
+        /// Top-level string list of folder paths, with a folder picker that only accepts paths under
+        /// Assets/. Used for the global exclusion list.
+        /// </summary>
+        private void DrawStringFolderList(SerializedProperty pathsProperty)
         {
-            const int baseRowCount = 4;
-            int pathKeywordCount = 0;
-            int excludedFolderCount = 0;
-            int excludedKeywordCount = 0;
-            if (_rulesProperty != null && index >= 0 && index < _rulesProperty.arraySize)
+            for (int i = 0; i < pathsProperty.arraySize; i++)
             {
-                SerializedProperty element = _rulesProperty.GetArrayElementAtIndex(index);
-                SerializedProperty pathKeywords =
-                    element.FindPropertyRelative("pathKeywords");
-                if (pathKeywords != null)
+                EditorGUILayout.BeginHorizontal();
+                SerializedProperty pathProperty = pathsProperty.GetArrayElementAtIndex(i);
+                string current = pathProperty.stringValue ?? string.Empty;
+
+                DefaultAsset folder = string.IsNullOrEmpty(current)
+                    ? null
+                    : AssetDatabase.LoadAssetAtPath<DefaultAsset>(current);
+                DefaultAsset picked = (DefaultAsset)EditorGUILayout.ObjectField(
+                    GUIContent.none,
+                    folder,
+                    typeof(DefaultAsset),
+                    false);
+                if (picked != folder && picked != null)
                 {
-                    pathKeywordCount = pathKeywords.arraySize;
+                    string pickedPath = AssetDatabase.GetAssetPath(picked);
+                    if (AssetDatabase.IsValidFolder(pickedPath))
+                    {
+                        pathProperty.stringValue = pickedPath;
+                    }
                 }
 
-                SerializedProperty paths = element.FindPropertyRelative("excludedFolderPaths");
-                if (paths != null)
+                if (GUILayout.Button("X", GUILayout.Width(22f)))
                 {
-                    excludedFolderCount = paths.arraySize;
+                    pathsProperty.DeleteArrayElementAtIndex(i);
+                    break;
                 }
 
-                SerializedProperty keywords =
-                    element.FindPropertyRelative("excludedNameKeywords");
-                if (keywords != null)
-                {
-                    excludedKeywordCount = keywords.arraySize;
-                }
+                EditorGUILayout.EndHorizontal();
             }
 
+            if (GUILayout.Button("Add Excluded Folder"))
+            {
+                string absolute = EditorUtility.OpenFolderPanel(
+                    "Select Excluded Folder",
+                    Application.dataPath,
+                    string.Empty);
+                if (!string.IsNullOrEmpty(absolute))
+                {
+                    string assetsRoot = Path.GetFullPath(Application.dataPath)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    string fullPath = Path.GetFullPath(absolute);
+                    string rootWithSeparator = assetsRoot + Path.DirectorySeparatorChar;
+                    if (string.Equals(fullPath, assetsRoot, StringComparison.OrdinalIgnoreCase)
+                        || fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+                    {
+                        int index = pathsProperty.arraySize;
+                        pathsProperty.InsertArrayElementAtIndex(index);
+                        pathsProperty.GetArrayElementAtIndex(index).stringValue =
+                            "Assets" + fullPath.Substring(assetsRoot.Length).Replace('\\', '/');
+                        Repaint();
+                    }
+                    else
+                    {
+                        EditorUtility.DisplayDialog(
+                            "CycloneGames Atlas Pipeline",
+                            "The selected folder must be inside the Unity project Assets folder.",
+                            "OK");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Analytic element height, derived from the same section structure
+        /// <see cref="DrawRuleAssetElement"/> draws. Analytic rather than measured because the
+        /// ReorderableList asks for heights BEFORE the draw pass: a measured height is always one
+        /// draw pass behind, which is exactly why expanding a rule used to overlap the next one —
+        /// the click frame drew expanded content into a collapsed-height rect.
+        /// Every row here is one NextLine advance in the draw code, counted per section so the two
+        /// can be diffed side by side when a section changes.
+        /// </summary>
+        private float ComputeRuleElementHeight(int index)
+        {
             float line = EditorGUIUtility.singleLineHeight;
             float spacing = EditorGUIUtility.standardVerticalSpacing;
-            int rowCount = _expandedRules.Contains(index)
-                ? baseRowCount + 15 + pathKeywordCount
-                                  + excludedFolderCount + excludedKeywordCount
-                : baseRowCount;
-            return rowCount * (line + spacing) + spacing * 2f + 8f;
+
+            // One spacing for the top inset the draw applies before the first row, one for the
+            // gap above the card's bottom edge.
+            float padding = spacing * 2f + RuleElementBottomPadding;
+
+            if (!_expandedRules.Contains(index))
+            {
+                return IdentityRows * (line + spacing) + padding;
+            }
+
+            AtlasRuleAsset asset = GetRuleAssetAtIndex(index);
+            int listEntries = 0;
+            if (asset != null)
+            {
+                RuleView view = GetRuleView(asset);
+                listEntries += view.PathKeywords?.arraySize ?? 0;
+                listEntries += view.ExcludedFolders?.arraySize ?? 0;
+                listEntries += view.ExcludedKeywords?.arraySize ?? 0;
+            }
+
+            int rows = IdentityRows
+                       + SpriteImportRows
+                       + AtlasCompositionRows
+                       + OverridesRows
+                       + ListCount * PerListChromeRows
+                       + listEntries;
+
+            // Before the first draw pass there is no element rect to measure, so seed from the
+            // window width; from then on the draw pass keeps _introWidth in sync with the real
+            // rect and both sides measure the same width.
+            float introWidth = _introWidth > 0f
+                ? _introWidth
+                : EditorGUIUtility.currentViewWidth - 60f;
+
+            return rows * (line + spacing)
+                   + MeasureIntroHeight(introWidth) + spacing
+                   + padding;
+        }
+
+        /// <summary>
+        /// Wrapped height of the overrides intro label at the given width, memoised on that width.
+        /// The height callback runs before the draw pass and therefore cannot know the element
+        /// rect, so it used to guess with <c>currentViewWidth - 60</c> while the draw measured the
+        /// real rect — two widths that differ by the scrollbar, the list's own padding and the
+        /// inset the draw applies. Whenever they straddled a wrap boundary the reserved height was
+        /// a line off, and the rule body shifted on the next frame. Sharing one cache keyed by
+        /// width makes the two sides agree; the only stale frame is the one right after a resize.
+        /// </summary>
+        private float MeasureIntroHeight(float width)
+        {
+            if (width <= 0f)
+            {
+                return EditorGUIUtility.singleLineHeight * 2f;
+            }
+
+            if (_introWidth < 0f || Mathf.Abs(width - _introWidth) > 0.5f)
+            {
+                _introWidth = width;
+                _introHeight = EditorStyles.wordWrappedMiniLabel.CalcHeight(
+                    AtlasPipelineUi.RuleOverridesIntro,
+                    width);
+            }
+
+            return _introHeight;
+        }
+
+        private AtlasRuleAsset GetRuleAssetAtIndex(int index)
+        {
+            if (_ruleAssetsProperty == null
+                || index < 0
+                || index >= _ruleAssetsProperty.arraySize)
+            {
+                return null;
+            }
+
+            return _ruleAssetsProperty.GetArrayElementAtIndex(index)
+                .objectReferenceValue as AtlasRuleAsset;
         }
 
         private static void NextLine(ref Rect rect, float lineHeight, float spacing)
@@ -1136,14 +1826,15 @@ namespace CycloneGames.AtlasPipeline
             }
 
             var settings = (AtlasPipelineSettings)_settingsObject.targetObject;
-            if (index < 0 || index >= settings.ImportRules.Count)
+            IReadOnlyList<AtlasRuleAsset> assets = settings.RuleAssets;
+            if (index < 0 || index >= assets.Count)
             {
                 return string.Empty;
             }
 
             // Show the current GUID-resolved path, so a renamed folder displays its new path here
             // rather than the stale serialized string.
-            return settings.ImportRules[index]?.NormalizedSourceFolder ?? string.Empty;
+            return assets[index]?.Rule?.NormalizedSourceFolder ?? string.Empty;
         }
 
         private void SaveSettingsAsset()

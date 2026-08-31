@@ -4,22 +4,44 @@ using System.IO;
 namespace CycloneGames.AtlasPipeline
 {
     /// <summary>
-    /// Fast, allocation-conscious source image size reader. It only parses PNG/JPEG headers and
-    /// never loads a Texture2D into memory, so it is safe to call during preprocess.
+    /// Fast, allocation-free source image size reader. It parses only the PNG/JPEG headers and never
+    /// loads a Texture2D, so it is safe to call from a preprocess hook on every imported image.
     /// </summary>
+    /// <remarks>
+    /// Disk strategy: one sequential read of a small window, then all parsing happens in memory.
+    /// The previous implementation walked the JPEG marker chain with per-byte
+    /// <see cref="Stream.ReadByte"/> calls and allocated a fresh 2-byte and 7-byte array for every
+    /// file; at tens of thousands of images that turned a metadata query into tens of thousands of
+    /// short-lived allocations. A 4 KB window covers essentially every real-world file, and the rare
+    /// image with a multi-kilobyte EXIF or ICC payload falls back to one wider read instead of
+    /// failing.
+    /// Memory safety: every marker walk is bounds-checked against the number of bytes actually read,
+    /// never against the buffer length, so a truncated or hostile file cannot read past the data.
+    /// </remarks>
     public static class AtlasImageInfo
     {
-        private const int BufferSize = 64 * 1024;
-        private const int HeaderBufferLength = 32;
+        /// <summary>Window that covers virtually every PNG and JPEG header, ICC payload included.</summary>
+        private const int FastScanLength = 4096;
+
+        /// <summary>Fallback window for images whose metadata segments are unusually large.</summary>
+        private const int DeepScanLength = 64 * 1024;
+
+        /// <summary>Bytes needed to read a PNG IHDR: 8 signature + 4 length + 4 type + 4 width + 4 height.</summary>
+        private const int MinimumHeaderLength = 24;
 
         [ThreadStatic]
-        private static byte[] s_headerBuffer;
+        private static byte[] s_scanBuffer;
 
-        private static byte[] GetHeaderBuffer()
+        private static byte[] GetScanBuffer(int minimumLength)
         {
-            // Reuse the 32-byte header buffer to avoid one array allocation per file
-            // during import. [ThreadStatic] keeps it safe if this is ever called off-thread.
-            return s_headerBuffer ?? (s_headerBuffer = new byte[HeaderBufferLength]);
+            byte[] buffer = s_scanBuffer;
+            if (buffer == null || buffer.Length < minimumLength)
+            {
+                buffer = new byte[minimumLength];
+                s_scanBuffer = buffer;
+            }
+
+            return buffer;
         }
 
         public static bool TryReadSize(
@@ -29,48 +51,208 @@ namespace CycloneGames.AtlasPipeline
         {
             width = 0;
             height = 0;
-            if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
+            if (string.IsNullOrEmpty(absolutePath))
             {
                 return false;
             }
 
-            // Buffered read: JPEG headers can carry large EXIF/ICC segments, and byte-wise
-            // reads degrade into one syscall per byte. 64 KB comfortably covers every segment
-            // that precedes SOF.
-            using (FileStream stream = new FileStream(
-                       absolutePath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.ReadWrite,
-                       BufferSize))
+            if (!File.Exists(absolutePath))
             {
-                byte[] header = GetHeaderBuffer();
-                int read = stream.Read(header, 0, header.Length);
-                if (read < 24)
+                return false;
+            }
+
+            if (TryReadSizeCore(
+                    absolutePath,
+                    FastScanLength,
+                    out width,
+                    out height,
+                    out bool windowExhausted))
+            {
+                return true;
+            }
+
+            // The window filled up before the frame header was reached. Widen once rather than
+            // reporting failure: a large EXIF block is common in art exported straight from a DCC
+            // tool, and silently treating those images as "unknown size" would disable the
+            // oversize guard exactly where it matters.
+            if (!windowExhausted)
+            {
+                return false;
+            }
+
+            return TryReadSizeCore(
+                absolutePath,
+                DeepScanLength,
+                out width,
+                out height,
+                out _);
+        }
+
+        private static bool TryReadSizeCore(
+            string absolutePath,
+            int windowLength,
+            out int width,
+            out int height,
+            out bool windowExhausted)
+        {
+            width = 0;
+            height = 0;
+            windowExhausted = false;
+
+            byte[] buffer = GetScanBuffer(windowLength);
+            int read;
+            try
+            {
+                using (var stream = new FileStream(
+                           absolutePath,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.ReadWrite,
+                           windowLength,
+                           FileOptions.SequentialScan))
+                {
+                    read = ReadAtLeast(stream, buffer, 0, windowLength);
+                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+
+            if (read < MinimumHeaderLength)
+            {
+                return false;
+            }
+
+            windowExhausted = read >= windowLength;
+
+            if (IsPng(buffer))
+            {
+                width = ReadBigEndianInt32(buffer, 16);
+                height = ReadBigEndianInt32(buffer, 20);
+                return width > 0 && height > 0;
+            }
+
+            if (!IsJpeg(buffer))
+            {
+                return false;
+            }
+
+            return TryParseJpegSize(buffer, read, out width, out height);
+        }
+
+        /// <summary>
+        /// Walks the JPEG marker chain inside the already-read window. No stream access and no
+        /// allocation: the segment length and the SOF payload are decoded straight from the buffer.
+        /// </summary>
+        private static bool TryParseJpegSize(byte[] buffer, int length, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+
+            int position = 2;
+            while (position + 4 <= length)
+            {
+                if (buffer[position] != 0xFF)
+                {
+                    position++;
+                    continue;
+                }
+
+                byte marker = buffer[position + 1];
+
+                // 0xFF padding bytes precede an actual marker; skip them without consuming the marker.
+                if (marker == 0xFF)
+                {
+                    position++;
+                    continue;
+                }
+
+                // Standalone markers carry no length payload. Restart markers (D0-D7) and the
+                // "no operation" marker (01) must be handled here, otherwise their data bytes would
+                // be misread as a segment length and desynchronize the walk.
+                if (IsStandaloneMarker(marker))
+                {
+                    position += 2;
+                    continue;
+                }
+
+                // Start of scan: the frame header, if any, is already behind us.
+                if (marker == 0xDA)
                 {
                     return false;
                 }
 
-                if (IsPng(header))
+                int segmentLength = ReadBigEndianUInt16(buffer, position + 2);
+                if (segmentLength < 2)
                 {
-                    width = ReadBigEndianInt32(header, 16);
-                    height = ReadBigEndianInt32(header, 20);
+                    return false;
+                }
+
+                if (IsStartOfFrameMarker(marker))
+                {
+                    // SOF payload: [0]=sample precision, [1..2]=height, [3..4]=width.
+                    int payload = position + 4;
+                    if (payload + 5 > length)
+                    {
+                        return false;
+                    }
+
+                    height = ReadBigEndianUInt16(buffer, payload + 1);
+                    width = ReadBigEndianUInt16(buffer, payload + 3);
                     return width > 0 && height > 0;
                 }
 
-                if (IsJpeg(header))
-                {
-                    return TryReadJpegSize(stream, out width, out height);
-                }
+                position += 2 + segmentLength;
             }
 
             return false;
         }
 
+        private static bool IsStandaloneMarker(byte marker)
+        {
+            if (marker == 0x01)
+            {
+                return true;
+            }
+
+            return marker == 0xD8
+                   || marker == 0xD9
+                   || (marker >= 0xD0 && marker <= 0xD7);
+        }
+
+        private static bool IsStartOfFrameMarker(byte marker)
+        {
+            // C4, C8 and CC are Huffman / arithmetic-coding table markers, not frame headers, so they
+            // must be excluded even though they sit inside the same numeric range.
+            switch (marker)
+            {
+                case 0xC0:
+                case 0xC1:
+                case 0xC2:
+                case 0xC3:
+                case 0xC5:
+                case 0xC6:
+                case 0xC7:
+                case 0xC9:
+                case 0xCA:
+                case 0xCB:
+                case 0xCD:
+                case 0xCE:
+                case 0xCF:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private static bool IsPng(byte[] header)
         {
-            return header.Length >= 8
-                   && header[0] == 0x89
+            return header[0] == 0x89
                    && header[1] == 0x50
                    && header[2] == 0x4E
                    && header[3] == 0x47;
@@ -78,111 +260,10 @@ namespace CycloneGames.AtlasPipeline
 
         private static bool IsJpeg(byte[] header)
         {
-            return header.Length >= 2
-                   && header[0] == 0xFF
-                   && header[1] == 0xD8;
+            return header[0] == 0xFF && header[1] == 0xD8;
         }
 
-        private static bool TryReadJpegSize(
-            FileStream stream,
-            out int width,
-            out int height)
-        {
-            width = 0;
-            height = 0;
-            stream.Position = 2;
-
-            while (true)
-            {
-                if (stream.Position >= stream.Length)
-                {
-                    return false;
-                }
-
-                int markerByte = ReadByte(stream);
-                if (markerByte < 0)
-                {
-                    return false;
-                }
-
-                if (markerByte != 0xFF)
-                {
-                    continue;
-                }
-
-                int marker;
-                do
-                {
-                    marker = ReadByte(stream);
-                    if (marker < 0)
-                    {
-                        return false;
-                    }
-                }
-                while (marker == 0xFF);
-
-                if (marker == 0xD8 || marker == 0xD9)
-                {
-                    continue;
-                }
-
-                if (marker == 0xDA)
-                {
-                    return false;
-                }
-
-                byte[] lengthBytes = new byte[2];
-                if (ReadExact(stream, lengthBytes, 0, lengthBytes.Length) != lengthBytes.Length)
-                {
-                    return false;
-                }
-
-                int segmentLength = ReadBigEndianUInt16(lengthBytes, 0);
-                if (segmentLength < 2)
-                {
-                    return false;
-                }
-
-                if (marker == 0xC0
-                    || marker == 0xC1
-                    || marker == 0xC2
-                    || marker == 0xC3
-                    || marker == 0xC5
-                    || marker == 0xC6
-                    || marker == 0xC7
-                    || marker == 0xC9
-                    || marker == 0xCA
-                    || marker == 0xCB
-                    || marker == 0xCD
-                    || marker == 0xCE
-                    || marker == 0xCF)
-                {
-                    byte[] sof = new byte[7];
-                    if (ReadExact(stream, sof, 0, sof.Length) != sof.Length)
-                    {
-                        return false;
-                    }
-
-                    // SOF segment layout: [0]=precision [1..2]=height [3..4]=width [5]=Nf [6]=component id
-                    height = ReadBigEndianUInt16(sof, 1);
-                    width = ReadBigEndianUInt16(sof, 3);
-                    return width > 0 && height > 0;
-                }
-
-                stream.Position += segmentLength - 2;
-            }
-        }
-
-        private static int ReadByte(Stream stream)
-        {
-            return stream.ReadByte();
-        }
-
-        private static int ReadExact(
-            Stream stream,
-            byte[] buffer,
-            int offset,
-            int count)
+        private static int ReadAtLeast(Stream stream, byte[] buffer, int offset, int count)
         {
             int total = 0;
             while (total < count)
