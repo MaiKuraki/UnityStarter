@@ -31,7 +31,19 @@ namespace Build.Pipeline.Editor.Integrations.AtlasPipeline
             BuildExecutionContext context,
             BuildStepInvocation invocation)
         {
-            return AtlasPipelineApi.ValidateForBuild(includeNameScan: true);
+            // Warnings are logged rather than returned: they mark costly-but-legitimate choices, such
+            // as a pixel-art atlas that must stay uncompressed, and must not fail the build.
+            var warnings = new List<string>();
+            IReadOnlyList<string> errors =
+                AtlasPipelineApi.ValidateForBuild(includeNameScan: true, warnings: warnings);
+
+            for (int i = 0; i < warnings.Count; i++)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[CycloneGames Atlas Pipeline] " + warnings[i]);
+            }
+
+            return errors;
         }
 
         public void Execute(

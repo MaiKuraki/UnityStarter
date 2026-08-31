@@ -42,24 +42,51 @@ namespace CycloneGames.AtlasPipeline.Pure
     /// </summary>
     public sealed class AtlasManifest
     {
-        public const int CurrentSchemaVersion = 1;
+        /// <summary>
+        /// Schema 2 added the per-atlas source fingerprint. Schema 1 manifests stay readable — the
+        /// deserializer is field-count tolerant and simply records no source hash — so adopting this
+        /// version does not force a full regeneration. It only means the cold-start skip stays off
+        /// until each atlas happens to be generated again.
+        /// </summary>
+        public const int CurrentSchemaVersion = 2;
 
+        /// <param name="entries">One entry per output page.</param>
+        /// <param name="sourceHashes">
+        /// Source fingerprint per atlas key. Required, not optional: a manifest that omits it has no
+        /// way to license a cold-start skip, and making the caller pass an empty dictionary states
+        /// that explicitly instead of hiding it behind a default. The deserializer may still produce
+        /// an empty one when reading a file written before this field existed — tolerance belongs at
+        /// the I/O boundary, not in the object model.
+        /// </param>
         public AtlasManifest(
             int schemaVersion,
             string generatorVersion,
             long settingsFingerprint,
-            IList<AtlasManifestEntry> entries)
+            IList<AtlasManifestEntry> entries,
+            IDictionary<string, long> sourceHashes)
         {
             SchemaVersion = schemaVersion;
             GeneratorVersion = generatorVersion ?? string.Empty;
             SettingsFingerprint = settingsFingerprint;
             Entries = entries ?? new List<AtlasManifestEntry>();
+            SourceHashes = sourceHashes == null
+                ? new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, long>(sourceHashes, StringComparer.OrdinalIgnoreCase);
         }
 
         public int SchemaVersion { get; }
         public string GeneratorVersion { get; }
         public long SettingsFingerprint { get; }
         public IList<AtlasManifestEntry> Entries { get; }
+
+        /// <summary>
+        /// Portable fingerprint of the source bytes behind each atlas, keyed by atlas key.
+        /// Deliberately NOT part of <see cref="AtlasManifestEntry"/>: an entry describes one output
+        /// page, while this describes the atlas as a whole, and a paged atlas has several entries
+        /// but one member set. The generator needs it before it knows the page count — which itself
+        /// requires loading the sprites this fingerprint exists to avoid loading.
+        /// </summary>
+        public IReadOnlyDictionary<string, long> SourceHashes { get; }
     }
 
     /// <summary>
@@ -173,6 +200,7 @@ namespace CycloneGames.AtlasPipeline.Pure
         private const string GeneratorKey = "generator";
         private const string SettingsKey = "settings";
         private const string AtlasKey = "atlas";
+        private const string SourceKey = "source";
 
         public static string Write(AtlasManifest manifest)
         {
@@ -211,6 +239,24 @@ namespace CycloneGames.AtlasPipeline.Pure
                     .Append('\n');
             }
 
+            // Source fingerprints go last and on their own lines: they are per atlas rather than per
+            // output page, and keeping them separate means adding one never rewrites the atlas
+            // block. Sorted by key so the block diffs line-granularly.
+            var orderedSources = new List<string>(manifest.SourceHashes.Count);
+            foreach (KeyValuePair<string, long> pair in manifest.SourceHashes)
+            {
+                orderedSources.Add(pair.Key);
+            }
+
+            orderedSources.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < orderedSources.Count; i++)
+            {
+                string key = orderedSources[i];
+                builder.Append(SourceKey).Append('=')
+                    .Append(key).Append(FieldSeparator)
+                    .Append(AtlasHash.ToHex(manifest.SourceHashes[key])).Append('\n');
+            }
+
             return builder.ToString();
         }
 
@@ -227,13 +273,15 @@ namespace CycloneGames.AtlasPipeline.Pure
                     AtlasManifest.CurrentSchemaVersion,
                     string.Empty,
                     AtlasHash.NullHash,
-                    new List<AtlasManifestEntry>());
+                    new List<AtlasManifestEntry>(),
+                    new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase));
             }
 
             int schema = AtlasManifest.CurrentSchemaVersion;
             string generator = string.Empty;
             long settings = AtlasHash.NullHash;
             var entries = new List<AtlasManifestEntry>();
+            var sourceHashes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
             int position = 0;
             int length = text.Length;
@@ -294,13 +342,30 @@ namespace CycloneGames.AtlasPipeline.Pure
                     continue;
                 }
 
+                // Older readers ignore unknown keys, so a manifest carrying source lines stays
+                // readable by a build of this package that predates them.
+                if (string.Equals(key, SourceKey, StringComparison.Ordinal))
+                {
+                    string[] sourceFields = value.Split(FieldSeparator);
+                    if (sourceFields.Length != 2)
+                    {
+                        errors?.Add(
+                            $"Manifest source line has {sourceFields.Length} field(s), expected 2: "
+                            + $"'{line}'.");
+                        continue;
+                    }
+
+                    sourceHashes[sourceFields[0]] = TryParseHex(sourceFields[1]);
+                    continue;
+                }
+
                 if (!string.Equals(key, AtlasKey, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 string[] fields = value.Split(FieldSeparator);
-                if (fields.Length < 6)
+                if (fields.Length != 6)
                 {
                     errors?.Add($"Manifest atlas line has {fields.Length} field(s), expected 6: '{line}'.");
                     continue;
@@ -335,7 +400,7 @@ namespace CycloneGames.AtlasPipeline.Pure
                     ruleId));
             }
 
-            return new AtlasManifest(schema, generator, settings, entries);
+            return new AtlasManifest(schema, generator, settings, entries, sourceHashes);
         }
 
         private static long TryParseHex(string value)

@@ -188,6 +188,82 @@ namespace CycloneGames.AtlasPipeline.Tests
             Assert.AreNotEqual(before, index.GetBuckets()[0].GetPathHash());
         }
 
+        /// <summary>
+        /// The case every "I added art and forgot to regenerate" story comes down to. A new sprite
+        /// in a rule's folder joins that atlas's member list, the content fingerprint moves, and the
+        /// committed manifest no longer matches — which is the only reason a CI job with no atlases
+        /// of its own can tell that the developer's atlases are behind.
+        /// </summary>
+        [Test]
+        public void AddingAMember_ChangesTheFingerprint()
+        {
+            AtlasIndex index = BuildForward();
+            AtlasBucket bucket = index.GetBuckets()[0];
+
+            long before = bucket.GetPathHash();
+            long contentBefore = bucket.ComputeContentHash(1234);
+
+            index.Add("Assets/UI/newly_added.png", "UI", markDirty: false);
+            AtlasBucket after = index.GetBuckets()[0];
+
+            Assert.AreNotEqual(before, after.GetPathHash(), "membership must move the fingerprint");
+            Assert.AreNotEqual(
+                contentBefore,
+                after.ComputeContentHash(1234),
+                "and the content hash the manifest records, which is what drift compares");
+            Assert.AreEqual(Members.Length + 1, after.Count);
+        }
+
+        /// <summary>
+        /// The fingerprint is a pure function of the member list, so undoing the change restores it
+        /// exactly. Without this, a fingerprint that drifted on its own would show up as permanent,
+        /// unexplainable drift in CI.
+        /// </summary>
+        [Test]
+        public void AddingThenRemovingAMember_RestoresTheFingerprint()
+        {
+            AtlasIndex index = BuildForward();
+            long before = index.GetBuckets()[0].GetPathHash();
+
+            index.Add("Assets/UI/transient.png", "UI", markDirty: false);
+            Assert.AreNotEqual(before, index.GetBuckets()[0].GetPathHash());
+
+            index.Remove("Assets/UI/transient.png", false, out _);
+            Assert.AreEqual(before, index.GetBuckets()[0].GetPathHash());
+        }
+
+        /// <summary>
+        /// A brand new rule folder produces a brand new atlas key, which the comparer reports as
+        /// Added rather than Changed. Both routes have to end in drift, or a newly added source
+        /// folder would slip through a gate that only watched for changed members.
+        /// </summary>
+        [Test]
+        public void ANewAtlasKeyIsReportedAsAddedNotChanged()
+        {
+            var before = new AtlasManifest(
+                2, "gen", 1L,
+                new List<AtlasManifestEntry>
+                {
+                    new AtlasManifestEntry("UI", "p/ui", 5, 10L, 1, 0),
+                },
+                new Dictionary<string, long>());
+
+            var after = new AtlasManifest(
+                2, "gen", 1L,
+                new List<AtlasManifestEntry>
+                {
+                    new AtlasManifestEntry("UI", "p/ui", 5, 10L, 1, 0),
+                    new AtlasManifestEntry("HUD", "p/hud", 3, 20L, 1, 0),
+                },
+                new Dictionary<string, long>());
+
+            AtlasManifestDelta delta = AtlasManifestComparer.Compare(before, after);
+
+            Assert.AreEqual(new[] { "HUD" }, delta.Added);
+            Assert.IsEmpty(delta.Changed, "the untouched atlas must not be reported");
+            Assert.IsFalse(delta.IsUpToDate);
+        }
+
         [Test]
         public void RemoveEmptyBuckets_ReportsKeysAndToleratesANullCollector()
         {

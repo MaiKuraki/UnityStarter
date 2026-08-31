@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 
 namespace CycloneGames.AtlasPipeline.Pure
 {
@@ -176,6 +178,121 @@ namespace CycloneGames.AtlasPipeline.Pure
 
             start = (pageIndex * perPage) + Math.Min(pageIndex, remainder);
             count = perPage + (pageIndex < remainder ? 1 : 0);
+        }
+
+        /// <summary>
+        /// Page count for one atlas across every platform it ships on. The pages are shared, so the
+        /// answer has to be the worst case: an atlas that fits on iOS at 2048px but needs three pages
+        /// on an Android build capped at 1024px is three pages on both, or the packable lists would
+        /// differ per platform and the outputs would not be reproducible.
+        /// When paging is disabled the answer is always one; the caller reports the overflow instead.
+        /// </summary>
+        public static int ComputePageCount(
+            int memberCount,
+            long requiredArea,
+            IReadOnlyList<int> platformMaxSizes,
+            int padding,
+            bool pagingEnabled)
+        {
+            if (!pagingEnabled
+                || memberCount <= 0
+                || requiredArea <= 0L
+                || platformMaxSizes == null
+                || platformMaxSizes.Count == 0)
+            {
+                return 1;
+            }
+
+            int worst = 1;
+            for (int i = 0; i < platformMaxSizes.Count; i++)
+            {
+                AtlasCapacityReport report = Evaluate(
+                    new AtlasCapacityRequest(memberCount, requiredArea, platformMaxSizes[i], padding));
+                if (report.PageCount > worst)
+                {
+                    worst = report.PageCount;
+                }
+            }
+
+            return worst;
+        }
+
+        /// <summary>
+        /// Output key for one page of an atlas. A single-page atlas keeps the plain key, so enabling
+        /// paging changes nothing for any atlas that already fits — only an atlas that would
+        /// otherwise fail the build starts producing paged files.
+        /// The page suffix is fixed-width and zero-padded, so page 7 never becomes page 10's name
+        /// with a digit missing, and every machine derives the same file name from the same index.
+        /// </summary>
+        public static string BuildPageKey(string atlasKey, int pageIndex, int pageCount)
+        {
+            if (string.IsNullOrEmpty(atlasKey) || pageCount <= 1 || pageIndex < 0)
+            {
+                return atlasKey;
+            }
+
+            int lastPageIndex = pageCount - 1;
+            int width = Math.Max(3, lastPageIndex == 0 ? 1 : PageDigitCount(lastPageIndex));
+            return atlasKey + "__p" + pageIndex.ToString(
+                "D" + width.ToString(CultureInfo.InvariantCulture),
+                CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Strips a page suffix from an atlas file stem, so a page-unaware consumer (the orphan sweep)
+        /// can recognize every page of a known atlas as expected. Returns the base key, or the input
+        /// unchanged when it carries no page suffix.
+        /// </summary>
+        public static string StripPageSuffix(string atlasKey)
+        {
+            if (string.IsNullOrEmpty(atlasKey))
+            {
+                return atlasKey;
+            }
+
+            int marker = atlasKey.LastIndexOf("__p", StringComparison.Ordinal);
+            if (marker <= 0 || marker + 3 >= atlasKey.Length)
+            {
+                return atlasKey;
+            }
+
+            for (int i = marker + 3; i < atlasKey.Length; i++)
+            {
+                if (atlasKey[i] < '0' || atlasKey[i] > '9')
+                {
+                    return atlasKey;
+                }
+            }
+
+            return atlasKey.Substring(0, marker);
+        }
+
+        /// <summary>
+        /// True when the key is a page of the given base atlas key — "ui__p000" is a page of "ui".
+        /// The base key itself is not a page of itself: the suffix has to actually have been present.
+        /// </summary>
+        public static bool IsPageOf(string atlasKey, string baseKey)
+        {
+            if (string.IsNullOrEmpty(atlasKey) || string.IsNullOrEmpty(baseKey))
+            {
+                return false;
+            }
+
+            string stripped = StripPageSuffix(atlasKey);
+            return !string.Equals(stripped, atlasKey, StringComparison.Ordinal)
+                   && string.Equals(stripped, baseKey, StringComparison.Ordinal);
+        }
+
+        private static int PageDigitCount(int value)
+        {
+            int digits = 1;
+            while (value >= 10)
+            {
+                value /= 10;
+                digits++;
+            }
+
+            return digits;
         }
 
         /// <summary>

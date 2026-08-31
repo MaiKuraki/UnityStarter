@@ -142,6 +142,120 @@ namespace CycloneGames.AtlasPipeline.Tests
             Assert.IsFalse(CreateRule("Assets/UI").IsPathExcluded("Assets/Scene/a.png"));
         }
 
+        /// <summary>
+        /// The boundary the allocation-free rewrite must preserve. The old form built
+        /// <c>excludedFolder + "/"</c> and used StartsWith, which also had to be checked against the
+        /// equality case separately; this pins the segment-boundary behaviour that replaces it.
+        /// </summary>
+        [TestCase("Assets/UI/Raw/a.png", ExpectedResult = true)]
+        [TestCase("Assets/UI/Raw", ExpectedResult = true, Description = "The folder itself")]
+        [TestCase("Assets/UI/RawFoo/a.png", ExpectedResult = false, Description = "Prefix must be a whole segment")]
+        [TestCase("Assets/UI/RawExtra", ExpectedResult = false)]
+        [TestCase("assets/ui/raw/a.png", ExpectedResult = true, Description = "Case-insensitive")]
+        [TestCase("Assets/UI/a.png", ExpectedResult = false)]
+        public bool IsPathExcluded_FolderPrefixBoundaries(string assetPath)
+        {
+            return CreateRule(
+                "Assets/UI",
+                excludedFolderPaths: new[] { "Assets/UI/Raw" }).IsPathExcluded(assetPath);
+        }
+
+        // ----------------------------------------------------------------
+        // OwnsPath
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// OwnsPath is the combined predicate every pipeline call site wants. It exists because the
+        /// callers used to run the folder and keyword match twice per asset per rule — once directly
+        /// and once inside the exclusion check's own guard.
+        /// </summary>
+        [Test]
+        public void OwnsPath_CombinesMatchAndExclusion()
+        {
+            AtlasImportRule rule = CreateRule(
+                "Assets/UI",
+                excludedFolderPaths: new[] { "Assets/UI/Raw" },
+                excludedNameKeywords: new[] { "_temp" });
+
+            Assert.IsTrue(rule.OwnsPath("Assets/UI/a.png"));
+            Assert.IsFalse(rule.OwnsPath("Assets/UI/Raw/a.png"), "excluded folder");
+            Assert.IsFalse(rule.OwnsPath("Assets/UI/a_temp.png"), "excluded keyword");
+            Assert.IsFalse(rule.OwnsPath("Assets/Other/a.png"), "not mine");
+        }
+
+        [Test]
+        public void OwnsPath_AgreesWithMatchesPathAndIsPathExcluded()
+        {
+            AtlasImportRule rule = CreateRule(
+                "Assets/UI",
+                pathKeywords: new[] { "icon" },
+                excludedFolderPaths: new[] { "Assets/UI/Raw" });
+
+            var paths = new[]
+            {
+                "Assets/UI/icon_a.png",
+                "Assets/UI/a.png",
+                "Assets/UI/Raw/icon_a.png",
+                "Assets/Other/icon_a.png",
+            };
+
+            foreach (string path in paths)
+            {
+                Assert.AreEqual(
+                    rule.MatchesPath(path) && !rule.IsPathExcluded(path),
+                    rule.OwnsPath(path),
+                    path);
+            }
+        }
+
+        /// <summary>
+        /// Regression guard for the measured cost: the exclusion check used to concatenate
+        /// <c>excludedFolder + "/"</c> per asset per rule per entry, which accounted for the entire
+        /// 152 bytes-per-asset allocation on a full rescan. Matching must now allocate nothing.
+        /// </summary>
+        [Test]
+        public void OwnsPath_AllocatesNothingPerAsset()
+        {
+            AtlasImportRule rule = CreateRule(
+                "Assets/Art/UI",
+                pathKeywords: new[] { "icon", "btn" },
+                excludedFolderPaths: new[]
+                {
+                    "Assets/Art/UI/Raw",
+                    "Assets/Art/UI/Source",
+                },
+                excludedNameKeywords: new[] { "_draft", "@tmp" });
+
+            var path = "Assets/Art/UI/Sub/icon_00001.png";
+
+            // Measured with the per-thread counter, not GC.GetTotalAllocatedBytes. The precise
+            // overload forces a blocking collection, and that collection's own bookkeeping plus any
+            // finalizer work still draining from earlier fixtures lands inside the window — it read
+            // as 6 to 14 bytes per asset for code that allocates nothing, and varied run to run.
+            // The per-thread counter sees only what this loop allocates.
+            //
+            // Tiered compilation promotes the method after a few hundred calls and a rejit inside
+            // the window allocates too, so warm up past promotion before measuring.
+            for (int i = 0; i < 256; i++)
+            {
+                rule.OwnsPath(path);
+            }
+
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 8192; i++)
+            {
+                rule.OwnsPath(path);
+            }
+
+            long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.AreEqual(
+                0L,
+                allocated,
+                $"rule matching allocated {allocated} bytes over 8192 assets "
+                + $"({allocated / 8192.0} per asset)");
+        }
+
         // ----------------------------------------------------------------
         // Normalization
         // ----------------------------------------------------------------

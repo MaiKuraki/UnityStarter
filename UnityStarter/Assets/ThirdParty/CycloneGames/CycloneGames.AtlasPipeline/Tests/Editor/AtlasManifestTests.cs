@@ -15,7 +15,7 @@ namespace CycloneGames.AtlasPipeline.Tests
     {
         private const string ExpectedManifest =
             "# CycloneGames atlas manifest. Generated file - do not edit by hand.\n"
-            + "schema=1\n"
+            + "schema=2\n"
             + "generator=gen/1\n"
             + "settings=00255800013571c5\n"
             + "atlas=UI\tAssets/Atlas/UI.spriteatlasv2\t3\te640bae279033453\t1\t0\n";
@@ -40,7 +40,8 @@ namespace CycloneGames.AtlasPipeline.Tests
                         index.GetBuckets()[0].GetPathHash(),
                         1,
                         0),
-                });
+                },
+                new Dictionary<string, long>());
         }
 
         [Test]
@@ -71,7 +72,8 @@ namespace CycloneGames.AtlasPipeline.Tests
                     new AtlasManifestEntry("Zebra", "p/z", 1, 1L, 1, 0),
                     new AtlasManifestEntry("Apple", "p/a", 1, 2L, 1, 0),
                     new AtlasManifestEntry("Mango", "p/m", 1, 3L, 1, 0),
-                });
+                },
+                new Dictionary<string, long>());
 
             string text = AtlasManifestSerializer.Write(manifest);
             int apple = text.IndexOf("atlas=Apple", System.StringComparison.Ordinal);
@@ -159,12 +161,12 @@ namespace CycloneGames.AtlasPipeline.Tests
             {
                 new AtlasManifestEntry("A", "a", 1, 10L, 1, 0),
                 new AtlasManifestEntry("B", "b", 1, 20L, 1, 0),
-            });
+            }, new Dictionary<string, long>());
             var after = new AtlasManifest(1, "gen", 1L, new List<AtlasManifestEntry>
             {
                 new AtlasManifestEntry("A", "a", 1, 11L, 1, 0),
                 new AtlasManifestEntry("C", "c", 1, 30L, 1, 0),
-            });
+            }, new Dictionary<string, long>());
 
             AtlasManifestDelta delta = AtlasManifestComparer.Compare(before, after);
 
@@ -185,13 +187,14 @@ namespace CycloneGames.AtlasPipeline.Tests
         [Test]
         public void Compare_DeltasAreSortedForStableLogs()
         {
-            var before = new AtlasManifest(1, "gen", 1L, new List<AtlasManifestEntry>());
+            var before = new AtlasManifest(
+                1, "gen", 1L, new List<AtlasManifestEntry>(), new Dictionary<string, long>());
             var after = new AtlasManifest(1, "gen", 1L, new List<AtlasManifestEntry>
             {
                 new AtlasManifestEntry("Zebra", "z", 1, 1L, 1, 0),
                 new AtlasManifestEntry("Apple", "a", 1, 2L, 1, 0),
                 new AtlasManifestEntry("Mango", "m", 1, 3L, 1, 0),
-            });
+            }, new Dictionary<string, long>());
 
             Assert.AreEqual(
                 new[] { "Apple", "Mango", "Zebra" },
@@ -205,6 +208,116 @@ namespace CycloneGames.AtlasPipeline.Tests
                 AtlasManifestComparer.Compare(null, BuildSample());
             Assert.IsNotNull(delta);
             Assert.AreEqual(0, delta.DifferenceCount);
+        }
+
+        /// <summary>
+        /// Source fingerprints are what let a cold start skip an atlas, so they have to survive a
+        /// round trip. They are keyed by atlas key rather than page key: the generator needs them
+        /// before it knows the page count, which itself requires loading the sprites they exist to
+        /// avoid loading.
+        /// </summary>
+        [Test]
+        public void Write_RecordsSourceFingerprintsByAtlasKey()
+        {
+            var manifest = new AtlasManifest(
+                2,
+                "gen/1",
+                0L,
+                new List<AtlasManifestEntry>
+                {
+                    new AtlasManifestEntry("UI", "p/ui", 3, 1L, 2, 0),
+                    new AtlasManifestEntry("UI__p000", "p/ui__p000", 3, 1L, 2, 0),
+                    new AtlasManifestEntry("UI__p001", "p/ui__p001", 3, 1L, 2, 0),
+                },
+                new Dictionary<string, long> { { "UI", 0x1234567890abcdefL } });
+
+            string text = AtlasManifestSerializer.Write(manifest);
+
+            // One line for the atlas, not one per page.
+            Assert.IsTrue(text.Contains("source=UI\t1234567890abcdef\n"), text);
+            Assert.AreEqual(1, CountLinesStartingWith(text, "source="));
+        }
+
+        private static int CountLinesStartingWith(string text, string prefix)
+        {
+            int count = 0;
+            foreach (string line in text.Split('\n'))
+            {
+                if (line.StartsWith(prefix, System.StringComparison.Ordinal))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Sorted so the block diffs line-granularly: adding one atlas must not rewrite the others.
+        /// </summary>
+        [Test]
+        public void Write_SortsSourceLinesByAtlasKey()
+        {
+            var manifest = new AtlasManifest(
+                2,
+                "gen/1",
+                0L,
+                new List<AtlasManifestEntry>(),
+                new Dictionary<string, long>
+                {
+                    { "Zebra", 3L },
+                    { "Apple", 1L },
+                    { "Mango", 2L },
+                });
+
+            string text = AtlasManifestSerializer.Write(manifest);
+            int apple = text.IndexOf("source=Apple", System.StringComparison.Ordinal);
+            int mango = text.IndexOf("source=Mango", System.StringComparison.Ordinal);
+            int zebra = text.IndexOf("source=Zebra", System.StringComparison.Ordinal);
+
+            Assert.Less(apple, mango);
+            Assert.Less(mango, zebra);
+        }
+
+        /// <summary>
+        /// A manifest written before source fingerprints existed must still parse. Its entries carry
+        /// no source hash, which the pipeline reads as "unknown" and regenerates rather than skips —
+        /// so adopting the new field costs nothing and forces no full rebuild.
+        /// </summary>
+        [Test]
+        public void Read_AcceptsManifestWithoutSourceLines()
+        {
+            const string legacy =
+                "# CycloneGames atlas manifest. Generated file - do not edit by hand.\n"
+                + "schema=1\n"
+                + "generator=gen/1\n"
+                + "settings=0000000000000000\n"
+                + "atlas=UI\tp/ui\t3\tabcdef0123456789\t1\t0\n";
+
+            var errors = new List<string>();
+            AtlasManifest parsed = AtlasManifestSerializer.Read(legacy, errors);
+
+            Assert.IsEmpty(errors);
+            Assert.AreEqual(1, parsed.SchemaVersion);
+            Assert.AreEqual(1, parsed.Entries.Count);
+            Assert.IsEmpty(parsed.SourceHashes, "no source lines means no source fingerprints");
+        }
+
+        [Test]
+        public void Read_ReportsMalformedSourceLineWithoutAborting()
+        {
+            const string text =
+                "schema=2\ngenerator=g\nsettings=0\n"
+                + "source=UI\n"
+                + "source=HUD\tdeadbeef\n"
+                + "atlas=UI\tp/ui\t1\t1\t1\t0\n";
+
+            var errors = new List<string>();
+            AtlasManifest parsed = AtlasManifestSerializer.Read(text, errors);
+
+            Assert.AreEqual(1, errors.Count, "the malformed line is reported");
+            Assert.AreEqual(1, parsed.Entries.Count, "the atlas line still parsed");
+            Assert.IsTrue(parsed.SourceHashes.ContainsKey("HUD"), "the valid line still applied");
         }
 
         /// <summary>

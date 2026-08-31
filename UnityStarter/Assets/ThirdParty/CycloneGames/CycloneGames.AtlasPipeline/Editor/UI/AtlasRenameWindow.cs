@@ -209,7 +209,9 @@ namespace CycloneGames.AtlasPipeline
         {
             AtlasPipelineSettings settings = AtlasPipeline.TryGetSettings();
             _requests = settings != null
-                ? AtlasNaming.CollectInvalidAtlasNames(settings)
+                ? AtlasNaming.CollectInvalidAtlasNames(
+                    settings,
+                    AtlasPipeline.ResolveRule)
                 : new List<AtlasRenameRequest>();
         }
 

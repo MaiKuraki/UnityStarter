@@ -144,6 +144,41 @@ namespace CycloneGames.AtlasPipeline.Pure
         }
 
         /// <summary>
+        /// Folds a byte buffer into a running 64-bit FNV-1a hash. This is what makes it possible to
+        /// fingerprint a source image by reading its bytes instead of importing it: decoding every
+        /// sprite just to learn whether it changed is the dominant cost of a cold atlas rebuild.
+        /// </summary>
+        public static void AppendFnv1a64(ref long hash, byte[] buffer, int offset, int count)
+        {
+            if (buffer == null || count <= 0 || offset >= buffer.Length)
+            {
+                return;
+            }
+
+            ulong working = hash == NullHash ? FnvOffsetBasis64 : (ulong)hash;
+            int end = offset + count;
+            if (end > buffer.Length)
+            {
+                end = buffer.Length;
+            }
+
+            for (int i = offset; i < end; i++)
+            {
+                working ^= buffer[i];
+                working *= FnvPrime64;
+            }
+
+            hash = (long)working;
+        }
+
+        /// <summary>
+        /// Full-buffer 64-bit hash. Deliberately not an overload of
+        /// <see cref="ComputeFnv1a64(string)"/>: the two differ only in parameter type, so a null or
+        /// an untyped literal would become ambiguous at every call site. Hash the buffer by starting
+        /// from <see cref="BeginFnv1a64"/> and appending.
+        /// </summary>
+
+        /// <summary>
         /// Order-sensitive combination of two hashes. Used to fold sprite identity fields into one
         /// value without allocating a tuple or a string.
         /// </summary>

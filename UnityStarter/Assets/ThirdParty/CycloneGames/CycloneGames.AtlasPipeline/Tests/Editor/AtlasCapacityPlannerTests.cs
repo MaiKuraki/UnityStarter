@@ -154,5 +154,176 @@ namespace CycloneGames.AtlasPipeline.Tests
             Assert.AreEqual(0L, AtlasCapacityPlanner.EstimateBytes(100L, 0d));
             Assert.AreEqual(50L, AtlasCapacityPlanner.EstimateBytes(100L, 0.5d));
         }
+
+        // ----------------------------------------------------------------
+        // Paging
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Pages are shared across platforms — the same packable list must produce the same page files
+        /// everywhere, or the output would not be reproducible — so the page count is the worst case
+        /// over platforms.
+        /// </summary>
+        [Test]
+        public void ComputePageCount_TakesTheWorstCaseAcrossPlatforms()
+        {
+            // Computed from the same truncated integers the planner uses, so the division is exact
+            // instead of landing one pixel over a page boundary.
+            long androidUsable = (long)(1024 * 1024 * AtlasCapacityPlanner.DefaultPackingEfficiency);
+            long requiredArea = androidUsable * 3L + 1L;
+
+            // Android at 1024px needs four pages; iOS at 2048px fits in one. The pages are shared,
+            // so the answer is four for both.
+            int pages = AtlasCapacityPlanner.ComputePageCount(
+                500,
+                requiredArea,
+                new[] { 1024, 2048, 2048, 2048 },
+                4,
+                pagingEnabled: true);
+
+            Assert.AreEqual(4, pages);
+        }
+
+        [Test]
+        public void ComputePageCount_DisabledPagingAlwaysAnswersOne()
+        {
+            long pageCapacity = (long)(2048 * 2048 * AtlasCapacityPlanner.DefaultPackingEfficiency);
+            Assert.AreEqual(
+                1,
+                AtlasCapacityPlanner.ComputePageCount(
+                    500,
+                    pageCapacity * 10L,
+                    new[] { 2048 },
+                    4,
+                    pagingEnabled: false));
+        }
+
+        [Test]
+        public void ComputePageCount_EmptyContentAnswersOne()
+        {
+            Assert.AreEqual(
+                1,
+                AtlasCapacityPlanner.ComputePageCount(0, 0L, new[] { 2048 }, 4, true));
+            Assert.AreEqual(
+                1,
+                AtlasCapacityPlanner.ComputePageCount(10, 0L, new[] { 2048 }, 4, true));
+            Assert.AreEqual(
+                1,
+                AtlasCapacityPlanner.ComputePageCount(10, 1000L, null, 4, true));
+            Assert.AreEqual(
+                1,
+                AtlasCapacityPlanner.ComputePageCount(10, 1000L, new int[0], 4, true));
+        }
+
+        /// <summary>
+        /// A single-page atlas keeps the plain key. This is what makes paging safe to enable on an
+        /// existing project: every atlas that already fits keeps its exact current output file.
+        /// </summary>
+        [Test]
+        public void BuildPageKey_SinglePageKeepsThePlainKey()
+        {
+            Assert.AreEqual("ui", AtlasCapacityPlanner.BuildPageKey("ui", 0, 1));
+            Assert.IsNull(AtlasCapacityPlanner.BuildPageKey(null, 0, 1));
+        }
+
+        [Test]
+        public void BuildPageKey_UsesFixedWidthZeroPadding()
+        {
+            Assert.AreEqual("ui__p000", AtlasCapacityPlanner.BuildPageKey("ui", 0, 3));
+            Assert.AreEqual("ui__p001", AtlasCapacityPlanner.BuildPageKey("ui", 1, 3));
+            Assert.AreEqual("ui__p002", AtlasCapacityPlanner.BuildPageKey("ui", 2, 3));
+        }
+
+        /// <summary>
+        /// Beyond 999 pages the width widens instead of truncating, so a page can never receive
+        /// another page's name.
+        /// </summary>
+        [Test]
+        public void BuildPageKey_WidensBeyondThreeDigits()
+        {
+            Assert.AreEqual(
+                "ui__p1000",
+                AtlasCapacityPlanner.BuildPageKey("ui", 1000, 1001));
+            Assert.AreEqual(
+                4,
+                AtlasCapacityPlanner.BuildPageKey("ui", 0, 1001).Length - "ui__p".Length);
+        }
+
+        [Test]
+        public void BuildPageKey_IsDeterministic()
+        {
+            Assert.AreEqual(
+                AtlasCapacityPlanner.BuildPageKey("ui", 7, 12),
+                AtlasCapacityPlanner.BuildPageKey("ui", 7, 12));
+        }
+
+        [Test]
+        public void StripPageSuffix_RemovesOnlyRealPageSuffixes()
+        {
+            Assert.AreEqual("ui", AtlasCapacityPlanner.StripPageSuffix("ui__p000"));
+            Assert.AreEqual("ui", AtlasCapacityPlanner.StripPageSuffix("ui__p12"));
+            Assert.AreEqual("ui__p", AtlasCapacityPlanner.StripPageSuffix("ui__p"));
+            Assert.AreEqual("ui__px", AtlasCapacityPlanner.StripPageSuffix("ui__px"));
+            Assert.AreEqual("ui__p0x", AtlasCapacityPlanner.StripPageSuffix("ui__p0x"));
+            Assert.AreEqual("ui", AtlasCapacityPlanner.StripPageSuffix("ui"));
+            Assert.IsNull(AtlasCapacityPlanner.StripPageSuffix(null));
+        }
+
+        /// <summary>
+        /// A rule group can legitimately contain the "__p" spelling. Stripping must not turn such a
+        /// key into a page of some other atlas.
+        /// </summary>
+        [Test]
+        public void StripPageSuffix_KeepsTrailingMarkerWithoutDigits()
+        {
+            Assert.AreEqual("map__p", AtlasCapacityPlanner.StripPageSuffix("map__p"));
+            Assert.AreEqual("map__player", AtlasCapacityPlanner.StripPageSuffix("map__player"));
+        }
+
+        [Test]
+        public void IsPageOf_RecognizesPagesOfABaseKey()
+        {
+            Assert.IsTrue(AtlasCapacityPlanner.IsPageOf("ui__p000", "ui"));
+            Assert.IsTrue(AtlasCapacityPlanner.IsPageOf("ui__p017", "ui"));
+            Assert.IsFalse(AtlasCapacityPlanner.IsPageOf("ui", "ui"));
+            Assert.IsFalse(AtlasCapacityPlanner.IsPageOf("other__p000", "ui"));
+            Assert.IsFalse(AtlasCapacityPlanner.IsPageOf(null, "ui"));
+            Assert.IsFalse(AtlasCapacityPlanner.IsPageOf("ui__p000", null));
+        }
+
+        /// <summary>
+        /// Slicing and naming have to agree: the pages of an atlas must cover the member list exactly
+        /// once, and the page keys must be derivable from the base key alone.
+        /// </summary>
+        [Test]
+        public void PagePlan_CoversEveryMemberExactlyOnce()
+        {
+            const int memberCount = 257;
+            for (int pageCount = 1; pageCount <= 5; pageCount++)
+            {
+                int covered = 0;
+                for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
+                {
+                    AtlasCapacityPlanner.AssignPageRange(
+                        memberCount,
+                        pageCount,
+                        pageIndex,
+                        out int start,
+                        out int count);
+                    Assert.AreEqual(covered, start);
+                    covered += count;
+
+                    string pageKey = AtlasCapacityPlanner.BuildPageKey(
+                        "ui",
+                        pageIndex,
+                        pageCount);
+                    Assert.IsTrue(
+                        AtlasCapacityPlanner.IsPageOf(pageKey, "ui") || pageCount == 1,
+                        "page key must strip back to the base key");
+                }
+
+                Assert.AreEqual(memberCount, covered, "pageCount=" + pageCount);
+            }
+        }
     }
 }

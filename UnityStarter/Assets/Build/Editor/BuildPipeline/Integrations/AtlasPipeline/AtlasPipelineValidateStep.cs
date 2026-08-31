@@ -37,7 +37,15 @@ namespace Build.Pipeline.Editor.Integrations.AtlasPipeline
             BuildExecutionContext context,
             BuildStepInvocation invocation)
         {
-            var errors = new List<string>(AtlasPipelineApi.ValidateForBuild(includeNameScan: true));
+            var warnings = new List<string>();
+            var errors = new List<string>(
+                AtlasPipelineApi.ValidateForBuild(includeNameScan: true, warnings: warnings));
+
+            for (int i = 0; i < warnings.Count; i++)
+            {
+                UnityEngine.Debug.LogWarning(
+                    "[CycloneGames Atlas Pipeline] " + warnings[i]);
+            }
 
             IReadOnlyList<string> drift = AtlasPipelineApi.ValidateManifestDrift();
             for (int i = 0; i < drift.Count; i++)

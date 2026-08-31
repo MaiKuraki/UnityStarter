@@ -193,6 +193,28 @@ namespace CycloneGames.AtlasPipeline.Pure
                 return value;
             }
 
+            string result = StripUnsafeCharacters(value);
+            return string.IsNullOrEmpty(result) ? "Atlas" : result;
+        }
+
+        /// <summary>
+        /// Reduces a string to letters, digits, underscores and dashes; runs of anything else
+        /// collapse to a single underscore, and leading and trailing underscores are trimmed.
+        /// Returns an empty string when nothing usable remains.
+        /// <para>
+        /// Shared by <see cref="SanitizePart"/> and <see cref="SanitizeSubfolder"/> so the two agree
+        /// on what a legal character is. The empty-string-vs-fallback decision is left to the caller
+        /// on purpose: "Atlas" is the right answer for an unusable atlas key — every atlas needs a
+        /// name — but a path segment that sanitizes to nothing must be dropped, not turned into a
+        /// folder called Atlas.
+        /// </para>
+        /// <para>
+        /// <see cref="char.IsLetterOrDigit"/> rather than an ASCII test: it accepts CJK and other
+        /// scripts, which is what a studio naming its packages in its own language expects.
+        /// </para>
+        /// </summary>
+        private static string StripUnsafeCharacters(string value)
+        {
             var builder = new System.Text.StringBuilder(value.Length);
             bool previousWasSeparator = false;
             for (int i = 0; i < value.Length; i++)
@@ -212,8 +234,107 @@ namespace CycloneGames.AtlasPipeline.Pure
                 }
             }
 
-            string result = builder.ToString().Trim('_');
-            return string.IsNullOrEmpty(result) ? "Atlas" : result;
+            return builder.ToString().Trim('_');
+        }
+
+        /// <summary>
+        /// Normalizes a rule's output subfolder into a safe relative path, or
+        /// <see cref="string.Empty"/> when the atlas belongs directly in the output root.
+        /// <para>
+        /// This is the primitive that lets one project ship several asset packages: a rule writes
+        /// into a folder of its choosing under the shared output root, and a path-based collector
+        /// (YooAsset's CollectPath, xasset build entries) picks that folder up as one bundle. Rules
+        /// that name the same subfolder share a package.
+        /// </para>
+        /// <para>
+        /// A subfolder rather than a free path on purpose. Keeping every generated atlas under one
+        /// root is an invariant the rest of the pipeline leans on — the global exclusion test and
+        /// the orphan sweep both reason about the output tree — so a value that could escape it
+        /// would quietly break them. Traversal segments ("..") are dropped rather than rejected, so
+        /// a mistyped value degrades to a shallower folder instead of an error the artist cannot
+        /// act on.
+        /// </para>
+        /// </summary>
+        public static string SanitizeSubfolder(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            string[] segments = value.Split(new[] { '/', '\\' }, System.StringSplitOptions.None);
+
+            bool clean = true;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                if (IsDirtySubfolderSegment(segments[i]))
+                {
+                    clean = false;
+                    break;
+                }
+            }
+
+            // Fast path: already a well-formed relative path, and the common case by far.
+            if (clean && value.IndexOf('\\') < 0)
+            {
+                return value;
+            }
+
+            var builder = new System.Text.StringBuilder(value.Length);
+            for (int i = 0; i < segments.Length; i++)
+            {
+                string raw = segments[i];
+
+                // Dropped, not rewritten: SanitizePart maps an unusable segment to "Atlas", which
+                // would silently turn ".." into a real folder called Atlas.
+                if (raw.Length == 0 || raw == "." || raw == "..")
+                {
+                    continue;
+                }
+
+                // Not SanitizePart: that maps an unusable value to "Atlas", which would invent a
+                // folder nobody asked for. A segment with nothing usable in it is dropped.
+                string segment = StripUnsafeCharacters(raw);
+                if (segment.Length == 0)
+                {
+                    continue;
+                }
+
+                if (builder.Length > 0)
+                {
+                    builder.Append('/');
+                }
+
+                builder.Append(segment);
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool IsDirtySubfolderSegment(string segment)
+        {
+            if (segment.Length == 0)
+            {
+                // Empty, or a doubled separator, or a leading/trailing separator.
+                return true;
+            }
+
+            // Traversal and self references are never valid in an output subfolder.
+            if (segment == "." || segment == "..")
+            {
+                return true;
+            }
+
+            for (int i = 0; i < segment.Length; i++)
+            {
+                char c = segment[i];
+                if (!char.IsLetterOrDigit(c) && c != '_' && c != '-')
+                {
+                    return true;
+                }
+            }
+
+            return segment[0] == '_' || segment[segment.Length - 1] == '_';
         }
     }
 }
