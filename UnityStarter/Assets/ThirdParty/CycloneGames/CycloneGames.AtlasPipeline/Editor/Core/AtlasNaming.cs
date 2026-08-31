@@ -5,6 +5,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.Logging;
+using CycloneGames.AtlasPipeline.Pure;
 
 namespace CycloneGames.AtlasPipeline
 {
@@ -177,13 +178,31 @@ namespace CycloneGames.AtlasPipeline
             return true;
         }
 
+        /// <summary>
+        /// Scans every rule folder for source file names that need renaming.
+        /// </summary>
+        /// <param name="settings">The pipeline settings to scan.</param>
+        /// <param name="resolveRule">
+        /// The pipeline's rule resolution function, injected by the caller. AtlasNaming cannot call
+        /// <c>AtlasPipeline.ResolveRule</c> directly: AtlasPipeline calls into this class (name
+        /// validation, rename previews), so a direct call back would form a circular static
+        /// dependency (CG0048). Injecting the function also guarantees the scan uses the exact
+        /// resolution semantics the pipeline uses — ordered rule cache, global excludes and the
+        /// empty-cache self-heal — instead of a second copy that could drift.
+        /// </param>
         public static List<AtlasRenameRequest> CollectInvalidAtlasNames(
-            AtlasPipelineSettings settings)
+            AtlasPipelineSettings settings,
+            Func<string, AtlasImportRule> resolveRule)
         {
             var requests = new List<AtlasRenameRequest>();
             if (settings == null)
             {
                 return requests;
+            }
+
+            if (resolveRule == null)
+            {
+                throw new ArgumentNullException(nameof(resolveRule));
             }
 
             IReadOnlyList<AtlasImportRule> importRules = settings.ImportRules;
@@ -216,11 +235,11 @@ namespace CycloneGames.AtlasPipeline
                         continue;
                     }
 
-                    // The scan must match ResolveRule: MatchesPath && !IsPathExcluded &&
-                    // granularity != None. Checking only IsPathExcluded would pull in files this
-                    // rule does not govern (IsPathExcluded returns false for non-matching paths),
-                    // producing false positives that block the build.
-                    if (!rule.MatchesPath(path) || rule.IsPathExcluded(path))
+                    // Route through the injected resolver rather than reimplementing "which rule
+                    // owns this asset". A second copy of that logic would silently drift and, worse,
+                    // would bypass global excludes, so files the pipeline ignores would still be
+                    // flagged as needing a rename.
+                    if (!ReferenceEquals(resolveRule(path), rule))
                     {
                         continue;
                     }
@@ -465,10 +484,10 @@ namespace CycloneGames.AtlasPipeline
 
         internal static bool IsSupportedImagePath(string assetPath)
         {
-            string extension = Path.GetExtension(assetPath);
-            return string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
-                   || string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase)
-                   || string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase);
+            // Delegates to the shared implementation so there is exactly one place to extend when a
+            // format is added. The old version built an extension substring per asset, which showed
+            // up in the profile of every full project scan.
+            return AtlasPathUtility.IsSupportedImagePath(assetPath);
         }
     }
 }
