@@ -72,6 +72,25 @@ namespace CycloneGames.AtlasPipeline.Pure
         }
 
         /// <summary>
+        /// True when <paramref name="inner"/> is a strict descendant of <paramref name="outer"/> —
+        /// below it, but not equal. Equality matters: two rules sharing one output folder is the
+        /// intended "two rules, one package" case, while one output folder nested inside another
+        /// means a collector targeting the outer folder ships the inner rule's atlases and the two
+        /// rules can no longer be updated independently.
+        /// </summary>
+        public static bool IsProperlyUnderFolder(string inner, string outer)
+        {
+            if (string.IsNullOrEmpty(inner) || string.IsNullOrEmpty(outer))
+            {
+                return false;
+            }
+
+            return inner.Length > outer.Length
+                   && inner.StartsWith(outer, StringComparison.OrdinalIgnoreCase)
+                   && inner[outer.Length] == '/';
+        }
+
+        /// <summary>
         /// True when two Assets/-relative folders are equal or one is an ancestor of the other.
         /// Used to keep the generated atlas output folder disjoint from every rule's source folder:
         /// when they overlap, every source image looks like an "intrusion" and a single confirmation
@@ -254,6 +273,15 @@ namespace CycloneGames.AtlasPipeline.Pure
         /// a mistyped value degrades to a shallower folder instead of an error the artist cannot
         /// act on.
         /// </para>
+        /// <para>
+        /// Folder names are otherwise preserved as the user wrote them, spaces and non-ASCII
+        /// included: the subfolder usually names a folder that already exists under the root, and
+        /// generating into a sanitized twin ("UI Battle" becoming "UI_Battle") would silently
+        /// create a second folder beside the one that was dragged. Only characters that are invalid
+        /// in a path segment on at least one target platform are removed, and Windows's
+        /// ignore-trailing-dots-and-spaces behaviour is neutralized by trimming them per segment —
+        /// otherwise "UI." names one folder on macOS and another on Windows.
+        /// </para>
         /// </summary>
         public static string SanitizeSubfolder(string value)
         {
@@ -263,22 +291,6 @@ namespace CycloneGames.AtlasPipeline.Pure
             }
 
             string[] segments = value.Split(new[] { '/', '\\' }, System.StringSplitOptions.None);
-
-            bool clean = true;
-            for (int i = 0; i < segments.Length; i++)
-            {
-                if (IsDirtySubfolderSegment(segments[i]))
-                {
-                    clean = false;
-                    break;
-                }
-            }
-
-            // Fast path: already a well-formed relative path, and the common case by far.
-            if (clean && value.IndexOf('\\') < 0)
-            {
-                return value;
-            }
 
             var builder = new System.Text.StringBuilder(value.Length);
             for (int i = 0; i < segments.Length; i++)
@@ -292,9 +304,7 @@ namespace CycloneGames.AtlasPipeline.Pure
                     continue;
                 }
 
-                // Not SanitizePart: that maps an unusable value to "Atlas", which would invent a
-                // folder nobody asked for. A segment with nothing usable in it is dropped.
-                string segment = StripUnsafeCharacters(raw);
+                string segment = SanitizeSubfolderSegment(raw);
                 if (segment.Length == 0)
                 {
                     continue;
@@ -311,30 +321,30 @@ namespace CycloneGames.AtlasPipeline.Pure
             return builder.ToString();
         }
 
-        private static bool IsDirtySubfolderSegment(string segment)
+        /// <summary>
+        /// Makes one subfolder segment safe to create on every target platform without renaming the
+        /// folder the user actually made: control characters and the Windows-reserved set
+        /// (<c>: * ? " &lt; &gt; |</c>) are removed, and trailing dots and spaces — which Windows
+        /// silently ignores, so "UI." and "UI" would be the same folder there and different ones
+        /// everywhere else — are trimmed from both ends.
+        /// </summary>
+        private static string SanitizeSubfolderSegment(string segment)
         {
-            if (segment.Length == 0)
-            {
-                // Empty, or a doubled separator, or a leading/trailing separator.
-                return true;
-            }
-
-            // Traversal and self references are never valid in an output subfolder.
-            if (segment == "." || segment == "..")
-            {
-                return true;
-            }
-
+            var builder = new System.Text.StringBuilder(segment.Length);
             for (int i = 0; i < segment.Length; i++)
             {
                 char c = segment[i];
-                if (!char.IsLetterOrDigit(c) && c != '_' && c != '-')
+                if (char.IsControl(c)
+                    || c == ':' || c == '*' || c == '?' || c == '"'
+                    || c == '<' || c == '>' || c == '|')
                 {
-                    return true;
+                    continue;
                 }
+
+                builder.Append(c);
             }
 
-            return segment[0] == '_' || segment[segment.Length - 1] == '_';
+            return builder.ToString().Trim(' ', '.');
         }
     }
 }

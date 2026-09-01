@@ -12,9 +12,13 @@ namespace CycloneGames.AtlasPipeline.Tests
     [TestFixture]
     public sealed class AtlasIndexTests
     {
+        // Content-hash goldens recorded after ComputeContentHash gained the global-fingerprint
+        // input: padding, rotation/dilation defaults, tight packing and block offset feed every
+        // packed result, and leaving them out let the regeneration skip fire after a global
+        // settings edit. A deliberate algorithm change, not drift.
         private const long ExpectedPathHash = -1078049228056889214L;
-        private const long ExpectedContentHash1234 = 6919136938327397330L;
-        private const long ExpectedContentHash5678 = 1650714209338961032L;
+        private const long ExpectedContentHash1234x777 = -6770390847638341131L;
+        private const long ExpectedContentHash5678x777 = 7353532761110073307L;
 
         private static readonly string[] Members =
         {
@@ -54,14 +58,26 @@ namespace CycloneGames.AtlasPipeline.Tests
         }
 
         [Test]
-        public void ContentHash_IncludesTheRuleFingerprint()
+        public void ContentHash_IncludesTheRuleAndGlobalFingerprints()
         {
             AtlasBucket bucket = BuildForward().GetBuckets()[0];
-            Assert.AreEqual(ExpectedContentHash1234, bucket.ComputeContentHash(1234));
-            Assert.AreEqual(ExpectedContentHash5678, bucket.ComputeContentHash(5678));
+            Assert.AreEqual(
+                ExpectedContentHash1234x777,
+                bucket.ComputeContentHash(1234, 777));
+            Assert.AreEqual(
+                ExpectedContentHash5678x777,
+                bucket.ComputeContentHash(5678, 777));
             Assert.AreNotEqual(
-                bucket.ComputeContentHash(1234),
-                bucket.ComputeContentHash(5678));
+                bucket.ComputeContentHash(1234, 777),
+                bucket.ComputeContentHash(5678, 777));
+
+            // The global fingerprint is a first-class input: padding, rotation and dilation
+            // defaults, tight packing and block offset all change the packed result for every
+            // atlas. Leaving it out let the regeneration skip fire after a global settings edit —
+            // the change was marked dirty, then skipped anyway.
+            Assert.AreNotEqual(
+                bucket.ComputeContentHash(1234, 777),
+                bucket.ComputeContentHash(1234, 778));
         }
 
         [Test]
@@ -201,7 +217,7 @@ namespace CycloneGames.AtlasPipeline.Tests
             AtlasBucket bucket = index.GetBuckets()[0];
 
             long before = bucket.GetPathHash();
-            long contentBefore = bucket.ComputeContentHash(1234);
+            long contentBefore = bucket.ComputeContentHash(1234, 777);
 
             index.Add("Assets/UI/newly_added.png", "UI", markDirty: false);
             AtlasBucket after = index.GetBuckets()[0];
@@ -209,7 +225,7 @@ namespace CycloneGames.AtlasPipeline.Tests
             Assert.AreNotEqual(before, after.GetPathHash(), "membership must move the fingerprint");
             Assert.AreNotEqual(
                 contentBefore,
-                after.ComputeContentHash(1234),
+                after.ComputeContentHash(1234, 777),
                 "and the content hash the manifest records, which is what drift compares");
             Assert.AreEqual(Members.Length + 1, after.Count);
         }

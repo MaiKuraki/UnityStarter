@@ -157,18 +157,33 @@ namespace CycloneGames.AtlasPipeline.Pure
         /// without loading a single sprite, which is what makes an incremental pass over tens of
         /// thousands of assets cheap.
         /// </summary>
-        public long ComputeContentHash(int ruleFingerprint)
+        /// <param name="ruleFingerprint">The owning rule's packing configuration.</param>
+        /// <param name="globalFingerprint">
+        /// The project-wide settings that also feed packing: padding, rotation and dilation
+        /// defaults, tight packing, block offset, include-in-build, output folder.
+        /// Required, not optional: these change the packed result for every atlas, and a fingerprint
+        /// that leaves them out lets the regeneration skip fire after a global settings edit — the
+        /// change is marked dirty, then skipped anyway, and the stale packing ships silently.
+        /// </param>
+        public long ComputeContentHash(int ruleFingerprint, int globalFingerprint)
         {
             long hash = GetPathHash();
             AtlasHash.AppendFnv1a64(ref hash, '\u001E');
 
-            uint bits = (uint)ruleFingerprint;
+            AppendInt(ref hash, ruleFingerprint);
+            AtlasHash.AppendFnv1a64(ref hash, '\u001D');
+            AppendInt(ref hash, globalFingerprint);
+
+            return hash;
+        }
+
+        private static void AppendInt(ref long hash, int value)
+        {
+            uint bits = (uint)value;
             for (int shift = 0; shift < 32; shift += 8)
             {
                 AtlasHash.AppendFnv1a64(ref hash, (char)((bits >> shift) & 0xFFu));
             }
-
-            return hash;
         }
 
         private void EnsureOrdered()

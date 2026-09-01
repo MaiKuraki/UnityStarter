@@ -270,6 +270,77 @@ namespace CycloneGames.AtlasPipeline.Tests
         }
 
         /// <summary>
+        /// The index is what separates a required page from a leftover: both strip to the same base
+        /// key, so a sweep that only knows the base key can never clean up after an atlas that
+        /// shrank. Parsing must therefore accept exactly the shapes stripping accepts, and reject
+        /// everything else for the same reason.
+        /// </summary>
+        [Test]
+        public void TryGetPageIndex_ParsesRealPageSuffixesOnly()
+        {
+            Assert.IsTrue(AtlasCapacityPlanner.TryGetPageIndex(
+                "ui__p000", out string baseKey, out int pageIndex));
+            Assert.AreEqual("ui", baseKey);
+            Assert.AreEqual(0, pageIndex);
+
+            Assert.IsTrue(AtlasCapacityPlanner.TryGetPageIndex(
+                "ui__p042", out baseKey, out pageIndex));
+            Assert.AreEqual("ui", baseKey);
+            Assert.AreEqual(42, pageIndex);
+
+            Assert.IsTrue(AtlasCapacityPlanner.TryGetPageIndex(
+                "ui__p1000", out baseKey, out pageIndex));
+            Assert.AreEqual("ui", baseKey);
+            Assert.AreEqual(1000, pageIndex);
+        }
+
+        [TestCase("ui")]
+        [TestCase("ui__p")]
+        [TestCase("ui__px")]
+        [TestCase("ui__p0x")]
+        [TestCase("ui__p")]
+        [TestCase("")]
+        [TestCase(null)]
+        public void TryGetPageIndex_RejectsNonPageKeys(string value)
+        {
+            Assert.IsFalse(AtlasCapacityPlanner.TryGetPageIndex(
+                value, out string baseKey, out int pageIndex));
+            Assert.AreEqual(-1, pageIndex, "the index must not look valid on a rejection");
+        }
+
+        /// <summary>
+        /// Locks the property the sweep depends on: stripping and index parsing agree on what a page
+        /// is. If they ever disagreed, a page would be cleanable by one and protected by the other.
+        /// </summary>
+        [Test]
+        public void TryGetPageIndex_AndStripPageSuffix_AgreeOnPageKeys()
+        {
+            var keys = new[]
+            {
+                "ui__p000", "ui__p007", "ui__p999", "battle__p012",
+                "ui", "ui__p", "ui__px", "ui__p1x",
+            };
+
+            foreach (string key in keys)
+            {
+                bool parses = AtlasCapacityPlanner.TryGetPageIndex(key, out string baseKey, out _);
+                bool strips = !string.Equals(
+                    AtlasCapacityPlanner.StripPageSuffix(key),
+                    key,
+                    System.StringComparison.Ordinal);
+
+                Assert.AreEqual(strips, parses, $"disagreement on '{key}'");
+                if (parses)
+                {
+                    Assert.AreEqual(
+                        AtlasCapacityPlanner.StripPageSuffix(key),
+                        baseKey,
+                        $"base key mismatch on '{key}'");
+                }
+            }
+        }
+
+        /// <summary>
         /// A rule group can legitimately contain the "__p" spelling. Stripping must not turn such a
         /// key into a page of some other atlas.
         /// </summary>
