@@ -31,17 +31,13 @@ namespace Build.Pipeline.Editor.Integrations.AtlasPipeline
             BuildExecutionContext context,
             BuildStepInvocation invocation)
         {
-            // Warnings are logged rather than returned: they mark costly-but-legitimate choices, such
-            // as a pixel-art atlas that must stay uncompressed, and must not fail the build.
-            var warnings = new List<string>();
+            // Advisory findings (orphans, rules that matched nothing, capacity advice) are logged by
+            // RunForBuild in Execute, which owns the build-path log — logging them here as well would
+            // put every advisory line twice into the CI log on the happy path. If validation fails
+            // here the build dies on the blockers below before Execute ever runs, and the advisories
+            // stay out of the log; that is the accepted trade for exactly-once advisory logging.
             IReadOnlyList<string> errors =
-                AtlasPipelineApi.ValidateForBuild(includeNameScan: true, warnings: warnings);
-
-            for (int i = 0; i < warnings.Count; i++)
-            {
-                UnityEngine.Debug.LogWarning(
-                    "[CycloneGames Atlas Pipeline] " + warnings[i]);
-            }
+                AtlasPipelineApi.ValidateForBuild(includeNameScan: true);
 
             return errors;
         }
