@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.event-bus",
   "version": "1.0.0",
   "displayName": "CycloneGames.EventBus",
-  "description": "Lightweight, allocation-conscious event bus and in-process command publisher for Unity, with optional R3, VitalRouter and CycloneGames.Logging integrations.",
+  "description": "Zero-allocation event bus for Unity: single-thread-confined dispatch, tombstone compaction with pooled subscription handles, a bounded lock-free MPSC ring for cross-thread producers, and preallocated event streams. Optional R3, UniTask, VitalRouter and CycloneGames.Logging adapters.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},
@@ -11,7 +11,10 @@
     "EventBus",
     "PubSub",
     "Command",
-    "Messaging"
+    "Messaging",
+    "ZeroAllocation",
+    "LockFree",
+    "Performance"
   ],
   "author": {
     "name": "CycloneGames",
