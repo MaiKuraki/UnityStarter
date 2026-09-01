@@ -37,6 +37,7 @@ namespace CycloneGames.AtlasPipeline
         private bool _showRules = true;
         private bool _showPacking = true;
         private bool _showValidation = true;
+        private bool _showManifest = true;
         private bool _showExclusions = false;
         private string _feedbackTitle = string.Empty;
         private string _feedbackMessage = string.Empty;
@@ -73,6 +74,27 @@ namespace CycloneGames.AtlasPipeline
         private float _introHeight;
 
         private IReadOnlyList<string> _cachedValidationErrors = new List<string>();
+
+        /// <summary>
+        /// Non-blocking findings from the last validation pass: rule audit orphans, rules that
+        /// matched no assets, nested output folders, capacity advice. They do not fail the build, but
+        /// they were invisible in this window for exactly that reason — a warning nobody sees is a
+        /// warning nobody acts on.
+        /// </summary>
+        private IReadOnlyList<string> _cachedValidationWarnings = new List<string>();
+
+        /// <summary>
+        /// Findings from comparing the committed manifest against the project, cached alongside the
+        /// validation pass. CI fails on this; the window is where it gets fixed before the push.
+        /// </summary>
+        private IReadOnlyList<string> _cachedManifestDrift = new List<string>();
+
+        /// <summary>
+        /// Whether a committed manifest exists, cached with the drift pass. A missing manifest is the
+        /// normal state of a fresh clone and is reported differently from real drift.
+        /// </summary>
+        private bool _cachedManifestMissing;
+
         private bool _validationCacheDirty = true;
         [MenuItem("Tools/CycloneGames/Atlas Pipeline/Open Atlas Pipeline")]
         public static void ShowWindow()
@@ -94,6 +116,9 @@ namespace CycloneGames.AtlasPipeline
             // The collector probe is cached per (window lifetime, output folder); a project change
             // re-probes so editing the YooAsset collector config is picked up without reopening.
             _collectorProbeDone = false;
+
+            // UI-only reaction. The pipeline's own refresh lives in AtlasPipeline at domain level,
+            // so it no longer depends on this window being open.
             EditorApplication.projectChanged += OnProjectChanged;
 
             // Force index initialization in OnEnable so the first OnGUI frame does not stall on a
@@ -107,12 +132,14 @@ namespace CycloneGames.AtlasPipeline
             SaveSettingsAsset();
         }
 
+        /// <summary>
+        /// Window-local reaction to a project change. The pipeline's own refresh (rescan, dirty
+        /// marking, incremental generation) is subscribed at domain level in
+        /// <see cref="AtlasPipeline"/>, so it keeps working while this window is closed — it used to
+        /// live here, which meant art pulled while the window was shut was never indexed at all.
+        /// </summary>
         private void OnProjectChanged()
         {
-            // Route through HandleProjectChanged: projectChanged raised by this tool's own batch
-            // operations is skipped (the source of the full-rescan feedback loop), while external
-            // changes are coalesced through delayCall into a single rescan.
-            AtlasPipeline.HandleProjectChanged();
             _validationCacheDirty = true;
             _collectorProbeDone = false;
 
@@ -509,7 +536,7 @@ namespace CycloneGames.AtlasPipeline
 
                 foreach (string collectedPath in EnumerateYooCollectPaths(settingPath))
                 {
-                    if (FoldersOverlap(outputFolder, collectedPath))
+                    if (AtlasPathUtility.PathsOverlap(outputFolder, collectedPath))
                     {
                         return collectedPath;
                     }
@@ -553,41 +580,47 @@ namespace CycloneGames.AtlasPipeline
             }
         }
 
-        private static bool FoldersOverlap(string left, string right)
-        {
-            left = AtlasPathUtility.NormalizeAndTrim(left);
-            right = AtlasPathUtility.NormalizeAndTrim(right);
-            if (left.Length == 0 || right.Length == 0)
-            {
-                return false;
-            }
-
-            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
-                   || AtlasPathUtility.IsUnderFolder(left + "/_", right)
-                   || AtlasPathUtility.IsUnderFolder(right + "/_", left);
-        }
-
         private void DrawValidation()
         {
             // Cache the validation result: ValidateForBuild runs RefreshRuleOrder (List.Sort) and a
             // full file-name scan, and calling it every OnGUI frame would drop frames in the window
             // itself. The criteria are unified with includeNameScan: true to match the build step,
             // fixing the previous inconsistency where the window showed READY while the build failed.
+            // The manifest drift check rides the same cache cycle: it answers a structural question
+            // (no source bytes are read), and CI fails the build on it, so the window has to show it.
             if (_validationCacheDirty)
             {
-                _cachedValidationErrors =
-                    AtlasPipeline.ValidateForBuild(includeNameScan: true);
+                var advisory = new List<string>();
+                _cachedValidationErrors = AtlasPipeline.ValidateForBuild(
+                    includeNameScan: true,
+                    warnings: advisory);
+                _cachedValidationWarnings = advisory;
+                _cachedManifestDrift = AtlasPipeline.ValidateManifestDrift();
+                _cachedManifestMissing = AtlasPipeline.ReadManifest() == null;
                 _validationCacheDirty = false;
             }
 
             IReadOnlyList<string> errors = _cachedValidationErrors;
+            IReadOnlyList<string> warnings = _cachedValidationWarnings;
             bool valid = errors.Count == 0;
+
             _showValidation = AtlasInspectorUiUtility.DrawFoldoutHeader(
                 "Build Validation",
                 _showValidation,
-                valid ? AtlasInspectorUiUtility.SuccessColor : AtlasInspectorUiUtility.WarningColor,
-                valid ? "READY" : _issueBadge.Get(errors.Count),
-                valid ? AtlasInspectorUiUtility.SuccessColor : AtlasInspectorUiUtility.WarningColor);
+                errors.Count > 0
+                    ? AtlasInspectorUiUtility.WarningColor
+                    : AtlasInspectorUiUtility.SuccessColor,
+                errors.Count > 0
+                    ? _issueBadge.Get(errors.Count)
+                    : warnings.Count > 0
+                        ? _warningBadge.Get(warnings.Count)
+                        : "READY",
+                errors.Count > 0
+                    ? AtlasInspectorUiUtility.WarningColor
+                    : warnings.Count > 0
+                        ? AtlasInspectorUiUtility.WarningColor
+                        : AtlasInspectorUiUtility.SuccessColor);
+
             if (!_showValidation)
             {
                 return;
@@ -595,15 +628,111 @@ namespace CycloneGames.AtlasPipeline
 
             AtlasInspectorUiUtility.BeginPanel();
             AtlasInspectorUiUtility.DrawStatusRow(
-                "Validation",
-                valid ? "Passed" : errors.Count + (errors.Count == 1 ? " issue" : " issues"),
-                valid ? AtlasInspectorUiUtility.SuccessColor : AtlasInspectorUiUtility.WarningColor);
+                "Blocking",
+                errors.Count == 0
+                    ? "None"
+                    : errors.Count + (errors.Count == 1 ? " issue" : " issues"),
+                errors.Count == 0
+                    ? AtlasInspectorUiUtility.SuccessColor
+                    : AtlasInspectorUiUtility.WarningColor);
+            AtlasInspectorUiUtility.DrawStatusRow(
+                "Advisory",
+                warnings.Count == 0
+                    ? "None"
+                    : warnings.Count + (warnings.Count == 1 ? " note" : " notes"),
+                warnings.Count == 0
+                    ? AtlasInspectorUiUtility.SuccessColor
+                    : AtlasInspectorUiUtility.WarningColor);
 
-            if (!valid)
+            // Severity split: blocking findings fail the build, advisory ones do not. They used to
+            // share one flat list rendered as warnings, which made an advisory note look exactly
+            // like the thing that was about to fail the build.
+            for (int i = 0; i < errors.Count; i++)
             {
-                for (int i = 0; i < errors.Count; i++)
+                EditorGUILayout.HelpBox(errors[i], MessageType.Error);
+            }
+
+            for (int i = 0; i < warnings.Count; i++)
+            {
+                EditorGUILayout.HelpBox(warnings[i], MessageType.Warning);
+            }
+
+            AtlasInspectorUiUtility.EndPanel();
+            EditorGUILayout.Space(4f);
+
+            DrawManifestPanel();
+        }
+
+        /// <summary>
+        /// The committed manifest is the only record CI has of what the atlases should contain, so
+        /// drift between it and the project is what makes the validate-only build step fail. Showing
+        /// it here — with a one-click fix — is what closes the "art changed, nobody regenerated"
+        /// loop at the moment the work happens instead of on the build agent.
+        /// </summary>
+        private void DrawManifestPanel()
+        {
+            IReadOnlyList<string> drift = _cachedManifestDrift;
+
+            // Cached with the drift pass, not read here: this method runs every OnGUI frame, and a
+            // file read per frame is exactly the kind of thing the validation cache exists to avoid.
+            bool manifestMissing = _cachedManifestMissing;
+
+            _showManifest = AtlasInspectorUiUtility.DrawFoldoutHeader(
+                "Atlas Manifest",
+                _showManifest,
+                drift.Count == 0
+                    ? AtlasInspectorUiUtility.SuccessColor
+                    : AtlasInspectorUiUtility.WarningColor,
+                drift.Count == 0
+                    ? "UP TO DATE"
+                    : _driftBadge.Get(drift.Count),
+                AtlasInspectorUiUtility.WarningColor);
+
+            if (!_showManifest)
+            {
+                return;
+            }
+
+            AtlasInspectorUiUtility.BeginPanel();
+
+            if (drift.Count == 0)
+            {
+                AtlasInspectorUiUtility.DrawStatusRow(
+                    "Manifest",
+                    "Matches the current project",
+                    AtlasInspectorUiUtility.SuccessColor);
+            }
+            else
+            {
+                AtlasInspectorUiUtility.DrawStatusRow(
+                    "Drift",
+                    manifestMissing
+                        ? "No manifest yet"
+                        : drift.Count + (drift.Count == 1 ? " finding" : " findings"),
+                    AtlasInspectorUiUtility.WarningColor);
+
+                for (int i = 0; i < drift.Count; i++)
                 {
-                    EditorGUILayout.HelpBox(errors[i], MessageType.Warning);
+                    EditorGUILayout.HelpBox(drift[i], MessageType.Warning);
+                }
+
+                // Missing is the normal state of a fresh clone — regeneration creates it — while
+                // real drift means the committed baseline no longer describes the project.
+                EditorGUILayout.HelpBox(
+                    manifestMissing
+                        ? "No manifest has been written yet. It is created by a complete, "
+                          + "error-free generation pass and committed so CI can verify staleness."
+                        : "Regenerate the atlases and the manifest is rewritten to match.",
+                    MessageType.Info);
+
+                if (GUILayout.Button("Regenerate & Update Manifest"))
+                {
+                    AtlasPipeline.ProcessAllDirtyAtlases();
+                    _validationCacheDirty = true;
+                    SetFeedback(
+                        "Manifest",
+                        "All atlases were regenerated (unchanged ones skipped) and the manifest "
+                        + "was rewritten to match the project.");
                 }
             }
 
@@ -802,6 +931,8 @@ namespace CycloneGames.AtlasPipeline
         private readonly UiCountText _folderBadge = new UiCountText("FOLDER", "FOLDERS");
         private readonly UiCountText _ruleBadge = new UiCountText("RULE", "RULES");
         private readonly UiCountText _issueBadge = new UiCountText("ISSUE", "ISSUES");
+        private readonly UiCountText _warningBadge = new UiCountText("WARNING", "WARNINGS");
+        private readonly UiCountText _driftBadge = new UiCountText("FINDING", "FINDINGS");
 
         private readonly Dictionary<AtlasRuleAsset, RuleView> _ruleViews =
             new Dictionary<AtlasRuleAsset, RuleView>();
@@ -961,12 +1092,7 @@ namespace CycloneGames.AtlasPipeline
             // Which package this rule ships in. Kept above the foldout rather than among the
             // advanced settings: it is a distribution decision, and a project splitting atlases
             // across asset packages needs it visible on every rule at a glance.
-            DrawSinglePropertyField(
-                ref rect,
-                line,
-                spacing,
-                view.OutputSubfolder,
-                AtlasPipelineUi.OutputSubfolder);
+            DrawOutputSubfolderField(ref rect, line, spacing, view.OutputSubfolder);
 
             bool expanded = _expandedRules.Contains(index);
             DrawAdvancedFoldout(
@@ -1270,6 +1396,113 @@ namespace CycloneGames.AtlasPipeline
                 property,
                 label);
             NextLine(ref rect, line, spacing);
+        }
+
+        /// <summary>
+        /// Draws the per-rule output subfolder as a folder drag target plus the resolved relative
+        /// path. The stored value stays a path relative to the shared output root: an absolute folder
+        /// reference would let a rule point outside the one output root the global exclusion test and
+        /// the orphan sweep are built on, so the picker converts rather than stores.
+        /// </summary>
+        /// <remarks>
+        /// The trailing label is what makes a not-yet-created folder survivable: generation creates
+        /// output folders on demand, so a freshly typed subfolder has no asset to show in the object
+        /// field, and without the label the value would look empty while it is not.
+        /// </remarks>
+        private void DrawOutputSubfolderField(
+            ref Rect rect,
+            float line,
+            float spacing,
+            SerializedProperty property)
+        {
+            string outputRoot = AtlasPipeline.Settings != null
+                ? AtlasPipeline.Settings.NormalizedOutputAtlasFolder
+                : string.Empty;
+            string subfolder = property.stringValue ?? string.Empty;
+
+            float fieldWidth = Mathf.Max(120f, rect.width * 0.6f);
+            var fieldRect = new Rect(rect.x, rect.y, fieldWidth, line);
+            var labelRect = new Rect(
+                rect.x + fieldWidth + 4f,
+                rect.y,
+                Mathf.Max(0f, rect.width - fieldWidth - 4f),
+                line);
+
+            var current = string.IsNullOrEmpty(outputRoot)
+                ? null
+                : AssetDatabase.LoadAssetAtPath<DefaultAsset>(
+                    string.IsNullOrEmpty(subfolder)
+                        ? outputRoot
+                        : outputRoot + "/" + subfolder);
+
+            EditorGUI.BeginChangeCheck();
+            UnityEngine.Object picked = EditorGUI.ObjectField(
+                fieldRect,
+                AtlasPipelineUi.OutputSubfolder,
+                current,
+                typeof(DefaultAsset),
+                false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                ApplyPickedOutputFolder(property, picked, outputRoot);
+            }
+
+            EditorGUI.LabelField(
+                labelRect,
+                new GUIContent(
+                    string.IsNullOrEmpty(subfolder) ? "(output root)" : subfolder,
+                    AtlasPipelineUi.OutputSubfolder.tooltip));
+
+            NextLine(ref rect, line, spacing);
+        }
+
+        /// <summary>
+        /// Converts a dropped folder into a subfolder path relative to the output root. Rejections
+        /// keep the previous value and explain themselves on the window, because a silent revert
+        /// looks exactly like a bug.
+        /// </summary>
+        private void ApplyPickedOutputFolder(
+            SerializedProperty property,
+            UnityEngine.Object picked,
+            string outputRoot)
+        {
+            if (picked == null)
+            {
+                // Cleared: back to writing into the shared root.
+                property.stringValue = string.Empty;
+                return;
+            }
+
+            string path = AtlasPathUtility.Normalize(AssetDatabase.GetAssetPath(picked));
+
+            if (!AssetDatabase.IsValidFolder(path))
+            {
+                ShowNotification(new GUIContent("Drop a folder, not a file."), 3f);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(outputRoot))
+            {
+                ShowNotification(new GUIContent("Set the default output folder first."), 3f);
+                return;
+            }
+
+            bool isRootItself = string.Equals(path, outputRoot, StringComparison.OrdinalIgnoreCase);
+            if (!isRootItself && !AtlasPathUtility.IsUnderFolder(path, outputRoot))
+            {
+                // The default two-second toast is easy to miss mid-drag, and this rejection is the
+                // one place a developer learns the output-root invariant — so state the constraint
+                // AND the way out, and hold it on screen longer.
+                ShowNotification(new GUIContent(
+                    "Output subfolders must be inside '" + outputRoot
+                    + "'. Create or pick a subfolder of it, or drop the root itself to write "
+                    + "to the root."), 4f);
+                return;
+            }
+
+            property.stringValue = isRootItself
+                ? string.Empty
+                : AtlasPathUtility.SanitizeSubfolder(path.Substring(outputRoot.Length + 1));
         }
 
         private static void DrawMaxTextureSizePopup(

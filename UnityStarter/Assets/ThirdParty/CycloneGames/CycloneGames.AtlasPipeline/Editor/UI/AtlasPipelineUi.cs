@@ -61,8 +61,12 @@ namespace CycloneGames.AtlasPipeline
             + "files (key__p000, key__p001, ...). Atlases that already fit keep their "
             + "exact current file name, so enabling this changes no existing output.");
 
-        public static readonly GUIContent OutputAtlasFolder =
-            new GUIContent("Output Atlas Folder");
+        public static readonly GUIContent OutputAtlasFolder = new GUIContent(
+            "Default Output Folder",
+            "The root every atlas is written under. Rules without an Output Subfolder "
+            + "write here directly; a rule with one writes to this folder plus its "
+            + "subfolder. The whole tree is ignored as a rule source — the pipeline's "
+            + "output can never feed back into its input.");
 
         // ── Packing panel ───────────────────────────────────────────────────────
 
@@ -103,10 +107,12 @@ namespace CycloneGames.AtlasPipeline
 
         public static readonly GUIContent OutputSubfolder = new GUIContent(
             "Output Subfolder",
-            "Where this rule's atlases are written, relative to the project-wide output "
-            + "folder. Leave empty for the output folder itself. Rules that name the same "
-            + "subfolder share one package, which is how a project splits its atlases "
-            + "across asset packages for hot update.");
+            "Drag a folder here: this rule's atlases are written under the default "
+            + "output folder, inside the folder you drop. Leave empty (or drop the root "
+            + "itself) to write to the root. Rules that name the same subfolder share "
+            + "one package, which is how a project splits its atlases across asset "
+            + "packages for hot update. The value is stored relative to the output root, "
+            + "so a rule can never write outside it.");
 
         public static readonly GUIContent SpriteMode = new GUIContent("Sprite Mode");
         public static readonly GUIContent PixelsPerUnit = new GUIContent("Pixels Per Unit");
