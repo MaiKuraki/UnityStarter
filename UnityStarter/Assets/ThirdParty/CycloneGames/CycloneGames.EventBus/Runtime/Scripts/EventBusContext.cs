@@ -111,12 +111,24 @@ namespace CycloneGames.EventBus.Runtime
             int subscriptionCount = 0;
             int tombstoneCount = 0;
             long publishCount = 0;
+            long droppedReentrantCount = 0;
+            long subscriberErrorCount = 0;
+            int peakSubscriptionCount = 0;
             foreach (KeyValuePair<Type, IEventBusDiagnostics> entry in _buses)
             {
                 EventBusSnapshot snapshot = entry.Value.GetSnapshot();
                 subscriptionCount += snapshot.SubscriptionCount;
                 tombstoneCount += snapshot.TombstoneCount;
                 publishCount += snapshot.PublishCount;
+                droppedReentrantCount += snapshot.DroppedReentrantCount;
+                subscriberErrorCount += snapshot.SubscriberErrorCount;
+
+                // Peak is a max, not a sum: summing it would report a number no bus ever reached and
+                // would overstate the capacity a host should reserve.
+                if (snapshot.PeakSubscriptionCount > peakSubscriptionCount)
+                {
+                    peakSubscriptionCount = snapshot.PeakSubscriptionCount;
+                }
             }
 
             return new EventBusDiagnosticsSnapshot(
@@ -124,7 +136,10 @@ namespace CycloneGames.EventBus.Runtime
                 _scopes.Count + 1,
                 subscriptionCount,
                 tombstoneCount,
-                publishCount);
+                publishCount,
+                droppedReentrantCount,
+                subscriberErrorCount,
+                peakSubscriptionCount);
         }
 
         /// <summary>Copies the registered bus type names and per-bus snapshots for tooling.</summary>

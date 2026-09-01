@@ -1,0 +1,29 @@
+{
+    "name": "CycloneGames.EventBus.Tests.Integrations",
+    "rootNamespace": "CycloneGames.EventBus.Tests.Integrations",
+    "references": [
+        "CycloneGames.EventBus.Core",
+        "CycloneGames.EventBus.Runtime.Integrations.R3",
+        "CycloneGames.EventBus.Runtime.Integrations.UniTask",
+        "R3.Unity",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "R3.dll",
+        "Microsoft.Bcl.TimeProvider.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

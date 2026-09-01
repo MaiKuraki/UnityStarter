@@ -14,6 +14,11 @@ namespace CycloneGames.EventBus.Runtime.Integrations.R3
         /// <summary>
         /// Exposes a bus as an observable. Every publish is forwarded to subscribed observers;
         /// disposing the observable subscription unsubscribes from the bus.
+        ///
+        /// The forwarding delegate is allocated once per observable subscription, not per event, so
+        /// this stays on the cold path. The per-event cost is one extra delegate hop between the bus
+        /// and the observer; if a listener is pure gameplay logic, subscribe to the bus directly and
+        /// skip R3 entirely.
         /// </summary>
         public static Observable<T> ToObservable<T>(this EventBus<T> bus) where T : struct
         {
@@ -22,11 +27,7 @@ namespace CycloneGames.EventBus.Runtime.Integrations.R3
                 throw new ArgumentNullException(nameof(bus));
             }
 
-            return Observable.Create<T>(observer =>
-            {
-                IEventSubscription subscription = bus.Subscribe(evt => observer.OnNext(evt));
-                return subscription;
-            });
+            return Observable.Create<T>(observer => bus.Subscribe(evt => observer.OnNext(evt)));
         }
 
         /// <summary>
@@ -46,7 +47,10 @@ namespace CycloneGames.EventBus.Runtime.Integrations.R3
             }
 
             IDisposable sourceSubscription = source.Subscribe(evt => bus.Publish(evt));
-            return new EventSubscription(sourceSubscription.Dispose);
+
+            // The handle is a plain teardown wrapper, not a pooled bus handle: the thing being
+            // released is an R3 subscription, and the bus has no handler to remove.
+            return new CallbackSubscription(sourceSubscription.Dispose);
         }
     }
 }

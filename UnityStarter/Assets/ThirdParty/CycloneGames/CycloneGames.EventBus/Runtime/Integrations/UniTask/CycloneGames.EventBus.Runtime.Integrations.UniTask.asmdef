@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.EventBus.Runtime.Integrations.UniTask",
+    "rootNamespace": "CycloneGames.EventBus.Runtime.Integrations.UniTask",
+    "references": [
+        "CycloneGames.EventBus.Core",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
