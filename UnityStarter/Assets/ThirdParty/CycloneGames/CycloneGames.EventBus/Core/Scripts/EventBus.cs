@@ -1,25 +1,51 @@
 using System;
-using System.Text;
+using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
     /// Zero-allocation one-to-many notification bus. This is the hot path: <see cref="Publish"/> is
-    /// synchronous, deterministic, and performs no managed allocation, no LINQ, no closure, no
-    /// string, and no logging.
+    /// synchronous, deterministic, and performs no managed allocation, no boxing, no LINQ, no
+    /// closure, no string formatting and no logging on the dispatch path.
     ///
-    /// Thread model: single-thread-confined. Subscribe, Unsubscribe, Publish, Compact, and Dispose
-    /// must all run on one owner thread (Unity main thread). Confinement is the safety guarantee and
-    /// the precondition for zero allocation, so <see cref="Publish"/> takes no lock.
+    /// Thread model: single-thread-confined. Subscribe, Unsubscribe, Publish, Compact, Clear and
+    /// Dispose must all run on one owner thread (in Unity, the main thread). Confinement is the
+    /// safety guarantee and the precondition for zero allocation, so <see cref="Publish"/> takes no
+    /// lock. To cross a thread boundary, publish into an <see cref="MpscEventQueue{T}"/> from the
+    /// background and drain it into this bus on the owner thread.
+    ///
+    /// Ordering: handlers run in subscription order, on every platform and every scripting backend.
+    /// There is no priority, no reordering and no async completion, so a publish is a fully
+    /// deterministic call tree that can be reasoned about and profiled frame by frame.
     ///
     /// Structural changes during dispatch:
-    /// - A handler subscribed during Publish never fires this round (it appends beyond the count
-    ///   snapshot; tombstone reuse is suppressed while dispatch is in progress).
-    /// - A handler unsubscribed during Publish is skipped once its slot is observed as null.
+    /// - A handler subscribed during Publish never fires in that round: it lands at or beyond the
+    ///   slot-count snapshot the loop captured on entry.
+    /// - A handler unsubscribed during Publish is skipped from the moment its slot reads null, so a
+    ///   handler that removes a later handler suppresses it within the same round.
+    /// - Compaction never runs mid-dispatch. An unsubscribe during dispatch marks the bus and the
+    ///   outermost dispatch frame performs a single in-place compaction on exit.
     /// </summary>
     public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics where T : struct
     {
+        /// <summary>Storage reserved when no explicit capacity is supplied.</summary>
         private const int DefaultCapacity = 8;
+
+        /// <summary>
+        /// Compact once tombstones reach this absolute count, regardless of how many subscriptions
+        /// are live. Keeps small buses from carrying tombstones indefinitely.
+        /// </summary>
+        private const int CompactAbsoluteThreshold = 16;
+
+        /// <summary>Compact once tombstones make up at least 1/N of the occupied slots.</summary>
+        private const int CompactRatio = 3;
+
+        /// <summary>
+        /// Upper bound on retained subscription handles. Bounding the pool keeps a churn-heavy bus
+        /// from pinning an unbounded number of handles; surplus handles are simply collected.
+        /// </summary>
+        private const int HandlePoolLimit = 32;
 
         private readonly int _maxDispatchDepth;
         private readonly string _category;
@@ -30,22 +56,35 @@ namespace CycloneGames.EventBus.Core
         private int _slots;
         private int _tombstones;
         private int _dispatchDepth;
+        private bool _compactPending;
+        private bool _disposed;
+
+        private EventSubscription<T>[] _handlePool;
+        private int _handlePoolCount;
+
         private long _publishCount;
         private long _droppedReentrantCount;
-        private bool _disposed;
+        private long _subscriberErrorCount;
+        private int _peakSubscriptionCount;
 
         public EventBus(EventBusConfiguration configuration = null)
             : this(configuration, DefaultCapacity)
         {
         }
 
+        /// <param name="configuration">Immutable composition choices; <c>null</c> selects defaults.</param>
+        /// <param name="initialCapacity">
+        /// Slots to reserve up front. Sizing this to the expected steady-state subscriber count
+        /// avoids every array growth on the subscribe path and removes a GC spike from warm-up.
+        /// </param>
         public EventBus(EventBusConfiguration configuration, int initialCapacity)
         {
-            configuration ??= EventBusConfiguration.Default;
             if (initialCapacity <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             }
+
+            configuration ??= EventBusConfiguration.Default;
 
             _maxDispatchDepth = configuration.MaxDispatchDepth;
             _logSink = configuration.LogSink ?? NullEventBusLogSink.Instance;
@@ -54,17 +93,44 @@ namespace CycloneGames.EventBus.Core
             _handlers = new Action<T>[initialCapacity];
         }
 
+        /// <summary>Live subscribers. O(1).</summary>
         public int SubscriptionCount => _slots - _tombstones;
 
+        /// <summary>
+        /// Dead slots left by unsubscribe. Compaction is automatic, so a value above zero is normal
+        /// and small; a value that keeps climbing means subscribers are being removed faster than
+        /// the threshold triggers, which is a signal to use an activity flag instead of churn.
+        /// </summary>
         public int TombstoneCount => _tombstones;
 
+        /// <summary>Total successful dispatch entries since construction.</summary>
         public long PublishCount => _publishCount;
+
+        /// <summary>Publishes rejected because <see cref="DispatchDepth"/> hit the configured limit.</summary>
+        public long DroppedReentrantCount => _droppedReentrantCount;
+
+        /// <summary>Subscriber exceptions handled according to the configured policy.</summary>
+        public long SubscriberErrorCount => _subscriberErrorCount;
+
+        /// <summary>Highest live subscriber count observed. Use it to size <c>initialCapacity</c>.</summary>
+        public int PeakSubscriptionCount => _peakSubscriptionCount;
+
+        /// <summary>Current dispatch nesting depth; zero when idle.</summary>
+        public int DispatchDepth => _dispatchDepth;
+
+        /// <summary>Backing array length. Grows only on subscribe, never shrinks.</summary>
+        public int Capacity => _handlers.Length;
 
         public bool IsDisposed => _disposed;
 
         public string EventTypeName => typeof(T).FullName;
 
-        public EventSubscription Subscribe(Action<T> handler)
+        /// <summary>
+        /// Registers <paramref name="handler"/> and returns a pooled handle that unsubscribes on
+        /// disposal. Cache the delegate at the callsite: <c>bus.Subscribe(OnDamage)</c> allocates a
+        /// new delegate every call because C# does not cache instance method groups.
+        /// </summary>
+        public IEventSubscription Subscribe(Action<T> handler)
         {
             ThrowIfDisposed();
             if (handler == null)
@@ -72,33 +138,37 @@ namespace CycloneGames.EventBus.Core
                 throw new ArgumentNullException(nameof(handler));
             }
 
-            // Reuse a tombstone slot only when not dispatching; otherwise always append so a handler
-            // subscribed mid-publish cannot appear at an index below the count snapshot.
+            // Tombstone reuse is only safe outside dispatch: reusing a slot below the loop's count
+            // snapshot would let a handler subscribed mid-round fire in that same round.
             if (_dispatchDepth == 0)
             {
                 for (int index = 0; index < _slots; index++)
                 {
-                    if (_handlers[index] == null)
+                    if (_handlers[index] != null)
                     {
-                        _handlers[index] = handler;
-                        _tombstones--;
-                        LogSubscription("subscribed (reused tombstone slot)");
-                        return new EventSubscription(() => Unsubscribe(handler));
+                        continue;
                     }
+
+                    _handlers[index] = handler;
+                    _tombstones--;
+                    TrackPeak();
+                    LogSubscription("subscribed (reused tombstone slot)");
+                    return RentHandle(handler);
                 }
             }
 
             EnsureCapacity(_slots + 1);
             _handlers[_slots++] = handler;
+            TrackPeak();
             LogSubscription("subscribed");
-            return new EventSubscription(() => Unsubscribe(handler));
+            return RentHandle(handler);
         }
 
         /// <summary>
-        /// Removes <paramref name="handler"/> and returns true when it was subscribed, or false when
-        /// it was not found (or the bus is already disposed). Unsubscribing a disposed bus is a no-op
-        /// because disposal has already dropped every handler; this keeps deferred scope disposal
-        /// (for example a MonoBehaviour OnDestroy running after the context disposed the bus) safe.
+        /// Removes <paramref name="handler"/>; returns true when it was subscribed, false when it was
+        /// not found. Unsubscribing a disposed bus is a no-op because disposal already dropped every
+        /// handler, which keeps deferred scope disposal (a MonoBehaviour OnDestroy running after the
+        /// context disposed the bus) safe.
         /// </summary>
         public bool Unsubscribe(Action<T> handler)
         {
@@ -112,24 +182,29 @@ namespace CycloneGames.EventBus.Core
                 throw new ArgumentNullException(nameof(handler));
             }
 
-            for (int index = 0; index < _slots; index++)
-            {
-                if (_handlers[index] == handler)
-                {
-                    _handlers[index] = null;
-                    _tombstones++;
-                    LogSubscription("unsubscribed");
-                    return true;
-                }
-            }
-
-            return false;
+            return RemoveCore(handler);
         }
 
+        /// <summary>
+        /// Dispatches <paramref name="evt"/> to every subscriber in subscription order.
+        ///
+        /// Zero allocation on the happy path. Under <see cref="PublishErrorPolicy.Stop"/> the first
+        /// subscriber exception propagates and the remaining handlers are skipped. Under
+        /// <see cref="PublishErrorPolicy.Swallow"/> every subscriber runs and failures are recorded.
+        /// Under <see cref="PublishErrorPolicy.ContinueOnError"/> every subscriber runs and the first
+        /// failure is rethrown once the round completes, so a fault can never be silently lost and
+        /// can never cost another subscriber its delivery.
+        /// </summary>
         public void Publish(in T evt)
         {
-            ThrowIfDisposed();
+            if (_disposed)
+            {
+                ThrowDisposed();
+            }
 
+            // Re-entrancy ceiling. Dropping here is deliberate: an unbounded recursive publish chain
+            // is a design error, and the alternative is a stack overflow that the runtime cannot
+            // recover from on any platform. The drop is counted and surfaced by diagnostics.
             if (_dispatchDepth >= _maxDispatchDepth)
             {
                 _droppedReentrantCount++;
@@ -138,8 +213,15 @@ namespace CycloneGames.EventBus.Core
 
             _dispatchDepth++;
             _publishCount++;
+
+            // Per-frame, not per-bus: a nested dispatch must not inherit or steal the fault captured
+            // by the frame that called it.
+            ExceptionDispatchInfo pendingFault = null;
             try
             {
+                // The array is re-read every iteration on purpose. A subscriber that subscribes
+                // during dispatch can replace the backing array; holding a stale local would keep
+                // invoking handlers the bus has already forgotten.
                 int count = _slots;
                 for (int index = 0; index < count; index++)
                 {
@@ -149,67 +231,68 @@ namespace CycloneGames.EventBus.Core
                         continue;
                     }
 
-                    // The exception filter runs only when a subscriber throws, so the hot path has
-                    // zero overhead from the try/catch. In Stop mode the exception propagates; in
-                    // Swallow mode it is logged (cold path) and dispatch continues.
                     try
                     {
                         handler(evt);
                     }
-                    catch (Exception exception) when (_publishErrorPolicy == PublishErrorPolicy.Swallow)
+                    catch (Exception exception)
                     {
-                        LogException(exception);
+                        // Routed unconditionally: `pendingFault ??= OnSubscriberException(...)`
+                        // would short-circuit and silently drop every fault after the first, so a
+                        // Swallow/ContinueOnError round would under-count. Only the *rethrow* keeps
+                        // the first fault; logging and counting must see all of them.
+                        ExceptionDispatchInfo fault = OnSubscriberException(exception);
+                        pendingFault ??= fault;
                     }
+                }
+
+                if (pendingFault != null)
+                {
+                    // Rethrows with the original stack intact. The enclosing finally still runs, so
+                    // dispatch depth is restored before the exception leaves the bus.
+                    pendingFault.Throw();
                 }
             }
             finally
             {
-                _dispatchDepth--;
+                // Depth is restored unconditionally: a subscriber that throws must not leave the bus
+                // permanently unable to publish. Compaction is deferred to the outermost frame so
+                // slot indices never shift underneath an in-flight iteration.
+                if (--_dispatchDepth == 0 && _compactPending)
+                {
+                    _compactPending = false;
+                    CompactInPlace();
+                }
             }
         }
 
         /// <summary>
-        /// Removes tombstone slots and shrinks storage. Cold path: only call when no dispatch is in
-        /// progress and the tombstone count is high relative to live subscriptions.
+        /// Removes tombstone slots in place. Allocation-free and non-shrinking: capacity is retained
+        /// so the steady state performs no array work at all.
+        ///
+        /// Automatic, so calling this directly is normally unnecessary. It exists for a one-shot
+        /// reclaim after a burst of unsubscribes and for tests.
         /// </summary>
+        /// <exception cref="InvalidOperationException">Dispatch is in progress.</exception>
         public void Compact()
         {
             ThrowIfDisposed();
             if (_dispatchDepth != 0)
             {
-                throw new InvalidOperationException("Compact cannot run during dispatch.");
+                throw new InvalidOperationException(
+                    "Compact cannot run during dispatch; slot indices would shift under the active iteration.");
             }
 
-            if (_tombstones == 0)
-            {
-                return;
-            }
-
-            int liveCount = _slots - _tombstones;
-            int nextCapacity = Math.Max(DefaultCapacity, liveCount);
-            var compacted = new Action<T>[nextCapacity];
-            int writeIndex = 0;
-            for (int readIndex = 0; readIndex < _slots; readIndex++)
-            {
-                Action<T> handler = _handlers[readIndex];
-                if (handler != null)
-                {
-                    compacted[writeIndex++] = handler;
-                }
-            }
-
-            _handlers = compacted;
-            _slots = liveCount;
-            _tombstones = 0;
+            CompactInPlace();
             Log("compacted");
         }
 
         /// <summary>
         /// Removes every subscription without disposing the bus, so the same instance can be reused
-        /// across a scene or mode reset. Diagnostic counters (PublishCount, DroppedReentrantCount) are
-        /// preserved because they describe the bus lifetime, not the current subscription set.
-        /// Like <see cref="Compact"/>, it must not run during dispatch.
+        /// across a scene or mode reset. Diagnostic counters are preserved because they describe the
+        /// bus lifetime, not the current subscription set.
         /// </summary>
+        /// <exception cref="InvalidOperationException">Dispatch is in progress.</exception>
         public void Clear()
         {
             ThrowIfDisposed();
@@ -218,13 +301,7 @@ namespace CycloneGames.EventBus.Core
                 throw new InvalidOperationException("Clear cannot run during dispatch.");
             }
 
-            for (int index = 0; index < _slots; index++)
-            {
-                _handlers[index] = null;
-            }
-
-            _slots = 0;
-            _tombstones = 0;
+            ClearCore();
             Log("cleared");
         }
 
@@ -235,7 +312,10 @@ namespace CycloneGames.EventBus.Core
                 TombstoneCount,
                 _publishCount,
                 _droppedReentrantCount,
+                _subscriberErrorCount,
+                _peakSubscriptionCount,
                 _dispatchDepth,
+                _handlers.Length,
                 _disposed);
         }
 
@@ -247,18 +327,176 @@ namespace CycloneGames.EventBus.Core
             }
 
             _disposed = true;
+            ClearCore();
+
+            // Release the backing array so a retained (not-yet-collected) bus no longer pins a large
+            // handler array, and drop the handle pool with it. A disposed bus cannot be reused.
+            _handlers = Array.Empty<Action<T>>();
+            _handlePool = null;
+            _handlePoolCount = 0;
+            Log("disposed");
+        }
+
+        internal void Release(EventSubscription<T> handle, Action<T> handler)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            RemoveCore(handler);
+
+            if (_handlePool == null)
+            {
+                _handlePool = new EventSubscription<T>[4];
+            }
+            else if (_handlePoolCount == _handlePool.Length)
+            {
+                if (_handlePoolCount >= HandlePoolLimit)
+                {
+                    // Pool is full: let this handle be collected instead of growing without bound.
+                    return;
+                }
+
+                var grown = new EventSubscription<T>[_handlePoolCount * 2];
+                Array.Copy(_handlePool, grown, _handlePoolCount);
+                _handlePool = grown;
+            }
+
+            _handlePool[_handlePoolCount++] = handle;
+        }
+
+        private bool RemoveCore(Action<T> handler)
+        {
+            // Hoisting the array is safe here: nothing in this method can re-enter the bus.
+            Action<T>[] handlers = _handlers;
             for (int index = 0; index < _slots; index++)
             {
-                _handlers[index] = null;
+                if (handlers[index] != handler)
+                {
+                    continue;
+                }
+
+                handlers[index] = null;
+                _tombstones++;
+
+                // Maintenance lives on the unsubscribe path, never on the publish path: unsubscribe
+                // is the only thing that creates tombstones, so checking there costs one compare on a
+                // cold path instead of one branch per dispatch.
+                if (_dispatchDepth == 0)
+                {
+                    MaybeCompact();
+                }
+                else
+                {
+                    _compactPending = true;
+                }
+
+                LogSubscription("unsubscribed");
+                return true;
+            }
+
+            return false;
+        }
+
+        private void MaybeCompact()
+        {
+            if (_tombstones == 0)
+            {
+                return;
+            }
+
+            if (_tombstones >= CompactAbsoluteThreshold || _tombstones * CompactRatio >= _slots)
+            {
+                CompactInPlace();
+            }
+        }
+
+        private void CompactInPlace()
+        {
+            Action<T>[] handlers = _handlers;
+            int writeIndex = 0;
+            for (int readIndex = 0; readIndex < _slots; readIndex++)
+            {
+                Action<T> handler = handlers[readIndex];
+                if (handler == null)
+                {
+                    continue;
+                }
+
+                handlers[writeIndex++] = handler;
+            }
+
+            // Clearing the tail is not cosmetic. Stale delegate references keep subscriber objects
+            // alive; on destroyed MonoBehaviours that is a real leak the profiler will show as
+            // managed heap that never comes back down.
+            for (int index = writeIndex; index < _slots; index++)
+            {
+                handlers[index] = null;
+            }
+
+            _slots = writeIndex;
+            _tombstones = 0;
+        }
+
+        private void ClearCore()
+        {
+            Action<T>[] handlers = _handlers;
+            for (int index = 0; index < _slots; index++)
+            {
+                handlers[index] = null;
             }
 
             _slots = 0;
             _tombstones = 0;
+            _compactPending = false;
+        }
 
-            // Release the backing array so a retained (not-yet-collected) bus no longer pins a large
-            // handler array. A disposed bus cannot be reused, so an empty array is safe.
-            _handlers = Array.Empty<Action<T>>();
-            Log("disposed");
+        private IEventSubscription RentHandle(Action<T> handler)
+        {
+            if (_handlePoolCount > 0)
+            {
+                EventSubscription<T> pooled = _handlePool[--_handlePoolCount];
+                _handlePool[_handlePoolCount] = null;
+                pooled.Reset(this, handler);
+                return pooled;
+            }
+
+            return new EventSubscription<T>(this, handler);
+        }
+
+        private void TrackPeak()
+        {
+            int live = _slots - _tombstones;
+            if (live > _peakSubscriptionCount)
+            {
+                _peakSubscriptionCount = live;
+            }
+        }
+
+        /// <summary>
+        /// Cold-path exception routing, kept out of line so the dispatch loop stays tight.
+        ///
+        /// Returns the fault to rethrow once the round finishes, or null when the policy swallows it.
+        /// Under <see cref="PublishErrorPolicy.Stop"/> it rethrows here with the original stack
+        /// preserved, which aborts the round and skips the remaining subscribers.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private ExceptionDispatchInfo OnSubscriberException(Exception exception)
+        {
+            _subscriberErrorCount++;
+            LogException(exception);
+
+            // ExceptionDispatchInfo is used instead of `throw exception` because rethrowing a caught
+            // exception by value rewrites its stack trace and destroys the original throw site.
+            ExceptionDispatchInfo captured = ExceptionDispatchInfo.Capture(exception);
+
+            if (_publishErrorPolicy == PublishErrorPolicy.Stop)
+            {
+                captured.Throw();
+            }
+
+            return _publishErrorPolicy == PublishErrorPolicy.ContinueOnError ? captured : null;
         }
 
         private void EnsureCapacity(int required)
@@ -297,21 +535,28 @@ namespace CycloneGames.EventBus.Core
 
         private void Log(string message)
         {
+            // The enable check must stay ahead of anything that allocates. Every message passed here
+            // is a constant literal, so the enabled path allocates nothing either.
             if (!_logSink.IsEnabled(EventBusLogSeverity.Debug, _category))
             {
                 return;
             }
 
-            string captured = message;
-            _logSink.Write(EventBusLogSeverity.Debug, _category, builder => builder.Append(captured));
+            _logSink.Write(EventBusLogSeverity.Debug, _category, message);
         }
 
         private void ThrowIfDisposed()
         {
             if (_disposed)
             {
-                throw new ObjectDisposedException(typeof(EventBus<T>).FullName);
+                ThrowDisposed();
             }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ThrowDisposed()
+        {
+            throw new ObjectDisposedException(typeof(EventBus<T>).FullName);
         }
     }
 }

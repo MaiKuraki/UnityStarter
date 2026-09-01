@@ -65,6 +65,36 @@ namespace CycloneGames.EventBus.Editor
             EditorGUILayout.LabelField("Subscriptions", _snapshot.SubscriptionCount.ToString());
             EditorGUILayout.LabelField("Tombstones", _snapshot.TombstoneCount.ToString());
             EditorGUILayout.LabelField("Publish count", _snapshot.PublishCount.ToString());
+            EditorGUILayout.LabelField("Dropped (re-entrant)", _snapshot.DroppedReentrantCount.ToString());
+            EditorGUILayout.LabelField("Subscriber errors", _snapshot.SubscriberErrorCount.ToString());
+            EditorGUILayout.LabelField("Peak subscriptions", _snapshot.PeakSubscriptionCount.ToString());
+
+            if (_snapshot.TombstoneCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Tombstones are dead slots left by unsubscribe. Compaction is automatic, so a "
+                    + "small non-zero value is normal. A value that keeps climbing means subscribers "
+                    + "are being added and removed faster than the compaction threshold triggers — "
+                    + "gate the subscription with an activity flag instead of churning it.",
+                    MessageType.Info);
+            }
+
+            if (_snapshot.DroppedReentrantCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Publishes were dropped because the re-entrancy depth ceiling was reached. That "
+                    + "is a recursive publish chain, not a capacity problem: find the handler that "
+                    + "publishes its own event type, directly or through a cycle.",
+                    MessageType.Warning);
+            }
+
+            if (_snapshot.SubscriberErrorCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "At least one subscriber threw. Every fault is counted and logged through the "
+                    + "configured sink; check the console for the original throw sites.",
+                    MessageType.Warning);
+            }
 
             if (GUILayout.Button("Refresh"))
             {
@@ -81,6 +111,9 @@ namespace CycloneGames.EventBus.Editor
                     $"subs={entry.Snapshot.SubscriptionCount}, "
                     + $"tombstones={entry.Snapshot.TombstoneCount}, "
                     + $"publishes={entry.Snapshot.PublishCount}, "
+                    + $"errors={entry.Snapshot.SubscriberErrorCount}, "
+                    + $"peak={entry.Snapshot.PeakSubscriptionCount}, "
+                    + $"cap={entry.Snapshot.Capacity}, "
                     + $"depth={entry.Snapshot.DispatchDepth}");
             }
         }
