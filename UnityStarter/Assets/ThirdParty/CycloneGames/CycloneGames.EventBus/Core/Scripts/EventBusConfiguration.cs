@@ -3,6 +3,12 @@ namespace CycloneGames.EventBus.Core
     /// <summary>
     /// Immutable composition choices for an EventBus. Built by the composition root and consumed by
     /// the facade and the per-bus instances.
+    ///
+    /// The default error policy is <see cref="PublishErrorPolicy.ContinueOnError"/>, not
+    /// <see cref="PublishErrorPolicy.Stop"/>. On a bus with more than a handful of subscribers,
+    /// <c>Stop</c> means one broken listener silently costs every later listener its delivery — the
+    /// failure mode that is hardest to trace in a large project. <c>ContinueOnError</c> still
+    /// surfaces the fault (rethrown after the round) and still never skips a subscriber.
     /// </summary>
     public sealed class EventBusConfiguration
     {
@@ -16,7 +22,7 @@ namespace CycloneGames.EventBus.Core
             int commandQueueCapacity = DefaultCommandQueueCapacity,
             CommandOverflowPolicy commandOverflowPolicy = CommandOverflowPolicy.Drop,
             int maxDispatchDepth = DefaultMaxDispatchDepth,
-            PublishErrorPolicy publishErrorPolicy = PublishErrorPolicy.Stop,
+            PublishErrorPolicy publishErrorPolicy = PublishErrorPolicy.ContinueOnError,
             IEventBusLogSink logSink = null)
         {
             if (commandQueueCapacity <= 0)
