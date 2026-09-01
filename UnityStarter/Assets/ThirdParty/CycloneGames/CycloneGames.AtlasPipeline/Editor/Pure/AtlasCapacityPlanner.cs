@@ -273,14 +273,52 @@ namespace CycloneGames.AtlasPipeline.Pure
         /// </summary>
         public static bool IsPageOf(string atlasKey, string baseKey)
         {
-            if (string.IsNullOrEmpty(atlasKey) || string.IsNullOrEmpty(baseKey))
+            return TryGetPageIndex(atlasKey, out string stripped, out _)
+                   && string.Equals(stripped, baseKey, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Splits a page key into its base atlas key and page index — "ui__p002" is index 2 of "ui".
+        /// Returns false for a key that carries no page suffix, so a caller can tell "a page" apart
+        /// from "an atlas that merely happens to contain __p in its name".
+        /// </summary>
+        /// <remarks>
+        /// Needed because knowing that a file is a page of a known atlas is not enough to judge it:
+        /// a page whose index is below the atlas's page count is required output, while one at or
+        /// above it is a leftover from a previous, larger page count. Both strip to the same base
+        /// key, so the index is the only thing that separates them.
+        /// </remarks>
+        public static bool TryGetPageIndex(string atlasKey, out string baseKey, out int pageIndex)
+        {
+            baseKey = atlasKey ?? string.Empty;
+            pageIndex = -1;
+
+            if (string.IsNullOrEmpty(atlasKey))
             {
                 return false;
             }
 
-            string stripped = StripPageSuffix(atlasKey);
-            return !string.Equals(stripped, atlasKey, StringComparison.Ordinal)
-                   && string.Equals(stripped, baseKey, StringComparison.Ordinal);
+            int marker = atlasKey.LastIndexOf("__p", StringComparison.Ordinal);
+            if (marker <= 0 || marker + 3 >= atlasKey.Length)
+            {
+                return false;
+            }
+
+            int index = 0;
+            for (int i = marker + 3; i < atlasKey.Length; i++)
+            {
+                char c = atlasKey[i];
+                if (c < '0' || c > '9')
+                {
+                    return false;
+                }
+
+                index = (index * 10) + (c - '0');
+            }
+
+            baseKey = atlasKey.Substring(0, marker);
+            pageIndex = index;
+            return true;
         }
 
         private static int PageDigitCount(int value)

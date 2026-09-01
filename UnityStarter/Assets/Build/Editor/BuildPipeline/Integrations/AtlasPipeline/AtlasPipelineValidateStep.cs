@@ -74,9 +74,11 @@ namespace Build.Pipeline.Editor.Integrations.AtlasPipeline
                 return;
             }
 
+            // Warning severity, not info: these findings are why the build failed, and a CI log
+            // filtered to warnings and errors must still contain them.
             for (int i = 0; i < drift.Count; i++)
             {
-                Debug.Log("[CycloneGames Atlas Pipeline] " + drift[i]);
+                Debug.LogWarning("[CycloneGames Atlas Pipeline] " + drift[i]);
             }
         }
     }

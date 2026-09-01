@@ -70,12 +70,45 @@ namespace CycloneGames.AtlasPipeline
         private static readonly int[] PlatformMaxSizeBuffer = new int[CapacityPlatforms.Length];
 
         /// <summary>
-        /// Page count produced for each atlas during the current generation pass. The manifest is
-        /// built from the index alone, which cannot know page counts without loading sprites, so the
-        /// pass records them here and the manifest writer reads them back.
+        /// Page count each atlas is believed to have on disk, keyed by atlas key. The manifest is
+        /// built from the index alone, which cannot know page counts without loading sprites, so
+        /// generation records them here and everything that reasons about pages — manifest writing,
+        /// the existence check, the orphan sweep — reads them back.
         /// </summary>
-        private static readonly Dictionary<string, int> GeneratedPageCounts =
+        /// <remarks>
+        /// This used to be a per-pass dictionary that was cleared on every batch, which silently
+        /// corrupted the manifest: an incremental pass regenerates only the atlases that changed, so
+        /// every paged atlas it did not touch fell back to one page in the manifest — pointing at a
+        /// base file that does not exist. Time slicing made it worse, because a later batch cleared
+        /// the counts an earlier batch had just recorded. The map is now persistent for the session
+        /// and seeded from the committed manifest, so an atlas nobody touched keeps its true page
+        /// count.
+        /// </remarks>
+        private static readonly Dictionary<string, int> KnownPageCounts =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Atlases written during the current generation pass. Page-count warnings are scoped to
+        /// this set: warning about every paged atlas in the project on every pass would be noise,
+        /// while warning only about the ones just regenerated says "this one grew" when it grew.
+        /// </summary>
+        private static readonly HashSet<string> RegeneratedThisPass =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Atlases whose fingerprint matched and were left untouched during the current pass. On a
+        /// build agent this is the observable proof that the incremental pass actually worked: a
+        /// cold build with an up-to-date manifest should report everything skipped and nothing
+        /// regenerated, and anything else points at the fingerprints or the manifest.
+        /// </summary>
+        private static int _skippedThisPass;
+
+        /// <summary>
+        /// Whether <see cref="KnownPageCounts"/> has been seeded from the committed manifest in this
+        /// domain. Once per domain, not per pass: the seed fills only keys generation has not
+        /// already set, so re-seeding could never add anything and would only cost a file read.
+        /// </summary>
+        private static bool _knownPageCountsSeeded;
 
         /// <summary>
         /// Cap on how many oversized sprite names go into one warning. A misconfigured rule can flag
@@ -167,6 +200,16 @@ namespace CycloneGames.AtlasPipeline
         private static int _generatedGlobalFingerprint;
 
         /// <summary>
+        /// Source assets each rule claimed during indexing, keyed by rule. A rule that ends at zero
+        /// is dead weight: it validates, it shows in the window, and it manages nothing — because its
+        /// folder is empty, everything in it is excluded, or an earlier rule (same folder, or the
+        /// whole subtree carved up by deeper rules) claims every sprite. Surfaced by validation,
+        /// because nothing else in the pipeline says so.
+        /// </summary>
+        private static readonly Dictionary<AtlasImportRule, int> MatchedAssetsPerRule =
+            new Dictionary<AtlasImportRule, int>();
+
+        /// <summary>
         /// Tracks PerSprite atlas keys back to the first asset that claimed them. PerSprite keys are
         /// the file stem alone, so two "btn.png" in different folders collapse into one atlas and one
         /// set of sprites silently never ships. Recorded during indexing — no extra scan needed.
@@ -236,6 +279,162 @@ namespace CycloneGames.AtlasPipeline
             return EditorSettings.spritePackerMode == SpritePackerMode.SpriteAtlasV2;
         }
 
+        /// <summary>
+        /// Audits the rule asset lifecycle: every settings slot resolved against every rule asset on
+        /// disk. Findings are classified by severity at the call site — a missing or duplicate
+        /// reference blocks the build because the rule's folder silently stops being managed, while
+        /// an orphaned asset only warns because unregistering is supposed to leave the file alone.
+        /// </summary>
+        public static IReadOnlyList<AtlasRuleAuditEntry> AuditRules()
+        {
+            EnsureSettingsAsset();
+            AtlasPipelineSettings settings = _settingsCache;
+
+            // One guid per slot, in list order: this is the resolution order, so a duplicate's first
+            // slot wins and every later one is the problem.
+            var registered = new List<string>();
+            if (settings != null)
+            {
+                IReadOnlyList<AtlasRuleAsset> assets = settings.RuleAssets;
+                for (int i = 0; i < assets.Count; i++)
+                {
+                    AtlasRuleAsset asset = assets[i];
+                    if (asset == null)
+                    {
+                        registered.Add(string.Empty);
+                        continue;
+                    }
+
+                    string path = AssetDatabase.GetAssetPath(asset);
+                    registered.Add(string.IsNullOrEmpty(path)
+                        ? string.Empty
+                        : AssetDatabase.AssetPathToGUID(path));
+                }
+            }
+
+            // Rules may live anywhere under Assets, so the disk side scans the whole tree rather
+            // than the default rules folder. An orphan outside the folder is exactly the one nobody
+            // is looking for.
+            var onDisk = new List<KeyValuePair<string, string>>();
+            string[] guids = AssetDatabase.FindAssets("t:AtlasRuleAsset", new[] { "Assets" });
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    onDisk.Add(new KeyValuePair<string, string>(guids[i], path));
+                }
+            }
+
+            return AtlasRuleAuditor.Audit(registered, onDisk);
+        }
+
+        /// <summary>
+        /// Deletes every rule asset the audit classifies as orphaned — on disk, referenced by no
+        /// settings slot. Asks for explicit confirmation with the full path list, because "the list
+        /// no longer mentions this file" is a decision for a human: the file may be work in
+        /// progress, and unregistering was designed to keep it.
+        /// </summary>
+        /// <remarks>
+        /// Re-audits immediately before deleting rather than trusting the caller's findings: the
+        /// gap between an audit and this call is exactly where someone registers the asset back.
+        /// Deleting a rule asset that has become registered again would destroy live configuration.
+        /// </remarks>
+        /// <returns>The number of assets deleted.</returns>
+        public static int DeleteOrphanRuleAssets()
+        {
+            EnsureSettingsAsset();
+
+            IReadOnlyList<AtlasRuleAuditEntry> findings = AuditRules();
+            var orphans = new List<AtlasRuleAuditEntry>();
+            for (int i = 0; i < findings.Count; i++)
+            {
+                if (findings[i].Kind == AtlasRuleAuditKind.OrphanAsset)
+                {
+                    orphans.Add(findings[i]);
+                }
+            }
+
+            if (orphans.Count == 0)
+            {
+                AtlasPipelineLog.Channel.Info(
+                    "[CycloneGames Atlas Pipeline] No unregistered rule assets to delete.");
+                return 0;
+            }
+
+            var listing = new StringBuilder();
+            for (int i = 0; i < orphans.Count; i++)
+            {
+                listing.Append('\n').Append(orphans[i].AssetPath);
+            }
+
+            bool confirmed = EditorUtility.DisplayDialog(
+                "Delete Unregistered Rule Assets",
+                orphans.Count + " rule asset(s) exist on disk but are not registered in the "
+                + "atlas settings. They have no effect on generation:"
+                + listing
+                + "\n\nDelete them? Unregistering a rule never deletes its file, so this "
+                + "confirmation is the only thing between a removed list entry and a lost rule.",
+                "Delete",
+                "Cancel");
+
+            if (!confirmed)
+            {
+                return 0;
+            }
+
+            int deleted = 0;
+            for (int i = 0; i < orphans.Count; i++)
+            {
+                string path = orphans[i].AssetPath;
+
+                // Re-checked against the live audit rather than the confirmed list: registration
+                // state may have changed between the dialog and here.
+                IReadOnlyList<AtlasRuleAuditEntry> current = AuditRules();
+                bool stillOrphaned = false;
+                for (int j = 0; j < current.Count; j++)
+                {
+                    if (current[j].Kind == AtlasRuleAuditKind.OrphanAsset
+                        && string.Equals(
+                            current[j].AssetPath,
+                            path,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        stillOrphaned = true;
+                        break;
+                    }
+                }
+
+                if (!stillOrphaned
+                    || AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) == null)
+                {
+                    continue;
+                }
+
+                if (AssetDatabase.DeleteAsset(path))
+                {
+                    deleted++;
+                    AtlasPipelineLog.Channel.Info(
+                        "[CycloneGames Atlas Pipeline] Deleted unregistered rule asset '" + path + "'.");
+                }
+            }
+
+            AtlasPipelineLog.Channel.Info(
+                "[CycloneGames Atlas Pipeline] Deleted " + deleted + " of " + orphans.Count
+                + " unregistered rule asset(s).");
+
+            // No cache invalidation needed: orphaned assets are not in the index, the rule cache or
+            // the manifest, and the deletions raise projectChanged, which the domain-level
+            // subscription turns into a rescan anyway.
+            return deleted;
+        }
+
+        [MenuItem("Assets/CycloneGames Atlas Pipeline/Delete Unregistered Rule Assets")]
+        private static void DeleteOrphanRuleAssetsMenu()
+        {
+            DeleteOrphanRuleAssets();
+        }
+
         public static AtlasPipelineSnapshot GetSnapshot()
         {
             EnsureInitialized();
@@ -263,6 +462,14 @@ namespace CycloneGames.AtlasPipeline
         {
             EditorApplication.update -= OnEditorUpdate;
             EditorApplication.update += OnEditorUpdate;
+
+            // Domain level, not window level. This used to be subscribed by the pipeline window,
+            // which meant every external change — a git pull adding art, a rule edited in another
+            // editor — went unnoticed while the window was closed: no rescan, no dirty marking, no
+            // generation, and a manifest that silently described the previous project. The window
+            // still subscribes for its own UI caches, which is all it ever needed to own.
+            EditorApplication.projectChanged -= HandleProjectChanged;
+            EditorApplication.projectChanged += HandleProjectChanged;
         }
 
         private static void OnEditorUpdate()
@@ -396,6 +603,13 @@ namespace CycloneGames.AtlasPipeline
             GeneratedFingerprints.Clear();
             GeneratedRuleFingerprints.Clear();
             _generatedGlobalFingerprint = AtlasHash.NullHash;
+
+            // Page counts describe the atlases on disk, which this call no longer vouches for:
+            // keeping them could protect stale pages from the sweep. They re-seed from the
+            // committed manifest on the next access.
+            KnownPageCounts.Clear();
+            RegeneratedThisPass.Clear();
+            _knownPageCountsSeeded = false;
         }
 
         /// <summary>
@@ -611,7 +825,8 @@ namespace CycloneGames.AtlasPipeline
                 }
 
                 AtlasImportRule rule = ResolveAtlasRule(bucket.Key);
-                long contentHash = bucket.ComputeContentHash(ComputeRuleFingerprint(rule));
+                long contentHash = bucket.ComputeContentHash(
+                    ComputeRuleFingerprint(rule), ComputeGlobalFingerprint());
 
                 // Keyed by atlas key, not page key: the generator needs this before it can know the
                 // page count, and the page count is only knowable by loading the sprite rects this
@@ -622,12 +837,12 @@ namespace CycloneGames.AtlasPipeline
                     sourceHashes[bucket.Key] = sourceHash;
                 }
 
-                // The index alone cannot know a page count — that needs sprite rects — so the pass
-                // records what it produced and the manifest reads it back. An atlas that was never
-                // generated in this session records a single page, which is the pre-paging output.
-                int pageCount = GeneratedPageCounts.TryGetValue(bucket.Key, out int pages) && pages > 1
-                    ? pages
-                    : 1;
+                // The index alone cannot know a page count — that needs sprite rects — so generation
+                // records what it produced and the manifest reads it back. Atlases this pass did not
+                // touch keep the count they are known to have on disk: falling back to one page here
+                // would record an atlas that spans several files as a single file at a path that
+                // does not exist.
+                int pageCount = GetKnownPageCount(bucket.Key);
 
                 for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
                 {
@@ -1123,10 +1338,26 @@ namespace CycloneGames.AtlasPipeline
                 atlasGroupOwners.Add(groupKey, rule);
             }
 
-            // Output-folder vs. source-folder overlap check. When they overlap (equal or one is an
-            // ancestor of the other), every source image is judged an "output-folder intrusion" and
-            // one confirmation moves the whole art folder into quarantine. Block this before build.
-            string overlapOutputFolder = _settingsCache.NormalizedOutputAtlasFolder;
+            // Folder relationship matrix. Every rule has a source folder and an effective output
+            // folder (the shared root, or the root plus its subfolder); the settings also carry
+            // global excludes, and the output root is always excluded on top of those. The checks
+            // below are ordered most-specific first so each conflict produces exactly one error —
+            // the precise one, not a generic fallback.
+            //
+            // A rule sourcing from ANOTHER rule's output folder is the nastiest case: the generated
+            // atlases are re-read as sources, and the sweep — which treats everything the index does
+            // not expect as garbage — will delete them on the next full pass. It is also the case a
+            // check scoped to "each rule against its own output" cannot see, which is why the check
+            // is cross-rule.
+            string outputRoot = _settingsCache.NormalizedOutputAtlasFolder;
+            var effectiveOutputs = new string[RuleCache.Count];
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                effectiveOutputs[i] = RuleCache[i].OutputSubfolder.Length == 0
+                    ? outputRoot
+                    : outputRoot + "/" + RuleCache[i].OutputSubfolder;
+            }
+
             for (int i = 0; i < RuleCache.Count; i++)
             {
                 string sourceFolder = RuleCache[i].NormalizedSourceFolder;
@@ -1135,23 +1366,138 @@ namespace CycloneGames.AtlasPipeline
                     continue;
                 }
 
-                // Checked against the folder this rule actually writes into, not the shared root.
-                // A subfolder is where this becomes dangerous: a rule sourcing from
-                // "Assets/Atlas/UI" with its subfolder set to "UI" writes straight back onto its
-                // own inputs, and one confirmation on the intrusion prompt would move the entire
-                // art folder into quarantine.
-                string effectiveOutputFolder = RuleCache[i].OutputSubfolder.Length == 0
-                    ? overlapOutputFolder
-                    : overlapOutputFolder + "/" + RuleCache[i].OutputSubfolder;
-                if (AtlasPathUtility.PathsOverlap(effectiveOutputFolder, sourceFolder))
+                // Most specific culprit wins: when several output folders overlap this source, the
+                // deepest one is where the loop actually closes.
+                int culprit = -1;
+                for (int j = 0; j < RuleCache.Count; j++)
+                {
+                    if (!AtlasPathUtility.PathsOverlap(effectiveOutputs[j], sourceFolder))
+                    {
+                        continue;
+                    }
+
+                    if (culprit < 0
+                        || effectiveOutputs[j].Length > effectiveOutputs[culprit].Length)
+                    {
+                        culprit = j;
+                    }
+                }
+
+                if (culprit >= 0)
+                {
+                    if (culprit == i)
+                    {
+                        errors.Add(
+                            $"Import rule '{RuleCache[i].Name}' writes its atlases into "
+                            + $"'{effectiveOutputs[culprit]}', which is also its own source folder "
+                            + $"('{sourceFolder}'). Every source image inside the output folder is "
+                            + "treated as an intrusion and one confirmation would move the entire "
+                            + "art folder into quarantine. Choose a disjoint output folder, or give "
+                            + "this rule a different output subfolder.");
+                    }
+                    else
+                    {
+                        errors.Add(
+                            $"Import rule '{RuleCache[culprit].Name}' writes its atlases into "
+                            + $"'{effectiveOutputs[culprit]}', which is also the source folder of "
+                            + $"rule '{RuleCache[i].Name}'. The generated atlases would be read back "
+                            + "as sources, and the sweep would delete them as unexpected output — a "
+                            + "feedback loop between the two rules. Give one of them a different "
+                            + "folder.");
+                    }
+
+                    continue;
+                }
+
+                // No rule writes where this rule reads, but the folder can still sit inside the
+                // output tree, which the pipeline ignores entirely — so the rule would manage
+                // nothing, silently.
+                if (AtlasPathUtility.PathsOverlap(outputRoot, sourceFolder))
                 {
                     errors.Add(
-                        $"Output atlas folder '{effectiveOutputFolder}' overlaps with import rule "
-                        + $"'{RuleCache[i].Name}' source folder '{sourceFolder}'. Every source "
-                        + "image inside the output folder is treated as an intrusion and would "
-                        + "be moved to quarantine. Choose a disjoint output folder, or give this "
-                        + "rule a different output subfolder.");
+                        $"Import rule '{RuleCache[i].Name}' source folder '{sourceFolder}' is "
+                        + $"inside the output tree '{outputRoot}'. Everything under the output tree "
+                        + "is ignored by the pipeline, so this rule matches no assets at all. Move "
+                        + "the source folder outside the output tree.");
                 }
+            }
+
+            // Nested output folders. Equality is deliberately allowed — two rules writing into the
+            // same folder is the intended "two rules, one package" case — but strict nesting means
+            // a collector targeting the outer folder ships the inner rule's atlases, so the two
+            // rules cannot be updated as separate packages. Warned, not blocked: the nesting may be
+            // intentional.
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                for (int j = i + 1; j < RuleCache.Count; j++)
+                {
+                    if (AtlasPathUtility.IsProperlyUnderFolder(
+                            effectiveOutputs[i], effectiveOutputs[j]))
+                    {
+                        warnings?.Add(
+                            $"Rule '{RuleCache[i].Name}' writes into '{effectiveOutputs[i]}', "
+                            + $"which is inside the output folder of rule '{RuleCache[j].Name}' "
+                            + $"('{effectiveOutputs[j]}'). A collector targeting the outer folder "
+                            + "ships the inner rule's atlases too, so the two cannot be updated as "
+                            + "separate packages. Keep output folders disjoint unless the nesting "
+                            + "is intentional.");
+                    }
+                    else if (AtlasPathUtility.IsProperlyUnderFolder(
+                                 effectiveOutputs[j], effectiveOutputs[i]))
+                    {
+                        warnings?.Add(
+                            $"Rule '{RuleCache[j].Name}' writes into '{effectiveOutputs[j]}', "
+                            + $"which is inside the output folder of rule '{RuleCache[i].Name}' "
+                            + $"('{effectiveOutputs[i]}'). A collector targeting the outer folder "
+                            + "ships the inner rule's atlases too, so the two cannot be updated as "
+                            + "separate packages. Keep output folders disjoint unless the nesting "
+                            + "is intentional.");
+                    }
+                }
+            }
+
+            // A rule that matched nothing is dead weight: it validates, it shows in the window, and
+            // it manages no assets. Same-folder rules are legal — keyword partitions are the point —
+            // but a partition that leaves one side with nothing is a configuration mistake, and so
+            // is a folder whose entire subtree is carved up by deeper rules. Warned rather than
+            // blocked, because an empty folder is a normal state while art is being organised.
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                AtlasImportRule rule = RuleCache[i];
+                if (rule == null
+                    || string.IsNullOrEmpty(rule.NormalizedSourceFolder)
+                    || (MatchedAssetsPerRule.TryGetValue(rule, out int matched) && matched > 0))
+                {
+                    continue;
+                }
+
+                var claimants = new List<string>();
+                for (int j = 0; j < RuleCache.Count; j++)
+                {
+                    if (j == i || RuleCache[j] == null)
+                    {
+                        continue;
+                    }
+
+                    if (AtlasPathUtility.PathsOverlap(
+                            RuleCache[j].NormalizedSourceFolder, rule.NormalizedSourceFolder))
+                    {
+                        claimants.Add(RuleCache[j].Name);
+                    }
+                }
+
+                claimants.Sort(StringComparer.Ordinal);
+                string claimantsText = claimants.Count > 0
+                    ? " Rules whose source folders overlap it: " + string.Join(", ", claimants) + "."
+                    : string.Empty;
+
+                warnings?.Add(
+                    $"Import rule '{rule.Name}' matched no source assets in "
+                    + $"'{rule.NormalizedSourceFolder}'. Either the folder is empty, its assets are "
+                    + "excluded, or another rule claims them first — resolution order is longest "
+                    + "source folder first, then fewest keywords, then list order."
+                    + claimantsText
+                    + " The rule has no effect until one of those changes.");
             }
 
             // PerSprite atlas keys are the file stem alone, so two identically named files in
@@ -1216,6 +1562,25 @@ namespace CycloneGames.AtlasPipeline
                         + "sprites in different atlases never batch. PerSprite suits a few large "
                         + "images; for a set this size switch the rule to PerChildFolder or "
                         + "PerSourceFolder so the sprites share an atlas.");
+                }
+            }
+
+            // Rule asset lifecycle. A missing reference is the dangerous one: the rule's folder
+            // silently stops being managed — no atlases, no import settings — and the atlases it
+            // used to own become orphans the sweep deletes. Blocking the build turns a silent
+            // config problem into a loud one before it can eat art.
+            IReadOnlyList<AtlasRuleAuditEntry> ruleAudit = AuditRules();
+            for (int i = 0; i < ruleAudit.Count; i++)
+            {
+                AtlasRuleAuditEntry entry = ruleAudit[i];
+                if (entry.Kind == AtlasRuleAuditKind.OrphanAsset)
+                {
+                    warnings?.Add(AtlasRuleAuditor.Describe(
+                        new[] { entry }));
+                }
+                else
+                {
+                    errors.Add(AtlasRuleAuditor.Describe(new[] { entry }));
                 }
             }
 
@@ -1489,7 +1854,19 @@ namespace CycloneGames.AtlasPipeline
         public static void RunForBuild(bool throwOnError)
         {
             EnsureSettingsAsset();
-            IReadOnlyList<string> errors = ValidateForBuild(includeNameScan: true);
+
+            // Advisory findings ride along with the blocking ones. They do not fail the build, but
+            // an orphaned rule asset or a rule that matched nothing is exactly the kind of thing a
+            // CI log should surface — dropping the warnings collection here made the build path
+            // blind to everything that was not fatal.
+            var validationWarnings = new List<string>();
+            IReadOnlyList<string> errors =
+                ValidateForBuild(includeNameScan: true, warnings: validationWarnings);
+            for (int i = 0; i < validationWarnings.Count; i++)
+            {
+                AtlasPipelineLog.Channel.Warning(validationWarnings[i]);
+            }
+
             if (errors.Count > 0)
             {
                 string message = string.Join(Environment.NewLine, errors);
@@ -1499,7 +1876,8 @@ namespace CycloneGames.AtlasPipeline
                         $"CycloneGames atlas pipeline validation failed:{Environment.NewLine}{message}");
                 }
 
-                AtlasPipelineLog.Channel.Error(message);
+                AtlasPipelineLog.Channel.Error(
+                    "[CycloneGames Atlas Pipeline] " + message);
                 return;
             }
 
@@ -1549,10 +1927,24 @@ namespace CycloneGames.AtlasPipeline
             // Only record the manifest once everything succeeded. A partial pass would commit
             // fingerprints for atlases that were never written, which is the one thing the manifest
             // must never claim.
-            if (failures.Count == 0)
+            bool manifestWritten = failures.Count == 0;
+            if (manifestWritten)
             {
                 WriteManifest();
             }
+
+            // One greppable line for the CI log. The skipped count is the observable proof that the
+            // incremental pass worked: on a build agent whose manifest is up to date it should read
+            // "everything skipped, nothing regenerated" — any regeneration there means the manifest
+            // was behind, and zero skips with a fresh manifest would point at the fingerprints.
+            AtlasPipelineLog.Channel.Info(
+                "[CycloneGames Atlas Pipeline] Build summary: "
+                + $"{RegeneratedThisPass.Count} regenerated, "
+                + $"{_skippedThisPass} skipped (unchanged), "
+                + $"{DeletedAtlasPaths.Count} file(s) deleted, "
+                + $"{validationWarnings.Count} warning(s), "
+                + $"{failures.Count} failure(s), manifest "
+                + (manifestWritten ? "written." : "NOT written because generation failed."));
 
             if (failures.Count > 0)
             {
@@ -1565,7 +1957,8 @@ namespace CycloneGames.AtlasPipeline
                         + message);
                 }
 
-                AtlasPipelineLog.Channel.Error(message);
+                AtlasPipelineLog.Channel.Error(
+                    "[CycloneGames Atlas Pipeline] " + message);
             }
         }
 
@@ -1658,20 +2051,29 @@ namespace CycloneGames.AtlasPipeline
                     continue;
                 }
 
-                // A paged atlas has no base file. Without loading sprites the page count is unknown
-                // here, but the first page is always "__p000" and a single-page atlas always has the
-                // base name, so accepting either covers both cases.
-                string basePath = BuildAtlasAssetPath(folder, bucket.Key);
-                string firstPagePath = BuildAtlasAssetPath(
-                    folder,
-                    AtlasCapacityPlanner.BuildPageKey(bucket.Key, 0, 2));
-                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(basePath) == null
-                    && AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(firstPagePath) == null)
+                // Every page is checked, not just the base or the first one. A missing middle page
+                // is exactly as fatal at runtime as a missing atlas — the sprites on it render as
+                // white quads — and it is the one failure a "base or first page" check is blind to.
+                int pageCount = GetKnownPageCount(bucket.Key);
+                for (int page = 0; page < pageCount; page++)
                 {
+                    string pageKey = AtlasCapacityPlanner.BuildPageKey(
+                        bucket.Key,
+                        page,
+                        pageCount);
+                    string pagePath = BuildAtlasAssetPath(folder, pageKey);
+                    if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(pagePath) != null)
+                    {
+                        continue;
+                    }
+
                     failures?.Add(
-                        $"Expected atlas '{basePath}' (key '{bucket.Key}', "
-                        + $"{bucket.Count} sprite(s)) was not generated. "
-                        + "Anything loading atlases by path at runtime will fail.");
+                        $"Expected atlas page '{pagePath}' (atlas '{bucket.Key}', page {page} of "
+                        + $"{pageCount}, {bucket.Count} sprite(s)) was not generated. Anything "
+                        + "loading that page at runtime will show missing sprites. If the atlas on "
+                        + "disk is a different shape than the manifest describes, regenerate with "
+                        + "force (the Regenerate Atlases action bypasses fingerprints).");
+                    break;
                 }
             }
         }
@@ -1704,11 +2106,21 @@ namespace CycloneGames.AtlasPipeline
             // identity rather than something reconstructed per file. Two atlases with the same key
             // in different packages are different files, and a file whose rule moved to a new
             // subfolder is correctly an orphan.
+            // The expected set is the FULL page set, not just the base name: an atlas that shrank
+            // from five pages to two leaves three files behind, and every one of them strips back to
+            // the base key of an atlas that still exists. Without the page count those leftovers are
+            // indistinguishable from required pages, which is why they survived every earlier sweep.
             var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
             for (int i = 0; i < buckets.Count; i++)
             {
-                expected.Add(RelativeAtlasPath(buckets[i].Key));
+                string atlasKey = buckets[i].Key;
+                int pageCount = GetKnownPageCount(atlasKey);
+                for (int page = 0; page < pageCount; page++)
+                {
+                    expected.Add(RelativeAtlasPath(
+                        AtlasCapacityPlanner.BuildPageKey(atlasKey, page, pageCount)));
+                }
             }
 
             // Enumerate the filesystem directly instead of using FindAssets: it avoids search-type
@@ -1723,7 +2135,8 @@ namespace CycloneGames.AtlasPipeline
             }
 
             string[] files = Directory.GetFiles(fullPath, "*", SearchOption.AllDirectories);
-            int removed = 0;
+            int removedOrphans = 0;
+            int removedStalePages = 0;
             for (int i = 0; i < files.Length; i++)
             {
                 string file = files[i];
@@ -1733,21 +2146,39 @@ namespace CycloneGames.AtlasPipeline
                 }
 
                 string relative = ToOutputRelativePath(fullPath, file);
-                if (IsExpectedAtlasFile(expected, relative))
+                if (expected.Contains(relative))
                 {
                     continue;
                 }
 
                 string assetPath = folder + "/" + relative;
                 AssetDatabase.DeleteAsset(assetPath);
-                removed++;
-                AtlasPipelineLog.Channel.Info($"[CycloneGames Atlas Pipeline] Removed orphan atlas '{assetPath}'.");
+
+                // Distinguished only for the log: a stale page says "this atlas shrank", an orphan
+                // says "this atlas is gone". Same action, different follow-up for the reader.
+                string stem = AtlasPathUtility.GetFileNameWithoutExtension(relative);
+                bool isStalePage = AtlasCapacityPlanner.TryGetPageIndex(stem, out string baseKey, out _)
+                                   && Index.TryGetBucket(baseKey, out _);
+                if (isStalePage)
+                {
+                    removedStalePages++;
+                    AtlasPipelineLog.Channel.Info(
+                        $"[CycloneGames Atlas Pipeline] Removed stale page '{assetPath}' — the "
+                        + "atlas it belongs to now produces fewer pages.");
+                }
+                else
+                {
+                    removedOrphans++;
+                    AtlasPipelineLog.Channel.Info(
+                        $"[CycloneGames Atlas Pipeline] Removed orphan atlas '{assetPath}'.");
+                }
             }
 
-            if (removed > 0)
+            if (removedOrphans > 0 || removedStalePages > 0)
             {
                 AtlasPipelineLog.Channel.Info(
-                    $"[CycloneGames Atlas Pipeline] Orphan atlas sweep removed {removed} file(s).");
+                    $"[CycloneGames Atlas Pipeline] Output sweep removed {removedOrphans} orphan "
+                    + $"atlas(es) and {removedStalePages} stale page(s).");
             }
         }
 
@@ -2321,6 +2752,10 @@ namespace CycloneGames.AtlasPipeline
 
             RefreshRuleOrder();
 
+            // Counts describe the membership this rebuild produces; the rebuild re-derives all of
+            // it, so last rebuild's numbers are stale by definition.
+            MatchedAssetsPerRule.Clear();
+
             var visitedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < RuleCache.Count; i++)
             {
@@ -2407,6 +2842,9 @@ namespace CycloneGames.AtlasPipeline
             {
                 return;
             }
+
+            MatchedAssetsPerRule.TryGetValue(rule, out int matched);
+            MatchedAssetsPerRule[rule] = matched + 1;
 
             Index.Add(assetPath, atlasKey, markDirty);
 
@@ -2649,32 +3087,6 @@ namespace CycloneGames.AtlasPipeline
                 .Replace('\\', '/');
         }
 
-        /// <summary>
-        /// Whether a file found in the output tree belongs to an atlas the index still expects.
-        /// Page-aware: a paged atlas produces "key__p000" and friends and no base file, so a page
-        /// must never be mistaken for an orphan. The stem is checked as-is first (a group can
-        /// legitimately contain the "__p" spelling), then with the page suffix stripped — and only
-        /// within the same directory, so a stray file in one package cannot protect itself by
-        /// borrowing a name from another.
-        /// </summary>
-        private static bool IsExpectedAtlasFile(HashSet<string> expected, string relativePath)
-        {
-            if (expected.Contains(relativePath))
-            {
-                return true;
-            }
-
-            int separator = relativePath.LastIndexOf('/');
-            string directory = separator >= 0
-                ? relativePath.Substring(0, separator + 1)
-                : string.Empty;
-
-            string stem = AtlasPathUtility.GetFileNameWithoutExtension(relativePath);
-            string stripped = AtlasPathUtility.SanitizePart(
-                AtlasCapacityPlanner.StripPageSuffix(stem));
-            return expected.Contains(directory + stripped + ".spriteatlasv2");
-        }
-
         private static void ProcessDirtyAtlases(
             int? maxCount = null,
             double? timeBudgetSeconds = null,
@@ -2698,6 +3110,10 @@ namespace CycloneGames.AtlasPipeline
             // that is current.
             ResetSourceCaches();
 
+            // Before any atlas is generated: shrinking a paged atlas needs to know how many pages it
+            // had, and that comes from the committed manifest when this session did not produce it.
+            EnsureKnownPageCountsSeeded();
+
             EnsureAssetFolderExists(settings.NormalizedOutputAtlasFolder);
 
             // TakeDirtyKeys sorts before handing the keys over, so atlases are always written in
@@ -2710,7 +3126,8 @@ namespace CycloneGames.AtlasPipeline
             DeletedAtlasPaths.Clear();
             PendingAtlasConfigure.Clear();
             CapacityOverflowAtlases.Clear();
-            GeneratedPageCounts.Clear();
+            RegeneratedThisPass.Clear();
+            _skippedThisPass = 0;
 
             int processCount = keys.Count;
             if (maxCount.HasValue && processCount > maxCount.Value)
@@ -2827,6 +3244,7 @@ namespace CycloneGames.AtlasPipeline
             for (int i = 0; i < RemovedKeyBuffer.Count; i++)
             {
                 GeneratedFingerprints.Remove(RemovedKeyBuffer[i]);
+                KnownPageCounts.Remove(RemovedKeyBuffer[i]);
             }
 
             // The atlases on disk now correspond to the current configuration; the next settings
@@ -2848,6 +3266,17 @@ namespace CycloneGames.AtlasPipeline
             if (settings == null
                 || !Index.TryGetBucket(atlasKey, out AtlasBucket bucket))
             {
+                return;
+            }
+
+            // Every member is gone: the atlas must not exist. Without this, deleting the last sprite
+            // in a folder regenerated the atlas as an empty asset — zero packables — that a
+            // path-based collector then ships as a texture nobody uses. The bucket itself is dropped
+            // at the end of the pass, so queueing the files here keeps disk and index in step.
+            if (bucket.Count == 0)
+            {
+                ScheduleAtlasRemoval(atlasKey);
+                KnownPageCounts.Remove(atlasKey);
                 return;
             }
 
@@ -2880,6 +3309,7 @@ namespace CycloneGames.AtlasPipeline
                 && GeneratedFingerprints.TryGetValue(atlasKey, out long recorded)
                 && recorded == fingerprint)
             {
+                _skippedThisPass++;
                 return;
             }
 
@@ -2903,6 +3333,7 @@ namespace CycloneGames.AtlasPipeline
                 {
                     // Promote to the session table so the next pass hits the cheaper branch.
                     GeneratedFingerprints[atlasKey] = fingerprint;
+                    _skippedThisPass++;
                     return;
                 }
             }
@@ -3095,13 +3526,20 @@ namespace CycloneGames.AtlasPipeline
 
             if (pageCount > 1)
             {
-                GeneratedPageCounts[atlasKey] = pageCount;
                 AtlasPipelineLog.Channel.Info(
                     $"[CycloneGames Atlas Pipeline] Atlas '{atlasKey}' does not fit a single page "
                     + $"and is split into {pageCount} pages. Members are sliced from the sorted "
                     + "member list, so alphabetical neighbours stay together and adding one sprite "
                     + "moves roughly one member per page boundary.");
             }
+
+            // Recorded before the writes: the count is what the pages just produced describe, and
+            // everything downstream — the manifest, the existence check, the orphan sweep — reads it
+            // from here. Recording only multi-page atlases was the bug: an atlas that shrank back to
+            // one page never updated its count, so it stayed paged in every consumer's view.
+            KnownPageCounts.TryGetValue(atlasKey, out int previousPageCount);
+            KnownPageCounts[atlasKey] = pageCount;
+            RegeneratedThisPass.Add(atlasKey);
 
             for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
             {
@@ -3132,6 +3570,12 @@ namespace CycloneGames.AtlasPipeline
                     pageStart,
                     pageSpriteCount);
             }
+
+            // Pages the new count no longer produces. The orphan sweep cannot catch these on its
+            // own: a page file strips back to the base key of an atlas that still exists, so the
+            // sweep needs the page count to tell a required page from a leftover — which is exactly
+            // the number this atlas had before this regeneration.
+            ScheduleStalePageDeletes(atlasKey, previousPageCount, pageCount);
 
             // An atlas that just started paging leaves a single-page file behind; without removing it
             // the stale file would ship alongside the pages and the orphan sweep would only catch it
@@ -3231,7 +3675,8 @@ namespace CycloneGames.AtlasPipeline
         /// </summary>
         private static long ComputeAtlasFingerprint(AtlasBucket bucket, AtlasImportRule rule)
         {
-            long content = bucket.ComputeContentHash(ComputeRuleFingerprint(rule));
+            long content = bucket.ComputeContentHash(
+                ComputeRuleFingerprint(rule), ComputeGlobalFingerprint());
 
             // XOR rather than a running hash: the set of sources is order-independent, so the value
             // must not change when only the member order changes. Order is already covered by
@@ -3261,7 +3706,8 @@ namespace CycloneGames.AtlasPipeline
             long sourceHash)
         {
             return AtlasHash.Combine64(
-                bucket.ComputeContentHash(ComputeRuleFingerprint(rule)),
+                bucket.ComputeContentHash(
+                    ComputeRuleFingerprint(rule), ComputeGlobalFingerprint()),
                 sourceHash);
         }
 
@@ -3317,13 +3763,7 @@ namespace CycloneGames.AtlasPipeline
         private static bool TryGetRecordedSourceHash(string atlasKey, out long sourceHash)
         {
             sourceHash = AtlasHash.NullHash;
-            if (!_recordedManifestRead)
-            {
-                _recordedManifestRead = true;
-                _recordedManifest = ReadManifest();
-            }
-
-            AtlasManifest recorded = _recordedManifest;
+            AtlasManifest recorded = GetRecordedManifest();
             if (recorded == null)
             {
                 return false;
@@ -3359,6 +3799,155 @@ namespace CycloneGames.AtlasPipeline
             SourceFileHashes.Clear();
             _recordedManifest = null;
             _recordedManifestRead = false;
+        }
+
+        /// <summary>
+        /// The committed manifest, read at most once between resets. Shared by the cold-start skip
+        /// and the page-count seed, which need the same file for the same reason: both describe what
+        /// the last complete generation produced.
+        /// </summary>
+        private static AtlasManifest GetRecordedManifest()
+        {
+            if (!_recordedManifestRead)
+            {
+                _recordedManifestRead = true;
+                _recordedManifest = ReadManifest();
+            }
+
+            return _recordedManifest;
+        }
+
+        /// <summary>
+        /// Loads page counts for atlases this session has not generated, from the committed
+        /// manifest. Runs once per domain and fills only keys generation has not already set, so it
+        /// can never override what this session actually produced.
+        /// </summary>
+        /// <remarks>
+        /// Skipped when the manifest was written by a different generator: its page counts describe
+        /// output this version would not reproduce, and trusting them could protect pages that
+        /// should have been deleted.
+        /// </remarks>
+        private static void EnsureKnownPageCountsSeeded()
+        {
+            if (_knownPageCountsSeeded)
+            {
+                return;
+            }
+
+            _knownPageCountsSeeded = true;
+
+            AtlasManifest recorded = GetRecordedManifest();
+            if (recorded == null
+                || !string.Equals(
+                    recorded.GeneratorVersion,
+                    ManifestGeneratorVersion,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            IList<AtlasManifestEntry> entries = recorded.Entries;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                AtlasManifestEntry entry = entries[i];
+                if (entry.PageCount <= 1)
+                {
+                    continue;
+                }
+
+                // Entries are keyed by page key; the atlas key is what is left over. A base entry
+                // (single page) strips to itself and is skipped above, so only real pages land here.
+                string atlasKey = AtlasCapacityPlanner.StripPageSuffix(entry.AtlasKey);
+                if (!KnownPageCounts.TryGetValue(atlasKey, out int known)
+                    || entry.PageCount > known)
+                {
+                    KnownPageCounts[atlasKey] = entry.PageCount;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Page count an atlas is believed to have on disk. One page unless generation or the
+        /// committed manifest says otherwise — one is the safe default, since it matches the
+        /// pre-paging output an untracked atlas would have.
+        /// </summary>
+        private static int GetKnownPageCount(string atlasKey)
+        {
+            EnsureKnownPageCountsSeeded();
+            return KnownPageCounts.TryGetValue(atlasKey, out int pageCount) && pageCount > 1
+                ? pageCount
+                : 1;
+        }
+
+        /// <summary>
+        /// Queues deletion of pages a regeneration made surplus. Going from five pages to two leaves
+        /// two, three and four behind; going back to a single page leaves every page behind, including
+        /// page zero, which is why the single-page case deletes the whole range rather than everything
+        /// at or above the new count.
+        /// </summary>
+        /// <remarks>
+        /// Deleting rather than leaving them to the orphan sweep is deliberate: the sweep strips a
+        /// page file back to the base key of an atlas that still exists, so without a page count it
+        /// cannot tell a leftover from a page that is still required. Generation is the one place
+        /// that knows both numbers.
+        /// </remarks>
+        private static void ScheduleStalePageDeletes(
+            string atlasKey,
+            int previousPageCount,
+            int newPageCount)
+        {
+            if (previousPageCount <= newPageCount)
+            {
+                return;
+            }
+
+            for (int pageIndex = 0; pageIndex < previousPageCount; pageIndex++)
+            {
+                if (newPageCount > 1 && pageIndex < newPageCount)
+                {
+                    continue;
+                }
+
+                string stalePageKey = AtlasCapacityPlanner.BuildPageKey(
+                    atlasKey,
+                    pageIndex,
+                    previousPageCount);
+                DeletedAtlasPaths.Add(BuildAtlasAssetPath(
+                    _settingsCache.NormalizedOutputAtlasFolder,
+                    ResolveOutputSubfolder(atlasKey),
+                    stalePageKey));
+            }
+        }
+
+        /// <summary>
+        /// Queues deletion of every file an atlas owns: the base file and, when it was paged, each
+        /// page. Used when the atlas's last member is removed, so an emptied folder stops producing
+        /// an empty asset.
+        /// </summary>
+        /// <remarks>
+        /// Queueing the base file unconditionally is safe even for a paged atlas — the deletion pass
+        /// checks existence first, and a paged atlas must not have a base file anyway. The page range
+        /// comes from the known page count; when that is unknown the base file is still covered, and
+        /// the sweep is the backstop for anything unaccounted for.
+        /// </remarks>
+        private static void ScheduleAtlasRemoval(string atlasKey)
+        {
+            string subfolder = ResolveOutputSubfolder(atlasKey);
+            DeletedAtlasPaths.Add(BuildAtlasAssetPath(
+                _settingsCache.NormalizedOutputAtlasFolder,
+                subfolder,
+                atlasKey));
+
+            if (KnownPageCounts.TryGetValue(atlasKey, out int pageCount) && pageCount > 1)
+            {
+                for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
+                {
+                    DeletedAtlasPaths.Add(BuildAtlasAssetPath(
+                        _settingsCache.NormalizedOutputAtlasFolder,
+                        subfolder,
+                        AtlasCapacityPlanner.BuildPageKey(atlasKey, pageIndex, pageCount)));
+                }
+            }
         }
 
         /// <summary>
@@ -3498,17 +4087,18 @@ namespace CycloneGames.AtlasPipeline
 
         private static void WarnOnExcessivePaging()
         {
-            if (GeneratedPageCounts.Count == 0)
+            if (RegeneratedThisPass.Count == 0)
             {
                 return;
             }
 
-            var excessive = new List<string>(GeneratedPageCounts.Count);
-            foreach (KeyValuePair<string, int> pair in GeneratedPageCounts)
+            var excessive = new List<string>(RegeneratedThisPass.Count);
+            foreach (string atlasKey in RegeneratedThisPass)
             {
-                if (pair.Value > ExcessivePageCountThreshold)
+                int pageCount = KnownPageCounts.TryGetValue(atlasKey, out int pages) ? pages : 1;
+                if (pageCount > ExcessivePageCountThreshold)
                 {
-                    excessive.Add(pair.Key + " (" + pair.Value + " pages)");
+                    excessive.Add(atlasKey + " (" + pageCount + " pages)");
                 }
             }
 
