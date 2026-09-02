@@ -94,6 +94,27 @@ namespace CycloneGames.AtlasPipeline
         public IReadOnlyList<AtlasRuleAsset> RuleAssets => ruleAssets;
 
         /// <summary>
+        /// Appends a rule asset to the registered list. The caller owns the transaction: record the
+        /// settings object with <c>Undo.RecordObject</c> before calling, and mark it dirty after —
+        /// this mutator only touches the list and the resolved-rule cache.
+        /// </summary>
+        internal void RegisterRuleAsset(AtlasRuleAsset asset)
+        {
+            if (asset == null)
+            {
+                return;
+            }
+
+            if (ruleAssets == null)
+            {
+                ruleAssets = new List<AtlasRuleAsset>();
+            }
+
+            ruleAssets.Add(asset);
+            _resolvedRules = null;
+        }
+
+        /// <summary>
         /// True when the settings asset still carries legacy inline rules and no rule assets: the
         /// state a project written before rule assets existed is in, and the migration source.
         /// </summary>
