@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using UnityEditor;
 using YooAsset;
 using YooAsset.Editor;
 
@@ -90,7 +91,61 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         public BuildResult Run()
         {
+            EnsureStandaloneSubtargetCanBuild();
             return pipeline.Run(Parameters, true);
+        }
+
+        /// <summary>
+        /// The Scriptable Build Pipeline validates the CURRENT Build Settings state through
+        /// DesktopStandaloneBuildWindowExtension.EnabledBuildButton, which fails SILENTLY (the
+        /// SBP package does not define STANDALONE_BUILD_ERROR_CHECK on Unity 2022.3, so the
+        /// actionable error message is never logged) and surfaces only as the generic
+        /// "Unable to build with the current configuration, please check the Build Settings."
+        /// This check reproduces the known silent-failure conditions up front so the failure is
+        /// loud and actionable.
+        /// </summary>
+        private static void EnsureStandaloneSubtargetCanBuild()
+        {
+            BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
+            bool isStandaloneTarget = target == BuildTarget.StandaloneWindows
+                || target == BuildTarget.StandaloneWindows64
+                || target == BuildTarget.StandaloneLinux64
+                || target == BuildTarget.StandaloneOSX;
+            if (!isStandaloneTarget)
+            {
+                return;
+            }
+
+            if (GetSelectedStandaloneBuildSubtarget() == StandaloneBuildSubtarget.Server)
+            {
+                throw new InvalidOperationException(
+                    "The Standalone build subtarget selected in Build Settings is Dedicated Server, and " +
+                    "this editor does not have the Dedicated Server build support module installed. The " +
+                    "Scriptable Build Pipeline rejects that state silently (it only surfaces as 'Unable " +
+                    "to build with the current configuration, please check the Build Settings'). Switch " +
+                    "the Standalone subtarget back to Client in Build Settings, or install 'Dedicated " +
+                    "Server Build Support' for this editor version through Unity Hub, then run the " +
+                    "build again.");
+            }
+        }
+
+        /// <summary>
+        /// SBP validates the *selected* subtarget (an internal editor value with no public API),
+        /// which can differ from the public active <c>standaloneBuildSubtarget</c>. Reflection is
+        /// confined to this Editor-only assembly and falls back to the public value.
+        /// </summary>
+        private static StandaloneBuildSubtarget GetSelectedStandaloneBuildSubtarget()
+        {
+            System.Reflection.PropertyInfo property = typeof(EditorUserBuildSettings).GetProperty(
+                "selectedStandaloneBuildSubtarget",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.Static);
+            if (property != null && property.CanRead)
+            {
+                return (StandaloneBuildSubtarget)property.GetValue(null);
+            }
+
+            return EditorUserBuildSettings.standaloneBuildSubtarget;
         }
 
         private static void ValidateKnownArtifactPathBudgets(

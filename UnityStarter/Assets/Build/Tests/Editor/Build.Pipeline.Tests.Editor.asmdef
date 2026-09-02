@@ -4,7 +4,8 @@
     "references": [
         "Build.Pipeline.Editor",
         "Build.Data",
-        "Build.VersionControl.Editor"
+        "Build.VersionControl.Editor",
+        "Build.Pipeline.Integrations.YooAsset3.Publication"
     ],
     "includePlatforms": [
         "Editor"

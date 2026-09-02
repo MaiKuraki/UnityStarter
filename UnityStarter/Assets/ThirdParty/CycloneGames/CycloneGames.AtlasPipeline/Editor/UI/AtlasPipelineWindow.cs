@@ -843,35 +843,54 @@ namespace CycloneGames.AtlasPipeline
             _rulesList.drawElementCallback = DrawRuleAssetElement;
             _rulesList.onAddCallback = list =>
             {
-                AtlasRuleAsset asset = CreateRuleAsset(list.serializedProperty.arraySize + 1);
+                AtlasRuleAsset asset = AtlasPipeline.CreateAndRegisterRuleAsset(
+                    BuildDefaultRule(list.serializedProperty.arraySize + 1));
                 if (asset == null)
                 {
                     return;
                 }
 
-                int index = list.serializedProperty.arraySize;
-                list.serializedProperty.InsertArrayElementAtIndex(index);
-                list.serializedProperty.GetArrayElementAtIndex(index)
-                    .objectReferenceValue = asset;
+                // The helper mutated the settings asset directly (with a full undo group), so this
+                // window's SerializedObject view is stale until it re-reads.
+                _settingsObject.Update();
                 _rulesChanged = true;
+                _validationCacheDirty = true;
+            };
+
+            // Explicit so the semantics are not an accident of ReorderableList's default remove:
+            // this UNREGISTERS the reference and nothing else. The asset file stays on disk as an
+            // orphan for the audit and the "Delete Unregistered Rule Assets" command to handle —
+            // no AssetDatabase.DeleteAsset here, ever. The delete is recorded by the settings
+            // SerializedObject's ApplyModifiedProperties, so undo restores the same reference.
+            // The double delete is the object-reference-array quirk: the first call clears the
+            // reference, only the second removes the slot — without it, every removal would leave
+            // a blank row that grows the list.
+            _rulesList.onRemoveCallback = list =>
+            {
+                if (list.index < 0 || list.index >= list.serializedProperty.arraySize)
+                {
+                    return;
+                }
+
+                int sizeBefore = list.serializedProperty.arraySize;
+                list.serializedProperty.DeleteArrayElementAtIndex(list.index);
+                if (list.serializedProperty.arraySize == sizeBefore)
+                {
+                    list.serializedProperty.DeleteArrayElementAtIndex(list.index);
+                }
+
+                _rulesChanged = true;
+                _validationCacheDirty = true;
             };
         }
 
         /// <summary>
-        /// Creates a rule asset with the same defaults the old inline "+" used to write, so a new
-        /// rule behaves identically whichever way it was added.
+        /// The defaults a freshly added rule starts with — the same values the old inline "+"
+        /// used to write, so a new rule behaves identically whichever way it was added.
         /// </summary>
-        private static AtlasRuleAsset CreateRuleAsset(int ruleNumber)
+        private static AtlasImportRule BuildDefaultRule(int ruleNumber)
         {
-            AtlasPipeline.EnsureAssetFolderExists(AtlasPipeline.DefaultRuleFolder);
-            string path = AtlasPipeline.DefaultRuleFolder + "/Rule " + ruleNumber + ".asset";
-            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) != null)
-            {
-                path = AssetDatabase.GenerateUniqueAssetPath(path);
-            }
-
-            var asset = ScriptableObject.CreateInstance<AtlasRuleAsset>();
-            AtlasImportRule rule = AtlasImportRule.Create(
+            return AtlasImportRule.Create(
                 "Rule " + ruleNumber,
                 string.Empty,
                 AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Android),
@@ -881,10 +900,6 @@ namespace CycloneGames.AtlasPipeline
                 webglFormat: AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Webgl),
                 standaloneFormat: AtlasPlatformFormats.GetDefaultFormat(AtlasPlatform.Standalone),
                 atlasMaxTextureSize: 2048);
-            asset.Initialize(rule);
-            AssetDatabase.CreateAsset(asset, path);
-            AssetDatabase.SaveAssets();
-            return asset;
         }
 
         /// <summary>

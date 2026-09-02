@@ -713,23 +713,4 @@ namespace Build.Pipeline.Editor
         }
     }
 
-    [BuildRecoveryRegistration(BuildPublicationBarrier.ParticipantId, 100)]
-    public sealed class BuildPublicationBarrierRecoveryParticipant :
-        IBuildRecoveryParticipant,
-        IBuildRecoveryCoordinator
-    {
-        private static readonly string[] StatePaths =
-        {
-            BuildPublicationBarrier.StateRelativePath
-        };
-
-        public string Id => BuildPublicationBarrier.ParticipantId;
-        public int Priority => 100;
-        public IReadOnlyList<string> StateDirectoryRelativePaths => StatePaths;
-
-        public void Recover(string projectRoot)
-        {
-            BuildPublicationBarrier.Recover(projectRoot);
-        }
-    }
 }

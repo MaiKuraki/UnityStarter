@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
-using static Build.Pipeline.Editor.Integrations.YooAsset3Core.YooAsset3PublicationConstants;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
+using static Build.Pipeline.Integrations.YooAsset3.Publication.PublicationConstants;
 
 namespace Build.Pipeline.Editor.Integrations.YooAsset3
 {
@@ -18,8 +18,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private readonly string stateRelativePath;
         private readonly string stateRoot;
         private readonly string activeJournalPath;
-        private readonly Journal journal;
-        private readonly YooAsset3PackagePublication[] packages;
+        private readonly PublicationJournal journal;
+        private readonly PackagePublication[] packages;
         private readonly YooAsset3PackageBuildPlan[] finalPlans;
         private bool prepared;
         private bool completed;
@@ -32,24 +32,24 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string buildOutputRoot,
             string bundledFileRoot,
             string invocationId,
-            Journal journal,
-            YooAsset3PackagePublication[] packages,
+            PublicationJournal journal,
+            PackagePublication[] packages,
             YooAsset3PackageBuildPlan[] finalPlans)
         {
             this.projectRoot = projectRoot;
             this.buildOutputRoot = buildOutputRoot;
             this.bundledFileRoot = bundledFileRoot;
-            this.invocationId = YooAsset3PublicationPaths.NormalizeInvocationId(invocationId);
-            publicationId = YooAsset3PublicationPaths.GetPublicationId(this.invocationId);
-            stateRelativePath = YooAsset3PublicationPaths.GetStateRelativePath(this.invocationId);
-            stateRoot = YooAsset3PublicationPaths.GetStateRoot(projectRoot, this.invocationId);
+            this.invocationId = PublicationPaths.NormalizeInvocationId(invocationId);
+            publicationId = PublicationPaths.GetPublicationId(this.invocationId);
+            stateRelativePath = PublicationPaths.GetStateRelativePath(this.invocationId);
+            stateRoot = PublicationPaths.GetStateRoot(projectRoot, this.invocationId);
             activeJournalPath = Path.Combine(stateRoot, ActiveJournalFileName);
             this.journal = journal;
             this.packages = packages;
             this.finalPlans = finalPlans;
         }
 
-        public IReadOnlyList<YooAsset3PackagePublication> Packages => packages;
+        public IReadOnlyList<PackagePublication> Packages => packages;
         // A bundled target only counts as a downstream input when it manages sibling
         // meta, i.e. it lives under Assets/StreamingAssets and will be swept into the
         // Player by Unity. Bundled targets elsewhere are not copied into the Player,
@@ -61,7 +61,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         internal string PublicationId => publicationId;
         internal string StateRelativePath => stateRelativePath;
 
-        internal YooAsset3PackageBuildPlan GetFinalPlan(YooAsset3PackagePublication publication)
+        internal YooAsset3PackageBuildPlan GetFinalPlan(PackagePublication publication)
         {
             int index = Array.IndexOf(packages, publication);
             if (index < 0)
@@ -74,42 +74,48 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         // Compatibility facades. The durable publication recovery logic and its path
-        // helpers now live in the core assembly (YooAsset3PublicationRecovery and
-        // YooAsset3PublicationPaths) so recovery still works when the YooAsset package
+        // helpers now live in the core assembly (PublicationRecovery and
+        // PublicationPaths) so recovery still works when the YooAsset package
         // is uninstalled. These one-line delegations preserve the transaction's public
         // surface for the gated build adapter and integration tests.
+        /// <summary>Durable transaction id; also the relocation journal document key.</summary>
+        internal string TransactionId => journal.transactionId;
+
+        /// <summary>Normalized project root the transaction was created against.</summary>
+        internal string ProjectRoot => projectRoot;
+
         public static string GetProviderStateRoot(string projectRoot)
         {
-            return YooAsset3PublicationPaths.GetProviderStateRoot(projectRoot);
+            return PublicationPaths.GetProviderStateRoot(projectRoot);
         }
 
         public static string GetStateRoot(
             string projectRoot,
             string invocationId)
         {
-            return YooAsset3PublicationPaths.GetStateRoot(projectRoot, invocationId);
+            return PublicationPaths.GetStateRoot(projectRoot, invocationId);
         }
 
         internal static string GetStateRelativePath(string invocationId)
         {
-            return YooAsset3PublicationPaths.GetStateRelativePath(invocationId);
+            return PublicationPaths.GetStateRelativePath(invocationId);
         }
 
         internal static string GetPublicationId(string invocationId)
         {
-            return YooAsset3PublicationPaths.GetPublicationId(invocationId);
+            return PublicationPaths.GetPublicationId(invocationId);
         }
 
         public static void RecoverPending(string projectRoot, Action refreshAssets)
         {
-            YooAsset3PublicationRecovery.RecoverPending(projectRoot, refreshAssets);
+            PublicationRecovery.RecoverPending(projectRoot, refreshAssets, UnityJournalSerializer.Instance);
         }
 
         internal static void EnsureNoPendingRecovery(
             string projectRoot,
             string invocationId)
         {
-            YooAsset3PublicationRecovery.EnsureNoPendingRecovery(projectRoot, invocationId);
+            PublicationRecovery.EnsureNoPendingRecovery(projectRoot, invocationId);
         }
 
         public static YooAsset3PublicationTransaction Create(
@@ -121,22 +127,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new ArgumentNullException(nameof(plan));
             }
 
-            string normalizedInvocationId = YooAsset3PublicationPaths.NormalizeInvocationId(invocationId);
+            string normalizedInvocationId = PublicationPaths.NormalizeInvocationId(invocationId);
             string transactionId = Guid.NewGuid().ToString("N");
             string stateRoot = GetStateRoot(
                 plan.ProjectRoot,
                 normalizedInvocationId);
             string workRoot = Path.GetFullPath(Path.Combine(stateRoot, "work", transactionId));
-            var operations = new List<YooAsset3PublicationJournalOperation>(plan.Packages.Length * 2);
-            var publications = new YooAsset3PackagePublication[plan.Packages.Length];
+            var operations = new List<PublicationJournalOperation>(plan.Packages.Length * 2);
+            var publications = new PackagePublication[plan.Packages.Length];
 
             for (int index = 0; index < plan.Packages.Length; index++)
             {
                 YooAsset3PackageBuildPlan packagePlan = plan.Packages[index];
                 string suffix = transactionId + "-" + index.ToString("D3", CultureInfo.InvariantCulture);
-                YooAsset3PublicationJournalOperation outputOperation = CreateOperation(
+                PublicationJournalOperation outputOperation = CreateOperation(
                     plan.ProjectRoot,
-                    YooAsset3PublicationOwnership.PackageOutputKind,
+                    PublicationOwnership.PackageOutputKind,
                     packagePlan.PackageName,
                     packagePlan.PackageVersion,
                     packagePlan.CryptographyAdapterId,
@@ -146,13 +152,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     suffix);
                 operations.Add(outputOperation);
 
-                YooAsset3PublicationJournalOperation bundledOperation = null;
+                PublicationJournalOperation bundledOperation = null;
                 string bundledWorkDirectory = string.Empty;
                 if (packagePlan.Parameters.BundledCopyOption != YooAsset.Editor.EBundledCopyOption.None)
                 {
                     bundledOperation = CreateOperation(
                         plan.ProjectRoot,
-                        YooAsset3PublicationOwnership.BundledPackageKind,
+                        PublicationOwnership.BundledPackageKind,
                         packagePlan.PackageName,
                         packagePlan.PackageVersion,
                         packagePlan.CryptographyAdapterId,
@@ -167,13 +173,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         index.ToString("D3", CultureInfo.InvariantCulture)));
                 }
 
-                publications[index] = new YooAsset3PackagePublication(
+                publications[index] = new PackagePublication(
                     outputOperation,
                     bundledOperation,
                     bundledWorkDirectory);
             }
 
-            var journal = new Journal
+            var journal = new PublicationJournal
             {
                 documentType = JournalDocumentType,
                 invocationId = normalizedInvocationId,
@@ -198,14 +204,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         private static void ValidateTransactionPathBudgets(
-            Journal value,
-            YooAsset3PackagePublication[] packagePublications,
+            PublicationJournal value,
+            PackagePublication[] packagePublications,
             YooAsset3PackageBuildPlan[] finalPlans)
         {
-            YooAsset3PublicationRecovery.ValidateJournalPathBudgets(value);
+            PublicationJournalStore.ValidateJournalPathBudgets(value);
             for (int index = 0; index < packagePublications.Length; index++)
             {
-                YooAsset3PackagePublication publication = packagePublications[index];
+                PackagePublication publication = packagePublications[index];
                 if (!string.IsNullOrEmpty(publication.BundledWorkDirectory))
                 {
                     BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
@@ -224,34 +230,34 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException("The YooAsset publication transaction is already prepared.");
             }
 
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, stateRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, activeJournalPath);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, stateRoot);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, activeJournalPath);
             Directory.CreateDirectory(stateRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, stateRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, activeJournalPath);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, stateRoot);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, activeJournalPath);
             if (File.Exists(activeJournalPath))
             {
                 throw new InvalidOperationException(
                     $"A pending YooAsset publication journal must be recovered before starting a new transaction: '{activeJournalPath}'.");
             }
 
-            YooAsset3PublicationRecovery.EnsureNoDetachedState(stateRoot);
-            foreach (YooAsset3PublicationJournalOperation operation in journal.operations)
+            PublicationRecovery.EnsureNoDetachedState(stateRoot);
+            foreach (PublicationJournalOperation operation in journal.operations)
             {
-                YooAsset3PublicationRecovery.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
+                PublicationJournalValidator.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
             }
 
             EnsureNoOrphanOperationDirectories(journal.operations);
-            foreach (YooAsset3PublicationJournalOperation operation in journal.operations)
+            foreach (PublicationJournalOperation operation in journal.operations)
             {
                 CaptureOriginalPublication(operation);
             }
 
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: true);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: true, UnityJournalSerializer.Instance);
             prepared = true;
             checkpoint?.Invoke("Prepared");
 
-            foreach (YooAsset3PackagePublication package in packages)
+            foreach (PackagePublication package in packages)
             {
                 if (package.BundledOperation == null || !RequiresBundledSeed(GetFinalPlan(package).Profile.bundledCopyOption))
                 {
@@ -260,7 +266,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
                 if (Directory.Exists(package.BundledOperation.target))
                 {
-                    YooAsset3PublicationRecovery.CopyDirectorySafely(
+                    PublicationFileOps.CopyDirectorySafely(
                         projectRoot,
                         package.BundledOperation.target,
                         package.BundledWorkDirectory,
@@ -272,7 +278,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         public YooAsset3PackageBuildPlan CreateExecutionPlan(
             AssetContentBuildRequest request,
-            YooAsset3PackagePublication publication)
+            PackagePublication publication)
         {
             ThrowIfDisposed();
             if (!prepared)
@@ -310,9 +316,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         public void PrepareReadyDirectories()
         {
             ThrowIfDisposed();
-            foreach (YooAsset3PackagePublication package in packages)
+            foreach (PackagePublication package in packages)
             {
-                YooAsset3PublicationJournalOperation bundledOperation = package.BundledOperation;
+                PublicationJournalOperation bundledOperation = package.BundledOperation;
                 if (bundledOperation == null)
                 {
                     continue;
@@ -324,8 +330,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         $"YooAsset did not produce its staged bundled package directory: '{package.BundledWorkDirectory}'.");
                 }
 
-                YooAsset3PublicationRecovery.EnsureOperationCandidateAbsent(bundledOperation);
-                YooAsset3PublicationRecovery.CopyDirectorySafely(
+                PublicationCommitCompletion.EnsureOperationCandidateAbsent(bundledOperation);
+                PublicationFileOps.CopyDirectorySafely(
                     projectRoot,
                     package.BundledWorkDirectory,
                     bundledOperation.stage,
@@ -342,9 +348,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException("Prepare the YooAsset publication transaction before sealing its stages.");
             }
 
-            foreach (YooAsset3PublicationJournalOperation operation in journal.operations)
+            foreach (PublicationJournalOperation operation in journal.operations)
             {
-                YooAsset3PublicationOwnership.PublicationSnapshot sealedStage = YooAsset3PublicationOwnership.Seal(
+                PublicationOwnership.PublicationSnapshot sealedStage = PublicationOwnership.Seal(
                     projectRoot,
                     operation.stage,
                     operation.kind,
@@ -352,12 +358,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     operation.packageVersion,
                     operation.cryptographyAdapterId,
                     operation.runtimeDecryptContractId,
-                    journal.transactionId);
+                    journal.transactionId,
+                    UnityJournalSerializer.Instance);
                 operation.installedContentIdentity = sealedStage.ContentIdentity;
                 operation.installedEntryCount = sealedStage.EntryCount;
             }
 
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             checkpoint?.Invoke("Sealed");
         }
 
@@ -381,7 +388,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         $"YooAsset publication cannot publish terminal outputs from phase '{journal.phase}'.");
                 }
 
-                YooAsset3PublicationJournalOperation[] pending = journal.operations
+                PublicationJournalOperation[] pending = journal.operations
                     .Where(operation => string.Equals(
                         operation.state,
                         PreparedState,
@@ -395,8 +402,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
                 ValidateReadyToCommit(pending);
                 journal.phase = CommittingPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
-                foreach (YooAsset3PublicationJournalOperation operation in pending)
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
+                foreach (PublicationJournalOperation operation in pending)
                 {
                     CommitOperation(operation, checkpoint);
                 }
@@ -404,11 +411,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 checkpoint?.Invoke("PreValidatePublishedState");
                 validatePublishedState?.Invoke();
                 checkpoint?.Invoke("PostValidatePublishedState");
-                YooAsset3PublicationRecovery.ValidatePreRefreshCommittedPublications(journal);
+                PublicationCommitCompletion.ValidatePreRefreshCommittedPublications(journal, UnityJournalSerializer.Instance);
                 journal.phase = AwaitingDecisionPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             }
-            catch (YooAsset3SimulatedTerminationException)
+            catch (SimulatedTerminationException)
             {
                 // A simulated crash leaves the durable journal exactly where the
                 // checkpoint fired; no rollback runs because the process is "gone".
@@ -418,7 +425,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             {
                 try
                 {
-                    YooAsset3PublicationRecovery.Rollback(journal, activeJournalPath, refreshAssets, checkpoint);
+                    PublicationRollback.Rollback(journal, activeJournalPath, refreshAssets, UnityJournalSerializer.Instance, checkpoint);
                     completed = true;
                 }
                 catch (Exception rollbackException)
@@ -452,30 +459,30 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new ArgumentNullException(nameof(refreshAssets));
             }
 
-            YooAsset3PublicationJournalOperation[] bundled = journal.operations
+            PublicationJournalOperation[] bundled = journal.operations
                 .Where(operation => operation.managesSiblingMeta)
                 .ToArray();
             try
             {
                 ValidateReadyToCommit(bundled);
                 journal.phase = CommittingPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
-                foreach (YooAsset3PublicationJournalOperation operation in bundled)
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
+                foreach (PublicationJournalOperation operation in bundled)
                 {
                     CommitOperation(operation, checkpoint);
                 }
 
-                YooAsset3PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: false);
+                PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: false, UnityJournalSerializer.Instance);
                 journal.phase = ActivationRefreshPendingPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
                 checkpoint?.Invoke("PreRefresh");
                 refreshAssets();
                 checkpoint?.Invoke("PostRefresh");
-                YooAsset3PublicationRecovery.CaptureInstalledSiblingMetas(journal, recoveryCandidates: null);
+                PublicationMetaGuard.CaptureInstalledSiblingMetas(journal, UnityJournalSerializer.Instance, recoveryCandidates: null);
                 journal.phase = DownstreamActivePhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             }
-            catch (YooAsset3SimulatedTerminationException)
+            catch (SimulatedTerminationException)
             {
                 // A simulated crash leaves the durable journal exactly where the
                 // checkpoint fired; no cleanup runs because the process is "gone".
@@ -483,7 +490,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
             catch
             {
-                YooAsset3PublicationRecovery.CaptureActivatedSiblingMetasForRollback(journal);
+                PublicationRollback.CaptureActivatedSiblingMetasForRollback(journal, UnityJournalSerializer.Instance);
                 if (bundled.All(operation => string.Equals(
                     operation.state,
                     InstalledState,
@@ -492,7 +499,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     journal.phase = DownstreamActivePhase;
                 }
 
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
                 throw;
             }
         }
@@ -512,7 +519,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     "YooAsset bundled inputs are not active at the terminal decision boundary.");
             }
 
-            YooAsset3PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true);
+            PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true, UnityJournalSerializer.Instance);
         }
 
         internal IDisposable SuspendForSourceQualification()
@@ -546,44 +553,44 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
             if (downstreamActive)
             {
-                YooAsset3PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true);
+                PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true, UnityJournalSerializer.Instance);
             }
             else
             {
-                YooAsset3PublicationRecovery.ValidatePreparedForSourceQualification(journal);
+                PublicationSourceQualification.ValidatePreparedForSourceQualification(journal, UnityJournalSerializer.Instance);
             }
 
             sourceQualificationResumePhase = journal.phase;
             journal.phase = SourceQualificationSuspendingPhase;
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
 
             try
             {
-                string suspensionRoot = YooAsset3PublicationRecovery.GetSourceQualificationRoot(journal);
-                YooAsset3PublicationRecovery.EnsureSourceQualificationRootCanBeCreated(journal, suspensionRoot);
+                string suspensionRoot = PublicationPaths.GetSourceQualificationRoot(journal);
+                PublicationSourceQualification.EnsureSourceQualificationRootCanBeCreated(journal, suspensionRoot);
                 Directory.CreateDirectory(suspensionRoot);
-                YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, suspensionRoot);
+                PublicationSafety.ValidateNoPathRedirection(projectRoot, suspensionRoot);
 
                 for (int index = journal.operations.Length - 1; index >= 0; index--)
                 {
-                    YooAsset3PublicationJournalOperation operation = journal.operations[index];
+                    PublicationJournalOperation operation = journal.operations[index];
                     if (!operation.managesSiblingMeta)
                     {
                         continue;
                     }
 
-                    YooAsset3PublicationRecovery.SuspendBundledOperation(
+                    PublicationSourceQualification.SuspendBundledOperation(
                         journal,
                         operation,
                         index,
-                        downstreamActive);
+                        downstreamActive, UnityJournalSerializer.Instance);
                 }
 
-                YooAsset3PublicationRecovery.ValidateSourceQualificationSuspended(
+                PublicationSourceQualification.ValidateSourceQualificationSuspended(
                     journal,
-                    downstreamActive);
+                    downstreamActive, UnityJournalSerializer.Instance);
                 journal.phase = SourceQualificationSuspendedPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
                 sourceQualificationScopeActive = true;
                 return new SourceQualificationScope(this);
             }
@@ -625,41 +632,41 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     "YooAsset source qualification suspension lost its resume phase.");
             }
 
-            YooAsset3PublicationRecovery.ValidateSourceQualificationSuspended(
+            PublicationSourceQualification.ValidateSourceQualificationSuspended(
                 journal,
-                downstreamActive);
+                downstreamActive, UnityJournalSerializer.Instance);
             journal.phase = SourceQualificationResumingPhase;
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
 
             try
             {
                 for (int index = 0; index < journal.operations.Length; index++)
                 {
-                    YooAsset3PublicationJournalOperation operation = journal.operations[index];
+                    PublicationJournalOperation operation = journal.operations[index];
                     if (!operation.managesSiblingMeta)
                     {
                         continue;
                     }
 
-                    YooAsset3PublicationRecovery.ResumeBundledOperation(
+                    PublicationSourceQualification.ResumeBundledOperation(
                         journal,
                         operation,
                         index,
-                        downstreamActive);
+                        downstreamActive, UnityJournalSerializer.Instance);
                 }
 
                 if (downstreamActive)
                 {
-                    YooAsset3PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true);
+                    PublicationRecovery.ValidateDownstreamInputs(journal, afterRefresh: true, UnityJournalSerializer.Instance);
                 }
                 else
                 {
-                    YooAsset3PublicationRecovery.ValidatePreparedForSourceQualification(journal);
+                    PublicationSourceQualification.ValidatePreparedForSourceQualification(journal, UnityJournalSerializer.Instance);
                 }
 
-                YooAsset3PublicationRecovery.DeleteSourceQualificationRoot(journal);
+                PublicationSourceQualification.DeleteSourceQualificationRoot(journal);
                 journal.phase = sourceQualificationResumePhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
                 sourceQualificationScopeActive = false;
                 sourceQualificationResumePhase = string.Empty;
             }
@@ -697,22 +704,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             completed = true;
             try
             {
-                YooAsset3PublicationRecovery.ValidatePreRefreshCommittedPublications(journal);
+                PublicationCommitCompletion.ValidatePreRefreshCommittedPublications(journal, UnityJournalSerializer.Instance);
                 journal.phase = RefreshPendingPhase;
-                YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
-                YooAsset3PublicationRecovery.CompletePendingRefresh(journal, activeJournalPath, refreshAssets, checkpoint);
+                PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
+                PublicationCommitCompletion.CompletePendingRefresh(journal, activeJournalPath, refreshAssets, UnityJournalSerializer.Instance, checkpoint);
             }
-            catch (YooAsset3SimulatedTerminationException)
+            catch (SimulatedTerminationException)
             {
                 throw;
             }
-            catch (YooAsset3CommittedPublicationException)
+            catch (CommittedPublicationException)
             {
                 throw;
             }
             catch (Exception completionException)
             {
-                throw new YooAsset3CommittedPublicationException(
+                throw new CommittedPublicationException(
                     "YooAsset publication was selected by the terminal commit barrier, but durable refresh finalization did not complete. " +
                     "The journal and backups were retained for explicit recovery.",
                     activeJournalPath,
@@ -740,7 +747,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     return;
                 }
 
-                YooAsset3PublicationRecovery.Rollback(journal, activeJournalPath, refreshAssets);
+                PublicationRollback.Rollback(journal, activeJournalPath, refreshAssets, UnityJournalSerializer.Instance);
             }
 
             completed = true;
@@ -761,7 +768,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             disposed = true;
         }
 
-        private static YooAsset3PublicationJournalOperation CreateOperation(
+        private static PublicationJournalOperation CreateOperation(
             string projectRoot,
             string kind,
             string packageName,
@@ -783,10 +790,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string backup = Path.Combine(parent, BackupPrefix + suffix);
             string streamingAssetsRoot = Path.GetFullPath(Path.Combine(projectRoot, "Assets", "StreamingAssets"));
             bool managesSiblingMeta =
-                string.Equals(kind, YooAsset3PublicationOwnership.BundledPackageKind, StringComparison.Ordinal) &&
-                (YooAsset3BuildSafety.PathsEqual(streamingAssetsRoot, normalizedTarget) ||
-                 YooAsset3BuildSafety.IsStrictDescendant(streamingAssetsRoot, normalizedTarget));
-            return new YooAsset3PublicationJournalOperation
+                string.Equals(kind, PublicationOwnership.BundledPackageKind, StringComparison.Ordinal) &&
+                (PublicationSafety.PathsEqual(streamingAssetsRoot, normalizedTarget) ||
+                 PublicationSafety.IsStrictDescendant(streamingAssetsRoot, normalizedTarget));
+            return new PublicationJournalOperation
             {
                 kind = kind,
                 packageName = packageName,
@@ -804,14 +811,15 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             };
         }
 
-        private void CaptureOriginalPublication(YooAsset3PublicationJournalOperation operation)
+        private void CaptureOriginalPublication(PublicationJournalOperation operation)
         {
-            YooAsset3PublicationRecovery.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
-            YooAsset3PublicationOwnership.PublicationSnapshot original = YooAsset3PublicationOwnership.CaptureExisting(
+            PublicationJournalValidator.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
+            PublicationOwnership.PublicationSnapshot original = PublicationOwnership.CaptureExisting(
                 projectRoot,
                 operation.target,
                 operation.kind,
-                operation.packageName);
+                operation.packageName,
+                UnityJournalSerializer.Instance);
             operation.targetInitiallyExisted = original.Exists;
             operation.originalWasOwned = original.Owned;
             operation.originalTransactionId = original.TransactionId;
@@ -825,7 +833,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 return;
             }
 
-            MetaFileSnapshot originalMeta = YooAsset3PublicationRecovery.CaptureMetaFile(projectRoot, operation.targetMeta);
+            MetaFileSnapshot originalMeta = PublicationMetaGuard.CaptureMetaFile(projectRoot, operation.targetMeta);
             if (original.Exists != originalMeta.Exists)
             {
                 throw new InvalidOperationException(
@@ -839,7 +847,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         private void ValidateReadyToCommit(
-            IReadOnlyList<YooAsset3PublicationJournalOperation> operations)
+            IReadOnlyList<PublicationJournalOperation> operations)
         {
             if (operations == null || operations.Count == 0)
             {
@@ -847,7 +855,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     "YooAsset publication has no operations to commit.");
             }
 
-            foreach (YooAsset3PublicationJournalOperation operation in operations)
+            foreach (PublicationJournalOperation operation in operations)
             {
                 if (operation == null ||
                     !string.Equals(operation.state, PreparedState, StringComparison.Ordinal))
@@ -856,20 +864,20 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         "YooAsset publication can only commit prepared operations.");
                 }
 
-                YooAsset3PublicationRecovery.ValidateDirectoryMovePathBudgets(
+                PublicationFileOps.ValidateDirectoryMovePathBudgets(
                     operation.stage,
                     operation.target,
                     $"YooAsset published artifact '{operation.packageName}'");
                 if (operation.targetInitiallyExisted)
                 {
-                    YooAsset3PublicationRecovery.ValidateDirectoryMovePathBudgets(
+                    PublicationFileOps.ValidateDirectoryMovePathBudgets(
                         operation.target,
                         operation.backup,
                         $"YooAsset backup artifact '{operation.packageName}'");
                 }
 
-                YooAsset3PublicationRecovery.ValidateOriginalPublicationAt(operation, operation.target, projectRoot);
-                YooAsset3PublicationRecovery.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId);
+                PublicationJournalValidator.ValidateOriginalPublicationAt(operation, operation.target, projectRoot, UnityJournalSerializer.Instance);
+                PublicationJournalValidator.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId, UnityJournalSerializer.Instance);
                 if (Directory.Exists(operation.backup) || File.Exists(operation.backup))
                 {
                     throw new InvalidOperationException($"Publication backup path is not empty: '{operation.backup}'.");
@@ -884,11 +892,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
         }
 
-        private void CommitOperation(YooAsset3PublicationJournalOperation operation, Action<string> checkpoint = null)
+        private void CommitOperation(PublicationJournalOperation operation, Action<string> checkpoint = null)
         {
-            YooAsset3PublicationRecovery.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
-            YooAsset3PublicationRecovery.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId);
-            YooAsset3PublicationRecovery.ValidateOriginalPublicationAt(operation, operation.target, projectRoot);
+            PublicationJournalValidator.ValidateOperation(operation, projectRoot, buildOutputRoot, bundledFileRoot, journal.transactionId);
+            PublicationJournalValidator.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId, UnityJournalSerializer.Instance);
+            PublicationJournalValidator.ValidateOriginalPublicationAt(operation, operation.target, projectRoot, UnityJournalSerializer.Instance);
 
             if (Directory.Exists(operation.backup) || File.Exists(operation.backup))
             {
@@ -896,17 +904,17 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             operation.state = BackupPendingState;
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             checkpoint?.Invoke($"BackupPending:{operation.packageName}");
             if (operation.targetInitiallyExisted)
             {
                 ProtectOriginalSiblingMeta(projectRoot, operation);
                 Directory.Move(operation.target, operation.backup);
-                YooAsset3PublicationRecovery.ValidateOriginalPublicationAt(operation, operation.backup, projectRoot);
+                PublicationJournalValidator.ValidateOriginalPublicationAt(operation, operation.backup, projectRoot, UnityJournalSerializer.Instance);
             }
 
             operation.state = BackedUpState;
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             checkpoint?.Invoke($"BackedUp:{operation.packageName}");
             if (Directory.Exists(operation.target) || File.Exists(operation.target))
             {
@@ -914,31 +922,31 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     $"Publication target appeared while committing package '{operation.packageName}': '{operation.target}'.");
             }
 
-            YooAsset3PublicationRecovery.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId);
+            PublicationJournalValidator.ValidateInstalledPublicationAt(operation, operation.stage, projectRoot, journal.transactionId, UnityJournalSerializer.Instance);
             Directory.Move(operation.stage, operation.target);
-            YooAsset3PublicationRecovery.ValidateInstalledPublicationAt(operation, operation.target, projectRoot, journal.transactionId);
-            YooAsset3PublicationRecovery.ValidatePreRefreshSiblingMeta(projectRoot, operation, allowMissingOriginalMeta: false);
+            PublicationJournalValidator.ValidateInstalledPublicationAt(operation, operation.target, projectRoot, journal.transactionId, UnityJournalSerializer.Instance);
+            PublicationMetaGuard.ValidatePreRefreshSiblingMeta(projectRoot, operation, UnityJournalSerializer.Instance, allowMissingOriginalMeta: false);
             operation.state = InstalledState;
-            YooAsset3PublicationRecovery.WriteJournal(journal, activeJournalPath, createNew: false);
+            PublicationJournalStore.WriteJournal(journal, activeJournalPath, createNew: false, UnityJournalSerializer.Instance);
             checkpoint?.Invoke($"Installed:{operation.packageName}");
         }
 
         private static void ProtectOriginalSiblingMeta(
             string projectRoot,
-            YooAsset3PublicationJournalOperation operation)
+            PublicationJournalOperation operation)
         {
             if (!operation.managesSiblingMeta)
             {
                 return;
             }
 
-            YooAsset3PublicationRecovery.ValidateMetaFile(
+            PublicationMetaGuard.ValidateMetaFile(
                 projectRoot,
                 operation.targetMeta,
                 operation.originalMetaExisted,
                 operation.originalMetaLength,
                 operation.originalMetaSha256,
-                "original bundled publication meta");
+                "original bundled publication meta", UnityJournalSerializer.Instance);
             if (!operation.originalMetaExisted)
             {
                 return;
@@ -950,14 +958,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     $"Protected bundled publication meta path is not empty: '{operation.protectedMeta}'.");
             }
 
-            YooAsset3PublicationRecovery.CopyMetaFileDurably(operation.targetMeta, operation.protectedMeta);
-            YooAsset3PublicationRecovery.ValidateMetaFile(
+            PublicationMetaGuard.CopyMetaFileDurably(operation.targetMeta, operation.protectedMeta);
+            PublicationMetaGuard.ValidateMetaFile(
                 projectRoot,
                 operation.protectedMeta,
                 true,
                 operation.originalMetaLength,
                 operation.originalMetaSha256,
-                "protected bundled publication meta");
+                "protected bundled publication meta", UnityJournalSerializer.Instance);
         }
 
         private static bool RequiresBundledSeed(YooAssetBundledCopyOption option)
@@ -967,12 +975,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         private static void EnsureNoOrphanOperationDirectories(
-            IEnumerable<YooAsset3PublicationJournalOperation> operations)
+            IEnumerable<PublicationJournalOperation> operations)
         {
             foreach (string parent in operations
                          .Select(operation => Path.GetDirectoryName(operation.target))
                          .Where(parent => !string.IsNullOrEmpty(parent))
-                         .Distinct(YooAsset3BuildSafety.FileSystemPathComparer))
+                         .Distinct(PublicationSafety.FileSystemPathComparer))
             {
                 if (!Directory.Exists(parent))
                 {
