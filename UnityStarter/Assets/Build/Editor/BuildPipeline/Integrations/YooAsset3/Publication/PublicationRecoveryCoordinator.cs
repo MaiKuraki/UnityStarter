@@ -1,8 +1,9 @@
 using System;
 using System.IO;
+using Build.Pipeline.Editor;
 using UnityEditor;
 
-namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
+namespace Build.Pipeline.Integrations.YooAsset3.Publication
 {
     /// <summary>
     /// Recovers project-central YooAsset publication transactions without requiring
@@ -12,7 +13,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
     /// publication.
     /// </summary>
     [BuildRecoveryRegistration(ParticipantId, 100)]
-    public sealed class YooAsset3RecoveryCoordinator : IBuildRecoveryParticipant
+    public sealed class PublicationRecoveryCoordinator : IBuildRecoveryParticipant
     {
         public const string ParticipantId = "YooAsset3";
         private static readonly string[] StatePaths =
@@ -32,16 +33,30 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             }
 
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
-            string providerStateRoot = YooAsset3PublicationPaths.GetProviderStateRoot(
+            string providerStateRoot = PublicationPaths.GetProviderStateRoot(
                 normalizedProjectRoot);
-            using (YooAsset3BuildLock.Acquire(
+            using (PublicationBuildLock.Acquire(
                        normalizedProjectRoot,
                        providerStateRoot,
                        providerStateRoot))
             {
-                YooAsset3PublicationRecovery.RecoverPending(
+                PublicationRecovery.RecoverPending(
                     normalizedProjectRoot,
-                    AssetDatabase.Refresh);
+                    AssetDatabase.Refresh,
+                    UnityJournalSerializer.Instance);
+
+                // Player-build artifact relocations (ownership markers, backups, protected
+                // metas, stage directories hidden for the Player build) are restored here so a
+                // crashed or killed Editor never strands them in Temp.
+                int restored = RelocationRecovery.RestorePending(
+                    normalizedProjectRoot,
+                    UnityJournalSerializer.Instance,
+                    message => UnityEngine.Debug.Log(message));
+                if (restored > 0)
+                {
+                    UnityEngine.Debug.Log(
+                        $"YooAsset relocation recovery restored {restored} Player-build publication artifact(s).");
+                }
             }
         }
     }

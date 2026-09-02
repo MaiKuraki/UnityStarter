@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -60,8 +60,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             try
             {
                 transaction.Prepare();
-                YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-                YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+                PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+                PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
                 WriteFile(output.stage, "payload.txt", "new-output");
                 WriteFile(bundled.stage, "payload.txt", "new-bundle");
                 transaction.SealReadyDirectories();
@@ -73,7 +73,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 var deferred = new YooAsset3BuildAdapter.YooAsset3DeferredPublication(transaction, NoOp);
                 string markerPath = Path.Combine(
                     bundled.target,
-                    YooAsset3PublicationOwnership.MarkerFileName);
+                    PublicationOwnership.MarkerFileName);
 
                 Assert.That(File.Exists(markerPath), Is.True, "precondition: published marker exists in the bundled target");
                 Assert.That(Directory.Exists(bundled.backup), Is.True, "precondition: backup directory exists");
@@ -112,8 +112,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             try
             {
                 transaction.Prepare();
-                YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-                YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+                PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+                PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
                 WriteFile(output.stage, "payload.txt", "new-output");
                 WriteFile(bundled.stage, "payload.txt", "new-bundle");
                 transaction.SealReadyDirectories();
@@ -122,7 +122,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 var deferred = new YooAsset3BuildAdapter.YooAsset3DeferredPublication(transaction, NoOp);
                 string markerPath = Path.Combine(
                     bundled.target,
-                    YooAsset3PublicationOwnership.MarkerFileName);
+                    PublicationOwnership.MarkerFileName);
                 Assert.That(File.Exists(markerPath), Is.True, "precondition: published marker exists");
 
                 string[] relocatedBefore = Directory.GetFiles(
@@ -182,7 +182,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             {
                 transaction.Prepare();
 
-                YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+                PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
                 Assert.That(bundled, Is.Not.Null, "OnlyCopyAll must create a bundled operation");
                 Assert.That(bundled.managesSiblingMeta, Is.False, "bundled target outside StreamingAssets must not manage sibling meta");
                 Assert.That(transaction.HasDownstreamInputs, Is.False, "no bundled input under StreamingAssets");
@@ -279,8 +279,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         {
             string directory = bundled ? package.BundledPackageDirectory : package.OutputPackageDirectory;
             string kind = bundled
-                ? YooAsset3PublicationOwnership.BundledPackageKind
-                : YooAsset3PublicationOwnership.PackageOutputKind;
+                ? PublicationOwnership.BundledPackageKind
+                : PublicationOwnership.PackageOutputKind;
             WriteFile(directory, fileName, content);
             if (bundled)
             {
@@ -289,7 +289,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                     "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\nfolderAsset: yes\n");
             }
 
-            YooAsset3PublicationOwnership.Seal(
+            PublicationOwnership.Seal(
                 projectRoot,
                 directory,
                 kind,
@@ -297,7 +297,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 package.PackageVersion,
                 YooAssetCryptographyIdentity.NoneAdapterId,
                 YooAssetCryptographyIdentity.NoneRuntimeDecryptContractId,
-                Guid.NewGuid().ToString("N"));
+                Guid.NewGuid().ToString("N"),
+                UnityJournalSerializer.Instance);
         }
 
         private static void NoOp()

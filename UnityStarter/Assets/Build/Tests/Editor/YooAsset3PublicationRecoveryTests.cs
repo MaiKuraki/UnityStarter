@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using Build.Pipeline.Editor;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -63,7 +63,7 @@ namespace Build.Pipeline.Tests.Editor
             string backup = Path.Combine(parent, ".yoo-backup-" + transactionId + "-000");
 
             WriteFile(target, "payload.txt", "old");
-            YooAsset3PublicationOwnership.PublicationSnapshot original = SealOwned(
+            PublicationOwnership.PublicationSnapshot original = SealOwned(
                 target,
                 packageName,
                 packageVersion,
@@ -71,18 +71,18 @@ namespace Build.Pipeline.Tests.Editor
             Directory.Move(target, backup);
 
             WriteFile(stage, "payload.txt", "new");
-            YooAsset3PublicationOwnership.PublicationSnapshot installed = SealOwned(
+            PublicationOwnership.PublicationSnapshot installed = SealOwned(
                 stage,
                 packageName,
                 packageVersion,
                 transactionId);
             Directory.Move(stage, target);
 
-            string stateRoot = YooAsset3PublicationPaths.GetStateRoot(projectRoot, InvocationId);
+            string stateRoot = PublicationPaths.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
-            var operation = new YooAsset3PublicationJournalOperation
+            var operation = new PublicationJournalOperation
             {
-                kind = YooAsset3PublicationOwnership.PackageOutputKind,
+                kind = PublicationOwnership.PackageOutputKind,
                 packageName = packageName,
                 packageVersion = packageVersion,
                 cryptographyAdapterId = YooAssetCryptographyIdentity.NoneAdapterId,
@@ -102,23 +102,23 @@ namespace Build.Pipeline.Tests.Editor
                 installedContentIdentity = installed.ContentIdentity,
                 installedEntryCount = installed.EntryCount,
                 managesSiblingMeta = false,
-                state = YooAsset3PublicationConstants.InstalledState
+                state = PublicationConstants.InstalledState
             };
-            var journal = new Journal
+            var journal = new PublicationJournal
             {
-                documentType = YooAsset3PublicationConstants.JournalDocumentType,
+                documentType = PublicationConstants.JournalDocumentType,
                 invocationId = InvocationId,
                 transactionId = transactionId,
-                phase = YooAsset3PublicationConstants.CommittingPhase,
+                phase = PublicationConstants.CommittingPhase,
                 projectRoot = Path.GetFullPath(projectRoot),
                 buildOutputRoot = Path.GetFullPath(buildOutputRoot),
                 bundledFileRoot = Path.GetFullPath(bundledFileRoot),
                 workRoot = Path.GetFullPath(Path.Combine(stateRoot, "work", transactionId)),
                 operations = new[] { operation }
             };
-            YooAsset3PublicationRecovery.WriteJournal(journal, journalPath, createNew: true);
+            PublicationJournalStore.WriteJournal(journal, journalPath, createNew: true, UnityJournalSerializer.Instance);
 
-            YooAsset3PublicationRecovery.RecoverPending(projectRoot, NoOp);
+            PublicationRecovery.RecoverPending(projectRoot, NoOp, UnityJournalSerializer.Instance);
 
             Assert.That(ReadFile(target, "payload.txt"), Is.EqualTo("old"));
             Assert.That(Directory.Exists(backup), Is.False);
@@ -140,24 +140,24 @@ namespace Build.Pipeline.Tests.Editor
             string backup = Path.Combine(parent, ".yoo-backup-" + transactionId + "-000");
 
             WriteFile(target, "payload.txt", "old");
-            YooAsset3PublicationOwnership.PublicationSnapshot original = SealOwned(
+            PublicationOwnership.PublicationSnapshot original = SealOwned(
                 target,
                 packageName,
                 packageVersion,
                 originalTransactionId);
 
             WriteFile(stage, "payload.txt", "new");
-            YooAsset3PublicationOwnership.PublicationSnapshot installed = SealOwned(
+            PublicationOwnership.PublicationSnapshot installed = SealOwned(
                 stage,
                 packageName,
                 packageVersion,
                 transactionId);
 
-            string stateRoot = YooAsset3PublicationPaths.GetStateRoot(projectRoot, InvocationId);
+            string stateRoot = PublicationPaths.GetStateRoot(projectRoot, InvocationId);
             string journalPath = Path.Combine(stateRoot, "active.json");
-            var operation = new YooAsset3PublicationJournalOperation
+            var operation = new PublicationJournalOperation
             {
-                kind = YooAsset3PublicationOwnership.PackageOutputKind,
+                kind = PublicationOwnership.PackageOutputKind,
                 packageName = packageName,
                 packageVersion = packageVersion,
                 cryptographyAdapterId = YooAssetCryptographyIdentity.NoneAdapterId,
@@ -177,23 +177,23 @@ namespace Build.Pipeline.Tests.Editor
                 installedContentIdentity = installed.ContentIdentity,
                 installedEntryCount = installed.EntryCount,
                 managesSiblingMeta = false,
-                state = YooAsset3PublicationConstants.PreparedState
+                state = PublicationConstants.PreparedState
             };
-            var journal = new Journal
+            var journal = new PublicationJournal
             {
-                documentType = YooAsset3PublicationConstants.JournalDocumentType,
+                documentType = PublicationConstants.JournalDocumentType,
                 invocationId = InvocationId,
                 transactionId = transactionId,
-                phase = YooAsset3PublicationConstants.PreparedPhase,
+                phase = PublicationConstants.PreparedPhase,
                 projectRoot = Path.GetFullPath(projectRoot),
                 buildOutputRoot = Path.GetFullPath(buildOutputRoot),
                 bundledFileRoot = Path.GetFullPath(bundledFileRoot),
                 workRoot = Path.GetFullPath(Path.Combine(stateRoot, "work", transactionId)),
                 operations = new[] { operation }
             };
-            YooAsset3PublicationRecovery.WriteJournal(journal, journalPath, createNew: true);
+            PublicationJournalStore.WriteJournal(journal, journalPath, createNew: true, UnityJournalSerializer.Instance);
 
-            YooAsset3PublicationRecovery.RecoverPending(projectRoot, NoOp);
+            PublicationRecovery.RecoverPending(projectRoot, NoOp, UnityJournalSerializer.Instance);
 
             Assert.That(ReadFile(target, "payload.txt"), Is.EqualTo("old"));
             Assert.That(Directory.Exists(stage), Is.False);
@@ -207,31 +207,33 @@ namespace Build.Pipeline.Tests.Editor
             WriteFile(directory, "authored.txt", "not-owned");
 
             InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
-                YooAsset3PublicationOwnership.CaptureExisting(
+                PublicationOwnership.CaptureExisting(
                     projectRoot,
                     directory,
-                    YooAsset3PublicationOwnership.PackageOutputKind,
-                    "PackageOne"));
+                    PublicationOwnership.PackageOutputKind,
+                    "PackageOne",
+                    UnityJournalSerializer.Instance));
 
             StringAssert.Contains("not a Build-owned", exception.Message);
             Assert.That(ReadFile(directory, "authored.txt"), Is.EqualTo("not-owned"));
         }
 
-        private YooAsset3PublicationOwnership.PublicationSnapshot SealOwned(
+        private PublicationOwnership.PublicationSnapshot SealOwned(
             string directory,
             string packageName,
             string packageVersion,
             string transactionId)
         {
-            return YooAsset3PublicationOwnership.Seal(
+            return PublicationOwnership.Seal(
                 projectRoot,
                 directory,
-                YooAsset3PublicationOwnership.PackageOutputKind,
+                PublicationOwnership.PackageOutputKind,
                 packageName,
                 packageVersion,
                 YooAssetCryptographyIdentity.NoneAdapterId,
                 YooAssetCryptographyIdentity.NoneRuntimeDecryptContractId,
-                transactionId);
+                transactionId,
+                UnityJournalSerializer.Instance);
         }
 
         private static void WriteFile(string directory, string fileName, string content)

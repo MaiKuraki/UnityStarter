@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using UnityEditor;
 using UnityEngine;
 using YooAsset;
@@ -132,10 +132,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 return FailureOperation(CreateValidationFailure(request, exception));
             }
 
-            YooAsset3BuildLock buildLock;
+            PublicationBuildLock buildLock;
             try
             {
-                buildLock = YooAsset3BuildLock.Acquire(projectRoot, buildOutputRoot, bundledFileRoot);
+                buildLock = PublicationBuildLock.Acquire(projectRoot, buildOutputRoot, bundledFileRoot);
             }
             catch (Exception exception)
             {
@@ -206,7 +206,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             try
             {
                 transaction.Prepare();
-                foreach (YooAsset3PackagePublication publication in transaction.Packages)
+                foreach (PackagePublication publication in transaction.Packages)
                 {
                     YooAsset3PackageBuildPlan finalPlan = transaction.GetFinalPlan(publication);
                     activePackageName = finalPlan.PackageName;
@@ -214,7 +214,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     YooAsset3PackageBuildPlan executionPlan = transaction.CreateExecutionPlan(request, publication);
                     executionPlan.Parameters.CheckBuildParameters();
                     YooAsset3BuildPathValidation.ValidatePackageOutputPath(plan.BuildOutputRoot, executionPlan);
-                    YooAsset3BuildSafety.ValidateNoPathRedirection(
+                    PublicationSafety.ValidateNoPathRedirection(
                         plan.ProjectRoot,
                         executionPlan.OutputPackageDirectory);
 
@@ -320,7 +320,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     preparedResults,
                     deferredPublication);
             }
-            catch (YooAsset3CommittedPublicationException exception)
+            catch (CommittedPublicationException exception)
             {
                 return FailureOperation(
                     CreateCommittedRecoveryFailure(
@@ -381,7 +381,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private AssetContentBuildResult CreateCommittedRecoveryFailure(
             AssetContentBuildRequest request,
             string packageName,
-            YooAsset3CommittedPublicationException exception,
+            CommittedPublicationException exception,
             IReadOnlyList<string> warnings = null)
         {
             string journalSuffix = string.IsNullOrWhiteSpace(exception.JournalPath)
@@ -417,11 +417,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             YooAssetBuildTokenPolicy.ValidatePackageVersion(request.PackageVersion, nameof(request.PackageVersion));
-            string projectRoot = YooAsset3BuildSafety.NormalizeProjectRoot(request.ProjectRoot);
+            string projectRoot = PublicationSafety.NormalizeProjectRoot(request.ProjectRoot);
             string buildOutputRoot = YooAsset3BuildPathValidation.ResolveBuildOutputRoot(projectRoot, configuration.buildOutputRoot);
             string bundledFileRoot = YooAsset3BuildPathValidation.ResolveBundledFileRoot(projectRoot, configuration.bundledFileRoot);
-            YooAsset3BuildSafety.EnsureRootsDoNotOverlap(buildOutputRoot, bundledFileRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, buildOutputRoot);
+            PublicationSafety.EnsureRootsDoNotOverlap(buildOutputRoot, bundledFileRoot);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, buildOutputRoot);
 
             if (File.Exists(buildOutputRoot))
             {
@@ -447,7 +447,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             var packagePlans = new List<YooAsset3PackageBuildPlan>(configuration.packages.Length);
-            var configuredPackageNames = new HashSet<string>(YooAsset3BuildSafety.PortablePathSegmentComparer);
+            var configuredPackageNames = new HashSet<string>(PublicationSafety.PortablePathSegmentComparer);
             var warnings = new List<string>();
             if (request.Incrementality == BuildIncrementality.Clean)
             {
@@ -484,7 +484,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
                     packagePlan.Parameters.CheckBuildParameters();
                     YooAsset3BuildPathValidation.ValidatePackageOutputPath(buildOutputRoot, packagePlan);
-                    YooAsset3BuildSafety.ValidateNoPathRedirection(
+                    PublicationSafety.ValidateNoPathRedirection(
                         projectRoot,
                         packagePlan.OutputPackageDirectory);
                     if (packagePlan.Parameters.BundledCopyOption != EBundledCopyOption.None)
@@ -535,12 +535,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     $"YooAsset provider requires {nameof(YooAssetBuildConfig)} configuration, but received '{actualType}'.");
             }
 
-            projectRoot = YooAsset3BuildSafety.NormalizeProjectRoot(request.ProjectRoot);
+            projectRoot = PublicationSafety.NormalizeProjectRoot(request.ProjectRoot);
             buildOutputRoot = YooAsset3BuildPathValidation.ResolveBuildOutputRoot(projectRoot, configuration.buildOutputRoot);
             bundledFileRoot = YooAsset3BuildPathValidation.ResolveBundledFileRoot(projectRoot, configuration.bundledFileRoot);
-            YooAsset3BuildSafety.EnsureRootsDoNotOverlap(buildOutputRoot, bundledFileRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, buildOutputRoot);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, bundledFileRoot);
+            PublicationSafety.EnsureRootsDoNotOverlap(buildOutputRoot, bundledFileRoot);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, buildOutputRoot);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, bundledFileRoot);
         }
 
         private static void ValidateCollectorSettings(out HashSet<string> collectorPackageNames)
@@ -584,7 +584,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             collectorPackageNames = new HashSet<string>(StringComparer.Ordinal);
-            var fileSystemNames = new HashSet<string>(YooAsset3BuildSafety.PortablePathSegmentComparer);
+            var fileSystemNames = new HashSet<string>(PublicationSafety.PortablePathSegmentComparer);
             foreach (BundleCollectorPackage package in setting.Packages)
             {
                 if (package == null || string.IsNullOrWhiteSpace(package.PackageName))
@@ -651,7 +651,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             EnsureDefined(profile.bundledCopyOption, nameof(profile.bundledCopyOption), profile.packageName);
             EnsureDefined(profile.versionCollisionPolicy, nameof(profile.versionCollisionPolicy), profile.packageName);
 
-            string normalizedCopyParams = YooAsset3BuildSafety.NormalizeBundledCopyParams(profile);
+            // The pure core takes primitives: the authoring enum never crosses into it.
+            string normalizedCopyParams = PublicationSafety.NormalizeBundledCopyParams(
+                profile.bundledCopyOption == YooAssetBundledCopyOption.ClearAndCopyByTags ||
+                profile.bundledCopyOption == YooAssetBundledCopyOption.OnlyCopyByTags,
+                profile.bundledCopyTags,
+                profile.packageName);
             if (normalizedCopyParams.Length > 0)
             {
                 var availableTags = new HashSet<string>(
@@ -682,16 +687,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static void ValidateGeneratedArtifactFileNames(string packageName, string packageVersion)
         {
-            YooAsset3BuildSafety.ValidateArtifactFileName(
+            PublicationSafety.ValidateArtifactFileName(
                 YooAssetConfiguration.GetBuildReportFileName(packageName, packageVersion),
                 "YooAsset build report file name");
-            YooAsset3BuildSafety.ValidateArtifactFileName(
+            PublicationSafety.ValidateArtifactFileName(
                 YooAssetConfiguration.GetManifestBinaryFileName(packageName, packageVersion),
                 "YooAsset manifest file name");
-            YooAsset3BuildSafety.ValidateArtifactFileName(
+            PublicationSafety.ValidateArtifactFileName(
                 YooAssetConfiguration.GetPackageHashFileName(packageName, packageVersion),
                 "YooAsset package hash file name");
-            YooAsset3BuildSafety.ValidateArtifactFileName(
+            PublicationSafety.ValidateArtifactFileName(
                 YooAssetConfiguration.GetPackageVersionFileName(packageName),
                 "YooAsset package version file name");
         }
@@ -746,7 +751,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             string reportedOutputDirectory = Path.GetFullPath(buildResult.OutputPackageDirectory);
-            if (!YooAsset3BuildSafety.PathsEqual(packagePlan.OutputPackageDirectory, reportedOutputDirectory))
+            if (!PublicationSafety.PathsEqual(packagePlan.OutputPackageDirectory, reportedOutputDirectory))
             {
                 throw new InvalidOperationException(
                     $"YooAsset output directory does not match the validated target. Expected '{packagePlan.OutputPackageDirectory}', received '{reportedOutputDirectory}'.");
@@ -775,7 +780,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         }
 
         private AssetContentBuildResult CreatePreparedSuccessResult(
-            YooAsset3PackagePublication publication,
+            PackagePublication publication,
             YooAsset3PackageBuildPlan packagePlan,
             IReadOnlyList<string> warnings)
         {
@@ -819,7 +824,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string normalizedRoot = Path.GetFullPath(root)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string normalizedPath = Path.GetFullPath(path);
-            if (!YooAsset3BuildSafety.IsStrictDescendant(normalizedRoot, normalizedPath))
+            if (!PublicationSafety.IsStrictDescendant(normalizedRoot, normalizedPath))
             {
                 throw new InvalidOperationException(
                     $"Prepared YooAsset artifact escaped its sealed stage: '{normalizedPath}'.");
@@ -866,7 +871,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 ValidateBundledArtifacts(packagePlan, bundledPackageDirectory);
             }
 
-            int scannedFileCount = YooAsset3BuildSafety.ValidateArtifactTree(
+            int scannedFileCount = PublicationSafety.ValidateArtifactTree(
                 reportedOutputDirectory,
                 MaxProducedArtifactTreeEntries);
             if (scannedFileCount == 0)
@@ -1103,7 +1108,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             internal sealed class PlayerBuildSession : IDisposable
             {
                 private YooAsset3DeferredPublication owner;
-                private readonly List<PublicationRelocation> relocations = new List<PublicationRelocation>();
+                private RelocationJournalDocument relocations;
+                private readonly string projectRoot;
+                private readonly IJournalSerializer serializer;
 
                 internal PlayerBuildSession(YooAsset3DeferredPublication owner)
                 {
@@ -1112,6 +1119,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     {
                         return;
                     }
+
+                    projectRoot = owner.transaction.ProjectRoot;
+                    serializer = UnityJournalSerializer.Instance;
+                    relocations = RelocationJournalStore.Create(owner.transaction.TransactionId);
 
                     try
                     {
@@ -1122,7 +1133,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         // Hiding moves artifacts one at a time. If it fails partway through,
                         // the already-moved entries must be moved back before construction
                         // gives up, otherwise the session leaves orphaned relocations behind.
-                        if (relocations.Count == 0)
+                        if (relocations == null || relocations.entries.Length == 0)
                         {
                             throw;
                         }
@@ -1164,7 +1175,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     // Dispose. ValidateActivatedInputs runs only after every artifact is back
                     // in place. A second Dispose after a failure therefore only works on the
                     // remaining relocation list and never touches the (possibly null) owner.
-                    if (relocations.Count > 0)
+                    if (relocations != null && relocations.entries.Length > 0)
                     {
                         Exception restoreFailure = RestorePublicationArtifacts();
                         if (restoreFailure != null)
@@ -1173,6 +1184,12 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                                 .Capture(restoreFailure)
                                 .Throw();
                         }
+                    }
+
+                    if (relocations != null)
+                    {
+                        RelocationJournalStore.DeleteIfClean(relocations, projectRoot);
+                        relocations = null;
                     }
 
                     YooAsset3DeferredPublication current = owner;
@@ -1197,9 +1214,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         "YooAssetPublicationMarkers"));
                     Directory.CreateDirectory(relocationRoot);
 
-                    foreach (YooAsset3PackagePublication package in owner.transaction.Packages)
+                    foreach (PackagePublication package in owner.transaction.Packages)
                     {
-                        YooAsset3PublicationJournalOperation operation = package.BundledOperation;
+                        PublicationJournalOperation operation = package.BundledOperation;
                         if (operation == null)
                         {
                             continue;
@@ -1218,7 +1235,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                         RelocateIfPresent(
                             Path.Combine(
                                 operation.target,
-                                YooAsset3PublicationOwnership.MarkerFileName),
+                                PublicationOwnership.MarkerFileName),
                             relocationRoot,
                             isDirectory: false);
 
@@ -1256,104 +1273,158 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                             "Configure the bundled file root on the same volume as the Unity project Temp directory.");
                     }
 
-                    if (isDirectory)
+                    // Crash-durable protocol: record the move as Planned (flushed to disk), move,
+                    // verify both sides, then record Moved. A process killed between any of these
+                    // steps leaves an accurate journal for the startup recovery pass.
+                    string kind = isDirectory
+                        ? RelocationJournalStore.KindDirectory
+                        : RelocationJournalStore.KindFile;
+                    RelocationJournalStore.AppendEntry(relocations, originalPath, relocatedPath, kind);
+                    RelocationJournalStore.Persist(relocations, projectRoot, serializer);
+
+                    try
                     {
-                        Directory.Move(originalPath, relocatedPath);
+                        if (isDirectory)
+                        {
+                            Directory.Move(originalPath, relocatedPath);
+                        }
+                        else
+                        {
+                            File.Move(originalPath, relocatedPath);
+                        }
                     }
-                    else
+                    catch (Exception moveException)
                     {
-                        File.Move(originalPath, relocatedPath);
+                        RelocationEntry entry = RelocationJournalStore.FindByRelocatedPath(
+                            relocations, relocatedPath);
+                        entry.state = RelocationJournalStore.ConflictState;
+                        entry.attemptCount++;
+                        entry.lastError = moveException.Message;
+                        RelocationJournalStore.Persist(relocations, projectRoot, serializer);
+                        throw;
                     }
 
-                    relocations.Add(new PublicationRelocation(originalPath, relocatedPath, isDirectory));
+                    bool movedSanely = isDirectory
+                        ? Directory.Exists(relocatedPath) && !Directory.Exists(originalPath)
+                        : File.Exists(relocatedPath) && !File.Exists(originalPath);
+                    if (!movedSanely)
+                    {
+                        RelocationEntry entry = RelocationJournalStore.FindByRelocatedPath(
+                            relocations, relocatedPath);
+                        entry.state = RelocationJournalStore.ConflictState;
+                        entry.attemptCount++;
+                        entry.lastError = "the move reported success but the original and relocated paths contradict it.";
+                        RelocationJournalStore.Persist(relocations, projectRoot, serializer);
+                        throw new InvalidOperationException(
+                            "YooAsset publication artifact relocation could not be verified: " +
+                            $"original='{originalPath}', relocated='{relocatedPath}'.");
+                    }
+
+                    RelocationEntry moved = RelocationJournalStore.FindByRelocatedPath(
+                        relocations, relocatedPath);
+                    moved.state = RelocationJournalStore.MovedState;
+                    moved.attemptCount++;
+                    RelocationJournalStore.Persist(relocations, projectRoot, serializer);
                 }
 
                 private Exception RestorePublicationArtifacts()
                 {
-                    var failures = new List<Exception>();
-                    for (int index = relocations.Count - 1; index >= 0; index--)
+                    var failures = new List<string>();
+                    // Reverse order: the last relocation is the first one undone.
+                    for (int index = relocations.entries.Length - 1; index >= 0; index--)
                     {
-                        PublicationRelocation relocation = relocations[index];
-                        Exception failure;
-                        if (TryRestore(relocation, out failure))
+                        RelocationEntry entry = relocations.entries[index];
+                        if (string.Equals(entry.state, RelocationJournalStore.RestoredState, StringComparison.Ordinal))
                         {
-                            // Restored (or already absent): this entry no longer needs a retry.
-                            relocations.RemoveAt(index);
+                            continue;
+                        }
+
+                        string failure = TryRestore(entry);
+                        entry.attemptCount++;
+                        if (failure == null)
+                        {
+                            entry.state = RelocationJournalStore.RestoredState;
+                            entry.lastError = string.Empty;
                         }
                         else
                         {
-                            // Fail closed: keep the entry so a subsequent Dispose can retry it.
-                            failures.Add(failure);
+                            // Fail closed: keep the entry so a subsequent Dispose or the startup
+                            // recovery pass can retry it. Never delete the journal early.
+                            entry.lastError = failure;
+                            failures.Add($"original='{entry.originalPath}' relocated='{entry.relocatedPath}': {failure}");
                         }
+
+                        // Persist after every entry, success or failure.
+                        RelocationJournalStore.Persist(relocations, projectRoot, serializer);
                     }
 
                     if (failures.Count > 0)
                     {
                         return new AggregateException(
                             "YooAsset Player build publication artifact restoration did not complete for every relocated entry.",
-                            failures);
+                            failures.Select(message => new InvalidOperationException(message)));
                     }
 
                     return null;
                 }
 
-                private bool TryRestore(PublicationRelocation relocation, out Exception failure)
+                private string TryRestore(RelocationEntry entry)
                 {
-                    bool relocatedIsDirectory = Directory.Exists(relocation.RelocatedPath);
-                    bool relocatedIsFile = File.Exists(relocation.RelocatedPath);
+                    bool isDirectory = string.Equals(entry.kind, RelocationJournalStore.KindDirectory, StringComparison.Ordinal);
+                    bool relocatedIsDirectory = Directory.Exists(entry.relocatedPath);
+                    bool relocatedIsFile = File.Exists(entry.relocatedPath);
+                    bool originalExists = isDirectory
+                        ? Directory.Exists(entry.originalPath)
+                        : File.Exists(entry.originalPath);
 
-                    // Fail closed on a type mismatch: never overwrite or move an entry whose
-                    // actual filesystem kind contradicts what the relocation recorded.
-                    if (relocation.IsDirectory ? relocatedIsFile : relocatedIsDirectory)
+                    // Fail closed on a type mismatch: never move an entry whose actual filesystem
+                    // kind contradicts what the relocation recorded.
+                    if (isDirectory ? relocatedIsFile : relocatedIsDirectory)
                     {
-                        failure = new InvalidOperationException(
-                            "YooAsset publication artifact relocation type mismatch for '" +
-                            relocation.RelocatedPath + "': expected a " +
-                            (relocation.IsDirectory ? "directory" : "file") + " but found a " +
-                            (relocation.IsDirectory ? "file" : "directory") + ".");
-                        return false;
+                        entry.state = RelocationJournalStore.ConflictState;
+                        return "relocation type mismatch: expected a " + (isDirectory ? "directory" : "file") +
+                               " at the relocated path but found a " + (isDirectory ? "file" : "directory") + ".";
                     }
 
-                    bool relocatedExists = relocation.IsDirectory
-                        ? relocatedIsDirectory
-                        : relocatedIsFile;
+                    bool relocatedExists = isDirectory ? relocatedIsDirectory : relocatedIsFile;
                     if (!relocatedExists)
                     {
-                        // Nothing left to move back; treat the entry as restored.
-                        failure = null;
-                        return true;
+                        if (originalExists)
+                        {
+                            // Already back in place (a previous restore moved it but could not
+                            // persist). Treat the entry as restored.
+                            return null;
+                        }
+
+                        // Fail closed: the artifact is gone from both paths. Never pretend the
+                        // restoration succeeded.
+                        entry.state = RelocationJournalStore.MissingBothState;
+                        return "neither the relocated artifact nor the original path exists; the artifact requires manual restoration.";
                     }
 
-                    bool originalExists = relocation.IsDirectory
-                        ? Directory.Exists(relocation.OriginalPath)
-                        : File.Exists(relocation.OriginalPath);
                     if (originalExists)
                     {
                         // Fail closed: never overwrite a recreated original path.
-                        failure = new InvalidOperationException(
-                            "YooAsset publication artifact cannot be restored because both the original and relocated paths exist. " +
-                            "Original='" + relocation.OriginalPath + "', relocated='" + relocation.RelocatedPath + "'.");
-                        return false;
+                        entry.state = RelocationJournalStore.ConflictState;
+                        return "both the original and the relocated paths exist.";
                     }
 
                     try
                     {
-                        if (relocation.IsDirectory)
+                        if (isDirectory)
                         {
-                            Directory.Move(relocation.RelocatedPath, relocation.OriginalPath);
+                            Directory.Move(entry.relocatedPath, entry.originalPath);
                         }
                         else
                         {
-                            File.Move(relocation.RelocatedPath, relocation.OriginalPath);
+                            File.Move(entry.relocatedPath, entry.originalPath);
                         }
 
-                        failure = null;
-                        return true;
+                        return null;
                     }
                     catch (Exception exception)
                     {
-                        failure = exception;
-                        return false;
+                        return exception.Message;
                     }
                 }
 
@@ -1361,31 +1432,18 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 {
                     var builder = new System.Text.StringBuilder();
                     builder.Append(" Remaining relocation entries:");
-                    for (int index = 0; index < relocations.Count; index++)
+                    foreach (RelocationEntry entry in relocations.entries)
                     {
-                        PublicationRelocation relocation = relocations[index];
                         builder.Append(" original='");
-                        builder.Append(relocation.OriginalPath);
+                        builder.Append(entry.originalPath);
                         builder.Append("' relocated='");
-                        builder.Append(relocation.RelocatedPath);
+                        builder.Append(entry.relocatedPath);
+                        builder.Append("' state='");
+                        builder.Append(entry.state);
                         builder.Append("';");
                     }
 
                     return builder.ToString();
-                }
-
-                private readonly struct PublicationRelocation
-                {
-                    public PublicationRelocation(string originalPath, string relocatedPath, bool isDirectory)
-                    {
-                        OriginalPath = originalPath;
-                        RelocatedPath = relocatedPath;
-                        IsDirectory = isDirectory;
-                    }
-
-                    public string OriginalPath { get; }
-                    public string RelocatedPath { get; }
-                    public bool IsDirectory { get; }
                 }
             }
         }
@@ -1393,7 +1451,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private static string RequireArtifact(string directory, string fileName)
         {
             string path = Path.GetFullPath(Path.Combine(directory, fileName));
-            if (!YooAsset3BuildSafety.IsStrictDescendant(directory, path) || !File.Exists(path))
+            if (!PublicationSafety.IsStrictDescendant(directory, path) || !File.Exists(path))
             {
                 throw new FileNotFoundException($"Required YooAsset artifact is missing: '{path}'.", path);
             }
@@ -1456,7 +1514,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private sealed class StagedPackageResult
         {
             public StagedPackageResult(
-                YooAsset3PackagePublication publication,
+                PackagePublication publication,
                 YooAsset3PackageBuildPlan finalPlan,
                 string[] warnings)
             {
@@ -1465,7 +1523,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 Warnings = warnings ?? Array.Empty<string>();
             }
 
-            public YooAsset3PackagePublication Publication { get; }
+            public PackagePublication Publication { get; }
             public YooAsset3PackageBuildPlan FinalPlan { get; }
             public string[] Warnings { get; }
         }
