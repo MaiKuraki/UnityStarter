@@ -28,20 +28,41 @@ namespace CycloneGames.EventBus.Runtime
     /// <see cref="EventBusPumpMonoBehaviour"/>, which is only a thin adapter.
     ///
     /// Single-thread-confined, like every bus it feeds.
+    ///
+    /// Structural changes during a drain are deferred: a flush callback that Adds, Removes or
+    /// Clears while <see cref="Drain"/> is iterating takes effect when the drain completes, never
+    /// mid-iteration. That keeps the target list immutable for the duration of the tick — a source
+    /// that removes itself cannot skip its neighbour, a newly registered source cannot execute in
+    /// the same tick that registered it, and a Clear cannot cut the tick short.
     /// </summary>
     public sealed class EventBusPump
     {
         private readonly List<EventPumpFlush> _targets = new List<EventPumpFlush>();
+        private readonly List<EventPumpFlush> _pendingAdds = new List<EventPumpFlush>();
+        private readonly List<EventPumpFlush> _pendingRemovals = new List<EventPumpFlush>();
+        private bool _clearPending;
+        private int _drainDepth;
 
         /// <summary>Registered sources.</summary>
         public int Count => _targets.Count;
 
-        /// <summary>Registers a custom flush callback. Cold path: registration is not per event.</summary>
+        /// <summary>
+        /// Registers a custom flush callback. Cold path: registration is not per event. During a
+        /// drain the registration is deferred and takes effect when the drain completes.
+        /// </summary>
         public EventPumpFlush Add(EventPumpFlush flush)
         {
             if (flush == null)
             {
                 throw new ArgumentNullException(nameof(flush));
+            }
+
+            if (_drainDepth > 0)
+            {
+                // Deferred: a source registered by a running flush callback must not execute in
+                // the same tick that registered it.
+                _pendingAdds.Add(flush);
+                return flush;
             }
 
             _targets.Add(flush);
@@ -86,17 +107,43 @@ namespace CycloneGames.EventBus.Runtime
             return Add(budget => stream.FlushTo(bus, budget));
         }
 
-        /// <summary>Removes a previously registered flush delegate.</summary>
+        /// <summary>
+        /// Removes a previously registered flush delegate. During a drain the removal is deferred
+        /// and takes effect when the drain completes.
+        /// </summary>
         public bool Remove(EventPumpFlush flush)
         {
-            return flush != null && _targets.Remove(flush);
+            if (flush == null)
+            {
+                return false;
+            }
+
+            if (_drainDepth > 0)
+            {
+                // An add-then-remove pair inside the same tick nets out to nothing.
+                if (_pendingAdds.Remove(flush))
+                {
+                    return true;
+                }
+
+                if (_targets.Contains(flush))
+                {
+                    _pendingRemovals.Add(flush);
+                    return true;
+                }
+
+                return false;
+            }
+
+            return _targets.Remove(flush);
         }
 
         /// <summary>
         /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each.
         ///
         /// The budget is per source, not global, so one flooded queue cannot starve the others.
-        /// Events a handler produces during the drain stay queued for the next tick.
+        /// Events a handler produces during the drain stay queued for the next tick, and structural
+        /// changes (Add, Remove, Clear) from flush callbacks are applied when the drain completes.
         /// </summary>
         /// <returns>The total number of events published.</returns>
         public int Drain(int maxEventsPerTarget)
@@ -112,11 +159,24 @@ namespace CycloneGames.EventBus.Runtime
             }
 
             int published = 0;
-            // Indexed loop, not foreach: List<T>'s struct enumerator would be fine here, but the
-            // indexed form keeps the drain free of any enumerator state on every platform.
-            for (int index = 0; index < _targets.Count; index++)
+            _drainDepth++;
+            try
             {
-                published += _targets[index](maxEventsPerTarget);
+                // Indexed loop, not foreach: List<T>'s struct enumerator would be fine here, but
+                // the indexed form keeps the drain free of any enumerator state on every platform.
+                // The list cannot mutate during the loop — mutations are deferred — so reading the
+                // count every iteration is safe and simple.
+                for (int index = 0; index < _targets.Count; index++)
+                {
+                    published += _targets[index](maxEventsPerTarget);
+                }
+            }
+            finally
+            {
+                if (--_drainDepth == 0)
+                {
+                    ApplyDeferredMutations();
+                }
             }
 
             return published;
@@ -131,11 +191,47 @@ namespace CycloneGames.EventBus.Runtime
 
         /// <summary>
         /// Drops every registration. It does not discard the pending events themselves: clear the
-        /// queues explicitly if that is what you want.
+        /// queues explicitly if that is what you want. During a drain the clear is deferred and
+        /// takes effect when the drain completes.
         /// </summary>
         public void Clear()
         {
+            if (_drainDepth > 0)
+            {
+                _clearPending = true;
+                _pendingAdds.Clear();
+                return;
+            }
+
             _targets.Clear();
+        }
+
+        private void ApplyDeferredMutations()
+        {
+            if (_clearPending)
+            {
+                _clearPending = false;
+                _pendingAdds.Clear();
+                _pendingRemovals.Clear();
+                _targets.Clear();
+                return;
+            }
+
+            // Adds first, then removals: an add and a remove of the same delegate in one tick is
+            // already netted out above, so the two lists never fight here.
+            for (int index = 0; index < _pendingAdds.Count; index++)
+            {
+                _targets.Add(_pendingAdds[index]);
+            }
+
+            _pendingAdds.Clear();
+
+            for (int index = 0; index < _pendingRemovals.Count; index++)
+            {
+                _targets.Remove(_pendingRemovals[index]);
+            }
+
+            _pendingRemovals.Clear();
         }
     }
 }
