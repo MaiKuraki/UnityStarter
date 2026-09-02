@@ -28,6 +28,16 @@ namespace CycloneGames.EventBus.Core
         private long _droppedCount;
         private long _rejectedCount;
 
+        // Bumped by Clear. An in-flight FlushTo compares it against the value it captured on
+        // entry: a mismatch means the batch it was publishing was cleared under it, so the loop
+        // must stop and remove nothing. Appends do not bump it — they belong to the next round,
+        // which the flush's entry-count bound already handles.
+        private long _generation;
+
+        // Guards re-entrant FlushTo from one of the stream's own handlers: an inner flush would
+        // publish entries the outer round still owns and shift the buffer under its loop.
+        private bool _flushing;
+
         /// <param name="capacity">Fixed event capacity; must be at least 1.</param>
         public EventStream(int capacity)
         {
@@ -92,6 +102,10 @@ namespace CycloneGames.EventBus.Core
         /// Allocation-free.
         ///
         /// These are the only events the stream can call lost: they entered it and were never read.
+        ///
+        /// Called from a flush handler it also invalidates the flush batch in progress: the flush
+        /// stops immediately instead of publishing the zeroed buffer as default phantom events, and
+        /// events written after the clear stay queued for the next round.
         /// </summary>
         public void Clear()
         {
@@ -106,6 +120,7 @@ namespace CycloneGames.EventBus.Core
             }
 
             _count = 0;
+            _generation++;
         }
 
         /// <summary>Publishes every pending event in write order and empties the stream.</summary>
@@ -119,7 +134,13 @@ namespace CycloneGames.EventBus.Core
         /// Publishes at most <paramref name="maxEvents"/> pending events in write order, leaving the
         /// rest for a later flush. Use this to spread a large batch across frames.
         /// </summary>
-        /// <returns>The number of events published.</returns>
+        /// <returns>The number of events actually published, which can be lower than the budget
+        /// when a handler clears the stream mid-flush.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// A handler called <see cref="FlushTo(EventBus{T},int)"/> on this same stream while it was
+        /// being flushed — the inner flush would publish entries the outer round still owns and
+        /// shift the buffer under its loop.
+        /// </exception>
         public int FlushTo(EventBus<T> bus, int maxEvents)
         {
             if (bus == null)
@@ -137,16 +158,50 @@ namespace CycloneGames.EventBus.Core
                 return 0;
             }
 
-            // The budget is captured up front: handlers may append to the stream while it is being
-            // flushed, and those events belong to the next round, not this one.
-            int budget = _count < maxEvents ? _count : maxEvents;
-            for (int index = 0; index < budget; index++)
+            if (_flushing)
             {
-                bus.Publish(in _buffer[index]);
+                throw new InvalidOperationException(
+                    "FlushTo cannot be re-entered on the same stream from one of its own handlers.");
             }
 
-            RemoveFront(budget);
-            return budget;
+            // Budget and generation are captured up front: handlers may append to the stream while
+            // it is being flushed (the entry-count bound keeps those in the next round), and a
+            // handler that calls Clear invalidates the whole batch — the entries this loop would
+            // read next were just zeroed, so publishing them would fabricate default events.
+            int entryCount = _count;
+            int budget = entryCount < maxEvents ? entryCount : maxEvents;
+            long generation = _generation;
+            int published = 0;
+
+            _flushing = true;
+            try
+            {
+                for (int index = 0; index < budget; index++)
+                {
+                    bus.Publish(in _buffer[index]);
+                    published++;
+
+                    if (_generation != generation)
+                    {
+                        // The batch was cleared under us: everything left in it is gone, and
+                        // events written after the clear belong to the next round. Remove nothing.
+                        return published;
+                    }
+                }
+            }
+            finally
+            {
+                _flushing = false;
+                if (_generation == generation)
+                {
+                    // Also runs when a handler faulted under PublishErrorPolicy.Stop: events
+                    // already published leave the stream (no duplicate delivery on the next
+                    // flush), the rest stay queued.
+                    RemoveFront(published);
+                }
+            }
+
+            return published;
         }
 
         private void RemoveFront(int count)
@@ -154,7 +209,8 @@ namespace CycloneGames.EventBus.Core
             int remaining = _count - count;
             if (remaining < 0)
             {
-                // A handler cleared the stream mid-flush; nothing is left to shift.
+                // Defensive: the generation guard keeps this branch unreachable today, but if a
+                // future mutation slips past it, clamping here must not corrupt the buffer.
                 remaining = 0;
             }
 

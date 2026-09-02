@@ -14,7 +14,7 @@
 - `YooAssetBuildConfig` 仍是可序列化 authoring type，但选中的 invocation 会因没有注册 Adapter 而在 Preflight 失败；
 - YooAsset 发布恢复核心位于 Core Assembly 的 `Integrations/YooAsset3Core/`，因此卸载或升级包后，尚未完成的发布仍可恢复。
 
-恢复核心是 `YooAsset3RecoveryCoordinator`（`[BuildRecoveryRegistration("YooAsset3", 100)]`）。它持有 durable journal、所有权 marker、路径安全原语以及全部回滚/提交恢复逻辑，与 `AddressablesRecoveryCoordinator` 对齐。受门控 Integration Assembly 只保留构建期路径解析、Package Plan Factory、Cryptography Registry 与事务生命周期，并通过 `Build.Pipeline.Editor.Integrations.YooAsset3Core` 命名空间引用 Core 类型。
+恢复核心是 `PublicationRecoveryCoordinator`（`[BuildRecoveryRegistration("YooAsset3", 100)]`）。它持有 durable journal、所有权 marker、路径安全原语以及全部回滚/提交恢复逻辑，与 `AddressablesRecoveryCoordinator` 对齐。受门控 Integration Assembly 只保留构建期路径解析、Package Plan Factory、Cryptography Registry 与事务生命周期，并通过 `Build.Pipeline.Editor.Integrations.YooAsset3Core` 命名空间引用 Core 类型。
 
 不要在 PlayerSettings 中手工添加 `BUILD_PIPELINE_HAS_YOOASSET_3`。Capability 应由 Package Presence 和 Version 管理。
 
@@ -130,7 +130,7 @@ YooAsset Transaction Evidence 位于：
 <UnityProject>/.buildpipeline/transactions/yooasset3/<invocation-id>/
 ```
 
-Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切换 Target。不要删除 Journal。恢复核心位于 Core Assembly（`YooAsset3RecoveryCoordinator`），因此卸载或升级 YooAsset 包后发布恢复仍然可用。
+Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切换 Target。不要删除 Journal。恢复核心位于 Core Assembly（`PublicationRecoveryCoordinator`），因此卸载或升级 YooAsset 包后发布恢复仍然可用。
 
 ## 故障排查与验证边界
 
@@ -157,5 +157,25 @@ Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切�
 - `YooAsset3BuildPlan.cs`
 - `YooAsset3Cryptography.cs`
 - `YooAsset3PublicationTransaction.cs`
-- `../YooAsset3Core/YooAsset3RecoveryCoordinator.cs`
-- `../YooAsset3Core/YooAsset3PublicationRecovery.cs`
+- `../YooAsset3Core/PublicationRecoveryCoordinator.cs`
+- `../YooAsset3Core/PublicationRecovery.cs`
+
+## 发布核心与崩溃可恢复性
+
+发布恢复栈位于独立程序集 `Build.Pipeline.Integrations.YooAsset3.Publication`（目录 `Core/`，命名空间
+`Build.Pipeline.Integrations.YooAsset3.Publication`）。它**不受版本门控**且**不依赖 YooAsset 包**：
+卸载或升级 YooAsset 不会让任何持久 journal 变得不可读。原本 2685 行的恢复单体被拆分为按职责
+聚合的组件——JournalStore、JournalValidator、MetaGuard、Rollback、CommitCompletion、
+SourceQualification、FileOps，以及一个瘦身的 phase 派发编排器。核心层除两个显式隔离的 Unity
+触点外完全引擎无关：Coordinator 的 `AssetDatabase.Refresh`（仍以委托注入）与
+`IJournalSerializer` 序列化缝（Unity 侧绑定 JsonUtility）。其余全部代码都能在
+`deliverables/yooasset-publication-verify` 的纯 .NET harness 下编译运行，包括恢复引擎、journal
+store 与 relocation journal。
+
+Player 构建期的产物搬移已实现崩溃可恢复。每一次把所有权标记、备份目录、受保护 meta、stage
+目录临时移出 StreamingAssets 的动作都会记录到
+`Temp/BuildPipeline/YooAssetRelocationJournals/<transactionId>.json`：移动前持久化 `Planned`，
+验证后写 `Moved`，逐条写 `Restored`；`Conflict`（双侧并存或类型不符）与 `MissingBoth`（产物
+丢失）是终止态、fail closed，会阻止构建直到人工处理。恢复 Coordinator 会在 Editor 启动时恢复
+未完成的 relocation journal；journal 只有在全部条目恢复后才会删除。故障路径（崩溃、恢复中途
+失败、冲突、双丢失、类型不匹配、校验和篡改）的无头回归测试运行于验证 harness。

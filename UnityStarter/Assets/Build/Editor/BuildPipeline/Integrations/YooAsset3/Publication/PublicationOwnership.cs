@@ -5,11 +5,11 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using UnityEngine;
+using Build.Pipeline.Editor;
 
-namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
+namespace Build.Pipeline.Integrations.YooAsset3.Publication
 {
-    internal static class YooAsset3PublicationOwnership
+    internal static class PublicationOwnership
     {
         internal const string MarkerFileName = ".yoo-pub.json";
         internal const string Owner = "Build.Pipeline.Editor.Integrations.YooAsset3";
@@ -26,10 +26,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             string projectRoot,
             string directory,
             string expectedKind,
-            string expectedPackageName)
+            string expectedPackageName,
+            IJournalSerializer serializer)
         {
             string root = Path.GetFullPath(directory);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, root);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, root);
             if (File.Exists(root))
             {
                 throw new InvalidOperationException($"Publication directory resolves to a file: '{root}'.");
@@ -64,6 +65,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             }
 
             return ReadAndValidateOwned(
+                serializer,
                 root,
                 expectedKind,
                 expectedPackageName,
@@ -83,10 +85,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             string packageVersion,
             string cryptographyAdapterId,
             string runtimeDecryptContractId,
-            string transactionId)
+            string transactionId,
+            IJournalSerializer serializer)
         {
             string root = Path.GetFullPath(directory);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, root);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, root);
             if (!Directory.Exists(root) || File.Exists(root))
             {
                 throw new DirectoryNotFoundException($"Publication stage does not exist: '{root}'.");
@@ -98,7 +101,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                 packageVersion,
                 cryptographyAdapterId,
                 runtimeDecryptContractId,
-                transactionId);
+                transactionId,
+                serializer);
             string markerPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(root, MarkerFileName),
                 "YooAsset publication ownership marker");
@@ -127,7 +131,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                 entryCount = identity.EntryCount
             };
             marker.checksum = ComputeMarkerChecksum(marker);
-            byte[] bytes = new UTF8Encoding(false).GetBytes(JsonUtility.ToJson(marker, true));
+            byte[] bytes = new UTF8Encoding(false).GetBytes(serializer.ToJson(marker));
             if (bytes.Length <= 0 || bytes.Length > MaximumMarkerBytes)
             {
                 throw new InvalidOperationException($"Publication marker exceeds {MaximumMarkerBytes} bytes: '{markerPath}'.");
@@ -151,6 +155,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             }
 
             return ReadAndValidateOwned(
+                serializer,
                 root,
                 kind,
                 packageName,
@@ -172,16 +177,18 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             string expectedRuntimeDecryptContractId,
             string expectedTransactionId,
             string expectedContentIdentity,
-            int expectedEntryCount)
+            int expectedEntryCount,
+            IJournalSerializer serializer)
         {
             string root = Path.GetFullPath(directory);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, root);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, root);
             if (!Directory.Exists(root) || File.Exists(root))
             {
                 throw new DirectoryNotFoundException($"Owned publication directory does not exist: '{root}'.");
             }
 
             return ReadAndValidateOwned(
+                serializer,
                 root,
                 expectedKind,
                 expectedPackageName,
@@ -196,7 +203,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
         public static PublicationSnapshot ValidateEmptyUnowned(string projectRoot, string directory)
         {
             string root = Path.GetFullPath(directory);
-            YooAsset3BuildSafety.ValidateNoPathRedirection(projectRoot, root);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, root);
             if (!Directory.Exists(root) || File.Exists(root))
             {
                 throw new DirectoryNotFoundException($"Original empty publication directory does not exist: '{root}'.");
@@ -229,6 +236,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
         }
 
         private static PublicationSnapshot ReadAndValidateOwned(
+            IJournalSerializer serializer,
             string root,
             string expectedKind,
             string expectedPackageName,
@@ -265,7 +273,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                     json,
                     MarkerDocumentType,
                     "YooAsset publication ownership marker");
-                marker = JsonUtility.FromJson<PublicationMarker>(json);
+                marker = serializer.FromJson<PublicationMarker>(json);
             }
             catch (Exception exception)
             {
@@ -285,7 +293,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                 marker.packageVersion,
                 marker.cryptographyAdapterId,
                 marker.runtimeDecryptContractId,
-                marker.transactionId);
+                marker.transactionId,
+                serializer);
             if (!string.Equals(marker.checksum, ComputeMarkerChecksum(marker), StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException($"Build-owned publication marker checksum is invalid: '{markerPath}'.");
@@ -481,7 +490,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             string packageVersion,
             string cryptographyAdapterId,
             string runtimeDecryptContractId,
-            string transactionId)
+            string transactionId,
+            IJournalSerializer serializer)
         {
             if ((!string.Equals(kind, PackageOutputKind, StringComparison.Ordinal) &&
                  !string.Equals(kind, BundledPackageKind, StringComparison.Ordinal)) ||

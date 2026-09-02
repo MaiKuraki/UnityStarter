@@ -5,7 +5,8 @@
         "Build.Pipeline.Editor",
         "Build.Pipeline.Integrations.YooAsset3.Editor",
         "YooAsset",
-        "YooAsset.Editor"
+        "YooAsset.Editor",
+        "Build.Pipeline.Integrations.YooAsset3.Publication"
     ],
     "includePlatforms": [
         "Editor"

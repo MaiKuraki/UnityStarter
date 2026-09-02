@@ -96,6 +96,15 @@ namespace CycloneGames.AtlasPipeline
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// Asset paths of the rule assets the settings currently reference, rebuilt whenever the
+        /// rule order is refreshed. Deleted paths can no longer be type-checked (the asset is gone
+        /// by the time the postprocessor sees them), so this set is how a deleted rule asset is
+        /// recognized: its path was registered a moment ago and now a file with that path vanished.
+        /// </summary>
+        private static readonly HashSet<string> RegisteredRuleAssetPaths =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Atlases whose fingerprint matched and were left untouched during the current pass. On a
         /// build agent this is the observable proof that the incremental pass actually worked: a
         /// cold build with an up-to-date manifest should report everything skipped and nothing
@@ -434,6 +443,117 @@ namespace CycloneGames.AtlasPipeline
         {
             DeleteOrphanRuleAssets();
         }
+
+        /// <summary>
+        /// Creates a rule asset and registers it in the settings list as ONE undoable operation:
+        /// undo reverts the registration and the created asset together, redo restores both.
+        /// Returns null when anything failed, in which case no half-registered rule is left behind —
+        /// an asset that was created but not registered is deleted, and the error is logged.
+        /// </summary>
+        /// <remarks>
+        /// Kept on the pipeline rather than the window because the window's ReorderableList callback
+        /// should not own AssetDatabase transaction details. This is a small helper, not a registry:
+        /// the settings list stays the single source of registration.
+        /// </remarks>
+        public static AtlasRuleAsset CreateAndRegisterRuleAsset(AtlasImportRule initialRule)
+        {
+            AtlasPipelineSettings settings;
+            try
+            {
+                EnsureSettingsAsset();
+                settings = _settingsCache;
+                if (settings == null || initialRule == null)
+                {
+                    return null;
+                }
+            }
+            catch (Exception exception)
+            {
+                AtlasPipelineLog.Channel.Error(
+                    "[CycloneGames Atlas Pipeline] Could not create a rule asset: "
+                    + exception.Message);
+                return null;
+            }
+
+            Undo.IncrementCurrentGroup();
+            Undo.SetCurrentGroupName("Create Atlas Rule");
+            int undoGroup = Undo.GetCurrentGroup();
+
+            string assetPath = null;
+            AtlasRuleAsset asset = null;
+            bool registered = false;
+            try
+            {
+                EnsureAssetFolderExists(DefaultRuleFolder);
+                string baseName = AtlasPathUtility.SanitizePart(initialRule.Name);
+                if (string.IsNullOrEmpty(baseName))
+                {
+                    baseName = "Rule";
+                }
+
+                assetPath = DefaultRuleFolder + "/" + baseName + ".asset";
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath) != null)
+                {
+                    assetPath = AssetDatabase.GenerateUniqueAssetPath(assetPath);
+                }
+
+                asset = ScriptableObject.CreateInstance<AtlasRuleAsset>();
+                asset.Initialize(initialRule);
+                AssetDatabase.CreateAsset(asset, assetPath);
+                Undo.RegisterCreatedObjectUndo(asset, "Create Atlas Rule");
+
+                Undo.RecordObject(settings, "Create Atlas Rule");
+                settings.RegisterRuleAsset(asset);
+                registered = true;
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
+
+                // Everything after the first undoable step shares the group, so one undo reverts
+                // registration and creation together and one redo restores both. The trailing
+                // increment closes the group: the editor advances undo groups on every interaction,
+                // but a bare API caller (a test, a script) runs several undoable operations in one
+                // frame, and without this its next operation would merge into the creation's group
+                // — one undo would then revert both operations instead of one.
+                Undo.CollapseUndoOperations(undoGroup);
+                Undo.IncrementCurrentGroup();
+                return asset;
+            }
+            catch (Exception exception)
+            {
+                // No half-registered rule: an asset that was created but never registered is
+                // deleted here, and the undo group is collapsed so the failed attempt leaves
+                // nothing replayable on the undo stack.
+                if (asset != null && !registered && !string.IsNullOrEmpty(assetPath))
+                {
+                    try
+                    {
+                        AssetDatabase.DeleteAsset(assetPath);
+                    }
+                    catch (Exception deleteException)
+                    {
+                        AtlasPipelineLog.Channel.Warning(
+                            "[CycloneGames Atlas Pipeline] Could not clean up the partially "
+                            + "created rule asset '" + assetPath + "': "
+                            + deleteException.Message + ". It remains on disk as an orphan and is "
+                            + "reported by the rule audit.");
+                    }
+                }
+
+                Undo.CollapseUndoOperations(undoGroup);
+                Undo.IncrementCurrentGroup();
+                AtlasPipelineLog.Channel.Error(
+                    "[CycloneGames Atlas Pipeline] Creating rule asset '"
+                    + (initialRule?.Name ?? "unnamed") + "' failed: " + exception.Message
+                    + ". The settings list was not modified.");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// How many atlases are waiting to be regenerated. Diagnostics for the window and tests:
+        /// a rule-asset change marks everything dirty, and this is the observable for that.
+        /// </summary>
+        public static int DirtyAtlasCount => Index.DirtyCount;
 
         public static AtlasPipelineSnapshot GetSnapshot()
         {
@@ -899,13 +1019,30 @@ namespace CycloneGames.AtlasPipeline
             BeginBatchedAssetEditing();
             try
             {
-                // LF only and no BOM. The file is committed, so a CRLF or BOM difference between a
-                // Windows developer machine and a Linux CI agent would show up as a whole-file diff
-                // on every change and turn every merge into a conflict.
-                File.WriteAllText(
-                    absolute,
-                    AtlasManifestSerializer.Write(BuildManifest()),
-                    new UTF8Encoding(false));
+                AtlasManifest manifest = BuildManifest();
+                int expectedEntries = manifest.Entries.Count;
+                string content = AtlasManifestSerializer.Write(manifest);
+
+                // Written to a sibling temporary file, verified by reading it back and parsing it,
+                // and only then swapped in. A crash mid-write therefore leaves the previous
+                // manifest intact instead of a truncated file that parses as the wrong project.
+                if (!AtlasManifestFile.TryWriteAtomically(
+                        absolute,
+                        content,
+                        text =>
+                        {
+                            AtlasManifest parsed = AtlasManifestSerializer.Read(text);
+                            return parsed != null
+                                   && parsed.Entries.Count == expectedEntries;
+                        },
+                        out string error))
+                {
+                    AtlasPipelineLog.Channel.Error(
+                        "[CycloneGames Atlas Pipeline] Manifest write failed; the previous "
+                        + "manifest is kept unchanged. " + error);
+                    return;
+                }
+
                 AssetDatabase.ImportAsset(ManifestPath, ImportAssetOptions.ForceUpdate);
             }
             finally
@@ -1081,6 +1218,14 @@ namespace CycloneGames.AtlasPipeline
         {
             EnsureInitialized();
             AtlasPipelineSettings settings = _settingsCache;
+
+            // Rule assets are configuration, not membership: their import, move or deletion must
+            // refresh the rule cache and (for import and deletion) mark every atlas dirty, because
+            // the packing configuration may have changed for all of them. Detected here rather
+            // than left to the project-changed rescan so the behaviour holds with the window closed.
+            bool ruleAssetsChanged = DetectRuleAssetChanges(
+                importedAssets, deletedAssets, movedFromAssetPaths);
+
             DetectNewInvalidAtlasNames(importedAssets, movedAssets);
             DetectOutputFolderIntrusions(importedAssets, movedAssets, settings);
 
@@ -1123,11 +1268,81 @@ namespace CycloneGames.AtlasPipeline
                 }
             }
 
-            if (changed)
+            if (ruleAssetsChanged)
+            {
+                // Re-read the rule assets (content, resolved folders, registered-path set), then
+                // mark every atlas dirty: a changed or deleted rule can affect any of them, and
+                // the fingerprint makes the regeneration cheap for the atlases that were not
+                // actually affected. A deleted registered rule is NOT auto-removed from settings —
+                // the missing reference stays, and the rule audit blocks the build on it.
+                RefreshRuleOrder();
+                Index.MarkAllDirty();
+            }
+
+            if (changed || ruleAssetsChanged)
             {
                 ScheduleProcessing();
             }
 
+        }
+
+        /// <summary>
+        /// True when any of the reported asset changes involves a rule asset. Imported and moved-to
+        /// paths can be type-checked directly; deleted and moved-from paths cannot (the asset is
+        /// gone), so they are matched against the paths the settings referenced most recently.
+        /// </summary>
+        private static bool DetectRuleAssetChanges(
+            string[] importedAssets,
+            string[] deletedAssets,
+            string[] movedFromAssetPaths)
+        {
+            if (importedAssets != null)
+            {
+                for (int i = 0; i < importedAssets.Length; i++)
+                {
+                    if (IsRuleAssetPath(importedAssets[i]))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (deletedAssets != null)
+            {
+                for (int i = 0; i < deletedAssets.Length; i++)
+                {
+                    if (IsRegisteredRuleAssetPath(deletedAssets[i]))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (movedFromAssetPaths != null)
+            {
+                for (int i = 0; i < movedFromAssetPaths.Length; i++)
+                {
+                    if (IsRegisteredRuleAssetPath(movedFromAssetPaths[i]))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsRuleAssetPath(string assetPath)
+        {
+            return !string.IsNullOrEmpty(assetPath)
+                   && AssetDatabase.LoadAssetAtPath<AtlasRuleAsset>(assetPath) != null;
+        }
+
+        private static bool IsRegisteredRuleAssetPath(string assetPath)
+        {
+            string normalized = AtlasPathUtility.NormalizeAndTrim(assetPath);
+            return !string.IsNullOrEmpty(normalized)
+                   && RegisteredRuleAssetPaths.Contains(normalized);
         }
 
         public static bool ApplyImportSettingsToAll()
@@ -2225,9 +2440,11 @@ namespace CycloneGames.AtlasPipeline
                 importer.isReadable,
                 rule.Readable,
                 value => importer.isReadable = value);
+            // The effective mode, not the stored one: with PixelArt on, sources and the atlas
+            // must agree on Point filtering — the packed atlas is what renders at runtime.
             changed |= SetIfChanged(
                 importer.filterMode,
-                rule.FilterMode,
+                rule.EffectiveFilterMode,
                 value => importer.filterMode = value);
             changed |= SetIfChanged(
                 importer.wrapMode,
@@ -3203,22 +3420,20 @@ namespace CycloneGames.AtlasPipeline
 
             // Batch editing: pause imports, then flush once after all ImportAsset/DeleteAsset calls.
             // This avoids a full library refresh per atlas, which also feeds the projectChanged storm.
+            //
+            // Window 1 only REGISTERS the freshly written files. Inside a batching window the
+            // importer of a brand-new asset either does not exist yet or its import defers until the
+            // flush — which is why configuring here applied one generation late: the first pass
+            // packed with the authoring asset's defaults and the rule configuration never reached
+            // the files it was meant for.
             BeginBatchedAssetEditing();
             try
             {
                 for (int i = 0; i < GeneratedAtlasPaths.Count; i++)
                 {
-                    string atlasPath = GeneratedAtlasPaths[i];
                     AssetDatabase.ImportAsset(
-                        atlasPath,
+                        GeneratedAtlasPaths[i],
                         ImportAssetOptions.ForceUpdate);
-                    SpriteAtlasImporter importer =
-                        AssetImporter.GetAtPath(atlasPath) as SpriteAtlasImporter;
-                    if (importer != null)
-                    {
-                        ConfigureAtlasImporter(importer, PendingAtlasConfigure[i]);
-                        AssetDatabase.WriteImportSettingsIfDirty(atlasPath);
-                    }
                 }
 
                 for (int i = 0; i < DeletedAtlasPaths.Count; i++)
@@ -3230,12 +3445,56 @@ namespace CycloneGames.AtlasPipeline
                 }
 
                 AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
+            }
+            finally
+            {
+                // The flush here is what makes the importers of brand-new assets exist.
+                EndBatchedAssetEditing();
+            }
+
+            // Window 2: imports have flushed, so every generated atlas now has an importer whose
+            // packed output reflects the file as written. Apply the owning rule's configuration,
+            // and when that importer did not match (a brand-new asset defaults to bilinear and
+            // default compression; an older file may carry stale settings) import once more —
+            // WriteImportSettingsIfDirty alone persists the corrected settings without a repack.
+            BeginBatchedAssetEditing();
+            try
+            {
+                for (int i = 0; i < GeneratedAtlasPaths.Count; i++)
+                {
+                    string atlasPath = GeneratedAtlasPaths[i];
+                    SpriteAtlasImporter importer =
+                        AssetImporter.GetAtPath(atlasPath) as SpriteAtlasImporter;
+                    if (importer == null)
+                    {
+                        AtlasPipelineLog.Channel.Warning(
+                            "[CycloneGames Atlas Pipeline] Atlas '" + atlasPath
+                            + "' was generated but has no SpriteAtlasImporter to configure.");
+                        continue;
+                    }
+
+                    bool importerWasStale =
+                        !AtlasConfigurationMatches(atlasPath, PendingAtlasConfigure[i]);
+
+                    ConfigureAtlasImporter(importer, PendingAtlasConfigure[i]);
+                    AssetDatabase.WriteImportSettingsIfDirty(atlasPath);
+
+                    if (importerWasStale)
+                    {
+                        AssetDatabase.ImportAsset(
+                            atlasPath,
+                            ImportAssetOptions.ForceUpdate);
+                    }
+                }
+
+                AssetDatabase.SaveAssets();
             }
             finally
             {
                 EndBatchedAssetEditing();
             }
+
+            AssetDatabase.Refresh();
 
             // Buckets that lost every member are dropped so a long editor session does not
             // accumulate thousands of empty entries; their atlas files were deleted above.
@@ -3304,8 +3563,25 @@ namespace CycloneGames.AtlasPipeline
             bool outputExists = File.Exists(ToAbsolutePath(outputPath))
                                 || File.Exists(ToAbsolutePath(firstPagePath));
 
+            // The fingerprint covers DATA — members, rule fields, global settings, source bytes. It
+            // cannot see changes to what the pipeline DOES with that data, so an atlas written by
+            // older code carries an importer configuration this version would never produce while
+            // every fingerprint still matches. Both skips below therefore verify the on-disk
+            // importer configuration against the current rule: a mismatch (filter mode, packing,
+            // platform settings, include-in-build) falls through to a full regeneration, which
+            // rewrites the pages and reconfigures the importer. One importer read per skipped atlas
+            // is cheap next to the sprite loading the fingerprint exists to avoid, and it makes
+            // code-level behaviour fixes self-healing instead of version-bump-driven.
+            int knownPageCount = GetKnownPageCount(atlasKey);
+            string configurationCheckPath = knownPageCount <= 1
+                ? outputPath
+                : firstPagePath;
+            bool configurationCurrent =
+                AtlasConfigurationMatches(configurationCheckPath, atlasKey);
+
             if (!force
                 && outputExists
+                && configurationCurrent
                 && GeneratedFingerprints.TryGetValue(atlasKey, out long recorded)
                 && recorded == fingerprint)
             {
@@ -3324,6 +3600,7 @@ namespace CycloneGames.AtlasPipeline
             // from an untouched one without decoding it.
             if (!force
                 && outputExists
+                && configurationCurrent
                 && TryGetRecordedSourceHash(atlasKey, out long recordedSource)
                 && TryComputeSourceHash(bucket, out long currentSource))
             {
@@ -4145,7 +4422,7 @@ namespace CycloneGames.AtlasPipeline
                 rule?.CompressionQuality ?? AtlasPlatformFormats.DefaultCompressionQuality,
                 0,
                 100);
-            FilterMode filterMode = rule?.FilterMode ?? FilterMode.Bilinear;
+            FilterMode filterMode = rule?.EffectiveFilterMode ?? FilterMode.Bilinear;
 
             importer.includeInBuild = ResolveIncludeInBuild(settings, rule);
             importer.packingSettings = CreatePackingSettings(settings, rule);
@@ -4260,7 +4537,7 @@ namespace CycloneGames.AtlasPipeline
 
             AtlasPipelineSettings settings = _settingsCache;
             AtlasImportRule rule = ResolveAtlasRule(atlasKey);
-            FilterMode filterMode = rule?.FilterMode ?? FilterMode.Bilinear;
+            FilterMode filterMode = rule?.EffectiveFilterMode ?? FilterMode.Bilinear;
 
             // Every value here must come from the same helper the writer uses. If the two drifted,
             // the comparison would report "configuration changed" forever and every atlas would be
@@ -4690,6 +4967,30 @@ namespace CycloneGames.AtlasPipeline
             if (healedAnyReference)
             {
                 EditorUtility.SetDirty(_settingsCache);
+            }
+
+            // Recorded here rather than derived on demand: the postprocessor needs to recognize a
+            // DELETED rule asset, and by then the file is gone and cannot be type-checked — the
+            // only memory of it is the set of paths the settings referenced.
+            RegisteredRuleAssetPaths.Clear();
+            IReadOnlyList<AtlasRuleAsset> ruleAssets = _settingsCache?.RuleAssets;
+            if (ruleAssets != null)
+            {
+                for (int i = 0; i < ruleAssets.Count; i++)
+                {
+                    AtlasRuleAsset asset = ruleAssets[i];
+                    if (asset == null)
+                    {
+                        continue;
+                    }
+
+                    string path = AssetDatabase.GetAssetPath(asset);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        RegisteredRuleAssetPaths.Add(
+                            AtlasPathUtility.NormalizeAndTrim(path));
+                    }
+                }
             }
 
             RuleCache.Sort((left, right) =>

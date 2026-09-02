@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using CycloneGames.EventBus.Core;
 using CycloneGames.EventBus.Runtime.Integrations.R3;
 using CycloneGames.EventBus.Runtime.Integrations.UniTask;
@@ -175,6 +176,123 @@ namespace CycloneGames.EventBus.Tests.Integrations
             {
             }
 
+            Assert.AreEqual(0, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public async Task WaitAsync_EventWinsOverLateCancellation_CompletesWithTheEvent()
+        {
+            var bus = new EventBus<Ping>();
+            var cancellation = new CancellationTokenSource();
+
+            var wait = bus.WaitAsync(cancellation.Token);
+            bus.Publish(new Ping { Value = 5 });
+            cancellation.Cancel();
+
+            // One-shot arbitration: the event settled first, the late cancellation must not
+            // corrupt or replace that result.
+            Ping result = await wait;
+            Assert.AreEqual(5, result.Value);
+            Assert.AreEqual(0, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public async Task WaitAsync_PredicateThrows_CompletesFaultedAndReleasesSubscription()
+        {
+            var bus = new EventBus<Ping>();
+
+            // AttachExternalCancellation keeps the red phase of this test observable: before the
+            // fix a throwing predicate left the waiter parked forever, and the await would hang.
+            var wait = bus.WaitAsync(_ => throw new InvalidOperationException("predicate"))
+                .AttachExternalCancellation(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
+
+            bus.Publish(new Ping { Value = 1 });
+
+            try
+            {
+                await wait;
+                Assert.Fail("A throwing predicate must fault the wait.");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            // The leak this test exists to catch: the failed wait must not leave a handler behind.
+            Assert.AreEqual(0, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public async Task WaitAsync_CancellationFromBackgroundThread_DuringPublishStorm_BusStaysConsistent()
+        {
+            for (int iteration = 0; iteration < 100; iteration++)
+            {
+                var bus = new EventBus<Ping>();
+                int churn = 0;
+                bus.Subscribe(_ => churn++);
+
+                using (var cancellation = new CancellationTokenSource())
+                {
+                    UniTask<Ping> wait = bus.WaitAsync(_ => false, cancellation.Token);
+
+                    // The cancellation callback fires on a thread-pool thread. The bus is
+                    // single-thread-confined, so the release must be deferred to the owner thread
+                    // instead of mutating the handler array from here.
+                    Task cancel = Task.Run(async () =>
+                    {
+                        await Task.Yield();
+                        cancellation.Cancel();
+                    });
+
+                    for (int index = 0; index < 50; index++)
+                    {
+                        bus.Publish(new Ping { Value = index });
+                        await Task.Yield();
+                    }
+
+                    await cancel;
+
+                    try
+                    {
+                        await wait;
+                        Assert.Fail($"Iteration {iteration}: a cancelled wait must not complete successfully.");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+
+                    // The foreign-thread cancellation deferred the unsubscribe into the bus's
+                    // removal inbox; one owner-thread operation applies it. Without this publish
+                    // the stale subscription legitimately lives until the next one.
+                    bus.Publish(new Ping { Value = -1 });
+
+                    Assert.AreEqual(1, bus.SubscriptionCount, $"Iteration {iteration} left a subscription behind.");
+                    Assert.AreEqual(51, churn, $"Iteration {iteration} lost churn deliveries.");
+                }
+            }
+        }
+
+        [Test]
+        public async Task WaitAsync_BusDisposedWhileWaiting_ThenCancelled_CompletesSafely()
+        {
+            var bus = new EventBus<Ping>();
+            var cancellation = new CancellationTokenSource();
+
+            var wait = bus.WaitAsync(cancellation.Token);
+            bus.Dispose();
+
+            // The parked task can never complete by event now; the token is the escape hatch.
+            cancellation.Cancel();
+
+            try
+            {
+                await wait;
+                Assert.Fail("A cancelled wait must not complete successfully.");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            Assert.IsTrue(bus.IsDisposed);
             Assert.AreEqual(0, bus.SubscriptionCount);
         }
 

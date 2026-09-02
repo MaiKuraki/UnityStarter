@@ -1,6 +1,6 @@
 using System;
 using System.IO;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using YooAsset.Editor;
 
 namespace Build.Pipeline.Editor.Integrations.YooAsset3
@@ -10,7 +10,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
     /// Editor assembly (<see cref="BundleBuilderHelper"/>) or the gated
     /// <see cref="YooAsset3PackageBuildPlan"/>. These methods must stay in the
     /// gated integration assembly; everything reachable from publication recovery
-    /// lives in <c>YooAsset3BuildSafety</c> in the core assembly.
+    /// lives in <c>PublicationSafety</c> in the core assembly.
     /// </summary>
     internal static class YooAsset3BuildPathValidation
     {
@@ -43,9 +43,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string outputDirectory = Path.GetFullPath(packagePlan.OutputPackageDirectory);
             string parentDirectory = Path.GetDirectoryName(outputDirectory);
 
-            if (!YooAsset3BuildSafety.IsStrictDescendant(buildOutputRoot, packageRoot) ||
+            if (!PublicationSafety.IsStrictDescendant(buildOutputRoot, packageRoot) ||
                 string.IsNullOrEmpty(parentDirectory) ||
-                !YooAsset3BuildSafety.PathsEqual(packageRoot, parentDirectory))
+                !PublicationSafety.PathsEqual(packageRoot, parentDirectory))
             {
                 throw new InvalidOperationException(
                     $"Unsafe YooAsset version output path for package '{packagePlan.PackageName}': '{outputDirectory}'.");
@@ -60,8 +60,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string bundledPackageDirectory = Path.GetFullPath(packagePlan.BundledPackageDirectory);
             string parentDirectory = Path.GetDirectoryName(bundledPackageDirectory);
             if (string.IsNullOrEmpty(parentDirectory) ||
-                !YooAsset3BuildSafety.PathsEqual(bundledFileRoot, parentDirectory) ||
-                !YooAsset3BuildSafety.IsStrictDescendant(bundledFileRoot, bundledPackageDirectory))
+                !PublicationSafety.PathsEqual(bundledFileRoot, parentDirectory) ||
+                !PublicationSafety.IsStrictDescendant(bundledFileRoot, bundledPackageDirectory))
             {
                 throw new InvalidOperationException(
                     $"Unsafe YooAsset bundled package path for package '{packagePlan.PackageName}': '{bundledPackageDirectory}'.");
@@ -70,7 +70,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             // YooAsset can delete or overwrite this directory depending on the
             // explicit bundled-copy option. Refuse path redirection before its
             // task receives control.
-            YooAsset3BuildSafety.EnsureNoReparsePoints(projectRoot, bundledPackageDirectory);
+            PublicationSafety.EnsureNoReparsePoints(projectRoot, bundledPackageDirectory);
         }
     }
 }

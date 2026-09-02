@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Build.Pipeline.Editor;
 
-namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
+namespace Build.Pipeline.Integrations.YooAsset3.Publication
 {
-    internal static class YooAsset3BuildSafety
+    internal static class PublicationSafety
     {
         private const int MaxArtifactFileNameLength = 240;
         private const int MaxPortableFileNameUtf8ByteCount = 240;
@@ -107,36 +108,34 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
             }
         }
 
-        public static string NormalizeBundledCopyParams(YooAssetPackageProfile profile)
+        public static string NormalizeBundledCopyParams(bool copyByTags, string bundledCopyTags, string packageName)
         {
-            bool copyByTags = profile.bundledCopyOption == YooAssetBundledCopyOption.ClearAndCopyByTags ||
-                              profile.bundledCopyOption == YooAssetBundledCopyOption.OnlyCopyByTags;
             if (!copyByTags)
             {
                 return string.Empty;
             }
 
-            string value = profile.bundledCopyTags ?? string.Empty;
+            string value = bundledCopyTags ?? string.Empty;
             if (string.IsNullOrWhiteSpace(value))
             {
                 throw new ArgumentException(
-                    $"Package '{profile.packageName}' requires at least one bundled-copy tag.",
-                    nameof(profile.bundledCopyTags));
+                    $"Package '{packageName}' requires at least one bundled-copy tag.",
+                    nameof(bundledCopyTags));
             }
 
             if (value.Length > MaxBundledCopyParamsLength)
             {
                 throw new ArgumentException(
-                    $"Package '{profile.packageName}' bundled-copy tags exceed the {MaxBundledCopyParamsLength}-character limit.",
-                    nameof(profile.bundledCopyTags));
+                    $"Package '{packageName}' bundled-copy tags exceed the {MaxBundledCopyParamsLength}-character limit.",
+                    nameof(bundledCopyTags));
             }
 
             string[] rawTags = value.Split(';');
             if (rawTags.Length > MaxBundledCopyTagCount)
             {
                 throw new ArgumentException(
-                    $"Package '{profile.packageName}' has more than {MaxBundledCopyTagCount} bundled-copy tags.",
-                    nameof(profile.bundledCopyTags));
+                    $"Package '{packageName}' has more than {MaxBundledCopyTagCount} bundled-copy tags.",
+                    nameof(bundledCopyTags));
             }
 
             var normalizedTags = new List<string>(rawTags.Length);
@@ -147,15 +146,15 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                 if (tag.Length == 0)
                 {
                     throw new ArgumentException(
-                        $"Package '{profile.packageName}' bundled-copy tags contain an empty entry.",
-                        nameof(profile.bundledCopyTags));
+                        $"Package '{packageName}' bundled-copy tags contain an empty entry.",
+                        nameof(bundledCopyTags));
                 }
 
                 if (tag.Length > MaxBundledCopyTagLength)
                 {
                     throw new ArgumentException(
-                        $"Package '{profile.packageName}' bundled-copy tag exceeds {MaxBundledCopyTagLength} characters: '{tag}'.",
-                        nameof(profile.bundledCopyTags));
+                        $"Package '{packageName}' bundled-copy tag exceeds {MaxBundledCopyTagLength} characters: '{tag}'.",
+                        nameof(bundledCopyTags));
                 }
 
                 foreach (char character in tag)
@@ -163,16 +162,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3Core
                     if (char.IsControl(character))
                     {
                         throw new ArgumentException(
-                            $"Package '{profile.packageName}' bundled-copy tag contains a control character.",
-                            nameof(profile.bundledCopyTags));
+                            $"Package '{packageName}' bundled-copy tag contains a control character.",
+                            nameof(bundledCopyTags));
                     }
                 }
 
                 if (!seenTags.Add(tag))
                 {
                     throw new ArgumentException(
-                        $"Package '{profile.packageName}' bundled-copy tag is duplicated: '{tag}'.",
-                        nameof(profile.bundledCopyTags));
+                        $"Package '{packageName}' bundled-copy tag is duplicated: '{tag}'.",
+                        nameof(bundledCopyTags));
                 }
 
                 normalizedTags.Add(tag);
