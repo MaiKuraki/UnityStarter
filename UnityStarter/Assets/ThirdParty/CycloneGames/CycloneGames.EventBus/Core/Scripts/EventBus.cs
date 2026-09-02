@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 
 namespace CycloneGames.EventBus.Core
 {
@@ -13,7 +15,9 @@ namespace CycloneGames.EventBus.Core
     /// Dispose must all run on one owner thread (in Unity, the main thread). Confinement is the
     /// safety guarantee and the precondition for zero allocation, so <see cref="Publish"/> takes no
     /// lock. To cross a thread boundary, publish into an <see cref="MpscEventQueue{T}"/> from the
-    /// background and drain it into this bus on the owner thread.
+    /// background and drain it into this bus on the owner thread. A callback that fires on a
+    /// foreign thread (a cancellation registration, a foreign completion) releases its
+    /// subscription through <see cref="ScheduleRemoval"/> instead of touching the bus directly.
     ///
     /// Ordering: handlers run in subscription order, on every platform and every scripting backend.
     /// There is no priority, no reordering and no async completion, so a publish is a fully
@@ -26,6 +30,9 @@ namespace CycloneGames.EventBus.Core
     ///   handler that removes a later handler suppresses it within the same round.
     /// - Compaction never runs mid-dispatch. An unsubscribe during dispatch marks the bus and the
     ///   outermost dispatch frame performs a single in-place compaction on exit.
+    /// - Dispose during Publish is also deferred: the round is atomic, so the handlers captured by
+    ///   the loop still run, <see cref="IsDisposed"/> turns true immediately (nested Publish and
+    ///   Subscribe throw), and the outermost dispatch frame tears the bus down on exit.
     /// </summary>
     public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics where T : struct
     {
@@ -58,6 +65,13 @@ namespace CycloneGames.EventBus.Core
         private int _dispatchDepth;
         private bool _compactPending;
         private bool _disposed;
+
+        // Thread-safe deferred-unsubscribe inbox. Foreign-thread callbacks enqueue here; the owner
+        // thread applies the removals at its next entry point. The count exists so the hot
+        // publish path pays one volatile read instead of touching the queue.
+        private readonly ConcurrentQueue<IEventSubscription> _pendingRemovals =
+            new ConcurrentQueue<IEventSubscription>();
+        private int _pendingRemovalCount;
 
         private EventSubscription<T>[] _handlePool;
         private int _handlePoolCount;
@@ -140,6 +154,7 @@ namespace CycloneGames.EventBus.Core
 
             // Tombstone reuse is only safe outside dispatch: reusing a slot below the loop's count
             // snapshot would let a handler subscribed mid-round fire in that same round.
+            DrainPendingRemovals();
             if (_dispatchDepth == 0)
             {
                 for (int index = 0; index < _slots; index++)
@@ -202,6 +217,9 @@ namespace CycloneGames.EventBus.Core
                 ThrowDisposed();
             }
 
+            // Apply deferred foreign-thread removals before the round snapshots its state.
+            DrainPendingRemovals();
+
             // Re-entrancy ceiling. Dropping here is deliberate: an unbounded recursive publish chain
             // is a design error, and the alternative is a stack overflow that the runtime cannot
             // recover from on any platform. The drop is counted and surfaced by diagnostics.
@@ -256,12 +274,22 @@ namespace CycloneGames.EventBus.Core
             finally
             {
                 // Depth is restored unconditionally: a subscriber that throws must not leave the bus
-                // permanently unable to publish. Compaction is deferred to the outermost frame so
-                // slot indices never shift underneath an in-flight iteration.
-                if (--_dispatchDepth == 0 && _compactPending)
+                // permanently unable to publish. Teardown and compaction are deferred to the
+                // outermost frame so slot indices never shift underneath an in-flight iteration.
+                if (--_dispatchDepth == 0)
                 {
-                    _compactPending = false;
-                    CompactInPlace();
+                    if (_disposed)
+                    {
+                        // Dispose was requested while this round was running. Replacing the array
+                        // mid-round would make the loop read past the end, so the teardown the
+                        // caller asked for happens here instead.
+                        TeardownCore();
+                    }
+                    else if (_compactPending)
+                    {
+                        _compactPending = false;
+                        CompactInPlace();
+                    }
                 }
             }
         }
@@ -301,6 +329,7 @@ namespace CycloneGames.EventBus.Core
                 throw new InvalidOperationException("Clear cannot run during dispatch.");
             }
 
+            DrainPendingRemovals();
             ClearCore();
             Log("cleared");
         }
@@ -319,6 +348,13 @@ namespace CycloneGames.EventBus.Core
                 _disposed);
         }
 
+        /// <summary>
+        /// Tears the bus down. Idempotent. Called during an active dispatch round it is deferred:
+        /// the round is atomic (its remaining handlers still run), <see cref="IsDisposed"/> turns
+        /// true immediately so nested Publish and Subscribe throw, and the outermost dispatch frame
+        /// performs the actual teardown on exit — replacing the handler array mid-round would make
+        /// the dispatch loop read past the end.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)
@@ -327,10 +363,64 @@ namespace CycloneGames.EventBus.Core
             }
 
             _disposed = true;
-            ClearCore();
 
-            // Release the backing array so a retained (not-yet-collected) bus no longer pins a large
-            // handler array, and drop the handle pool with it. A disposed bus cannot be reused.
+            if (_dispatchDepth > 0)
+            {
+                // An in-flight Publish is iterating the handler array right now; the outermost
+                // dispatch frame tears the bus down on exit.
+                return;
+            }
+
+            TeardownCore();
+        }
+
+        /// <summary>
+        /// Thread-safe deferred unsubscribe — the only sanctioned way to release a subscription
+        /// from a thread that does not own this bus, e.g. a cancellation callback or a foreign
+        /// completion source. The removal is applied on the owner thread at the next
+        /// <see cref="Publish"/>, <see cref="Subscribe"/>, <see cref="Clear"/> or Dispose. Calling
+        /// this from the owner thread is correct too; disposing the subscription directly is just
+        /// cheaper there.
+        /// </summary>
+        public void ScheduleRemoval(IEventSubscription subscription)
+        {
+            if (subscription == null)
+            {
+                throw new ArgumentNullException(nameof(subscription));
+            }
+
+            _pendingRemovals.Enqueue(subscription);
+            Interlocked.Increment(ref _pendingRemovalCount);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void DrainPendingRemovals()
+        {
+            // One volatile read on the steady-state path; the queue is only touched when a foreign
+            // thread actually scheduled something.
+            if (Volatile.Read(ref _pendingRemovalCount) == 0)
+            {
+                return;
+            }
+
+            while (_pendingRemovals.TryDequeue(out IEventSubscription subscription))
+            {
+                Interlocked.Decrement(ref _pendingRemovalCount);
+
+                // A subscription may be disposed directly as well (owner-thread double release);
+                // Dispose is idempotent, so a duplicate here is harmless.
+                subscription.Dispose();
+            }
+        }
+
+        private void TeardownCore()
+        {
+            // Release the backing array so a retained (not-yet-collected) bus no longer pins a
+            // large handler array, and drop the handle pool with it. A disposed bus cannot be
+            // reused. Pending foreign-thread removals are drained so the inbox does not retain
+            // them; their Dispose is a no-op on a disposed bus.
+            DrainPendingRemovals();
+            ClearCore();
             _handlers = Array.Empty<Action<T>>();
             _handlePool = null;
             _handlePoolCount = 0;

@@ -158,6 +158,17 @@ namespace CycloneGames.AtlasPipeline
         public bool Mipmaps => mipmaps;
         public bool Readable => readable;
         public FilterMode FilterMode => filterMode;
+
+        /// <summary>
+        /// The filter mode the packed atlas texture and its sources are actually given. Pixel art
+        /// implies point filtering: the toggle already forces uncompressed formats for exactly the
+        /// same reason, and bilinear on pixel art is the one outcome the toggle exists to prevent —
+        /// the atlas texture is what renders at runtime, so a source set to Point means nothing
+        /// once it is packed. The stored <see cref="FilterMode"/> field still applies whenever
+        /// PixelArt is off, so the two settings compose instead of conflict.
+        /// </summary>
+        public FilterMode EffectiveFilterMode =>
+            pixelArt ? FilterMode.Point : filterMode;
         public TextureWrapMode WrapMode => wrapMode;
         public int CompressionQuality => compressionQuality;
         public AtlasGranularity AtlasGranularity => atlasGranularity;

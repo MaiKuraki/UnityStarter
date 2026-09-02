@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using YooAsset;
 
 namespace Build.Pipeline.Editor.Integrations.YooAsset3
@@ -54,9 +54,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 directory,
                 $"{packageName}.version"));
 
-            if (!YooAsset3BuildSafety.IsStrictDescendant(directory, manifestPath) ||
-                !YooAsset3BuildSafety.IsStrictDescendant(directory, hashPath) ||
-                !YooAsset3BuildSafety.IsStrictDescendant(directory, versionPath))
+            if (!PublicationSafety.IsStrictDescendant(directory, manifestPath) ||
+                !PublicationSafety.IsStrictDescendant(directory, hashPath) ||
+                !PublicationSafety.IsStrictDescendant(directory, versionPath))
             {
                 failures.Add($"YooAsset manifest paths escaped their package directory: '{directory}'.");
                 return;
@@ -130,7 +130,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 foreach (string bundleFileName in bundleFileNames)
                 {
                     string bundlePath = Path.GetFullPath(Path.Combine(directory, bundleFileName));
-                    if (!YooAsset3BuildSafety.IsStrictDescendant(directory, bundlePath))
+                    if (!PublicationSafety.IsStrictDescendant(directory, bundlePath))
                     {
                         missing.Add(bundleFileName + " (unsafe path)");
                         continue;

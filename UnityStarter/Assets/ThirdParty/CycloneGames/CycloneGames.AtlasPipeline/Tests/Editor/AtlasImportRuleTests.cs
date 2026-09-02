@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using NUnit.Framework;
+using UnityEngine;
+// FilterMode comes from UnityEngine; the tests below assert the PixelArt → Point override.
 
 namespace CycloneGames.AtlasPipeline.Tests
 {
@@ -27,6 +29,64 @@ namespace CycloneGames.AtlasPipeline.Tests
                 pathKeywords: pathKeywords,
                 excludedFolderPaths: excludedFolderPaths,
                 excludedNameKeywords: excludedNameKeywords);
+        }
+
+        // ----------------------------------------------------------------
+        // EffectiveFilterMode: PixelArt implies Point for the atlas
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// The atlas texture is what renders at runtime — a source set to Point means nothing once
+        /// it is packed. Pixel art therefore implies Point filtering, the same way it already
+        /// forces RGBA32: "Pixel Art" that ships bilinear is the exact outcome the toggle exists to
+        /// prevent. The stored FilterMode still applies whenever PixelArt is off.
+        /// </summary>
+        [Test]
+        public void EffectiveFilterMode_PixelArtForcesPoint()
+        {
+            AtlasImportRule rule = AtlasImportRule.Create(
+                "PixelRule",
+                "Assets/UI",
+                AtlasTextureFormat.Astc6x6,
+                AtlasTextureFormat.Astc6x6,
+                AtlasGranularity.PerSourceFolder,
+                "PixelGroup",
+                filterMode: FilterMode.Bilinear,
+                pixelArt: true);
+
+            Assert.AreEqual(FilterMode.Point, rule.EffectiveFilterMode);
+        }
+
+        [Test]
+        public void EffectiveFilterMode_WithoutPixelArt_UsesStoredValue()
+        {
+            AtlasImportRule rule = AtlasImportRule.Create(
+                "NormalRule",
+                "Assets/UI",
+                AtlasTextureFormat.Astc6x6,
+                AtlasTextureFormat.Astc6x6,
+                AtlasGranularity.PerSourceFolder,
+                "NormalGroup",
+                filterMode: FilterMode.Bilinear,
+                pixelArt: false);
+
+            Assert.AreEqual(FilterMode.Bilinear, rule.EffectiveFilterMode);
+        }
+
+        [Test]
+        public void EffectiveFilterMode_PixelArtWithExplicitPoint_StaysPoint()
+        {
+            AtlasImportRule rule = AtlasImportRule.Create(
+                "AlreadyPointRule",
+                "Assets/UI",
+                AtlasTextureFormat.Astc6x6,
+                AtlasTextureFormat.Astc6x6,
+                AtlasGranularity.PerSourceFolder,
+                "PointGroup",
+                filterMode: FilterMode.Point,
+                pixelArt: true);
+
+            Assert.AreEqual(FilterMode.Point, rule.EffectiveFilterMode);
         }
 
         // ----------------------------------------------------------------

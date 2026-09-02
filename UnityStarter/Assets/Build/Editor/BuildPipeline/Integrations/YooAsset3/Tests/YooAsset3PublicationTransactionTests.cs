@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
-using Build.Pipeline.Editor.Integrations.YooAsset3Core;
+using Build.Pipeline.Integrations.YooAsset3.Publication;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -308,7 +308,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             Assert.That(Directory.Exists(stage), Is.False);
             Assert.That(File.Exists(journalPath), Is.False);
             Assert.That(
-                YooAsset3BuildSafety.IsStrictDescendant(
+                PublicationSafety.IsStrictDescendant(
                     Path.Combine(projectRoot, ".buildpipeline"),
                     YooAsset3PublicationTransaction.GetStateRoot(projectRoot, InvocationId)),
                 Is.True);
@@ -377,17 +377,17 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
 
             Assert.That(execution.Parameters, Is.InstanceOf<RawFileBuildParameters>());
             Assert.That(
-                YooAsset3BuildSafety.PathsEqual(
+                PublicationSafety.PathsEqual(
                     execution.OutputPackageDirectory,
                     transaction.Packages[0].OutputOperation.stage),
                 Is.True);
             Assert.That(
-                YooAsset3BuildSafety.PathsEqual(
+                PublicationSafety.PathsEqual(
                     execution.BundledPackageDirectory,
                     transaction.Packages[0].BundledWorkDirectory),
                 Is.True);
             Assert.That(
-                YooAsset3BuildSafety.PathsEqual(
+                PublicationSafety.PathsEqual(
                     execution.Parameters.GetPipelineOutputDirectory(),
                     plan.Packages[0].Parameters.GetPipelineOutputDirectory()),
                 Is.True);
@@ -399,11 +399,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         {
             string firstBuildRoot = Path.Combine(testRoot, "BuildOne");
             string secondBuildRoot = Path.Combine(testRoot, "BuildTwo");
-            using (YooAsset3BuildLock.Acquire(projectRoot, firstBuildRoot, bundledFileRoot))
+            using (PublicationBuildLock.Acquire(projectRoot, firstBuildRoot, bundledFileRoot))
             {
                 InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
                 {
-                    using (YooAsset3BuildLock.Acquire(projectRoot, secondBuildRoot, bundledFileRoot))
+                    using (PublicationBuildLock.Acquire(projectRoot, secondBuildRoot, bundledFileRoot))
                     {
                     }
                 });
@@ -411,7 +411,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 StringAssert.Contains("publication roots", exception.Message);
             }
 
-            using (YooAsset3BuildLock.Acquire(projectRoot, secondBuildRoot, bundledFileRoot))
+            using (PublicationBuildLock.Acquire(projectRoot, secondBuildRoot, bundledFileRoot))
             {
             }
         }
@@ -423,11 +423,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             string secondBuildRoot = Path.Combine(projectRoot, "BuildTwo");
             string firstBundledRoot = Path.Combine(projectRoot, "Assets", "StreamingAssets", "First");
             string secondBundledRoot = Path.Combine(projectRoot, "Assets", "StreamingAssets", "Second");
-            using (YooAsset3BuildLock.Acquire(projectRoot, firstBuildRoot, firstBundledRoot))
+            using (PublicationBuildLock.Acquire(projectRoot, firstBuildRoot, firstBundledRoot))
             {
                 InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
                 {
-                    using (YooAsset3BuildLock.Acquire(projectRoot, secondBuildRoot, secondBundledRoot))
+                    using (PublicationBuildLock.Acquire(projectRoot, secondBuildRoot, secondBundledRoot))
                     {
                     }
                 });
@@ -496,7 +496,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], false, "payload.txt", "old");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation operation = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation operation = transaction.Packages[0].OutputOperation;
             WriteFile(operation.stage, "payload.txt", "new");
             transaction.SealReadyDirectories();
 
@@ -520,14 +520,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], false, "payload.txt", "old");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation operation = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation operation = transaction.Packages[0].OutputOperation;
             WriteFile(operation.stage, "payload.txt", "new");
             transaction.SealReadyDirectories();
 
             TerminalBarrierHarness barrier = BeginBarrier();
             transaction.Publish(validatePublishedState: null, refreshAssets: NoOp);
             barrier.CommitDecision();
-            YooAsset3CommittedPublicationException exception = Assert.Throws<YooAsset3CommittedPublicationException>(() =>
+            CommittedPublicationException exception = Assert.Throws<CommittedPublicationException>(() =>
                 transaction.Complete(() => throw new InvalidOperationException("refresh failed")));
 
             StringAssert.Contains("committed", exception.Message.ToLowerInvariant());
@@ -552,7 +552,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation operation = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation operation = transaction.Packages[0].BundledOperation;
             string originalMeta = File.ReadAllText(operation.targetMeta);
 
             File.Copy(operation.targetMeta, operation.protectedMeta);
@@ -575,7 +575,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation operation = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation operation = transaction.Packages[0].BundledOperation;
 
             File.Copy(operation.targetMeta, operation.protectedMeta);
             Directory.Move(operation.target, operation.backup);
@@ -599,8 +599,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
@@ -610,7 +610,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             TerminalBarrierHarness barrier = BeginBarrier();
             transaction.Publish(validatePublishedState: null, refreshAssets: NoOp);
             barrier.CommitDecision();
-            Assert.Throws<YooAsset3CommittedPublicationException>(() => transaction.Complete(() =>
+            Assert.Throws<CommittedPublicationException>(() => transaction.Complete(() =>
             {
                 File.WriteAllText(bundled.targetMeta, GeneratedMeta);
                 throw new InvalidOperationException("refresh failed after generating meta");
@@ -658,8 +658,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
 
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
@@ -695,8 +695,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3PublicationTransaction transaction =
                 YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             string originalMeta = File.ReadAllText(bundled.targetMeta);
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
@@ -733,8 +733,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3PublicationTransaction transaction =
                 YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             string originalMeta = File.ReadAllText(bundled.targetMeta);
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
@@ -775,8 +775,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3PublicationTransaction transaction =
                 YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
@@ -812,8 +812,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
@@ -842,8 +842,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
@@ -868,8 +868,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             using (YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId))
             {
                 transaction.Prepare();
-                YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-                YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+                PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+                PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
                 WriteFile(output.stage, "payload.txt", "new-output");
                 WriteFile(bundled.stage, "payload.txt", "new-bundle");
                 transaction.SealReadyDirectories();
@@ -908,14 +908,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             Directory.CreateDirectory(Path.Combine(fakeProjectRoot, "Assets"));
             string redirectedTarget = Path.Combine(fakeProjectRoot, "RedirectedLocks");
             Directory.CreateDirectory(redirectedTarget);
-            string lockRoot = YooAsset3BuildLock.GetLockRoot(fakeProjectRoot);
+            string lockRoot = PublicationBuildLock.GetLockRoot(fakeProjectRoot);
             Directory.CreateDirectory(Path.GetDirectoryName(lockRoot));
             CreateDirectoryLink(lockRoot, redirectedTarget);
             try
             {
                 InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
                 {
-                    using (YooAsset3BuildLock.Acquire(
+                    using (PublicationBuildLock.Acquire(
                                fakeProjectRoot,
                                Path.Combine(fakeProjectRoot, "BuildOutput"),
                                Path.Combine(fakeProjectRoot, "Assets", "StreamingAssets")))
@@ -974,8 +974,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             transaction.SealReadyDirectories();
 
             BeginBarrier();
-            YooAsset3SimulatedTerminationException exception =
-                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+            SimulatedTerminationException exception =
+                Assert.Throws<SimulatedTerminationException>(() =>
                     transaction.Publish(
                         validatePublishedState: null,
                         refreshAssets: NoOp,
@@ -1000,14 +1000,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
 
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
             transaction.Prepare();
-            YooAsset3PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
-            YooAsset3PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
+            PublicationJournalOperation output = transaction.Packages[0].OutputOperation;
+            PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
             WriteFile(output.stage, "payload.txt", "new-output");
             WriteFile(bundled.stage, "payload.txt", "new-bundle");
             transaction.SealReadyDirectories();
 
-            YooAsset3SimulatedTerminationException exception =
-                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+            SimulatedTerminationException exception =
+                Assert.Throws<SimulatedTerminationException>(() =>
                     transaction.ActivateDownstreamInputs(NoOp, TerminateAt("PreRefresh")));
 
             StringAssert.Contains("PreRefresh", exception.Message);
@@ -1034,8 +1034,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             transaction.Publish(validatePublishedState: null, refreshAssets: NoOp);
             barrier.CommitDecision();
 
-            YooAsset3SimulatedTerminationException exception =
-                Assert.Throws<YooAsset3SimulatedTerminationException>(() =>
+            SimulatedTerminationException exception =
+                Assert.Throws<SimulatedTerminationException>(() =>
                     transaction.Complete(NoOp, TerminateAt("CommitRefreshPreRefresh")));
 
             StringAssert.Contains("CommitRefreshPreRefresh", exception.Message);
@@ -1055,7 +1055,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             {
                 if (string.Equals(node, checkpointName, StringComparison.Ordinal))
                 {
-                    throw new YooAsset3SimulatedTerminationException(node);
+                    throw new SimulatedTerminationException(node);
                 }
             };
         }
@@ -1154,8 +1154,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         {
             string directory = bundled ? package.BundledPackageDirectory : package.OutputPackageDirectory;
             string kind = bundled
-                ? YooAsset3PublicationOwnership.BundledPackageKind
-                : YooAsset3PublicationOwnership.PackageOutputKind;
+                ? PublicationOwnership.BundledPackageKind
+                : PublicationOwnership.PackageOutputKind;
             WriteFile(directory, fileName, content);
             if (bundled)
             {
@@ -1163,7 +1163,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                     directory + ".meta",
                     "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\nfolderAsset: yes\n");
             }
-            YooAsset3PublicationOwnership.Seal(
+            PublicationOwnership.Seal(
                 projectRoot,
                 directory,
                 kind,
@@ -1171,7 +1171,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
                 package.PackageVersion,
                 YooAssetCryptographyIdentity.NoneAdapterId,
                 YooAssetCryptographyIdentity.NoneRuntimeDecryptContractId,
-                Guid.NewGuid().ToString("N"));
+                Guid.NewGuid().ToString("N"),
+                UnityJournalSerializer.Instance);
         }
 
         private string GetJournalPath()

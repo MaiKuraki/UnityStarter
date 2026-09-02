@@ -118,12 +118,17 @@ namespace CycloneGames.AtlasPipeline
         public static readonly GUIContent PixelsPerUnit = new GUIContent("Pixels Per Unit");
 
         public static readonly GUIContent PixelArt = new GUIContent(
-            "Pixel Art (Uncompressed)",
-            "Forces both the source texture and generated atlas to RGBA32 "
-            + "(uncompressed) on all platforms, avoiding compressed-source "
-            + "packing artifacts for pixel art.");
+            "Pixel Art",
+            "Uncompressed + Point. Forces both the source texture and generated "
+            + "atlas to RGBA32 (uncompressed) on all platforms, avoiding "
+            + "compressed-source packing artifacts, and forces Point filtering on "
+            + "the atlas texture and its sources — the atlas is what renders at "
+            + "runtime, so this is what keeps pixels crisp.");
 
-        public static readonly GUIContent FilterMode = new GUIContent("Filter Mode");
+        public static readonly GUIContent FilterMode = new GUIContent(
+            "Filter Mode",
+            "Filtering for the packed atlas texture and its sources. Overridden "
+            + "to Point while Pixel Art is on.");
         public static readonly GUIContent WrapMode = new GUIContent("Wrap Mode");
         public static readonly GUIContent Mipmaps = new GUIContent("Mipmaps");
         public static readonly GUIContent Readable = new GUIContent("Readable");

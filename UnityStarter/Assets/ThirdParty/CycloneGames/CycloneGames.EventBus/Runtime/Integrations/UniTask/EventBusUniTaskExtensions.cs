@@ -25,6 +25,10 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
     {
         /// <summary>
         /// Completes with the next event published on <paramref name="bus"/>.
+        ///
+        /// Must be called on the bus owner thread (in Unity, the main thread). Cancellation may
+        /// come from any thread: the release is then deferred through the bus's thread-safe removal
+        /// inbox, so the single-thread-confined bus is never mutated off the owner thread.
         /// </summary>
         public static Cysharp.Threading.Tasks.UniTask<T> WaitAsync<T>(
             this EventBus<T> bus,
@@ -38,8 +42,13 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
         /// Completes with the next event published on <paramref name="bus"/> that satisfies
         /// <paramref name="predicate"/>. A null predicate accepts the next event of any value.
         ///
-        /// The subscription is released as soon as the wait completes, on either the event or the
-        /// cancellation path, so a cancelled wait leaves no handler behind.
+        /// Must be called on the bus owner thread; cancellation may come from any thread. A
+        /// predicate that throws faults the wait with that exception and releases the subscription
+        /// and the cancellation registration — the fault never reaches the bus dispatch, so a
+        /// failing filter cannot silently park the waiter forever.
+        ///
+        /// If the bus is disposed while the wait is parked, the task never completes by event; the
+        /// cancellation token is the escape hatch.
         /// </summary>
         public static Cysharp.Threading.Tasks.UniTask<T> WaitAsync<T>(
             this EventBus<T> bus,
@@ -59,6 +68,11 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
         /// One-shot waiter. Separated into its own type so the subscription handle, the completion
         /// source and the cancellation registration have one owner with one release path — releasing
         /// any of them independently is how these helpers leak handlers.
+        ///
+        /// Race protocol, in order: the cancellation registration is created first (so it exists
+        /// before any settle path can run and can never be missed), the subscription second, then
+        /// the settled flag is re-checked to close the window between the two, and a single
+        /// try/finally disposes the registration on every exit.
         /// </summary>
         private sealed class EventAwaiter<T> where T : struct
         {
@@ -66,6 +80,11 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
             private readonly Func<T, bool> _predicate;
             private readonly Action<T> _handler;
             private readonly UniTaskCompletionSource<T> _completion = new UniTaskCompletionSource<T>();
+
+            // The thread WaitAsync ran on — the bus owner thread by contract. The cancellation
+            // callback compares against it to decide between a direct release and the deferred
+            // thread-safe removal inbox.
+            private readonly int _ownerThreadId;
 
             private IEventSubscription _subscription;
             private CancellationTokenRegistration _registration;
@@ -75,61 +94,96 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
             {
                 _bus = bus;
                 _predicate = predicate;
+                _ownerThreadId = Environment.CurrentManagedThreadId;
 
                 // Cached once. Passing a method group to Subscribe would allocate a new delegate on
                 // every call, because C# does not cache instance method group conversions.
                 _handler = OnNext;
             }
 
-            internal Cysharp.Threading.Tasks.UniTask<T> Run(CancellationToken cancellationToken)
+            internal async Cysharp.Threading.Tasks.UniTask<T> Run(CancellationToken cancellationToken)
             {
-                _subscription = _bus.Subscribe(_handler);
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    // Subscribed first, then settled: the release path is the same either way, so
-                    // there is no window where a later publish finds a half-torn-down waiter.
-                    Settle();
-                    _completion.TrySetCanceled(cancellationToken);
-                    return _completion.Task;
-                }
-
+                // Register BEFORE subscribing. Whatever happens next, the registration exists
+                // before any settle path can run, so a settle can never miss it and leak it. A
+                // token that is already cancelled fires OnCanceled synchronously inside Register —
+                // with the subscription still null, which the paths below handle.
                 if (cancellationToken.CanBeCanceled)
                 {
                     _registration = cancellationToken.Register(OnCanceled);
                 }
 
-                return _completion.Task;
+                try
+                {
+                    if (Volatile.Read(ref _settled) == 0)
+                    {
+                        _subscription = _bus.Subscribe(_handler);
+
+                        if (Volatile.Read(ref _settled) != 0)
+                        {
+                            // Cancellation won the race between Register and Subscribe: OnCanceled
+                            // saw a null subscription and scheduled nothing, so this owner-thread
+                            // release is the only one.
+                            ReleaseSubscription();
+                        }
+                    }
+
+                    return await _completion.Task;
+                }
+                finally
+                {
+                    // The one unconditional release of the registration: event, cancellation and
+                    // predicate fault all land here. Idempotent, and safe to call from the token's
+                    // own callback.
+                    _registration.Dispose();
+                }
             }
 
             private void OnNext(T evt)
             {
-                if (_predicate != null && !_predicate(evt))
+                if (_predicate != null)
                 {
-                    return;
+                    bool matches;
+                    try
+                    {
+                        matches = _predicate(evt);
+                    }
+                    catch (Exception exception)
+                    {
+                        // A throwing predicate must not propagate into the bus dispatch (the bus
+                        // would record it as a subscriber fault and this waiter would park forever)
+                        // and must not leave the subscription registered. We are inside a dispatch
+                        // on the owner thread, so the direct release is safe.
+                        if (Settle())
+                        {
+                            _completion.TrySetException(exception);
+                        }
+
+                        return;
+                    }
+
+                    if (!matches)
+                    {
+                        return;
+                    }
                 }
 
-                if (!Settle())
+                if (Settle())
                 {
-                    return;
+                    _completion.TrySetResult(evt);
                 }
-
-                _completion.TrySetResult(evt);
             }
 
             private void OnCanceled()
             {
-                if (!Settle())
+                if (Settle())
                 {
-                    return;
+                    _completion.TrySetCanceled();
                 }
-
-                _completion.TrySetCanceled();
             }
 
             /// <summary>
-            /// Claims the one-shot. Returns false when the other path already won, so a publish and a
-            /// cancellation racing can never both complete the source.
+            /// Claims the one-shot. Returns false when the other path already won, so a publish and
+            /// a cancellation racing can never both complete the source.
             /// </summary>
             private bool Settle()
             {
@@ -138,15 +192,30 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
                     return false;
                 }
 
-                // Disposing during a dispatch is safe: the bus defers compaction to the outermost
-                // dispatch frame, so slot indices never shift under the active iteration.
-                _subscription?.Dispose();
-                _subscription = null;
-
-                // Safe from inside the callback: CancellationTokenRegistration.Dispose is explicitly
-                // documented not to deadlock when called from the token's own callback.
-                _registration.Dispose();
+                ReleaseSubscription();
                 return true;
+            }
+
+            private void ReleaseSubscription()
+            {
+                IEventSubscription subscription = _subscription;
+                _subscription = null;
+                if (subscription == null)
+                {
+                    return;
+                }
+
+                if (Environment.CurrentManagedThreadId == _ownerThreadId)
+                {
+                    // Owner thread: the bus can be mutated directly.
+                    subscription.Dispose();
+                    return;
+                }
+
+                // The cancellation callback runs on whichever thread cancelled the token. The bus
+                // is single-thread-confined, so from a foreign thread the unsubscribe is deferred
+                // through the bus's thread-safe removal inbox and applied on the owner thread.
+                _bus.ScheduleRemoval(subscription);
             }
         }
     }

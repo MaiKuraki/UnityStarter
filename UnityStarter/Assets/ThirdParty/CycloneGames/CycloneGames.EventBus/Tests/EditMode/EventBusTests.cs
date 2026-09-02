@@ -712,6 +712,155 @@ namespace CycloneGames.EventBus.Tests
         }
 
         [Test]
+        public void Flush_HandlerClearsMidFlush_RemainingEventsAreNotPublished()
+        {
+            var stream = new EventStream<int>(8);
+            var bus = new EventBus<int>();
+            var received = new List<int>();
+            bus.Subscribe(value =>
+            {
+                received.Add(value);
+                if (value == 1)
+                {
+                    stream.Clear();
+                }
+            });
+
+            stream.TryWrite(1);
+            stream.TryWrite(2);
+            stream.TryWrite(3);
+
+            // Regression: the loop used to keep reading the zeroed buffer and publish default
+            // phantom events, and the trailing RemoveFront then destroyed events written after
+            // the clear.
+            Assert.AreEqual(1, stream.FlushTo(bus));
+            CollectionAssert.AreEqual(new[] { 1 }, received);
+            Assert.AreEqual(0, stream.Count);
+
+            // Clear ran while event 1 was already published but not yet removed from the buffer,
+            // so the drop count covers all three buffered entries. The guarantees that matter:
+            // no phantom default events, and nothing published twice.
+            Assert.AreEqual(3, stream.DroppedCount);
+        }
+
+        [Test]
+        public void Flush_HandlerClearsAndWrites_NewEventSurvivesToNextRound()
+        {
+            var stream = new EventStream<int>(8);
+            var bus = new EventBus<int>();
+            var received = new List<int>();
+            bus.Subscribe(value =>
+            {
+                received.Add(value);
+                if (value == 1)
+                {
+                    stream.Clear();
+                    stream.TryWrite(9);
+                }
+            });
+
+            stream.TryWrite(1);
+            stream.TryWrite(2);
+
+            Assert.AreEqual(1, stream.FlushTo(bus));
+            CollectionAssert.AreEqual(new[] { 1 }, received);
+            Assert.AreEqual(1, stream.Count);
+
+            Assert.AreEqual(1, stream.FlushTo(bus));
+            CollectionAssert.AreEqual(new[] { 1, 9 }, received);
+        }
+
+        [Test]
+        public void Flush_BudgetedFlushHandlerClears_NewWritesStayQueued()
+        {
+            var stream = new EventStream<int>(8);
+            var bus = new EventBus<int>();
+            var received = new List<int>();
+            bus.Subscribe(value =>
+            {
+                received.Add(value);
+                if (value == 1)
+                {
+                    stream.Clear();
+                    stream.TryWrite(7);
+                    stream.TryWrite(8);
+                }
+            });
+
+            stream.TryWrite(1);
+            stream.TryWrite(2);
+
+            Assert.AreEqual(1, stream.FlushTo(bus, 4));
+            CollectionAssert.AreEqual(new[] { 1 }, received);
+
+            Assert.AreEqual(2, stream.FlushTo(bus));
+            CollectionAssert.AreEqual(new[] { 1, 7, 8 }, received);
+        }
+
+        [Test]
+        public void Flush_HandlerThrowsUnderStopPolicy_PublishedEventsLeaveTheStream()
+        {
+            var config = new EventBusConfiguration(publishErrorPolicy: PublishErrorPolicy.Stop);
+            var bus = new EventBus<int>(config);
+            var stream = new EventStream<int>(8);
+            var received = new List<int>();
+            bool faulted = false;
+            bus.Subscribe(value =>
+            {
+                received.Add(value);
+                if (value == 2 && !faulted)
+                {
+                    // Fault exactly once: the next flush re-publishes event 2, and a second
+                    // throw there would fault the verification flush itself.
+                    faulted = true;
+                    throw new InvalidOperationException("stop");
+                }
+            });
+
+            stream.TryWrite(1);
+            stream.TryWrite(2);
+            stream.TryWrite(3);
+
+            Assert.Throws<InvalidOperationException>(() => stream.FlushTo(bus));
+
+            // The handler records the value before throwing, so event 2 shows up here even though
+            // the round aborted with it.
+            CollectionAssert.AreEqual(new[] { 1, 2 }, received);
+
+            // Event 1 was published, so the next flush must not deliver it a second time.
+            Assert.AreEqual(2, stream.Count);
+            Assert.AreEqual(2, stream.FlushTo(bus));
+            CollectionAssert.AreEqual(new[] { 1, 2, 2, 3 }, received);
+        }
+
+        [Test]
+        public void Flush_ReentrantFlushFromHandler_FailsLoud()
+        {
+            var stream = new EventStream<int>(8);
+            var bus = new EventBus<int>();
+            Exception observed = null;
+            bus.Subscribe(value =>
+            {
+                try
+                {
+                    // An inner flush would publish entries the outer round still owns and shift
+                    // the buffer under its loop. Before the guard this recursed to a stack
+                    // overflow, which no test could catch.
+                    stream.FlushTo(bus);
+                }
+                catch (Exception exception)
+                {
+                    observed = exception;
+                }
+            });
+
+            stream.TryWrite(1);
+            stream.FlushTo(bus);
+
+            Assert.IsInstanceOf<InvalidOperationException>(observed);
+        }
+
+        [Test]
         public void WriteFlush_ZeroAllocation_AfterWarmup()
         {
             var stream = new EventStream<int>(64);
@@ -1248,6 +1397,102 @@ namespace CycloneGames.EventBus.Tests
         }
 
         [Test]
+        public void Drain_CallbackRemovesItself_SecondSourceStillDrainsThisTick()
+        {
+            var pump = new EventBusPump();
+            var bus = new EventBus<int>();
+            int received = 0;
+            bus.Subscribe(_ => received++);
+
+            var selfRemoving = new MpscEventQueue<int>(16);
+            selfRemoving.TryEnqueue(1);
+            EventPumpFlush self = null;
+            self = pump.Add(_ =>
+            {
+                int published = selfRemoving.FlushTo(bus, int.MaxValue);
+                pump.Remove(self);
+                return published;
+            });
+
+            var second = new MpscEventQueue<int>(16);
+            second.TryEnqueue(1);
+            pump.AddQueue(second, bus);
+
+            pump.Drain(16);
+
+            // A source that removes itself mid-drain used to shift the list and skip its
+            // neighbour in the same tick.
+            Assert.AreEqual(2, received);
+
+            // The self-removal took effect at the end of the tick; only the second source remains.
+            second.TryEnqueue(2);
+            pump.Drain(16);
+            Assert.AreEqual(3, received);
+            Assert.AreEqual(1, pump.Count);
+        }
+
+        [Test]
+        public void Drain_CallbackAddsSource_NewSourceStartsNextTick()
+        {
+            var pump = new EventBusPump();
+            var bus = new EventBus<int>();
+            int received = 0;
+            bus.Subscribe(_ => received++);
+
+            var first = new MpscEventQueue<int>(16);
+            first.TryEnqueue(1);
+            pump.AddQueue(first, bus);
+            MpscEventQueue<int> added = null;
+            pump.Add(_ =>
+            {
+                if (added == null)
+                {
+                    added = new MpscEventQueue<int>(16);
+                    added.TryEnqueue(1);
+                    pump.AddQueue(added, bus);
+                }
+
+                return 0;
+            });
+
+            pump.Drain(16);
+
+            // The source registered during the drain must not execute in the same tick.
+            Assert.AreEqual(1, received);
+
+            pump.Drain(16);
+            Assert.AreEqual(2, received);
+        }
+
+        [Test]
+        public void Drain_CallbackClears_RemainingSourcesStillDrainThisTick()
+        {
+            var pump = new EventBusPump();
+            var bus = new EventBus<int>();
+            int received = 0;
+            bus.Subscribe(_ => received++);
+
+            // The clearing callback is registered first so it runs before the drainable source.
+            pump.Add(_ =>
+            {
+                pump.Clear();
+                return 0;
+            });
+            var second = new MpscEventQueue<int>(16);
+            second.TryEnqueue(1);
+            pump.AddQueue(second, bus);
+
+            pump.Drain(16);
+
+            // A Clear mid-drain used to empty the list and cut the iteration short.
+            Assert.AreEqual(1, received);
+            Assert.AreEqual(0, pump.Count);
+
+            pump.Drain(16);
+            Assert.AreEqual(1, received);
+        }
+
+        [Test]
         public void Remove_UnknownDelegate_ReturnsFalse()
         {
             var pump = new EventBusPump();
@@ -1259,6 +1504,185 @@ namespace CycloneGames.EventBus.Tests
 
             pump.Clear();
             Assert.AreEqual(0, pump.Count);
+        }
+    }
+
+    /// <summary>
+    /// Regression coverage for disposing a bus from inside its own dispatch round. Dispose used to
+    /// replace the handler array with an empty one while <see cref="EventBus{T}.Publish"/> was
+    /// iterating it, which threw IndexOutOfRangeException on the next slot read.
+    /// </summary>
+    public sealed class EventBusDisposeDuringDispatchTests
+    {
+        [Test]
+        public void Publish_HandlerDisposesBus_RemainingHandlersStillRun()
+        {
+            var bus = new EventBus<int>();
+            var received = new List<int>();
+            bus.Subscribe(_ => { bus.Dispose(); received.Add(1); });
+            bus.Subscribe(_ => received.Add(2));
+            bus.Subscribe(_ => received.Add(3));
+
+            // The publish round is atomic: dispose is deferred to the end of the round, so the
+            // handlers captured by the loop still execute.
+            Assert.DoesNotThrow(() => bus.Publish(7));
+            CollectionAssert.AreEqual(new[] { 1, 2, 3 }, received);
+            Assert.IsTrue(bus.IsDisposed);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_TeardownRunsWhenTheRoundEnds()
+        {
+            var bus = new EventBus<int>(null, 4);
+            int capacityInsideRound = -1;
+            bus.Subscribe(_ =>
+            {
+                bus.Dispose();
+                capacityInsideRound = bus.Capacity;
+            });
+
+            bus.Publish(1);
+
+            // While the round runs the array is still alive; teardown happens on exit.
+            Assert.AreEqual(4, capacityInsideRound);
+            Assert.AreEqual(0, bus.Capacity);
+            Assert.AreEqual(0, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_IsDisposedIsTrueImmediatelyInsideTheRound()
+        {
+            var bus = new EventBus<int>();
+            bool observed = false;
+            bus.Subscribe(_ =>
+            {
+                bus.Dispose();
+                observed = bus.IsDisposed;
+            });
+
+            bus.Publish(1);
+
+            Assert.IsTrue(observed);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_NestedPublishThrowsObjectDisposed()
+        {
+            var bus = new EventBus<int>();
+            Exception observed = null;
+            bus.Subscribe(_ =>
+            {
+                bus.Dispose();
+                try
+                {
+                    bus.Publish(2);
+                }
+                catch (Exception exception)
+                {
+                    observed = exception;
+                }
+            });
+
+            Assert.DoesNotThrow(() => bus.Publish(1));
+            Assert.IsInstanceOf<ObjectDisposedException>(observed);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_NestedSubscribeThrowsObjectDisposed()
+        {
+            var bus = new EventBus<int>();
+            Exception observed = null;
+            bus.Subscribe(_ =>
+            {
+                bus.Dispose();
+                try
+                {
+                    bus.Subscribe(_ => { });
+                }
+                catch (Exception exception)
+                {
+                    observed = exception;
+                }
+            });
+
+            Assert.DoesNotThrow(() => bus.Publish(1));
+            Assert.IsInstanceOf<ObjectDisposedException>(observed);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_StopPolicy_TeardownRunsWhenTheFaultAbortsTheRound()
+        {
+            var config = new EventBusConfiguration(publishErrorPolicy: PublishErrorPolicy.Stop);
+            var bus = new EventBus<int>(config);
+            int secondRan = 0;
+            bus.Subscribe(_ =>
+            {
+                bus.Dispose();
+                throw new InvalidOperationException("stop");
+            });
+            bus.Subscribe(_ => secondRan++);
+
+            Assert.Throws<InvalidOperationException>(() => bus.Publish(1));
+            Assert.AreEqual(0, secondRan);
+            Assert.IsTrue(bus.IsDisposed);
+            Assert.AreEqual(0, bus.Capacity);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_ContinueOnError_AllHandlersRun()
+        {
+            var config = new EventBusConfiguration(publishErrorPolicy: PublishErrorPolicy.ContinueOnError);
+            var bus = new EventBus<int>(config);
+            var received = new List<int>();
+            bus.Subscribe(_ => { bus.Dispose(); received.Add(1); });
+            bus.Subscribe(_ => received.Add(2));
+
+            Assert.DoesNotThrow(() => bus.Publish(1));
+            CollectionAssert.AreEqual(new[] { 1, 2 }, received);
+            Assert.AreEqual(0, bus.Capacity);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_DuringNestedDispatch_OuterRoundStillCompletes()
+        {
+            var config = new EventBusConfiguration(publishErrorPolicy: PublishErrorPolicy.ContinueOnError);
+            var bus = new EventBus<int>(config);
+            var received = new List<int>();
+            bus.Subscribe(value =>
+            {
+                received.Add(value);
+                if (value == 1)
+                {
+                    bus.Publish(2);
+                }
+            });
+            bus.Subscribe(value =>
+            {
+                if (value == 2)
+                {
+                    bus.Dispose();
+                }
+            });
+            bus.Subscribe(_ => received.Add(3));
+
+            Assert.DoesNotThrow(() => bus.Publish(1));
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 3 }, received);
+            Assert.IsTrue(bus.IsDisposed);
+            Assert.AreEqual(0, bus.Capacity);
+        }
+
+        [Test]
+        public void Publish_HandlerDisposesBus_SubscriptionHandleDisposalStaysSafe()
+        {
+            var bus = new EventBus<int>();
+            int received = 0;
+            IEventSubscription handle = bus.Subscribe(_ => received++);
+            bus.Subscribe(_ => bus.Dispose());
+
+            Assert.DoesNotThrow(() => bus.Publish(1));
+            Assert.DoesNotThrow(handle.Dispose);
+            Assert.IsTrue(handle.IsReleased);
+            Assert.AreEqual(1, received);
         }
     }
 
