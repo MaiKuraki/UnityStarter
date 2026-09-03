@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace CycloneGames.EventBus.Core
 {
@@ -52,6 +53,21 @@ namespace CycloneGames.EventBus.Core
         public static void Clear()
         {
             _instance = null;
+        }
+
+        /// <summary>
+        /// Drops the holder only when it still reference-equals <paramref name="expected"/>. Without
+        /// this, a teardown that runs late can clear a bus the next context has already installed.
+        /// Returns true when the holder was cleared.
+        /// </summary>
+        public static bool ClearIf(EventBus<T> expected)
+        {
+            if (expected == null)
+            {
+                throw new ArgumentNullException(nameof(expected));
+            }
+
+            return Interlocked.CompareExchange(ref _instance, null, expected) == expected;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

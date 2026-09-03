@@ -43,7 +43,25 @@ namespace CycloneGames.EventBus.Runtime
         public int MaxEventsPerTargetPerFrame
         {
             get => maxEventsPerTargetPerFrame;
-            set => maxEventsPerTargetPerFrame = value < 0 ? 0 : value;
+            set => maxEventsPerTargetPerFrame = ClampBudget(value);
+        }
+
+        /// <summary>
+        /// Clamps a per-frame budget to its documented domain: 0 pauses publishing, any positive
+        /// value is the budget, negatives collapse to 0. Shared by the setter, <c>OnValidate</c> and
+        /// <c>Update</c> so the runtime never depends on an Editor-only pass.
+        /// </summary>
+        internal static int ClampBudget(int value)
+        {
+            return value < 0 ? 0 : value;
+        }
+
+        private void OnValidate()
+        {
+            // Deserialization bypasses the property setter, so a prefab or scene authored (or
+            // hand-edited) with a negative value would otherwise reach Drain every frame and throw.
+            // Clamping here keeps the stored field honest for every later serialize.
+            maxEventsPerTargetPerFrame = ClampBudget(maxEventsPerTargetPerFrame);
         }
 
         /// <summary>Whether the pump publishes. Disabling leaves registrations intact.</summary>
@@ -57,7 +75,9 @@ namespace CycloneGames.EventBus.Runtime
         {
             if (pumpingEnabled)
             {
-                _pump.Drain(maxEventsPerTargetPerFrame);
+                // Same clamp as OnValidate: OnValidate does not run in a Player build, and a
+                // serialized negative value must not become a per-frame ArgumentOutOfRangeException.
+                _pump.Drain(ClampBudget(maxEventsPerTargetPerFrame));
             }
         }
 
