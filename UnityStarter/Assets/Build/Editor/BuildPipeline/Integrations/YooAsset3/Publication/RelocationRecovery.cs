@@ -41,6 +41,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
 
             int restored = 0;
             var blocked = new List<string>();
+            var blockedStates = new List<string>();
             foreach (string transactionId in transactionIds)
             {
                 RelocationJournalDocument document = RelocationJournalStore.Load(
@@ -52,7 +53,8 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                     continue;
                 }
 
-                restored += RestoreDocument(normalizedProjectRoot, document, serializer, blocked, log);
+                restored += RestoreDocument(
+                    normalizedProjectRoot, document, serializer, blocked, blockedStates, log);
 
                 bool clean = true;
                 foreach (RelocationEntry entry in document.entries)
@@ -73,6 +75,37 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
 
             if (blocked.Count > 0)
             {
+                // Temp-wipe discriminator: the artifacts live under Temp, so if EVERY blocked
+                // entry reports MissingBoth then the relocated artifacts disappeared together with
+                // Temp. Nothing is left to restore, and keeping the journal would block every later
+                // build on a loss that no longer exists - report it and retire the session instead.
+                // A partial loss (some entries found, some not) is a real inconsistency and stays
+                // fail-closed below.
+                bool lostWithTemp = true;
+                foreach (string state in blockedStates)
+                {
+                    if (!string.Equals(state, RelocationJournalStore.MissingBothState, StringComparison.Ordinal))
+                    {
+                        lostWithTemp = false;
+                        break;
+                    }
+                }
+
+                if (lostWithTemp)
+                {
+                    foreach (string transactionId in transactionIds)
+                    {
+                        RelocationJournalStore.Delete(normalizedProjectRoot, transactionId);
+                    }
+
+                    log?.Invoke(
+                        "YooAsset relocation recovery: the relocated Player-build artifacts are gone "
+                        + "together with the Temp directory, so there is nothing left to restore. The "
+                        + "relocation session has been retired. If a .meta or backup file is missing, "
+                        + "restore it from version control before building again.");
+                    return restored;
+                }
+
                 throw new InvalidOperationException(
                     "YooAsset publication artifact relocation could not be restored automatically and requires " +
                     "manual resolution. Blocked entries:\n" + string.Join("\n", blocked.ToArray()));
@@ -86,6 +119,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             RelocationJournalDocument document,
             IJournalSerializer serializer,
             List<string> blocked,
+            List<string> blockedStates,
             Action<string> log)
         {
             int restored = 0;
@@ -112,6 +146,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                 {
                     entry.lastError = failure;
                     blocked.Add($"[{entry.state}] original='{entry.originalPath}' relocated='{entry.relocatedPath}': {failure}");
+                    blockedStates.Add(entry.state);
                 }
 
                 // Persist after every entry: a crash mid-recovery must leave an accurate journal.

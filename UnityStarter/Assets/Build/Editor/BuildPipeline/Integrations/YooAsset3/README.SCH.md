@@ -12,9 +12,9 @@
 
 - 卸载 YooAsset 不会破坏 Build Core Assembly；
 - `YooAssetBuildConfig` 仍是可序列化 authoring type，但选中的 invocation 会因没有注册 Adapter 而在 Preflight 失败；
-- YooAsset 发布恢复核心位于 Core Assembly 的 `Integrations/YooAsset3Core/`，因此卸载或升级包后，尚未完成的发布仍可恢复。
+- YooAsset 发布恢复核心位于独立程序集 `Build.Pipeline.Integrations.YooAsset3.Publication`（目录 `Integrations/YooAsset3/Publication/`，无版本门控、不依赖 YooAsset 包），因此卸载或升级包后，尚未完成的发布仍可恢复。
 
-恢复核心是 `PublicationRecoveryCoordinator`（`[BuildRecoveryRegistration("YooAsset3", 100)]`）。它持有 durable journal、所有权 marker、路径安全原语以及全部回滚/提交恢复逻辑，与 `AddressablesRecoveryCoordinator` 对齐。受门控 Integration Assembly 只保留构建期路径解析、Package Plan Factory、Cryptography Registry 与事务生命周期，并通过 `Build.Pipeline.Editor.Integrations.YooAsset3Core` 命名空间引用 Core 类型。
+恢复核心是 `PublicationRecoveryCoordinator`（`[BuildRecoveryRegistration("YooAsset3", 100)]`）。它持有 durable journal、所有权 marker、路径安全原语以及全部回滚/提交恢复逻辑，与 `AddressablesRecoveryCoordinator` 对齐。受门控 Integration Assembly 只保留构建期路径解析、Package Plan Factory、Cryptography Registry 与事务生命周期，并通过 `Build.Pipeline.Integrations.YooAsset3.Publication` 命名空间引用 Publication 程序集中的类型。
 
 不要在 PlayerSettings 中手工添加 `BUILD_PIPELINE_HAS_YOOASSET_3`。Capability 应由 Package Presence 和 Version 管理。
 
@@ -157,8 +157,10 @@ Crash 后应先通过 Workspace Health 执行显式 Recovery，再 Retry 或切�
 - `YooAsset3BuildPlan.cs`
 - `YooAsset3Cryptography.cs`
 - `YooAsset3PublicationTransaction.cs`
-- `../YooAsset3Core/PublicationRecoveryCoordinator.cs`
-- `../YooAsset3Core/PublicationRecovery.cs`
+- `Publication/PublicationRecoveryCoordinator.cs`
+- `Publication/PublicationRecovery.cs`
+- `Publication/RelocationRecoveryCoordinator.cs`
+- `Publication/RelocationJournal.cs`
 
 ## 发布核心与崩溃可恢复性
 
