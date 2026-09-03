@@ -54,6 +54,11 @@ namespace CycloneGames.EventBus.Core
         /// </summary>
         private const int HandlePoolLimit = 32;
 
+        // Deferred-unsubscribe inbox close states (documented on _closeState).
+        private const int Open = 0;
+        private const int DisposeRequested = 1;
+        private const int Closed = 2;
+
         private readonly int _maxDispatchDepth;
         private readonly string _category;
         private readonly IEventBusLogSink _logSink;
@@ -75,6 +80,24 @@ namespace CycloneGames.EventBus.Core
 
         private EventSubscription<T>[] _handlePool;
         private int _handlePoolCount;
+
+        // Close protocol for the deferred-unsubscribe inbox (see ScheduleRemoval).
+        //   0 = Open: foreign threads enqueue removals for the owner thread to apply.
+        //   1 = DisposeRequested: a Dispose has been observed; teardown is running or waiting for
+        //       an in-flight dispatch. Enqueue is still accepted so no handle is dropped, and the
+        //       teardown performs a final drain.
+        //   2 = Closed: teardown finished. A foreign thread must release synchronously instead of
+        //       enqueueing, because nothing will ever drain the queue again.
+        // The state is written with Interlocked/Volatile and re-checked after every enqueue so a
+        // check-then-enqueue race cannot strand a subscription.
+        private int _closeState;
+
+        // Serializes "enqueue + re-check" against "publish Closed + final drain". Both sides drain,
+        // so each alone leaves a window: the enqueuer can re-check before Closed is published, and
+        // the closer can drain before the enqueue lands. Holding this gate across each side's
+        // check-then-act removes the interleaving. It is never touched by Publish/Subscribe/Remove,
+        // only by the foreign-thread cold path (ScheduleRemoval) and the one-shot teardown.
+        private readonly object _closeGate = new object();
 
         private long _publishCount;
         private long _droppedReentrantCount;
@@ -357,7 +380,9 @@ namespace CycloneGames.EventBus.Core
         /// </summary>
         public void Dispose()
         {
-            if (_disposed)
+            // Atomic close handshake: the first caller wins and every later call is a no-op, so
+            // Dispose can never interleave with itself or leave the inbox half-open.
+            if (Interlocked.CompareExchange(ref _closeState, DisposeRequested, Open) != Open)
             {
                 return;
             }
@@ -389,9 +414,34 @@ namespace CycloneGames.EventBus.Core
                 throw new ArgumentNullException(nameof(subscription));
             }
 
-            _pendingRemovals.Enqueue(subscription);
-            Interlocked.Increment(ref _pendingRemovalCount);
+            lock (_closeGate)
+            {
+                // Already torn down: nothing will drain the inbox again, so release synchronously.
+                // EventBus.Release short-circuits on a disposed bus and EventSubscription.Dispose is
+                // idempotent, so this is a safe no-op rather than a handler-array mutation.
+                if (_closeState == Closed)
+                {
+                    subscription.Dispose();
+                    return;
+                }
+
+                _pendingRemovals.Enqueue(subscription);
+                Interlocked.Increment(ref _pendingRemovalCount);
+
+                // Re-check after enqueueing: if the bus closed in between, the teardown drain may
+                // already have run past this entry, so release it here.
+                if (_closeState == Closed)
+                {
+                    DrainPendingRemovals();
+                }
+            }
         }
+
+        /// <summary>
+        /// Removals waiting in the deferred inbox. Non-zero after <see cref="Dispose"/> indicates a
+        /// close-protocol leak; tests and the diagnostics surface assert on it.
+        /// </summary>
+        internal int PendingRemovalCount => Volatile.Read(ref _pendingRemovalCount);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void DrainPendingRemovals()
@@ -424,6 +474,16 @@ namespace CycloneGames.EventBus.Core
             _handlers = Array.Empty<Action<T>>();
             _handlePool = null;
             _handlePoolCount = 0;
+
+            // Publish Closed and run the final drain as one critical section against ScheduleRemoval:
+            // either the enqueuer sees Open and this drain collects its entry, or it sees Closed and
+            // releases the entry itself. No interleaving can leave an entry uncollected.
+            lock (_closeGate)
+            {
+                Volatile.Write(ref _closeState, Closed);
+                DrainPendingRemovals();
+            }
+
             Log("disposed");
         }
 

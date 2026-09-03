@@ -19,6 +19,9 @@ namespace CycloneGames.EventBus.Runtime
         private readonly ICommandPublisher _commandPublisher;
         private readonly Dictionary<Type, IEventBusDiagnostics> _buses =
             new Dictionary<Type, IEventBusDiagnostics>();
+        // Event types whose bus this context owns and must dispose. RegisterBus adopts caller-owned
+        // buses and deliberately leaves them out; GetOrCreateBus and RegisterOwnedBus add to it.
+        private readonly HashSet<Type> _ownedBuses = new HashSet<Type>();
         private readonly List<ISubscriptionScope> _scopes = new List<ISubscriptionScope>();
         private readonly SubscriptionScope _rootScope = new SubscriptionScope();
 
@@ -30,6 +33,14 @@ namespace CycloneGames.EventBus.Runtime
             _commandPublisher = commandPublisher ?? throw new ArgumentNullException(nameof(commandPublisher));
         }
 
+        /// <summary>
+        /// True after <see cref="Dispose"/>. Tooling needs this to stop observing a context that is
+        /// gone: the snapshot of a disposed context is legitimately all zeros (the bus map is
+        /// cleared), so a debugger that keeps reading it would silently show an empty world instead
+        /// of telling the user the context ended.
+        /// </summary>
+        public bool IsDisposed => _disposed;
+
         public ICommandPublisher Commands => _commandPublisher;
 
         public ISubscriptionScope RootScope => _rootScope;
@@ -40,6 +51,10 @@ namespace CycloneGames.EventBus.Runtime
         /// Registers a caller-owned bus for <typeparamref name="T"/>. This is the DI-friendly entry
         /// point: a container (or manual composition root) constructs the bus and registers it here,
         /// so the context never creates buses behind the caller's back.
+        ///
+        /// The context does NOT dispose a bus registered here — the caller outlives the context and
+        /// keeps ownership. Use <see cref="RegisterOwnedBus{T}"/> to hand a bus over, or
+        /// <see cref="GetOrCreateBus{T}"/> to let the context create and own one.
         /// </summary>
         public void RegisterBus<T>(EventBus<T> bus) where T : struct
         {
@@ -57,6 +72,18 @@ namespace CycloneGames.EventBus.Runtime
             }
 
             _buses.Add(type, bus);
+        }
+
+        /// <summary>
+        /// Registers a bus for <typeparamref name="T"/> and transfers ownership to this context:
+        /// <see cref="Dispose"/> will dispose it. Use this when a bus is constructed outside the
+        /// context but its lifetime should end with it — the ownership is explicit at the call site
+        /// instead of hidden behind a bool parameter.
+        /// </summary>
+        public void RegisterOwnedBus<T>(EventBus<T> bus) where T : struct
+        {
+            RegisterBus<T>(bus);
+            _ownedBuses.Add(typeof(T));
         }
 
         /// <summary>
@@ -90,6 +117,7 @@ namespace CycloneGames.EventBus.Runtime
 
             var bus = new EventBus<T>(_configuration);
             _buses.Add(typeof(T), bus);
+            _ownedBuses.Add(typeof(T));
             return bus;
         }
 
@@ -163,18 +191,8 @@ namespace CycloneGames.EventBus.Runtime
 
             _disposed = true;
 
-            // 1. Stop receiving: dispose every bus (drops all handlers).
-            foreach (KeyValuePair<Type, IEventBusDiagnostics> entry in _buses)
-            {
-                if (entry.Value is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
-            }
-
-            _buses.Clear();
-
-            // 2. Release subscriptions, then child scopes.
+            // 1. Release subscriptions and child scopes first: disposing a scope unsubscribes, and
+            //    that must happen while the buses are still alive.
             _rootScope.Dispose();
             for (int index = _scopes.Count - 1; index >= 0; index--)
             {
@@ -182,6 +200,19 @@ namespace CycloneGames.EventBus.Runtime
             }
 
             _scopes.Clear();
+
+            // 2. Dispose only the buses this context owns. A bus registered through RegisterBus is
+            //    caller-owned and outlives the context by contract, so it is left running.
+            foreach (KeyValuePair<Type, IEventBusDiagnostics> entry in _buses)
+            {
+                if (_ownedBuses.Contains(entry.Key) && entry.Value is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+
+            _ownedBuses.Clear();
+            _buses.Clear();
 
             // 3. Release the command backend last.
             if (_commandPublisher is IDisposable disposablePublisher)
@@ -197,5 +228,5 @@ namespace CycloneGames.EventBus.Runtime
                 throw new ObjectDisposedException(nameof(EventBusContext));
             }
         }
-    }
+}
 }

@@ -21,10 +21,25 @@ namespace CycloneGames.EventBus.Editor
         private EventBusDiagnosticsSnapshot _snapshot;
         private bool _needsRebuild = true;
 
+        // Formatted during Rebuild for the same reason: OnGUI is a repaint path, not a rebuild path.
+        private string _activeBusLabel;
+        private string _scopeLabel;
+        private string _subscriptionLabel;
+        private string _tombstoneLabel;
+        private string _publishLabel;
+        private string _droppedLabel;
+        private string _errorLabel;
+        private string _peakLabel;
+
         private struct Entry
         {
             public string TypeName;
             public EventBusSnapshot Snapshot;
+
+            // Formatted once during Rebuild. OnGUI runs on every repaint (mouse move, scroll,
+            // window interaction), and interpolating here would allocate a string per bus per
+            // repaint for data that has not changed since the last refresh.
+            public string Detail;
         }
 
         [MenuItem("Tools/CycloneGames/EventBus/Debugger")]
@@ -48,6 +63,22 @@ namespace CycloneGames.EventBus.Editor
                 return;
             }
 
+            if (context.IsDisposed)
+            {
+                // Drop the borrowed reference instead of rendering an all-zero world: a disposed
+                // context has an empty bus map, and a static that keeps pointing at it would pin the
+                // whole context (and its buses) for the lifetime of the Editor process.
+                EventBusEditorDiagnostics.Clear();
+                _lastContext = null;
+                _entries.Clear();
+                _needsRebuild = true;
+                EditorGUILayout.HelpBox(
+                    "The observed EventBusContext was disposed. The reference has been released; "
+                    + "register a new context to observe it.",
+                    MessageType.Warning);
+                return;
+            }
+
             if (context != _lastContext)
             {
                 _lastContext = context;
@@ -60,14 +91,14 @@ namespace CycloneGames.EventBus.Editor
                 _needsRebuild = false;
             }
 
-            EditorGUILayout.LabelField("Active buses", _snapshot.ActiveBusCount.ToString());
-            EditorGUILayout.LabelField("Scopes", _snapshot.ScopeCount.ToString());
-            EditorGUILayout.LabelField("Subscriptions", _snapshot.SubscriptionCount.ToString());
-            EditorGUILayout.LabelField("Tombstones", _snapshot.TombstoneCount.ToString());
-            EditorGUILayout.LabelField("Publish count", _snapshot.PublishCount.ToString());
-            EditorGUILayout.LabelField("Dropped (re-entrant)", _snapshot.DroppedReentrantCount.ToString());
-            EditorGUILayout.LabelField("Subscriber errors", _snapshot.SubscriberErrorCount.ToString());
-            EditorGUILayout.LabelField("Peak subscriptions", _snapshot.PeakSubscriptionCount.ToString());
+            EditorGUILayout.LabelField("Active buses", _activeBusLabel);
+            EditorGUILayout.LabelField("Scopes", _scopeLabel);
+            EditorGUILayout.LabelField("Subscriptions", _subscriptionLabel);
+            EditorGUILayout.LabelField("Tombstones", _tombstoneLabel);
+            EditorGUILayout.LabelField("Publish count", _publishLabel);
+            EditorGUILayout.LabelField("Dropped (re-entrant)", _droppedLabel);
+            EditorGUILayout.LabelField("Subscriber errors", _errorLabel);
+            EditorGUILayout.LabelField("Peak subscriptions", _peakLabel);
 
             if (_snapshot.TombstoneCount > 0)
             {
@@ -106,15 +137,7 @@ namespace CycloneGames.EventBus.Editor
             for (int index = 0; index < _entries.Count; index++)
             {
                 Entry entry = _entries[index];
-                EditorGUILayout.LabelField(
-                    entry.TypeName,
-                    $"subs={entry.Snapshot.SubscriptionCount}, "
-                    + $"tombstones={entry.Snapshot.TombstoneCount}, "
-                    + $"publishes={entry.Snapshot.PublishCount}, "
-                    + $"errors={entry.Snapshot.SubscriberErrorCount}, "
-                    + $"peak={entry.Snapshot.PeakSubscriptionCount}, "
-                    + $"cap={entry.Snapshot.Capacity}, "
-                    + $"depth={entry.Snapshot.DispatchDepth}");
+                EditorGUILayout.LabelField(entry.TypeName, entry.Detail);
             }
         }
 
@@ -122,17 +145,40 @@ namespace CycloneGames.EventBus.Editor
         {
             _snapshot = context.GetDiagnosticsSnapshot();
 
+            _activeBusLabel = _snapshot.ActiveBusCount.ToString();
+            _scopeLabel = _snapshot.ScopeCount.ToString();
+            _subscriptionLabel = _snapshot.SubscriptionCount.ToString();
+            _tombstoneLabel = _snapshot.TombstoneCount.ToString();
+            _publishLabel = _snapshot.PublishCount.ToString();
+            _droppedLabel = _snapshot.DroppedReentrantCount.ToString();
+            _errorLabel = _snapshot.SubscriberErrorCount.ToString();
+            _peakLabel = _snapshot.PeakSubscriptionCount.ToString();
+
             _entries.Clear();
             IReadOnlyList<IEventBusDiagnostics> buses = context.GetRegisteredBuses();
             for (int index = 0; index < buses.Count; index++)
             {
                 IEventBusDiagnostics bus = buses[index];
+                EventBusSnapshot busSnapshot = bus.GetSnapshot();
                 _entries.Add(new Entry
                 {
                     TypeName = bus.EventTypeName,
-                    Snapshot = bus.GetSnapshot(),
+                    Snapshot = busSnapshot,
+                    Detail = FormatBusDetail(busSnapshot),
                 });
             }
         }
+
+        private static string FormatBusDetail(EventBusSnapshot snapshot)
+        {
+            return "subs=" + snapshot.SubscriptionCount.ToString()
+                + ", tombstones=" + snapshot.TombstoneCount.ToString()
+                + ", publishes=" + snapshot.PublishCount.ToString()
+                + ", errors=" + snapshot.SubscriberErrorCount.ToString()
+                + ", peak=" + snapshot.PeakSubscriptionCount.ToString()
+                + ", cap=" + snapshot.Capacity.ToString()
+                + ", depth=" + snapshot.DispatchDepth.ToString();
+        }
     }
+
 }
