@@ -21,10 +21,10 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
     /// (neither path exists) are terminal fail-closed states: recovery refuses to guess and the
     /// entry stays in the journal until a human resolves it.
     ///
-    /// The journal lives under <c>Temp/BuildPipeline/YooAssetRelocationJournals/</c> — the same
-    /// lifetime domain as the relocated artifacts themselves. If Temp is wiped, both the journal
-    /// and the artifacts are gone together, and the outer publication journal still detects the
-    /// missing originals through its own ownership validation.
+    /// The journal lives under <c>.buildpipeline/transactions/yooasset3-relocations/</c> so the
+    /// workspace recovery service can see it. Artifacts themselves still relocate into Temp; when
+    /// Temp is wiped every entry reports <c>MissingBoth</c> and recovery treats the session as
+    /// ended with Temp rather than blocking the next build (see RelocationRecovery).
     /// </summary>
     internal static class RelocationJournalStore
     {
@@ -37,7 +37,15 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
         internal const string KindFile = "file";
         internal const string KindDirectory = "directory";
 
-        internal const string StateRootRelativePath = "Temp/BuildPipeline/YooAssetRelocationJournals";
+        // The journal lives under the build transaction root, NOT beside the relocated artifacts in
+        // Temp. Two reasons:
+        //   1. BuildWorkspaceService only resolves recovery claims below '.buildpipeline/transactions'
+        //      (see ResolveStateClaim), so a Temp-based journal is invisible to Inspect — the
+        //      workspace would be reported Clean and the relocation would never be restored.
+        //   2. Journal and artifacts are decoupled: entries record absolute artifact paths, so the
+        //      journal surviving a Temp wipe is what lets recovery report the loss instead of
+        //      silently leaving moved metas/backups stranded.
+        internal const string StateRootRelativePath = ".buildpipeline/transactions/yooasset3-relocations";
 
         internal static string GetStateRoot(string projectRoot)
         {
@@ -194,6 +202,24 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             }
 
             string journalPath = GetJournalPath(projectRoot, document.transactionId);
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, journalPath);
+            if (File.Exists(journalPath))
+            {
+                File.Delete(journalPath);
+            }
+
+            TryDeleteEmptyStateDirectory(GetStateRoot(projectRoot));
+        }
+
+        /// <summary>
+        /// Deletes a journal outright. Only for sessions that provably ended with the Temp
+        /// directory (every entry reported MissingBoth): the artifacts are gone with Temp, so the
+        /// journal is a tombstone that would otherwise block every later build. Recovery logs the
+        /// loss before calling this.
+        /// </summary>
+        internal static void Delete(string projectRoot, string transactionId)
+        {
+            string journalPath = GetJournalPath(projectRoot, transactionId);
             PublicationSafety.ValidateNoPathRedirection(projectRoot, journalPath);
             if (File.Exists(journalPath))
             {

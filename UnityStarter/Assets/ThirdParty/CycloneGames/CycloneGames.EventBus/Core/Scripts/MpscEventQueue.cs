@@ -58,6 +58,9 @@ namespace CycloneGames.EventBus.Core
 
         private readonly Slot[] _slots;
         private readonly int _mask;
+        private int _closed;
+        private long _rejectedAfterCloseCount;
+
         private PaddedInt _enqueuePos;
         private PaddedInt _dequeuePos;
         private long _droppedCount;
@@ -133,12 +136,40 @@ namespace CycloneGames.EventBus.Core
         /// <summary>True when no event is pending. Safe from any thread; treat it as advisory.</summary>
         public bool IsEmpty => PendingCount == 0;
 
+        /// <summary>True once <see cref="Close"/> has been called. Producers observe false from
+        /// <see cref="TryEnqueue"/> afterwards and must stop, not retry.</summary>
+        public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
+        /// <summary>Events rejected because the queue was already closed. Diagnostics only.</summary>
+        public long RejectedAfterCloseCount => Interlocked.Read(ref _rejectedAfterCloseCount);
+
+        /// <summary>
+        /// Closes the ingress. Idempotent and callable from any thread. Already-queued events remain
+        /// drainable, so the shutdown order is: close the ingress, let producers observe the failure,
+        /// then drain (or drop) the remainder on the owner thread. There is deliberately no producer
+        /// join here — the queue cannot know who produces, and a join belongs to the caller's
+        /// lifecycle contract.
+        /// </summary>
+        public void Close()
+        {
+            Interlocked.Exchange(ref _closed, 1);
+        }
+
         /// <summary>
         /// Enqueues from any thread. Returns false when the queue is full; the event is then the
         /// caller's to retry, drop, or count. Never allocates, never blocks.
         /// </summary>
         public bool TryEnqueue(in T evt)
         {
+            // Closed ingress fails immediately and permanently: a producer must not spin on a
+            // queue that is shutting down. Events already queued stay drainable so shutdown can be
+            // graceful (close the ingress, let the producers observe false, then drain).
+            if (Volatile.Read(ref _closed) != 0)
+            {
+                Interlocked.Increment(ref _rejectedAfterCloseCount);
+                return false;
+            }
+
             Slot[] slots = _slots;
             int mask = _mask;
 

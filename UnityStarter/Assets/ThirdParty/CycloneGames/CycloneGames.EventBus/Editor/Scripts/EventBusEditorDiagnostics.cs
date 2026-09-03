@@ -19,5 +19,16 @@ namespace CycloneGames.EventBus.Editor
         }
 
         internal static EventBusContext Current => _context;
+
+        /// <summary>
+        /// Releases the borrowed reference. Callers use this when the observed context ends: the
+        /// static would otherwise keep the context (and every bus it owns) reachable for the whole
+        /// Editor session, which is a real leak for a window that outlives several play sessions.
+        /// Idempotent.
+        /// </summary>
+        internal static void Clear()
+        {
+            _context = null;
+        }
     }
 }

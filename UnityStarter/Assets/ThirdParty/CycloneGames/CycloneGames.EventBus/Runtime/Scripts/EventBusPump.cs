@@ -41,6 +41,12 @@ namespace CycloneGames.EventBus.Runtime
         private readonly List<EventPumpFlush> _pendingAdds = new List<EventPumpFlush>();
         private readonly List<EventPumpFlush> _pendingRemovals = new List<EventPumpFlush>();
         private bool _clearPending;
+
+        // Number of deferred adds that existed when Clear() was called during this drain. Adds
+        // before the boundary belong to the registrations Clear removes; adds after it were made
+        // *because of* the Clear and must survive it.
+        private int _clearAddBoundary;
+        private bool _clearBoundaryValid;
         private int _drainDepth;
 
         /// <summary>Registered sources.</summary>
@@ -158,6 +164,18 @@ namespace CycloneGames.EventBus.Runtime
                 return 0;
             }
 
+            // Re-entrancy is rejected, not tolerated. A flush callback that drains again would
+            // re-walk the same targets inside one tick, which breaks the per-tick budget ("a source
+            // publishes at most N events this tick") and, via a self-registering callback, recurses
+            // until the stack dies. Failing loudly is the only semantics that keeps the budget true.
+            if (_drainDepth > 0)
+            {
+                throw new InvalidOperationException(
+                    "EventBusPump.Drain is not re-entrant: a flush callback must not drain the pump "
+                    + "it is being drained by. Split the work into a second pump, or defer it to the "
+                    + "next tick.");
+            }
+
             int published = 0;
             _drainDepth++;
             try
@@ -198,8 +216,16 @@ namespace CycloneGames.EventBus.Runtime
         {
             if (_drainDepth > 0)
             {
+                // Deferred, and ordering matters: a callback that calls Clear() and then Add() must
+                // end up with the new source registered. Record how many deferred adds existed when
+                // Clear was requested; ApplyDeferredMutations drops those and keeps the rest.
+                if (!_clearBoundaryValid)
+                {
+                    _clearAddBoundary = _pendingAdds.Count;
+                    _clearBoundaryValid = true;
+                }
+
                 _clearPending = true;
-                _pendingAdds.Clear();
                 return;
             }
 
@@ -208,18 +234,32 @@ namespace CycloneGames.EventBus.Runtime
 
         private void ApplyDeferredMutations()
         {
+            int addStart = 0;
+
             if (_clearPending)
             {
                 _clearPending = false;
-                _pendingAdds.Clear();
+
+                // Everything registered before the Clear request is removed by it; everything
+                // added after it survives and starts running on the next tick.
+                if (_clearBoundaryValid)
+                {
+                    addStart = _clearAddBoundary;
+                    _clearBoundaryValid = false;
+                    _clearAddBoundary = 0;
+                }
+                else
+                {
+                    addStart = _pendingAdds.Count;
+                }
+
                 _pendingRemovals.Clear();
                 _targets.Clear();
-                return;
             }
 
             // Adds first, then removals: an add and a remove of the same delegate in one tick is
             // already netted out above, so the two lists never fight here.
-            for (int index = 0; index < _pendingAdds.Count; index++)
+            for (int index = addStart; index < _pendingAdds.Count; index++)
             {
                 _targets.Add(_pendingAdds[index]);
             }
