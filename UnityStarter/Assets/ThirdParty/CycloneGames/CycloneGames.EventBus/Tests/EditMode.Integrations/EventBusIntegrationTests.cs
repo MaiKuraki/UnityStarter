@@ -222,6 +222,7 @@ namespace CycloneGames.EventBus.Tests.Integrations
         }
 
         [Test]
+        [Timeout(60000)]
         public async Task WaitAsync_CancellationFromBackgroundThread_DuringPublishStorm_BusStaysConsistent()
         {
             for (int iteration = 0; iteration < 100; iteration++)
@@ -243,13 +244,22 @@ namespace CycloneGames.EventBus.Tests.Integrations
                         cancellation.Cancel();
                     });
 
+                    // No yield inside the loop. The cancellation callback runs concurrently on a
+                    // thread-pool thread, and that concurrency IS the interleaving under test.
+                    // Yielding per publish instead serializes the storm against the main-thread
+                    // player loop: thousands of yields per run in the Editor, which is both far
+                    // slower and a weaker race, because the cancellation then almost always lands
+                    // at the same point in the sequence.
                     for (int index = 0; index < 50; index++)
                     {
                         bus.Publish(new Ping { Value = index });
-                        await Task.Yield();
                     }
 
                     await cancel;
+
+                    // One yield so the deferred removal is applied on the owner thread before the
+                    // assertions below observe the bus.
+                    await Task.Yield();
 
                     try
                     {
