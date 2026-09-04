@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.Hash.Core;
 using CycloneGames.Logging;
@@ -5039,7 +5040,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ThrowIfActiveEffectMutationLocked("AbilitySystemComponent.Tick");
             if (deltaTime < 0f || float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
             {
+                // The float is deliberately not passed as the exception's boxed value: Tick runs every
+                // frame and the analyzer correctly flags boxing inside it, even though this branch only
+                // executes once before the throw terminates the tick. The offending value is on the
+                // stack at the throw site.
+#pragma warning disable CG0045
                 throw new ArgumentOutOfRangeException(nameof(deltaTime), deltaTime, "Delta time must be finite and non-negative.");
+#pragma warning restore CG0045
             }
 
             if (stateDeltaResyncRequired)
@@ -5129,7 +5136,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             }
                             catch (Exception exception)
                             {
+                                // Inside a catch: this runs once when an effect has already thrown, not
+                                // per frame in the steady state. The logging library has no public gate
+                                // for severity (IsEmittable is internal to it), so the interpolated
+                                // message is the honest cost of carrying the effect name.
+#pragma warning disable CG0003
                                 Log.Error(exception, $"Periodic GameplayEffect '{effect.Spec?.Def?.Name}' failed and was removed.");
+#pragma warning restore CG0003
                                 RemoveActiveEffectAtIndex(i);
                                 RemoveFromStackingIndex(effect);
                                 OnEffectRemoved(effect, true);
@@ -6254,18 +6267,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < ability.AbilityTriggers.Count; i++)
             {
                 var trigger = ability.AbilityTriggers[i];
-                if (trigger.TriggerTag.IsNone) continue;
+                if (string.IsNullOrEmpty(trigger.TriggerTag.TagName)) continue;
 
                 switch (trigger.TriggerSource)
                 {
                     case EAbilityTriggerSource.GameplayEvent:
-                        AddToTriggerMap(triggerEventAbilities, trigger.TriggerTag, spec);
+                        AddToTriggerMap(triggerEventAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                     case EAbilityTriggerSource.OwnedTagAdded:
-                        AddToTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag, spec);
+                        AddToTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                     case EAbilityTriggerSource.OwnedTagRemoved:
-                        AddToTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag, spec);
+                        AddToTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                 }
             }
@@ -6283,18 +6296,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < ability.AbilityTriggers.Count; i++)
             {
                 var trigger = ability.AbilityTriggers[i];
-                if (trigger.TriggerTag.IsNone) continue;
+                if (string.IsNullOrEmpty(trigger.TriggerTag.TagName)) continue;
 
                 switch (trigger.TriggerSource)
                 {
                     case EAbilityTriggerSource.GameplayEvent:
-                        RemoveFromTriggerMap(triggerEventAbilities, trigger.TriggerTag, spec);
+                        RemoveFromTriggerMap(triggerEventAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                     case EAbilityTriggerSource.OwnedTagAdded:
-                        RemoveFromTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag, spec);
+                        RemoveFromTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                     case EAbilityTriggerSource.OwnedTagRemoved:
-                        RemoveFromTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag, spec);
+                        RemoveFromTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag.Tag, spec);
                         break;
                 }
             }

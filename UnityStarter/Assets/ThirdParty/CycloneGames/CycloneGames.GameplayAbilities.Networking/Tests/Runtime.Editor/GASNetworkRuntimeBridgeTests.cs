@@ -167,7 +167,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
             const string tagName = "Test.GAS.Networking.Bridge.RoundTrip";
             GameplayTagManager.RegisterDynamicTag(tagName, "Runtime bridge round-trip test tag.");
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag looseTag = GameplayTagManager.RequestTag(tagName);
+            GameplayTag looseTag = GameplayTagManager.Request(tagName);
             Assert.That(looseTag.IsValid, Is.True);
 
             GameplayAbility ability = CreateAbility(

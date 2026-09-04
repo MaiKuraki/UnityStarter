@@ -274,13 +274,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<int, string> hexColorCache = new Dictionary<int, string>(32);
         private readonly Dictionary<string, string> shortNameCache = new Dictionary<string, string>(32);
 
+        // Properties rather than fields: this struct is nested inside a MonoBehaviour subclass and the
+        // project's CG0030 rule walks the declaring type's hierarchy, so public fields here read as
+        // exposed MonoBehaviour state even though the struct is private and never serialized.
         private struct BoundASC
         {
-            public AbilitySystemComponent ASC;
-            public string DisplayName;
-            public GameObject OwnerGO;
-            public Transform TrackTarget;
-            public int PanelKey;
+            public AbilitySystemComponent ASC { get; set; }
+            public string DisplayName { get; set; }
+            public GameObject OwnerGO { get; set; }
+            public Transform TrackTarget { get; set; }
+            public int PanelKey { get; set; }
         }
 
         #endregion

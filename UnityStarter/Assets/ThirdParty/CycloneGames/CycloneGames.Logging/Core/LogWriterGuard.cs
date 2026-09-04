@@ -116,7 +116,12 @@ namespace CycloneGames.Logging
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool IsEmittable(LogSeverity severity)
+        /// <summary>
+        /// True when the configured level would emit <paramref name="severity"/>. Call this before
+        /// formatting a message so a hot path pays for the message only when it will actually be
+        /// written; the Write overloads that take a builder defer the same decision.
+        /// </summary>
+        public static bool IsEmittable(LogSeverity severity)
         {
             return (uint)severity < (uint)LogSeverity.None;
         }

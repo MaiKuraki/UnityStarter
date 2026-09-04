@@ -6,7 +6,8 @@
         "CycloneGames.Logging.Core",
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
-        "CycloneGames.Hash.Core"
+        "CycloneGames.Hash.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

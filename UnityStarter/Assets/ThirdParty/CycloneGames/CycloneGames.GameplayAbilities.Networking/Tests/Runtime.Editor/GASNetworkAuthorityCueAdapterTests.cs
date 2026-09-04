@@ -26,7 +26,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
         {
             GameplayTagManager.RegisterDynamicTag(CueTagName, "Authority cue adapter test tag.");
             GameplayTagManager.InitializeIfNeeded();
-            cueTag = GameplayTagManager.RequestTag(CueTagName);
+            cueTag = GameplayTagManager.Request(CueTagName);
             context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
             abilitySystem = new AbilitySystemComponent(
                 context,

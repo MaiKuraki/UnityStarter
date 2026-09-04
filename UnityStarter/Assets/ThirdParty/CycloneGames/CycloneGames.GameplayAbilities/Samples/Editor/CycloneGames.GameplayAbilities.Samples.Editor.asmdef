@@ -6,7 +6,8 @@
         "CycloneGames.GameplayAbilities.Runtime",
         "CycloneGames.GameplayAbilities.Editor",
         "CycloneGames.GameplayAbilities.Sample",
-        "CycloneGames.Logging.Core"
+        "CycloneGames.Logging.Core",
+        "CycloneGames.GameplayTags.Core"
     ],
     "includePlatforms": [
         "Editor"

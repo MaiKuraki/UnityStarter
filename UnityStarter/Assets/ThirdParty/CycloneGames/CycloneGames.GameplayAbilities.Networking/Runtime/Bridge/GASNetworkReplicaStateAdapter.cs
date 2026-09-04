@@ -848,7 +848,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         private static bool TryResolveTag(GASNetworkTagId id, out GameplayTag tag)
         {
             tag = default;
-            return id.IsValid && GameplayTagManager.TryGetTagFromStableId(id.Value, out tag) &&
+            return id.IsValid && GameplayTagManager.TryGetByStableId(id.Value, out tag) &&
                    !tag.IsNone && tag.IsValid;
         }
 

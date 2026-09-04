@@ -20,8 +20,15 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
     /// The journal now lives under the transaction root (see
     /// <see cref="RelocationJournalStore.StateRootRelativePath"/>), so a leftover journal file makes
     /// <c>Inspect</c> report <c>RecoveryRequired</c> and this participant runs.
+    ///
+    /// Ordering: <c>BuildWorkspaceService.RecoverPhase</c> executes participants in DESCENDING
+    /// Priority order (OrderByDescending(Priority).ThenBy(Id)), so Priority 110 runs BEFORE the
+    /// publication participant (100). Restoring metas and backups first gives the publication
+    /// rollback its originals back, instead of rolling back against missing paths. This
+    /// participant is the single owner of relocation recovery; the publication participant does
+    /// not call RelocationRecovery itself.
     /// </summary>
-    [BuildRecoveryRegistration(ParticipantId, 90)]
+    [BuildRecoveryRegistration(ParticipantId, 110)]
     public sealed class RelocationRecoveryCoordinator : IBuildRecoveryParticipant
     {
         public const string ParticipantId = "YooAsset3Relocation";
@@ -35,9 +42,9 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
 
         public string Id => ParticipantId;
 
-        // Runs before the publication participant (100): restoring metas and backups first gives the
-        // publication rollback its originals back, instead of rolling back against missing paths.
-        public int Priority => 90;
+        // Descending-order contract (BuildWorkspaceService.RecoverPhase): 110 executes before the
+        // publication participant (100).
+        public int Priority => 110;
 
         public System.Collections.Generic.IReadOnlyList<string> StateDirectoryRelativePaths => StatePaths;
 
@@ -49,19 +56,29 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             }
 
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
-
-            // Relocation restoration touches StreamingAssets and the Temp staging root only, so it
-            // does not need the publication lock; the recovery lease already serializes it.
-            int restored = RelocationRecovery.RestorePending(
-                normalizedProjectRoot,
-                UnityJournalSerializer.Instance,
-                message => UnityEngine.Debug.Log(message));
-
-            if (restored > 0)
+            string providerStateRoot = PublicationPaths.GetProviderStateRoot(
+                normalizedProjectRoot);
+            using (PublicationBuildLock.Acquire(
+                       normalizedProjectRoot,
+                       providerStateRoot,
+                       providerStateRoot))
             {
-                UnityEngine.Debug.Log(
-                    $"[BuildPipeline] Relocation recovery restored {restored} Player-build "
-                    + "publication artifact(s).");
+                // Lock contract: relocation restoration mutates the same StreamingAssets artifacts
+                // and Temp staging root as the publication recovery participant, so both recovery
+                // paths must be mutually exclusive. The workspace recovery lease already
+                // serializes whole recovery runs; this lock adds the same protection the
+                // publication participant relies on against a concurrent publication session.
+                int restored = RelocationRecovery.RestorePending(
+                    normalizedProjectRoot,
+                    UnityJournalSerializer.Instance,
+                    message => UnityEngine.Debug.Log(message));
+
+                if (restored > 0)
+                {
+                    UnityEngine.Debug.Log(
+                        $"[BuildPipeline] Relocation recovery restored {restored} Player-build "
+                        + "publication artifact(s).");
+                }
             }
         }
     }

@@ -19,10 +19,9 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
         {
             GameplayTagManager.ResetForTests();
             GameplayTagRedirector.ClearAll();
-            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
-            GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
-            GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => Array.Empty<IGameplayTagSource>();
-            GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+            // No host facts: not playing, no build data, no project sources. The null platform is the
+            // honest default for a fixture that supplies everything explicitly.
+            GameplayTagHost.Use(null);
             _logScope = new ScopedSilentLogWriter();
         }
 
@@ -33,7 +32,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
             {
                 GameplayTagManager.ResetForTests();
                 GameplayTagRedirector.ClearAll();
-                GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+                GameplayTagHost.ClearRegisteredProjectTagSources();
             }
             finally
             {
@@ -52,7 +51,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 new TagCatalogRow(3, "DataTableTest.Hidden.EditorOnly", "Hidden in editor.", GameplayTagFlags.HideInEditor, false)
             });
 
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableSource<TagCatalogRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableSource<TagCatalogRow>(
                 "Design.GameplayTags",
                 table,
                 static row => row.Name,
@@ -62,9 +61,9 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
 
             GameplayTagManager.InitializeIfNeeded();
 
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Ability.Fireball").Description, Is.EqualTo("Fireball ability."));
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Effect.Burn").IsValid, Is.True);
-            Assert.That(GameplayTagManager.TryRequestTag("DataTableTest.Hidden.EditorOnly", out _), Is.False);
+            Assert.That(GameplayTagManager.Request("DataTableTest.Ability.Fireball").Description, Is.EqualTo("Fireball ability."));
+            Assert.That(GameplayTagManager.Request("DataTableTest.Effect.Burn").IsValid, Is.True);
+            Assert.That(GameplayTagManager.TryRequest("DataTableTest.Hidden.EditorOnly", out _), Is.False);
         }
 
         [Test]
@@ -81,7 +80,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 static row => row.Name,
                 StringComparer.Ordinal);
 
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(
+            GameplayTagHost.RegisterProjectTagSource(
                 new GameplayTagDataTableSource<GeneratedTagCatalogRow>(
                     "Design.GeneratedGameplayTags",
                     table,
@@ -92,7 +91,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
             GameplayTagManager.InitializeIfNeeded();
 
             Assert.That(
-                GameplayTagManager.RequestTag("DataTableTest.Generated.LubanCompatible").Description,
+                GameplayTagManager.Request("DataTableTest.Generated.LubanCompatible").Description,
                 Is.EqualTo("Generated rows can use an explicit key selector."));
         }
 
@@ -109,7 +108,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 },
                 static row => row.Id);
 
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(
+            GameplayTagHost.RegisterProjectTagSource(
                 new GameplayTagDataTableSource<GeneratedTagStructRow>(
                     "Design.GeneratedValueTypeGameplayTags",
                     table,
@@ -119,7 +118,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
             GameplayTagManager.InitializeIfNeeded();
 
             Assert.That(
-                GameplayTagManager.RequestTag("DataTableTest.Generated.FlatBufferStyle").Description,
+                GameplayTagManager.Request("DataTableTest.Generated.FlatBufferStyle").Description,
                 Is.EqualTo("Value-type generated views are supported."));
         }
 
@@ -136,7 +135,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                     new[] { "DataTableTest.State.Casting.Fireball" })
             });
 
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.Abilities",
                 table,
                 static row => row.AbilityTags,
@@ -152,11 +151,11 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 row.ActivationBlockedTags,
                 row.ActivationRequiredTags);
 
-            Assert.That(abilityTags.HasTagExact(GameplayTagManager.RequestTag("DataTableTest.Ability.Fireball")), Is.True);
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Ability.Damage.Fire").IsValid, Is.True);
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.State.CrowdControl.Stunned").IsValid, Is.True);
-            Assert.That(activationRequirements.RequiredTags.HasTagExact(GameplayTagManager.RequestTag("DataTableTest.State.Combat.Ready")), Is.True);
-            Assert.That(activationRequirements.ForbiddenTags.HasTagExact(GameplayTagManager.RequestTag("DataTableTest.State.CrowdControl.Stunned")), Is.True);
+            Assert.That(abilityTags.HasTagExact(GameplayTagManager.Request("DataTableTest.Ability.Fireball")), Is.True);
+            Assert.That(GameplayTagManager.Request("DataTableTest.Ability.Damage.Fire").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("DataTableTest.State.CrowdControl.Stunned").IsValid, Is.True);
+            Assert.That(activationRequirements.RequiredTags.HasTagExact(GameplayTagManager.Request("DataTableTest.State.Combat.Ready")), Is.True);
+            Assert.That(activationRequirements.ForbiddenTags.HasTagExact(GameplayTagManager.Request("DataTableTest.State.CrowdControl.Stunned")), Is.True);
         }
 
         [Test]
@@ -181,11 +180,11 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 accessors);
 
             accessors[0] = static _ => new[] { "DataTableTest.MutatedAccessor" };
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+            GameplayTagHost.RegisterProjectTagSource(source);
             GameplayTagManager.InitializeIfNeeded();
 
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.OriginalAccessor").IsValid, Is.True);
-            Assert.That(GameplayTagManager.TryRequestTag("DataTableTest.MutatedAccessor", out _), Is.False);
+            Assert.That(GameplayTagManager.Request("DataTableTest.OriginalAccessor").IsValid, Is.True);
+            Assert.That(GameplayTagManager.TryRequest("DataTableTest.MutatedAccessor", out _), Is.False);
         }
 
         [Test]
@@ -193,21 +192,21 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("DataTableTest.Baseline");
             GameplayTagManager.InitializeIfNeeded();
-            int generation = GameplayTagManager.CurrentGeneration;
-            int runtimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+            int generation = GameplayTagManager.Generation;
+            int runtimeIndexEpoch = GameplayTagManager.RuntimeIndexEpoch;
             DataTable<AbilityConfigRow> table = new(new[]
             {
                 new AbilityConfigRow(1002, new[] { "DataTableTest.Valid", "" }, null, null, null)
             });
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.InvalidAbilities",
                 table,
                 static row => row.AbilityTags));
 
-            Assert.Throws<InvalidOperationException>(GameplayTagManager.ReloadTags);
-            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
-            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Baseline").IsValid, Is.True);
+            Assert.Throws<InvalidOperationException>(GameplayTagManager.Reload);
+            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
+            Assert.That(GameplayTagManager.Request("DataTableTest.Baseline").IsValid, Is.True);
         }
 
         [Test]
@@ -222,7 +221,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 new AbilityConfigRow(1005, new[] { "DataTableTest.Enabled" }, null, null, null)
             };
 
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.NullableAbilities",
                 rows,
                 getDescription: null,
@@ -241,8 +240,8 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
             GameplayTagManager.InitializeIfNeeded();
 
             Assert.That(disabledAccessorCalls, Is.EqualTo(1));
-            Assert.That(GameplayTagManager.TryRequestTag("DataTableTest.Disabled", out _), Is.False);
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Enabled").IsValid, Is.True);
+            Assert.That(GameplayTagManager.TryRequest("DataTableTest.Disabled", out _), Is.False);
+            Assert.That(GameplayTagManager.Request("DataTableTest.Enabled").IsValid, Is.True);
         }
 
         [Test]
@@ -250,27 +249,27 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("DataTableTest.Baseline");
             GameplayTagManager.InitializeIfNeeded();
-            int generation = GameplayTagManager.CurrentGeneration;
-            int runtimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+            int generation = GameplayTagManager.Generation;
+            int runtimeIndexEpoch = GameplayTagManager.RuntimeIndexEpoch;
             IReadOnlyList<AbilityConfigRow> rows = new[]
             {
                 new AbilityConfigRow(1006, new[] { "DataTableTest.BeforeFailure" }, null, null, null),
                 new AbilityConfigRow(1007, new[] { "DataTableTest.Throws" }, null, null, null)
             };
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.ThrowingAbilities",
                 rows,
                 row => row.Id == 1007
                     ? throw new InvalidOperationException("Injected accessor failure.")
                     : row.AbilityTags));
 
-            InvalidOperationException error = Assert.Throws<InvalidOperationException>(GameplayTagManager.ReloadTags);
+            InvalidOperationException error = Assert.Throws<InvalidOperationException>(GameplayTagManager.Reload);
 
             Assert.That(error.Message, Is.EqualTo("Injected accessor failure."));
-            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
-            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Baseline").IsValid, Is.True);
-            Assert.That(GameplayTagManager.TryRequestTag("DataTableTest.BeforeFailure", out _), Is.False);
+            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
+            Assert.That(GameplayTagManager.Request("DataTableTest.Baseline").IsValid, Is.True);
+            Assert.That(GameplayTagManager.TryRequest("DataTableTest.BeforeFailure", out _), Is.False);
         }
 
         [Test]
@@ -281,18 +280,18 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 new AbilityConfigRow(1008, new[] { "DataTableTest.Shared", "DataTableTest.Shared" }, null, null, null),
                 new AbilityConfigRow(1009, new[] { "DataTableTest.Shared" }, null, null, null)
             };
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.DuplicateReferences",
                 rows,
                 static row => row.AbilityTags));
 
             GameplayTagManager.InitializeIfNeeded();
 
-            GameplayTag shared = GameplayTagManager.RequestTag("DataTableTest.Shared");
+            GameplayTag shared = GameplayTagManager.Request("DataTableTest.Shared");
             Assert.That(shared.IsValid, Is.True);
 
             int sharedTagCount = 0;
-            ReadOnlySpan<GameplayTag> allTags = GameplayTagManager.GetAllTags();
+            GameplayTag[] allTags = GameplayTagManager.Current.CreateAllTagsArray();
             for (int i = 0; i < allTags.Length; i++)
             {
                 if (allTags[i].Name == "DataTableTest.Shared")
@@ -307,21 +306,21 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("DataTableTest.Baseline");
             GameplayTagManager.InitializeIfNeeded();
-            int generation = GameplayTagManager.CurrentGeneration;
-            int runtimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+            int generation = GameplayTagManager.Generation;
+            int runtimeIndexEpoch = GameplayTagManager.RuntimeIndexEpoch;
             IReadOnlyList<AbilityConfigRow> rows = new[]
             {
                 new AbilityConfigRow(1010, null, null, null, null)
             };
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
+            GameplayTagHost.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityConfigRow>(
                 "Design.BudgetOverflow",
                 rows,
                 static _ => EnumerateBudgetOverflowTags()));
 
-            Assert.Throws<InvalidOperationException>(GameplayTagManager.ReloadTags);
-            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
-            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
-            Assert.That(GameplayTagManager.RequestTag("DataTableTest.Baseline").IsValid, Is.True);
+            Assert.Throws<InvalidOperationException>(GameplayTagManager.Reload);
+            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.EqualTo(runtimeIndexEpoch));
+            Assert.That(GameplayTagManager.Request("DataTableTest.Baseline").IsValid, Is.True);
         }
 
         [Test]

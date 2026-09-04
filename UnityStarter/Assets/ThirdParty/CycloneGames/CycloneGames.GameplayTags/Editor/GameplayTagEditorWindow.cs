@@ -50,7 +50,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
         {
             _treeViewState = new TreeViewState();
             _treeView = new ManagerTreeView(_treeViewState, OnTagSelected);
-            _cachedTagCount = GameplayTagManager.GetAllTags().Length;
+            _cachedTagCount = GameplayTagManager.TagCount;
             _previousTagCount = _cachedTagCount;
             UpdateCachedStrings();
             BindTreeChanged();
@@ -59,7 +59,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private void OnDisable()
         {
-            GameplayTagManager.OnGameplayTagTreeChanged -= OnTreeChanged;
+            GameplayTagManager.TreeChanged -= OnTreeChanged;
             EditorApplication.update -= ProcessTreeChange;
         }
 
@@ -75,8 +75,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private void BindTreeChanged()
         {
-            GameplayTagManager.OnGameplayTagTreeChanged -= OnTreeChanged;
-            GameplayTagManager.OnGameplayTagTreeChanged += OnTreeChanged;
+            GameplayTagManager.TreeChanged -= OnTreeChanged;
+            GameplayTagManager.TreeChanged += OnTreeChanged;
         }
 
         private void OnTreeChanged()
@@ -88,7 +88,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
         {
             if (Interlocked.Exchange(ref _treeChanged, 0) == 0)
                 return;
-            _cachedTagCount = GameplayTagManager.GetAllTags().Length;
+            _cachedTagCount = GameplayTagManager.TagCount;
             RefreshSelectedTag();
             _treeView?.Reload();
             UpdateCachedStrings();
@@ -241,7 +241,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             try
             {
                 UpdateCachedStrings();
-                GameplayTagManager.ReloadTags();
+                GameplayTagManager.Reload();
                 _treeView?.Reload();
                 UpdateCachedStrings();
                 _nextStatsRefresh = EditorApplication.timeSinceStartup + 0.1d;
@@ -268,7 +268,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             }
 
             string selectedTagName = _selectedTag.Name;
-            _selectedTag = GameplayTagManager.RequestTag(selectedTagName, false);
+            _selectedTag = GameplayTagManager.Request(selectedTagName, false);
         }
 
         private void DrawDetailsPanel(Rect rect)
@@ -283,19 +283,17 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                 EditorGUILayout.LabelField("Tag Details", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox("Select a gameplay tag to inspect its stable ID, hierarchy, source files, and editor metadata.", MessageType.Info);
-                EditorGUILayout.LabelField("Manifest", $"0x{GameplayTagManager.CurrentManifestHash:X16}");
+                EditorGUILayout.LabelField("Manifest", $"0x{GameplayTagManager.ManifestHash:X16}");
                 EditorGUILayout.EndScrollView();
                 GUILayout.EndArea();
                 return;
             }
 
-            GameplayTagDefinition definition = _selectedTag.Definition;
-
             EditorGUILayout.LabelField(_selectedTag.Label, EditorStyles.boldLabel);
             DrawSelectableField("Name", _selectedTag.Name);
             DrawSelectableField("Stable ID", $"0x{_selectedTag.StableId:X16}");
             EditorGUILayout.LabelField("Runtime Index", _selectedTag.RuntimeIndex.ToString());
-            EditorGUILayout.LabelField("Manifest", $"0x{GameplayTagManager.CurrentManifestHash:X16}");
+            EditorGUILayout.LabelField("Manifest", $"0x{GameplayTagManager.ManifestHash:X16}");
             EditorGUILayout.LabelField("Flags", _selectedTag.Flags.ToString());
             EditorGUILayout.LabelField("Leaf", _selectedTag.IsLeaf ? "Yes" : "No");
 
@@ -305,20 +303,19 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField("Hierarchy", EditorStyles.boldLabel);
-            DrawTagSpan("Parents", _selectedTag.ParentTags);
-            DrawTagSpan("Children", _selectedTag.ChildTags);
+            IReadOnlyList<IGameplayTagSource> sources = GameplayTagManager.GetTagSources(_selectedTag);
 
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField("Sources", EditorStyles.boldLabel);
-            if (definition.SourceCount == 0)
+            if (sources.Count == 0)
             {
                 EditorGUILayout.LabelField("No source registered.");
             }
             else
             {
-                for (int i = 0; i < definition.SourceCount; i++)
+                for (int i = 0; i < sources.Count; i++)
                 {
-                    IGameplayTagSource source = definition.GetSource(i);
+                    IGameplayTagSource source = sources[i];
                     string access = source is IDeleteTagHandler ? "Editable" : "Read-only";
                     EditorGUILayout.LabelField(source.Name, access);
                 }

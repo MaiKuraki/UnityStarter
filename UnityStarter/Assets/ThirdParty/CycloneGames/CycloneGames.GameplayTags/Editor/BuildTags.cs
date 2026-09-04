@@ -29,7 +29,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          }
 
          GameplayTagManagerEditorInitialization.ConfigureEditorSources();
-         GameplayTagManager.ReloadTags();
+         GameplayTagManager.Reload();
 
          string projectRoot = GameplayTagsBuildAssetTransaction.GetCurrentProjectRoot();
          byte[] data = CreateBuildData();
@@ -78,8 +78,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       internal static byte[] CreateBuildData()
       {
-         ReadOnlySpan<GameplayTag> tags = GameplayTagManager.GetAllTags();
-         if (tags.IsEmpty)
+         GameplayTag[] tags = GameplayTagManager.Current.CreateAllTagsArray();
+         if (tags.Length == 0)
             throw new BuildFailedException("Gameplay tag build data must contain at least one definition.");
 
          int dataSize = CalculateBuildDataSize(tags);

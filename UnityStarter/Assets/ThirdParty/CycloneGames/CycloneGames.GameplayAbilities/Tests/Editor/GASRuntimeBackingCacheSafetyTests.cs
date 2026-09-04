@@ -225,7 +225,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(name, "GameplayAbilities backing-cache safety test tag");
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
 
         private static Exception RunOnWorkerThread(Action action)

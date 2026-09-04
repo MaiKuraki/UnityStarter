@@ -51,7 +51,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          Interlocked.Exchange(ref s_ReloadRequested, 0);
          try
          {
-            GameplayTagManager.ReloadTags();
+            GameplayTagManager.Reload();
             Interlocked.Exchange(ref s_ReloadRetryCount, 0);
             s_NextReloadRetryTime = 0;
             s_LastReloadError = null;

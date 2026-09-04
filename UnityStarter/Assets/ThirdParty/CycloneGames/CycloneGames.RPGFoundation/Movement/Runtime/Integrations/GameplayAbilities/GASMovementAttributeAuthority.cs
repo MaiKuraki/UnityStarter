@@ -365,7 +365,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities
                 return false;
             }
 
-            if (!GameplayTagManager.TryRequestTag(abilityTagName, out GameplayTag abilityTag))
+            if (!GameplayTagManager.TryRequest(abilityTagName, out GameplayTag abilityTag))
             {
                 return false;
             }
@@ -405,7 +405,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities
                     continue;
                 }
 
-                if (!GameplayTagManager.TryRequestTag(tagName, out GameplayTag tag) || !_asc.HasMatchingGameplayTag(tag))
+                if (!GameplayTagManager.TryRequest(tagName, out GameplayTag tag) || !_asc.HasMatchingGameplayTag(tag))
                 {
                     return false;
                 }
@@ -429,7 +429,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities
                     continue;
                 }
 
-                if (GameplayTagManager.TryRequestTag(tagName, out GameplayTag tag) && _asc.HasMatchingGameplayTag(tag))
+                if (GameplayTagManager.TryRequest(tagName, out GameplayTag tag) && _asc.HasMatchingGameplayTag(tag))
                 {
                     return true;
                 }

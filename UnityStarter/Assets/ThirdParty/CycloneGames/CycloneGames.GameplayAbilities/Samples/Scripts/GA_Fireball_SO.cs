@@ -49,7 +49,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (actorInfo.OwnerActor is Character casterCharacter)
                 {
                     float bonusDamageMultiplier = casterCharacter.AttributeSet.GetCurrentValue(casterCharacter.AttributeSet.BonusDamageMultiplier);
-                    damageSpec.SetSetByCallerMagnitude(GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier), bonusDamageMultiplier);
+                    damageSpec.SetSetByCallerMagnitude(GameplayTagManager.Request(GASSampleTags.Data_DamageMultiplier), bonusDamageMultiplier);
                     Log.Info($"Snapshotting DamageMultiplier: {bonusDamageMultiplier}");
                 }
 

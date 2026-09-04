@@ -176,7 +176,7 @@ store 与 relocation journal。
 
 Player 构建期的产物搬移已实现崩溃可恢复。每一次把所有权标记、备份目录、受保护 meta、stage
 目录临时移出 StreamingAssets 的动作都会记录到
-`Temp/BuildPipeline/YooAssetRelocationJournals/<transactionId>.json`：移动前持久化 `Planned`，
+`.buildpipeline/transactions/yooasset3-relocations/<transactionId>.json`：移动前持久化 `Planned`，
 验证后写 `Moved`，逐条写 `Restored`；`Conflict`（双侧并存或类型不符）与 `MissingBoth`（产物
 丢失）是终止态、fail closed，会阻止构建直到人工处理。恢复 Coordinator 会在 Editor 启动时恢复
 未完成的 relocation journal；journal 只有在全部条目恢复后才会删除。故障路径（崩溃、恢复中途

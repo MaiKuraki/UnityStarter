@@ -180,10 +180,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float WorldTrackingOffsetY = 30f;
 
         /// <summary>Loads the config from Resources. Returns null if not found.</summary>
+        /// <remarks>
+        /// A debug overlay's config asset: loaded once, a few hundred bytes, and needed synchronously.
+        /// When the overlay is wired through the project's asset pipeline, load it there and hand the
+        /// instance to the overlay directly - this method is the fallback, not the integration point.
+        /// </remarks>
+#pragma warning disable CG0014
         public static GASOverlayConfig Load()
         {
             return Resources.Load<GASOverlayConfig>(ResourcePath);
         }
+#pragma warning restore CG0014
 
         /// <summary>
         /// Get the display color for a tag name by checking semantic classifications.

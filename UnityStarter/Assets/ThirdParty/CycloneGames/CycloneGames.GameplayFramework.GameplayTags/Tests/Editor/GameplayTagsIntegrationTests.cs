@@ -79,7 +79,7 @@ namespace CycloneGames.GameplayFramework.Integrations.GameplayTags.Tests.Editor
             string name = prefix + ".State.Active";
             GameplayTagManager.RegisterDynamicTag(name);
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
     }
 }
