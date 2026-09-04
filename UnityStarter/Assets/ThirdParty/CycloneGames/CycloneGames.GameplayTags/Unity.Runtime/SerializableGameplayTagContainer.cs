@@ -56,9 +56,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         // re-registers its sources AFTER the assets have deserialized, so a resolve-once design serves
         // indices from a registry that no longer exists.
         [NonSerialized]
-        private int m_ResolvedRegistryId;
-        [NonSerialized]
-        private int m_ResolvedEpoch;
+        private TagDataSnapshot m_ResolvedSnapshot;
 
         /// <summary>The live container. Mutate this; serialization handles the rest.</summary>
         public GameplayTagContainer Container
@@ -219,6 +217,14 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
                 return;
             }
 
+            // Never let an empty container erase names that are still on disk. That is the state whenever
+            // the registry does not know these tags yet - before the first initialization, during a domain
+            // reload, or while a catalog is still being registered - and an empty container means "not
+            // resolvable yet", not "nothing was configured". Writing it back deleted the authoring data.
+            bool namesOnDisk = explicitTagNames != null && explicitTagNames.Length > 0;
+            if (container.IsEmpty && namesOnDisk)
+                return;
+
             // Only overwrite the durable copy when the indices are still meaningful. TryToPersisted
             // returns false exactly when they are not, which is the case where keeping what is on disk
             // is the correct behaviour.
@@ -240,22 +246,35 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         /// have already deserialized, so a resolve-once design serves indices from a registry that no
         /// longer exists - which is what emptied configured tags on entering play.
         /// </summary>
+        /// <summary>
+        /// Re-resolves the names when the published snapshot has changed.
+        /// </summary>
+        /// <remarks>
+        /// Cost is one <see cref="Volatile"/> read and one reference compare per member access - small,
+        /// but not free. Bridges are authoring data: a hot path should read the resolved
+        /// <see cref="GameplayTagContainer"/> or <see cref="GameplayTagCountContainer"/> once and cache
+        /// that, or use a <see cref="NativeGameplayTag"/>, rather than going through the bridge per frame.
+        /// </remarks>
         private void EnsureResolved()
         {
-            int registryId = GameplayTagManager.RegistryInstanceId;
-            int epoch = GameplayTagManager.RuntimeIndexEpoch;
-            if (m_ResolvedRegistryId == registryId && m_ResolvedEpoch == epoch)
+            // One volatile read and one reference compare. The snapshot is a single published object, so
+            // it is the whole cache key: any rebuild - with or without an epoch change - publishes a new
+            // one, and an unchanged reference means the indices below are still the ones on disk.
+            TagDataSnapshot current = GameplayTagManager.Snapshot;
+            if (ReferenceEquals(m_ResolvedSnapshot, current))
                 return;
 
-            ResolveFromNames();
+            ResolveFromNames(current);
+        }
+
+        private void ResolveFromNames(TagDataSnapshot snapshot)
+        {
+            container.LoadPersisted(explicitTagNames);
+            m_ResolvedSnapshot = snapshot;
         }
 
         private void ResolveFromNames()
-        {
-            container.LoadPersisted(explicitTagNames);
-            m_ResolvedRegistryId = GameplayTagManager.RegistryInstanceId;
-            m_ResolvedEpoch = GameplayTagManager.RuntimeIndexEpoch;
-        }
+            => ResolveFromNames(GameplayTagManager.Snapshot);
 
         private bool SerializedArraysUntouched()
         {
@@ -412,9 +431,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         // re-registers its sources AFTER the assets have deserialized, so a resolve-once design serves
         // indices from a registry that no longer exists.
         [NonSerialized]
-        private int m_ResolvedRegistryId;
-        [NonSerialized]
-        private int m_ResolvedEpoch;
+        private TagDataSnapshot m_ResolvedSnapshot;
         [NonSerialized]
         private int[] m_LastDeserializedCounts = Array.Empty<int>();
 

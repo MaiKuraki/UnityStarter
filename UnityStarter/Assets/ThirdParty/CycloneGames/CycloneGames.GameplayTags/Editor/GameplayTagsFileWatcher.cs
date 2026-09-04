@@ -95,6 +95,17 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       private static void EnsureWatcher()
       {
+         // Only the editor authoring platform is watchable. Test fixtures install their own hosts whose
+         // settings directories are temporary folders (deleted on teardown) or unset (DirectoryPath
+         // throws) - watching either produced a retry storm and reload churn for the whole test run.
+         if (GameplayTagHost.Current is not GameplayTagUnityEditorPlatform)
+         {
+            if (s_Watcher != null)
+               DisposeWatcher();
+            s_LastWatcherError = null;
+            return;
+         }
+
          if (s_Watcher != null || EditorApplication.timeSinceStartup < s_NextWatcherRetryTime)
             return;
          s_NextWatcherRetryTime = EditorApplication.timeSinceStartup + WatcherRetrySeconds;

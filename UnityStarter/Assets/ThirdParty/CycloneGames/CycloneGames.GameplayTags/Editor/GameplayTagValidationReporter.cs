@@ -295,13 +295,39 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                 do
                 {
-                    if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTagContainer")
+                    // Serialized fields hold the bridge types now: a bare GameplayTag is a registry index
+                    // and is not serializable, so every authoring field is one of the Serializable*
+                    // bridges. Matching on the old type names here silently disabled the whole scan
+                    // after the refactor - no invalid reference was ever reported again.
+                    if (property.propertyType != SerializedPropertyType.Generic)
+                    {
+                        continue;
+                    }
+
+                    string serializedType = property.type;
+                    if (serializedType == "SerializableGameplayTagContainer" ||
+                        serializedType == "SerializableGameplayTagCountContainer")
                     {
                         ProcessTagContainerProperty(serializedObject, property, assetPath, canFix);
                     }
-                    else if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTag")
+                    else if (serializedType == "SerializableGameplayTag")
                     {
                         ProcessSingleTagProperty(serializedObject, property, assetPath, canFix);
+                    }
+                    else if (serializedType == "SerializableGameplayTagRequirements")
+                    {
+                        // A requirement pair is two containers; report each side under its own path.
+                        SerializedProperty forbidden = property.FindPropertyRelative("forbiddenTags");
+                        SerializedProperty required = property.FindPropertyRelative("requiredTags");
+                        if (forbidden != null)
+                        {
+                            ProcessTagContainerProperty(serializedObject, forbidden, assetPath, canFix);
+                        }
+
+                        if (required != null)
+                        {
+                            ProcessTagContainerProperty(serializedObject, required, assetPath, canFix);
+                        }
                     }
                 } while (property.NextVisible(true));
             }

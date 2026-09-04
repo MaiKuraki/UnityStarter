@@ -80,6 +80,23 @@ namespace CycloneGames.GameplayTags.Tests
          }
       }
 
+      /// <summary>
+      /// Installs a fresh platform as the ambient host and caches it for this facade.
+      /// </summary>
+      /// <remarks>
+      /// Use this instead of <see cref="GameplayTagTestHostPlatform.Install"/> from a fixture: it keeps the
+      /// facade's cached instance and <see cref="GameplayTagHost.Current"/> pointing at the same object.
+      /// <c>[InitializeOnLoad]</c> and the file watcher's static constructor reinstall the editor platform,
+      /// which leaves a directly-installed test platform orphaned - the facade would then configure one
+      /// instance while the registry reads another.
+      /// </remarks>
+      public static GameplayTagTestHostPlatform Install()
+      {
+         GameplayTagTestHostPlatform platform = GameplayTagTestHostPlatform.Install();
+         s_Platform = platform;
+         return platform;
+      }
+
       public static bool IsRuntimePlaying
       {
          get => Platform.IsRuntimePlaying;
