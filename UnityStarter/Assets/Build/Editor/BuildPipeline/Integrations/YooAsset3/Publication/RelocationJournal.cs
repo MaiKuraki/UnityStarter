@@ -47,11 +47,23 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
         //      silently leaving moved metas/backups stranded.
         internal const string StateRootRelativePath = ".buildpipeline/transactions/yooasset3-relocations";
 
+        // Shared single source of truth for where relocated artifacts live in Temp. The adapter
+        // builds relocation destinations with this helper and recovery validates journal entries
+        // against it, so the two sides can never drift apart.
+        internal const string RelocationRootRelativePath = "Temp/BuildPipeline/YooAssetPublicationMarkers";
+
         internal static string GetStateRoot(string projectRoot)
         {
             return Path.GetFullPath(Path.Combine(
                 projectRoot,
                 StateRootRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
+        internal static string GetRelocationRoot(string projectRoot)
+        {
+            return Path.GetFullPath(Path.Combine(
+                projectRoot,
+                RelocationRootRelativePath.Replace('/', Path.DirectorySeparatorChar)));
         }
 
         internal static string GetJournalPath(string projectRoot, string transactionId)
@@ -114,6 +126,13 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
         }
 
         /// <summary>Transaction ids that have a relocation journal on disk, ordered by name.</summary>
+        /// <remarks>
+        /// The "*.json" pattern never matches leftover temporary candidate files
+        /// ("&lt;transactionId&gt;.json.tmp-&lt;guid&gt;"): such names do not end in ".json", and the
+        /// Windows FindFirstFile quirk that widens a pattern to "*.ext*" only applies to
+        /// exactly-three-character extensions (like "*.xls"), never to "*.json". A unit test
+        /// pins this contract.
+        /// </remarks>
         internal static string[] EnumeratePendingTransactionIds(string projectRoot)
         {
             string stateRoot = GetStateRoot(projectRoot);
@@ -133,6 +152,13 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
         /// journal, then read it back and compare the checksum so a torn write can never be
         /// mistaken for a durable state change.
         /// </summary>
+        /// <remarks>
+        /// The temporary name is unique per call and opened with <c>FileMode.CreateNew</c> +
+        /// <c>FileShare.None</c>, so concurrent writers can never truncate each other's candidate
+        /// file; a promotion race (two writers moving onto the same target) throws and fails
+        /// closed instead of retrying. This mirrors PublicationJournalStore.WriteJournal without
+        /// its sequence/promotion flow, which the relocation journal does not have.
+        /// </remarks>
         internal static void Persist(
             RelocationJournalDocument document,
             string projectRoot,
@@ -143,6 +169,12 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             document.checksum = ComputeChecksum(document);
             ValidateDocument(document, null);
             string journalPath = GetJournalPath(projectRoot, document.transactionId);
+            // ".tmp-" plus a 32-character GUID suffix must still fit the Win32 path budget after
+            // promotion, so reserve that margin on the journal path itself.
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
+                journalPath,
+                "YooAsset relocation journal",
+                ".tmp-".Length + 32);
             PublicationSafety.ValidateNoPathRedirection(projectRoot, journalPath);
 
             string json = serializer.ToJson(document);
@@ -155,26 +187,63 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
 
             string stateRoot = GetStateRoot(projectRoot);
             Directory.CreateDirectory(stateRoot);
-            string temporaryPath = journalPath + ".tmp";
-            using (var stream = new FileStream(
-                       temporaryPath,
-                       FileMode.Create,
-                       FileAccess.Write,
-                       FileShare.None,
-                       4096,
-                       FileOptions.WriteThrough))
+            string temporaryPath = journalPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
+                temporaryPath,
+                "YooAsset relocation temporary journal");
+            PublicationSafety.ValidateNoPathRedirection(projectRoot, temporaryPath);
+            bool candidateIsDurable = false;
+            try
             {
-                stream.Write(bytes, 0, bytes.Length);
-                stream.Flush(true);
-            }
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           4096,
+                           FileOptions.WriteThrough))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(true);
+                }
 
-            if (File.Exists(journalPath))
-            {
-                File.Replace(temporaryPath, journalPath, null);
+                candidateIsDurable = true;
+
+                if (File.Exists(journalPath))
+                {
+                    File.Replace(temporaryPath, journalPath, null);
+                }
+                else
+                {
+                    // If another writer promotes first between the Exists check and the Move,
+                    // the Move fails closed with an IOException. Retrying is deliberately not
+                    // attempted: the caller re-runs Persist after re-reading the document.
+                    File.Move(temporaryPath, journalPath);
+                }
             }
-            else
+            catch (Exception exception)
             {
-                File.Move(temporaryPath, journalPath);
+                // Delete only OUR temporary file, and only when it was never fully written
+                // durably. A cleanup failure must not be swallowed silently: the orphaned
+                // candidate is kept as diagnostic evidence (later removed by
+                // DeleteIfClean/Delete stale-temporary cleanup) and both failures propagate.
+                if (!candidateIsDurable && File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch (Exception cleanupException)
+                    {
+                        throw new AggregateException(
+                            "YooAsset relocation journal write failed and its temporary file could " +
+                            $"not be removed; the file was kept for diagnosis: '{temporaryPath}'.",
+                            exception,
+                            cleanupException);
+                    }
+                }
+
+                throw;
             }
 
             RelocationJournalDocument persisted = Load(projectRoot, document.transactionId, serializer);
@@ -208,6 +277,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                 File.Delete(journalPath);
             }
 
+            CleanupStaleTemporaryFiles(projectRoot, document.transactionId);
             TryDeleteEmptyStateDirectory(GetStateRoot(projectRoot));
         }
 
@@ -226,7 +296,50 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                 File.Delete(journalPath);
             }
 
+            CleanupStaleTemporaryFiles(projectRoot, transactionId);
             TryDeleteEmptyStateDirectory(GetStateRoot(projectRoot));
+        }
+
+        /// <summary>
+        /// Removes leftover temporary candidate files ("&lt;transactionId&gt;.json.tmp-*") that a
+        /// failed Persist could not clean up itself. Only files whose name starts with this
+        /// transaction's journal name are touched, so a concurrent transaction's candidates are
+        /// never deleted. A file that cannot be removed is surfaced as an IOException instead of
+        /// being silently kept: a journal-retirement decision must not leave undiagnosable residue
+        /// behind. The empty-state-directory deletion stays best-effort (see
+        /// <see cref="TryDeleteEmptyStateDirectory"/>) because a locked directory is harmless and
+        /// the next pass retries it.
+        /// </summary>
+        private static void CleanupStaleTemporaryFiles(string projectRoot, string transactionId)
+        {
+            string stateRoot = GetStateRoot(projectRoot);
+            if (!Directory.Exists(stateRoot))
+            {
+                return;
+            }
+
+            string prefix = transactionId + ".json.tmp-";
+            foreach (string candidate in Directory.GetFiles(
+                         stateRoot,
+                         "*.json.tmp-*",
+                         SearchOption.TopDirectoryOnly))
+            {
+                if (!Path.GetFileName(candidate).StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(candidate);
+                }
+                catch (Exception exception)
+                {
+                    throw new IOException(
+                        $"A stale YooAsset relocation journal temporary file could not be removed: '{candidate}'.",
+                        exception);
+                }
+            }
         }
 
         internal static string ComputeChecksum(RelocationJournalDocument document)
