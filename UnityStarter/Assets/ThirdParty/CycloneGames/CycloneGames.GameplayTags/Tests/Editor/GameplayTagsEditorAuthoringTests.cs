@@ -37,7 +37,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "ProjectSettings"));
          Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "Assets"));
 
-         m_Host = GameplayTagTestHostPlatform.Install();
+         // Install a fresh platform through the facade so the cached instance and GameplayTagHost.Current
+         // are the same object. Reading TestHost.Platform here would hand back a platform from an earlier
+         // test that [InitializeOnLoad] has already replaced, leaving the settings directory configured on
+         // an orphan while the file sources validate against the editor platform's real directory.
+         m_Host = TestHost.Install();
          m_Host.SettingsDirectory = m_SettingsRoot;
          m_Host.SetRuntimePlaying(false);
          m_Host.SetBuildData(null);
@@ -494,6 +498,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          GameplayTagManager.ResetForTests();
          TestHost.IsRuntimePlaying = false;
          TestHost.ClearRegisteredProjectTagSources();
+         // The ambient registry consumes host build data on every rebuild, so clear it before registering:
+         // a manifest left behind by an earlier test would be baked into this one's data.
+         TestHost.SetBuildData(null);
          GameplayTagManager.RegisterDynamicTag(
             "Build.Ability",
             "Ability category",
@@ -612,11 +619,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       [Test]
       public void SerializedBridge_ExposesTheReadOnlyContainerContract()
       {
-         GameplayTagRegistrationContext context = new GameplayTagRegistrationContext();
-         context.RegisterTag("Bridge.A", null, GameplayTagFlags.None);
-         context.RegisterTag("Bridge.A.B", null, GameplayTagFlags.None);
-         context.RegisterTag("Bridge.C", null, GameplayTagFlags.None);
-         GameplayTagBuildResult result = context.Build();
+         // The bridge resolves against the ambient registry, so publish the tags there; building a
+         // throwaway context does not register them anywhere the bridge can see them.
+         GameplayTagManager.RegisterDynamicTags(new[] { "Bridge.A", "Bridge.A.B", "Bridge.C" });
 
          var bridge = new SerializableGameplayTagContainer();
          bridge.LoadPersisted(new[] { "Bridge.A.B", "Bridge.C" });
