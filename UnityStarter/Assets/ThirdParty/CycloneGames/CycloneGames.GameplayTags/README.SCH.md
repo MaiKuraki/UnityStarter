@@ -426,6 +426,7 @@ Core 容器存储运行时索引；Unity 通过 `CycloneGames.GameplayTags.Unity
 | --- | --- | --- | --- |
 | 代码声明 | `IGameplayTagCatalog` + 每个引导一次 `RegisterCatalog`（[InitializeOnLoad] 与 [RuntimeInitializeOnLoadMethod]） | 可见，只读 | 启动时注册 |
 | Authoring | `ProjectSettings/GameplayTags` 下的 `FileGameplayTagSource` JSON | Tag Editor 完全可编辑 | 烘焙进 manifest |
+| 数据驱动 | Luban 表行包装为 `GameplayTagDataTableSource<TRow>`（`CycloneGames.GameplayTags.DataTable`），经 `GameplayTagHost.RegisterProjectTagSource` 注册 | 可见（编辑器引导同步加载已发布字节） | DataTable 加载完成后注册；版本变化时重注册并 Reload |
 
 Native tag（`NativeGameplayTag`）是代码车道的常量句柄形式。
 

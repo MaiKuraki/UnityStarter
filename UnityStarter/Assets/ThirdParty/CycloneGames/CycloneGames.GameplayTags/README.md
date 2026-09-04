@@ -426,6 +426,7 @@ Assign a runtime container to a bridge with `LoadPersisted(string[] names)`; rea
 | --- | --- | --- | --- |
 | Code-declared | `IGameplayTagCatalog` + one `RegisterCatalog` call per bootstrap ([InitializeOnLoad] and [RuntimeInitializeOnLoadMethod]) | Visible, read-only | Registered at startup |
 | Authored | `FileGameplayTagSource` JSON under `ProjectSettings/GameplayTags` | Editable in the Tag Editor | Baked into the manifest |
+| Data-driven | Luban table rows wrapped in `GameplayTagDataTableSource<TRow>` (`CycloneGames.GameplayTags.DataTable`), registered via `GameplayTagHost.RegisterProjectTagSource` | Visible (editor bootstrap loads published bytes synchronously) | Registered after the DataTable load; revision changes re-register and reload |
 
 Native tags (`NativeGameplayTag`) are the constant-handle form of the code lane.
 
