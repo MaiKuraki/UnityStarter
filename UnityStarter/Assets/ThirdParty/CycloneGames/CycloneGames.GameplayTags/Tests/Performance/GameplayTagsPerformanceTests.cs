@@ -144,10 +144,10 @@ namespace CycloneGames.GameplayTags.Tests.Performance
 
          GameplayTagContainer subject = new();
          for (int i = 0; i < HIGH_SCALE_SUBJECT_TAG_COUNT; i++)
-            subject.AddTag(GameplayTagManager.RequestTag(names[i]));
+            subject.AddTag(GameplayTagManager.Request(names[i]));
 
-         int hitIndex = GameplayTagManager.RequestTag(names[HIGH_SCALE_SUBJECT_TAG_COUNT - 1]).RuntimeIndex;
-         int missIndex = GameplayTagManager.RequestTag(names[HIGH_SCALE_TAG_COUNT - 1]).RuntimeIndex;
+         int hitIndex = GameplayTagManager.Request(names[HIGH_SCALE_SUBJECT_TAG_COUNT - 1]).RuntimeIndex;
+         int missIndex = GameplayTagManager.Request(names[HIGH_SCALE_TAG_COUNT - 1]).RuntimeIndex;
          Assert.That(MeasureAllocatedBytes(() =>
          {
             bool result = subject.ContainsRuntimeIndex(hitIndex, explicitOnly: false);
@@ -243,7 +243,7 @@ namespace CycloneGames.GameplayTags.Tests.Performance
          {
             string tagName = $"Perf.Tag{i:000}";
 
-            _allTags.Add(GameplayTagManager.RequestTag(tagName));
+            _allTags.Add(GameplayTagManager.Request(tagName));
          }
 
          for (int i = 0; i < SUBJECT_TAG_COUNT; i++)

@@ -424,7 +424,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < abilityTriggers.Count; i++)
             {
                 AbilityTriggerData trigger = abilityTriggers[i];
-                if (trigger.TriggerTag.IsNone || !trigger.TriggerTag.IsValid)
+                if (string.IsNullOrEmpty(trigger.TriggerTag.TagName))
                 {
                     throw new System.ArgumentException($"GameplayAbility trigger {i} has an invalid tag.", nameof(abilityTriggers));
                 }

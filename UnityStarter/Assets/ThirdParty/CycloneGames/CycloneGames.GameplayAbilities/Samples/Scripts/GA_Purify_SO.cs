@@ -1,5 +1,6 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 using UnityEngine;
 using System.Collections.Generic;
@@ -82,7 +83,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
                 if (targetCharacter.AbilitySystemComponent != null && CanDispelPoison(targetCharacter.AbilitySystemComponent, Spec.Level))
                 {
-                    var poisonTagContainer = new GameplayTagContainer { GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison) };
+                    var poisonTagContainer = new GameplayTagContainer { GameplayTagManager.Request(GASSampleTags.Debuff_Poison) };
                     targetCharacter.AbilitySystemComponent.RemoveActiveEffectsWithGrantedTags(poisonTagContainer);
                     targetsPurified++;
                     Log.Info($"Purified {targetCharacter.name}.");
@@ -99,7 +100,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private bool CanDispelPoison(AbilitySystemComponent targetASC, int dispelLevel)
         {
-            var poisonDebuffTag = GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison);
+            var poisonDebuffTag = GameplayTagManager.Request(GASSampleTags.Debuff_Poison);
             if (poisonDebuffTag.IsNone) return false;
 
             foreach (var activeEffect in targetASC.ActiveEffects)
@@ -129,10 +130,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         public float AreaOfEffectRadius = 5.0f;
 
         [Tooltip("Targets found must have ALL of these faction tags to be affected.")]
-        public GameplayTagContainer TargetRequiredFactions;
+        public SerializableGameplayTagContainer TargetRequiredFactions;
 
         [Tooltip("Targets found that have ANY of these faction tags will be ignored.")]
-        public GameplayTagContainer TargetForbiddenFactions;
+        public SerializableGameplayTagContainer TargetForbiddenFactions;
 
         protected override GameplayAbility CreateGameplayAbility()
         {

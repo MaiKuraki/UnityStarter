@@ -122,8 +122,8 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             if (Input.GetKeyDown(KeyCode.F)) ToggleGASInfoDetail();
 
-            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Fireball)); // Fireball
-            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Purify)); // Purify
+            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbilityByTag(Player, GameplayTagManager.Request(GASSampleTags.Ability_Fireball)); // Fireball
+            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbilityByTag(Player, GameplayTagManager.Request(GASSampleTags.Ability_Purify)); // Purify
 
             //  Enemy active PoisonBlade ability
             if (Input.GetKeyDown(KeyCode.E))
@@ -131,7 +131,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (Enemy != null)
                 {
                     Log.Info("DEBUG: Forcing Enemy to cast ability.");
-                    TryActivateAbilityByTag(Enemy, GameplayTagManager.RequestTag(GASSampleTags.Ability_PoisonBlade));
+                    TryActivateAbilityByTag(Enemy, GameplayTagManager.Request(GASSampleTags.Ability_PoisonBlade));
                 }
             }
 
@@ -287,7 +287,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 foreach (var activeEffect in asc.ActiveEffects)
                 {
-                    if (activeEffect.Spec.Def.GrantedTags.HasTag(GameplayTagManager.RequestTag("Debuff")))
+                    if (activeEffect.Spec.Def.GrantedTags.HasTag(GameplayTagManager.Request("Debuff")))
                     {
                         hasEffects = true;
                         // Display Effect Name, Remaining Duration, and Stack Count

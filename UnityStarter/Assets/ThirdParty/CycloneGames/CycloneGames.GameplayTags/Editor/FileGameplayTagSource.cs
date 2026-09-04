@@ -88,7 +88,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          }
       }
 
-      public static string DirectoryPath => Path.GetFullPath(GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory());
+      public static string DirectoryPath => Path.GetFullPath(GameplayTagHost.Current.GetProjectTagSettingsDirectory());
       public string Name { get; }
       public string FilePath { get; }
       public bool IsReadOnly => false;

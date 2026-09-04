@@ -36,9 +36,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       {
          m_Tag = tag;
 
-         for (int i = 0; i < tag.Definition.SourceCount; i++)
+         foreach (IGameplayTagSource source in GameplayTagManager.GetTagSources(tag))
          {
-            IGameplayTagSource source = tag.Definition.GetSource(i);
             if (source is IDeleteTagHandler)
             {
                CanBeDeleted = true;
@@ -97,6 +96,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private bool m_IsEmpty;
       private AddNewTagPanel m_AddNewTagPanel;
       private DeleteTagPanel m_DeleteTagPanel;
+      private RenameTagPanel m_RenameTagPanel;
       private string m_CachedDeleteTooltip;
       private string m_CachedReadOnlyTooltip;
       private GUIContent m_TempDeleteContent;
@@ -122,6 +122,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             height += m_AddNewTagPanel.GetHeight();
          if (m_DeleteTagPanel != null)
             height += m_DeleteTagPanel.GetHeight();
+         if (m_RenameTagPanel != null)
+            height += m_RenameTagPanel.GetHeight();
          return height;
       }
 
@@ -239,6 +241,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private void CreateDeleteTagPanel(GameplayTag tag)
       {
          m_AddNewTagPanel = null;
+         m_RenameTagPanel = null;
          m_DeleteTagPanel = new(tag);
 
          m_DeleteTagPanel.OnClose += () =>
@@ -247,6 +250,25 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          };
 
          m_DeleteTagPanel.OnTagDeleted += () =>
+         {
+            RefreshAfterCatalogChange();
+         };
+      }
+
+      private void CreateRenameTagPanel(GameplayTag tag)
+      {
+         // One panel at a time: the rename targets the same header space as add and delete, and stacking
+         // them would leave ambiguous which panel a click belongs to.
+         m_AddNewTagPanel = null;
+         m_DeleteTagPanel = null;
+         m_RenameTagPanel = new(tag);
+
+         m_RenameTagPanel.OnClose += () =>
+         {
+            m_RenameTagPanel = null;
+         };
+
+         m_RenameTagPanel.OnTagRenamed += () =>
          {
             RefreshAfterCatalogChange();
          };
@@ -293,7 +315,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
          GUI.Label(labelRect, TreeViewGUIUtility.TempContent(m_IsSearching ? item.Tag.Name : item.displayName, item.Tag.Description));
 
-         if (item.Tag.Definition.SourceCount > 0)
+         IReadOnlyList<IGameplayTagSource> sources = GameplayTagManager.GetTagSources(item.Tag);
+         if (sources.Count > 0)
          {
             Rect sourceLabelRect = rect;
             sourceLabelRect.height = EditorGUIUtility.singleLineHeight;
@@ -301,8 +324,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             string sourceText;
 
-            if (item.Tag.Definition.SourceCount == 1)
-               sourceText = item.Tag.Definition.GetSource(0).Name;
+            if (sources.Count == 1)
+               sourceText = sources[0].Name;
             else
                sourceText = "(Multiple Sources)";
 
@@ -312,9 +335,9 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                s_SourceTooltipBuilder.Clear();
                s_SourceTooltipBuilder.Append("Sources:\n");
-               for (int i = 0; i < item.Tag.Definition.SourceCount; i++)
+               for (int i = 0; i < sources.Count; i++)
                {
-                  IGameplayTagSource source = item.Tag.Definition.GetSource(i);
+                  IGameplayTagSource source = sources[i];
                   if (source is not IDeleteTagHandler)
                   {
                      s_SourceTooltipBuilder.Append(source.Name);
@@ -371,9 +394,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          if (nameMatches)
             return true;
 
-         for (int i = 0; i < tagItem.Tag.Definition.SourceCount; i++)
+         foreach (IGameplayTagSource source in GameplayTagManager.GetTagSources(tagItem.Tag))
          {
-            IGameplayTagSource source = tagItem.Tag.Definition.GetSource(i);
             if (source.Name.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0)
                return true;
          }
@@ -403,6 +425,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          if (item.CanBeDeleted)
          {
             menu.AddSeparator("");
+            menu.AddItem(new GUIContent("Rename Tag"), false, () => CreateRenameTagPanel(item.Tag));
             menu.AddItem(new GUIContent("Delete Tag"), false, () => CreateDeleteTagPanel(item.Tag));
          }
 
@@ -416,7 +439,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
          List<TreeViewItem> items = new();
 
-         foreach (GameplayTag tag in GameplayTagManager.GetAllTags())
+         foreach (GameplayTag tag in GameplayTagManager.Current.CreateAllTagsArray())
          {
             items.Add(new GameplayTagTreeViewItem(tag.RuntimeIndex, tag));
             m_IsEmpty = false;

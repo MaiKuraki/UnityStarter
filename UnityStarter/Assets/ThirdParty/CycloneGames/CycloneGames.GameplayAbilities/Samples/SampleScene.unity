@@ -1446,6 +1446,16 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
         type: 3}
+      propertyPath: FactionTags.explicitTagNames.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
+      propertyPath: FactionTags.explicitTagNames.Array.data[0]
+      value: Faction.NPC.Enemy
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
       propertyPath: FactionTags.m_SerializedExplicitTags.Array.size
       value: 1
       objectReference: {fileID: 0}
@@ -2115,6 +2125,16 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 11400000, guid: 47e3160bb78f337409d4a6924455ecc2,
         type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: FactionTags.explicitTagNames.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: FactionTags.explicitTagNames.Array.data[0]
+      value: Faction.Player
+      objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
         type: 3}
       propertyPath: FactionTags.m_SerializedExplicitTags.Array.size

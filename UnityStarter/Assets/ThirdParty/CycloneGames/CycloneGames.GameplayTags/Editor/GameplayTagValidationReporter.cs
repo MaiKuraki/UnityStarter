@@ -309,14 +309,14 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private void ProcessSingleTagProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath, bool canFix)
         {
-            SerializedProperty nameProperty = property.FindPropertyRelative("m_Name");
+            SerializedProperty nameProperty = property.FindPropertyRelative("tagName");
             if (nameProperty == null)
             {
                 return;
             }
 
             string tagName = nameProperty.stringValue;
-            if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequestTag(tagName, out _))
+            if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequest(tagName, out _))
             {
                 AddInvalidTag(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.SingleTag, canFix));
             }
@@ -324,7 +324,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private void ProcessTagContainerProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath, bool canFix)
         {
-            SerializedProperty tagsArrayProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
+            SerializedProperty tagsArrayProperty = property.FindPropertyRelative("explicitTagNames");
             if (tagsArrayProperty == null || !tagsArrayProperty.isArray)
             {
                 return;
@@ -335,7 +335,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 SerializedProperty tagStringProperty = tagsArrayProperty.GetArrayElementAtIndex(i);
                 string tagName = tagStringProperty.stringValue;
 
-                if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequestTag(tagName, out _))
+                if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequest(tagName, out _))
                 {
                     AddInvalidTag(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.ContainerTag, canFix));
                 }
@@ -449,7 +449,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private static bool TryFixSingleTagProperty(SerializedProperty tagProperty, string tagName)
         {
-            SerializedProperty nameProperty = tagProperty.FindPropertyRelative("m_Name");
+            SerializedProperty nameProperty = tagProperty.FindPropertyRelative("tagName");
             if (nameProperty == null || nameProperty.stringValue != tagName)
             {
                 return false;
@@ -461,7 +461,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private static bool TryFixTagContainerProperty(SerializedProperty containerProperty, string tagName)
         {
-            SerializedProperty tagsArrayProperty = containerProperty.FindPropertyRelative("m_SerializedExplicitTags");
+            SerializedProperty tagsArrayProperty = containerProperty.FindPropertyRelative("explicitTagNames");
             if (tagsArrayProperty == null || !tagsArrayProperty.isArray)
             {
                 return false;

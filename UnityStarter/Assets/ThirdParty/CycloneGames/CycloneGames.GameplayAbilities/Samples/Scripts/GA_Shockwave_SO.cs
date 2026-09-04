@@ -1,5 +1,6 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 using UnityEngine;
 
@@ -99,10 +100,10 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         [Header("Targeting")]
         [Tooltip("Targets found must have ALL of these faction tags to be affected (e.g., Faction.Enemy).")]
-        public GameplayTagContainer TargetRequiredFactions;
+        public SerializableGameplayTagContainer TargetRequiredFactions;
 
         [Tooltip("Targets found that have ANY of these faction tags will be ignored.")]
-        public GameplayTagContainer TargetForbiddenFactions;
+        public SerializableGameplayTagContainer TargetForbiddenFactions;
 
         protected override GameplayAbility CreateGameplayAbility()
         {

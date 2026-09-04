@@ -18,16 +18,28 @@ MonoBehaviour:
   CostEffect: {fileID: 11400000, guid: a24a4335b348a9d44a23a66e0f2fc61b, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 12796ed79a8aa6f40baef41cee7f9310, type: 2}
   AbilityTags:
-    m_SerializedExplicitTags:
+    explicitTagNames:
     - Ability.Fireball
   ActivationBlockedTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   ActivationRequiredTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   CancelAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   BlockAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
+  ActivationOwnedTags:
+    explicitTagNames: []
+  SourceRequiredTags:
+    explicitTagNames: []
+  SourceBlockedTags:
+    explicitTagNames: []
+  TargetRequiredTags:
+    explicitTagNames: []
+  TargetBlockedTags:
+    explicitTagNames: []
+  ActivateAbilityOnGranted: 0
+  AbilityTriggerDataList: []
   FireballDamageEffect: {fileID: 11400000, guid: fa23d7aa75982ad46872c934d7a4d8ed,
     type: 2}
   BurnEffect: {fileID: 11400000, guid: 50f699da58f16a64ea8d004fa61cf5e7, type: 2}

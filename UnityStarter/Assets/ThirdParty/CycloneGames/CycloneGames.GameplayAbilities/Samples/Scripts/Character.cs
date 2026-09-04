@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Serialization;
@@ -28,7 +29,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         [Header("Faction")]
         // A character can now belong to multiple factions, e.g., "Faction.Player", "Faction.Team.Blue".
         [Tooltip("Tags that define this character's faction, team, or allegiances.")]
-        public GameplayTagContainer FactionTags;
+        public SerializableGameplayTagContainer FactionTags;
 
         [Header("Bounty")]
         [Tooltip("The GameplayEffect to grant to the killer when this character dies.")]
@@ -141,7 +142,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 };
 
                 var levelUpEffect = new GameplayEffect($"GE_MultiLevelUp_ToLvl{finalLevel}", EDurationPolicy.Instant, 0, 0, mods,
-                    gameplayCues: new GameplayTagContainer { GASSampleTags.Event_Character_LeveledUp });
+                    gameplayCues: new GameplayTagContainer { GameplayTagManager.Request(GASSampleTags.Event_Character_LeveledUp) });
 
                 var spec = GameplayEffectSpec.Create(levelUpEffect, AbilitySystemComponent);
                 AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);

@@ -18,18 +18,30 @@ MonoBehaviour:
   CostEffect: {fileID: 11400000, guid: d6ec08bd85ef7c84da9a7e1fdebaf78b, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 29b3fdd1a4dcb3948b8f8495bdbb0bb7, type: 2}
   AbilityTags:
-    m_SerializedExplicitTags:
+    explicitTagNames:
     - Ability.Purify
   ActivationBlockedTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   ActivationRequiredTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   CancelAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   BlockAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
+  ActivationOwnedTags:
+    explicitTagNames: []
+  SourceRequiredTags:
+    explicitTagNames: []
+  SourceBlockedTags:
+    explicitTagNames: []
+  TargetRequiredTags:
+    explicitTagNames: []
+  TargetBlockedTags:
+    explicitTagNames: []
+  ActivateAbilityOnGranted: 0
+  AbilityTriggerDataList: []
   AreaOfEffectRadius: 5
   TargetRequiredFactions:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   TargetForbiddenFactions:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []

@@ -1,5 +1,6 @@
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -39,7 +40,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// The tag that triggers this ability.
         /// </summary>
-        public GameplayTag TriggerTag;
+        /// <remarks>
+        /// Serialized as the tag's name through the bridge: a bare <see cref="GameplayTag"/> is a registry
+        /// index and would silently change meaning after a registry rebuild.
+        /// </remarks>
+        public SerializableGameplayTag TriggerTag;
 
         /// <summary>
         /// How the trigger fires (on event, on tag added, on tag removed).
@@ -48,7 +53,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public AbilityTriggerData(GameplayTag triggerTag, EAbilityTriggerSource triggerSource)
         {
-            TriggerTag = triggerTag;
+            TriggerTag = new SerializableGameplayTag(triggerTag.IsNone ? null : triggerTag.Name);
             TriggerSource = triggerSource;
         }
     }

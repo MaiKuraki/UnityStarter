@@ -17,23 +17,34 @@ MonoBehaviour:
   Duration: 1
   Period: 0
   SerializableModifiers: []
+  ExecutionDefinition: {fileID: 0}
+  Stacking:
+    Type: 0
+    Limit: 0
+    DurationPolicy: 0
+    ExpirationPolicy: 0
   GrantedAbilities: []
   AssetTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   GrantedTags:
-    m_SerializedExplicitTags:
+    explicitTagNames:
     - Cooldown.Skill.Purify
   ApplicationTagRequirements:
-    m_ForbiddenTags:
-      m_SerializedExplicitTags: []
-    m_RequiredTags:
-      m_SerializedExplicitTags: []
+    forbiddenTags:
+      explicitTagNames: []
+    requiredTags:
+      explicitTagNames: []
   OngoingTagRequirements:
-    m_ForbiddenTags:
-      m_SerializedExplicitTags: []
-    m_RequiredTags:
-      m_SerializedExplicitTags: []
+    forbiddenTags:
+      explicitTagNames: []
+    requiredTags:
+      explicitTagNames: []
   RemoveGameplayEffectsWithTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   GameplayCues:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
+  SuppressGameplayCues: 0
+  RemoveGameplayEffectsAfterAbilityEnds: 0
+  ExecutePeriodicEffectOnApplication: 1
+  OverflowEffects: []
+  DenyOverflowApplication: 0

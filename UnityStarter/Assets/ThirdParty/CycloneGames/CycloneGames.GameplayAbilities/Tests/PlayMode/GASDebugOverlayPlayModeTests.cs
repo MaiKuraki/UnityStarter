@@ -220,7 +220,12 @@ namespace CycloneGames.GameplayAbilities.Tests.PlayMode
         public IEnumerator ExternalDestruction_ResetsLifecycleAndAllowsRecreation()
         {
             Assert.That(GASDebugOverlay.TryAddTarget(CreateASC()), Is.True);
+            // The overlay under test is created by TryAddTarget in the same test body; there is no
+            // serialized reference to reach it from, and a per-test registry would only restate the
+            // scene search this performs.
+#pragma warning disable CG0011
             GASDebugOverlay overlay = Object.FindObjectOfType<GASDebugOverlay>();
+#pragma warning restore CG0011
             Assert.That(overlay, Is.Not.Null);
 
             Object.Destroy(overlay.gameObject);
