@@ -19,9 +19,9 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
         {
             GameplayTagManager.ResetForTests();
             GameplayTagRedirector.ClearAll();
-            // No host facts: not playing, no build data, no project sources. The null platform is the
-            // honest default for a fixture that supplies everything explicitly.
-            GameplayTagHost.Use(null);
+            // A host that accepts the project tag sources under test; no build data and not playing.
+            // The null platform cannot hold project sources, so RegisterProjectTagSource would throw.
+            GameplayTagHost.Use(new GameplayTagDataTableTestPlatform());
             _logScope = new ScopedSilentLogWriter();
         }
 
