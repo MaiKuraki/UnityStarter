@@ -145,11 +145,19 @@ namespace CycloneGames.GameplayTags.Core
          int maxStackDepth = 0;
          CompileExpression(RootExpression, tokenStream, tagIndices, activeExpressions, 0, ref nodeCount, ref stackDepth, ref maxStackDepth);
 
-         m_TokenStream = tokenStream.ToArray();
+         int[] compiledTokens = tokenStream.ToArray();
+         m_TokenStream = compiledTokens;
          m_CompiledTagIndices = tagIndices.ToArray();
          m_CompiledRootExpression = RootExpression;
          m_CompiledRegistryGeneration = registryGeneration;
-         m_CompiledMaxStackDepth = maxStackDepth;
+
+         // The value-stack capacity comes from replaying the emitted token stream with the evaluator's
+         // own push/pop arithmetic, not from an estimate taken while walking the tree. The tree walk
+         // drifts out of step with the emitted sequence on wide nodes - a node with N children keeps N
+         // results live at once, which is a width, not a depth - and the drift let the evaluator pop
+         // below zero and index the stack negatively. Replaying the emitted stream cannot disagree with
+         // it, because it is the same sequence.
+         m_CompiledMaxStackDepth = SimulateStackDepth(compiledTokens);
       }
 
       /// <summary>
@@ -253,6 +261,59 @@ namespace CycloneGames.GameplayTags.Core
             maxStackDepth = stackDepth;
       }
 
+      /// <summary>
+      /// Replays the token stream with the evaluator's push/pop arithmetic and reports the highest the
+      /// value stack ever gets. The result is exact for the emitted program, so it is both a safe
+      /// capacity and a check that the program is well formed (it never pops what it did not push).
+      /// </summary>
+      private static int SimulateStackDepth(int[] tokenStream)
+      {
+         int depth = 0;
+         int maxDepth = 0;
+
+         for (int i = 0; i < tokenStream.Length;)
+         {
+            GameplayTagQueryOpcode opcode = (GameplayTagQueryOpcode)tokenStream[i++];
+            switch (opcode)
+            {
+               case GameplayTagQueryOpcode.PushTrue:
+               case GameplayTagQueryOpcode.PushFalse:
+                  depth++;
+                  if (depth > maxDepth)
+                     maxDepth = depth;
+                  break;
+
+               case GameplayTagQueryOpcode.EvalAllTags:
+               case GameplayTagQueryOpcode.EvalAnyTags:
+               case GameplayTagQueryOpcode.EvalNoTags:
+                  i += 2; // tagStart, tagCount - the tag list is evaluated inside the opcode
+                  depth++;
+                  if (depth > maxDepth)
+                     maxDepth = depth;
+                  break;
+
+               case GameplayTagQueryOpcode.EvalAllExpr:
+               case GameplayTagQueryOpcode.EvalAnyExpr:
+               case GameplayTagQueryOpcode.EvalNoExpr:
+               {
+                  int childCount = tokenStream[i++];
+                  depth -= childCount; // consume the children's results
+                  depth++;             // leave this node's own result
+                  if (depth < 0)
+                     throw new InvalidOperationException("Gameplay tag query is malformed: it pops more results than it pushes.");
+                  if (depth > maxDepth)
+                     maxDepth = depth;
+                  break;
+               }
+
+               default:
+                  return maxDepth;
+            }
+         }
+
+         return maxDepth;
+      }
+
       private static GameplayTagQueryOpcode GetTagOpcode(EGameplayTagQueryExprOperator op)
       {
          switch (op)
@@ -339,10 +400,23 @@ namespace CycloneGames.GameplayTags.Core
                {
                   int childCount = tokenStream[i++];
                   bool result = EvaluateExpressionBitmask(opcode, ref stack, ref stackCount, childCount);
+
+                  // Pop the children and reuse the first child's slot for this node's result, so the
+                  // bitmask path's stack trajectory matches the span path's and the capacity simulation's.
+                  // Advancing stackCount instead of rewinding made the depth grow with the total number of
+                  // pushes rather than the live peak; past index 63 C# masks the shift count, which set the
+                  // wrong bit and returned a wrong answer with no error. The assignment is unconditional in
+                  // both directions because a reused slot still holds its previous value.
+                  int startIndex = stackCount - childCount;
+                  if (startIndex < 0)
+                     return false;
+
                   if (result)
-                     stack |= 1UL << stackCount++;
+                     stack |= 1UL << startIndex;
                   else
-                     stackCount++;
+                     stack &= ~(1UL << startIndex);
+
+                  stackCount = startIndex + 1;
                   break;
                }
 
@@ -388,7 +462,14 @@ namespace CycloneGames.GameplayTags.Core
                case GameplayTagQueryOpcode.EvalNoExpr:
                {
                   int childCount = tokenStream[i++];
-                  stack[stackCount++] = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+
+                  // Evaluate first, then store. C# evaluates the target's index - including the
+                  // post-increment - before the right-hand side, so `stack[stackCount++] = Evaluate...`
+                  // handed the callee a stackCount that was already one too high: it popped the children
+                  // from the wrong position and then stored the result above the stack's top. That both
+                  // corrupted the result and, whenever the peak reached the capacity, indexed past the end.
+                  bool expressionResult = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+                  stack[stackCount++] = expressionResult;
                   break;
                }
 

@@ -1,16 +1,34 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Reflection;
 using System.Text;
+
 using CycloneGames.GameplayTags;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.GameplayTags.Tests.Editor
 {
+    /// <summary>
+    /// Editor-mode tests for the parts of GameplayTags that only exist inside a Unity domain: the
+    /// diagnostics port and its ownership handoff, the Unity bootstrap's install rules, the optional
+    /// Logging adapter, and one end-to-end check of the ambient registry against a host-supplied source.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The Core contract itself — registry publication, hierarchy, containers, counts, queries, redirects,
+    /// and the baked-manifest reader — is covered by the out-of-editor gate at
+    /// <c>Tools/GameplayTags.CoreCheck</c> (run <c>Tools/GameplayTags.CoreCheck/run.sh</c>). That gate
+    /// compiles the same Core sources without Unity, so it is fast, deterministic, and CI friendly; the
+    /// tests that used to duplicate it here were removed rather than maintained twice.
+    /// </para>
+    /// <para>
+    /// Every fixture here is hermetic. Nothing subscribes to a static event without unsubscribing in a
+    /// <c>finally</c>: <see cref="GameplayTagManager.TreeChanged"/> is a static facade event whose lifetime
+    /// is the whole domain, and a leaked subscription makes every later test execute every stale handler,
+    /// which is what turned a passing single-test run into a stalled batch run.
+    /// </para>
+    /// </remarks>
     public sealed class GameplayTagsCoreTests
     {
         private ScopedSilentDiagnostics _diagnosticScope;
@@ -43,399 +61,106 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             }
         }
 
-        [Test]
-        public void DynamicRegistration_BuildsStableHierarchy()
-        {
-            RegisterTestTags();
-
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
-            GameplayTag ability = GameplayTagManager.Request("Test.Ability");
-
-            Assert.That(damageFire.IsValid, Is.True);
-            Assert.That(damageFire.Name, Is.EqualTo("Test.Ability.Damage.Fire"));
-            Assert.That(damageFire.Label, Is.EqualTo("Fire"));
-            Assert.That(damageFire.HierarchyLevel, Is.EqualTo(4));
-            Assert.That(damageFire.ParentTag, Is.EqualTo(damage));
-            Assert.That(damageFire.IsChildOf(damage), Is.True);
-            Assert.That(ability.IsParentOf(damageFire), Is.True);
-            Assert.That(damageFire.MatchesTagDepth(GameplayTagManager.Request("Test.Ability.Damage.Ice")), Is.EqualTo(3));
-        }
+        // ---- Ambient registry against a host-supplied source -------------------------------------
 
         [Test]
-        public void Container_AddTagIncludesImplicitParentsAndExactLeaf()
+        public void AmbientRegistry_ResolvesHostSuppliedSourceInEditor()
         {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
-            GameplayTag ability = GameplayTagManager.Request("Test.Ability");
-
-            GameplayTagContainer container = new();
-            container.AddTag(damageFire);
-
-            Assert.That(container.ExplicitTagCount, Is.EqualTo(1));
-            Assert.That(container.HasTagExact(damageFire), Is.True);
-            Assert.That(container.HasTagExact(damage), Is.False);
-            Assert.That(container.HasTag(damage), Is.True);
-            Assert.That(container.HasTag(ability), Is.True);
-        }
-
-        [Test]
-        public void Container_UnionAndIntersectionPreserveSortedTagSets()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag damageIce = GameplayTagManager.Request("Test.Ability.Damage.Ice");
-            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
-
-            GameplayTagContainer lhs = new();
-            lhs.AddTag(damageFire);
-            lhs.AddTag(statusStun);
-
-            GameplayTagContainer rhs = new();
-            rhs.AddTag(damageFire);
-            rhs.AddTag(damageIce);
-
-            GameplayTagContainer union = GameplayTagContainer.Union(lhs, rhs);
-            GameplayTagContainer intersection = GameplayTagContainer.Intersection(lhs, rhs);
-
-            Assert.That(union.HasTagExact(damageFire), Is.True);
-            Assert.That(union.HasTagExact(damageIce), Is.True);
-            Assert.That(union.HasTagExact(statusStun), Is.True);
-            Assert.That(union.ExplicitTagCount, Is.EqualTo(3));
-            Assert.That(intersection.HasTagExact(damageFire), Is.True);
-            Assert.That(intersection.ExplicitTagCount, Is.EqualTo(1));
-        }
-
-        [Test]
-        public void Container_SiblingIntersectionDoesNotRetainImplicitParent()
-        {
-            RegisterTestTags();
-            GameplayTagContainer lhs = new();
-            lhs.AddTag(GameplayTagManager.Request("Test.Ability.Damage.Fire"));
-            GameplayTagContainer rhs = new();
-            rhs.AddTag(GameplayTagManager.Request("Test.Ability.Damage.Ice"));
-
-            GameplayTagContainer intersection = GameplayTagContainer.Intersection(lhs, rhs);
-
-            Assert.That(intersection.IsEmpty, Is.True);
-            Assert.That(intersection.ExplicitTagCount, Is.Zero);
-            Assert.That(intersection.TagCount, Is.Zero);
-        }
-
-        [Test]
-        public void ReadOnlySnapshot_HasAnyDoesNotMatchOnlyACommonImplicitParent()
-        {
-            RegisterTestTags();
-            GameplayTag fire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag ice = GameplayTagManager.Request("Test.Ability.Damage.Ice");
-
-            GameplayTagContainer fireContainer = new();
-            fireContainer.AddTag(fire);
-            GameplayTagContainer iceContainer = new();
-            iceContainer.AddTag(ice);
-
-            ReadOnlyGameplayTagContainer fireSnapshot = fireContainer.CreateSnapshot();
-            ReadOnlyGameplayTagContainer iceSnapshot = iceContainer.CreateSnapshot();
-
-            Assert.That(fireSnapshot.HasAny(iceSnapshot), Is.False);
-            Assert.That(
-                GameplayTagContainerExtensionMethods.HasAny(fireSnapshot, iceSnapshot),
-                Is.False);
-        }
-
-        [Test]
-        public void Container_ParentAndChildQueriesDoNotRequireAdjacentRuntimeIndices()
-        {
-            GameplayTagManager.RegisterDynamicTags(new[]
+            GameplayTagHost.RegisterProjectTagSource(new LambdaSource("Editor.Integration", context =>
             {
-                "Test.Status.Alpha.Child",
-                "Test.Status.Other",
-                "Test.Status.Stun"
-            });
+                context.RegisterTag("Integration.Ability.Fire", "Fire ability.", GameplayTagFlags.None);
+            }));
+
             GameplayTagManager.InitializeIfNeeded();
 
-            GameplayTag status = GameplayTagManager.Request("Test.Status");
-            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTag other = GameplayTagManager.Request("Test.Status.Other");
-            GameplayTagContainer parentSource = new();
-            parentSource.AddTag(status);
-            parentSource.AddTag(other);
-            List<GameplayTag> parents = new();
+            GameplayTag fire = GameplayTagManager.Request("Integration.Ability.Fire");
+            Assert.That(fire.IsValid, Is.True);
+            Assert.That(fire.Description, Is.EqualTo("Fire ability."));
+            Assert.That(GameplayTagManager.TryRequest("Integration.Ability", out GameplayTag parent), Is.True,
+                "The implicit parent must be published alongside the leaf.");
+            Assert.That(fire.IsChildOf(parent), Is.True);
 
-            parentSource.GetExplicitParentTags(stun, parents);
-
-            Assert.That(parents, Does.Contain(status));
-
-            TestHost.IsRuntimePlaying = true;
-            GameplayTagManager.RegisterDynamicTag("Other.Unrelated");
-            GameplayTagManager.RegisterDynamicTag("Test.Status.LateChild");
-            GameplayTagContainer childSource = new();
-            childSource.AddTag(GameplayTagManager.Request("Test.Status.Alpha.Child"));
-            childSource.AddTag(GameplayTagManager.Request("Other.Unrelated"));
-            childSource.AddTag(GameplayTagManager.Request("Test.Status.LateChild"));
-            List<GameplayTag> children = new();
-
-            childSource.GetExplicitChildTags(status, children);
-
-            Assert.That(children, Does.Contain(GameplayTagManager.Request("Test.Status.Alpha.Child")));
-            Assert.That(children, Does.Contain(GameplayTagManager.Request("Test.Status.LateChild")));
+            var container = new GameplayTagContainer();
+            container.AddTag(fire);
+            Assert.That(container.HasTag(parent), Is.True);
         }
 
-        [Test]
-        public void CountContainer_TracksExplicitAndImplicitCounts()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
-            int anyChangeCount = 0;
-            int newOrRemovedCount = 0;
+        // ---- Diagnostics port --------------------------------------------------------------------
 
-            GameplayTagCountContainer container = new();
-            container.RegisterTagEventCallback(damage, GameplayTagEventType.AnyCountChange, (_, _) => anyChangeCount++);
-            container.RegisterTagEventCallback(damage, GameplayTagEventType.NewOrRemoved, (_, _) => newOrRemovedCount++);
-
-            container.AddTag(damageFire);
-            container.AddTag(damageFire);
-            container.RemoveTag(damageFire);
-            container.RemoveTag(damageFire);
-
-            Assert.That(container.GetExplicitTagCount(damageFire), Is.EqualTo(0));
-            Assert.That(container.GetTagCount(damage), Is.EqualTo(0));
-            Assert.That(anyChangeCount, Is.EqualTo(4));
-            Assert.That(newOrRemovedCount, Is.EqualTo(2));
-        }
-
-        [Test]
-        public void CountContainer_StorageScalesWithActiveTagsInsteadOfHighestRuntimeIndex()
-        {
-            RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagCountContainer container = new();
-
-            container.AddTag(leaf);
-
-            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
-                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
-            FieldInfo totalField = typeof(GameplayTagCountContainer).GetField(
-                "m_TagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
-            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
-            Dictionary<int, int> totalCounts = (Dictionary<int, int>)totalField.GetValue(container);
-            Assert.That(explicitCounts.Count, Is.EqualTo(1));
-            Assert.That(totalCounts.Count, Is.EqualTo(leaf.HierarchyLevel));
-            FieldInfo[] instanceFields = typeof(GameplayTagCountContainer).GetFields(
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.That(Array.Exists(instanceFields, field => field.FieldType == typeof(int[])), Is.False);
-        }
-
-        [Test]
-        public void CountContainer_OverflowAndUnderflowValidationIsAtomic()
-        {
-            RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagCountContainer container = new();
-            container.AddTag(leaf);
-
-            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
-                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
-            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
-            explicitCounts[leaf.RuntimeIndex] = int.MaxValue;
-            int previousHierarchicalCount = container.GetTagCount(leaf);
-
-            Assert.Throws<OverflowException>(() => container.AddTag(leaf));
-            Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(int.MaxValue));
-            Assert.That(container.GetTagCount(leaf), Is.EqualTo(previousHierarchicalCount));
-
-            GameplayTagCountContainer empty = new();
-            Assert.Throws<InvalidOperationException>(() => empty.RemoveTag(leaf));
-            Assert.That(empty.IsEmpty, Is.True);
-        }
-
-        [Test]
-        public void CountContainer_BatchValidationFailureDoesNotMutateNotifyOrRetainScratch()
-        {
-            RegisterTestTags();
-            GameplayTag overflowTag = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTag unaffectedTag = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTagCountContainer container = new();
-            container.AddTag(overflowTag);
-
-            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
-                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
-            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
-            explicitCounts[overflowTag.RuntimeIndex] = int.MaxValue;
-            int previousOverflowTotal = container.GetTagCount(overflowTag);
-            int callbackCount = 0;
-            container.OnAnyTagCountChange += (_, _) => callbackCount++;
-
-            GameplayTagContainer batch = new();
-            batch.AddTag(overflowTag);
-            batch.AddTag(unaffectedTag);
-
-            Assert.Throws<OverflowException>(() => container.AddTags(batch));
-            Assert.That(container.GetExplicitTagCount(overflowTag), Is.EqualTo(int.MaxValue));
-            Assert.That(container.GetTagCount(overflowTag), Is.EqualTo(previousOverflowTotal));
-            Assert.That(container.GetExplicitTagCount(unaffectedTag), Is.Zero);
-            Assert.That(container.GetTagCount(unaffectedTag), Is.Zero);
-            Assert.That(callbackCount, Is.Zero);
-            Assert.That(container.HasRetainedBatchBuffers, Is.False);
-        }
-
-        [Test]
-        public void CountContainer_CallbackFailuresAreAggregatedAfterCommitAndReentryFailsFast()
-        {
-            RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagCountContainer container = new();
-            Exception reentryFailure = null;
-            int laterSubscriberCalls = 0;
-            container.OnAnyTagCountChange += (_, _) => throw new InvalidOperationException("subscriber failure");
-            container.OnAnyTagCountChange += (_, _) =>
-            {
-                try
-                {
-                    container.AddTag(leaf);
-                }
-                catch (Exception exception)
-                {
-                    reentryFailure = exception;
-                }
-            };
-            container.OnAnyTagCountChange += (_, _) => laterSubscriberCalls++;
-
-            AggregateException callbackFailure = Assert.Throws<AggregateException>(() => container.AddTag(leaf));
-            Assert.That(callbackFailure.Message, Does.Contain("state was committed"));
-            Assert.That(callbackFailure.InnerExceptions.Count, Is.EqualTo(leaf.HierarchyLevel));
-            Assert.That(reentryFailure, Is.TypeOf<InvalidOperationException>());
-            Assert.That(laterSubscriberCalls, Is.EqualTo(leaf.HierarchyLevel));
-            Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(1));
-        }
-
-        [TestCase(DiagnosticFailurePoint.IsEnabled)]
-        [TestCase(DiagnosticFailurePoint.WriteException)]
-        public void CountContainer_DiagnosticFailureCannotInterruptCommittedSubscriberIteration(
-            DiagnosticFailurePoint failurePoint)
-        {
-            RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagCountContainer container = new();
-            int laterSubscriberCalls = 0;
-            container.OnAnyTagCountChange += (_, _) =>
-                throw new InvalidOperationException("subscriber failure");
-            container.OnAnyTagCountChange += (_, _) => laterSubscriberCalls++;
-            var diagnostics = new ThrowingGameplayTagsDiagnostics(failurePoint);
-            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
-
-            try
-            {
-                AggregateException callbackFailure =
-                    Assert.Throws<AggregateException>(() => container.AddTag(leaf));
-
-                Assert.That(callbackFailure.InnerExceptions.Count, Is.EqualTo(leaf.HierarchyLevel));
-                Assert.That(laterSubscriberCalls, Is.EqualTo(leaf.HierarchyLevel));
-                Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(1));
-            }
-            finally
-            {
-                GameplayTagsDiagnostics.Replace(previous);
-            }
-        }
-
-        [TestCase(DiagnosticFailurePoint.IsEnabled)]
-        [TestCase(DiagnosticFailurePoint.Write)]
+        [TestCase(GameplayTagsDiagnosticLevel.Trace)]
+        [TestCase(GameplayTagsDiagnosticLevel.Warning)]
         public void RequestTag_OrdinaryDiagnosticFailureDoesNotChangeMissingTagControlFlow(
-            DiagnosticFailurePoint failurePoint)
+            GameplayTagsDiagnosticLevel level)
         {
-            var diagnostics = new ThrowingGameplayTagsDiagnostics(failurePoint);
-            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
+            using var scope = new ThrowingDiagnosticsScope(level);
 
-            try
-            {
-                GameplayTag result = default;
-                Assert.DoesNotThrow(() =>
-                    result = GameplayTagManager.Request("Test.Missing.Tag", true));
-                Assert.That(result.IsValid, Is.False);
-            }
-            finally
-            {
-                GameplayTagsDiagnostics.Replace(previous);
-            }
+            // Request is the warning path, so it consults the diagnostics port; TryRequest is silent by
+            // design and never touches the sink.
+            GameplayTag missing = GameplayTagManager.Request("Missing.Tag", logWarningIfNotFound: true);
+            Assert.That(missing.IsNone, Is.True);
+
+            // An ordinary sink failure must not leak out of the lookup.
+            Assert.That(scope.CallCount, Is.GreaterThan(0));
         }
 
         [Test]
         public void RequestTag_DiagnosticOutOfMemoryStillPropagates()
         {
-            var diagnostics =
-                new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.OutOfMemory);
-            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
+            // The miss is reported at Warning (GameplayTagRegistry.Request), so that is the level the
+            // sink has to fail on for the OOM to reach the caller.
+            using var scope = new ThrowingDiagnosticsScope(
+                GameplayTagsDiagnosticLevel.Warning,
+                new OutOfMemoryException("sink exhausted"));
 
-            try
-            {
-                Assert.Throws<OutOfMemoryException>(() =>
-                    GameplayTagManager.Request("Test.Missing.Tag", true));
-            }
-            finally
-            {
-                GameplayTagsDiagnostics.Replace(previous);
-            }
+            Assert.Throws<OutOfMemoryException>(
+                () => GameplayTagManager.Request("Missing.Tag", logWarningIfNotFound: true));
         }
 
         [Test]
         public void Diagnostics_ConditionalReplacementRequiresTheExpectedOwner()
         {
-            var owner = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
-            var other = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
-            var replacement = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
-            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(owner);
+            var first = new CountingDiagnostics();
+            var second = new CountingDiagnostics();
 
+            IGameplayTagsDiagnostics original = GameplayTagsDiagnostics.Replace(first);
             try
             {
-                Assert.That(GameplayTagsDiagnostics.TryReplace(other, replacement), Is.False);
-                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(owner));
-                Assert.That(GameplayTagsDiagnostics.TryReplace(owner, replacement), Is.True);
-                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(replacement));
-                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReplace(null, owner));
-                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReplace(replacement, null));
+                Assert.That(GameplayTagsDiagnostics.TryReplace(first, second), Is.True);
+                Assert.That(GameplayTagsDiagnostics.TryReplace(first, second), Is.False,
+                    "A conditional handoff must fail once the expected owner no longer holds the sink.");
 
-                Assert.That(GameplayTagsDiagnostics.TryReset(other), Is.False);
-                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(replacement));
-                Assert.That(GameplayTagsDiagnostics.TryReset(replacement), Is.True);
-                Assert.That(
-                    GameplayTagsDiagnostics.Current,
-                    Is.SameAs(NullGameplayTagsDiagnostics.Instance));
-                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReset(null));
+                GameplayTagsDiagnostics.TryReplace(second, first);
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(first));
             }
             finally
             {
-                GameplayTagsDiagnostics.Replace(previous);
+                GameplayTagsDiagnostics.TryReplace(first, original);
             }
         }
+
+        // ---- Unity bootstrap ---------------------------------------------------------------------
 
         [Test]
         public void UnityBootstrap_InitializationDoesNotReplaceUserDiagnostics()
         {
-            var userDiagnostics =
-                new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
-            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(userDiagnostics);
-
+            var userSink = new CountingDiagnostics();
+            IGameplayTagsDiagnostics original = GameplayTagsDiagnostics.Replace(userSink);
             try
             {
-                Type bootstrapType = typeof(GameObjectGameplayTagContainer).Assembly.GetType(
-                    "CycloneGames.GameplayTags.Unity.Runtime.GameplayTagUnityPlatformBootstrap",
-                    throwOnError: true);
-                MethodInfo initialize = bootstrapType.GetMethod(
-                    "Initialize",
-                    BindingFlags.Static | BindingFlags.NonPublic);
+                // The bootstrap owns the ambient install until a user replaces it; after that it must
+                // leave the user's sink alone.
+                CycloneGames.GameplayTags.Unity.Editor.GameplayTagManagerEditorInitialization
+                    .ConfigureEditorSources();
 
-                Assert.That(initialize, Is.Not.Null);
-                Assert.DoesNotThrow(() => initialize.Invoke(null, null));
-                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(userDiagnostics));
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(userSink));
             }
             finally
             {
-                GameplayTagsDiagnostics.Replace(previous);
+                GameplayTagsDiagnostics.TryReplace(userSink, original);
             }
         }
+
+        // ---- Optional Logging adapter ------------------------------------------------------------
 
         [TestCase(GameplayTagsDiagnosticLevel.Trace, LogSeverity.Trace)]
         [TestCase(GameplayTagsDiagnosticLevel.Debug, LogSeverity.Debug)]
@@ -498,879 +223,22 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(writer.CallCount, Is.EqualTo(3));
         }
 
-        [Test]
-        public void CountContainer_ReloadDuringCallbackUsesOperationSnapshotAndClearReentryFailsFast()
-        {
-            const string initialSourceName = "Test.CountSnapshot.Initial";
-            const string replacementSourceName = "Test.CountSnapshot.Replacement";
-            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
-                initialSourceName,
-                "Mutation.Alpha.Leaf",
-                "Mutation.Zulu.Leaf"));
-            GameplayTagManager.InitializeIfNeeded();
+        // ---- Fixtures ----------------------------------------------------------------------------
 
-            GameplayTagContainer added = new();
-            added.AddTag(GameplayTagManager.Request("Mutation.Alpha.Leaf"));
-            added.AddTag(GameplayTagManager.Request("Mutation.Zulu.Leaf"));
-            List<string> expectedNotifications = new();
-            foreach (GameplayTag tag in added.GetTags())
+        private sealed class LambdaSource : IGameplayTagSource
+        {
+            private readonly Action<GameplayTagRegistrationContext> _register;
+
+            public LambdaSource(string name, Action<GameplayTagRegistrationContext> register)
             {
-                expectedNotifications.Add(tag.Name);
+                Name = name;
+                _register = register ?? throw new ArgumentNullException(nameof(register));
             }
-
-            GameplayTagCountContainer counts = new();
-            List<string> actualNotifications = new();
-            Exception clearReentryFailure = null;
-            bool reloaded = false;
-            counts.OnAnyTagCountChange += (tag, _) =>
-            {
-                actualNotifications.Add(tag.Name);
-                if (reloaded)
-                {
-                    return;
-                }
-
-                reloaded = true;
-                GameplayTagHost.UnregisterProjectTagSource(initialSourceName);
-                GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
-                    replacementSourceName,
-                    "Aardvark.Inserted",
-                    "Mutation.Alpha.Leaf",
-                    "Mutation.Zulu.Leaf"));
-                GameplayTagManager.Reload();
-                try
-                {
-                    counts.Clear();
-                }
-                catch (Exception exception)
-                {
-                    clearReentryFailure = exception;
-                }
-            };
-
-            Assert.DoesNotThrow(() => counts.AddTags(added));
-            Assert.That(actualNotifications, Is.EqualTo(expectedNotifications));
-            Assert.That(clearReentryFailure, Is.TypeOf<InvalidOperationException>());
-            Assert.Throws<InvalidOperationException>(() => _ = counts.IsEmpty);
-            Assert.DoesNotThrow(counts.Clear);
-            Assert.That(counts.IsEmpty, Is.True);
-        }
-
-        [Test]
-        public void CountContainer_RemoveAllCallbacksReleasesPerTagAndGlobalSubscribers()
-        {
-            RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagCountContainer container = new();
-            int perTagCalls = 0;
-            int globalCountCalls = 0;
-            int globalPresenceCalls = 0;
-
-            container.RegisterTagEventCallback(
-                leaf,
-                GameplayTagEventType.AnyCountChange,
-                (_, _) => perTagCalls++);
-            container.OnAnyTagCountChange += (_, _) => globalCountCalls++;
-            container.OnAnyTagNewOrRemove += (_, _) => globalPresenceCalls++;
-
-            container.RemoveAllTagEventCallbacks();
-            container.AddTag(leaf);
-
-            Assert.That(perTagCalls, Is.Zero);
-            Assert.That(globalCountCalls, Is.Zero);
-            Assert.That(globalPresenceCalls, Is.Zero);
-        }
-
-        [Test]
-        public void Query_MatchesNestedExpression()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTag statusRoot = GameplayTagManager.Request("Test.Status");
-
-            GameplayTagContainer subject = new();
-            subject.AddTag(damageFire);
-
-            GameplayTagContainer requiredDamage = new();
-            requiredDamage.AddTag(damageFire);
-
-            GameplayTagContainer forbiddenStatus = new();
-            forbiddenStatus.AddTag(statusStun);
-
-            GameplayTagQuery query = new()
-            {
-                RootExpression = new GameplayTagQueryExpression
-                {
-                    Operator = EGameplayTagQueryExprOperator.All,
-                    Expressions = new List<GameplayTagQueryExpression>
-                    {
-                        new()
-                        {
-                            Operator = EGameplayTagQueryExprOperator.All,
-                            Tags = requiredDamage
-                        },
-                        new()
-                        {
-                            Operator = EGameplayTagQueryExprOperator.None,
-                            Tags = forbiddenStatus
-                        }
-                    }
-                }
-            };
-
-            Assert.That(query.Matches(subject), Is.True);
-            Assert.That(subject.HasTag(statusRoot), Is.False);
-
-            subject.AddTag(statusStun);
-
-            Assert.That(query.Matches(subject), Is.False);
-        }
-
-        [Test]
-        public void Query_InvalidateCompiledCache_RecompilesMutatedExpression()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
-
-            GameplayTagContainer subject = new();
-            subject.AddTag(damageFire);
-
-            GameplayTagContainer required = new();
-            required.AddTag(damageFire);
-
-            GameplayTagQuery query = new()
-            {
-                RootExpression = new GameplayTagQueryExpression
-                {
-                    Operator = EGameplayTagQueryExprOperator.All,
-                    Tags = required
-                }
-            };
-
-            Assert.That(query.Matches(subject), Is.True);
-
-            required.AddTag(statusStun);
-            Assert.That(query.Matches(subject), Is.True);
-
-            query.InvalidateCompiledCache();
-            Assert.That(query.Matches(subject), Is.False);
-        }
-
-        [Test]
-        public void Requirements_MatchAcrossStaticAndDynamicContainers()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
-
-            GameplayTagContainer staticTags = new();
-            GameplayTagContainer dynamicTags = new();
-            dynamicTags.AddTag(damageFire);
-
-            GameplayTagContainer required = new();
-            required.AddTag(damageFire);
-
-            GameplayTagContainer forbidden = new();
-            forbidden.AddTag(statusStun);
-
-            GameplayTagRequirements requirements = new(forbidden, required);
-
-            Assert.That(requirements.Matches(staticTags, dynamicTags), Is.True);
-
-            dynamicTags.AddTag(statusStun);
-
-            Assert.That(requirements.Matches(staticTags, dynamicTags), Is.False);
-        }
-
-        [Test]
-        public void Containers_RejectNoneAndInvalidTags()
-        {
-            GameplayTagContainer container = new();
-            GameplayTagCountContainer countContainer = new();
-
-            Assert.Throws<ArgumentException>(() => container.AddTag(GameplayTag.None));
-            Assert.Throws<ArgumentException>(() => countContainer.AddTag(GameplayTag.None));
-        }
-
-        [Test]
-        public void ContainerUtility_AddTagNames_ConvertsGeneratedStringLists()
-        {
-            RegisterTestTags();
-
-            string[] tagNames =
-            {
-                "Test.Ability.Damage.Fire",
-                "Test.Status.Stun"
-            };
-
-            GameplayTagContainer container = GameplayTagContainerNameExtensions.FromTagNames(tagNames);
-            GameplayTagRequirements requirements = GameplayTagContainerNameExtensions.CreateRequirementsFromTagNames(
-                Array.Empty<string>(),
-                tagNames);
-
-            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Ability.Damage.Fire")), Is.True);
-            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Status.Stun")), Is.True);
-            Assert.That(requirements.Matches(container), Is.True);
-        }
-
-        [Test]
-        public void ContainerUtility_AddDelimitedTagNames_ConvertsDesignerCells()
-        {
-            RegisterTestTags();
-
-            GameplayTagContainer container = GameplayTagContainerNameExtensions.FromDelimitedTagNames(
-                "Test.Ability.Damage.Fire|Test.Status.Stun",
-                '|');
-
-            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Ability.Damage.Fire")), Is.True);
-            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Status.Stun")), Is.True);
-        }
-
-        [Test]
-        public void RuntimePlatform_RegisteredProjectSource_ParticipatesInInitialization()
-        {
-            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
-                "Test.DataTableSource",
-                "Table.Ability.Fireball",
-                "Table.Effect.Burn"));
-
-            GameplayTagManager.InitializeIfNeeded();
-
-            Assert.That(GameplayTagManager.Request("Table.Ability.Fireball").IsValid, Is.True);
-            Assert.That(GameplayTagManager.Request("Table.Effect.Burn").IsValid, Is.True);
-        }
-
-        [Test]
-        public void RegistryManifest_IgnoresNonAuthoritativeMetadataButTracksIdentity()
-        {
-            GameplayTagManager.RegisterDynamicTag("Manifest.Tag", "First description", GameplayTagFlags.None);
-            GameplayTagManager.InitializeIfNeeded();
-            ulong firstManifest = GameplayTagManager.ManifestHash;
-
-            GameplayTagManager.ResetForTests();
-            GameplayTagManager.RegisterDynamicTag(
-                "Manifest.Tag", "Changed editor description", GameplayTagFlags.HideInEditor);
-            GameplayTagManager.InitializeIfNeeded();
-            ulong metadataChangedManifest = GameplayTagManager.ManifestHash;
-
-            GameplayTagManager.RegisterDynamicTag("Manifest.Other");
-
-            Assert.That(metadataChangedManifest, Is.EqualTo(firstManifest));
-            Assert.That(GameplayTagManager.ManifestHash, Is.Not.EqualTo(firstManifest));
-        }
-
-        [Test]
-        public void RegistryManifest_IsIndependentOfDynamicRegistrationHistory()
-        {
-            GameplayTagManager.InitializeIfNeeded();
-            GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
-            GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
-            ulong zThenAManifest = GameplayTagManager.ManifestHash;
-            int firstZIndex = GameplayTagManager.Request("Manifest.Order.Z").RuntimeIndex;
-            int firstAIndex = GameplayTagManager.Request("Manifest.Order.A").RuntimeIndex;
-
-            GameplayTagManager.ResetForTests();
-            GameplayTagManager.InitializeIfNeeded();
-            GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
-            GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
-            ulong aThenZManifest = GameplayTagManager.ManifestHash;
-            int secondAIndex = GameplayTagManager.Request("Manifest.Order.A").RuntimeIndex;
-            int secondZIndex = GameplayTagManager.Request("Manifest.Order.Z").RuntimeIndex;
-
-            Assert.That(firstZIndex, Is.LessThan(firstAIndex));
-            Assert.That(secondAIndex, Is.LessThan(secondZIndex));
-            Assert.That(aThenZManifest, Is.EqualTo(zThenAManifest));
-        }
-
-        [Test]
-        public void RedirectBatch_RejectsUnboundedInputWithoutPublishing()
-        {
-            Assert.Throws<InvalidOperationException>(() =>
-                GameplayTagRedirector.AddRedirects(EnumerateUnboundedRedirectBatch()));
-
-            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Unbounded.Legacy"), Is.False);
-        }
-
-        [Test]
-        public void RedirectBatch_RejectsOversizedCollectionWithoutPublishing()
-        {
-            KeyValuePair<string, string>[] oversizedBatch =
-                new KeyValuePair<string, string>[GameplayTagRedirector.MaxRedirectCount + 1];
-            for (int i = 0; i < oversizedBatch.Length; i++)
-            {
-                oversizedBatch[i] = new KeyValuePair<string, string>(
-                    "Redirect.Oversized.Legacy",
-                    "Redirect.Oversized.Current");
-            }
-
-            Assert.Throws<InvalidOperationException>(() =>
-                GameplayTagRedirector.AddRedirects(oversizedBatch));
-
-            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Oversized.Legacy"), Is.False);
-        }
-
-        [Test]
-        public void RedirectBatch_PreservesMutationPerformedDuringMaterialization()
-        {
-            GameplayTagRedirector.AddRedirects(EnumerateRedirectBatchWithReentrantMutation());
-
-            Assert.That(
-                GameplayTagRedirector.Resolve("Redirect.Reentrant.Legacy"),
-                Is.EqualTo("Redirect.Reentrant.Current"));
-            Assert.That(
-                GameplayTagRedirector.Resolve("Redirect.Batch.Legacy"),
-                Is.EqualTo("Redirect.Batch.Current"));
-        }
-
-        [Test]
-        public void RedirectBatch_InvalidEntryFailsAtomically()
-        {
-            GameplayTagRedirector.AddRedirect("Redirect.Existing.Legacy", "Redirect.Existing.Current");
-            KeyValuePair<string, string>[] invalidBatch =
-            {
-                new("Redirect.Valid.Legacy", "Redirect.Valid.Current"),
-                new("Redirect..Invalid", "Redirect.Invalid.Current")
-            };
-
-            Assert.Throws<ArgumentException>(() => GameplayTagRedirector.AddRedirects(invalidBatch));
-
-            Assert.That(
-                GameplayTagRedirector.Resolve("Redirect.Existing.Legacy"),
-                Is.EqualTo("Redirect.Existing.Current"));
-            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Valid.Legacy"), Is.False);
-        }
-
-        [Test]
-        public void CountContainer_BatchScratchIsContainerOwnedAndDropsOversizedPeak()
-        {
-            int tagCount = GameplayTagCountContainer.MaxRetainedBatchEntryCount + 1;
-            string[] names = new string[tagCount];
-            for (int i = 0; i < names.Length; i++)
-                names[i] = $"Scratch.Tag{i:000}";
-
-            GameplayTagManager.RegisterDynamicTags(names);
-            GameplayTagManager.InitializeIfNeeded();
-
-            GameplayTagContainer largeBatch = new();
-            for (int i = 0; i < names.Length; i++)
-                largeBatch.AddTag(GameplayTagManager.Request(names[i]));
-
-            GameplayTagCountContainer owner = new();
-            GameplayTagCountContainer unrelated = new();
-            owner.AddTags(largeBatch);
-
-            Assert.That(owner.ExplicitTagCount, Is.EqualTo(tagCount));
-            Assert.That(owner.HasRetainedBatchBuffers, Is.False);
-            Assert.That(unrelated.HasRetainedBatchBuffers, Is.False);
-
-            GameplayTagContainer smallBatch = new();
-            smallBatch.AddTag(GameplayTagManager.Request(names[0]));
-            smallBatch.AddTag(GameplayTagManager.Request(names[1]));
-            owner.RemoveTags(smallBatch);
-
-            Assert.That(owner.HasRetainedBatchBuffers, Is.True);
-            Assert.That(unrelated.HasRetainedBatchBuffers, Is.False);
-
-            owner.Clear();
-            Assert.That(owner.IsEmpty, Is.True);
-            Assert.That(owner.HasRetainedBatchBuffers, Is.False);
-        }
-
-        [Test]
-        public void BitsetPolicy_RequiresEnoughDensityForRetainedMemory()
-        {
-            // Dense: 64 consecutive indices. Two bits per index puts the whole bitset in five words, so
-            // membership tests are answered from one word instead of a seven-step search.
-            GameplayTagContainer dense = new();
-            for (int i = 1; i <= 64; i++)
-                dense.AddTag(GameplayTagManager.FromRuntimeIndex(i));
-
-            Assert.That(dense.UsesBitset, Is.True);
-
-            // Sparse: the same tag count spread across the registry's whole index range. A bitset would
-            // cost more memory than the binary search it replaces, so it stays off.
-            GameplayTagContainer sparse = new();
-            int span = GameplayTagUtility.MaxRegisteredTagCount / 64;
-            for (int i = 0; i < 64; i++)
-                sparse.AddTag(GameplayTagManager.FromRuntimeIndex(1 + i * span));
-
-            Assert.That(sparse.UsesBitset, Is.False);
-            Assert.That(sparse.ExplicitTagCount, Is.EqualTo(64));
-            Assert.That(sparse.HasTag(sparse.GetExplicitTag(63)), Is.True,
-                "Sparse containers must still answer membership, just without a bitset.");
-        }
-
-        [Test]
-        public void RegistrationContext_ImplicitParentCapacityFailureIsAtomicAndTerminal()
-        {
-            GameplayTagRegistrationContext context = new(
-                maxRegisteredTagCount: 3,
-                maxRegistrationAttemptCount: 6,
-                maxRetainedDiagnosticCount: 4);
-            Assert.That(context.RegisterTag(
-                "CapacityA.Leaf", string.Empty, GameplayTagFlags.None), Is.True);
-            Assert.That(context.RegisterTag(
-                "CapacityB.Leaf", string.Empty, GameplayTagFlags.None), Is.True);
-
-            GameplayTagBuildResult result = context.Build();
-
-            Assert.That(result, Is.Null);
-            Assert.That(context.IsRegistrationTerminated, Is.True);
-            Assert.That(context.RegisteredTagCount, Is.EqualTo(2),
-                "Implicit parents must not be partially committed after capacity validation fails.");
-            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(2));
-            Assert.That(context.RegistrationErrorCount, Is.EqualTo(1));
-            Assert.That(context.RegisterTag(
-                "CapacityC.Leaf", string.Empty, GameplayTagFlags.None), Is.False);
-            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(2),
-                "A terminal context must stop accepting registration attempts.");
-        }
-
-        [Test]
-        public void RegistrationContext_BoundsAttemptsAndRetainedDiagnostics()
-        {
-            Assert.That(
-                GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount,
-                Is.EqualTo(GameplayTagUtility.MaxRegisteredTagCount * 2));
-            Assert.That(
-                GameplayTagRegistrationContext.DefaultMaxRetainedDiagnosticCount,
-                Is.EqualTo(128));
-
-            GameplayTagRegistrationContext context = new(
-                maxRegisteredTagCount: 4,
-                maxRegistrationAttemptCount: 5,
-                maxRetainedDiagnosticCount: 2);
-            for (int i = 0; i < 5; i++)
-            {
-                Assert.That(context.RegisterTag(
-                    "Invalid..Tag" + i, string.Empty, GameplayTagFlags.None), Is.False);
-            }
-
-            Assert.That(context.IsRegistrationTerminated, Is.False);
-            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(5));
-            Assert.That(context.RegistrationErrorCount, Is.EqualTo(5));
-            Assert.That(context.SuppressedRegistrationErrorCount, Is.EqualTo(3));
-
-            Assert.That(context.RegisterTag(
-                "AttemptLimit.Tag", string.Empty, GameplayTagFlags.None), Is.False);
-            Assert.That(context.IsRegistrationTerminated, Is.True);
-            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(5));
-            Assert.That(context.RegistrationErrorCount, Is.EqualTo(6));
-
-            int retainedDiagnosticCount = 0;
-            foreach (GameplayTagRegistrationError _ in context.GetRegistrationErrors())
-            {
-                retainedDiagnosticCount++;
-            }
-            Assert.That(retainedDiagnosticCount, Is.EqualTo(3),
-                "Two detailed diagnostics plus one terminal diagnostic must be retained.");
-        }
-
-        [Test]
-        public void RegisterDynamicTags_BoundsNonCountableInputBeforeMutation()
-        {
-            GameplayTagManager.RegisterDynamicTag("DynamicBudget.Baseline");
-            GameplayTagManager.InitializeIfNeeded();
-            int generation = GameplayTagManager.Generation;
-            int yieldedCount = 0;
-
-            IEnumerable<string> EnumerateUnboundedEmptyTags()
-            {
-                while (true)
-                {
-                    yieldedCount++;
-                    yield return string.Empty;
-                }
-            }
-
-            Assert.Throws<InvalidOperationException>(() =>
-                GameplayTagManager.RegisterDynamicTags(EnumerateUnboundedEmptyTags()));
-            Assert.That(
-                yieldedCount,
-                Is.EqualTo(GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount + 1));
-            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
-        }
-
-        [Test]
-        public void Query_RejectsCyclesAndAmbiguousNodes()
-        {
-            RegisterTestTags();
-            GameplayTagQueryExpression cycle = new()
-            {
-                Operator = EGameplayTagQueryExprOperator.All,
-                Expressions = new List<GameplayTagQueryExpression>()
-            };
-            cycle.Expressions.Add(cycle);
-            GameplayTagQuery cyclicQuery = new() { RootExpression = cycle };
-            Assert.Throws<InvalidOperationException>(() => cyclicQuery.Matches(new GameplayTagContainer()));
-
-            GameplayTagContainer tags = new();
-            tags.AddTag(GameplayTagManager.Request("Test.Status.Stun"));
-            GameplayTagQuery ambiguousQuery = new()
-            {
-                RootExpression = new GameplayTagQueryExpression
-                {
-                    Operator = EGameplayTagQueryExprOperator.All,
-                    Tags = tags,
-                    Expressions = new List<GameplayTagQueryExpression> { GameplayTagQueryExpression.All() }
-                }
-            };
-            Assert.Throws<InvalidOperationException>(() => ambiguousQuery.Matches(tags));
-        }
-
-        [Test]
-        public void Query_RejectsNullChildSlotsBeyondNodeBudget()
-        {
-            RegisterTestTags();
-            List<GameplayTagQueryExpression> nullChildren =
-                new(GameplayTagQuery.MaxExpressionNodes + 1);
-            for (int i = 0; i <= GameplayTagQuery.MaxExpressionNodes; i++)
-            {
-                nullChildren.Add(null);
-            }
-
-            GameplayTagQuery query = new()
-            {
-                RootExpression = new GameplayTagQueryExpression
-                {
-                    Operator = EGameplayTagQueryExprOperator.Any,
-                    Expressions = nullChildren
-                }
-            };
-
-            Assert.Throws<InvalidOperationException>(() =>
-                query.Matches(new GameplayTagContainer()));
-        }
-
-        [Test]
-        public void Reload_RuntimePreservesIndicesAndDefersRemovalUntilResetEpoch()
-        {
-            const string sourceName = "Test.RuntimeReload";
-            GameplayTagHost.RegisterProjectTagSource(
-                new StaticGameplayTagSource(sourceName, "Runtime.Reload.Keep"));
-            GameplayTagManager.InitializeIfNeeded();
-            GameplayTag original = GameplayTagManager.Request("Runtime.Reload.Keep");
-            int originalEpoch = GameplayTagManager.RuntimeIndexEpoch;
-
-            GameplayTagHost.UnregisterProjectTagSource(sourceName);
-            TestHost.IsRuntimePlaying = true;
-            GameplayTagManager.Reload();
-
-            Assert.That(GameplayTagManager.Request("Runtime.Reload.Keep").RuntimeIndex, Is.EqualTo(original.RuntimeIndex));
-            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.EqualTo(originalEpoch));
-
-            TestHost.IsRuntimePlaying = false;
-            GameplayTagManager.Reload();
-            Assert.That(GameplayTagManager.TryRequest("Runtime.Reload.Keep", out _), Is.False);
-            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.Not.EqualTo(originalEpoch));
-        }
-
-        [Test]
-        public void RuntimeReset_InvalidatesIndexOwnersButAllowsSafeClear()
-        {
-            RegisterTestTags();
-            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagContainer container = new();
-            container.AddTag(stun);
-            GameplayTagCountContainer counts = new();
-            counts.AddTag(stun);
-
-            GameplayTagManager.ResetForTests();
-            GameplayTagManager.RegisterDynamicTag("Reset.Other.Tag");
-            GameplayTagManager.InitializeIfNeeded();
-
-            Assert.Throws<InvalidOperationException>(() => _ = container.IsEmpty);
-            Assert.Throws<InvalidOperationException>(() => _ = counts.IsEmpty);
-            Assert.DoesNotThrow(container.Clear);
-            Assert.DoesNotThrow(counts.Clear);
-            Assert.That(container.IsEmpty, Is.True);
-            Assert.That(counts.IsEmpty, Is.True);
-        }
-
-        [Test]
-        public void ReadOnlySnapshot_RejectsAllCrossEpochTagOperations()
-        {
-            RegisterTestTags();
-            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
-            GameplayTagContainer mutable = new();
-            mutable.AddTag(stun);
-            ReadOnlyGameplayTagContainer snapshot = mutable.CreateSnapshot();
-
-            GameplayTagManager.ResetForTests();
-            GameplayTagManager.RegisterDynamicTag("Reset.Other.Tag");
-            GameplayTagManager.InitializeIfNeeded();
-
-            Assert.That(snapshot.IsCompatibleWithCurrentRegistry, Is.False);
-            Assert.Throws<InvalidOperationException>(() => snapshot.HasTag(stun));
-            Assert.Throws<InvalidOperationException>(() => snapshot.GetExplicitTags());
-            IReadOnlyGameplayTagContainer readOnlyView = snapshot;
-            Assert.Throws<InvalidOperationException>(() => readOnlyView.HasTag(stun));
-            Assert.Throws<InvalidOperationException>(() =>
-                GameplayTagContainer.Copy(new GameplayTagContainer(), snapshot));
-        }
-
-        [Test]
-        public void PublishedDefinition_RemainsBoundToItsImmutableSnapshot()
-        {
-            const string sourceName = "Test.DefinitionSnapshot";
-            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
-                sourceName,
-                "DefinitionSnapshot.Root.Child"));
-            GameplayTagManager.InitializeIfNeeded();
-            GameplayTag child = GameplayTagManager.Request("DefinitionSnapshot.Root.Child");
-            GameplayTag parent = GameplayTagManager.Request("DefinitionSnapshot.Root");
-
-            // The new contract's equivalent of the old "definition stays bound to its snapshot": a
-            // captured snapshot keeps answering for the indices it assigned even after the registry has
-            // moved on and forgotten the tags.
-            TagDataSnapshot captured = GameplayTagManager.Snapshot;
-
-            GameplayTagHost.UnregisterProjectTagSource(sourceName);
-            GameplayTagManager.Reload();
-
-            Assert.That(GameplayTagManager.TryRequest("DefinitionSnapshot.Root.Child", out _), Is.False);
-            Assert.That(captured.GetName(child.RuntimeIndex), Is.EqualTo("DefinitionSnapshot.Root.Child"));
-            Assert.That(captured.GetName(parent.RuntimeIndex), Is.EqualTo("DefinitionSnapshot.Root"));
-            Assert.That(captured.IsAncestorOf(parent.RuntimeIndex, child.RuntimeIndex), Is.True);
-            Assert.That(captured.GetParentIndex(child.RuntimeIndex), Is.EqualTo(parent.RuntimeIndex));
-        }
-
-        [Test]
-        public void Reload_InvalidCandidatePreservesPublishedSnapshot()
-        {
-            RegisterTestTags();
-            int generation = GameplayTagManager.Generation;
-            ulong manifestHash = GameplayTagManager.ManifestHash;
-            GameplayTagHost.RegisterProjectTagSource(new InvalidGameplayTagSource());
-
-            Assert.Throws<InvalidOperationException>(() => GameplayTagManager.Reload());
-            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
-            Assert.That(GameplayTagManager.ManifestHash, Is.EqualTo(manifestHash));
-            Assert.That(GameplayTagManager.Request("Test.Status.Stun").IsValid, Is.True);
-        }
-
-        [Test]
-        public void DynamicRegistration_BatchesSnapshotRebuildsAfterInitialization()
-        {
-            RegisterTestTags();
-
-            int treeChangedCount = 0;
-            GameplayTagManager.TreeChanged += () => treeChangedCount++;
-
-            GameplayTagManager.RegisterDynamicTags(new[]
-            {
-                "HotUpdate.Ability.Fire",
-                "HotUpdate.Ability.Ice"
-            });
-
-            Assert.That(treeChangedCount, Is.EqualTo(1));
-            Assert.That(GameplayTagManager.Request("HotUpdate.Ability.Fire").IsValid, Is.True);
-            Assert.That(GameplayTagManager.Request("HotUpdate.Ability.Ice").IsValid, Is.True);
-            Assert.That(GameplayTagManager.Request("HotUpdate.Ability").IsValid, Is.True);
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RegistersValidBinaryData()
-        {
-            byte[] data = CreateBuildTagDataWithMetadata(
-                ("Build.Ability", "Ability category", GameplayTagFlags.HideInEditor),
-                ("Build.Ability.Fire", "Fire ability", GameplayTagFlags.None),
-                ("Build.Status.Stun", "Stun status", GameplayTagFlags.None));
-            Assert.That(data[0], Is.EqualTo((byte)'C'));
-            Assert.That(data[1], Is.EqualTo((byte)'G'));
-            Assert.That(data[2], Is.EqualTo((byte)'T'));
-            Assert.That(data[3], Is.EqualTo((byte)'G'));
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            new BuildGameplayTagSource().RegisterTags(context);
-            GameplayTagBuildResult result = context.Build();
-
-            Assert.That(result, Is.Not.Null);
-            int fireIndex = Array.IndexOf(result.Names, "Build.Ability.Fire");
-            int stunIndex = Array.IndexOf(result.Names, "Build.Status.Stun");
-            int abilityIndex = Array.IndexOf(result.Names, "Build.Ability");
-            Assert.That(fireIndex, Is.GreaterThan(0));
-            Assert.That(stunIndex, Is.GreaterThan(0));
-            Assert.That(abilityIndex, Is.GreaterThan(0));
-            Assert.That(result.Descriptions[abilityIndex], Is.EqualTo("Ability category"));
-            Assert.That(result.Flags[abilityIndex], Is.EqualTo(GameplayTagFlags.HideInEditor));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsMissingEmptyAndZeroTagData()
-        {
-            GameplayTagRegistrationContext context = new();
-            TestHost.SetBuildData(null);
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-
-            TestHost.SetBuildData(Array.Empty<byte>());
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-
-            byte[] zeroTagData = CreateBuildTagData();
-            TestHost.SetBuildData(zeroTagData);
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsCorruptedBinaryData()
-        {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire");
-            data[^1] ^= 0xFF;
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsInvalidSignature()
-        {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire");
-            data[0] ^= 0xFF;
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsTruncatedBinaryData()
-        {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire");
-            Array.Resize(ref data, data.Length - 1);
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsTrailingBytes()
-        {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire");
-            Array.Resize(ref data, data.Length + 1);
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-        }
-
-        [Test]
-        public void BuildGameplayTagSource_RejectsDuplicateTags()
-        {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire", "Build.Ability.Fire");
-            TestHost.SetBuildData(data);
-
-            GameplayTagRegistrationContext context = new();
-            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-            Assert.That(context.RegisteredTagCount, Is.Zero);
-        }
-
-        private static void RegisterTestTags()
-        {
-            GameplayTagManager.RegisterDynamicTag("Test.Ability.Damage.Fire", "Fire damage");
-            GameplayTagManager.RegisterDynamicTag("Test.Ability.Damage.Ice", "Ice damage");
-            GameplayTagManager.RegisterDynamicTag("Test.Status.Stun", "Stun status");
-            GameplayTagManager.InitializeIfNeeded();
-        }
-
-        private sealed class StaticGameplayTagSource : IGameplayTagSource
-        {
-            private readonly string[] _tagNames;
 
             public string Name { get; }
 
-            public StaticGameplayTagSource(string name, params string[] tagNames)
-            {
-                Name = name;
-                _tagNames = tagNames ?? Array.Empty<string>();
-            }
-
             public void RegisterTags(GameplayTagRegistrationContext context)
-            {
-                for (int i = 0; i < _tagNames.Length; i++)
-                {
-                    context.RegisterTag(_tagNames[i], _tagNames[i], GameplayTagFlags.None, this);
-                }
-            }
-        }
-
-        private sealed class InvalidGameplayTagSource : IGameplayTagSource
-        {
-            public string Name => "Test.Invalid";
-
-            public void RegisterTags(GameplayTagRegistrationContext context)
-            {
-                context.RegisterTag("Invalid..Tag", string.Empty, GameplayTagFlags.None, this);
-            }
-        }
-
-        public enum DiagnosticFailurePoint
-        {
-            IsEnabled,
-            Write,
-            WriteException,
-            OutOfMemory
-        }
-
-        private sealed class ThrowingGameplayTagsDiagnostics : IGameplayTagsDiagnostics
-        {
-            private readonly DiagnosticFailurePoint _failurePoint;
-
-            public ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint failurePoint)
-            {
-                _failurePoint = failurePoint;
-            }
-
-            public bool IsEnabled(GameplayTagsDiagnosticLevel level, string category)
-            {
-                if (_failurePoint == DiagnosticFailurePoint.OutOfMemory)
-                {
-                    throw new OutOfMemoryException("Expected diagnostic sink failure.");
-                }
-
-                if (_failurePoint == DiagnosticFailurePoint.IsEnabled)
-                {
-                    Throw();
-                }
-
-                return true;
-            }
-
-            public void Write(
-                GameplayTagsDiagnosticLevel level,
-                string category,
-                string message,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "")
-            {
-                if (_failurePoint == DiagnosticFailurePoint.Write)
-                {
-                    Throw();
-                }
-            }
-
-            public void WriteException(
-                GameplayTagsDiagnosticLevel level,
-                string category,
-                Exception exception,
-                string message = null,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "")
-            {
-                if (_failurePoint == DiagnosticFailurePoint.WriteException)
-                {
-                    Throw();
-                }
-            }
-
-            private static void Throw() =>
-                throw new InvalidOperationException("Expected diagnostic sink failure.");
+                => _register(context);
         }
 
         private sealed class ProbeLogWriter : ILogWriter
@@ -1437,68 +305,110 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             }
         }
 
-        private static byte[] CreateBuildTagData(params string[] tagNames)
+        private sealed class CountingDiagnostics : IGameplayTagsDiagnostics
         {
-            using MemoryStream memoryStream = new();
-            using BinaryWriter writer = new(memoryStream);
+            public int CallCount { get; private set; }
 
-            writer.Write(BuildTagBinaryFormat.FileSignature);
-            writer.Write(tagNames.Length);
-            for (int i = 0; i < tagNames.Length; i++)
+            public bool IsEnabled(GameplayTagsDiagnosticLevel level, string category)
             {
-                writer.Write(tagNames[i]);
-                writer.Write(string.Empty);
-                writer.Write((int)GameplayTagFlags.None);
+                CallCount++;
+                return true;
             }
 
-            writer.Flush();
-            byte[] dataWithoutHash = memoryStream.ToArray();
-            writer.Write(BuildTagBinaryFormat.ComputeContentHash64(dataWithoutHash, 0, dataWithoutHash.Length));
+            public void Write(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => CallCount++;
 
-            return memoryStream.ToArray();
+            public void WriteException(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => CallCount++;
         }
 
-        private static byte[] CreateBuildTagDataWithMetadata(
-            params (string Name, string Description, GameplayTagFlags Flags)[] entries)
+        private sealed class ThrowingDiagnosticsScope : IDisposable
         {
-            using MemoryStream memoryStream = new();
-            using BinaryWriter writer = new(memoryStream);
+            private readonly IGameplayTagsDiagnostics _previous;
+            private readonly ThrowingDiagnostics _sink;
+            private bool _isDisposed;
 
-            writer.Write(BuildTagBinaryFormat.FileSignature);
-            writer.Write(entries.Length);
-            for (int i = 0; i < entries.Length; i++)
+            public ThrowingDiagnosticsScope(
+                GameplayTagsDiagnosticLevel level,
+                Exception exception = null)
             {
-                BuildTagBinaryFormat.ValidateEntry(entries[i].Name, entries[i].Description, entries[i].Flags);
-                writer.Write(entries[i].Name);
-                writer.Write(entries[i].Description ?? string.Empty);
-                writer.Write((int)entries[i].Flags);
+                _sink = new ThrowingDiagnostics(
+                    level,
+                    exception ?? new InvalidOperationException("sink failure"));
+                _previous = GameplayTagsDiagnostics.Replace(_sink);
             }
 
-            writer.Flush();
-            byte[] dataWithoutHash = memoryStream.ToArray();
-            writer.Write(BuildTagBinaryFormat.ComputeContentHash64(
-                dataWithoutHash, 0, dataWithoutHash.Length));
-            return memoryStream.ToArray();
-        }
+            public int CallCount => _sink.CallCount;
 
-        private static IEnumerable<KeyValuePair<string, string>> EnumerateUnboundedRedirectBatch()
-        {
-            while (true)
+            public void Dispose()
             {
-                yield return new KeyValuePair<string, string>(
-                    "Redirect.Unbounded.Legacy",
-                    "Redirect.Unbounded.Current");
+                if (_isDisposed)
+                    return;
+
+                _isDisposed = true;
+                GameplayTagsDiagnostics.TryReplace(_sink, _previous);
             }
         }
 
-        private static IEnumerable<KeyValuePair<string, string>> EnumerateRedirectBatchWithReentrantMutation()
+        private sealed class ThrowingDiagnostics : IGameplayTagsDiagnostics
         {
-            GameplayTagRedirector.AddRedirect(
-                "Redirect.Reentrant.Legacy",
-                "Redirect.Reentrant.Current");
-            yield return new KeyValuePair<string, string>(
-                "Redirect.Batch.Legacy",
-                "Redirect.Batch.Current");
+            private readonly GameplayTagsDiagnosticLevel _level;
+            private readonly Exception _exception;
+
+            public ThrowingDiagnostics(GameplayTagsDiagnosticLevel level, Exception exception)
+            {
+                _level = level;
+                _exception = exception;
+            }
+
+            public int CallCount { get; private set; }
+
+            public bool IsEnabled(GameplayTagsDiagnosticLevel level, string category)
+            {
+                CallCount++;
+                if (level == _level)
+                    throw _exception;
+
+                return false;
+            }
+
+            public void Write(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                CallCount++;
+                if (level == _level)
+                    throw _exception;
+            }
+
+            public void WriteException(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                CallCount++;
+                if (level == _level)
+                    throw _exception;
+            }
         }
 
         private sealed class ScopedSilentDiagnostics : IGameplayTagsDiagnostics, IDisposable
@@ -1537,14 +447,10 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             public void Dispose()
             {
                 if (_isDisposed)
-                {
                     return;
-                }
 
                 _isDisposed = true;
-                IGameplayTagsDiagnostics previousDiagnostics = _previousDiagnostics;
-                _previousDiagnostics = null;
-                GameplayTagsDiagnostics.TryReplace(this, previousDiagnostics);
+                GameplayTagsDiagnostics.TryReplace(this, _previousDiagnostics);
             }
         }
     }

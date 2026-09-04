@@ -792,11 +792,34 @@ namespace CycloneGames.GameplayTags.Core
          InvokeTreeChangedHandlers(handlers);
       }
 
+      [ThreadStatic]
+      private static bool t_IsBroadcastingTreeChanged;
+
       internal static void InvokeTreeChangedHandlers(Action handlers)
       {
          if (handlers == null)
             return;
 
+         // A subscriber that changes the tree while the change is being broadcast must not re-enter the
+         // broadcast: it would invoke every subscriber again, and against a chain that has grown over a
+         // long session that is exponential, not linear. The in-flight broadcast already announces the
+         // current state, so the nested change needs no announcement of its own.
+         if (t_IsBroadcastingTreeChanged)
+            return;
+
+         t_IsBroadcastingTreeChanged = true;
+         try
+         {
+            InvokeTreeChangedHandlersCore(handlers);
+         }
+         finally
+         {
+            t_IsBroadcastingTreeChanged = false;
+         }
+      }
+
+      private static void InvokeTreeChangedHandlersCore(Action handlers)
+      {
          Delegate[] subscribers = handlers.GetInvocationList();
          for (int i = 0; i < subscribers.Length; i++)
          {

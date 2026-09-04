@@ -89,6 +89,7 @@ namespace CycloneGames.GameplayTags.Core
       private List<OnTagCountChangedDelegate> m_GlobalNewOrRemove;
       private int m_RuntimeIndexEpoch;
       private int m_MutationDepth;
+      private bool m_Poisoned;
 
       /// <summary>Capacity of the stack buffer used to stage a batch mutation of a small container.</summary>
       private const int StackBatchCapacity = 64;
@@ -141,7 +142,14 @@ namespace CycloneGames.GameplayTags.Core
          m_Registry = registry ?? throw new ArgumentNullException(nameof(registry));
       }
 
-      public bool IsEmpty => m_ExplicitCount == 0;
+      public bool IsEmpty
+      {
+         get
+         {
+            ThrowIfMutationInProgress();
+            return m_ExplicitCount == 0;
+         }
+      }
 
       public int ExplicitTagCount => m_ExplicitCount;
 
@@ -199,6 +207,31 @@ namespace CycloneGames.GameplayTags.Core
          => m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      /// <summary>
+      /// Read members fail fast while a mutation is in flight. A notification callback may have put the
+      /// container into a transient state (and may even have swapped the registry underneath it), so any
+      /// read served mid-mutation would observe half-applied counts. Callbacks queue work and apply it
+      /// after <see cref="Clear"/> completes; the same rule protects reads.
+      /// </summary>
+      private void ThrowIfMutationInProgress()
+      {
+         if (m_MutationDepth > 0)
+         {
+            m_Poisoned = true;
+            throw new InvalidOperationException(
+               "This gameplay tag count container is mid-mutation (a notification callback is running). " +
+               "Queue the read and retry after the current operation completes.");
+         }
+
+         if (m_Poisoned)
+         {
+            throw new InvalidOperationException(
+               "This gameplay tag count container is poisoned by a rejected reentrant operation. Its counts " +
+               "are committed and unchanged, but callbacks already observed the container mid-mutation, so " +
+               "reads stay locked until Clear() resets the container.");
+         }
+      }
+
       private TagDataSnapshot GetSnapshotForMutation()
       {
          TagDataSnapshot snapshot = GetSnapshot();
@@ -375,10 +408,14 @@ namespace CycloneGames.GameplayTags.Core
       {
          if (m_MutationDepth > 0)
          {
+            // A rejected reentrant Clear poisons the container: callbacks already observed it mid-mutation,
+            // so reads stay locked until a Clear issued outside the mutation resets it.
+            m_Poisoned = true;
             throw new InvalidOperationException(
                "A gameplay tag count container cannot be cleared from inside its own mutation callback.");
          }
 
+         m_Poisoned = false;
          m_ExplicitCount = 0;
          m_ImplicitCount = 0;
          m_BatchCount = 0;
@@ -438,6 +475,7 @@ namespace CycloneGames.GameplayTags.Core
       {
          if (m_MutationDepth > 0)
          {
+            m_Poisoned = true;
             throw new InvalidOperationException(
                "A gameplay tag count container cannot be mutated from inside its own mutation callback. " +
                "Queue the change and apply it after the current one completes.");
