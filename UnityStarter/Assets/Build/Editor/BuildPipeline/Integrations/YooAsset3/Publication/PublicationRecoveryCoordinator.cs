@@ -45,18 +45,10 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                     AssetDatabase.Refresh,
                     UnityJournalSerializer.Instance);
 
-                // Player-build artifact relocations (ownership markers, backups, protected
-                // metas, stage directories hidden for the Player build) are restored here so a
-                // crashed or killed Editor never strands them in Temp.
-                int restored = RelocationRecovery.RestorePending(
-                    normalizedProjectRoot,
-                    UnityJournalSerializer.Instance,
-                    message => UnityEngine.Debug.Log(message));
-                if (restored > 0)
-                {
-                    UnityEngine.Debug.Log(
-                        $"YooAsset relocation recovery restored {restored} Player-build publication artifact(s).");
-                }
+                // Relocation restoration is owned by RelocationRecoveryCoordinator (priority 110),
+                // which runs before this participant and acquires the same publication lock.
+                // Calling RelocationRecovery from both coordinators would duplicate the work and
+                // make the ownership of relocation recovery ambiguous.
             }
         }
     }

@@ -121,7 +121,7 @@ namespace CycloneGames.GameplayTags.Core
             throw new ArgumentNullException(nameof(container));
          }
 
-         if (!GameplayTagManager.TryRequestTag(tagName, out GameplayTag tag))
+         if (!GameplayTagManager.TryRequest(tagName, out GameplayTag tag))
          {
             return false;
          }
@@ -142,7 +142,7 @@ namespace CycloneGames.GameplayTags.Core
             throw new ArgumentException("Gameplay tag name cannot be empty.", nameof(tagName));
          }
 
-         if (!GameplayTagManager.TryRequestTag(tagName, out GameplayTag tag))
+         if (!GameplayTagManager.TryRequest(tagName, out GameplayTag tag))
          {
             if (ignoreMissing)
             {

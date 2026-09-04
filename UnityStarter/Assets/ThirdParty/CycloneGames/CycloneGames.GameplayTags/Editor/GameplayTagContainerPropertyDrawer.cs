@@ -10,10 +10,11 @@ using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState;
 #endif
 
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
-   [CustomPropertyDrawer(typeof(GameplayTagContainer))]
+   [CustomPropertyDrawer(typeof(SerializableGameplayTagContainer))]
    public class GameplayTagContainerPropertyDrawer : PropertyDrawer
    {
       private const float k_Gap = 3.0f;
@@ -87,7 +88,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       private float CalcTagsInnerHeight(SerializedProperty property)
       {
-         SerializedProperty tags = property.FindPropertyRelative("m_SerializedExplicitTags");
+         SerializedProperty tags = property.FindPropertyRelative("explicitTagNames");
          if (tags.hasMultipleDifferentValues || tags.arraySize == 0)
             return EditorGUIUtility.singleLineHeight;
 
@@ -106,7 +107,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          int oldIndentLevel = EditorGUI.indentLevel;
          EditorGUI.indentLevel = 0;
 
-         SerializedProperty explicitTagsProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
+         SerializedProperty explicitTagsProperty = property.FindPropertyRelative("explicitTagNames");
          float buttonsWidth = GetButtonsWidth(position.width);
 
          Rect editButtonRect = new(position.x, position.y, buttonsWidth, k_ButtonHeight);
@@ -170,7 +171,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < visibleCount; i++)
             {
                SerializedProperty element = explicitTagsProperty.GetArrayElementAtIndex(i);
-               GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue, false);
+               GameplayTag tag = GameplayTagManager.Request(element.stringValue, false);
 
                bool isValid = tag.IsValid;
                SetTagLabelContent(element.stringValue, isValid, tag.Description);

@@ -110,9 +110,9 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                   FileGameplayTagSource source = GetOrCreateFileTagSource();
                   source.AddTag(m_NewTagName, m_NewTagComment);
 
-                  GameplayTagManager.ReloadTags();
+                  GameplayTagManager.Reload();
 
-                  GameplayTag addedTag = GameplayTagManager.RequestTag(m_NewTagName);
+                  GameplayTag addedTag = GameplayTagManager.Request(m_NewTagName);
 
                   if (!addedTag.IsValid)
                   {

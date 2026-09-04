@@ -45,7 +45,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             const string tagName = "Test.GAS.Performance.SetByCaller";
             GameplayTagManager.RegisterDynamicTag(tagName, "GameplayEffectSpec benchmark tag");
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag dataTag = GameplayTagManager.RequestTag(tagName);
+            GameplayTag dataTag = GameplayTagManager.Request(tagName);
             var effect = new GameplayEffect(
                 "BenchmarkEffect",
                 EDurationPolicy.Instant,

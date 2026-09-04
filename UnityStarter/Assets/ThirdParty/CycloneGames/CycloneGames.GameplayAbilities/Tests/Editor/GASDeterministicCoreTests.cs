@@ -198,7 +198,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Magnitude.SetByCaller", "SetByCaller magnitude test tag");
             GameplayTagManager.InitializeIfNeeded();
-            var dataTag = GameplayTagManager.RequestTag("Test.GAS.Magnitude.SetByCaller");
+            var dataTag = GameplayTagManager.Request("Test.GAS.Magnitude.SetByCaller");
             var context = new GASRuntimeContext();
             var source = CreateMagnitudeTestAsc(context, out _);
             var target = CreateMagnitudeTestAsc(context, out _);
@@ -741,7 +741,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.Powered", "Ongoing requirement test tag");
             GameplayTagManager.InitializeIfNeeded();
-            var requiredTag = GameplayTagManager.RequestTag("Test.GAS.Effect.Powered");
+            var requiredTag = GameplayTagManager.Request("Test.GAS.Effect.Powered");
             var requiredTags = new GameplayTagContainer();
             requiredTags.AddTag(requiredTag);
             var ongoingRequirements = new GameplayTagRequirements(new GameplayTagContainer(), requiredTags);
@@ -800,7 +800,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.PeriodicEnabled", "Periodic inhibition test tag");
             GameplayTagManager.InitializeIfNeeded();
-            var requiredTag = GameplayTagManager.RequestTag("Test.GAS.Effect.PeriodicEnabled");
+            var requiredTag = GameplayTagManager.Request("Test.GAS.Effect.PeriodicEnabled");
             var requiredTags = new GameplayTagContainer();
             requiredTags.AddTag(requiredTag);
             var ongoingRequirements = new GameplayTagRequirements(new GameplayTagContainer(), requiredTags);
@@ -964,7 +964,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Replication.TagWindow", "Replication window test tag");
             GameplayTagManager.InitializeIfNeeded();
-            var tag = GameplayTagManager.RequestTag("Test.GAS.Replication.TagWindow");
+            var tag = GameplayTagManager.Request("Test.GAS.Replication.TagWindow");
             var builder = new ReplicationStateBuilder();
 
             Assert.That(builder.TrackTagCountChange(tag, 1), Is.True);

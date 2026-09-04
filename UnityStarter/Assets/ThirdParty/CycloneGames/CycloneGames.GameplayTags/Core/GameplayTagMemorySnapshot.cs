@@ -44,7 +44,7 @@ namespace CycloneGames.GameplayTags.Core
             snapshot.TagCount,
             snapshot.Generation,
             snapshot.RuntimeIndexEpoch,
-            CurrentManifestHash,
+            GameplayTagManager.ManifestHash,
             GameplayTagRedirector.CurrentCount);
       }
    }

@@ -1206,12 +1206,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 // ownership evidence and deferred rollback state remain intact.
                 private void HidePublicationArtifacts()
                 {
-                    string relocationRoot = Path.GetFullPath(Path.Combine(
-                        Application.dataPath,
-                        "..",
-                        "Temp",
-                        "BuildPipeline",
-                        "YooAssetPublicationMarkers"));
+                    // Shared helper keeps the relocation root in sync with the trust boundary the
+                    // recovery pass validates journal entries against
+                    // (RelocationPathPolicy.ValidateEntryRoots).
+                    string relocationRoot = RelocationJournalStore.GetRelocationRoot(projectRoot);
                     Directory.CreateDirectory(relocationRoot);
 
                     foreach (PackagePublication package in owner.transaction.Packages)

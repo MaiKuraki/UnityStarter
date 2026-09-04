@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(CueTagName, "Committed Gameplay Cue test tag.");
             GameplayTagManager.InitializeIfNeeded();
-            cueTag = GameplayTagManager.RequestTag(CueTagName);
+            cueTag = GameplayTagManager.Request(CueTagName);
             cueManager = new ProbeCueManager();
             context = new GASRuntimeContext(
                 GASRuntimeAuthorityMode.Authority,

@@ -27,9 +27,9 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GameplayAttribute BonusDamageMultiplier { get; } = new GameplayAttribute(GASSampleTags.Data_DamageMultiplier);
         public GameplayAttribute Damage { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Damage);
 
-        private static readonly GameplayTag Tag_DamageMultiplier = GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier);
-        private static readonly GameplayTag Tag_State_Dead = GameplayTagManager.RequestTag(GASSampleTags.State_Dead);
-        private static readonly GameplayTag Tag_Event_ExpGain = GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain);
+        private static readonly GameplayTag Tag_DamageMultiplier = GameplayTagManager.Request(GASSampleTags.Data_DamageMultiplier);
+        private static readonly GameplayTag Tag_State_Dead = GameplayTagManager.Request(GASSampleTags.State_Dead);
+        private static readonly GameplayTag Tag_Event_ExpGain = GameplayTagManager.Request(GASSampleTags.Event_Experience_Gain);
 
         public CharacterAttributeSet()
         {

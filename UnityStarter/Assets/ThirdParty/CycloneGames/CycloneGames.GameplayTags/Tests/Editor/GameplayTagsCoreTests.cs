@@ -20,10 +20,10 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             GameplayTagManager.ResetForTests();
             GameplayTagRedirector.ClearAll();
-            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
-            GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
-            GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => System.Array.Empty<IGameplayTagSource>();
-            GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+            TestHost.IsRuntimePlaying = false;
+            TestHost.SetBuildData(null);
+            TestHost.ClearRegisteredProjectTagSources();
+            GameplayTagHost.ClearRegisteredProjectTagSources();
             _diagnosticScope = new ScopedSilentDiagnostics();
         }
 
@@ -34,7 +34,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             {
                 GameplayTagManager.ResetForTests();
                 GameplayTagRedirector.ClearAll();
-                GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+                GameplayTagHost.ClearRegisteredProjectTagSources();
             }
             finally
             {
@@ -48,9 +48,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             RegisterTestTags();
 
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.RequestTag("Test.Ability.Damage");
-            GameplayTag ability = GameplayTagManager.RequestTag("Test.Ability");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
+            GameplayTag ability = GameplayTagManager.Request("Test.Ability");
 
             Assert.That(damageFire.IsValid, Is.True);
             Assert.That(damageFire.Name, Is.EqualTo("Test.Ability.Damage.Fire"));
@@ -59,16 +59,16 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(damageFire.ParentTag, Is.EqualTo(damage));
             Assert.That(damageFire.IsChildOf(damage), Is.True);
             Assert.That(ability.IsParentOf(damageFire), Is.True);
-            Assert.That(damageFire.MatchesTagDepth(GameplayTagManager.RequestTag("Test.Ability.Damage.Ice")), Is.EqualTo(3));
+            Assert.That(damageFire.MatchesTagDepth(GameplayTagManager.Request("Test.Ability.Damage.Ice")), Is.EqualTo(3));
         }
 
         [Test]
         public void Container_AddTagIncludesImplicitParentsAndExactLeaf()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.RequestTag("Test.Ability.Damage");
-            GameplayTag ability = GameplayTagManager.RequestTag("Test.Ability");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
+            GameplayTag ability = GameplayTagManager.Request("Test.Ability");
 
             GameplayTagContainer container = new();
             container.AddTag(damageFire);
@@ -84,9 +84,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void Container_UnionAndIntersectionPreserveSortedTagSets()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damageIce = GameplayTagManager.RequestTag("Test.Ability.Damage.Ice");
-            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag damageIce = GameplayTagManager.Request("Test.Ability.Damage.Ice");
+            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
 
             GameplayTagContainer lhs = new();
             lhs.AddTag(damageFire);
@@ -112,9 +112,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             RegisterTestTags();
             GameplayTagContainer lhs = new();
-            lhs.AddTag(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire"));
+            lhs.AddTag(GameplayTagManager.Request("Test.Ability.Damage.Fire"));
             GameplayTagContainer rhs = new();
-            rhs.AddTag(GameplayTagManager.RequestTag("Test.Ability.Damage.Ice"));
+            rhs.AddTag(GameplayTagManager.Request("Test.Ability.Damage.Ice"));
 
             GameplayTagContainer intersection = GameplayTagContainer.Intersection(lhs, rhs);
 
@@ -127,8 +127,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void ReadOnlySnapshot_HasAnyDoesNotMatchOnlyACommonImplicitParent()
         {
             RegisterTestTags();
-            GameplayTag fire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag ice = GameplayTagManager.RequestTag("Test.Ability.Damage.Ice");
+            GameplayTag fire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag ice = GameplayTagManager.Request("Test.Ability.Damage.Ice");
 
             GameplayTagContainer fireContainer = new();
             fireContainer.AddTag(fire);
@@ -155,9 +155,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             });
             GameplayTagManager.InitializeIfNeeded();
 
-            GameplayTag status = GameplayTagManager.RequestTag("Test.Status");
-            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
-            GameplayTag other = GameplayTagManager.RequestTag("Test.Status.Other");
+            GameplayTag status = GameplayTagManager.Request("Test.Status");
+            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
+            GameplayTag other = GameplayTagManager.Request("Test.Status.Other");
             GameplayTagContainer parentSource = new();
             parentSource.AddTag(status);
             parentSource.AddTag(other);
@@ -167,27 +167,27 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
             Assert.That(parents, Does.Contain(status));
 
-            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => true;
+            TestHost.IsRuntimePlaying = true;
             GameplayTagManager.RegisterDynamicTag("Other.Unrelated");
             GameplayTagManager.RegisterDynamicTag("Test.Status.LateChild");
             GameplayTagContainer childSource = new();
-            childSource.AddTag(GameplayTagManager.RequestTag("Test.Status.Alpha.Child"));
-            childSource.AddTag(GameplayTagManager.RequestTag("Other.Unrelated"));
-            childSource.AddTag(GameplayTagManager.RequestTag("Test.Status.LateChild"));
+            childSource.AddTag(GameplayTagManager.Request("Test.Status.Alpha.Child"));
+            childSource.AddTag(GameplayTagManager.Request("Other.Unrelated"));
+            childSource.AddTag(GameplayTagManager.Request("Test.Status.LateChild"));
             List<GameplayTag> children = new();
 
             childSource.GetExplicitChildTags(status, children);
 
-            Assert.That(children, Does.Contain(GameplayTagManager.RequestTag("Test.Status.Alpha.Child")));
-            Assert.That(children, Does.Contain(GameplayTagManager.RequestTag("Test.Status.LateChild")));
+            Assert.That(children, Does.Contain(GameplayTagManager.Request("Test.Status.Alpha.Child")));
+            Assert.That(children, Does.Contain(GameplayTagManager.Request("Test.Status.LateChild")));
         }
 
         [Test]
         public void CountContainer_TracksExplicitAndImplicitCounts()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damage = GameplayTagManager.RequestTag("Test.Ability.Damage");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag damage = GameplayTagManager.Request("Test.Ability.Damage");
             int anyChangeCount = 0;
             int newOrRemovedCount = 0;
 
@@ -210,7 +210,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void CountContainer_StorageScalesWithActiveTagsInsteadOfHighestRuntimeIndex()
         {
             RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagCountContainer container = new();
 
             container.AddTag(leaf);
@@ -232,7 +232,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void CountContainer_OverflowAndUnderflowValidationIsAtomic()
         {
             RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagCountContainer container = new();
             container.AddTag(leaf);
 
@@ -255,8 +255,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void CountContainer_BatchValidationFailureDoesNotMutateNotifyOrRetainScratch()
         {
             RegisterTestTags();
-            GameplayTag overflowTag = GameplayTagManager.RequestTag("Test.Status.Stun");
-            GameplayTag unaffectedTag = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+            GameplayTag overflowTag = GameplayTagManager.Request("Test.Status.Stun");
+            GameplayTag unaffectedTag = GameplayTagManager.Request("Test.Ability.Damage.Fire");
             GameplayTagCountContainer container = new();
             container.AddTag(overflowTag);
 
@@ -278,14 +278,14 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(container.GetExplicitTagCount(unaffectedTag), Is.Zero);
             Assert.That(container.GetTagCount(unaffectedTag), Is.Zero);
             Assert.That(callbackCount, Is.Zero);
-            Assert.That(container.HasRetainedMutationScratch, Is.False);
+            Assert.That(container.HasRetainedBatchBuffers, Is.False);
         }
 
         [Test]
         public void CountContainer_CallbackFailuresAreAggregatedAfterCommitAndReentryFailsFast()
         {
             RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagCountContainer container = new();
             Exception reentryFailure = null;
             int laterSubscriberCalls = 0;
@@ -317,7 +317,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             DiagnosticFailurePoint failurePoint)
         {
             RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagCountContainer container = new();
             int laterSubscriberCalls = 0;
             container.OnAnyTagCountChange += (_, _) =>
@@ -353,7 +353,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             {
                 GameplayTag result = default;
                 Assert.DoesNotThrow(() =>
-                    result = GameplayTagManager.RequestTag("Test.Missing.Tag", true));
+                    result = GameplayTagManager.Request("Test.Missing.Tag", true));
                 Assert.That(result.IsValid, Is.False);
             }
             finally
@@ -372,7 +372,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             try
             {
                 Assert.Throws<OutOfMemoryException>(() =>
-                    GameplayTagManager.RequestTag("Test.Missing.Tag", true));
+                    GameplayTagManager.Request("Test.Missing.Tag", true));
             }
             finally
             {
@@ -503,15 +503,15 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             const string initialSourceName = "Test.CountSnapshot.Initial";
             const string replacementSourceName = "Test.CountSnapshot.Replacement";
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
                 initialSourceName,
                 "Mutation.Alpha.Leaf",
                 "Mutation.Zulu.Leaf"));
             GameplayTagManager.InitializeIfNeeded();
 
             GameplayTagContainer added = new();
-            added.AddTag(GameplayTagManager.RequestTag("Mutation.Alpha.Leaf"));
-            added.AddTag(GameplayTagManager.RequestTag("Mutation.Zulu.Leaf"));
+            added.AddTag(GameplayTagManager.Request("Mutation.Alpha.Leaf"));
+            added.AddTag(GameplayTagManager.Request("Mutation.Zulu.Leaf"));
             List<string> expectedNotifications = new();
             foreach (GameplayTag tag in added.GetTags())
             {
@@ -531,13 +531,13 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 }
 
                 reloaded = true;
-                GameplayTagRuntimePlatform.UnregisterProjectTagSource(initialSourceName);
-                GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+                GameplayTagHost.UnregisterProjectTagSource(initialSourceName);
+                GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
                     replacementSourceName,
                     "Aardvark.Inserted",
                     "Mutation.Alpha.Leaf",
                     "Mutation.Zulu.Leaf"));
-                GameplayTagManager.ReloadTags();
+                GameplayTagManager.Reload();
                 try
                 {
                     counts.Clear();
@@ -560,7 +560,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void CountContainer_RemoveAllCallbacksReleasesPerTagAndGlobalSubscribers()
         {
             RegisterTestTags();
-            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag leaf = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagCountContainer container = new();
             int perTagCalls = 0;
             int globalCountCalls = 0;
@@ -585,9 +585,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void Query_MatchesNestedExpression()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
-            GameplayTag statusRoot = GameplayTagManager.RequestTag("Test.Status");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
+            GameplayTag statusRoot = GameplayTagManager.Request("Test.Status");
 
             GameplayTagContainer subject = new();
             subject.AddTag(damageFire);
@@ -631,8 +631,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void Query_InvalidateCompiledCache_RecompilesMutatedExpression()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
 
             GameplayTagContainer subject = new();
             subject.AddTag(damageFire);
@@ -662,8 +662,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void Requirements_MatchAcrossStaticAndDynamicContainers()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag damageFire = GameplayTagManager.Request("Test.Ability.Damage.Fire");
+            GameplayTag statusStun = GameplayTagManager.Request("Test.Status.Stun");
 
             GameplayTagContainer staticTags = new();
             GameplayTagContainer dynamicTags = new();
@@ -710,8 +710,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 Array.Empty<string>(),
                 tagNames);
 
-            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire")), Is.True);
-            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Status.Stun")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Ability.Damage.Fire")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Status.Stun")), Is.True);
             Assert.That(requirements.Matches(container), Is.True);
         }
 
@@ -724,22 +724,22 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 "Test.Ability.Damage.Fire|Test.Status.Stun",
                 '|');
 
-            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire")), Is.True);
-            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Status.Stun")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Ability.Damage.Fire")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.Request("Test.Status.Stun")), Is.True);
         }
 
         [Test]
         public void RuntimePlatform_RegisteredProjectSource_ParticipatesInInitialization()
         {
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
                 "Test.DataTableSource",
                 "Table.Ability.Fireball",
                 "Table.Effect.Burn"));
 
             GameplayTagManager.InitializeIfNeeded();
 
-            Assert.That(GameplayTagManager.RequestTag("Table.Ability.Fireball").IsValid, Is.True);
-            Assert.That(GameplayTagManager.RequestTag("Table.Effect.Burn").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("Table.Ability.Fireball").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("Table.Effect.Burn").IsValid, Is.True);
         }
 
         [Test]
@@ -747,18 +747,18 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("Manifest.Tag", "First description", GameplayTagFlags.None);
             GameplayTagManager.InitializeIfNeeded();
-            ulong firstManifest = GameplayTagManager.CurrentManifestHash;
+            ulong firstManifest = GameplayTagManager.ManifestHash;
 
             GameplayTagManager.ResetForTests();
             GameplayTagManager.RegisterDynamicTag(
                 "Manifest.Tag", "Changed editor description", GameplayTagFlags.HideInEditor);
             GameplayTagManager.InitializeIfNeeded();
-            ulong metadataChangedManifest = GameplayTagManager.CurrentManifestHash;
+            ulong metadataChangedManifest = GameplayTagManager.ManifestHash;
 
             GameplayTagManager.RegisterDynamicTag("Manifest.Other");
 
             Assert.That(metadataChangedManifest, Is.EqualTo(firstManifest));
-            Assert.That(GameplayTagManager.CurrentManifestHash, Is.Not.EqualTo(firstManifest));
+            Assert.That(GameplayTagManager.ManifestHash, Is.Not.EqualTo(firstManifest));
         }
 
         [Test]
@@ -767,17 +767,17 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             GameplayTagManager.InitializeIfNeeded();
             GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
             GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
-            ulong zThenAManifest = GameplayTagManager.CurrentManifestHash;
-            int firstZIndex = GameplayTagManager.RequestTag("Manifest.Order.Z").RuntimeIndex;
-            int firstAIndex = GameplayTagManager.RequestTag("Manifest.Order.A").RuntimeIndex;
+            ulong zThenAManifest = GameplayTagManager.ManifestHash;
+            int firstZIndex = GameplayTagManager.Request("Manifest.Order.Z").RuntimeIndex;
+            int firstAIndex = GameplayTagManager.Request("Manifest.Order.A").RuntimeIndex;
 
             GameplayTagManager.ResetForTests();
             GameplayTagManager.InitializeIfNeeded();
             GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
             GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
-            ulong aThenZManifest = GameplayTagManager.CurrentManifestHash;
-            int secondAIndex = GameplayTagManager.RequestTag("Manifest.Order.A").RuntimeIndex;
-            int secondZIndex = GameplayTagManager.RequestTag("Manifest.Order.Z").RuntimeIndex;
+            ulong aThenZManifest = GameplayTagManager.ManifestHash;
+            int secondAIndex = GameplayTagManager.Request("Manifest.Order.A").RuntimeIndex;
+            int secondZIndex = GameplayTagManager.Request("Manifest.Order.Z").RuntimeIndex;
 
             Assert.That(firstZIndex, Is.LessThan(firstAIndex));
             Assert.That(secondAIndex, Is.LessThan(secondZIndex));
@@ -845,7 +845,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         [Test]
         public void CountContainer_BatchScratchIsContainerOwnedAndDropsOversizedPeak()
         {
-            int tagCount = GameplayTagCountContainer.MaxRetainedMutationScratchEntries + 1;
+            int tagCount = GameplayTagCountContainer.MaxRetainedBatchEntryCount + 1;
             string[] names = new string[tagCount];
             for (int i = 0; i < names.Length; i++)
                 names[i] = $"Scratch.Tag{i:000}";
@@ -855,44 +855,51 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
             GameplayTagContainer largeBatch = new();
             for (int i = 0; i < names.Length; i++)
-                largeBatch.AddTag(GameplayTagManager.RequestTag(names[i]));
+                largeBatch.AddTag(GameplayTagManager.Request(names[i]));
 
             GameplayTagCountContainer owner = new();
             GameplayTagCountContainer unrelated = new();
             owner.AddTags(largeBatch);
 
             Assert.That(owner.ExplicitTagCount, Is.EqualTo(tagCount));
-            Assert.That(owner.HasRetainedMutationScratch, Is.False);
-            Assert.That(unrelated.HasRetainedMutationScratch, Is.False);
+            Assert.That(owner.HasRetainedBatchBuffers, Is.False);
+            Assert.That(unrelated.HasRetainedBatchBuffers, Is.False);
 
             GameplayTagContainer smallBatch = new();
-            smallBatch.AddTag(GameplayTagManager.RequestTag(names[0]));
-            smallBatch.AddTag(GameplayTagManager.RequestTag(names[1]));
+            smallBatch.AddTag(GameplayTagManager.Request(names[0]));
+            smallBatch.AddTag(GameplayTagManager.Request(names[1]));
             owner.RemoveTags(smallBatch);
 
-            Assert.That(owner.HasRetainedMutationScratch, Is.True);
-            Assert.That(unrelated.HasRetainedMutationScratch, Is.False);
+            Assert.That(owner.HasRetainedBatchBuffers, Is.True);
+            Assert.That(unrelated.HasRetainedBatchBuffers, Is.False);
 
             owner.Clear();
             Assert.That(owner.IsEmpty, Is.True);
-            Assert.That(owner.HasRetainedMutationScratch, Is.False);
+            Assert.That(owner.HasRetainedBatchBuffers, Is.False);
         }
 
         [Test]
         public void BitsetPolicy_RequiresEnoughDensityForRetainedMemory()
         {
-            Assert.That(
-                GameplayTagContainerUtility.ShouldUseBitset(64, 64, out int denseWordCount),
-                Is.True);
-            Assert.That(denseWordCount, Is.EqualTo(3));
+            // Dense: 64 consecutive indices. Two bits per index puts the whole bitset in five words, so
+            // membership tests are answered from one word instead of a seven-step search.
+            GameplayTagContainer dense = new();
+            for (int i = 1; i <= 64; i++)
+                dense.AddTag(GameplayTagManager.FromRuntimeIndex(i));
 
-            Assert.That(
-                GameplayTagContainerUtility.ShouldUseBitset(
-                    64,
-                    GameplayTagUtility.MaxRegisteredTagCount,
-                    out int sparseWordCount),
-                Is.False);
-            Assert.That(sparseWordCount, Is.EqualTo(2048));
+            Assert.That(dense.UsesBitset, Is.True);
+
+            // Sparse: the same tag count spread across the registry's whole index range. A bitset would
+            // cost more memory than the binary search it replaces, so it stays off.
+            GameplayTagContainer sparse = new();
+            int span = GameplayTagUtility.MaxRegisteredTagCount / 64;
+            for (int i = 0; i < 64; i++)
+                sparse.AddTag(GameplayTagManager.FromRuntimeIndex(1 + i * span));
+
+            Assert.That(sparse.UsesBitset, Is.False);
+            Assert.That(sparse.ExplicitTagCount, Is.EqualTo(64));
+            Assert.That(sparse.HasTag(sparse.GetExplicitTag(63)), Is.True,
+                "Sparse containers must still answer membership, just without a bitset.");
         }
 
         [Test]
@@ -907,9 +914,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(context.RegisterTag(
                 "CapacityB.Leaf", string.Empty, GameplayTagFlags.None), Is.True);
 
-            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(addNoneTag: true);
+            GameplayTagBuildResult result = context.Build();
 
-            Assert.That(definitions, Is.Null);
+            Assert.That(result, Is.Null);
             Assert.That(context.IsRegistrationTerminated, Is.True);
             Assert.That(context.RegisteredTagCount, Is.EqualTo(2),
                 "Implicit parents must not be partially committed after capacity validation fails.");
@@ -966,7 +973,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag("DynamicBudget.Baseline");
             GameplayTagManager.InitializeIfNeeded();
-            int generation = GameplayTagManager.CurrentGeneration;
+            int generation = GameplayTagManager.Generation;
             int yieldedCount = 0;
 
             IEnumerable<string> EnumerateUnboundedEmptyTags()
@@ -983,7 +990,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(
                 yieldedCount,
                 Is.EqualTo(GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount + 1));
-            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
         }
 
         [Test]
@@ -1000,7 +1007,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.Throws<InvalidOperationException>(() => cyclicQuery.Matches(new GameplayTagContainer()));
 
             GameplayTagContainer tags = new();
-            tags.AddTag(GameplayTagManager.RequestTag("Test.Status.Stun"));
+            tags.AddTag(GameplayTagManager.Request("Test.Status.Stun"));
             GameplayTagQuery ambiguousQuery = new()
             {
                 RootExpression = new GameplayTagQueryExpression
@@ -1041,30 +1048,30 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void Reload_RuntimePreservesIndicesAndDefersRemovalUntilResetEpoch()
         {
             const string sourceName = "Test.RuntimeReload";
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(
+            GameplayTagHost.RegisterProjectTagSource(
                 new StaticGameplayTagSource(sourceName, "Runtime.Reload.Keep"));
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag original = GameplayTagManager.RequestTag("Runtime.Reload.Keep");
-            int originalEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+            GameplayTag original = GameplayTagManager.Request("Runtime.Reload.Keep");
+            int originalEpoch = GameplayTagManager.RuntimeIndexEpoch;
 
-            GameplayTagRuntimePlatform.UnregisterProjectTagSource(sourceName);
-            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => true;
-            GameplayTagManager.ReloadTags();
+            GameplayTagHost.UnregisterProjectTagSource(sourceName);
+            TestHost.IsRuntimePlaying = true;
+            GameplayTagManager.Reload();
 
-            Assert.That(GameplayTagManager.RequestTag("Runtime.Reload.Keep").RuntimeIndex, Is.EqualTo(original.RuntimeIndex));
-            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.EqualTo(originalEpoch));
+            Assert.That(GameplayTagManager.Request("Runtime.Reload.Keep").RuntimeIndex, Is.EqualTo(original.RuntimeIndex));
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.EqualTo(originalEpoch));
 
-            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
-            GameplayTagManager.ReloadTags();
-            Assert.That(GameplayTagManager.TryRequestTag("Runtime.Reload.Keep", out _), Is.False);
-            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.Not.EqualTo(originalEpoch));
+            TestHost.IsRuntimePlaying = false;
+            GameplayTagManager.Reload();
+            Assert.That(GameplayTagManager.TryRequest("Runtime.Reload.Keep", out _), Is.False);
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.Not.EqualTo(originalEpoch));
         }
 
         [Test]
         public void RuntimeReset_InvalidatesIndexOwnersButAllowsSafeClear()
         {
             RegisterTestTags();
-            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagContainer container = new();
             container.AddTag(stun);
             GameplayTagCountContainer counts = new();
@@ -1086,7 +1093,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void ReadOnlySnapshot_RejectsAllCrossEpochTagOperations()
         {
             RegisterTestTags();
-            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag stun = GameplayTagManager.Request("Test.Status.Stun");
             GameplayTagContainer mutable = new();
             mutable.AddTag(stun);
             ReadOnlyGameplayTagContainer snapshot = mutable.CreateSnapshot();
@@ -1108,35 +1115,40 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void PublishedDefinition_RemainsBoundToItsImmutableSnapshot()
         {
             const string sourceName = "Test.DefinitionSnapshot";
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+            GameplayTagHost.RegisterProjectTagSource(new StaticGameplayTagSource(
                 sourceName,
                 "DefinitionSnapshot.Root.Child"));
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag child = GameplayTagManager.RequestTag("DefinitionSnapshot.Root.Child");
-            GameplayTag parent = GameplayTagManager.RequestTag("DefinitionSnapshot.Root");
-            GameplayTagDefinition definition = child.Definition;
+            GameplayTag child = GameplayTagManager.Request("DefinitionSnapshot.Root.Child");
+            GameplayTag parent = GameplayTagManager.Request("DefinitionSnapshot.Root");
 
-            GameplayTagRuntimePlatform.UnregisterProjectTagSource(sourceName);
-            GameplayTagManager.ReloadTags();
+            // The new contract's equivalent of the old "definition stays bound to its snapshot": a
+            // captured snapshot keeps answering for the indices it assigned even after the registry has
+            // moved on and forgotten the tags.
+            TagDataSnapshot captured = GameplayTagManager.Snapshot;
 
-            Assert.That(GameplayTagManager.TryRequestTag("DefinitionSnapshot.Root.Child", out _), Is.False);
-            Assert.That(definition.ParentTags.Length, Is.EqualTo(2));
-            Assert.That(definition.ParentTags[1].m_Name, Is.EqualTo("DefinitionSnapshot.Root"));
-            Assert.That(definition.IsChildOf(parent), Is.True);
+            GameplayTagHost.UnregisterProjectTagSource(sourceName);
+            GameplayTagManager.Reload();
+
+            Assert.That(GameplayTagManager.TryRequest("DefinitionSnapshot.Root.Child", out _), Is.False);
+            Assert.That(captured.GetName(child.RuntimeIndex), Is.EqualTo("DefinitionSnapshot.Root.Child"));
+            Assert.That(captured.GetName(parent.RuntimeIndex), Is.EqualTo("DefinitionSnapshot.Root"));
+            Assert.That(captured.IsAncestorOf(parent.RuntimeIndex, child.RuntimeIndex), Is.True);
+            Assert.That(captured.GetParentIndex(child.RuntimeIndex), Is.EqualTo(parent.RuntimeIndex));
         }
 
         [Test]
         public void Reload_InvalidCandidatePreservesPublishedSnapshot()
         {
             RegisterTestTags();
-            int generation = GameplayTagManager.CurrentGeneration;
-            ulong manifestHash = GameplayTagManager.CurrentManifestHash;
-            GameplayTagRuntimePlatform.RegisterProjectTagSource(new InvalidGameplayTagSource());
+            int generation = GameplayTagManager.Generation;
+            ulong manifestHash = GameplayTagManager.ManifestHash;
+            GameplayTagHost.RegisterProjectTagSource(new InvalidGameplayTagSource());
 
-            Assert.Throws<InvalidOperationException>(GameplayTagManager.ReloadTags);
-            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
-            Assert.That(GameplayTagManager.CurrentManifestHash, Is.EqualTo(manifestHash));
-            Assert.That(GameplayTagManager.RequestTag("Test.Status.Stun").IsValid, Is.True);
+            Assert.Throws<InvalidOperationException>(() => GameplayTagManager.Reload());
+            Assert.That(GameplayTagManager.Generation, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.ManifestHash, Is.EqualTo(manifestHash));
+            Assert.That(GameplayTagManager.Request("Test.Status.Stun").IsValid, Is.True);
         }
 
         [Test]
@@ -1145,7 +1157,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             RegisterTestTags();
 
             int treeChangedCount = 0;
-            GameplayTagManager.OnGameplayTagTreeChanged += () => treeChangedCount++;
+            GameplayTagManager.TreeChanged += () => treeChangedCount++;
 
             GameplayTagManager.RegisterDynamicTags(new[]
             {
@@ -1154,9 +1166,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             });
 
             Assert.That(treeChangedCount, Is.EqualTo(1));
-            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability.Fire").IsValid, Is.True);
-            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability.Ice").IsValid, Is.True);
-            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("HotUpdate.Ability.Fire").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("HotUpdate.Ability.Ice").IsValid, Is.True);
+            Assert.That(GameplayTagManager.Request("HotUpdate.Ability").IsValid, Is.True);
         }
 
         [Test]
@@ -1170,31 +1182,35 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(data[1], Is.EqualTo((byte)'G'));
             Assert.That(data[2], Is.EqualTo((byte)'T'));
             Assert.That(data[3], Is.EqualTo((byte)'G'));
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             new BuildGameplayTagSource().RegisterTags(context);
-            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(true);
+            GameplayTagBuildResult result = context.Build();
 
-            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Ability.Fire"), Is.True);
-            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Status.Stun"), Is.True);
-            GameplayTagDefinition ability = definitions.Find(static definition => definition.TagName == "Build.Ability");
-            Assert.That(ability.Description, Is.EqualTo("Ability category"));
-            Assert.That(ability.Flags, Is.EqualTo(GameplayTagFlags.HideInEditor));
+            Assert.That(result, Is.Not.Null);
+            int fireIndex = Array.IndexOf(result.Names, "Build.Ability.Fire");
+            int stunIndex = Array.IndexOf(result.Names, "Build.Status.Stun");
+            int abilityIndex = Array.IndexOf(result.Names, "Build.Ability");
+            Assert.That(fireIndex, Is.GreaterThan(0));
+            Assert.That(stunIndex, Is.GreaterThan(0));
+            Assert.That(abilityIndex, Is.GreaterThan(0));
+            Assert.That(result.Descriptions[abilityIndex], Is.EqualTo("Ability category"));
+            Assert.That(result.Flags[abilityIndex], Is.EqualTo(GameplayTagFlags.HideInEditor));
         }
 
         [Test]
         public void BuildGameplayTagSource_RejectsMissingEmptyAndZeroTagData()
         {
             GameplayTagRegistrationContext context = new();
-            GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
+            TestHost.SetBuildData(null);
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
 
-            GameplayTagRuntimePlatform.LoadBuildTagData = static () => Array.Empty<byte>();
+            TestHost.SetBuildData(Array.Empty<byte>());
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
 
             byte[] zeroTagData = CreateBuildTagData();
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => zeroTagData;
+            TestHost.SetBuildData(zeroTagData);
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
         }
 
@@ -1203,7 +1219,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             byte[] data = CreateBuildTagData("Build.Ability.Fire");
             data[^1] ^= 0xFF;
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
@@ -1214,7 +1230,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             byte[] data = CreateBuildTagData("Build.Ability.Fire");
             data[0] ^= 0xFF;
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
@@ -1225,7 +1241,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             byte[] data = CreateBuildTagData("Build.Ability.Fire");
             Array.Resize(ref data, data.Length - 1);
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
@@ -1236,7 +1252,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             byte[] data = CreateBuildTagData("Build.Ability.Fire");
             Array.Resize(ref data, data.Length + 1);
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
@@ -1246,11 +1262,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         public void BuildGameplayTagSource_RejectsDuplicateTags()
         {
             byte[] data = CreateBuildTagData("Build.Ability.Fire", "Build.Ability.Fire");
-            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+            TestHost.SetBuildData(data);
 
             GameplayTagRegistrationContext context = new();
             Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
-            Assert.That(context.GenerateDefinitions(false), Is.Empty);
+            Assert.That(context.RegisteredTagCount, Is.Zero);
         }
 
         private static void RegisterTestTags()

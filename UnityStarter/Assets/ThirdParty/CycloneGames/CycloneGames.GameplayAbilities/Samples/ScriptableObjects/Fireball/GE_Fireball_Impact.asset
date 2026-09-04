@@ -19,31 +19,57 @@ MonoBehaviour:
   SerializableModifiers:
   - AttributeName: Attribute.Meta.Damage
     Operation: 0
+    EvaluationChannel: 0
+    MagnitudeCalculationType: 0
     Magnitude:
       BaseValue: 20
       ScalingFactorPerLevel: 0
+    BackingAttributeName: 
+    AttributeCaptureSource: 0
+    AttributeCalculationType: 0
+    AttributeSnapshotPolicy: 0
+    AttributeCoefficient:
+      BaseValue: 1
+      ScalingFactorPerLevel: 0
+    AttributePreMultiplyAdditiveValue:
+      BaseValue: 0
+      ScalingFactorPerLevel: 0
+    AttributePostMultiplyAdditiveValue:
+      BaseValue: 0
+      ScalingFactorPerLevel: 0
+    SetByCallerDataTag:
+      tagName: 
+    SetByCallerDataName: 
+    SetByCallerDefaultValue: 0
+    WarnIfSetByCallerMissing: 1
   ExecutionDefinition: {fileID: 0}
   Stacking:
     Type: 0
     Limit: 0
     DurationPolicy: 0
+    ExpirationPolicy: 0
   GrantedAbilities: []
   AssetTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   GrantedTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   ApplicationTagRequirements:
-    m_ForbiddenTags:
-      m_SerializedExplicitTags: []
-    m_RequiredTags:
-      m_SerializedExplicitTags: []
+    forbiddenTags:
+      explicitTagNames: []
+    requiredTags:
+      explicitTagNames: []
   OngoingTagRequirements:
-    m_ForbiddenTags:
-      m_SerializedExplicitTags: []
-    m_RequiredTags:
-      m_SerializedExplicitTags: []
+    forbiddenTags:
+      explicitTagNames: []
+    requiredTags:
+      explicitTagNames: []
   RemoveGameplayEffectsWithTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   GameplayCues:
-    m_SerializedExplicitTags:
+    explicitTagNames:
     - GameplayCue.Fireball.Impact
+  SuppressGameplayCues: 0
+  RemoveGameplayEffectsAfterAbilityEnds: 0
+  ExecutePeriodicEffectOnApplication: 1
+  OverflowEffects: []
+  DenyOverflowApplication: 0

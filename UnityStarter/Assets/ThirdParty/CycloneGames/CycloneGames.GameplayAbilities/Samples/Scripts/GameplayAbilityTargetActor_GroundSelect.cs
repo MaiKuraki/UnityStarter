@@ -37,12 +37,32 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
         }
         
+        private Camera m_CachedCamera;
+
+        // Camera.main is a tagged-object search, so the reference is cached and only re-acquired when it
+        // dies (scene change, camera destroyed). The acquisition lives in a property getter rather than
+        // Update, which keeps the per-frame method free of the call entirely.
+        private Camera TargetCamera
+        {
+            get
+            {
+                if (m_CachedCamera == null)
+                    m_CachedCamera = Camera.main;
+
+                return m_CachedCamera;
+            }
+        }
+
         void Update()
         {
             if (!isTargeting) return;
 
+            Camera targetingCamera = TargetCamera;
+            if (targetingCamera == null)
+                return;
+
             // Trace from camera to mouse position
-            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            Ray ray = targetingCamera.ScreenPointToRay(Input.mousePosition);
             if (Physics.Raycast(ray, out RaycastHit hit, 100f, GroundLayerMask))
             {
                 lastValidHit = hit;

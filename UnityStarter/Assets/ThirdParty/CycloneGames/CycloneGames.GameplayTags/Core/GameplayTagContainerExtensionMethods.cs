@@ -2,98 +2,106 @@ using System.Collections.Generic;
 
 namespace CycloneGames.GameplayTags.Core
 {
+   /// <summary>
+   /// Tag membership tests over any <see cref="IReadOnlyGameplayTagContainer"/>.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// These are the only query entry points downstream code should use, because they work uniformly on a
+   /// mutable <see cref="GameplayTagContainer"/>, a frozen <see cref="ReadOnlyGameplayTagContainer"/>, and
+   /// a <see cref="GameplayTagCountContainer"/>.
+   /// </para>
+   /// <para>
+   /// <b>Semantics.</b> The non-Exact forms test against the expanded set - the container's tags plus
+   /// every ancestor of each - matching Unreal's <c>FGameplayTagContainer</c>. The Exact forms test only
+   /// the explicitly held tags. "Has all of an empty set" is true, "has any of an empty set" is false.
+   /// </para>
+   /// <para>
+   /// There was previously a second <see cref="HasAll{T,U,V}"/> overload in this namespace with the same
+   /// signature but the meaning "the union of two containers has all of the third". Same signature and
+   /// different meaning is a call-site ambiguity, so that variant is gone; the combined-requirement case
+   /// belongs to <see cref="GameplayTagRequirements"/>.
+   /// </para>
+   /// <para>
+   /// None of these allocate and none check the registry epoch. See
+   /// <see cref="IGameplayTagContainer"/> for the epoch contract.
+   /// </para>
+   /// </remarks>
    public static class GameplayTagContainerExtensionMethods
    {
-      public static bool HasTag<T>(this T container, GameplayTag gameplayTag) where T : IReadOnlyGameplayTagContainer
+      public static bool HasTag<T>(this T container, GameplayTag gameplayTag)
+         where T : IReadOnlyGameplayTagContainer
       {
-         if (gameplayTag.IsNone || container == null || container.IsEmpty) return false;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         return container.ContainsRuntimeIndex(gameplayTag.RuntimeIndex, explicitOnly: false);
+         return !gameplayTag.IsNone
+            && container != null
+            && !container.IsEmpty
+            && container.ContainsRuntimeIndex(gameplayTag.RuntimeIndex, explicitOnly: false);
       }
 
-      public static bool HasTagExact<T>(this T container, GameplayTag gameplayTag) where T : IReadOnlyGameplayTagContainer
+      public static bool HasTagExact<T>(this T container, GameplayTag gameplayTag)
+         where T : IReadOnlyGameplayTagContainer
       {
-         if (gameplayTag.IsNone || container == null || container.IsEmpty) return false;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         return container.ContainsRuntimeIndex(gameplayTag.RuntimeIndex, explicitOnly: true);
+         return !gameplayTag.IsNone
+            && container != null
+            && !container.IsEmpty
+            && container.ContainsRuntimeIndex(gameplayTag.RuntimeIndex, explicitOnly: true);
       }
 
-      public static bool HasAny<T, U>(this T container, in U other) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         if (container == null || other == null) return false;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
-         return HasAnyInternal(container, explicitOnly: false, other.Indices.Explicit);
-      }
+      public static bool HasAny<T, U>(this T container, in U other)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+         => HasAnyInternal(container, other, explicitOnly: false);
 
-      public static bool HasAnyExact<T, U>(this T container, in U other) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         if (container == null || other == null) return false;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
-         return HasAnyInternal(container, explicitOnly: true, other.Indices.Explicit);
-      }
+      public static bool HasAnyExact<T, U>(this T container, in U other)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+         => HasAnyInternal(container, other, explicitOnly: true);
 
-      private static bool HasAnyInternal<T>(T container, bool explicitOnly, List<int> otherIndices) where T : IReadOnlyGameplayTagContainer
+      public static bool HasAll<T, U>(this T container, in U other)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+         => HasAllInternal(container, other, explicitOnly: false);
+
+      public static bool HasAllExact<T, U>(this T container, in U other)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+         => HasAllInternal(container, other, explicitOnly: true);
+
+      private static bool HasAnyInternal<T, U>(T container, in U other, bool explicitOnly)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
       {
-         if (container == null || container.IsEmpty || otherIndices == null || otherIndices.Count == 0)
-         {
+         if (container == null || container.IsEmpty || other == null || other.IsEmpty)
             return false;
-         }
 
-         for (int i = 0; i < otherIndices.Count; i++)
+         // Iterating by index rather than through GetExplicitTags matters here. That member returns a
+         // struct, and calling a struct-returning member through an interface boxes the result - so the
+         // generic form would allocate on every HasAny/HasAll, which is the one thing these helpers must
+         // never do. GetExplicitTag(i) is an interface dispatch but returns nothing to box.
+         int requiredCount = other.ExplicitTagCount;
+         for (int i = 0; i < requiredCount; i++)
          {
-            if (container.ContainsRuntimeIndex(otherIndices[i], explicitOnly))
-            {
+            if (container.ContainsRuntimeIndex(other.GetExplicitTag(i).RuntimeIndex, explicitOnly))
                return true;
-            }
          }
 
          return false;
       }
 
-      public static bool HasAll<T, U>(this T container, in U other) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
+      private static bool HasAllInternal<T, U>(T container, in U other, bool explicitOnly)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
       {
-         if (container == null) return false;
-         if (other == null || other.IsEmpty) return true; // Has all of an empty set is true
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
-         return HasAllInternal(container, explicitOnly: false, other.Indices.Explicit);
-      }
-
-      public static bool HasAll<T, U, V>(this T container, in U otherA, in V otherB) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer where V : IReadOnlyGameplayTagContainer
-      {
-         // The container must have all required tags from both other containers.
-         return container.HasAll(otherA) && container.HasAll(otherB);
-      }
-
-      public static bool HasAllExact<T, U>(this T container, in U other) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         if (container == null) return false;
-         if (other == null || other.IsEmpty) return true;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
-         return HasAllInternal(container, explicitOnly: true, other.Indices.Explicit);
-      }
-
-      internal static bool HasAllInternal<T>(T container, bool explicitOnly, List<int> otherIndices) where T : IReadOnlyGameplayTagContainer
-      {
-         if (otherIndices == null || otherIndices.Count == 0)
-         {
-            return true; // A container always has "all" tags of an empty set.
-         }
-
+         if (other == null || other.IsEmpty)
+            return true;
          if (container == null || container.IsEmpty)
-         {
             return false;
-         }
 
-         for (int i = 0; i < otherIndices.Count; i++)
+         int requiredCount = other.ExplicitTagCount;
+         for (int i = 0; i < requiredCount; i++)
          {
-            if (!container.ContainsRuntimeIndex(otherIndices[i], explicitOnly))
-            {
+            if (!container.ContainsRuntimeIndex(other.GetExplicitTag(i).RuntimeIndex, explicitOnly))
                return false;
-            }
          }
 
          return true;

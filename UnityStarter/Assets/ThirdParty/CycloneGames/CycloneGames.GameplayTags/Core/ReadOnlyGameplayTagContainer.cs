@@ -6,353 +6,239 @@ using System.Runtime.CompilerServices;
 namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
-   /// An immutable snapshot of a GameplayTagContainer's state bound to the registry snapshot
-   /// captured during construction. Its read methods do not reinterpret stored runtime indices
-   /// through a later registry snapshot.
-   ///
-   /// Usage:
-   ///   var snapshot = container.CreateSnapshot();
-   ///   bool has = snapshot.HasTag(someTag);
+   /// A frozen, allocation-free view of a container's tag set.
    /// </summary>
-   public sealed class ReadOnlyGameplayTagContainer : IReadOnlyGameplayTagContainer, IGameplayTagRuntimeIndexView
+   /// <remarks>
+   /// <para>
+   /// This is the type to hand across a thread, into a job, or into a cache: it owns its index arrays, it
+   /// is immutable, and every query is a pure index operation. Contrast
+   /// <see cref="GameplayTagContainer"/>, which is owner-thread mutable state.
+   /// </para>
+   /// <para>
+   /// The view is bound to one registry epoch by construction. <see cref="IsCompatibleWithCurrentRegistry"/>
+   /// reports whether that epoch is still current; the queries themselves never check, because they would
+   /// otherwise tax every read for a condition that never arises during play.
+   /// </para>
+   /// <para>
+   /// <see cref="HasTag"/> and friends test the expanded set - the explicit tags plus all of their
+   /// ancestors - matching <see cref="GameplayTagContainer"/> semantics.
+   /// </para>
+   /// </remarks>
+   public sealed class ReadOnlyGameplayTagContainer : IReadOnlyGameplayTagContainer, IEnumerable<GameplayTag>
    {
-      private readonly int[] _explicitIndices;
-      private readonly int[] _implicitIndices;
-      private readonly int[] _bitset;
-      private readonly GameplayTagContainerIndices _indices;
-      private readonly TagDataSnapshot _snapshot;
+      private readonly int[] m_Explicit;
+      private readonly int[] m_Implicit;
+      private readonly int[] m_Bitset;
+      private readonly int m_RuntimeIndexEpoch;
+      private readonly TagDataSnapshot m_Snapshot;
 
-      public bool IsCompatibleWithCurrentRegistry =>
-         ReferenceEquals(_snapshot, GameplayTagManager.Snapshot) ||
-         _snapshot.RuntimeIndexEpoch == GameplayTagManager.CurrentRuntimeIndexEpoch;
-
-      public GameplayTagContainerIndices Indices
-      {
-         get
-         {
-            EnsureCompatible();
-            return _indices;
-         }
-      }
-
-      int IGameplayTagRuntimeIndexView.RuntimeIndexEpoch => _snapshot.RuntimeIndexEpoch;
-
-      /// <summary>Number of explicitly added tags.</summary>
-      public int ExplicitTagCount
-      {
-         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-         get => _explicitIndices.Length;
-      }
-
-      /// <summary>Total tag count (explicit + implicit hierarchy).</summary>
-      public int TagCount
-      {
-         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-         get => _implicitIndices.Length;
-      }
-
-      /// <summary>True if no tags are present.</summary>
-      public bool IsEmpty
-      {
-         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-         get => _explicitIndices.Length == 0;
-      }
-
-      /// <summary>
-      /// Create an immutable snapshot from a container's current state.
-      /// </summary>
+      /// <summary>Builds a frozen view of another container's current tag set.</summary>
       public ReadOnlyGameplayTagContainer(IReadOnlyGameplayTagContainer source)
       {
-         if (source is ReadOnlyGameplayTagContainer immutableSource)
-         {
-            _snapshot = immutableSource._snapshot;
-            _explicitIndices = immutableSource._explicitIndices;
-            _implicitIndices = immutableSource._implicitIndices;
-         }
-         else
-         {
-            TagDataSnapshot capturedSnapshot;
-            int[] explicitIndices;
-            int[] implicitIndices;
-            do
-            {
-               capturedSnapshot = GameplayTagManager.Snapshot;
-               if (source == null || source.IsEmpty)
-               {
-                  explicitIndices = Array.Empty<int>();
-                  implicitIndices = Array.Empty<int>();
-               }
-               else
-               {
-                  GameplayTagContainerIndices sourceIndices = source.Indices;
-                  explicitIndices = sourceIndices.Explicit != null
-                     ? sourceIndices.Explicit.ToArray()
-                     : Array.Empty<int>();
-                  implicitIndices = sourceIndices.Implicit != null
-                     ? sourceIndices.Implicit.ToArray()
-                     : Array.Empty<int>();
-               }
-            }
-            while (!ReferenceEquals(capturedSnapshot, GameplayTagManager.Snapshot));
+         if (source == null)
+            throw new ArgumentNullException(nameof(source));
 
-            _snapshot = capturedSnapshot;
-            _explicitIndices = explicitIndices;
-            _implicitIndices = implicitIndices;
-         }
+         // Read by index: GetTags/GetExplicitTags return a struct, and reading them through this
+         // interface would box it twice per snapshot.
+         int explicitCount = source.ExplicitTagCount;
+         m_Explicit = new int[explicitCount];
+         for (int i = 0; i < explicitCount; i++)
+            m_Explicit[i] = source.GetExplicitTag(i).RuntimeIndex;
 
-         _indices = GameplayTagContainerIndices.Create();
-         _indices.Explicit.AddRange(_explicitIndices);
-         _indices.Implicit.AddRange(_implicitIndices);
+         int implicitCount = source.TagCount;
+         m_Implicit = new int[implicitCount];
+         for (int i = 0; i < implicitCount; i++)
+            m_Implicit[i] = source.GetTag(i).RuntimeIndex;
 
-         // Dense snapshots use a bitset; sparse snapshots retain binary-search storage.
-         if (_implicitIndices.Length > 0 &&
-             GameplayTagContainerUtility.ShouldUseBitset(
-                _implicitIndices.Length,
-                _implicitIndices[_implicitIndices.Length - 1],
-                out int bitsetLength))
-         {
-            _bitset = new int[bitsetLength];
-            for (int i = 0; i < _implicitIndices.Length; i++)
-            {
-               int idx = _implicitIndices[i];
-               _bitset[idx >> 5] |= 1 << (idx & 31);
-            }
-         }
-         else
-         {
-            _bitset = null;
-         }
+         m_Snapshot = GameplayTagManager.Snapshot;
+         m_RuntimeIndexEpoch = m_Snapshot.RuntimeIndexEpoch;
+         m_Bitset = BuildBitset(m_Explicit, m_Implicit, m_Snapshot.TagCount);
       }
 
-      /// <summary>Check if a tag (or any of its parents) is present. O(1) with bitset, O(log n) otherwise.</summary>
-      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private ReadOnlyGameplayTagContainer(
+         int[] explicitIndices,
+         int[] implicitIndices,
+         int[] bitset,
+         TagDataSnapshot snapshot)
+      {
+         m_Explicit = explicitIndices;
+         m_Implicit = implicitIndices;
+         m_Bitset = bitset;
+         m_Snapshot = snapshot;
+         m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+      }
+
+      /// <summary>True when the registry epoch this view was built against is still current.</summary>
+      public bool IsCompatibleWithCurrentRegistry
+         => m_RuntimeIndexEpoch == GameplayTagManager.Snapshot.RuntimeIndexEpoch;
+
+      /// <summary>The registry epoch this view is bound to.</summary>
+      public int RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
+      public int ExplicitTagCount => m_Explicit.Length;
+
+      public int TagCount => m_Implicit.Length;
+
+      public bool IsEmpty => m_Explicit.Length == 0;
+
+      public GameplayTag GetTag(int index)
+      {
+         if ((uint)index >= (uint)m_Implicit.Length)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_Implicit[index]);
+      }
+
+      public GameplayTag GetExplicitTag(int index)
+      {
+         if ((uint)index >= (uint)m_Explicit.Length)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_Explicit[index]);
+      }
+
       public bool HasTag(in GameplayTag tag)
-      {
-         EnsureCompatible();
-         if (!TryResolveRuntimeIndex(tag, out int runtimeIndex))
-            return false;
+         => !tag.IsNone && m_Implicit.Length > 0 && ContainsRuntimeIndex(tag.RuntimeIndex, explicitOnly: false);
 
-         if (_bitset != null)
-         {
-            int word = runtimeIndex >> 5;
-            return word < _bitset.Length && (_bitset[word] & (1 << (runtimeIndex & 31))) != 0;
-         }
-
-         return BinarySearchUtility.Search(_implicitIndices, runtimeIndex) >= 0;
-      }
-
-      /// <summary>Check if a tag is explicitly present (not inherited). O(log n).</summary>
-      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public bool HasTagExact(in GameplayTag tag)
-      {
-         EnsureCompatible();
-         return TryResolveRuntimeIndex(tag, out int runtimeIndex) &&
-                BinarySearchUtility.Search(_explicitIndices, runtimeIndex) >= 0;
-      }
+         => !tag.IsNone && m_Explicit.Length > 0 && ContainsRuntimeIndex(tag.RuntimeIndex, explicitOnly: true);
 
-      /// <summary>Check if all tags in another container are present.</summary>
       public bool HasAll<T>(in T other) where T : IReadOnlyGameplayTagContainer
-      {
-         EnsureCompatible();
-         if (other == null || other.IsEmpty) return true;
+         => GameplayTagContainerExtensionMethods.HasAll(this, other);
 
-         foreach (GameplayTag tag in other.GetExplicitTags())
-         {
-            if (!HasTag(tag)) return false;
-         }
-         return true;
-      }
-
-      /// <summary>Check if any tag in another container is present.</summary>
       public bool HasAny<T>(in T other) where T : IReadOnlyGameplayTagContainer
-      {
-         EnsureCompatible();
-         if (other == null || other.IsEmpty) return false;
+         => GameplayTagContainerExtensionMethods.HasAny(this, other);
 
-         foreach (GameplayTag tag in other.GetExplicitTags())
-         {
-            if (HasTag(tag)) return true;
-         }
-         return false;
-      }
+      /// <summary>
+      /// The raw explicit indices, ascending. The span aliases this view's storage, which never changes.
+      /// </summary>
+      public ReadOnlySpan<int> GetExplicitIndices() => m_Explicit;
 
-      /// <summary>Check if all tags from another snapshot are present.</summary>
-      public bool HasAll(ReadOnlyGameplayTagContainer other)
-      {
-         EnsureCompatible();
-         other?.EnsureCompatible();
-         if (other == null || other.IsEmpty) return true;
+      /// <summary>
+      /// The raw expanded indices, ascending. The span aliases this view's storage, which never changes.
+      /// </summary>
+      public ReadOnlySpan<int> GetImplicitIndices() => m_Implicit;
 
-         foreach (GameplayTag tag in other.GetExplicitTags())
-         {
-            if (!HasTag(tag))
-               return false;
-         }
-         return true;
-      }
+      public GameplayTagEnumerator GetTags() => new(m_Implicit, m_Implicit.Length);
 
-      /// <summary>Check if any tag from another snapshot is present.</summary>
-      public bool HasAny(ReadOnlyGameplayTagContainer other)
-      {
-         EnsureCompatible();
-         other?.EnsureCompatible();
-         if (other == null || other.IsEmpty) return false;
-
-         foreach (GameplayTag tag in other.GetExplicitTags())
-         {
-            if (HasTag(tag))
-               return true;
-         }
-         return false;
-      }
-
-      /// <summary>Get a span of all implicit (full hierarchy) snapshot-local runtime indices.</summary>
-      public ReadOnlySpan<int> GetImplicitIndices()
-      {
-         EnsureCompatible();
-         return _implicitIndices;
-      }
-
-      /// <summary>Get a span of all explicit snapshot-local runtime indices.</summary>
-      public ReadOnlySpan<int> GetExplicitIndices()
-      {
-         EnsureCompatible();
-         return _explicitIndices;
-      }
-
-      public GameplayTagEnumerator GetTags()
-      {
-         EnsureCompatible();
-         return new GameplayTagEnumerator(_indices.Implicit, _snapshot);
-      }
-
-      public GameplayTagEnumerator GetExplicitTags()
-      {
-         EnsureCompatible();
-         return new GameplayTagEnumerator(_indices.Explicit, _snapshot);
-      }
+      public GameplayTagEnumerator GetExplicitTags() => new(m_Explicit, m_Explicit.Length);
 
       public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureCompatible();
-         CollectParents(_implicitIndices, tag, parentTags);
-      }
+         => FillAncestors(m_Implicit, tag, parentTags);
 
       public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureCompatible();
-         CollectChildren(_implicitIndices, tag, childTags);
-      }
+         => FillDescendants(m_Implicit, tag, childTags);
 
       public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureCompatible();
-         CollectParents(_explicitIndices, tag, parentTags);
-      }
+         => FillAncestors(m_Explicit, tag, parentTags);
 
       public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureCompatible();
-         CollectChildren(_explicitIndices, tag, childTags);
-      }
+         => FillDescendants(m_Explicit, tag, childTags);
 
-      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
       {
-         EnsureCompatible();
          if (runtimeIndex <= 0)
             return false;
 
-         if (!explicitOnly && _bitset != null)
-         {
-            int word = runtimeIndex >> 5;
-            return word < _bitset.Length && (_bitset[word] & (1 << (runtimeIndex & 31))) != 0;
-         }
+         if (m_Bitset.Length > 0)
+            return HasBit(m_Bitset, runtimeIndex, explicitOnly);
 
-         int[] indices = explicitOnly ? _explicitIndices : _implicitIndices;
-         return BinarySearchUtility.Search(indices, runtimeIndex) >= 0;
+         return explicitOnly
+            ? BinarySearchUtility.Contains(m_Explicit, m_Explicit.Length, runtimeIndex)
+            : BinarySearchUtility.Contains(m_Implicit, m_Implicit.Length, runtimeIndex);
       }
 
-      public GameplayTagEnumerator GetEnumerator()
+      private void FillAncestors(int[] indices, GameplayTag tag, List<GameplayTag> destination)
       {
-         return GetTags();
-      }
-
-      IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator()
-      {
-         return GetTags();
-      }
-
-      IEnumerator IEnumerable.GetEnumerator()
-      {
-         return GetTags();
-      }
-
-      private void CollectParents(int[] containerIndices, GameplayTag tag, List<GameplayTag> output)
-      {
-         if (output == null)
-            throw new ArgumentNullException(nameof(output));
-         if (!TryResolveRuntimeIndex(tag, out int runtimeIndex))
+         if (indices.Length == 0 || destination == null)
+            return;
+         if ((uint)tag.RuntimeIndex >= (uint)m_Snapshot.TotalTagCount)
             return;
 
-         ReadOnlySpan<int> ancestorIndices = _snapshot.GetParentRuntimeIndicesSpan(runtimeIndex);
-         for (int i = ancestorIndices.Length - 1; i >= 0; i--)
+         // The pool slice is root-first, so walking it backwards yields nearest-ancestor-first.
+         int start = m_Snapshot.HierarchyOffsets[tag.RuntimeIndex];
+         int end = m_Snapshot.HierarchyOffsets[tag.RuntimeIndex + 1] - 1;
+         for (int i = end - 1; i >= start; i--)
          {
-            int ancestorRuntimeIndex = ancestorIndices[i];
-            if (BinarySearchUtility.Search(containerIndices, ancestorRuntimeIndex) >= 0)
-               output.Add(_snapshot.GetTagFromRuntimeIndex(ancestorRuntimeIndex));
+            int ancestor = m_Snapshot.HierarchyPool[i];
+            if (BinarySearchUtility.Contains(indices, indices.Length, ancestor))
+               destination.Add(new GameplayTag(ancestor));
          }
       }
 
-      private void CollectChildren(int[] containerIndices, GameplayTag tag, List<GameplayTag> output)
+      private void FillDescendants(int[] indices, GameplayTag tag, List<GameplayTag> destination)
       {
-         if (output == null)
-            throw new ArgumentNullException(nameof(output));
-         if (!TryResolveRuntimeIndex(tag, out int runtimeIndex))
+         if (indices.Length == 0 || destination == null)
+            return;
+         if ((uint)tag.RuntimeIndex >= (uint)m_Snapshot.TotalTagCount)
             return;
 
-         ReadOnlySpan<int> descendantIndices = _snapshot.GetChildRuntimeIndicesSpan(runtimeIndex);
-         for (int i = 0; i < descendantIndices.Length; i++)
+         int start = m_Snapshot.ChildOffsets[tag.RuntimeIndex];
+         int end = m_Snapshot.ChildOffsets[tag.RuntimeIndex + 1];
+         for (int i = start; i < end; i++)
          {
-            int descendantRuntimeIndex = descendantIndices[i];
-            if (BinarySearchUtility.Search(containerIndices, descendantRuntimeIndex) >= 0)
-               output.Add(_snapshot.GetTagFromRuntimeIndex(descendantRuntimeIndex));
+            int child = m_Snapshot.ChildPool[i];
+            if (BinarySearchUtility.Contains(indices, indices.Length, child))
+               destination.Add(new GameplayTag(child));
          }
+      }
+
+      private static int[] BuildBitset(int[] explicitIndices, int[] implicitIndices, int tagCount)
+      {
+         if (implicitIndices.Length == 0)
+            return Array.Empty<int>();
+
+         int maxIndex = Math.Min(implicitIndices[implicitIndices.Length - 1], tagCount);
+         int wordCount = (maxIndex / GameplayTagContainer.IndicesPerWord) + 1;
+         if (implicitIndices.Length < GameplayTagContainer.BitsetActivationTagCount ||
+             wordCount > implicitIndices.Length * GameplayTagContainer.MaxBitsetWordsPerTag)
+         {
+            return Array.Empty<int>();
+         }
+
+         int[] bitset = new int[wordCount];
+         for (int i = 0; i < explicitIndices.Length; i++)
+            SetBit(bitset, explicitIndices[i], explicitOnly: true);
+         for (int i = 0; i < implicitIndices.Length; i++)
+            SetBit(bitset, implicitIndices[i], explicitOnly: false);
+
+         return bitset;
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
-      private bool TryResolveRuntimeIndex(in GameplayTag tag, out int runtimeIndex)
+      private static bool HasBit(int[] bitset, int runtimeIndex, bool explicitOnly)
       {
-         string name = tag.m_Name;
-         if (!string.IsNullOrEmpty(name))
-            return _snapshot.TryGetRuntimeIndex(name, out runtimeIndex);
+         int word = runtimeIndex / GameplayTagContainer.IndicesPerWord;
+         if ((uint)word >= (uint)bitset.Length)
+            return false;
 
-         runtimeIndex = 0;
-         return false;
+         int bit = 1 << (((runtimeIndex % GameplayTagContainer.IndicesPerWord)
+             * GameplayTagContainer.BitsPerIndex) + (explicitOnly ? 0 : 1));
+         return (bitset[word] & bit) != 0;
+      }
+
+      private static void SetBit(int[] bitset, int runtimeIndex, bool explicitOnly)
+      {
+         int word = runtimeIndex / GameplayTagContainer.IndicesPerWord;
+         if ((uint)word >= (uint)bitset.Length)
+            return;
+
+         bitset[word] |= 1 << (((runtimeIndex % GameplayTagContainer.IndicesPerWord)
+             * GameplayTagContainer.BitsPerIndex) + (explicitOnly ? 0 : 1));
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
-      private void EnsureCompatible()
-      {
-         if (!IsCompatibleWithCurrentRegistry)
-         {
-            throw new InvalidOperationException(
-               "ReadOnlyGameplayTagContainer belongs to an incompatible gameplay tag runtime-index epoch.");
-         }
-      }
+      public GameplayTagEnumerator GetEnumerator() => new(m_Implicit, m_Implicit.Length);
+
+      IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator() => GetEnumerator();
+
+      IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
    }
 
-   /// <summary>
-   /// Extension methods for creating immutable snapshots.
-   /// </summary>
    public static class GameplayTagContainerSnapshotExtensions
    {
-      /// <summary>
-      /// Create an immutable snapshot of the container's current state.
-      /// </summary>
+      /// <summary>Freezes a container's current tag set into an immutable view.</summary>
       public static ReadOnlyGameplayTagContainer CreateSnapshot(this IReadOnlyGameplayTagContainer container)
-      {
-         return new ReadOnlyGameplayTagContainer(container);
-      }
+         => new(container);
    }
 }

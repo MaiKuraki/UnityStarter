@@ -97,9 +97,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return new ModifierInfo(
                         serializableMod.AttributeName,
                         serializableMod.Operation,
-                        !serializableMod.SetByCallerDataTag.IsNone
+                        !string.IsNullOrEmpty(serializableMod.SetByCallerDataTag.TagName)
                             ? new SetByCallerMagnitude(
-                                serializableMod.SetByCallerDataTag,
+                                serializableMod.SetByCallerDataTag.Tag,
                                 serializableMod.SetByCallerDefaultValue,
                                 serializableMod.WarnIfSetByCallerMissing)
                             : new SetByCallerMagnitude(
