@@ -3,70 +3,107 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace CycloneGames.GameplayTags.Core
 {
-   public struct GameplayTagContainerIndices
+   /// <summary>
+   /// The durable form of a tag container: the names of its explicitly held tags.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// A <see cref="GameplayTagContainer"/> stores runtime indices, which are only meaningful for one
+   /// registry epoch. Names are the durable identity, so names are what crosses a persistence boundary.
+   /// </para>
+   /// <para>
+   /// Core deliberately does not own this payload. It is a plain string array with no engine attribute
+   /// attached, which keeps Core free of any host reference: a Unity host maps it onto a
+   /// <c>[SerializeField] string[]</c> field, a Godot host onto an <c>[Export] string[]</c> property, and
+   /// a headless host onto whatever its save format wants. See <c>IGameplayTagHostPlatform</c>.
+   /// </para>
+   /// </remarks>
+   public readonly struct GameplayTagContainerPersisted
    {
-      public readonly bool IsCreated => Explicit != null && Implicit != null;
-      public readonly bool IsEmpty => !IsCreated || Explicit.Count == 0;
-      public readonly int TagCount => IsCreated ? Implicit.Count : 0;
-      public readonly int ExplicitTagCount => IsCreated ? Explicit.Count : 0;
+      /// <summary>The names of the explicitly held tags, in ascending runtime-index order.</summary>
+      public readonly string[] ExplicitNames;
 
-      internal List<int> Explicit { get; private set; }
-      internal List<int> Implicit { get; private set; }
-
-      public static void Create(ref GameplayTagContainerIndices indices)
+      public GameplayTagContainerPersisted(string[] explicitNames)
       {
-         if (indices.IsCreated)
-            return;
-
-         indices = new GameplayTagContainerIndices
-         {
-            Explicit = new(),
-            Implicit = new()
-         };
-      }
-
-      public static GameplayTagContainerIndices Create()
-      {
-         return new GameplayTagContainerIndices
-         {
-            Explicit = new(),
-            Implicit = new()
-         };
-      }
-
-      internal readonly void Clear()
-      {
-         Explicit?.Clear();
-         Implicit?.Clear();
-      }
-
-      internal readonly void CopyTo(in GameplayTagContainerIndices other)
-      {
-         other.Clear();
-         other.Explicit.AddRange(this.Explicit);
-         other.Implicit.AddRange(this.Implicit);
+         ExplicitNames = explicitNames;
       }
    }
 
+   /// <summary>Read access shared by every tag container.</summary>
+   /// <remarks>
+   /// <para>
+   /// Implementations store sorted runtime-index arrays. <see cref="ContainsRuntimeIndex"/> with
+   /// <c>explicitOnly</c> tests the explicitly held set; with <c>false</c> it tests the expanded set that
+   /// also contains every ancestor of every explicitly held tag, which is what <c>HasTag</c> means.
+   /// </para>
+   /// <para>
+   /// An index is only meaningful against the registry epoch it was produced by. Reads perform no epoch
+   /// check - see <see cref="IGameplayTagContainer"/> for where that line is drawn.
+   /// </para>
+   /// </remarks>
    public interface IReadOnlyGameplayTagContainer : IEnumerable<GameplayTag>
    {
+      /// <summary>True when the container holds no explicit tag.</summary>
       bool IsEmpty { get; }
-      int ExplicitTagCount { get; }
-      int TagCount { get; }
-      GameplayTagContainerIndices Indices { get; }
 
+      /// <summary>Explicitly held tags, excluding ancestors.</summary>
+      int ExplicitTagCount { get; }
+
+      /// <summary>Expanded tag count: explicit tags plus every ancestor of every explicit tag.</summary>
+      int TagCount { get; }
+
+      /// <summary>The expanded tag at <paramref name="index"/>, in ascending index order.</summary>
+      GameplayTag GetTag(int index);
+
+      /// <summary>The explicit tag at <paramref name="index"/>, in ascending index order.</summary>
+      GameplayTag GetExplicitTag(int index);
+
+      /// <summary>Enumerates the expanded tag set.</summary>
       GameplayTagEnumerator GetTags();
+
+      /// <summary>Enumerates the explicitly held tags.</summary>
       GameplayTagEnumerator GetExplicitTags();
+
+      /// <summary>
+      /// Appends the ancestors of <paramref name="tag"/> that this container holds, farthest first.
+      /// The caller owns the buffer, so this never allocates.
+      /// </summary>
       void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags);
+
+      /// <summary>
+      /// Appends the descendants of <paramref name="tag"/> that this container holds, nearest first.
+      /// The caller owns the buffer, so this never allocates.
+      /// </summary>
       void GetChildTags(GameplayTag tag, List<GameplayTag> childTags);
+
+      /// <summary><see cref="GetParentTags"/> restricted to ancestors of explicitly held tags.</summary>
       void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags);
+
+      /// <summary><see cref="GetChildTags"/> restricted to descendants of explicitly held tags.</summary>
       void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags);
+
+      /// <summary>True when the container holds <paramref name="runtimeIndex"/>.</summary>
       bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly);
    }
 
+   /// <summary>Write access to a tag container.</summary>
+   /// <remarks>
+   /// <para>
+   /// <b>Epoch contract.</b> A container's indices are valid for exactly one registry epoch. Reads are
+   /// unchecked, because an epoch change is a rare authoring-time event and a per-read check would tax
+   /// every query for a condition that never happens in a running game. Mutations are checked: writing
+   /// into a stale container would mix indices from two incompatible registries, so it throws instead.
+   /// When a container can outlive a registry rebuild, the owner resolves it again from
+   /// <see cref="GameplayTagContainerPersisted"/> - in a Unity host that is the
+   /// <c>[SerializeField] string[]</c> the adapter holds, which is why Core never needs to keep a
+   /// recoverable copy of its own.
+   /// </para>
+   /// </remarks>
    public interface IGameplayTagContainer : IReadOnlyGameplayTagContainer
    {
       void AddTag(GameplayTag gameplayTag);
@@ -76,324 +113,241 @@ namespace CycloneGames.GameplayTags.Core
       void Clear();
    }
 
-   internal interface IGameplayTagRuntimeIndexView
-   {
-      int RuntimeIndexEpoch { get; }
-   }
-
-   [Serializable]
+   /// <summary>
+   /// The mutable, owner-owned gameplay tag container.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// Storage is two sorted <see cref="int"/> arrays - the explicitly held tags and the expanded set -
+   /// plus a lazily built bitset with two bits per runtime index: one for "held explicitly", one for
+   /// "held at all". That is the whole object. There is no per-tag managed object, no name payload, and
+   /// no dictionary, so a container costs roughly <c>8 bytes per distinct tag</c> plus the bitset.
+   /// </para>
+   /// <para>
+   /// <see cref="GameplayTag.HasTag"/> resolves against the expanded set, matching Unreal's
+   /// <c>FGameplayTagContainer::HasTag</c> semantics: a container holding "A.B.C" answers yes for "A.B.C",
+   /// "A.B", and "A". <see cref="GameplayTag"/>-level helpers live in
+   /// <see cref="GameplayTagContainerExtensionMethods"/>.
+   /// </para>
+   /// <para>
+   /// <b>Threading.</b> A container is owner-thread state. It has no internal synchronization and its
+   /// reads do not write, so a container may be read concurrently with itself only while no thread is
+   /// mutating it. Hand a <see cref="ReadOnlyGameplayTagContainer"/> across threads instead.
+   /// </para>
+   /// </remarks>
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagContainer : IGameplayTagContainer, IGameplayTagRuntimeIndexView, IEnumerable<GameplayTag>
+   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>
    {
-      private const int k_BitsetShrinkRatio = 4;
+      /// <summary>Bits of bitset consumed by one runtime index: one for explicit, one for implicit.</summary>
+      internal const int BitsPerIndex = 2;
 
-      public static GameplayTagContainer Empty => new();
+      /// <summary>Runtime indices covered by one <see cref="int"/> bitset word.</summary>
+      internal const int IndicesPerWord = 32 / BitsPerIndex;
 
-      public bool IsEmpty
-      {
-         get
-         {
-            EnsureRuntimeStateInitialized();
-            return m_Indices.IsEmpty;
-         }
-      }
+      internal const int BitsetActivationTagCount = 64;
+      internal const int MaxBitsetWordsPerTag = 2;
 
-      public int ExplicitTagCount
-      {
-         get
-         {
-            EnsureRuntimeStateInitialized();
-            return m_Indices.ExplicitTagCount;
-         }
-      }
-
-      public int TagCount
-      {
-         get
-         {
-            EnsureRuntimeStateInitialized();
-            return m_Indices.TagCount;
-         }
-      }
-
-      public GameplayTagContainerIndices Indices
-      {
-         get
-         {
-            EnsureRuntimeStateInitialized();
-            return m_Indices;
-         }
-      }
-
-      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      private string DebuggerDisplay => $"Count (Explicit, Total) = ({ExplicitTagCount}, {TagCount})";
-
-      // Kept public so Unity can serialize it without requiring Unity-specific attributes in the core assembly.
-      public List<string> m_SerializedExplicitTags;
-
-      private GameplayTagContainerIndices m_Indices = new();
-      private int[] m_ExplicitBitset = Array.Empty<int>();
-      private int[] m_ImplicitBitset = Array.Empty<int>();
-      private bool m_SerializedDirty;
+      private int[] m_Explicit = Array.Empty<int>();
+      private int[] m_Implicit = Array.Empty<int>();
+      private int[] m_Scratch = Array.Empty<int>();
+      private int[] m_Bitset = Array.Empty<int>();
+      private int m_ExplicitCount;
+      private int m_ImplicitCount;
       private int m_RuntimeIndexEpoch;
 
-      int IGameplayTagRuntimeIndexView.RuntimeIndexEpoch
+      /// <summary>
+      /// The registry this container resolves against, or null for the ambient registry. Set for DI use;
+      /// a tag resolved by one registry must never be mixed into a container bound to another.
+      /// </summary>
+      private readonly GameplayTagRegistry m_Registry;
+
+
+      private int m_OwningThreadId;
+
+      /// <summary>
+      /// Records or verifies the mutating thread. See
+      /// <see cref="GameplayTagsDiagnostics.ThreadAffinityChecksEnabled"/>.
+      /// </summary>
+      private void AssertMutationThreadAffinity()
       {
-         get
+         if (!GameplayTagsDiagnostics.ThreadAffinityChecksEnabled)
+            return;
+
+         int current = Environment.CurrentManagedThreadId;
+         int owner = Volatile.Read(ref m_OwningThreadId);
+         if (owner == 0)
          {
-            EnsureRuntimeStateInitialized();
-            return m_RuntimeIndexEpoch;
+            Volatile.Write(ref m_OwningThreadId, current);
+            return;
+         }
+
+         if (owner != current)
+         {
+            throw new InvalidOperationException(
+               $"{nameof(GameplayTagContainer)} was first mutated on managed thread {owner} but is being mutated on thread " +
+               $"{current}. A container is owner-thread state; hand a {nameof(ReadOnlyGameplayTagContainer)} " +
+               "across threads instead.");
          }
       }
 
-      public GameplayTagContainer()
-      { }
+      public GameplayTagContainer() { }
+
+      /// <summary>Creates a container that resolves hierarchy and names against a specific registry.</summary>
+      public GameplayTagContainer(GameplayTagRegistry registry)
+      {
+         m_Registry = registry ?? throw new ArgumentNullException(nameof(registry));
+      }
 
       public GameplayTagContainer(IReadOnlyGameplayTagContainer other)
       {
          Copy(this, other);
       }
 
+      public bool IsEmpty => m_ExplicitCount == 0;
+
+      public int ExplicitTagCount => m_ExplicitCount;
+
+      public int TagCount => m_ImplicitCount;
+
+      /// <summary>The registry epoch these indices belong to, or 0 before the first mutation.</summary>
+      public int RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
+      /// <summary>
+      /// True while membership tests are answered from the bitset rather than a binary search. Diagnostics
+      /// and tests only - it exposes which storage the queries are using, not new capability.
+      /// </summary>
+      internal bool UsesBitset => m_Bitset.Length > 0;
+
+      /// <summary>
+      /// True when the registry has been rebuilt with reassigned indices since this container was last
+      /// written. A stale container's indices are meaningless and must be re-resolved from
+      /// <see cref="GameplayTagContainerPersisted"/>; reads do not detect this for you.
+      /// </summary>
+      public bool IsStale
+      {
+         get
+         {
+            int epoch = GetSnapshot().RuntimeIndexEpoch;
+            return m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != epoch;
+         }
+      }
+
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      private string DebuggerDisplay => $"Count (Explicit, Total) = ({m_ExplicitCount}, {m_ImplicitCount})";
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private TagDataSnapshot GetSnapshot()
+         => m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
+
+      /// <summary>Like <see cref="GetSnapshot"/> but rejects a container whose epoch has moved on.</summary>
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private TagDataSnapshot GetSnapshotForMutation()
+      {
+         TagDataSnapshot snapshot = GetSnapshot();
+         if (m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != snapshot.RuntimeIndexEpoch)
+         {
+            throw new InvalidOperationException(
+               $"This gameplay tag container holds indices from registry epoch {m_RuntimeIndexEpoch} but the " +
+               $"registry is now at epoch {snapshot.RuntimeIndexEpoch}. Re-resolve the container from " +
+               $"{nameof(GameplayTagContainerPersisted)} before writing to it; writing would mix indices from " +
+               "two incompatible registries.");
+         }
+
+         return snapshot;
+      }
+
+      public GameplayTag GetTag(int index)
+      {
+         if ((uint)index >= (uint)m_ImplicitCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_Implicit[index]);
+      }
+
+      public GameplayTag GetExplicitTag(int index)
+      {
+         if ((uint)index >= (uint)m_ExplicitCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_Explicit[index]);
+      }
+
+      public GameplayTagEnumerator GetTags() => new(m_Implicit, m_ImplicitCount);
+
+      public GameplayTagEnumerator GetExplicitTags() => new(m_Explicit, m_ExplicitCount);
+
+      public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
+         => FillAncestors(m_Implicit, m_ImplicitCount, tag, parentTags);
+
+      public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
+         => FillDescendants(m_Implicit, m_ImplicitCount, tag, childTags);
+
+      public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
+         => FillAncestors(m_Explicit, m_ExplicitCount, tag, parentTags);
+
+      public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
+         => FillDescendants(m_Explicit, m_ExplicitCount, tag, childTags);
+
+
+      public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
+      {
+         if (runtimeIndex <= 0)
+            return false;
+
+         if (m_Bitset.Length > 0)
+            return HasBit(m_Bitset, runtimeIndex, explicitOnly);
+
+         return explicitOnly
+            ? BinarySearchUtility.Contains(m_Explicit, m_ExplicitCount, runtimeIndex)
+            : BinarySearchUtility.Contains(m_Implicit, m_ImplicitCount, runtimeIndex);
+      }
+
+      /// <summary>Copies the explicit and expanded sets of another container into this one.</summary>
+      public static void Copy<T>(GameplayTagContainer destination, in T source)
+         where T : IReadOnlyGameplayTagContainer
+      {
+         if (destination == null)
+            throw new ArgumentNullException(nameof(destination));
+         if (source is GameplayTagContainer same && ReferenceEquals(destination, same))
+            return;
+
+         destination.Clear();
+
+         int count = source.ExplicitTagCount;
+         if (count == 0)
+            return;
+
+         // Drained by index, not by GetExplicitTags: the enumerator is a struct and reading it through
+         // this interface would box it once per copy.
+         if (destination.m_Explicit.Length < count)
+            destination.m_Explicit = new int[count];
+
+         for (int i = 0; i < count; i++)
+            destination.m_Explicit[i] = source.GetExplicitTag(i).RuntimeIndex;
+
+         destination.m_ExplicitCount = count;
+         destination.m_RuntimeIndexEpoch = destination.GetSnapshotForMutation().RuntimeIndexEpoch;
+         destination.RebuildImplicit();
+         destination.RebuildBitset();
+      }
+
       public GameplayTagContainer Clone()
       {
-         GameplayTagContainer clone = new();
+         GameplayTagContainer clone = new(m_Registry);
          Copy(clone, this);
          return clone;
       }
 
-      public static void Copy<T>(GameplayTagContainer dest, in T src) where T : IReadOnlyGameplayTagContainer
-      {
-         if (src is GameplayTagContainer sourceContainer && ReferenceEquals(dest, sourceContainer))
-            return;
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(src);
-         dest.Clear();
-
-         if (src.IsEmpty)
-            return;
-
-         GameplayTagContainerIndices.Create(ref dest.m_Indices);
-         src.Indices.CopyTo(dest.m_Indices);
-         dest.m_RuntimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
-         dest.SyncSerializedExplicitTagsWithRuntime();
-      }
-
-      public static GameplayTagContainer Intersection<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         GameplayTagContainer intersection = new();
-         intersection.AddIntersection(lhs, rhs);
-         return intersection;
-      }
-
-      public static void Intersection<T, U>(GameplayTagContainer output, in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         if (output == null)
-            throw new ArgumentNullException(nameof(output));
-
-         if (!output.IsEmpty)
-            throw new ArgumentException("Output container must be empty.", nameof(output));
-
-         output.AddIntersection(lhs, rhs);
-      }
-
-      internal void AddIntersection<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         static void OrderedListIntersection(List<int> a, List<int> b, List<int> dst)
-         {
-            int i = 0;
-            int j = 0;
-            while (i < a.Count && j < b.Count)
-            {
-               int aElement = a[i];
-               int bElement = b[j];
-               if (aElement == bElement)
-               {
-                  dst.Add(aElement);
-                  i++;
-                  j++;
-                  continue;
-               }
-
-               if (aElement < bElement)
-               {
-                  i++;
-                  continue;
-               }
-
-               j++;
-            }
-         }
-
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(lhs);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(rhs);
-         if (lhs.IsEmpty || rhs.IsEmpty)
-            return;
-
-         EnsureRuntimeStateInitialized();
-         if (!m_Indices.IsCreated)
-            m_Indices = GameplayTagContainerIndices.Create();
-
-         OrderedListIntersection(lhs.Indices.Explicit, rhs.Indices.Explicit, m_Indices.Explicit);
-         FillImplicitTags();
-         SyncSerializedExplicitTagsWithRuntime();
-      }
-
-      public static GameplayTagContainer Union<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
-      {
-         static void OrderedListUnion(List<int> a, List<int> b, List<int> dst)
-         {
-            dst.Capacity = Math.Max(dst.Capacity, a.Count + b.Count);
-
-            int i = 0;
-            int j = 0;
-            while (i < a.Count && j < b.Count)
-            {
-               int aElement = a[i];
-               int bElement = b[j];
-               if (aElement == bElement)
-               {
-                  dst.Add(aElement);
-                  i++;
-                  j++;
-                  continue;
-               }
-
-               if (aElement < bElement)
-               {
-                  dst.Add(aElement);
-                  i++;
-                  continue;
-               }
-
-               dst.Add(bElement);
-               j++;
-            }
-
-            for (; i < a.Count; i++)
-               dst.Add(a[i]);
-
-            for (; j < b.Count; j++)
-               dst.Add(b[j]);
-         }
-
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(lhs);
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(rhs);
-         GameplayTagContainer union = new();
-         GameplayTagContainerIndices.Create(ref union.m_Indices);
-         union.m_RuntimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
-
-         if (lhs.IsEmpty && rhs.IsEmpty)
-            return union;
-
-         if (lhs.IsEmpty)
-            return new GameplayTagContainer(rhs);
-
-         if (rhs.IsEmpty)
-            return new GameplayTagContainer(lhs);
-
-         OrderedListUnion(lhs.Indices.Explicit, rhs.Indices.Explicit, union.m_Indices.Explicit);
-         OrderedListUnion(lhs.Indices.Implicit, rhs.Indices.Implicit, union.m_Indices.Implicit);
-         union.RebuildBitsetsFromIndices();
-         union.SyncSerializedExplicitTagsWithRuntime();
-
-         return union;
-      }
-
-      public void GetDiffExplicitTags<T>(T other, List<GameplayTag> added, List<GameplayTag> removed) where T : IReadOnlyGameplayTagContainer
-      {
-         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
-         GameplayTagContainerIndices otherIndices = other.Indices;
-         List<int> currentContainerTagIndices = Indices.Explicit;
-         List<int> otherContainerTagIndices = otherIndices.Explicit;
-
-         int currentIndex = 0;
-         int otherIndex = 0;
-
-         while (currentIndex < Indices.ExplicitTagCount && otherIndex < otherIndices.ExplicitTagCount)
-         {
-            int currentTagIndex = currentContainerTagIndices[currentIndex];
-            int otherTagIndex = otherContainerTagIndices[otherIndex];
-
-            if (currentTagIndex == otherTagIndex)
-            {
-               currentIndex++;
-               otherIndex++;
-               continue;
-            }
-
-            if (currentTagIndex < otherTagIndex)
-            {
-               added.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(currentTagIndex).Tag);
-               currentIndex++;
-               continue;
-            }
-
-            removed.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(otherTagIndex).Tag);
-            otherIndex++;
-         }
-
-         for (; currentIndex < Indices.ExplicitTagCount; currentIndex++)
-            added.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(currentContainerTagIndices[currentIndex]).Tag);
-
-         for (; otherIndex < otherIndices.ExplicitTagCount; otherIndex++)
-            removed.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(otherContainerTagIndices[otherIndex]).Tag);
-      }
-
-      public GameplayTagEnumerator GetExplicitTags()
-      {
-         EnsureRuntimeStateInitialized();
-         return new GameplayTagEnumerator(m_Indices.Explicit);
-      }
-
-      public GameplayTagEnumerator GetTags()
-      {
-         EnsureRuntimeStateInitialized();
-         return new GameplayTagEnumerator(m_Indices.Implicit);
-      }
-
-      public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerUtility.GetParentTags(m_Indices.Implicit, tag, parentTags);
-      }
-
-      public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerUtility.GetChildTags(m_Indices.Implicit, tag, childTags);
-      }
-
-      public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerUtility.GetParentTags(m_Indices.Explicit, tag, parentTags);
-      }
-
-      public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerUtility.GetChildTags(m_Indices.Explicit, tag, childTags);
-      }
-
       public void Clear()
       {
-         int currentEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
-         if (m_Indices.IsCreated && m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != currentEpoch)
-         {
-            m_Indices = GameplayTagContainerIndices.Create();
-            m_RuntimeIndexEpoch = currentEpoch;
-            m_ExplicitBitset = Array.Empty<int>();
-            m_ImplicitBitset = Array.Empty<int>();
-            m_SerializedExplicitTags?.Clear();
-            m_SerializedDirty = false;
-            return;
-         }
-
-         EnsureRuntimeStateInitialized();
-         m_Indices.Clear();
-         m_ExplicitBitset = Array.Empty<int>();
-         m_ImplicitBitset = Array.Empty<int>();
-         m_SerializedExplicitTags?.Clear();
+         m_ExplicitCount = 0;
+         m_ImplicitCount = 0;
+         m_Explicit = Array.Empty<int>();
+         m_Implicit = Array.Empty<int>();
+         m_Scratch = Array.Empty<int>();
+         m_Bitset = Array.Empty<int>();
+         m_RuntimeIndexEpoch = 0;
       }
 
       public void AddTag(GameplayTag tag)
@@ -401,16 +355,16 @@ namespace CycloneGames.GameplayTags.Core
          if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot add an invalid gameplay tag.", nameof(tag));
 
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerIndices.Create(ref m_Indices);
-         int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
-         if (index >= 0)
-            return;
+         AssertMutationThreadAffinity();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
-         m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
-         RebuildExplicitBitsetIfNeeded();
-         AddImplicitTagsFor(tag);
-         SyncSerializedExplicitTagsWithRuntime();
+         if (InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, tag.RuntimeIndex))
+         {
+            AppendChain(snapshot, tag.RuntimeIndex);
+            RebuildBitset();
+         }
       }
 
       public void AddTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
@@ -418,29 +372,27 @@ namespace CycloneGames.GameplayTags.Core
          if (container == null || container.IsEmpty)
             return;
 
-         EnsureRuntimeStateInitialized();
-         GameplayTagContainerIndices.Create(ref m_Indices);
+         AssertMutationThreadAffinity();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
          bool changed = false;
-         foreach (GameplayTag tag in container.GetExplicitTags())
+         int sourceCount = container.ExplicitTagCount;
+         for (int i = 0; i < sourceCount; i++)
          {
-            if (!tag.IsValid)
+            int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
+            if (runtimeIndex <= 0)
                continue;
 
-            if (BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex) >= 0)
-               continue;
-
-            m_Indices.Explicit.Add(tag.RuntimeIndex);
-            changed = true;
+            changed |= InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex);
          }
 
-         if (!changed)
-            return;
-
-         m_Indices.Explicit.Sort();
-         RebuildExplicitBitsetIfNeeded();
-         FillImplicitTags();
-         SyncSerializedExplicitTagsWithRuntime();
+         if (changed)
+         {
+            RebuildImplicit();
+            RebuildBitset();
+         }
       }
 
       public void RemoveTag(GameplayTag tag)
@@ -448,265 +400,477 @@ namespace CycloneGames.GameplayTags.Core
          if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot remove an invalid gameplay tag.", nameof(tag));
 
-         EnsureRuntimeStateInitialized();
-         if (!m_Indices.IsCreated)
+         AssertMutationThreadAffinity();
+         GetSnapshotForMutation();
+         if (m_ExplicitCount == 0)
             return;
 
-         int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
-         if (index < 0)
+         if (!RemoveSorted(m_Explicit, ref m_ExplicitCount, tag.RuntimeIndex))
          {
             GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
             return;
          }
 
-         m_Indices.Explicit.RemoveAt(index);
-         RebuildExplicitBitsetIfNeeded();
-         FillImplicitTags();
-         SyncSerializedExplicitTagsWithRuntime();
+         RebuildImplicit();
+         RebuildBitset();
       }
 
-      public void RemoveTags<T>(in T other) where T : IReadOnlyGameplayTagContainer
+      public void RemoveTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
-         EnsureRuntimeStateInitialized();
-         if (!m_Indices.IsCreated || other == null || other.IsEmpty)
+         AssertMutationThreadAffinity();
+         GetSnapshotForMutation();
+         if (m_ExplicitCount == 0 || container == null || container.IsEmpty)
             return;
 
          bool changed = false;
-         foreach (GameplayTag tag in other.GetExplicitTags())
+         int sourceCount = container.ExplicitTagCount;
+         for (int i = 0; i < sourceCount; i++)
          {
-            int removeIndex = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
-            if (removeIndex < 0)
+            GameplayTag tag = container.GetExplicitTag(i);
+            int runtimeIndex = tag.RuntimeIndex;
+            if (runtimeIndex <= 0)
             {
                GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
                continue;
             }
 
-            m_Indices.Explicit.RemoveAt(removeIndex);
-            changed = true;
+            changed |= RemoveSorted(m_Explicit, ref m_ExplicitCount, runtimeIndex);
          }
 
-         if (!changed)
-            return;
-
-         RebuildExplicitBitsetIfNeeded();
-         FillImplicitTags();
-         SyncSerializedExplicitTagsWithRuntime();
-      }
-
-      public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
-      {
-         EnsureRuntimeStateInitialized();
-         if (runtimeIndex <= 0)
-            return false;
-
-         int[] bitset = explicitOnly ? m_ExplicitBitset : m_ImplicitBitset;
-         if (bitset != null && bitset.Length > 0)
-            return TryCheckBit(bitset, runtimeIndex);
-
-         List<int> indices = explicitOnly ? m_Indices.Explicit : m_Indices.Implicit;
-         return indices != null && indices.Count > 0 && BinarySearchUtility.Search(indices, runtimeIndex) >= 0;
-      }
-
-      private void EnsureRuntimeStateInitialized()
-      {
-         int currentEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
-         if (m_Indices.IsCreated && m_RuntimeIndexEpoch == currentEpoch)
-            return;
-
-         if (m_Indices.IsCreated && !m_Indices.IsEmpty &&
-             (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0))
+         if (changed)
          {
-            throw new InvalidOperationException(
-               "GameplayTagContainer runtime indices crossed an incompatible registry epoch without serialized tag names.");
-         }
-
-         m_Indices = GameplayTagContainerIndices.Create();
-         m_ExplicitBitset = Array.Empty<int>();
-         m_ImplicitBitset = Array.Empty<int>();
-         m_RuntimeIndexEpoch = currentEpoch;
-
-         if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
-            return;
-
-         for (int i = 0; i < m_SerializedExplicitTags.Count; i++)
-         {
-            GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i], false);
-            if (!tag.IsValid)
-               continue;
-
-            if (BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex) >= 0)
-               continue;
-
-            m_Indices.Explicit.Add(tag.RuntimeIndex);
-         }
-
-         if (m_Indices.Explicit.Count > 1)
-            m_Indices.Explicit.Sort();
-
-         RebuildExplicitBitsetIfNeeded();
-         FillImplicitTags();
-      }
-
-      private void AddImplicitTagsFor(GameplayTag tag)
-      {
-         ReadOnlySpan<int> tagIndices = GameplayTagManager.GetHierarchyRuntimeIndicesSpan(tag.RuntimeIndex);
-         for (int i = tagIndices.Length - 1; i >= 0; i--)
-         {
-            int parentRuntimeIndex = tagIndices[i];
-            int index = BinarySearchUtility.Search(m_Indices.Implicit, parentRuntimeIndex);
-            if (index >= 0)
-               break;
-
-            m_Indices.Implicit.Insert(~index, parentRuntimeIndex);
-         }
-
-         RebuildImplicitBitsetIfNeeded();
-      }
-
-      private void FillImplicitTags()
-      {
-         m_Indices.Implicit.Clear();
-
-         for (int i = 0; i < m_Indices.Explicit.Count; i++)
-         {
-            ReadOnlySpan<int> hierarchyTagIndices = GameplayTagManager.GetHierarchyRuntimeIndicesSpan(m_Indices.Explicit[i]);
-            for (int j = 0; j < hierarchyTagIndices.Length; j++)
-            {
-                int runtimeIndex = hierarchyTagIndices[j];
-               if (BinarySearchUtility.Search(m_Indices.Implicit, runtimeIndex) >= 0)
-                  continue;
-
-               m_Indices.Implicit.Add(runtimeIndex);
-            }
-         }
-
-         if (m_Indices.Implicit.Count > 1)
-            m_Indices.Implicit.Sort();
-
-         RebuildImplicitBitsetIfNeeded();
-      }
-
-      private void RebuildBitsetsFromIndices()
-      {
-         RebuildExplicitBitsetIfNeeded();
-         RebuildImplicitBitsetIfNeeded();
-      }
-
-      private static bool TryCheckBit(int[] bitset, int runtimeIndex)
-      {
-         int wordIndex = runtimeIndex >> 5;
-         return bitset != null &&
-                wordIndex < bitset.Length &&
-                (bitset[wordIndex] & (1 << (runtimeIndex & 31))) != 0;
-      }
-
-      private static void SetBit(int[] bitset, int runtimeIndex)
-      {
-         if (runtimeIndex <= 0)
-            return;
-
-         int wordIndex = runtimeIndex >> 5;
-         if (wordIndex >= bitset.Length)
-            return;
-
-         bitset[wordIndex] |= 1 << (runtimeIndex & 31);
-      }
-
-      private static void ClearBitset(int[] bitset)
-      {
-         if (bitset != null && bitset.Length > 0)
-            Array.Clear(bitset, 0, bitset.Length);
-      }
-
-      private void RebuildExplicitBitsetIfNeeded()
-      {
-         RebuildBitsetIfNeeded(m_Indices.Explicit, ref m_ExplicitBitset);
-      }
-
-      private void RebuildImplicitBitsetIfNeeded()
-      {
-         RebuildBitsetIfNeeded(m_Indices.Implicit, ref m_ImplicitBitset);
-      }
-
-      private static void RebuildBitsetIfNeeded(List<int> indices, ref int[] bitset)
-      {
-         if (indices == null || indices.Count == 0)
-         {
-            bitset = Array.Empty<int>();
-            return;
-         }
-
-         int maxRuntimeIndex = indices[indices.Count - 1];
-         if (!GameplayTagContainerUtility.ShouldUseBitset(indices.Count, maxRuntimeIndex, out int requiredLength))
-         {
-            bitset = Array.Empty<int>();
-            return;
-         }
-
-         if (bitset.Length < requiredLength || bitset.Length > requiredLength * k_BitsetShrinkRatio)
-            bitset = new int[requiredLength];
-         ClearBitset(bitset);
-         for (int i = 0; i < indices.Count; i++)
-            SetBit(bitset, indices[i]);
-      }
-
-      private void SyncSerializedExplicitTagsWithRuntime()
-      {
-         m_SerializedDirty = true;
-         if (m_SerializedExplicitTags != null)
-         {
-            FlushSerializedState();
+            RebuildImplicit();
+            RebuildBitset();
          }
       }
 
       /// <summary>
-      /// Called by serialization (OnBeforeSerialize) or when explicit serialized state is needed.
-      /// Only rebuilds the serialized list if dirty.
+      /// Replaces this container's explicit set with the union of two containers' explicit sets.
       /// </summary>
-      public void FlushSerializedState()
+      /// <remarks>
+      /// Both sides are drained by index, so nothing boxes regardless of the concrete container types.
+      /// The merge is a two-pointer walk over two sorted arrays, which produces a sorted deduplicated
+      /// result directly.
+      /// </remarks>
+      public void AddUnion<T, U>(in T first, in U second)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
       {
-         if (!m_SerializedDirty)
+         Clear();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         int firstCount = first?.ExplicitTagCount ?? 0;
+         int secondCount = second?.ExplicitTagCount ?? 0;
+         if (firstCount + secondCount == 0)
             return;
 
-         EnsureRuntimeStateInitialized();
+         if (m_Explicit.Length < firstCount + secondCount)
+            m_Explicit = new int[Math.Max(4, firstCount + secondCount)];
 
-         m_SerializedDirty = false;
-
-         if (!m_Indices.IsCreated)
-            return;
-
-         if (m_Indices.Explicit.Count == 0)
+         int i = 0;
+         int j = 0;
+         while (i < firstCount || j < secondCount)
          {
-            m_SerializedExplicitTags?.Clear();
+            int next;
+            if (i >= firstCount)
+            {
+               next = second.GetExplicitTag(j++).RuntimeIndex;
+            }
+            else if (j >= secondCount)
+            {
+               next = first.GetExplicitTag(i++).RuntimeIndex;
+            }
+            else
+            {
+               int a = first.GetExplicitTag(i).RuntimeIndex;
+               int b = second.GetExplicitTag(j).RuntimeIndex;
+               if (a == b)
+               {
+                  i++;
+                  j++;
+               }
+               else if (a < b)
+               {
+                  i++;
+               }
+               else
+               {
+                  j++;
+               }
+
+               next = Math.Min(a, b);
+            }
+
+            if (next <= 0)
+               continue;
+
+            m_Explicit[m_ExplicitCount++] = next;
+         }
+
+         RebuildImplicit();
+         RebuildBitset();
+      }
+
+      /// <summary>
+      /// Replaces this container's explicit set with the tags both containers hold explicitly.
+      /// </summary>
+      public void AddIntersection<T, U>(in T first, in U second)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+      {
+         Clear();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         int firstCount = first?.ExplicitTagCount ?? 0;
+         int secondCount = second?.ExplicitTagCount ?? 0;
+         if (firstCount > 0 && secondCount > 0)
+         {
+            // Clear leaves the explicit array empty; the intersection can never exceed the smaller side.
+            m_Explicit = new int[Math.Min(firstCount, secondCount)];
+         }
+
+         int i = 0;
+         int j = 0;
+         while (i < firstCount && j < secondCount)
+         {
+            int a = first.GetExplicitTag(i).RuntimeIndex;
+            int b = second.GetExplicitTag(j).RuntimeIndex;
+            if (a == b)
+            {
+               if (a > 0)
+                  m_Explicit[m_ExplicitCount++] = a;
+
+               i++;
+               j++;
+            }
+            else if (a < b)
+            {
+               i++;
+            }
+            else
+            {
+               j++;
+            }
+         }
+
+         RebuildImplicit();
+         RebuildBitset();
+      }
+
+      /// <summary>A new container holding every tag either side holds explicitly.</summary>
+      public static GameplayTagContainer Union<T, U>(in T first, in U second)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+      {
+         GameplayTagContainer union = new(ResolveBinding(first));
+         union.AddUnion(first, second);
+         return union;
+      }
+
+      /// <summary>A new container holding every tag both sides hold explicitly.</summary>
+      public static GameplayTagContainer Intersection<T, U>(in T first, in U second)
+         where T : IReadOnlyGameplayTagContainer
+         where U : IReadOnlyGameplayTagContainer
+      {
+         GameplayTagContainer intersection = new(ResolveBinding(first));
+         intersection.AddIntersection(first, second);
+         return intersection;
+      }
+
+      /// <summary>
+      /// Set-operation results bind to the registry their left operand is bound to, so a DI caller does
+      /// not silently get an ambient-bound container back.
+      /// </summary>
+      private static GameplayTagRegistry ResolveBinding<T>(in T container)
+         where T : IReadOnlyGameplayTagContainer
+         => container is GameplayTagContainer concrete ? concrete.m_Registry : null;
+
+      /// <summary>
+      /// Writes the names of the explicitly held tags for a persistence boundary.
+      /// </summary>
+      /// <returns>
+      /// False when this container is stale, in which case <paramref name="persisted"/> is null and the
+      /// caller must fall back to the durable copy it already holds. Returning wrong names would corrupt
+      /// the save, so this refuses rather than guessing.
+      /// </returns>
+      public bool TryToPersisted(out string[] explicitNames)
+      {
+         explicitNames = null;
+         if (m_ExplicitCount == 0)
+         {
+            explicitNames = Array.Empty<string>();
+            return true;
+         }
+
+         TagDataSnapshot snapshot;
+         try
+         {
+            snapshot = GetSnapshotForMutation();
+         }
+         catch (InvalidOperationException)
+         {
+            return false;
+         }
+
+         string[] names = new string[m_ExplicitCount];
+         for (int i = 0; i < m_ExplicitCount; i++)
+            names[i] = snapshot.Names[m_Explicit[i]];
+
+         explicitNames = names;
+         return true;
+      }
+
+      /// <summary>
+      /// Resolves an explicit tag list produced by <see cref="TryToPersisted"/> against the owning
+      /// registry, replacing this container's contents.
+      /// </summary>
+      /// <remarks>
+      /// Names the registry does not know are skipped with a diagnostic rather than failing the load: a
+      /// hot-updated assembly legitimately removes tags, and a save must still load.
+      /// </remarks>
+      public void LoadPersisted(string[] explicitNames)
+      {
+         Clear();
+
+         if (explicitNames == null || explicitNames.Length == 0)
+            return;
+
+         TagDataSnapshot snapshot = GetSnapshot();
+         m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         for (int i = 0; i < explicitNames.Length; i++)
+         {
+            string name = explicitNames[i];
+            if (string.IsNullOrEmpty(name))
+               continue;
+
+            if (!snapshot.TryGetIndex(name, out int runtimeIndex))
+            {
+               if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+                  GameplayTagsDiagnosticLevel.Warning,
+                  GameplayTagsDiagnosticCategories.Root,
+                  out IGameplayTagsDiagnostics diagnostics))
+               {
+                  GameplayTagsCoreDiagnostics.TryWrite(
+                     diagnostics,
+                     GameplayTagsDiagnosticLevel.Warning,
+                     GameplayTagsDiagnosticCategories.Root,
+                     $"Persisted gameplay tag \"{name}\" is not registered; it was skipped while loading a container.");
+               }
+
+               continue;
+            }
+
+            if (InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex))
+               AppendChain(snapshot, runtimeIndex);
+         }
+
+         RebuildBitset();
+      }
+
+      /// <summary>Appends the whole ancestor chain of <paramref name="runtimeIndex"/> to the implicit set.</summary>
+      private void AppendChain(TagDataSnapshot snapshot, int runtimeIndex)
+      {
+         int start = snapshot.HierarchyOffsets[runtimeIndex];
+         int end = snapshot.HierarchyOffsets[runtimeIndex + 1];
+         for (int i = start; i < end; i++)
+            InsertSortedUnique(ref m_Implicit, ref m_ImplicitCount, snapshot.HierarchyPool[i]);
+      }
+
+      /// <summary>
+      /// Recomputes the expanded set as the union of the ancestor chains of every explicit tag.
+      /// </summary>
+      /// <remarks>
+      /// Chains are read out of the snapshot's compressed pool into a retained scratch array, then sorted
+      /// and deduplicated into the implicit array. Zero allocations once warm: the scratch array is kept
+      /// and only grows.
+      /// </remarks>
+      private void RebuildImplicit()
+      {
+         if (m_ExplicitCount == 0)
+         {
+            m_ImplicitCount = 0;
             return;
          }
 
-         m_SerializedExplicitTags ??= new List<string>(m_Indices.Explicit.Count);
-         m_SerializedExplicitTags.Clear();
+         TagDataSnapshot snapshot = GetSnapshot();
 
-         for (int i = 0; i < m_Indices.Explicit.Count; i++)
+         int total = 0;
+         for (int i = 0; i < m_ExplicitCount; i++)
          {
-            GameplayTagDefinition definition = GameplayTagManager.GetDefinitionFromRuntimeIndex(m_Indices.Explicit[i]);
-            if (!definition.IsNone())
-               m_SerializedExplicitTags.Add(definition.TagName);
+            int index = m_Explicit[i];
+            total += snapshot.HierarchyOffsets[index + 1] - snapshot.HierarchyOffsets[index];
+         }
+
+         if (total == 0)
+         {
+            m_ImplicitCount = 0;
+            return;
+         }
+
+         if (m_Scratch.Length < total)
+            m_Scratch = new int[Math.Max(total, m_Scratch.Length * 2)];
+
+         int count = 0;
+         for (int i = 0; i < m_ExplicitCount; i++)
+         {
+            int index = m_Explicit[i];
+            int start = snapshot.HierarchyOffsets[index];
+            int end = snapshot.HierarchyOffsets[index + 1];
+            for (int k = start; k < end; k++)
+               m_Scratch[count++] = snapshot.HierarchyPool[k];
+         }
+
+         if (count > 1)
+            Array.Sort(m_Scratch, 0, count);
+
+         if (m_Implicit.Length < count)
+            m_Implicit = new int[Math.Max(count, m_Implicit.Length * 2)];
+
+         int implicitCount = 0;
+         for (int i = 0; i < count; i++)
+         {
+            int value = m_Scratch[i];
+            if (implicitCount > 0 && m_Implicit[implicitCount - 1] == value)
+               continue;
+
+            m_Implicit[implicitCount++] = value;
+         }
+
+         m_ImplicitCount = implicitCount;
+      }
+
+      private void RebuildBitset()
+      {
+         if (m_ImplicitCount == 0)
+         {
+            m_Bitset = Array.Empty<int>();
+            return;
+         }
+
+         int maxIndex = m_Implicit[m_ImplicitCount - 1];
+         int wordCount = (maxIndex / IndicesPerWord) + 1;
+         if (m_ImplicitCount < BitsetActivationTagCount || wordCount > m_ImplicitCount * MaxBitsetWordsPerTag)
+         {
+            m_Bitset = Array.Empty<int>();
+            return;
+         }
+
+         if (m_Bitset.Length != wordCount)
+            m_Bitset = new int[wordCount];
+         else
+            Array.Clear(m_Bitset, 0, wordCount);
+
+         for (int i = 0; i < m_ExplicitCount; i++)
+            SetBit(m_Bitset, m_Explicit[i], explicitOnly: true);
+
+         for (int i = 0; i < m_ImplicitCount; i++)
+            SetBit(m_Bitset, m_Implicit[i], explicitOnly: false);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private static bool HasBit(int[] bitset, int runtimeIndex, bool explicitOnly)
+      {
+         int word = runtimeIndex / IndicesPerWord;
+         if ((uint)word >= (uint)bitset.Length)
+            return false;
+
+         int bit = 1 << (((runtimeIndex % IndicesPerWord) * BitsPerIndex) + (explicitOnly ? 0 : 1));
+         return (bitset[word] & bit) != 0;
+      }
+
+      private static void SetBit(int[] bitset, int runtimeIndex, bool explicitOnly)
+      {
+         int word = runtimeIndex / IndicesPerWord;
+         if ((uint)word >= (uint)bitset.Length)
+            return;
+
+         bitset[word] |= 1 << (((runtimeIndex % IndicesPerWord) * BitsPerIndex) + (explicitOnly ? 0 : 1));
+      }
+
+      private static bool InsertSortedUnique(ref int[] array, ref int count, int value)
+      {
+         int position = BinarySearchUtility.Search(array, count, value);
+         if (position >= 0)
+            return false;
+
+         position = ~position;
+         if (count == array.Length)
+         {
+            int newSize = Math.Max(4, count * 2);
+            int[] grown = new int[newSize];
+            Array.Copy(array, grown, count);
+            array = grown;
+         }
+
+         Array.Copy(array, position, array, position + 1, count - position);
+         array[position] = value;
+         count++;
+         return true;
+      }
+
+      private static bool RemoveSorted(int[] array, ref int count, int value)
+      {
+         int position = BinarySearchUtility.Search(array, count, value);
+         if (position < 0)
+            return false;
+
+         Array.Copy(array, position + 1, array, position, count - position - 1);
+         array[--count] = 0;
+         return true;
+      }
+
+      private void FillAncestors(int[] indices, int count, GameplayTag tag, List<GameplayTag> destination)
+      {
+         if (count == 0 || destination == null)
+            return;
+
+         TagDataSnapshot snapshot = GetSnapshot();
+         if ((uint)tag.RuntimeIndex >= (uint)snapshot.TotalTagCount)
+            return;
+
+         // The pool slice is root-first, so walking it backwards yields nearest-ancestor-first.
+         int start = snapshot.HierarchyOffsets[tag.RuntimeIndex];
+         int end = snapshot.HierarchyOffsets[tag.RuntimeIndex + 1] - 1;
+         for (int i = end - 1; i >= start; i--)
+         {
+            int ancestor = snapshot.HierarchyPool[i];
+            if (BinarySearchUtility.Contains(indices, count, ancestor))
+               destination.Add(new GameplayTag(ancestor));
+         }
+      }
+
+      private void FillDescendants(int[] indices, int count, GameplayTag tag, List<GameplayTag> destination)
+      {
+         if (count == 0 || destination == null)
+            return;
+
+         TagDataSnapshot snapshot = GetSnapshot();
+         if ((uint)tag.RuntimeIndex >= (uint)snapshot.TotalTagCount)
+            return;
+
+         int start = snapshot.ChildOffsets[tag.RuntimeIndex];
+         int end = snapshot.ChildOffsets[tag.RuntimeIndex + 1];
+         for (int i = start; i < end; i++)
+         {
+            int child = snapshot.ChildPool[i];
+            if (BinarySearchUtility.Contains(indices, count, child))
+               destination.Add(new GameplayTag(child));
          }
       }
 
       [EditorBrowsable(EditorBrowsableState.Never)]
-      public void Add(GameplayTag tag)
-      {
-         AddTag(tag);
-      }
+      public void Add(GameplayTag tag) => AddTag(tag);
 
-      public IEnumerator<GameplayTag> GetEnumerator()
-      {
-         EnsureRuntimeStateInitialized();
-         return GetTags();
-      }
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public GameplayTagEnumerator GetEnumerator() => new(m_Implicit, m_ImplicitCount);
 
-      IEnumerator IEnumerable.GetEnumerator()
-      {
-         return GetEnumerator();
-      }
+      IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator() => GetEnumerator();
+
+      IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
    }
 }

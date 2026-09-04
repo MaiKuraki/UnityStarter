@@ -8,7 +8,8 @@
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement"
+        "CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement",
+        "CycloneGames.GameplayTags.Unity.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

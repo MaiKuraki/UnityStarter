@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -61,7 +62,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public ScalableFloat AttributePostMultiplyAdditiveValue;
 
         [Tooltip("SetByCaller GameplayTag key. Prefer this for replicated effects.")]
-        public GameplayTag SetByCallerDataTag;
+        public SerializableGameplayTag SetByCallerDataTag;
 
         [Tooltip("SetByCaller name key for non-replicated local workflows. Use GameplayTag keys for networked effects.")]
         public string SetByCallerDataName;

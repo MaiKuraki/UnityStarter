@@ -30,7 +30,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(CueTagName, "Gameplay Cue lifecycle test tag");
             GameplayTagManager.InitializeIfNeeded();
-            cueTag = GameplayTagManager.RequestTag(CueTagName);
+            cueTag = GameplayTagManager.Request(CueTagName);
 
             prefab = new GameObject("GameplayCueManagerTestPrefab");
             cueAsset = ScriptableObject.CreateInstance<GameplayCueProbeAsset>();

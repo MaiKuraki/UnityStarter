@@ -23,16 +23,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int ExplicitTagCount => snapshot.ExplicitTagCount;
         public int TagCount => snapshot.TagCount;
 
-        public GameplayTagContainerIndices Indices
+        internal ReadOnlyGameplayTagContainer Snapshot => snapshot;
+
+        /// <summary>The expanded tag at <paramref name="index"/>, in ascending index order.</summary>
+        public GameplayTag GetTag(int index)
         {
-            get
-            {
-                EnsureCompatible();
-                return values.Indices;
-            }
+            EnsureCompatible();
+            return values.GetTag(index);
         }
 
-        internal ReadOnlyGameplayTagContainer Snapshot => snapshot;
+        /// <summary>The explicit tag at <paramref name="index"/>, in ascending index order.</summary>
+        public GameplayTag GetExplicitTag(int index)
+        {
+            EnsureCompatible();
+            return values.GetExplicitTag(index);
+        }
 
         /// <summary>
         /// Creates an isolated mutable copy. Changes to the copy never affect the definition.
@@ -136,7 +141,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             return !staticContainer.HasAny(ForbiddenTags) &&
                    !dynamicContainer.HasAny(ForbiddenTags) &&
-                   GameplayTagContainerUtility.HasAll(staticContainer, dynamicContainer, RequiredTags);
+                   HasAllAcross(staticContainer, dynamicContainer);
+        }
+
+        /// <summary>
+        /// True when, for every explicitly required tag, at least one of the two containers holds it in
+        /// the expanded sense. The shared-requirement case: part of the requirement is static (the
+        /// effect's own tags) and part is dynamic (the target's).
+        /// </summary>
+        private bool HasAllAcross<T, U>(in T first, in U second)
+            where T : IReadOnlyGameplayTagContainer
+            where U : IReadOnlyGameplayTagContainer
+        {
+            int requiredCount = RequiredTags.ExplicitTagCount;
+            for (int i = 0; i < requiredCount; i++)
+            {
+                GameplayTag required = RequiredTags.GetExplicitTag(i);
+                if (!first.ContainsRuntimeIndex(required.RuntimeIndex, explicitOnly: false) &&
+                    !second.ContainsRuntimeIndex(required.RuntimeIndex, explicitOnly: false))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public bool MeetsRequirements(GameplayTagCountContainer container)

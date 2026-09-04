@@ -492,7 +492,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(name, "GameplayAbilities replication version atomicity test tag.");
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
 
         private sealed class VersionGuardAttributeSet : AttributeSet

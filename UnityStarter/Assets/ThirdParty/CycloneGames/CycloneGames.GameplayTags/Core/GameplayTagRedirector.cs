@@ -75,7 +75,10 @@ namespace CycloneGames.GameplayTags.Core
             for (int i = 0; i < keyCount; i++)
                next[keys[i]] = finalTarget;
 
-            ValidateAcyclic(next);
+            // No whole-table pass here. The old table was already acyclic, and this edit maps oldName to a
+            // fully resolved terminal and rewrites everything that pointed at oldName to that same
+            // terminal, so the only cycle it could introduce is oldName reaching itself - which
+            // ResolveChain already rejected above.
             Volatile.Write(ref s_Table, new RedirectTable(next));
          }
       }
@@ -129,8 +132,9 @@ namespace CycloneGames.GameplayTags.Core
                   throw new InvalidOperationException($"Gameplay tag redirect count cannot exceed {MaxRedirectCount}.");
             }
 
-            ValidateAcyclic(next);
-
+            // Flattening resolves every chain and ResolveChain rejects cycles as it walks, so this single
+            // pass is both the normalization and the acyclicity check. There is no separate whole-table
+            // validation, which is what used to make a batch cost one full walk per entry.
             string[] keys = new string[next.Count];
             next.Keys.CopyTo(keys, 0);
             for (int i = 0; i < keys.Length; i++)
@@ -181,22 +185,22 @@ namespace CycloneGames.GameplayTags.Core
          return new Dictionary<string, string>(Volatile.Read(ref s_Table).Entries, StringComparer.Ordinal);
       }
 
-      private static void ValidateAcyclic(Dictionary<string, string> redirects)
-      {
-         foreach (string key in redirects.Keys)
-            ResolveChain(key, redirects);
-      }
-
       private static string ResolveChain(string name, Dictionary<string, string> redirects)
       {
-         HashSet<string> visited = new(StringComparer.Ordinal);
+         // A chain that walks more entries than the table holds must have revisited one, so a depth
+         // budget is a complete cycle detector. The HashSet this replaces allocated once per call, and
+         // validation used to call it once per entry, which turned a batch import into a quadratic
+         // allocation storm on the critical path of a cold start.
          string current = name;
+         int budget = redirects.Count + 1;
          while (redirects.TryGetValue(current, out string next))
          {
-            if (!visited.Add(current))
+            if (--budget == 0)
                throw new InvalidOperationException($"Circular gameplay tag redirect detected from '{name}'.");
+
             current = next;
          }
+
          return current;
       }
    }

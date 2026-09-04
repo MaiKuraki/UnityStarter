@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -28,19 +29,20 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       {
          m_TagToDelete = tag;
 
+         IReadOnlyList<IGameplayTagSource> sources = GameplayTagManager.GetTagSources(tag);
          int deletableSourceCount = 0;
-         for (int i = 0; i < tag.Definition.SourceCount; i++)
+         for (int i = 0; i < sources.Count; i++)
          {
-            if (tag.Definition.GetSource(i) is IDeleteTagHandler)
+            if (sources[i] is IDeleteTagHandler)
                deletableSourceCount++;
          }
 
          m_SourceFileNameOptions = new string[deletableSourceCount];
          m_SourceFileOptions = new IGameplayTagSource[deletableSourceCount];
          int destinationIndex = 0;
-         for (int i = 0; i < tag.Definition.SourceCount; i++)
+         for (int i = 0; i < sources.Count; i++)
          {
-            IGameplayTagSource source = tag.Definition.GetSource(i);
+            IGameplayTagSource source = sources[i];
             if (source is not IDeleteTagHandler)
                continue;
 
@@ -101,7 +103,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                   IDeleteTagHandler source = GetSelectedFileTagSource();
                   source.DeleteTag(m_TagToDelete.Name);
 
-                  GameplayTagManager.ReloadTags();
+                  GameplayTagManager.Reload();
 
                   OnTagDeleted?.Invoke();
                   OnClose?.Invoke();

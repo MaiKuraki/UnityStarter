@@ -360,6 +360,12 @@ namespace Build.Pipeline.Editor
                     $"Build result manifest exceeds the {MaximumManifestBytes}-byte safety budget: '{path}'.");
             }
 
+            // Concurrency collision semantics: every formal caller (BuildPipelineRunner, which
+            // writes inside its BuildWorkspaceLease, and the session-guarded context overload)
+            // serializes writers, so the fixed "<runId>.json.tmp" candidate name cannot collide
+            // in practice. If a lease bypass ever made two writers race, FileMode.CreateNew +
+            // FileShare.None fails the second writer closed instead of truncating the first
+            // candidate - never widen this to FileMode.Create.
             string temporaryPath = path + ".tmp";
             BuildPathPolicy.EnsureWin32MaxPathBudget(
                 temporaryPath,

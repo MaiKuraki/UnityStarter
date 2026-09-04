@@ -138,7 +138,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(name, "GameplayEffect immutability test tag.");
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
 
         private static List<T> Repeat<T>(T value, int count)

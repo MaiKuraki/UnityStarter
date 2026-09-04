@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CycloneGames.Hash.Core;
 
 namespace CycloneGames.GameplayTags.Core
@@ -52,7 +53,7 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
-      internal static void WarnNotExplicitTagsRemoval(GameplayTagEnumerator tags)
+      internal static void WarnNotExplicitTagsRemoval<T>(T tags) where T : IEnumerable<GameplayTag>
       {
          foreach (GameplayTag tag in tags)
          {

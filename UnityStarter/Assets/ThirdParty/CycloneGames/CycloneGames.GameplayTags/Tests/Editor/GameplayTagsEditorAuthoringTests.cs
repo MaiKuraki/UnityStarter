@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.GameplayTags.Unity.Editor;
 using CycloneGames.Logging;
 using NUnit.Framework;
@@ -23,10 +24,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
    {
       private string m_TemporaryProjectRoot;
       private string m_SettingsRoot;
-      private Func<string> m_PreviousSettingsDirectory;
-      private Func<IEnumerable<IGameplayTagSource>> m_PreviousProjectSources;
-      private Func<bool> m_PreviousIsRuntimePlaying;
-      private Func<byte[]> m_PreviousLoadBuildTagData;
+      private GameplayTagTestHostPlatform m_Host;
 
       [SetUp]
       public void SetUp()
@@ -39,23 +37,18 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "ProjectSettings"));
          Directory.CreateDirectory(Path.Combine(m_TemporaryProjectRoot, "Assets"));
 
-         m_PreviousSettingsDirectory = GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory;
-         m_PreviousProjectSources = GameplayTagRuntimePlatform.EnumerateProjectTagSources;
-         m_PreviousIsRuntimePlaying = GameplayTagRuntimePlatform.IsRuntimePlaying;
-         m_PreviousLoadBuildTagData = GameplayTagRuntimePlatform.LoadBuildTagData;
+         m_Host = GameplayTagTestHostPlatform.Install();
+         m_Host.SettingsDirectory = m_SettingsRoot;
+         m_Host.SetRuntimePlaying(false);
+         m_Host.SetBuildData(null);
+         m_Host.ClearRegisteredProjectTagSources();
          GameplayTagManager.ResetForTests();
-         GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory = () => m_SettingsRoot;
-         GameplayTagRuntimePlatform.EnumerateProjectTagSources = () => Array.Empty<IGameplayTagSource>();
       }
 
       [TearDown]
       public void TearDown()
       {
          GameplayTagManager.ResetForTests();
-         GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory = m_PreviousSettingsDirectory;
-         GameplayTagRuntimePlatform.EnumerateProjectTagSources = m_PreviousProjectSources;
-         GameplayTagRuntimePlatform.IsRuntimePlaying = m_PreviousIsRuntimePlaying;
-         GameplayTagRuntimePlatform.LoadBuildTagData = m_PreviousLoadBuildTagData;
          if (!string.IsNullOrEmpty(m_TemporaryProjectRoot) && Directory.Exists(m_TemporaryProjectRoot))
             Directory.Delete(m_TemporaryProjectRoot, true);
       }
@@ -112,11 +105,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          GameplayTagRegistrationContext context = new GameplayTagRegistrationContext();
          source.RegisterTags(context);
 
-         GameplayTagDefinition definition = context.GenerateDefinitions(true)
-            .Find(static candidate => candidate.TagName == "UI.Hidden");
-         Assert.That(definition, Is.Not.Null);
-         Assert.That(definition.Description, Is.EqualTo("Hidden tag"));
-         Assert.That(definition.Flags, Is.EqualTo(GameplayTagFlags.HideInEditor));
+         GameplayTagBuildResult result = context.Build();
+         int hiddenIndex = Array.IndexOf(result.Names, "UI.Hidden");
+         Assert.That(hiddenIndex, Is.GreaterThan(0));
+         Assert.That(result.Descriptions[hiddenIndex], Is.EqualTo("Hidden tag"));
+         Assert.That(result.Flags[hiddenIndex], Is.EqualTo(GameplayTagFlags.HideInEditor));
       }
 
       [Test]
@@ -264,9 +257,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          Assert.That(reloaded.TryLoad(), Is.True);
          GameplayTagRegistrationContext context = new();
          reloaded.RegisterTags(context);
-         List<GameplayTagDefinition> definitions = context.GenerateDefinitions(false);
-         Assert.That(definitions.Exists(static definition => definition.TagName == "Combat.First"), Is.True);
-         Assert.That(definitions.Exists(static definition => definition.TagName == "Combat.Second"), Is.True);
+         GameplayTagBuildResult result = context.Build();
+         Assert.That(Array.IndexOf(result.Names, "Combat.First"), Is.GreaterThan(0));
+         Assert.That(Array.IndexOf(result.Names, "Combat.Second"), Is.GreaterThan(0));
       }
 
       [Test]
@@ -467,8 +460,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       [Test]
       public void BuildBinary_RejectsInvalidUtf16BeforeAllocatingOutput()
       {
-         GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
-         GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => Array.Empty<IGameplayTagSource>();
+         TestHost.IsRuntimePlaying = false;
+         TestHost.ClearRegisteredProjectTagSources();
          GameplayTagManager.RegisterDynamicTag("Build.InvalidText", "\uD800");
 
          Assert.Throws<BuildFailedException>(() => BuildTags.CreateBuildData());
@@ -499,8 +492,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       public void BuildBinary_RoundTripsAllDefinitionsAndMetadata()
       {
          GameplayTagManager.ResetForTests();
-         GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
-         GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => Array.Empty<IGameplayTagSource>();
+         TestHost.IsRuntimePlaying = false;
+         TestHost.ClearRegisteredProjectTagSources();
          GameplayTagManager.RegisterDynamicTag(
             "Build.Ability",
             "Ability category",
@@ -508,21 +501,20 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          GameplayTagManager.RegisterDynamicTag("Build.Ability.Fire", "Fire ability");
 
          byte[] data = BuildTags.CreateBuildData();
-         Assert.That(BuildTags.CalculateBuildDataSize(GameplayTagManager.GetAllTags()), Is.EqualTo(data.Length));
-         GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+         Assert.That(BuildTags.CalculateBuildDataSize(GameplayTagManager.Current.CreateAllTagsArray()), Is.EqualTo(data.Length));
+         TestHost.SetBuildData(data);
          GameplayTagRegistrationContext context = new GameplayTagRegistrationContext();
          new BuildGameplayTagSource().RegisterTags(context);
-         List<GameplayTagDefinition> definitions = context.GenerateDefinitions(true);
+         GameplayTagBuildResult result = context.Build();
 
-         GameplayTagDefinition parent = definitions.Find(
-            static definition => definition.TagName == "Build.Ability");
-         GameplayTagDefinition child = definitions.Find(
-            static definition => definition.TagName == "Build.Ability.Fire");
-         Assert.That(parent, Is.Not.Null);
-         Assert.That(parent.Description, Is.EqualTo("Ability category"));
-         Assert.That(parent.Flags, Is.EqualTo(GameplayTagFlags.HideInEditor));
-         Assert.That(child, Is.Not.Null);
-         Assert.That(child.Description, Is.EqualTo("Fire ability"));
+         int parentIndex = Array.IndexOf(result.Names, "Build.Ability");
+         int childIndex = Array.IndexOf(result.Names, "Build.Ability.Fire");
+         Assert.That(parentIndex, Is.GreaterThan(0));
+         Assert.That(childIndex, Is.GreaterThan(0));
+         Assert.That(result.Descriptions[parentIndex], Is.EqualTo("Ability category"));
+         Assert.That(result.Flags[parentIndex], Is.EqualTo(GameplayTagFlags.HideInEditor));
+         Assert.That(result.Descriptions[childIndex], Is.EqualTo("Fire ability"));
+         Assert.That(result.ParentIndices[childIndex], Is.EqualTo(parentIndex));
       }
 
       [TestCase((int)GameplayTagValidationScanStatus.Completed, 0, true)]
@@ -571,7 +563,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
 
             GameplayTagManager.ResetForTests();
-            GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => Array.Empty<IGameplayTagSource>();
+            TestHost.ClearRegisteredProjectTagSources();
             GameplayTagManager.InitializeIfNeeded();
             reporter.ScanProjectAsset(assetPath, canFix: true);
 
@@ -606,7 +598,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             SetSerializedTagName(first, "Combat.First");
             SetSerializedTagName(second, "Combat.Second");
             using SerializedObject serializedObject = new SerializedObject(new UnityEngine.Object[] { first, second });
-            SerializedProperty name = serializedObject.FindProperty("Tag").FindPropertyRelative("m_Name");
+            SerializedProperty name = serializedObject.FindProperty("Tag").FindPropertyRelative("tagName");
 
             Assert.That(GameplayTagPropertyDrawer.HasMixedTagValues(name), Is.True);
          }
@@ -618,6 +610,49 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       }
 
       [Test]
+      public void SerializedBridge_ExposesTheReadOnlyContainerContract()
+      {
+         GameplayTagRegistrationContext context = new GameplayTagRegistrationContext();
+         context.RegisterTag("Bridge.A", null, GameplayTagFlags.None);
+         context.RegisterTag("Bridge.A.B", null, GameplayTagFlags.None);
+         context.RegisterTag("Bridge.C", null, GameplayTagFlags.None);
+         GameplayTagBuildResult result = context.Build();
+
+         var bridge = new SerializableGameplayTagContainer();
+         bridge.LoadPersisted(new[] { "Bridge.A.B", "Bridge.C" });
+
+         // Interface members through the bridge itself - the GAS editor's PropertyField path walks these.
+         Assert.That(bridge.ExplicitTagCount, Is.EqualTo(2));
+         Assert.That(bridge.TagCount, Is.EqualTo(4));
+         Assert.That(bridge.ContainsRuntimeIndex(
+            GameplayTagManager.Request("Bridge.A.B").RuntimeIndex, true), Is.True);
+
+         // Extension methods over the interface work on the bridge directly.
+         var other = new SerializableGameplayTagContainer();
+         other.LoadPersisted(new[] { "Bridge.A", "Bridge.C" });
+         Assert.That(bridge.HasTag(GameplayTagManager.Request("Bridge.A")), Is.True);
+         Assert.That(bridge.HasAll(other), Is.True);
+         Assert.That(bridge.HasAny(other), Is.True);
+
+         // Implicit conversion reads the same set.
+         GameplayTagContainer converted = bridge;
+         Assert.That(converted.HasTagExact(GameplayTagManager.Request("Bridge.A.B")), Is.True);
+
+         // The requirement bridge converts to the Core struct and evaluates the pair.
+         var requirements = new SerializableGameplayTagRequirements();
+         requirements.RequiredTags.LoadPersisted(new[] { "Bridge.A" });
+         requirements.ForbiddenTags.LoadPersisted(new[] { "Bridge.C" });
+         var met = new SerializableGameplayTagContainer();
+         met.LoadPersisted(new[] { "Bridge.A.B" });
+         Assert.That(requirements.IsEmpty, Is.False);
+         Assert.That(requirements.Matches(met), Is.True);
+
+         var unmet = new SerializableGameplayTagContainer();
+         unmet.LoadPersisted(new[] { "Bridge.C" });
+         Assert.That(requirements.Matches(unmet), Is.False);
+      }
+
+      [Test]
       public void CatalogRefresh_DoesNotRemoveSerializedContainerAssignment()
       {
          GameplayTagTestHolder holder = ScriptableObject.CreateInstance<GameplayTagTestHolder>();
@@ -625,7 +660,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          {
             using SerializedObject serializedObject = new SerializedObject(holder);
             SerializedProperty explicitTags = serializedObject.FindProperty("Container")
-               .FindPropertyRelative("m_SerializedExplicitTags");
+               .FindPropertyRelative("explicitTagNames");
             explicitTags.arraySize = 1;
             explicitTags.GetArrayElementAtIndex(0).stringValue = "Catalog.RemainsAssigned";
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
@@ -828,7 +863,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       private static void SetSerializedTagName(GameplayTagTestHolder holder, string value)
       {
          using SerializedObject serializedObject = new SerializedObject(holder);
-         SerializedProperty name = serializedObject.FindProperty("Tag").FindPropertyRelative("m_Name");
+         SerializedProperty name = serializedObject.FindProperty("Tag").FindPropertyRelative("tagName");
          name.stringValue = value;
          serializedObject.ApplyModifiedPropertiesWithoutUndo();
       }

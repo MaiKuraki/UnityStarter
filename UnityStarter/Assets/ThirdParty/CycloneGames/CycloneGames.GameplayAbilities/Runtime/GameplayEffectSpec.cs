@@ -31,7 +31,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int ExplicitTagCount => GetReadContainer().ExplicitTagCount;
         public int TagCount => GetReadContainer().TagCount;
 
-        GameplayTagContainerIndices IReadOnlyGameplayTagContainer.Indices => GetReadContainer().Indices;
+        /// <summary>The expanded tag at <paramref name="index"/>, in ascending index order.</summary>
+        public GameplayTag GetTag(int index)
+        {
+            return GetReadContainer().GetTag(index);
+        }
+
+        /// <summary>The explicit tag at <paramref name="index"/>, in ascending index order.</summary>
+        public GameplayTag GetExplicitTag(int index)
+        {
+            return GetReadContainer().GetExplicitTag(index);
+        }
 
         public void AddTag(GameplayTag gameplayTag)
         {

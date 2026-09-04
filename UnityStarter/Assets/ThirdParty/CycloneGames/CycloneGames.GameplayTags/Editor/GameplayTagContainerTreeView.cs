@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
@@ -130,7 +131,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue, false);
+                GameplayTag tag = GameplayTagManager.Request(element.stringValue, false);
                 if (!tag.IsValid)
                     continue;
 
@@ -142,14 +143,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 item.IsExplicitIncluded = true;
                 item.IsIncluded = true;
 
-                foreach (GameplayTag parentTag in tag.ParentTags)
-                {
-                    GameplayTagTreeViewItem parentItem = FindItem(parentTag.RuntimeIndex);
-                    if (parentItem == null)
-                        continue;
-
-                    parentItem.IsIncluded = true;
-                }
+                MarkAncestorsIncluded(tag);
             }
         }
 
@@ -158,7 +152,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue, false);
+                GameplayTag tag = GameplayTagManager.Request(element.stringValue, false);
                 if (!tag.IsValid)
                     continue;
 
@@ -166,15 +160,33 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 if (item == null)
                     continue;
 
-                foreach (GameplayTag parentTag in tag.ParentTags)
-                {
-                    GameplayTagTreeViewItem parentItem = FindItem(parentTag.RuntimeIndex);
-                    if (parentItem == null)
-                        continue;
+                ExpandAncestors(tag);
+            }
+        }
 
-                    SetExpanded(parentItem.id, true);
-                }
+        private void MarkAncestorsIncluded(GameplayTag tag)
+        {
+            var ancestors = new List<GameplayTag>(8);
+            tag.AppendAncestors(ancestors);
+            for (int i = 0; i < ancestors.Count; i++)
+            {
+                GameplayTagTreeViewItem item = FindItem(ancestors[i].RuntimeIndex);
+                if (item != null)
+                    item.IsIncluded = true;
+            }
+        }
+
+        private void ExpandAncestors(GameplayTag tag)
+        {
+            var ancestors = new List<GameplayTag>(8);
+            tag.AppendAncestors(ancestors);
+            for (int i = 0; i < ancestors.Count; i++)
+            {
+                GameplayTagTreeViewItem item = FindItem(ancestors[i].RuntimeIndex);
+                if (item != null)
+                    SetExpanded(item.id, true);
             }
         }
     }
+
 }

@@ -370,7 +370,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             const string tagName = "Test.GAS.Runtime.ImmutableAbilityDefinition";
             GameplayTagManager.RegisterDynamicTag(tagName, "Immutable ability definition tag");
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag tag = GameplayTagManager.RequestTag(tagName);
+            GameplayTag tag = GameplayTagManager.Request(tagName);
             var mutableInput = new GameplayTagContainer();
             mutableInput.AddTag(tag);
             ReadOnlyGameplayTagContainer readOnlyInput = mutableInput.CreateSnapshot();
@@ -474,7 +474,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             const string tagName = "Test.GAS.Runtime.SetByCaller";
             GameplayTagManager.RegisterDynamicTag(tagName, "Runtime hardening SetByCaller tag");
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag tag = GameplayTagManager.RequestTag(tagName);
+            GameplayTag tag = GameplayTagManager.Request(tagName);
             var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
             var effect = new GameplayEffect(
                 "SetByCaller",
@@ -498,7 +498,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             const string cooldownTagName = "Test.GAS.Runtime.Cooldown";
             GameplayTagManager.RegisterDynamicTag(cooldownTagName, "Runtime hardening cooldown tag");
             GameplayTagManager.InitializeIfNeeded();
-            GameplayTag cooldownTag = GameplayTagManager.RequestTag(cooldownTagName);
+            GameplayTag cooldownTag = GameplayTagManager.Request(cooldownTagName);
 
             var cooldownTags = new GameplayTagContainer();
             cooldownTags.AddTag(cooldownTag);
@@ -1248,7 +1248,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(name, "GameplayAbilities runtime hardening tag");
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
 
         private static void SetAttributeValues(GameplayAttribute attribute, float value)

@@ -2,856 +2,734 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace CycloneGames.GameplayTags.Core
 {
-   public delegate void OnTagCountChangedDelegate(GameplayTag gameplayTag, int newCount);
-
+   /// <summary>Why a tag-event callback is being invoked.</summary>
    public enum GameplayTagEventType
    {
-      NewOrRemoved,
-      AnyCountChange
+      /// <summary>The count of the tag changed, including through zero.</summary>
+      AnyCountChange = 0,
+
+      /// <summary>The tag count crossed zero in either direction.</summary>
+      NewOrRemoved = 1,
    }
 
-   internal struct PendingTagChange
-   {
-      public const byte NotifyAnyCount = 1;
-      public const byte NotifyNewOrRemoved = 2;
+   /// <summary>Callback shape for tag count changes.</summary>
+   public delegate void OnTagCountChangedDelegate(GameplayTag gameplayTag, int newCount);
 
-      public int RuntimeIndex;
-      public int NewCount;
-      public byte Flags;
-   }
-
-   internal struct GameplayTagDelegateInfo
-   {
-      public OnTagCountChangedDelegate[] OnAnyChange;
-      public OnTagCountChangedDelegate[] OnNewOrRemove;
-   }
-
+   /// <summary>Write access to a tag container whose members carry reference counts.</summary>
    public interface IGameplayTagCountContainer : IGameplayTagContainer
    {
+      /// <summary>Raised for every tag whose count changed, including through zero.</summary>
       event OnTagCountChangedDelegate OnAnyTagCountChange;
+
+      /// <summary>Raised when a tag's count crosses zero in either direction.</summary>
       event OnTagCountChangedDelegate OnAnyTagNewOrRemove;
 
-      int GetExplicitTagCount(GameplayTag tag);
+      /// <summary>The number of times <paramref name="tag"/> has been added, which is 0 when absent.</summary>
       int GetTagCount(GameplayTag tag);
+
+      /// <summary>The number of times <paramref name="tag"/> was added explicitly.</summary>
+      int GetExplicitTagCount(GameplayTag tag);
+
       void RegisterTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback);
       void RemoveTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback);
       void RemoveAllTagEventCallbacks();
    }
 
-   [DebuggerDisplay("{DebuggerDisplay,nq}")]
+   /// <summary>
+   /// A tag container whose members carry reference counts instead of presence flags.
+   /// </summary>
+   /// <remarks>
+   /// <para>
+   /// This is what a GameplayAbility System uses for granted tags: two effects may both grant "Status.Burning",
+   /// and the tag must stay present until both are removed. Adding a tag increments its count and the count of
+   /// every ancestor; removing decrements. A tag is contained while its count is above zero.
+   /// </para>
+   /// <para>
+   /// Storage is two sorted parallel index/count array pairs - one for the explicitly granted set, one for
+   /// the expanded set. There is no dictionary on any mutation path, so an add or remove touches a handful of
+   /// contiguous array slots and allocates nothing once warm.
+   /// </para>
+   /// <para>
+   /// <b>Notifications.</b> Subscribers are invoked only after a mutation has been fully applied, so a
+   /// callback never observes a half-mutated container. A callback that throws does not stop the others; the
+   /// failures are aggregated and rethrown once the batch has been flushed. Re-entrant mutation from inside a
+   /// callback is rejected.
+   /// </para>
+   /// <para>
+   /// <b>Threading and epochs.</b> Owner-thread state, like <see cref="GameplayTagContainer"/>. Mutations on a
+   /// container whose registry epoch has moved on throw; reads do not check.
+   /// </para>
+   /// </remarks>
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
-   public class GameplayTagCountContainer : IGameplayTagCountContainer, IGameplayTagRuntimeIndexView
+   [DebuggerDisplay("{DebuggerDisplay,nq}")]
+   public class GameplayTagCountContainer : IGameplayTagCountContainer, IEnumerable<GameplayTag>
    {
-      internal const int MaxRetainedMutationScratchEntries = 256;
+      private int[] m_ExplicitIndices = Array.Empty<int>();
+      private int[] m_ExplicitCounts = Array.Empty<int>();
+      private int[] m_ImplicitIndices = Array.Empty<int>();
+      private int[] m_ImplicitCounts = Array.Empty<int>();
+      private int m_ExplicitCount;
+      private int m_ImplicitCount;
 
-      private sealed class BatchMutationScratch
+      // Retained batch scratch. Sorted unique touched indices with their per-set deltas, so a batch
+      // mutation allocates nothing after its first use at that size.
+      private int[] m_BatchIndices = Array.Empty<int>();
+      private int[] m_BatchExplicitDeltas = Array.Empty<int>();
+      private int[] m_BatchTotalDeltas = Array.Empty<int>();
+      private int m_BatchCount;
+
+      private readonly GameplayTagRegistry m_Registry;
+      private Dictionary<int, TagDelegateEntry> m_DelegateMap;
+      private List<OnTagCountChangedDelegate> m_GlobalAnyChange;
+      private List<OnTagCountChangedDelegate> m_GlobalNewOrRemove;
+      private int m_RuntimeIndexEpoch;
+      private int m_MutationDepth;
+
+      /// <summary>Capacity of the stack buffer used to stage a batch mutation of a small container.</summary>
+      private const int StackBatchCapacity = 64;
+
+      /// <summary>
+      /// The largest batch staging buffer retained between mutations. A batch past this size releases its
+      /// buffers when it completes instead of pinning the peak for the container's lifetime.
+      /// </summary>
+      internal const int MaxRetainedBatchEntryCount = 256;
+
+      /// <summary>
+      /// True while this container is holding batch staging buffers between mutations. Diagnostics and
+      /// tests only - it exposes whether retained memory exists, not new capability.
+      /// </summary>
+      internal bool HasRetainedBatchBuffers => m_BatchIndices.Length > 0;
+
+
+      private int m_OwningThreadId;
+
+      /// <summary>
+      /// Records or verifies the mutating thread. See
+      /// <see cref="GameplayTagsDiagnostics.ThreadAffinityChecksEnabled"/>.
+      /// </summary>
+      private void AssertMutationThreadAffinity()
       {
-         internal readonly Dictionary<int, int> ExplicitDeltas = new();
-         internal readonly Dictionary<int, int> TotalDeltas = new();
-         internal readonly List<int> SortedRuntimeIndices = new();
+         if (!GameplayTagsDiagnostics.ThreadAffinityChecksEnabled)
+            return;
 
-         internal int MaximumEntryCount => Math.Max(
-            Math.Max(ExplicitDeltas.Count, TotalDeltas.Count),
-            SortedRuntimeIndices.Count);
-
-         internal void Clear()
+         int current = Environment.CurrentManagedThreadId;
+         int owner = Volatile.Read(ref m_OwningThreadId);
+         if (owner == 0)
          {
-            ExplicitDeltas.Clear();
-            TotalDeltas.Clear();
-            SortedRuntimeIndices.Clear();
+            Volatile.Write(ref m_OwningThreadId, current);
+            return;
+         }
+
+         if (owner != current)
+         {
+            throw new InvalidOperationException(
+               $"{nameof(GameplayTagCountContainer)} was first mutated on managed thread {owner} but is being mutated on thread " +
+               $"{current}. A container is owner-thread state; hand a {nameof(ReadOnlyGameplayTagContainer)} " +
+               "across threads instead.");
          }
       }
 
-      public bool IsEmpty { get { EnsureCompatible(); return m_Indices.IsEmpty; } }
-      public int ExplicitTagCount { get { EnsureCompatible(); return m_Indices.ExplicitTagCount; } }
-      public int TagCount { get { EnsureCompatible(); return m_Indices.TagCount; } }
-      public GameplayTagContainerIndices Indices { get { EnsureCompatible(); return m_Indices; } }
+      public GameplayTagCountContainer() { }
 
-      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      [SuppressMessage("CodeQuality", "IDE0051:Remove unused private members", Justification = "It's used for debugging")]
-      private string DebuggerDisplay => $"Count (Explicit, Total) = ({ExplicitTagCount}, {TagCount})";
-
-      public event OnTagCountChangedDelegate OnAnyTagNewOrRemove
+      public GameplayTagCountContainer(GameplayTagRegistry registry)
       {
-         add => m_OnAnyTagNewOrRemove = AddSubscriber(m_OnAnyTagNewOrRemove, value);
-         remove => m_OnAnyTagNewOrRemove = RemoveSubscriber(m_OnAnyTagNewOrRemove, value);
+         m_Registry = registry ?? throw new ArgumentNullException(nameof(registry));
       }
 
-      public event OnTagCountChangedDelegate OnAnyTagCountChange
-      {
-         add => m_OnAnyTagCountChange = AddSubscriber(m_OnAnyTagCountChange, value);
-         remove => m_OnAnyTagCountChange = RemoveSubscriber(m_OnAnyTagCountChange, value);
-      }
+      public bool IsEmpty => m_ExplicitCount == 0;
 
-      private Dictionary<int, GameplayTagDelegateInfo> m_TagDelegateInfoMap;
-      private Dictionary<int, int> m_TagCounts;
-      private Dictionary<int, int> m_ExplicitTagCounts;
-      private GameplayTagContainerIndices m_Indices;
-      private BatchMutationScratch m_BatchMutationScratch;
-      private OnTagCountChangedDelegate[] m_OnAnyTagNewOrRemove = Array.Empty<OnTagCountChangedDelegate>();
-      private OnTagCountChangedDelegate[] m_OnAnyTagCountChange = Array.Empty<OnTagCountChangedDelegate>();
-      private int m_RuntimeIndexEpoch;
-      private int m_PeakStateEntryCount;
-      private bool m_IsMutatingOrNotifying;
+      public int ExplicitTagCount => m_ExplicitCount;
 
-      internal bool HasRetainedMutationScratch => m_BatchMutationScratch != null;
+      public int TagCount => m_ImplicitCount;
 
-      int IGameplayTagRuntimeIndexView.RuntimeIndexEpoch
+      /// <summary>The registry epoch these indices belong to, or 0 before the first mutation.</summary>
+      public int RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
+      /// <summary>
+      /// True when the registry has been rebuilt with reassigned indices since this container was last
+      /// written. Reads do not detect this; re-resolve before writing.
+      /// </summary>
+      public bool IsStale
       {
          get
          {
-            EnsureCompatible();
-            return m_RuntimeIndexEpoch;
+            int epoch = GetSnapshot().RuntimeIndexEpoch;
+            return m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != epoch;
          }
       }
 
-      public GameplayTagEnumerator GetExplicitTags()
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      private string DebuggerDisplay => $"Count (Explicit, Total) = ({m_ExplicitCount}, {m_ImplicitCount})";
+
+      /// <summary>Raised for every tag whose count changed, including through zero.</summary>
+      public event OnTagCountChangedDelegate OnAnyTagCountChange
       {
-         EnsureCompatible();
-         return new GameplayTagEnumerator(m_Indices.Explicit);
+         add
+         {
+            m_GlobalAnyChange ??= new List<OnTagCountChangedDelegate>();
+            m_GlobalAnyChange.Add(value);
+         }
+         remove
+         {
+            m_GlobalAnyChange?.Remove(value);
+         }
       }
 
-      public GameplayTagEnumerator GetTags()
+      /// <summary>Raised when a tag's count crosses zero in either direction.</summary>
+      public event OnTagCountChangedDelegate OnAnyTagNewOrRemove
       {
-         EnsureCompatible();
-         return new GameplayTagEnumerator(m_Indices.Implicit);
+         add
+         {
+            m_GlobalNewOrRemove ??= new List<OnTagCountChangedDelegate>();
+            m_GlobalNewOrRemove.Add(value);
+         }
+         remove
+         {
+            m_GlobalNewOrRemove?.Remove(value);
+         }
       }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private TagDataSnapshot GetSnapshot()
+         => m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private TagDataSnapshot GetSnapshotForMutation()
+      {
+         TagDataSnapshot snapshot = GetSnapshot();
+         if (m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != snapshot.RuntimeIndexEpoch)
+         {
+            throw new InvalidOperationException(
+               $"This gameplay tag count container holds indices from registry epoch {m_RuntimeIndexEpoch} but " +
+               $"the registry is now at epoch {snapshot.RuntimeIndexEpoch}. Re-resolve the container before " +
+               "writing to it; writing would mix indices from two incompatible registries.");
+         }
+
+         return snapshot;
+      }
+
+      public GameplayTag GetTag(int index)
+      {
+         if ((uint)index >= (uint)m_ImplicitCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_ImplicitIndices[index]);
+      }
+
+      public GameplayTag GetExplicitTag(int index)
+      {
+         if ((uint)index >= (uint)m_ExplicitCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+         return new GameplayTag(m_ExplicitIndices[index]);
+      }
+
+      public GameplayTagEnumerator GetTags() => new(m_ImplicitIndices, m_ImplicitCount);
+
+      public GameplayTagEnumerator GetExplicitTags() => new(m_ExplicitIndices, m_ExplicitCount);
 
       public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureCompatible();
-         GameplayTagContainerUtility.GetParentTags(m_Indices.Implicit, tag, parentTags);
-      }
+         => FillAncestors(m_ImplicitIndices, m_ImplicitCount, tag, parentTags);
 
       public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureCompatible();
-         GameplayTagContainerUtility.GetChildTags(m_Indices.Implicit, tag, childTags);
-      }
+         => FillDescendants(m_ImplicitIndices, m_ImplicitCount, tag, childTags);
 
       public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
-      {
-         EnsureCompatible();
-         GameplayTagContainerUtility.GetParentTags(m_Indices.Explicit, tag, parentTags);
-      }
+         => FillAncestors(m_ExplicitIndices, m_ExplicitCount, tag, parentTags);
 
       public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
-      {
-         EnsureCompatible();
-         GameplayTagContainerUtility.GetChildTags(m_Indices.Explicit, tag, childTags);
-      }
-
-      public int GetTagCount(GameplayTag tag)
-      {
-         EnsureCompatible();
-         return tag.RuntimeIndex > 0 &&
-                m_TagCounts != null &&
-                m_TagCounts.TryGetValue(tag.RuntimeIndex, out int count)
-            ? count
-            : 0;
-      }
-
-      public int GetExplicitTagCount(GameplayTag tag)
-      {
-         EnsureCompatible();
-         return tag.RuntimeIndex > 0 &&
-                m_ExplicitTagCounts != null &&
-                m_ExplicitTagCounts.TryGetValue(tag.RuntimeIndex, out int count)
-            ? count
-            : 0;
-      }
+         => FillDescendants(m_ExplicitIndices, m_ExplicitCount, tag, childTags);
 
       public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
       {
-         EnsureCompatible();
          if (runtimeIndex <= 0)
             return false;
 
-         Dictionary<int, int> counts = explicitOnly ? m_ExplicitTagCounts : m_TagCounts;
-         return counts != null && counts.ContainsKey(runtimeIndex);
+         return explicitOnly
+            ? Find(m_ExplicitIndices, m_ExplicitCount, runtimeIndex) >= 0
+            : Find(m_ImplicitIndices, m_ImplicitCount, runtimeIndex) >= 0;
       }
 
+      /// <summary>The number of times <paramref name="tag"/> has been added, which is 0 when absent.</summary>
+      public int GetTagCount(GameplayTag tag)
+      {
+         if (tag.IsNone || !tag.IsValid)
+            return 0;
+
+         int position = Find(m_ImplicitIndices, m_ImplicitCount, tag.RuntimeIndex);
+         return position >= 0 ? m_ImplicitCounts[position] : 0;
+      }
+
+      /// <summary>The number of times <paramref name="tag"/> was added explicitly.</summary>
+      public int GetExplicitTagCount(GameplayTag tag)
+      {
+         if (tag.IsNone || !tag.IsValid)
+            return 0;
+
+         int position = Find(m_ExplicitIndices, m_ExplicitCount, tag.RuntimeIndex);
+         return position >= 0 ? m_ExplicitCounts[position] : 0;
+      }
+
+      /// <summary>
+      /// Registers <paramref name="callback"/> for one tag and one event kind. The same callback may be
+      /// registered more than once and will then be invoked that many times.
+      /// </summary>
       public void RegisterTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
       {
-         EnsureCompatible();
-         ValidateTagAndCallback(tag, callback);
-
-         int runtimeIndex = tag.RuntimeIndex;
-         m_TagDelegateInfoMap ??= new Dictionary<int, GameplayTagDelegateInfo>();
-         m_TagDelegateInfoMap.TryGetValue(runtimeIndex, out GameplayTagDelegateInfo delegateInfo);
-         switch (eventType)
-         {
-            case GameplayTagEventType.AnyCountChange:
-               delegateInfo.OnAnyChange = AddSubscriber(delegateInfo.OnAnyChange, callback);
-               break;
-            case GameplayTagEventType.NewOrRemoved:
-               delegateInfo.OnNewOrRemove = AddSubscriber(delegateInfo.OnNewOrRemove, callback);
-               break;
-            default:
-               throw new ArgumentOutOfRangeException(nameof(eventType));
-         }
-
-         m_TagDelegateInfoMap[runtimeIndex] = delegateInfo;
-      }
-
-      public void RemoveTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
-      {
-         EnsureCompatible();
          if (callback == null)
             throw new ArgumentNullException(nameof(callback));
-         if (m_TagDelegateInfoMap == null ||
-             !m_TagDelegateInfoMap.TryGetValue(tag.RuntimeIndex, out GameplayTagDelegateInfo delegateInfo))
-            return;
+         if (tag.IsNone || !tag.IsValid)
+            throw new ArgumentException("Cannot register a callback for an invalid gameplay tag.", nameof(tag));
 
-         switch (eventType)
+         m_DelegateMap ??= new Dictionary<int, TagDelegateEntry>();
+         if (!m_DelegateMap.TryGetValue(tag.RuntimeIndex, out TagDelegateEntry entry))
          {
-            case GameplayTagEventType.AnyCountChange:
-               delegateInfo.OnAnyChange = RemoveSubscriber(delegateInfo.OnAnyChange, callback);
-               break;
-            case GameplayTagEventType.NewOrRemoved:
-               delegateInfo.OnNewOrRemove = RemoveSubscriber(delegateInfo.OnNewOrRemove, callback);
-               break;
-            default:
-               throw new ArgumentOutOfRangeException(nameof(eventType));
+            entry = new TagDelegateEntry();
+            m_DelegateMap.Add(tag.RuntimeIndex, entry);
          }
 
-         if (HasNoSubscribers(delegateInfo.OnAnyChange) && HasNoSubscribers(delegateInfo.OnNewOrRemove))
+         if (eventType == GameplayTagEventType.AnyCountChange)
          {
-            m_TagDelegateInfoMap.Remove(tag.RuntimeIndex);
-            if (m_TagDelegateInfoMap.Count == 0)
-               m_TagDelegateInfoMap = null;
+            entry.OnAnyChange ??= new List<OnTagCountChangedDelegate>();
+            entry.OnAnyChange.Add(callback);
          }
          else
-            m_TagDelegateInfoMap[tag.RuntimeIndex] = delegateInfo;
+         {
+            entry.OnNewOrRemove ??= new List<OnTagCountChangedDelegate>();
+            entry.OnNewOrRemove.Add(callback);
+         }
       }
 
+      /// <summary>Removes one registration made by <see cref="RegisterTagEventCallback"/>.</summary>
+      public void RemoveTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
+      {
+         if (callback == null || tag.IsNone || !tag.IsValid)
+            return;
+
+         if (m_DelegateMap == null ||
+             !m_DelegateMap.TryGetValue(tag.RuntimeIndex, out TagDelegateEntry entry))
+         {
+            return;
+         }
+
+         List<OnTagCountChangedDelegate> list = eventType == GameplayTagEventType.AnyCountChange
+            ? entry.OnAnyChange
+            : entry.OnNewOrRemove;
+         list?.Remove(callback);
+      }
+
+      /// <summary>Removes every per-tag registration. Global event subscribers are untouched.</summary>
       public void RemoveAllTagEventCallbacks()
       {
-         m_TagDelegateInfoMap = null;
-         m_OnAnyTagNewOrRemove = Array.Empty<OnTagCountChangedDelegate>();
-         m_OnAnyTagCountChange = Array.Empty<OnTagCountChangedDelegate>();
+         m_DelegateMap = null;
       }
 
-      public void AddTag(GameplayTag tag)
+      public void AddTag(GameplayTag tag) => AddTag(tag, 1);
+
+      /// <summary>Adds <paramref name="count"/> stack of <paramref name="tag"/> in one mutation.</summary>
+      public void AddTag(GameplayTag tag, int count)
       {
-         MutateSingleTag(tag, 1);
+         if (tag.IsNone || !tag.IsValid)
+            throw new ArgumentException("Cannot add an invalid gameplay tag.", nameof(tag));
+         if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count));
+
+         AssertMutationThreadAffinity();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         Mutate(snapshot, stackalloc int[] { tag.RuntimeIndex }, count);
       }
 
-      public void AddTags<T>(in T other) where T : IReadOnlyGameplayTagContainer
+      public void RemoveTag(GameplayTag tag) => RemoveTag(tag, 1);
+
+      /// <summary>Removes <paramref name="count"/> stack of <paramref name="tag"/> in one mutation.</summary>
+      public void RemoveTag(GameplayTag tag, int count)
       {
-         MutateTags(other, 1);
+         if (tag.IsNone || !tag.IsValid)
+            throw new ArgumentException("Cannot remove an invalid gameplay tag.", nameof(tag));
+         if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count));
+
+         AssertMutationThreadAffinity();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         Mutate(snapshot, stackalloc int[] { tag.RuntimeIndex }, -count);
       }
 
-      public void RemoveTag(GameplayTag tag)
-      {
-         MutateSingleTag(tag, -1);
-      }
+      public void AddTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
+         => MutateFromContainer(container, 1);
 
-      public void RemoveTags<T>(in T other) where T : IReadOnlyGameplayTagContainer
-      {
-         MutateTags(other, -1);
-      }
+      public void RemoveTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
+         => MutateFromContainer(container, -1);
 
       public void Clear()
       {
-         BeginMutation();
-         BatchMutationScratch scratch = null;
-         List<Exception> callbackFailures = null;
-         try
+         if (m_MutationDepth > 0)
          {
-            TagDataSnapshot operationSnapshot = GameplayTagManager.Snapshot;
-            if (m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != operationSnapshot.RuntimeIndexEpoch)
-            {
-               ReleaseAllOwnedStorage();
-               m_TagDelegateInfoMap = null;
-               m_RuntimeIndexEpoch = operationSnapshot.RuntimeIndexEpoch;
-               return;
-            }
-
-            EnsureCompatible(operationSnapshot.RuntimeIndexEpoch);
-            if (m_Indices.IsEmpty)
-            {
-               m_BatchMutationScratch = null;
-               return;
-            }
-
-            if (HasAnySubscribers())
-            {
-               scratch = AcquireBatchMutationScratch();
-               scratch.SortedRuntimeIndices.AddRange(m_Indices.Implicit);
-            }
-
-            bool releaseStateStorage = m_PeakStateEntryCount > MaxRetainedMutationScratchEntries;
-            ClearStateStorage(releaseStateStorage);
-
-            if (scratch != null)
-            {
-               for (int i = 0; i < scratch.SortedRuntimeIndices.Count; i++)
-               {
-                   FlushPendingChange(new PendingTagChange
-                   {
-                      RuntimeIndex = scratch.SortedRuntimeIndices[i],
-                      NewCount = 0,
-                      Flags = PendingTagChange.NotifyAnyCount | PendingTagChange.NotifyNewOrRemoved
-                   }, operationSnapshot, ref callbackFailures);
-                }
-            }
-
-            ThrowIfCallbackFailures(callbackFailures);
+            throw new InvalidOperationException(
+               "A gameplay tag count container cannot be cleared from inside its own mutation callback.");
          }
-         finally
-         {
-            if (scratch != null)
-               ReleaseBatchMutationScratch(scratch, retain: false);
-            else
-               m_BatchMutationScratch = null;
-            EndMutation();
-         }
+
+         m_ExplicitCount = 0;
+         m_ImplicitCount = 0;
+         m_BatchCount = 0;
+         m_BatchIndices = Array.Empty<int>();
+         m_BatchExplicitDeltas = Array.Empty<int>();
+         m_BatchTotalDeltas = Array.Empty<int>();
+         m_RuntimeIndexEpoch = 0;
       }
 
-      public GameplayTagEnumerator GetEnumerator()
+      /// <summary>
+      /// Buffers are kept between mutations so a run of small batches allocates once. A batch that peaked
+      /// past the retention budget releases them instead of pinning the peak.
+      /// </summary>
+      private void ReleaseOversizedBatchBuffers()
       {
-         EnsureCompatible();
-         return new GameplayTagEnumerator(m_Indices.Implicit);
-      }
-
-      IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator() => GetEnumerator();
-      IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-
-      private void MutateSingleTag(GameplayTag tag, int delta)
-      {
-         TagDataSnapshot operationSnapshot = GameplayTagManager.Snapshot;
-         EnsureCompatible(operationSnapshot.RuntimeIndexEpoch);
-         int runtimeIndex = ResolveRuntimeIndex(tag, operationSnapshot, nameof(tag));
-         MutateSingleRuntimeIndex(runtimeIndex, delta, operationSnapshot);
-      }
-
-      private void MutateSingleRuntimeIndex(
-         int runtimeIndex,
-         int delta,
-         TagDataSnapshot operationSnapshot)
-      {
-         ValidateRuntimeIndex(runtimeIndex, operationSnapshot, nameof(runtimeIndex));
-         BeginMutation();
-         List<Exception> callbackFailures = null;
-         try
-         {
-            ReadOnlySpan<int> hierarchyRuntimeIndices = operationSnapshot.GetHierarchyRuntimeIndicesSpan(runtimeIndex);
-            if (hierarchyRuntimeIndices.Length == 0 ||
-                hierarchyRuntimeIndices.Length > GameplayTagUtility.MaxHierarchyDepth)
-            {
-               throw new InvalidOperationException(
-                  $"Gameplay tag runtime index {runtimeIndex} has an invalid hierarchy depth.");
-            }
-
-            ValidateDelta(m_ExplicitTagCounts, runtimeIndex, delta, "explicit");
-            for (int i = 0; i < hierarchyRuntimeIndices.Length; i++)
-               ValidateDelta(m_TagCounts, hierarchyRuntimeIndices[i], delta, "hierarchical");
-
-            EnsureStateStorageCreated();
-            ApplyDelta(m_ExplicitTagCounts, m_Indices.Explicit, runtimeIndex, delta);
-
-            Span<PendingTagChange> pendingChanges =
-               stackalloc PendingTagChange[hierarchyRuntimeIndices.Length];
-            for (int i = 0; i < hierarchyRuntimeIndices.Length; i++)
-            {
-               int hierarchyRuntimeIndex = hierarchyRuntimeIndices[i];
-               int newCount = ApplyDelta(m_TagCounts, m_Indices.Implicit, hierarchyRuntimeIndex, delta);
-               int previousCount = newCount - delta;
-               byte flags = PendingTagChange.NotifyAnyCount;
-               if ((previousCount == 0) != (newCount == 0))
-                  flags |= PendingTagChange.NotifyNewOrRemoved;
-
-               pendingChanges[i] = new PendingTagChange
-               {
-                  RuntimeIndex = hierarchyRuntimeIndex,
-                  NewCount = newCount,
-                  Flags = flags
-               };
-            }
-
-            SortPendingChangesByRuntimeIndex(pendingChanges.Slice(0, hierarchyRuntimeIndices.Length));
-            UpdatePeakStateEntryCount();
-            for (int i = 0; i < hierarchyRuntimeIndices.Length; i++)
-               FlushPendingChange(pendingChanges[i], operationSnapshot, ref callbackFailures);
-
-            ReleaseOversizedEmptyStateStorage();
-            ThrowIfCallbackFailures(callbackFailures);
-         }
-         finally
-         {
-            EndMutation();
-         }
-      }
-
-      private void MutateTags<T>(in T other, int delta) where T : IReadOnlyGameplayTagContainer
-      {
-         TagDataSnapshot operationSnapshot = GameplayTagManager.Snapshot;
-         EnsureCompatible(operationSnapshot.RuntimeIndexEpoch);
-         if (other is null || other.IsEmpty)
+         if (m_BatchIndices.Length <= MaxRetainedBatchEntryCount)
             return;
 
-         EnsureContainerCompatible(other, operationSnapshot.RuntimeIndexEpoch);
-         GameplayTagContainerIndices otherIndices = other.Indices;
-         List<int> explicitRuntimeIndices = otherIndices.Explicit;
-         if (explicitRuntimeIndices == null || explicitRuntimeIndices.Count != other.ExplicitTagCount)
-            throw new InvalidOperationException("A gameplay tag container reported inconsistent explicit runtime-index storage.");
+         m_BatchIndices = Array.Empty<int>();
+         m_BatchExplicitDeltas = Array.Empty<int>();
+         m_BatchTotalDeltas = Array.Empty<int>();
+      }
 
-         if (explicitRuntimeIndices.Count == 1)
-         {
-            MutateSingleRuntimeIndex(explicitRuntimeIndices[0], delta, operationSnapshot);
+      private void MutateFromContainer<T>(in T container, int delta) where T : IReadOnlyGameplayTagContainer
+      {
+         if (container == null || container.IsEmpty)
             return;
+
+         AssertMutationThreadAffinity();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+
+         int explicitCount = container.ExplicitTagCount;
+         Span<int> indices = stackalloc int[StackBatchCapacity];
+         if (explicitCount > StackBatchCapacity)
+            indices = new int[explicitCount];
+         indices = indices.Slice(0, explicitCount);
+
+         for (int i = 0; i < explicitCount; i++)
+         {
+            int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
+            if (runtimeIndex <= 0)
+               throw new ArgumentException("Cannot mutate a container holding an invalid gameplay tag.", nameof(container));
+
+            indices[i] = runtimeIndex;
          }
 
-         BeginMutation();
-         BatchMutationScratch scratch = null;
-         bool committed = false;
-         List<Exception> callbackFailures = null;
+         Mutate(snapshot, indices, delta);
+      }
+
+      /// <summary>
+      /// Applies <paramref name="delta"/> to every tag in <paramref name="explicitRuntimeIndices"/> and to
+      /// all of their ancestors, then flushes notifications for every touched tag.
+      /// </summary>
+      private void Mutate(TagDataSnapshot snapshot, ReadOnlySpan<int> explicitRuntimeIndices, int delta)
+      {
+         if (m_MutationDepth > 0)
+         {
+            throw new InvalidOperationException(
+               "A gameplay tag count container cannot be mutated from inside its own mutation callback. " +
+               "Queue the change and apply it after the current one completes.");
+         }
+
+         m_MutationDepth++;
          try
          {
-            scratch = AcquireBatchMutationScratch();
-            for (int i = 0; i < explicitRuntimeIndices.Count; i++)
+            // Pass 1: validate every delta before applying any of them, so a rejected mutation leaves the
+            // container exactly as it was.
+            for (int i = 0; i < explicitRuntimeIndices.Length; i++)
             {
                int runtimeIndex = explicitRuntimeIndices[i];
-               ValidateRuntimeIndex(runtimeIndex, operationSnapshot, nameof(other));
-               AccumulateTagDeltas(
-                  runtimeIndex,
-                  delta,
-                  operationSnapshot,
-                  scratch.ExplicitDeltas,
-                  scratch.TotalDeltas);
+               if ((uint)runtimeIndex >= (uint)snapshot.TotalTagCount)
+                  throw new ArgumentException($"Runtime index {runtimeIndex} is not registered.", nameof(explicitRuntimeIndices));
+
+               int explicitPosition = Find(m_ExplicitIndices, m_ExplicitCount, runtimeIndex);
+               if (explicitPosition < 0 && delta < 0)
+                  WarnAndRejectNegative(snapshot, runtimeIndex, delta, explicitSet: true);
+
+               int start = snapshot.HierarchyOffsets[runtimeIndex];
+               int end = snapshot.HierarchyOffsets[runtimeIndex + 1];
+               for (int k = start; k < end; k++)
+               {
+                  int ancestor = snapshot.HierarchyPool[k];
+                  int position = Find(m_ImplicitIndices, m_ImplicitCount, ancestor);
+                  if (position < 0 && delta < 0)
+                     WarnAndRejectNegative(snapshot, ancestor, delta, explicitSet: false);
+               }
             }
 
-            ValidateDeltas(m_ExplicitTagCounts, scratch.ExplicitDeltas, "explicit");
-            ValidateDeltas(m_TagCounts, scratch.TotalDeltas, "hierarchical");
-            EnsureStateStorageCreated();
-            ApplyDeltas(
-               m_ExplicitTagCounts,
-               m_Indices.Explicit,
-               scratch.ExplicitDeltas,
-               scratch.SortedRuntimeIndices);
-            ApplyDeltas(
-               m_TagCounts,
-               m_Indices.Implicit,
-               scratch.TotalDeltas,
-               scratch.SortedRuntimeIndices);
-            UpdatePeakStateEntryCount();
-            committed = true;
-            FlushCommittedBatchChanges(
-               scratch.SortedRuntimeIndices,
-               scratch.TotalDeltas,
-               operationSnapshot,
-               ref callbackFailures);
-            ReleaseOversizedEmptyStateStorage();
-            ThrowIfCallbackFailures(callbackFailures);
+            // Pass 2: accumulate into the batch buffers.
+            for (int i = 0; i < explicitRuntimeIndices.Length; i++)
+            {
+               int runtimeIndex = explicitRuntimeIndices[i];
+               Accumulate(runtimeIndex, delta, explicitSet: true);
+               int start = snapshot.HierarchyOffsets[runtimeIndex];
+               int end = snapshot.HierarchyOffsets[runtimeIndex + 1];
+               for (int k = start; k < end; k++)
+                  Accumulate(snapshot.HierarchyPool[k], delta, explicitSet: false);
+            }
+
+            if (m_BatchCount == 0)
+               return;
+
+            if (m_BatchCount > 1)
+               Array.Sort(m_BatchIndices, 0, m_BatchCount);
+
+            // Pass 3: apply.
+            for (int i = 0; i < m_BatchCount; i++)
+            {
+               int runtimeIndex = m_BatchIndices[i];
+               int explicitDelta = m_BatchExplicitDeltas[i];
+               int totalDelta = m_BatchTotalDeltas[i];
+
+               if (explicitDelta != 0)
+                  AdjustSet(m_ExplicitIndices, m_ExplicitCounts, ref m_ExplicitCount, runtimeIndex, explicitDelta, explicitSet: true);
+               if (totalDelta != 0)
+                  AdjustSet(m_ImplicitIndices, m_ImplicitCounts, ref m_ImplicitCount, runtimeIndex, totalDelta, explicitSet: false);
+            }
+
+            // Pass 4: notify, after the container is fully consistent.
+            List<Exception> failures = null;
+            for (int i = 0; i < m_BatchCount; i++)
+            {
+               int runtimeIndex = m_BatchIndices[i];
+               int newTotal = CountOf(m_ImplicitIndices, m_ImplicitCounts, m_ImplicitCount, runtimeIndex);
+               int oldTotal = newTotal - m_BatchTotalDeltas[i];
+               Notify(runtimeIndex, newTotal, oldTotal, ref failures);
+            }
+
+            m_BatchCount = 0;
+
+            if (failures != null)
+               throw new AggregateException("One or more gameplay tag count callbacks failed.", failures);
          }
          finally
          {
-            if (scratch != null)
-               ReleaseBatchMutationScratch(scratch, retain: committed);
-            EndMutation();
+            ReleaseOversizedBatchBuffers();
+            m_BatchCount = 0;
+            m_MutationDepth--;
          }
       }
 
-      private static void AccumulateTagDeltas(
-         int runtimeIndex,
-         int delta,
-         TagDataSnapshot operationSnapshot,
-         Dictionary<int, int> explicitDeltas,
-         Dictionary<int, int> totalDeltas)
+      private void WarnAndRejectNegative(TagDataSnapshot snapshot, int runtimeIndex, int delta, bool explicitSet)
       {
-         AccumulateDelta(explicitDeltas, runtimeIndex, delta);
+         int current = explicitSet
+            ? CountOf(m_ExplicitIndices, m_ExplicitCounts, m_ExplicitCount, runtimeIndex)
+            : CountOf(m_ImplicitIndices, m_ImplicitCounts, m_ImplicitCount, runtimeIndex);
 
-         ReadOnlySpan<int> hierarchyRuntimeIndices = operationSnapshot.GetHierarchyRuntimeIndicesSpan(runtimeIndex);
-         for (int i = 0; i < hierarchyRuntimeIndices.Length; i++)
-            AccumulateDelta(totalDeltas, hierarchyRuntimeIndices[i], delta);
-      }
-
-      private static void AccumulateDelta(Dictionary<int, int> deltas, int runtimeIndex, int delta)
-      {
-         deltas.TryGetValue(runtimeIndex, out int existingDelta);
-         deltas[runtimeIndex] = checked(existingDelta + delta);
-      }
-
-      private static void ValidateDeltas(Dictionary<int, int> counts, Dictionary<int, int> deltas, string countKind)
-      {
-         foreach (KeyValuePair<int, int> pair in deltas)
-         {
-            int currentCount = 0;
-            counts?.TryGetValue(pair.Key, out currentCount);
-            long nextCount = (long)currentCount + pair.Value;
-            if (nextCount < 0)
-               throw new InvalidOperationException($"Cannot decrement {countKind} gameplay tag count below zero for runtime index {pair.Key}.");
-            if (nextCount > int.MaxValue)
-               throw new OverflowException($"Cannot increment {countKind} gameplay tag count above Int32.MaxValue for runtime index {pair.Key}.");
-         }
-      }
-
-      private static void ApplyDeltas(
-         Dictionary<int, int> counts,
-         List<int> activeIndices,
-         Dictionary<int, int> deltas,
-         List<int> sortedRuntimeIndices)
-      {
-         sortedRuntimeIndices.Clear();
-         foreach (int runtimeIndex in deltas.Keys)
-            sortedRuntimeIndices.Add(runtimeIndex);
-         sortedRuntimeIndices.Sort();
-
-         for (int i = 0; i < sortedRuntimeIndices.Count; i++)
-         {
-            int runtimeIndex = sortedRuntimeIndices[i];
-            ApplyDelta(counts, activeIndices, runtimeIndex, deltas[runtimeIndex]);
-         }
-      }
-
-      private static void ValidateDelta(
-         Dictionary<int, int> counts,
-         int runtimeIndex,
-         int delta,
-         string countKind)
-      {
-         int currentCount = 0;
-         counts?.TryGetValue(runtimeIndex, out currentCount);
-         long nextCount = (long)currentCount + delta;
-         if (nextCount < 0)
-            throw new InvalidOperationException(
-               $"Cannot decrement {countKind} gameplay tag count below zero for runtime index {runtimeIndex}.");
-         if (nextCount > int.MaxValue)
-            throw new OverflowException(
-               $"Cannot increment {countKind} gameplay tag count above Int32.MaxValue for runtime index {runtimeIndex}.");
-      }
-
-      private static int ApplyDelta(
-         Dictionary<int, int> counts,
-         List<int> activeIndices,
-         int runtimeIndex,
-         int delta)
-      {
-         counts.TryGetValue(runtimeIndex, out int previousCount);
-         int newCount = previousCount + delta;
-         if (newCount == 0)
-         {
-            counts.Remove(runtimeIndex);
-            int activeIndex = BinarySearchUtility.Search(activeIndices, runtimeIndex);
-            if (activeIndex >= 0)
-               activeIndices.RemoveAt(activeIndex);
-         }
-         else
-         {
-            counts[runtimeIndex] = newCount;
-            if (previousCount == 0)
-            {
-               int activeIndex = BinarySearchUtility.Search(activeIndices, runtimeIndex);
-               if (activeIndex < 0)
-                  activeIndices.Insert(~activeIndex, runtimeIndex);
-            }
-         }
-
-         return newCount;
-      }
-
-      private static void SortPendingChangesByRuntimeIndex(Span<PendingTagChange> changes)
-      {
-         for (int i = 1; i < changes.Length; i++)
-         {
-            PendingTagChange value = changes[i];
-            int insertionIndex = i - 1;
-            while (insertionIndex >= 0 && changes[insertionIndex].RuntimeIndex > value.RuntimeIndex)
-            {
-               changes[insertionIndex + 1] = changes[insertionIndex];
-               insertionIndex--;
-            }
-
-            changes[insertionIndex + 1] = value;
-         }
-      }
-
-      private void FlushCommittedBatchChanges(
-         List<int> sortedRuntimeIndices,
-         Dictionary<int, int> totalDeltas,
-         TagDataSnapshot operationSnapshot,
-         ref List<Exception> callbackFailures)
-      {
-         for (int i = 0; i < sortedRuntimeIndices.Count; i++)
-         {
-            int runtimeIndex = sortedRuntimeIndices[i];
-            int newCount = 0;
-            m_TagCounts?.TryGetValue(runtimeIndex, out newCount);
-            int previousCount = newCount - totalDeltas[runtimeIndex];
-            byte flags = PendingTagChange.NotifyAnyCount;
-            if ((previousCount == 0) != (newCount == 0))
-               flags |= PendingTagChange.NotifyNewOrRemoved;
-
-            FlushPendingChange(new PendingTagChange
-            {
-               RuntimeIndex = runtimeIndex,
-               NewCount = newCount,
-               Flags = flags
-            }, operationSnapshot, ref callbackFailures);
-         }
-      }
-
-      private void FlushPendingChange(
-         PendingTagChange change,
-         TagDataSnapshot operationSnapshot,
-         ref List<Exception> callbackFailures)
-      {
-         GameplayTag tag = operationSnapshot.GetTagFromRuntimeIndex(change.RuntimeIndex);
-         GameplayTagDelegateInfo delegateInfo = default;
-         if (m_TagDelegateInfoMap != null)
-            m_TagDelegateInfoMap.TryGetValue(change.RuntimeIndex, out delegateInfo);
-
-         if ((change.Flags & PendingTagChange.NotifyNewOrRemoved) != 0)
-         {
-            InvokeSubscribers(delegateInfo.OnNewOrRemove, tag, change.NewCount, ref callbackFailures);
-            InvokeSubscribers(m_OnAnyTagNewOrRemove, tag, change.NewCount, ref callbackFailures);
-         }
-
-         if ((change.Flags & PendingTagChange.NotifyAnyCount) != 0)
-         {
-            InvokeSubscribers(delegateInfo.OnAnyChange, tag, change.NewCount, ref callbackFailures);
-            InvokeSubscribers(m_OnAnyTagCountChange, tag, change.NewCount, ref callbackFailures);
-         }
-      }
-
-      private BatchMutationScratch AcquireBatchMutationScratch()
-      {
-         m_BatchMutationScratch ??= new BatchMutationScratch();
-         return m_BatchMutationScratch;
-      }
-
-      private void ReleaseBatchMutationScratch(BatchMutationScratch scratch, bool retain)
-      {
-         int maximumEntryCount = scratch.MaximumEntryCount;
-         scratch.Clear();
-         if (!retain || maximumEntryCount > MaxRetainedMutationScratchEntries)
-            m_BatchMutationScratch = null;
-      }
-
-      private void EnsureStateStorageCreated()
-      {
-         m_TagCounts ??= new Dictionary<int, int>();
-         m_ExplicitTagCounts ??= new Dictionary<int, int>();
-         GameplayTagContainerIndices.Create(ref m_Indices);
-      }
-
-      private void UpdatePeakStateEntryCount()
-      {
-         m_PeakStateEntryCount = Math.Max(m_PeakStateEntryCount, m_Indices.TagCount);
-      }
-
-      private void ReleaseOversizedEmptyStateStorage()
-      {
-         if (!m_Indices.IsEmpty || m_PeakStateEntryCount <= MaxRetainedMutationScratchEntries)
+         if (current + delta >= 0)
             return;
 
-         ReleaseAllOwnedStorage();
+         string name = snapshot.GetName(runtimeIndex);
+         throw new InvalidOperationException(
+            $"Removing gameplay tag \"{name}\" would drive its {(explicitSet ? "explicit" : "hierarchical")} " +
+            $"count below zero (current {current}, delta {delta}). A tag cannot be removed more times than it was added.");
       }
 
-      private void ClearStateStorage(bool releaseStorage)
+      private void Accumulate(int runtimeIndex, int delta, bool explicitSet)
       {
-         if (releaseStorage)
+         int position = Find(m_BatchIndices, m_BatchCount, runtimeIndex);
+         if (position >= 0)
          {
-            ReleaseAllOwnedStorage();
+            if (explicitSet)
+               m_BatchExplicitDeltas[position] += delta;
+            else
+               m_BatchTotalDeltas[position] += delta;
             return;
          }
 
-         m_ExplicitTagCounts?.Clear();
-         m_TagCounts?.Clear();
-         m_Indices.Clear();
-         m_PeakStateEntryCount = 0;
+         position = ~position;
+         if (m_BatchCount == m_BatchIndices.Length)
+         {
+            int newSize = Math.Max(8, m_BatchCount * 2);
+            m_BatchIndices = Grow(m_BatchIndices, m_BatchCount, newSize);
+            m_BatchExplicitDeltas = Grow(m_BatchExplicitDeltas, m_BatchCount, newSize);
+            m_BatchTotalDeltas = Grow(m_BatchTotalDeltas, m_BatchCount, newSize);
+         }
+
+         Array.Copy(m_BatchIndices, position, m_BatchIndices, position + 1, m_BatchCount - position);
+         Array.Copy(m_BatchExplicitDeltas, position, m_BatchExplicitDeltas, position + 1, m_BatchCount - position);
+         Array.Copy(m_BatchTotalDeltas, position, m_BatchTotalDeltas, position + 1, m_BatchCount - position);
+
+         m_BatchIndices[position] = runtimeIndex;
+         m_BatchExplicitDeltas[position] = explicitSet ? delta : 0;
+         m_BatchTotalDeltas[position] = explicitSet ? 0 : delta;
+         m_BatchCount++;
       }
 
-      private void ReleaseAllOwnedStorage()
+      private static int[] Grow(int[] source, int count, int newSize)
       {
-         m_ExplicitTagCounts = null;
-         m_TagCounts = null;
-         m_Indices = default;
-         m_BatchMutationScratch = null;
-         m_PeakStateEntryCount = 0;
+         int[] grown = new int[newSize];
+         Array.Copy(source, grown, count);
+         return grown;
       }
 
-      private bool HasAnySubscribers()
+      private void AdjustSet(
+         int[] indices,
+         int[] counts,
+         ref int count,
+         int runtimeIndex,
+         int delta,
+         bool explicitSet)
       {
-         return (m_TagDelegateInfoMap != null && m_TagDelegateInfoMap.Count != 0) ||
-                !HasNoSubscribers(m_OnAnyTagNewOrRemove) ||
-                !HasNoSubscribers(m_OnAnyTagCountChange);
+         int position = Find(indices, count, runtimeIndex);
+         if (position >= 0)
+         {
+            counts[position] += delta;
+            if (counts[position] != 0)
+               return;
+
+            // The tag dropped out of this set entirely.
+            Array.Copy(indices, position + 1, indices, position, count - position - 1);
+            Array.Copy(counts, position + 1, counts, position, count - position - 1);
+            count--;
+            indices[count] = 0;
+            counts[count] = 0;
+            return;
+         }
+
+         if (delta <= 0)
+            return;
+
+         position = ~position;
+         if (count == indices.Length)
+         {
+            int newSize = Math.Max(8, count * 2);
+            int[] grownIndices = Grow(indices, count, newSize);
+            int[] grownCounts = Grow(counts, count, newSize);
+            if (explicitSet)
+            {
+               m_ExplicitIndices = grownIndices;
+               m_ExplicitCounts = grownCounts;
+            }
+            else
+            {
+               m_ImplicitIndices = grownIndices;
+               m_ImplicitCounts = grownCounts;
+            }
+
+            indices = grownIndices;
+            counts = grownCounts;
+         }
+
+         Array.Copy(indices, position, indices, position + 1, count - position);
+         Array.Copy(counts, position, counts, position + 1, count - position);
+         indices[position] = runtimeIndex;
+         counts[position] = delta;
+         count++;
       }
 
-      private static void InvokeSubscribers(
-         OnTagCountChangedDelegate[] subscribers,
-         GameplayTag tag,
+      private static int CountOf(int[] indices, int[] counts, int count, int runtimeIndex)
+      {
+         int position = Find(indices, count, runtimeIndex);
+         return position >= 0 ? counts[position] : 0;
+      }
+
+      private void Notify(int runtimeIndex, int newTotal, int oldTotal, ref List<Exception> failures)
+      {
+         bool crossedZero = (oldTotal == 0) != (newTotal == 0);
+
+         if (m_GlobalAnyChange != null)
+            Invoke(m_GlobalAnyChange, runtimeIndex, newTotal, ref failures);
+
+         if (m_GlobalNewOrRemove != null && crossedZero)
+            Invoke(m_GlobalNewOrRemove, runtimeIndex, newTotal, ref failures);
+
+         if (m_DelegateMap != null && m_DelegateMap.TryGetValue(runtimeIndex, out TagDelegateEntry entry))
+         {
+            if (entry.OnAnyChange != null)
+               Invoke(entry.OnAnyChange, runtimeIndex, newTotal, ref failures);
+
+            if (entry.OnNewOrRemove != null && crossedZero)
+               Invoke(entry.OnNewOrRemove, runtimeIndex, newTotal, ref failures);
+         }
+      }
+
+      private static void Invoke(
+         List<OnTagCountChangedDelegate> callbacks,
+         int runtimeIndex,
          int newCount,
-         ref List<Exception> callbackFailures)
+         ref List<Exception> failures)
       {
-         if (subscribers == null)
-            return;
-
-         for (int i = 0; i < subscribers.Length; i++)
+         GameplayTag tag = new(runtimeIndex);
+         for (int i = 0; i < callbacks.Count; i++)
          {
             try
             {
-               subscribers[i](tag, newCount);
+               callbacks[i](tag, newCount);
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!(exception is OutOfMemoryException))
             {
-               callbackFailures ??= new List<Exception>(1);
-               callbackFailures.Add(exception);
-               if (!GameplayTagsCoreDiagnostics.TryGetEnabled(
-                  GameplayTagsDiagnosticLevel.Error,
-                  GameplayTagsDiagnosticCategories.Root,
-                  out IGameplayTagsDiagnostics diagnostics))
-                  continue;
-
-               GameplayTagsCoreDiagnostics.TryWriteException(
-                  diagnostics,
-                  GameplayTagsDiagnosticLevel.Error,
-                  GameplayTagsDiagnosticCategories.Root,
-                  exception,
-                  $"Gameplay tag count callback failed for '{tag}' with committed count {newCount}.");
+               failures ??= new List<Exception>();
+               failures.Add(exception);
             }
          }
       }
 
-      private static void ThrowIfCallbackFailures(List<Exception> callbackFailures)
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private static int Find(int[] indices, int count, int value)
+         => BinarySearchUtility.Search(indices, count, value);
+
+      private void FillAncestors(int[] indices, int count, GameplayTag tag, List<GameplayTag> destination)
       {
-         if (callbackFailures == null)
+         if (count == 0 || destination == null)
             return;
 
-         throw new AggregateException(
-            "One or more gameplay tag count callbacks failed after the tag state was committed. " +
-            "Do not retry the mutation without reconciling the committed state.",
-            callbackFailures);
-      }
-
-      private void BeginMutation()
-      {
-         if (m_IsMutatingOrNotifying)
-            throw new InvalidOperationException("GameplayTagCountContainer does not allow mutation reentry from a count callback.");
-         m_IsMutatingOrNotifying = true;
-      }
-
-      private void EndMutation()
-      {
-         m_IsMutatingOrNotifying = false;
-      }
-
-      private void EnsureCompatible()
-      {
-         EnsureCompatible(GameplayTagManager.CurrentRuntimeIndexEpoch);
-      }
-
-      private void EnsureCompatible(int expectedRuntimeIndexEpoch)
-      {
-         if (m_RuntimeIndexEpoch == 0)
-         {
-            m_RuntimeIndexEpoch = expectedRuntimeIndexEpoch;
+         TagDataSnapshot snapshot = GetSnapshot();
+         if ((uint)tag.RuntimeIndex >= (uint)snapshot.TotalTagCount)
             return;
-         }
 
-         if (m_RuntimeIndexEpoch != expectedRuntimeIndexEpoch)
+         int start = snapshot.HierarchyOffsets[tag.RuntimeIndex];
+         int end = snapshot.HierarchyOffsets[tag.RuntimeIndex + 1] - 1;
+         for (int i = end - 1; i >= start; i--)
          {
-            throw new InvalidOperationException(
-               "GameplayTagCountContainer belongs to an incompatible gameplay tag runtime-index epoch.");
+            int ancestor = snapshot.HierarchyPool[i];
+            if (BinarySearchUtility.Contains(indices, count, ancestor))
+               destination.Add(new GameplayTag(ancestor));
          }
       }
 
-      private static void EnsureContainerCompatible<T>(in T container, int expectedRuntimeIndexEpoch)
-         where T : IReadOnlyGameplayTagContainer
+      private void FillDescendants(int[] indices, int count, GameplayTag tag, List<GameplayTag> destination)
       {
-         if (container is IGameplayTagRuntimeIndexView runtimeIndexView &&
-             runtimeIndexView.RuntimeIndexEpoch != expectedRuntimeIndexEpoch)
+         if (count == 0 || destination == null)
+            return;
+
+         TagDataSnapshot snapshot = GetSnapshot();
+         if ((uint)tag.RuntimeIndex >= (uint)snapshot.TotalTagCount)
+            return;
+
+         int start = snapshot.ChildOffsets[tag.RuntimeIndex];
+         int end = snapshot.ChildOffsets[tag.RuntimeIndex + 1];
+         for (int i = start; i < end; i++)
          {
-            throw new InvalidOperationException(
-               "Gameplay tag containers from different runtime-index epochs cannot be combined.");
+            int child = snapshot.ChildPool[i];
+            if (BinarySearchUtility.Contains(indices, count, child))
+               destination.Add(new GameplayTag(child));
          }
       }
 
-      private static int ResolveRuntimeIndex(
-         GameplayTag tag,
-         TagDataSnapshot operationSnapshot,
-         string parameterName)
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public GameplayTagEnumerator GetEnumerator() => new(m_ImplicitIndices, m_ImplicitCount);
+
+      IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator() => GetEnumerator();
+
+      IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+      private sealed class TagDelegateEntry
       {
-         int runtimeIndex = tag.GetResolvedRuntimeIndex(operationSnapshot);
-         ValidateRuntimeIndex(runtimeIndex, operationSnapshot, parameterName);
-         return runtimeIndex;
-      }
-
-      private static void ValidateRuntimeIndex(
-         int runtimeIndex,
-         TagDataSnapshot operationSnapshot,
-         string parameterName)
-      {
-         if (runtimeIndex <= 0 || (uint)runtimeIndex >= (uint)operationSnapshot.TotalTagCount)
-            throw new ArgumentException("A valid gameplay tag is required.", parameterName);
-      }
-
-      private static void ValidateTag(GameplayTag tag, string parameterName)
-      {
-         if (tag.IsNone || !tag.IsValid)
-            throw new ArgumentException("A valid gameplay tag is required.", parameterName);
-      }
-
-      private static void ValidateTagAndCallback(GameplayTag tag, OnTagCountChangedDelegate callback)
-      {
-         ValidateTag(tag, nameof(tag));
-         if (callback == null)
-            throw new ArgumentNullException(nameof(callback));
-      }
-
-      private static bool HasNoSubscribers(OnTagCountChangedDelegate[] subscribers)
-      {
-         return subscribers == null || subscribers.Length == 0;
-      }
-
-      private static OnTagCountChangedDelegate[] AddSubscriber(
-         OnTagCountChangedDelegate[] subscribers,
-         OnTagCountChangedDelegate subscriber)
-      {
-         if (subscriber == null)
-            throw new ArgumentNullException(nameof(subscriber));
-
-         int count = subscribers?.Length ?? 0;
-         OnTagCountChangedDelegate[] next = new OnTagCountChangedDelegate[count + 1];
-         if (count > 0)
-            Array.Copy(subscribers, next, count);
-         next[count] = subscriber;
-         return next;
-      }
-
-      private static OnTagCountChangedDelegate[] RemoveSubscriber(
-         OnTagCountChangedDelegate[] subscribers,
-         OnTagCountChangedDelegate subscriber)
-      {
-         if (subscriber == null || subscribers == null || subscribers.Length == 0)
-            return subscribers ?? Array.Empty<OnTagCountChangedDelegate>();
-
-         int removeIndex = -1;
-         for (int i = subscribers.Length - 1; i >= 0; i--)
-         {
-            if (subscribers[i] == subscriber)
-            {
-               removeIndex = i;
-               break;
-            }
-         }
-
-         if (removeIndex < 0)
-            return subscribers;
-         if (subscribers.Length == 1)
-            return Array.Empty<OnTagCountChangedDelegate>();
-
-         OnTagCountChangedDelegate[] next = new OnTagCountChangedDelegate[subscribers.Length - 1];
-         if (removeIndex > 0)
-            Array.Copy(subscribers, 0, next, 0, removeIndex);
-         if (removeIndex < next.Length)
-            Array.Copy(subscribers, removeIndex + 1, next, removeIndex, next.Length - removeIndex);
-         return next;
+         internal List<OnTagCountChangedDelegate> OnAnyChange;
+         internal List<OnTagCountChangedDelegate> OnNewOrRemove;
       }
    }
 }

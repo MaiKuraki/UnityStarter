@@ -11,6 +11,25 @@ namespace CycloneGames.GameplayTags.Core
     {
         private static IGameplayTagsDiagnostics s_current = NullGameplayTagsDiagnostics.Instance;
 
+        private static int s_threadAffinityChecksEnabled;
+
+        /// <summary>
+        /// When true, a container records the managed thread that first mutated it and throws if another
+        /// thread then mutates it. Off by default and costing nothing while off; an editor host turns it
+        /// on so cross-thread writes surface as an exception at the write site instead of as torn state
+        /// discovered frames later.
+        /// </summary>
+        /// <remarks>
+        /// Reads are never checked. A container is safe to read from any thread while no thread is
+        /// mutating it, and asserting the reader's thread would forbid the legitimate pattern of mutating
+        /// on the main thread and reading on a worker.
+        /// </remarks>
+        public static bool ThreadAffinityChecksEnabled
+        {
+            get => Volatile.Read(ref s_threadAffinityChecksEnabled) != 0;
+            set => Volatile.Write(ref s_threadAffinityChecksEnabled, value ? 1 : 0);
+        }
+
         public static IGameplayTagsDiagnostics Current => Volatile.Read(ref s_current);
 
         public static bool TryInstall(IGameplayTagsDiagnostics diagnostics)

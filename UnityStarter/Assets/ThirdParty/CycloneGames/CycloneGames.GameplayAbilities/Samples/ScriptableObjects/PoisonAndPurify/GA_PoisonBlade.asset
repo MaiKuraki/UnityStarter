@@ -18,15 +18,27 @@ MonoBehaviour:
   CostEffect: {fileID: 11400000, guid: c871b84b1fe1ce5489ecc41bf80d6c7c, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 57ff3289480fa2141b06e94101262415, type: 2}
   AbilityTags:
-    m_SerializedExplicitTags:
+    explicitTagNames:
     - Ability.PoisonBlade
   ActivationBlockedTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   ActivationRequiredTags:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   CancelAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
   BlockAbilitiesWithTag:
-    m_SerializedExplicitTags: []
+    explicitTagNames: []
+  ActivationOwnedTags:
+    explicitTagNames: []
+  SourceRequiredTags:
+    explicitTagNames: []
+  SourceBlockedTags:
+    explicitTagNames: []
+  TargetRequiredTags:
+    explicitTagNames: []
+  TargetBlockedTags:
+    explicitTagNames: []
+  ActivateAbilityOnGranted: 0
+  AbilityTriggerDataList: []
   ImpactDamageEffect: {fileID: 11400000, guid: 8993402004285e347bd6db49b55a0540, type: 2}
   PoisonEffect: {fileID: 11400000, guid: c347dbb16712dfc409ad601d4a7f0f74, type: 2}

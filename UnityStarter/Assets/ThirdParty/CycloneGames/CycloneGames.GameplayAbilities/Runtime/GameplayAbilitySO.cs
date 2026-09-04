@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using UnityEngine;
 
@@ -29,35 +30,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         [Header("Ability Tags")]
         [Tooltip("Tags that describe the ability itself (e.g., 'Ability.Damage.Fire').")]
-        public GameplayTagContainer AbilityTags;
+        public SerializableGameplayTagContainer AbilityTags;
 
         [Tooltip("This ability is blocked from activating if the owner has ANY of these tags.")]
-        public GameplayTagContainer ActivationBlockedTags;
+        public SerializableGameplayTagContainer ActivationBlockedTags;
 
         [Tooltip("The owner must have ALL of these tags for the ability to be activatable.")]
-        public GameplayTagContainer ActivationRequiredTags;
+        public SerializableGameplayTagContainer ActivationRequiredTags;
 
         [Tooltip("When this ability is activated, it will cancel any other active abilities that have ANY of these tags.")]
-        public GameplayTagContainer CancelAbilitiesWithTag;
+        public SerializableGameplayTagContainer CancelAbilitiesWithTag;
 
         [Tooltip("While this ability is active, other abilities that have ANY of these tags are blocked from activating.")]
-        public GameplayTagContainer BlockAbilitiesWithTag;
+        public SerializableGameplayTagContainer BlockAbilitiesWithTag;
 
         [Tooltip("Tags that are granted to the owner while this ability is active. Removed when the ability ends.")]
-        public GameplayTagContainer ActivationOwnedTags;
+        public SerializableGameplayTagContainer ActivationOwnedTags;
 
         [Header("Source / Target Tags (UE5 Parity)")]
         [Tooltip("The source (owner) must have ALL of these tags for the ability to activate. UE5: SourceRequiredTags.")]
-        public GameplayTagContainer SourceRequiredTags;
+        public SerializableGameplayTagContainer SourceRequiredTags;
 
         [Tooltip("The ability is blocked from activating if the source (owner) has ANY of these tags. UE5: SourceBlockedTags.")]
-        public GameplayTagContainer SourceBlockedTags;
+        public SerializableGameplayTagContainer SourceBlockedTags;
 
         [Tooltip("The target must have ALL of these tags for the ability's effects to be applied. UE5: TargetRequiredTags.")]
-        public GameplayTagContainer TargetRequiredTags;
+        public SerializableGameplayTagContainer TargetRequiredTags;
 
         [Tooltip("The ability's effects are blocked from applying if the target has ANY of these tags. UE5: TargetBlockedTags.")]
-        public GameplayTagContainer TargetBlockedTags;
+        public SerializableGameplayTagContainer TargetBlockedTags;
 
         [Header("Activation")]
         [Tooltip("If true, this ability is automatically activated when granted and deactivated when removed. Used for passive abilities like auras and buffs. UE5: bActivateAbilityOnGranted.")]

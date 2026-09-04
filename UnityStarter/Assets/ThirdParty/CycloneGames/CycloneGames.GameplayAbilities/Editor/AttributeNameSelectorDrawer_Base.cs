@@ -234,6 +234,10 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (EditorGUI.DropdownButton(position, s_tempContent, FocusType.Keyboard))
             {
                 // GenericMenu construction happens only on-click, which is an acceptable allocation cost.
+                // Each entry needs its own closure over the value it writes back, so there is no cached
+                // or static form of these delegates; the whole menu, delegates included, is built and
+                // discarded inside this click.
+#pragma warning disable CG0046
                 var menu = new GenericMenu();
                 menu.AddItem(new GUIContent("None"), string.IsNullOrEmpty(currentValue), () =>
                 {
@@ -256,6 +260,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                         property.serializedObject.ApplyModifiedProperties();
                     });
                 }
+#pragma warning restore CG0046
                 menu.DropDown(position);
             }
 

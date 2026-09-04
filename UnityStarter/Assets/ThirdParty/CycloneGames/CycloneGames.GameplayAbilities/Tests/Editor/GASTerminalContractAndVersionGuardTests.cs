@@ -990,7 +990,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             GameplayTagManager.RegisterDynamicTag(name, "Gameplay Ability terminal contract test tag");
             GameplayTagManager.InitializeIfNeeded();
-            return GameplayTagManager.RequestTag(name);
+            return GameplayTagManager.Request(name);
         }
 
         private sealed class TerminalAttributeSet : AttributeSet
