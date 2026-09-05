@@ -102,7 +102,10 @@ func normalizeChannelName(s string) string {
 
 // parseSourceSpec parses a CLI channel source specification.
 // Formats: "file.png", "file.png:R", "fill:128", "128", ""
-func parseSourceSpec(spec string, defaultFill uint8) channelSource {
+// The channel defaults to defaultChannel — the channel the flag itself names —
+// so "-r img.png" means "use the red channel"; an explicit ":Gray" suffix opts
+// out of that default.
+func parseSourceSpec(spec string, defaultFill uint8, defaultChannel string) channelSource {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return channelSource{Fill: defaultFill}
@@ -121,7 +124,7 @@ func parseSourceSpec(spec string, defaultFill uint8) channelSource {
 	}
 
 	// File path with optional :CHANNEL suffix
-	channel := "Gray"
+	channel := defaultChannel
 	if idx := strings.LastIndex(spec, ":"); idx > 0 {
 		suffix := strings.ToUpper(spec[idx+1:])
 		switch suffix {
@@ -139,29 +142,37 @@ func parseSourceSpec(spec string, defaultFill uint8) channelSource {
 // ============================================================
 
 // loadImageAsNRGBA loads an image file and ensures it's in NRGBA format
-// for correct non-premultiplied channel extraction.
-func loadImageAsNRGBA(path string) (*image.NRGBA, error) {
+// for correct non-premultiplied channel extraction. Advisory warnings (for
+// example, a 16-bit source being reduced to 8 bits by the conversion) are
+// returned separately from hard errors.
+func loadImageAsNRGBA(path string) (*image.NRGBA, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
 	img, _, err := image.Decode(f)
 	if err != nil {
-		return nil, fmt.Errorf("decode failed: %w", err)
+		return nil, nil, fmt.Errorf("decode failed: %w", err)
+	}
+
+	var warnings []string
+	switch img.(type) {
+	case *image.NRGBA64, *image.RGBA64, *image.Gray16:
+		warnings = append(warnings, fmt.Sprintf("  [WARNING] 16-bit source %s is reduced to 8-bit output", filepath.Base(path)))
 	}
 
 	// Fast path: already NRGBA
 	if nrgba, ok := img.(*image.NRGBA); ok {
-		return nrgba, nil
+		return nrgba, warnings, nil
 	}
 
 	// Convert to NRGBA (handles un-premultiplication, Gray→RGBA, YCbCr→RGBA, etc.)
 	bounds := img.Bounds()
 	nrgba := image.NewNRGBA(bounds)
 	draw.Draw(nrgba, bounds, img, bounds.Min, draw.Src)
-	return nrgba, nil
+	return nrgba, warnings, nil
 }
 
 // ============================================================
@@ -261,9 +272,13 @@ func packChannels(outW, outH int, sources [4]channelSource) (*image.NRGBA, []str
 		}
 
 		// Load source image
-		img, err := loadImageAsNRGBA(src.FilePath)
+		img, warnings, err := loadImageAsNRGBA(src.FilePath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s channel: %w", channelLetters[ci], err)
+		}
+		log = append(log, warnings...)
+		if ext := filepath.Ext(src.FilePath); strings.EqualFold(ext, ".jpg") || strings.EqualFold(ext, ".jpeg") {
+			log = append(log, fmt.Sprintf("  [NOTE] JPEG input %s is lossy (chroma subsampling); prefer PNG for mask data", filepath.Base(src.FilePath)))
 		}
 
 		srcW := img.Bounds().Dx()
@@ -354,14 +369,14 @@ func printPreview(sources [4]channelSource, outW, outH int, outPath string, labe
 // Execution
 // ============================================================
 
-func executePack(sources [4]channelSource, outW, outH int, outPath string) {
+func executePack(sources [4]channelSource, outW, outH int, outPath string) error {
 	fmt.Println("\nPacking channels...")
 	startTime := time.Now()
 
 	out, log, err := packChannels(outW, outH, sources)
 	if err != nil {
 		logging.Errorf("%v", err)
-		return
+		return err
 	}
 
 	for _, msg := range log {
@@ -370,29 +385,44 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) {
 
 	// Encode output PNG with buffered writer
 	fmt.Print("\nEncoding PNG...")
-	f, err := os.Create(outPath)
+	// A unique per-run temporary file (same directory, same extension) keeps
+	// half-written output away from the final path if the process dies
+	// mid-encode; the rename below publishes atomically, matching the FFmpeg
+	// tools' output convention.
+	tempFile, err := os.CreateTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+".partial-*"+filepath.Ext(outPath))
 	if err != nil {
-		logging.Errorf("cannot create output file: %v", err)
-		return
+		logging.Errorf("cannot create temporary output file: %v", err)
+		return err
 	}
+	tempPath := tempFile.Name()
 
-	writer := bufio.NewWriterSize(f, 256*1024)
+	writer := bufio.NewWriterSize(tempFile, 256*1024)
 	encoder := &png.Encoder{CompressionLevel: png.BestSpeed}
 	if err := encoder.Encode(writer, out); err != nil {
-		f.Close()
-		os.Remove(outPath) // clean up partial file
+		tempFile.Close()
+		os.Remove(tempPath)
 		logging.Errorf("png encode failed: %v", err)
-		return
+		return err
 	}
 	if err := writer.Flush(); err != nil {
-		f.Close()
-		os.Remove(outPath)
+		tempFile.Close()
+		os.Remove(tempPath)
 		logging.Errorf("write failed: %v", err)
-		return
+		return err
 	}
-	f.Close()
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+		logging.Errorf("close failed: %v", err)
+		return err
+	}
 	out = nil
 	runtime.GC()
+
+	if err := os.Rename(tempPath, outPath); err != nil {
+		os.Remove(tempPath)
+		logging.Errorf("cannot publish output: %v", err)
+		return fmt.Errorf("cannot publish output: %w", err)
+	}
 
 	// Report
 	info, _ := os.Stat(outPath)
@@ -410,13 +440,58 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) {
 	fmt.Printf("  Resolution: %dx%d\n", outW, outH)
 	fmt.Printf("  File size:  %s\n", formatSize(outSize))
 	fmt.Printf("  Time:       %s\n", duration.Round(time.Millisecond))
+	return nil
 }
 
 // ============================================================
 // Interactive Mode
 // ============================================================
 
-func runInteractive() {
+// readPromptLine reads one prompt answer. A closed input stream is an error,
+// never a silent default: partially fed stdin (piped scripts, Ctrl+Z, closed
+// pipes) must not make the tool write files unattended. A final line without a
+// trailing newline is still accepted.
+func readPromptLine(reader *bufio.Reader, prompt string) (string, error) {
+	fmt.Print(prompt)
+	line, err := reader.ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// cancelledByEOF reports a closed input stream consistently with the other
+// interactive tools: cancel loudly and fail instead of proceeding on defaults.
+func cancelledByEOF() int {
+	fmt.Println("\n[FAIL] Cancelled: input stream closed.")
+	return toolkit.ExitFailure
+}
+
+// printSourceSizeWarnings reports, before the preview, sources whose dimensions
+// differ from the output size: the first file source silently defines that
+// size, and a smaller first source would silently downscale larger inputs.
+func printSourceSizeWarnings(sources [4]channelSource, outW, outH int) {
+	for ci, src := range sources {
+		if src.FilePath == "" {
+			continue
+		}
+		f, err := os.Open(src.FilePath)
+		if err != nil {
+			continue
+		}
+		cfg, _, err := image.DecodeConfig(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+		if cfg.Width != outW || cfg.Height != outH {
+			fmt.Printf("  [WARNING] %s channel source %s is %dx%d and will be nearest-resized to %dx%d.\n",
+				channelLetters[ci], filepath.Base(src.FilePath), cfg.Width, cfg.Height, outW, outH)
+		}
+	}
+}
+
+func runInteractive(reader *bufio.Reader) int {
 	fmt.Println("==============================================")
 	fmt.Println("  Texture Channel Packer")
 	fmt.Println("  Pack images into RGBA channels of a texture")
@@ -431,10 +506,12 @@ func runInteractive() {
 		fmt.Printf("  [%d] %s (%s)\n", i+2, p.description, formatPresetLabels(p.labels))
 	}
 
-	fmt.Print("\n> ")
-	modeStr, _ := stdinReader.ReadString('\n')
-	mode, err := strconv.Atoi(strings.TrimSpace(modeStr))
-	if err != nil || mode < 1 || mode > len(presets)+1 {
+	modeStr, err := readPromptLine(reader, "\n> ")
+	if err != nil {
+		return cancelledByEOF()
+	}
+	mode, convErr := strconv.Atoi(modeStr)
+	if convErr != nil || mode < 1 || mode > len(presets)+1 {
 		mode = 1
 	}
 
@@ -454,16 +531,16 @@ func runInteractive() {
 
 	for ci := 0; ci < 4; ci++ {
 		fillDefault := defaultFills[ci]
-		label := labels[ci]
-		if label != channelLabels[ci] {
-			fmt.Printf("--- %s Channel (%s) --- [default fill: %d]\n", channelLabels[ci], label, fillDefault)
+		if labels[ci] != channelLabels[ci] {
+			fmt.Printf("--- %s Channel (%s) --- [default fill: %d]\n", channelLabels[ci], labels[ci], fillDefault)
 		} else {
 			fmt.Printf("--- %s Channel --- [default fill: %d]\n", channelLabels[ci], fillDefault)
 		}
 
-		fmt.Print("Source: ")
-		input, _ := stdinReader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		input, err := readPromptLine(reader, "Source: ")
+		if err != nil {
+			return cancelledByEOF()
+		}
 
 		if input == "" {
 			sources[ci] = channelSource{Fill: fillDefault}
@@ -472,7 +549,7 @@ func runInteractive() {
 		}
 
 		// Check if it's a fill value
-		if val, err := strconv.Atoi(input); err == nil && val >= 0 && val <= 255 {
+		if val, parseErr := strconv.Atoi(input); parseErr == nil && val >= 0 && val <= 255 {
 			sources[ci] = channelSource{Fill: uint8(val)}
 			fmt.Printf("  → fill(%d)\n\n", val)
 			continue
@@ -480,7 +557,7 @@ func runInteractive() {
 
 		// Treat as file path
 		filePath := normalizePath(input)
-		if _, err := os.Stat(filePath); err != nil {
+		if _, statErr := os.Stat(filePath); statErr != nil {
 			fmt.Printf("  [WARNING] File not found: %s\n", filePath)
 			fmt.Printf("  Using fill(%d) instead.\n\n", fillDefault)
 			sources[ci] = channelSource{Fill: fillDefault}
@@ -488,9 +565,10 @@ func runInteractive() {
 		}
 
 		// Ask which channel to extract
-		fmt.Print("  Extract channel [R/G/B/A/Gray] (default: Gray): ")
-		chStr, _ := stdinReader.ReadString('\n')
-		chStr = strings.TrimSpace(chStr)
+		chStr, err := readPromptLine(reader, "  Extract channel [R/G/B/A/Gray] (default: Gray): ")
+		if err != nil {
+			return cancelledByEOF()
+		}
 		ch := "Gray"
 		if chStr != "" {
 			ch = normalizeChannelName(chStr)
@@ -501,9 +579,11 @@ func runInteractive() {
 	}
 
 	// Output path
-	fmt.Print("Output file path (default: packed.png): ")
-	outPath, _ := stdinReader.ReadString('\n')
-	outPath = strings.TrimSpace(outPath)
+	outPathInput, err := readPromptLine(reader, "Output file path (default: packed.png): ")
+	if err != nil {
+		return cancelledByEOF()
+	}
+	outPath := outPathInput
 	if outPath == "" {
 		outPath = "packed.png"
 	}
@@ -513,30 +593,36 @@ func runInteractive() {
 	}
 
 	// Determine output size
-	outW, outH, err := detectOutputSize(sources)
-	if err != nil {
-		logging.Errorf("%v", err)
+	outW, outH, sizeErr := detectOutputSize(sources)
+	if sizeErr != nil {
+		logging.Errorf("%v", sizeErr)
 		fmt.Println("At least one channel must have a source image.")
 		toolkit.WaitForExit()
-		return
+		return toolkit.ExitFailure
 	}
+	printSourceSizeWarnings(sources, outW, outH)
 
 	// Preview
 	printPreview(sources, outW, outH, outPath, labels)
 
 	// Confirm
-	fmt.Print("\nProceed? (Y/n): ")
-	confirm, _ := stdinReader.ReadString('\n')
-	confirm = strings.TrimSpace(strings.ToLower(confirm))
-	if confirm == "n" || confirm == "no" {
+	confirmed, err := readPromptLine(reader, "\nProceed? (Y/n): ")
+	if err != nil {
+		return cancelledByEOF()
+	}
+	if strings.EqualFold(confirmed, "n") || strings.EqualFold(confirmed, "no") {
 		fmt.Println("Operation cancelled.")
 		toolkit.WaitForExit()
-		return
+		return toolkit.ExitSuccess
 	}
 
 	// Execute
-	executePack(sources, outW, outH, outPath)
+	if packErr := executePack(sources, outW, outH, outPath); packErr != nil {
+		toolkit.WaitForExit()
+		return toolkit.ExitFailure
+	}
 	toolkit.WaitForExit()
+	return toolkit.ExitSuccess
 }
 
 // ============================================================
@@ -586,10 +672,10 @@ func Run(args []string) int {
 
 	flags := flag.NewFlagSet("texture_channel_packer", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	flags.StringVar(&redSpec, "r", "", "Red channel source: file.png[:channel], fill:N, or 0-255")
-	flags.StringVar(&greenSpec, "g", "", "Green channel source")
-	flags.StringVar(&blueSpec, "b", "", "Blue channel source")
-	flags.StringVar(&alphaSpec, "a", "", "Alpha channel source")
+	flags.StringVar(&redSpec, "r", "", "Red channel source: file.png[:R|G|B|A|Gray], fill:N, or 0-255 (channel defaults to Red)")
+	flags.StringVar(&greenSpec, "g", "", "Green channel source (channel defaults to Green)")
+	flags.StringVar(&blueSpec, "b", "", "Blue channel source (channel defaults to Blue)")
+	flags.StringVar(&alphaSpec, "a", "", "Alpha channel source (channel defaults to Alpha)")
 	flags.StringVar(&outPath, "o", "packed.png", "Output file path (PNG)")
 	flags.StringVar(&sizeSpec, "size", "", "Force output size (WxH, e.g. 2048x2048)")
 	flags.StringVar(&presetName, "preset", "", "Use preset labels (hdrp-mask, urp-mask)")
@@ -604,16 +690,15 @@ func Run(args []string) int {
 
 	// If no channel flags provided, run interactive mode
 	if redSpec == "" && greenSpec == "" && blueSpec == "" && alphaSpec == "" && !ciMode {
-		runInteractive()
-		return toolkit.ExitSuccess
+		return runInteractive(stdinReader)
 	}
 
 	// CLI mode
 	sources := [4]channelSource{
-		parseSourceSpec(redSpec, defaultFills[0]),
-		parseSourceSpec(greenSpec, defaultFills[1]),
-		parseSourceSpec(blueSpec, defaultFills[2]),
-		parseSourceSpec(alphaSpec, defaultFills[3]),
+		parseSourceSpec(redSpec, defaultFills[0], "R"),
+		parseSourceSpec(greenSpec, defaultFills[1], "G"),
+		parseSourceSpec(blueSpec, defaultFills[2], "B"),
+		parseSourceSpec(alphaSpec, defaultFills[3], "A"),
 	}
 
 	// Validate source files exist
@@ -668,6 +753,7 @@ func Run(args []string) int {
 	}
 
 	// Preview
+	printSourceSizeWarnings(sources, outW, outH)
 	printPreview(sources, outW, outH, outPath, labels)
 
 	if dryRun {
@@ -677,15 +763,18 @@ func Run(args []string) int {
 
 	// Confirm in non-CI mode
 	if !ciMode {
-		fmt.Print("\nProceed? (Y/n): ")
-		confirm, _ := stdinReader.ReadString('\n')
-		confirm = strings.TrimSpace(strings.ToLower(confirm))
-		if confirm == "n" || confirm == "no" {
+		confirmed, err := readPromptLine(stdinReader, "\nProceed? (Y/n): ")
+		if err != nil {
+			return cancelledByEOF()
+		}
+		if strings.EqualFold(confirmed, "n") || strings.EqualFold(confirmed, "no") {
 			fmt.Println("Operation cancelled.")
 			return toolkit.ExitSuccess
 		}
 	}
 
-	executePack(sources, outW, outH, outPath)
+	if err := executePack(sources, outW, outH, outPath); err != nil {
+		return toolkit.ExitFailure
+	}
 	return toolkit.ExitSuccess
 }

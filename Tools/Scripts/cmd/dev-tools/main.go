@@ -23,11 +23,15 @@ func main() {
 		{Name: "texture_channel_packer", Summary: "Pack source images into RGBA texture channels.", Run: texture_channel_packer.Run},
 		{Name: "unity_video_webm_converter", Summary: "Convert videos to Unity-friendly WebM.", Run: unity_video_webm_converter.Run},
 	}
-	args := os.Args[1:]
+	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	if len(args) == 0 && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
 		// Launched by double-click (or a plain no-argument run) on an interactive
 		// terminal: show the command menu instead of the usage error.
 		os.Exit(toolkit.InteractiveMenu(programName, commands, os.Stdin, os.Stdout))
 	}
-	os.Exit(toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr))
+	code := toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr)
+	// Keep a double-clicked console window readable after the run; scripts and
+	// CI callers (pipes, shells, --no-pause, TOOLS_NO_PAUSE=1) are never paused.
+	toolkit.PauseAfterRun(noPause)
+	os.Exit(code)
 }

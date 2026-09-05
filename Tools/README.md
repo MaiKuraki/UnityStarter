@@ -51,7 +51,7 @@ Tools/
 | Command | Purpose | Notes |
 | --- | --- | --- |
 | `rename_project` | Rename a UnityStarter-derived project transactionally | `--dry-run` for a complete read-only plan; journaled with backups and rollback; re-runnable — renaming again reuses the persisted state and fresh fallback detection |
-| `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--apply`, `--dry-run`; fails closed |
+| `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--apply`, `--dry-run`, `--resolve-stale-transaction`; fails closed |
 | `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--include-build-outputs`; interactive mode types `CLEAN` to confirm; fails closed while Unity is running or recovery evidence exists |
 
 ### dev-tools (general-purpose tools)
@@ -61,7 +61,7 @@ Tools/
 | `generate_file_tree` | Generate a Markdown directory tree | `--profile`, `--target`, `--depth`, `--ext`, `--ignore`, `--ci`, `-i` |
 | `texture_channel_packer` | Pack images into RGBA texture channels | `-r/-g/-b/-a`, `-o`, `-size`, `-preset`, `-ci`, `--dry-run` |
 | `audio_volume_normalizer` | Category-aware audio loudness normalization | `--ci --input <dir> [--format wav\|ogg] [--jobs N]` (`--input` required in CI mode); parallel worker pool (default CPU count), Ctrl+C/SIGTERM cancel; requires FFmpeg |
-| `unity_video_webm_converter` | Convert videos to Unity-friendly WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N]`; parallel conversion pool, graceful cancel; requires FFmpeg |
+| `unity_video_webm_converter` | Convert videos to Unity-friendly WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N] [--ffmpeg-timeout 2h]`; parallel conversion pool, graceful cancel; requires FFmpeg |
 
 ## Install
 
@@ -69,11 +69,17 @@ Tools/
 
 Each platform bundle under `Tools/Executable/<OS>/<GOARCH>/` contains the standalone
 `unity-project-tools` and `dev-tools` executables plus `toolsbuild` for producing further
-bundles. On Windows, double-clicking either executable opens an interactive command menu for its
-own tool family (pick a tool by number or name, `q` to quit); running them with arguments keeps
-the pure CLI behavior. The Windows bundle is
-committed; macOS and Linux bundles are produced with one command (below) or downloaded from the CI
-workflow's Artifacts (each platform runner uploads the bundle it built and verified).
+bundles. All platform bundles (Windows, macOS, Linux) are committed to the repository; they can
+also be regenerated with one command (below) or downloaded from the CI workflow's Artifacts
+(each platform runner uploads the bundle it built and verified).
+
+On Windows, double-clicking either executable opens an interactive command menu for its own tool
+family (pick a tool by number or name, `q` to quit); running them with arguments keeps the pure
+CLI behavior. After an argument-driven run, a double-clicked console window stays open with a
+"Press Enter to exit" prompt so success/failure output remains readable. The pause only happens
+when the process owns a fresh console and both stdin and stdout are interactive terminals; shells,
+scripts, redirected output, and CI are never paused. Opt out explicitly with the `--no-pause` flag
+or the `TOOLS_NO_PAUSE=1` environment variable.
 
 ### Build from source
 
@@ -100,8 +106,9 @@ into `Tools/Executable/<OS>/<GOARCH>/` and exits non-zero on any failure, so it 
 CI release step without any scripting layer. The distributed `toolsbuild` executable is also runnable
 on its own: it locates the module root from its own path (not the working directory), so a terminal
 command like `Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` works from any
-directory. It is a CLI program whose console window closes as soon as it finishes, so run it from a
-terminal to see its output.
+directory. From a terminal it behaves like any CLI program; when double-clicked on Windows it keeps
+the console open until you press Enter, subject to the same `--no-pause` / `TOOLS_NO_PAUSE=1`
+opt-outs described above.
 
 ## CI/CD
 
@@ -150,3 +157,7 @@ go run ./cmd/unity-project-tools --list
   half-written file at the final path.
 - **TTY-aware progress**: progress bars are drawn only when stdout is an interactive terminal; piped
   and CI output stays clean.
+- **Windows double-click UX**: after an argument-driven run, a freshly opened console stays readable
+  until Enter is pressed. The decision is centralized in the toolkit (`ShouldPauseAfterRun`): pause
+  only when stdin and stdout are interactive terminals, the console hosts this process alone, and
+  neither `--no-pause` nor `TOOLS_NO_PAUSE=1` opted out. Pipes, scripts, shells, and CI never pause.

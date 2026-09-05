@@ -131,8 +131,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var profilePath string
 	var dryRun bool
 	var apply bool
-	var allowLockRegeneration bool
+		var allowLockRegeneration bool
 	var listMode bool
+	var resolveStaleTransactions bool
 	flags.Var(&allowed, "allow-package", "Exact package ID authorized for removal; repeatable")
 	flags.Var(&allowReferenced, "allow-referenced-package", "Explicitly override detected source evidence; repeatable")
 	flags.StringVar(&profilePath, "profile", "", "Strict current-contract JSON removal policy")
@@ -140,6 +141,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	flags.BoolVar(&apply, "apply", false, "Commit the reviewed removal transaction")
 	flags.BoolVar(&allowLockRegeneration, "allow-lock-regeneration", false, "Back up then remove packages-lock.json so Unity must resolve again")
 	flags.BoolVar(&listMode, "list", false, "List packages with built-in source-reference signatures")
+	flags.BoolVar(&resolveStaleTransactions, "resolve-stale-transaction", false, "Complete interrupted transactions by removing stale staged evidence (copies only; canonical package files are never touched)")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -176,6 +178,14 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
+	}
+	if resolveStaleTransactions {
+		if apply || allowLockRegeneration || listMode || profilePath != "" ||
+			len(allowed) != 0 || len(allowReferenced) != 0 {
+			logging.Errorf("-resolve-stale-transaction cannot be combined with package mutation flags.")
+			return toolkit.ExitUsage
+		}
+		return runStaleTransactionResolution(projectRoot, dryRun, stdout)
 	}
 	var workspaceLease *buildWorkspaceLease
 	if apply {
@@ -261,11 +271,11 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 
 	lockPath := filepath.Join(projectRoot, "Packages", "packages-lock.json")
 	if err := ensureNoPackageTransactionEvidence(filepath.Dir(lockPath), lockPath); err != nil {
-		logging.Errorf("Incomplete prior package-removal transaction requires manual recovery before another mutation: %v", err)
+		logging.Errorf("Incomplete prior package-removal transaction requires recovery before another mutation: %v. Review the evidence, then run with -resolve-stale-transaction to complete the interrupted transaction.", err)
 		return toolkit.ExitFailure
 	}
 	if err := ensureNoStalePackageStages(filepath.Dir(lockPath)); err != nil {
-		logging.Errorf("Incomplete prior package stage requires manual recovery before another mutation: %v", err)
+		logging.Errorf("Incomplete prior package stage requires recovery before another mutation: %v. Review the evidence, then run with -resolve-stale-transaction to complete the interrupted transaction.", err)
 		return toolkit.ExitFailure
 	}
 	lockBytes, lockExists, err := readOptionalBoundedFile(lockPath)
@@ -920,6 +930,159 @@ func ensureNoStalePackageStages(packagesDirectory string) error {
 			return false
 		},
 	)
+}
+
+// staleTransactionEntryBudget bounds how much evidence a resolvable stale
+// transaction directory may contain before resolution refuses it.
+const staleTransactionEntryBudget = 1024
+
+// runStaleTransactionResolution completes interrupted package-removal
+// transactions by deleting stale staged evidence under Packages/. It only ever
+// removes copies that were staged inside transaction directories or stage
+// files - never the canonical manifest or lock files - and fails closed on any
+// ambiguity, mirroring the full-clean quarantine resolution contract.
+func runStaleTransactionResolution(projectRoot string, dryRun bool, stdout io.Writer) int {
+	lease, err := acquireBuildWorkspaceLease(projectRoot)
+	if err != nil {
+		logging.Errorf("Build workspace is busy or unsafe; stale transaction resolution refused: %v", err)
+		return toolkit.ExitFailure
+	}
+	defer func() {
+		if err := lease.release(); err != nil {
+			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
+		}
+	}()
+	if running, pid, err := checkUnityEditorRunning(projectRoot); err != nil {
+		logging.Errorf("Unity activity cannot be proven idle: %v", err)
+		return toolkit.ExitFailure
+	} else if running {
+		logging.Errorf("Unity Editor is active for this project (PID %d). Stale transaction resolution refused; there is no force mode.", pid)
+		return toolkit.ExitFailure
+	}
+	packagesDirectory := filepath.Join(projectRoot, "Packages")
+	if err := resolveStalePackageEvidence(projectRoot, packagesDirectory, dryRun, stdout); err != nil {
+		logging.Errorf("Stale package-removal transaction resolution failed: %v", err)
+		return toolkit.ExitFailure
+	}
+	return toolkit.ExitSuccess
+}
+
+func resolveStalePackageEvidence(projectRoot, packagesDirectory string, dryRun bool, stdout io.Writer) error {
+	entries, err := os.ReadDir(packagesDirectory)
+	if err != nil {
+		return err
+	}
+	resolvable := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !isStalePackageEvidenceName(name) {
+			continue
+		}
+		resolvable++
+		path := filepath.Join(packagesDirectory, name)
+		if redirected, inspectErr := pathIsReparsePoint(path); inspectErr != nil || redirected {
+			return fmt.Errorf("stale evidence is redirected or unreadable: %s", path)
+		}
+		info, lstatErr := os.Lstat(path)
+		if lstatErr != nil {
+			return fmt.Errorf("stale evidence cannot be inspected: %s: %w", path, lstatErr)
+		}
+		if entry.IsDir() {
+			if err := validateStaleTransactionDirectory(path); err != nil {
+				return fmt.Errorf("stale transaction %s cannot be resolved: %w", name, err)
+			}
+		} else if !info.Mode().IsRegular() {
+			return fmt.Errorf("stale evidence is not a regular file: %s", path)
+		}
+		if dryRun {
+			fmt.Fprintf(stdout, "[Dry Run] Would remove stale package-removal evidence: %s\n", path)
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("failed to remove stale evidence %s: %w", path, err)
+		}
+		fmt.Fprintf(stdout, "[Resolved] Removed stale package-removal evidence: %s\n", path)
+	}
+	if resolvable == 0 {
+		fmt.Fprintln(stdout, "No stale package-removal evidence; nothing to resolve.")
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".manifest.json.backup-") || strings.HasPrefix(name, ".packages-lock.json.backup-") {
+			if strings.Contains(name[len(".manifest.json.backup-"):], ".stage-") ||
+				strings.Contains(name[len(".packages-lock.json.backup-"):], ".stage-") {
+				continue // stage files are covered above
+			}
+			fmt.Fprintf(stdout, "[Info] Backup retained for manual review: %s\n", filepath.Join(packagesDirectory, name))
+		}
+	}
+	return nil
+}
+
+func isStalePackageEvidenceName(name string) bool {
+	for _, prefix := range []string{
+		"packages-lock.json.removal-transaction-",
+		".package-removal-transaction-",
+		".manifest.json.stage-",
+		".packages-lock.json.stage-",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range []string{".manifest.json.backup-", ".packages-lock.json.backup-"} {
+		if strings.HasPrefix(name, prefix) && strings.Contains(name[len(prefix):], ".stage-") {
+			return true
+		}
+	}
+	return false
+}
+
+func isHex(value string) bool {
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateStaleTransactionDirectory(transactionRoot string) error {
+	journalPath := filepath.Join(transactionRoot, "transaction.json")
+	data, err := os.ReadFile(journalPath)
+	if err != nil {
+		return fmt.Errorf("transaction journal unreadable: %w", err)
+	}
+	if len(data) > maximumJSONBytes {
+		return fmt.Errorf("transaction journal exceeds %d bytes", maximumJSONBytes)
+	}
+	var journal packageRemovalJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return fmt.Errorf("transaction journal invalid: %w", err)
+	}
+	if journal.DocumentType != "unity-package-removal-transaction" {
+		return fmt.Errorf("transaction journal has unexpected documentType %q", journal.DocumentType)
+	}
+	if len(journal.TransactionID) != 32 || !isHex(journal.TransactionID) {
+		return fmt.Errorf("transaction journal has an invalid transaction ID")
+	}
+	if len(journal.Entries) > 16 {
+		return fmt.Errorf("transaction journal entry count %d is not plausible", len(journal.Entries))
+	}
+	entries := 0
+	return filepath.WalkDir(transactionRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entries++
+		if entries > staleTransactionEntryBudget {
+			return fmt.Errorf("transaction evidence exceeds %d entries", staleTransactionEntryBudget)
+		}
+		if redirected, inspectErr := pathIsReparsePoint(path); inspectErr != nil || redirected {
+			return fmt.Errorf("transaction evidence is redirected or unreadable: %s", path)
+		}
+		return nil
+	})
 }
 
 func ensureNoDirectoryEntriesMatching(directory, evidenceDescription string, matches func(string) bool) (returnErr error) {
