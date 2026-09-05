@@ -20,10 +20,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
@@ -39,6 +41,15 @@ const (
 // ffmpegTimeout bounds every per-invocation FFmpeg call. It is configurable via
 // the -ffmpeg-timeout flag so very long encodes can extend the bounded default.
 var ffmpegTimeout = defaultFFmpegTimeout
+
+// ffmpegBinary is the ffmpeg executable used by every invocation. It defaults
+// to PATH lookup and can be overridden with the -ffmpeg flag (CI-friendly for
+// pinned toolchain installations).
+var ffmpegBinary = "ffmpeg"
+
+// progressReportInterval throttles per-file encode progress lines so long
+// cutscene encodes stay observable without flooding the console.
+const progressReportInterval = 2 * time.Second
 
 type preset struct {
 	Key          string
@@ -59,6 +70,9 @@ type encodeSettings struct {
 	VideoBitrate       string
 	VideoMaxRate       string
 	VideoBufSize       string
+	// AlphaOutput keeps transparency by encoding VP8 with the yuva420p pixel
+	// format plus the alpha_mode metadata key (UI/VFX videos with alpha).
+	AlphaOutput bool
 }
 
 type resolutionOption struct {
@@ -114,7 +128,7 @@ var presets = []preset{
 		Description:  "Default preset with a 9M target for noticeably cleaner playback across Android, iOS, WebGL, Windows, and macOS.",
 		Suffix:       "_unity_vp8_balanced",
 		CRF:          12,
-		CPUUsed:      0,
+		CPUUsed:      2,
 		VideoBitrate: "9M",
 		VideoMaxRate: "13.5M",
 		VideoBufSize: "18M",
@@ -126,7 +140,7 @@ var presets = []preset{
 		Description:  "Highest quality preset with an 18M target for showcase clips and maximum preservation within VP8/WebM.",
 		Suffix:       "_unity_vp8_high",
 		CRF:          8,
-		CPUUsed:      0,
+		CPUUsed:      2,
 		VideoBitrate: "18M",
 		VideoMaxRate: "27M",
 		VideoBufSize: "36M",
@@ -204,9 +218,11 @@ var (
 		"movies":   categoryDefault,
 	}
 
-	durationRegex    = regexp.MustCompile(`Duration:\s+(\d+):(\d+):(\d+)\.(\d+)`)
-	maxVolRegex      = regexp.MustCompile(`max_volume:\s+([\-\d.]+)\s+dB`)
-	audioStreamRegex = regexp.MustCompile(`Stream\s+#\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?:\s+Audio:`)
+	durationRegex        = regexp.MustCompile(`Duration:\s+(\d+):(\d+):(\d+)\.(\d+)`)
+	maxVolRegex          = regexp.MustCompile(`max_volume:\s+([\-\d.]+)\s+dB`)
+	audioStreamRegex     = regexp.MustCompile(`Stream\s+#\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?:\s+Audio:`)
+	videoStreamLineRegex = regexp.MustCompile(`Stream\s+#\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?:\s+Video:`)
+	progressTimeRegex    = regexp.MustCompile(`time=(\d+:\d+:\d+\.\d+)`)
 )
 
 // Run executes the video converter and returns its process exit code.
@@ -223,6 +239,8 @@ func Run(args []string) int {
 	var presetKey string
 	var overwrite bool
 	var jobs int
+	var ffmpegPath string
+	var alphaOutput bool
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode (requires --input and --output)")
 	flags.StringVar(&inputPath, "input", "", "Source video file or folder (CI mode)")
 	flags.StringVar(&outputRoot, "output", "", "Output root directory (CI mode)")
@@ -230,6 +248,8 @@ func Run(args []string) int {
 	flags.BoolVar(&overwrite, "overwrite", false, "Overwrite existing outputs (CI mode)")
 	flags.IntVar(&jobs, "jobs", 0, "Parallel conversion workers (default: CPU count, clamped 1..64)")
 	flags.DurationVar(&ffmpegTimeout, "ffmpeg-timeout", defaultFFmpegTimeout, "Per-invocation FFmpeg timeout (for example 45m or 2h)")
+	flags.StringVar(&ffmpegPath, "ffmpeg", "", "Custom ffmpeg executable path (default: ffmpeg on PATH)")
+	flags.BoolVar(&alphaOutput, "alpha", false, "Preserve transparency: encode VP8 with the yuva420p alpha channel (UI/VFX videos)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -240,14 +260,39 @@ func Run(args []string) int {
 		logging.Error("--ffmpeg-timeout must be a positive duration")
 		return 2
 	}
-	if ciMode {
-		return runCi(ctx, inputPath, outputRoot, presetKey, overwrite, jobs)
+	if ffmpegPath != "" {
+		resolved, resolveErr := resolveCustomFFmpeg(ffmpegPath)
+		if resolveErr != nil {
+			logging.Error("ffmpeg path not usable", "path", ffmpegPath, "error", resolveErr)
+			return 2
+		}
+		ffmpegBinary = resolved
 	}
-	return runInteractiveFlow(ctx, jobs)
+	if ciMode {
+		return runCi(ctx, inputPath, outputRoot, presetKey, overwrite, alphaOutput, jobs)
+	}
+	return runInteractiveFlow(ctx, jobs, alphaOutput)
+}
+
+// resolveCustomFFmpeg validates a user-provided ffmpeg path and returns its
+// cleaned absolute form.
+func resolveCustomFFmpeg(path string) (string, error) {
+	cleaned := normalizePath(path)
+	if cleaned == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory")
+	}
+	return cleaned, nil
 }
 
 // runInteractiveFlow is the guided interactive conversion.
-func runInteractiveFlow(ctx context.Context, jobs int) int {
+func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
 	printIntro()
 
 	if !commandExists("ffmpeg") {
@@ -274,7 +319,7 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 	if err != nil {
 		return cancelledWithMessage(err)
 	}
-	settings, err := chooseVideoBitrate(reader, selectedPreset, selectedResolution)
+	settings, err := chooseVideoBitrate(reader, selectedPreset, selectedResolution, alphaOutput)
 	if err != nil {
 		return cancelledWithMessage(err)
 	}
@@ -332,7 +377,7 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 }
 
 // runCi executes the non-interactive conversion path.
-func runCi(ctx context.Context, inputPath, outputRoot, presetKey string, overwrite bool, workerCount int) int {
+func runCi(ctx context.Context, inputPath, outputRoot, presetKey string, overwrite bool, alphaOutput bool, workerCount int) int {
 	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputRoot) == "" {
 		logging.Error("--ci requires --input and --output")
 		return 2
@@ -356,7 +401,7 @@ func runCi(ctx context.Context, inputPath, outputRoot, presetKey string, overwri
 		logging.Error("input not found", "path", sourcePath)
 		return 1
 	}
-	settings := buildEncodeSettings(selectedPreset, resolutionOptions[0], selectedPreset.VideoBitrate)
+	settings := buildEncodeSettings(selectedPreset, resolutionOptions[0], selectedPreset.VideoBitrate, alphaOutput)
 	conversionJobs, err := buildJobs(sourcePath, info, outputRoot, selectedPreset)
 	if err != nil {
 		logging.Error("failed to build conversion list", "error", err)
@@ -409,6 +454,9 @@ func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, se
 	if workerCount < 1 {
 		workerCount = 1
 	}
+	// Share the machine's cores across the parallel encodes instead of letting
+	// every libvpx process grab all of them at once.
+	encodeThreads := computeThreadsPerEncode(runtime.NumCPU(), workerCount)
 
 	type outcome struct {
 		skip bool
@@ -438,7 +486,7 @@ func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, se
 					outcomes <- outcome{fail: true}
 					continue
 				}
-				if err := convertVideo(ctx, item.InputPath, item.OutputPath, settings); err != nil {
+				if err := convertVideo(ctx, item.InputPath, item.OutputPath, settings, encodeThreads); err != nil {
 					if ctx.Err() != nil {
 						fmt.Printf("  Cancelled: %s\n", filepath.Base(item.InputPath))
 					} else {
@@ -587,34 +635,35 @@ func chooseResolution(reader *bufio.Reader) (resolutionOption, error) {
 	return resolutionOptions[0], nil
 }
 
-func chooseVideoBitrate(reader *bufio.Reader, selectedPreset preset, selectedResolution resolutionOption) (encodeSettings, error) {
+func chooseVideoBitrate(reader *bufio.Reader, selectedPreset preset, selectedResolution resolutionOption, alphaOutput bool) (encodeSettings, error) {
 	fmt.Printf("Video bitrate [default: %s, examples: 12M / 8500k]: ", selectedPreset.VideoBitrate)
 	input, err := readLine(reader)
 	if err != nil {
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), err
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate, alphaOutput), err
 	}
 
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), nil
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate, alphaOutput), nil
 	}
 
 	normalized, ok := normalizeBitrateInput(input)
 	if !ok {
 		fmt.Printf("Unknown bitrate format '%s', using default %s.\n", input, selectedPreset.VideoBitrate)
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), nil
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate, alphaOutput), nil
 	}
 
-	return buildEncodeSettings(selectedPreset, selectedResolution, normalized), nil
+	return buildEncodeSettings(selectedPreset, selectedResolution, normalized, alphaOutput), nil
 }
 
-func buildEncodeSettings(selectedPreset preset, selectedResolution resolutionOption, videoBitrate string) encodeSettings {
+func buildEncodeSettings(selectedPreset preset, selectedResolution resolutionOption, videoBitrate string, alphaOutput bool) encodeSettings {
 	return encodeSettings{
 		Preset:             selectedPreset,
 		SelectedResolution: selectedResolution,
 		VideoBitrate:       videoBitrate,
 		VideoMaxRate:       scaleBitrate(videoBitrate, 1.5),
 		VideoBufSize:       scaleBitrate(videoBitrate, 2.0),
+		AlphaOutput:        alphaOutput,
 	}
 }
 
@@ -696,11 +745,42 @@ func buildJobs(sourcePath string, info os.FileInfo, outputRoot string, selectedP
 		})
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	if collisions := findOutputCollisions(jobs); len(collisions) != 0 {
+		return nil, fmt.Errorf(
+			"output collision detected: multiple sources convert to the same output file; rename the sources or convert them separately:\n%s",
+			strings.Join(collisions, "\n"),
+		)
+	}
 
-	return jobs, err
+	return jobs, nil
 }
 
-func convertVideo(ctx context.Context, inputPath string, outputPath string, settings encodeSettings) error {
+// findOutputCollisions reports output paths that more than one source maps to.
+// Two sources sharing a basename (for example clip.mp4 and clip.mov) would
+// otherwise silently overwrite each other's output while both jobs report
+// success, so collisions must fail the plan instead.
+func findOutputCollisions(jobs []job) []string {
+	owners := make(map[string][]string, len(jobs))
+	order := make([]string, 0, len(jobs))
+	for _, item := range jobs {
+		if _, seen := owners[item.OutputPath]; !seen {
+			order = append(order, item.OutputPath)
+		}
+		owners[item.OutputPath] = append(owners[item.OutputPath], item.InputPath)
+	}
+	var collisions []string
+	for _, output := range order {
+		if sources := owners[output]; len(sources) > 1 {
+			collisions = append(collisions, fmt.Sprintf("  %s <- %s", output, strings.Join(sources, " + ")))
+		}
+	}
+	return collisions
+}
+
+func convertVideo(ctx context.Context, inputPath string, outputPath string, settings encodeSettings, encodeThreads int) error {
 	// A unique per-run temporary name (same directory, same extension) keeps concurrent
 	// conversions from clobbering each other and makes the final rename atomic.
 	tempFile, err := os.CreateTemp(filepath.Dir(outputPath), "."+filepath.Base(outputPath)+".partial-*"+filepath.Ext(outputPath))
@@ -713,38 +793,20 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 		return fmt.Errorf("failed to close temporary output file: %w", err)
 	}
 
-	info, err := inspectMedia(ctx, inputPath)
+	info, err := probeMediaInfo(ctx, inputPath)
 	if err != nil {
+		_ = os.Remove(tempOutput)
 		return err
 	}
 
 	audioArgs, err := buildAudioArgs(ctx, inputPath, info, settings.Preset)
 	if err != nil {
+		_ = os.Remove(tempOutput)
 		return err
 	}
 
-	args := []string{
-		"-y",
-		"-hide_banner",
-		"-i", inputPath,
-		"-map_metadata", "-1",
-		"-map_chapters", "-1",
-		"-map", "0:v:0",
-		"-map", "0:a:0?",
-		"-sn",
-		"-pix_fmt", "yuv420p",
-		"-c:v", "libvpx",
-		"-crf", fmt.Sprintf("%d", settings.Preset.CRF),
-		"-b:v", settings.VideoBitrate,
-		"-maxrate", settings.VideoMaxRate,
-		"-bufsize", settings.VideoBufSize,
-		"-deadline", "good",
-		"-cpu-used", fmt.Sprintf("%d", settings.Preset.CPUUsed),
-		"-threads", "0",
-		"-g", "120",
-		"-lag-in-frames", "16",
-		"-auto-alt-ref", "1",
-	}
+	args := []string{"-y", "-hide_banner", "-i", inputPath}
+	args = append(args, buildVideoEncodeArgs(settings, encodeThreads)...)
 	if scaleFilter := buildScaleFilter(settings.SelectedResolution); scaleFilter != "" {
 		args = append(args, "-vf", scaleFilter)
 	}
@@ -754,15 +816,59 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	cmd := exec.CommandContext(ctx, ffmpegBinary, args...)
+	var stderrBuf bytes.Buffer
+	progress := newFFmpegProgressWriter()
+	cmd.Stderr = io.MultiWriter(&stderrBuf, progress)
+
+	if startErr := cmd.Start(); startErr != nil {
+		_ = os.Remove(tempOutput)
+		return fmt.Errorf("failed to start ffmpeg: %w", startErr)
+	}
+
+	progressDone := make(chan struct{})
+	var progressPrinted atomic.Bool
+	if term.IsTerminal(os.Stdout.Fd()) && info.DurationSec > 0 {
+		go func() {
+			ticker := time.NewTicker(progressReportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressDone:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					elapsed := progress.lastEncodedSeconds()
+					percent := int(math.Round(elapsed / info.DurationSec * 100))
+					if percent < 0 {
+						percent = 0
+					}
+					if percent > 100 {
+						percent = 100
+					}
+					progressPrinted.Store(true)
+					fmt.Printf("\r  Encoding %s: %d%% (%s / %s)",
+						filepath.Base(inputPath), percent,
+						formatSecondsAsTimecode(elapsed), formatSecondsAsTimecode(info.DurationSec))
+				}
+			}
+		}()
+	}
+
+	waitErr := cmd.Wait()
+	close(progressDone)
+	if progressPrinted.Load() {
+		fmt.Println()
+	}
+
 	if ctx.Err() == context.DeadlineExceeded {
 		_ = os.Remove(tempOutput)
 		return fmt.Errorf("ffmpeg timed out after %s", ffmpegTimeout)
 	}
-	if err != nil {
+	if waitErr != nil {
 		_ = os.Remove(tempOutput)
-		return fmt.Errorf("ffmpeg error: %w\n%s", err, trimCommandOutput(output))
+		return fmt.Errorf("ffmpeg error: %w\n%s", waitErr, trimCommandOutput(stderrBuf.Bytes()))
 	}
 
 	if err := os.Rename(tempOutput, outputPath); err != nil {
@@ -770,6 +876,135 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 		return fmt.Errorf("failed to finalize output file: %w", err)
 	}
 	return nil
+}
+
+// buildVideoEncodeArgs assembles the libvpx video arguments (everything that
+// applies to the output stream, before scaling, audio, and the output path) so
+// the codec policy is testable in isolation from subprocess plumbing.
+func buildVideoEncodeArgs(settings encodeSettings, encodeThreads int) []string {
+	pixFmt := "yuv420p"
+	if settings.AlphaOutput {
+		pixFmt = "yuva420p"
+	}
+	args := []string{
+		"-map_metadata", "-1",
+		"-map_chapters", "-1",
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
+		"-sn",
+		"-pix_fmt", pixFmt,
+		"-c:v", "libvpx",
+		"-crf", fmt.Sprintf("%d", settings.Preset.CRF),
+		"-b:v", settings.VideoBitrate,
+		"-maxrate", settings.VideoMaxRate,
+		"-bufsize", settings.VideoBufSize,
+		"-deadline", "good",
+		"-cpu-used", fmt.Sprintf("%d", settings.Preset.CPUUsed),
+		"-threads", strconv.Itoa(encodeThreads),
+		"-g", "120",
+		"-lag-in-frames", "16",
+	}
+	// libvpx cannot open an alpha encoder while auto-alt-ref is enabled, so
+	// alpha mode forces it off; transparency is signalled to players through
+	// the alpha_mode metadata key on the video stream.
+	if settings.AlphaOutput {
+		args = append(args, "-auto-alt-ref", "0")
+		args = append(args, "-metadata:s:v:0", "alpha_mode=1")
+	} else {
+		args = append(args, "-auto-alt-ref", "1")
+	}
+	return args
+}
+
+// ffmpegProgressWriter consumes ffmpeg's carriage-return progress stream and
+// exposes the most recent encoded timestamp (in seconds) for throttled display.
+type ffmpegProgressWriter struct {
+	mutex          sync.Mutex
+	tail           string
+	encodedSeconds float64
+}
+
+func newFFmpegProgressWriter() *ffmpegProgressWriter {
+	return &ffmpegProgressWriter{}
+}
+
+func (w *ffmpegProgressWriter) Write(p []byte) (int, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	w.tail += string(p)
+	for {
+		idx := strings.IndexAny(w.tail, "\r\n")
+		if idx < 0 {
+			break
+		}
+		segment := w.tail[:idx]
+		w.tail = w.tail[idx+1:]
+		if match := progressTimeRegex.FindStringSubmatch(segment); match != nil {
+			if seconds, parseErr := parseTimecodeSeconds(match[1]); parseErr == nil {
+				w.encodedSeconds = seconds
+			}
+		}
+	}
+	if len(w.tail) > 8192 {
+		w.tail = w.tail[len(w.tail)-8192:]
+	}
+	return len(p), nil
+}
+
+func (w *ffmpegProgressWriter) lastEncodedSeconds() float64 {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	return w.encodedSeconds
+}
+
+func parseTimecodeSeconds(timecode string) (float64, error) {
+	parts := strings.Split(timecode, ":")
+	if len(parts) != 3 {
+		return 0, fmt.Errorf("invalid timecode %q", timecode)
+	}
+	hours, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, err
+	}
+	minutes, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return 0, err
+	}
+	seconds, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return 0, err
+	}
+	return hours*3600 + minutes*60 + seconds, nil
+}
+
+func formatSecondsAsTimecode(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	total := int(math.Round(seconds))
+	return fmt.Sprintf("%02d:%02d:%02d", total/3600, (total%3600)/60, total%60)
+}
+
+// computeThreadsPerEncode divides the machine's cores across the parallel
+// conversions. libvpx with automatic threads grabs every core per encode,
+// which thrashes when several conversions run side by side; a bounded share
+// keeps total CPU usage at the core count while each encode still gets real
+// parallelism.
+func computeThreadsPerEncode(cpus, workers int) int {
+	if cpus < 1 {
+		cpus = 1
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	threads := cpus / workers
+	if threads < 1 {
+		threads = 1
+	}
+	if threads > 8 {
+		threads = 8
+	}
+	return threads
 }
 
 func buildScaleFilter(selectedResolution resolutionOption) string {
@@ -804,23 +1039,94 @@ func hasGeneratedSuffix(path string, suffix string) bool {
 	return strings.HasSuffix(base, suffix)
 }
 
-func inspectMedia(ctx context.Context, inputPath string) (mediaInfo, error) {
-	category := detectCategory(inputPath)
-	args := []string{
-		"-hide_banner",
-		"-i", inputPath,
-		"-map", "0:v:0",
-		"-map", "0:a:0?",
-		"-f", "null",
-		"-",
+// probeMediaInfo reads duration and stream layout from the container headers.
+// It prefers ffprobe (millisecond header reads) and falls back to an ffmpeg -i
+// header dump for ffmpeg-only installations. Neither path decodes the media
+// payload: the previous implementation mapped the whole file to null just to
+// learn the duration, which made every batch job pay a full decode upfront.
+func probeMediaInfo(ctx context.Context, inputPath string) (mediaInfo, error) {
+	if ffprobeBin, ok := resolveFFprobe(); ok {
+		return probeWithFFprobe(ctx, ffprobeBin, inputPath)
 	}
+	return probeWithFFmpegHeader(ctx, inputPath)
+}
 
+// resolveFFprobe locates an ffprobe executable matching the configured ffmpeg
+// binary (same directory when a custom path is given), falling back to the
+// system PATH. The second result reports whether a probe binary was found.
+func resolveFFprobe() (string, bool) {
+	if ffmpegBinary != "ffmpeg" {
+		probeName := "ffprobe"
+		if runtime.GOOS == "windows" {
+			probeName = "ffprobe.exe"
+		}
+		candidate := filepath.Join(filepath.Dir(ffmpegBinary), probeName)
+		if info, err := os.Lstat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, true
+		}
+	}
+	if _, err := exec.LookPath("ffprobe"); err == nil {
+		return "ffprobe", true
+	}
+	return "", false
+}
+
+func probeWithFFprobe(ctx context.Context, ffprobeBin, inputPath string) (mediaInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, ffprobeBin, "-v", "error", "-show_entries",
+		"format=duration:stream=codec_type", "-of", "json", inputPath)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return mediaInfo{}, fmt.Errorf("ffprobe failed for %s: %w\n%s", inputPath, err, trimCommandOutput(stderr.Bytes()))
+	}
+
+	var probe struct {
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &probe); jsonErr != nil {
+		return mediaInfo{}, fmt.Errorf("ffprobe output for %s is not valid JSON: %w", inputPath, jsonErr)
+	}
+
+	hasVideo, hasAudio := false, false
+	for _, stream := range probe.Streams {
+		switch stream.CodecType {
+		case "video":
+			hasVideo = true
+		case "audio":
+			hasAudio = true
+		}
+	}
+	if !hasVideo {
+		return mediaInfo{}, fmt.Errorf("no video stream found in %s", inputPath)
+	}
+
+	duration := -1.0
+	if probe.Format.Duration != "" {
+		if parsed, parseErr := strconv.ParseFloat(probe.Format.Duration, 64); parseErr == nil {
+			duration = parsed
+		}
+	}
+	return mediaInfo{DurationSec: duration, HasAudio: hasAudio, DetectedCategory: detectCategory(inputPath)}, nil
+}
+
+// probeWithFFmpegHeader parses the input header dump from ffmpeg -i. It is the
+// fallback for ffmpeg-only installations and never decodes the payload; the
+// non-zero exit (no output was requested) is expected and ignored.
+func probeWithFFmpegHeader(ctx context.Context, inputPath string) (mediaInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ffmpegBinary, "-hide_banner", "-i", inputPath)
 	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr
 	_ = cmd.Run()
 
@@ -829,10 +1135,13 @@ func inspectMedia(ctx context.Context, inputPath string) (mediaInfo, error) {
 	}
 
 	output := stderr.String()
+	if !videoStreamLineRegex.MatchString(output) {
+		return mediaInfo{}, fmt.Errorf("no video stream found in %s", inputPath)
+	}
 	return mediaInfo{
 		DurationSec:      parseDuration(output),
 		HasAudio:         audioStreamRegex.MatchString(output),
-		DetectedCategory: category,
+		DetectedCategory: detectCategory(inputPath),
 	}, nil
 }
 
