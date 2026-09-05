@@ -3,6 +3,7 @@ package rename_project
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
@@ -411,8 +413,16 @@ func acquireProjectLock(
 				ownerContent, readErr := fileSystem.ReadFile(ownerPath)
 				var owner projectLockOwner
 				if readErr == nil && json.Unmarshal(ownerContent, &owner) == nil {
+					if processIsLikelyRunning(owner.PID) {
+						return nil, fmt.Errorf(
+							"rename project lock is already held by PID %d since %s; stale locks require manual confirmation and deletion: %s",
+							owner.PID,
+							owner.CreatedAt,
+							lockDirectory,
+						)
+					}
 					return nil, fmt.Errorf(
-						"rename project lock is already held by PID %d since %s; stale locks require manual confirmation and deletion: %s",
+						"rename project lock was left behind by PID %d since %s, which no longer appears to be running; after confirming no rename process is active, delete the lock directory to continue: %s",
 						owner.PID,
 						owner.CreatedAt,
 						lockDirectory,
@@ -452,6 +462,153 @@ func acquireProjectLock(
 		OwnerPath: ownerPath,
 		Token:     owner.Token,
 	}, nil
+}
+
+// lockOwnerProbeTimeout bounds the external process-liveness probe so a wedged
+// tasklist can never hang lock acquisition.
+const lockOwnerProbeTimeout = 10 * time.Second
+
+// processIsLikelyRunning reports whether a PID probably belongs to a live
+// process. It is a liveness hint only: when the probe cannot prove absence
+// (unknown platform, probe failure), it conservatively reports "running" so
+// the lock error message never suggests deleting a possibly-live lock.
+func processIsLikelyRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), lockOwnerProbeTimeout)
+		defer cancel()
+		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
+		output, err := command.Output()
+		if err != nil {
+			return true
+		}
+		return strings.Contains(string(output), strconv.Itoa(pid))
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return false
+	}
+	return true
+}
+
+// ============================================================
+// Workspace Safety (Unity Editor / Build pipeline coordination)
+// ============================================================
+
+const (
+	// editorInstanceRelativePath is Unity's per-project marker for "an editor
+	// has this exact project open"; it carries the editor process id.
+	editorInstanceRelativePath = "Library/EditorInstance.json"
+	// Build workspace lease files owned by the Assets/Build pipeline. A held
+	// lease means a Build workspace operation is in flight and BuildData
+	// identity writes would race it.
+	buildLeaseLockRelativePath     = "Temp/BuildPipeline/Workspace/lease.lock"
+	buildLeaseMetadataRelativePath = "Temp/BuildPipeline/Workspace/lease.json"
+	maxSafetyEvidenceBytes         = 64 * 1024
+)
+
+type editorInstanceReport struct {
+	ProcessID    int    `json:"process_id"`
+	UnityVersion string `json:"unity_version,omitempty"`
+}
+
+type buildLeaseMetadataReport struct {
+	PID       int    `json:"pid"`
+	Operation string `json:"operation,omitempty"`
+}
+
+// workspaceSafetyReport collects Unity Editor and Build-workspace activity that
+// must not race a rename. Blockers refuse the run; warnings are advisory.
+type workspaceSafetyReport struct {
+	Blockers []string
+	Warnings []string
+}
+
+func assessWorkspaceSafety(projectRoot string) workspaceSafetyReport {
+	report := workspaceSafetyReport{}
+	checkUnityEditorActivity(projectRoot, &report)
+	checkBuildWorkspaceLease(projectRoot, &report)
+	return report
+}
+
+// checkUnityEditorActivity performs project-scoped editor detection: the
+// EditorInstance.json inside THIS project's Library folder is the only editor
+// signal examined, so editors open on other projects never block the rename.
+// A marker whose PID is gone is stale crash evidence and only warns.
+func checkUnityEditorActivity(projectRoot string, report *workspaceSafetyReport) {
+	editorPath := filepath.Join(projectRoot, filepath.FromSlash(editorInstanceRelativePath))
+	data, err := os.ReadFile(editorPath)
+	if os.IsNotExist(err) {
+		return // No editor has this project open.
+	}
+	if err != nil {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot inspect %s: %v", editorPath, err))
+		return
+	}
+	if len(data) == 0 || len(data) > maxSafetyEvidenceBytes {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("%s has an invalid size", editorPath))
+		return
+	}
+	var instance editorInstanceReport
+	if jsonErr := json.Unmarshal(data, &instance); jsonErr != nil || instance.ProcessID <= 0 {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("%s is malformed", editorPath))
+		return
+	}
+	if processIsLikelyRunning(instance.ProcessID) {
+		report.Blockers = append(report.Blockers, fmt.Sprintf(
+			"Unity Editor (PID %d, version %q) has this project open; close it before renaming",
+			instance.ProcessID, instance.UnityVersion))
+		return
+	}
+	report.Warnings = append(report.Warnings, fmt.Sprintf(
+		"stale %s (PID %d is not running; the editor likely crashed and Library may hold recovery state)",
+		editorPath, instance.ProcessID))
+}
+
+// checkBuildWorkspaceLease refuses renames while the Assets/Build pipeline owns
+// the shared Build workspace: BuildData identity writes must never race an
+// in-flight build transaction. An unprovable lease state fails closed.
+func checkBuildWorkspaceLease(projectRoot string, report *workspaceSafetyReport) {
+	leaseLockPath := filepath.Join(projectRoot, filepath.FromSlash(buildLeaseLockRelativePath))
+	lockInfo, lockErr := os.Lstat(leaseLockPath)
+	if os.IsNotExist(lockErr) {
+		return // No Build workspace holder.
+	}
+	if lockErr != nil {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot inspect the Build workspace lease %s: %v", leaseLockPath, lockErr))
+		return
+	}
+	if !lockInfo.Mode().IsRegular() || lockInfo.Mode()&os.ModeSymlink != 0 {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("the Build workspace lease path is not a regular file: %s", leaseLockPath))
+		return
+	}
+	leaseData, readErr := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(buildLeaseMetadataRelativePath)))
+	if readErr != nil || len(leaseData) == 0 || len(leaseData) > maxSafetyEvidenceBytes {
+		report.Blockers = append(report.Blockers, "a Build workspace lease exists but its metadata is unreadable; resolve the Build workspace (see Temp/BuildPipeline/Workspace) before renaming")
+		return
+	}
+	var lease buildLeaseMetadataReport
+	if jsonErr := json.Unmarshal(leaseData, &lease); jsonErr != nil || lease.PID <= 0 {
+		report.Blockers = append(report.Blockers, "the Build workspace lease metadata is malformed; resolve the Build workspace (see Temp/BuildPipeline/Workspace) before renaming")
+		return
+	}
+	if processIsLikelyRunning(lease.PID) {
+		report.Blockers = append(report.Blockers, fmt.Sprintf(
+			"the Build workspace lease is held by PID %d (%s); wait for that operation to finish before renaming",
+			lease.PID, lease.Operation))
+		return
+	}
+	report.Warnings = append(report.Warnings, fmt.Sprintf(
+		"stale Build workspace lease (holder PID %d is not running)", lease.PID))
 }
 
 func releaseProjectLock(fileSystem renameFileSystem, lock *projectLock) error {
@@ -4761,10 +4918,17 @@ func runRenameTool(args []string) (exitCode int) {
 		}
 	}()
 
+	safety := assessWorkspaceSafety(projectRoot)
 	var log *Logger
 	logPath := filepath.Join(projectRoot, "rename_project.log")
 	if dryRun {
 		log = NewConsoleLogger()
+		for _, warning := range safety.Warnings {
+			log.Printf("Warning: %s\n", warning)
+		}
+		for _, blocker := range safety.Blockers {
+			log.Printf("Warning: %s (advisory in dry-run)\n", blocker)
+		}
 		journalPath, journal, inspectErr := findIncompleteTransactionWithFS(fileSystem, projectRoot)
 		if inspectErr != nil {
 			log.Printf("Error inspecting previous rename transactions: %v\n", inspectErr)
@@ -4782,6 +4946,19 @@ func runRenameTool(args []string) (exitCode int) {
 		}
 		defer log.Close()
 		log.Printf("=== Rename Project Tool started at %s ===\n", time.Now().Format("2006-01-02 15:04:05"))
+		for _, warning := range safety.Warnings {
+			log.Printf("Warning: %s\n", warning)
+		}
+		// Safety gates run before crash recovery: rolling a rename transaction
+		// back while the editor or a Build operation is live is exactly the
+		// race the gates exist to prevent.
+		if len(safety.Blockers) != 0 {
+			for _, blocker := range safety.Blockers {
+				log.Printf("Error: %s\n", blocker)
+			}
+			log.Printf("Rename refused: close this project's Unity Editor (editors on other projects may stay open) and let Build workspace operations finish, then retry.\n")
+			return toolkit.ExitFailure
+		}
 		if recoverErr := recoverIncompleteTransaction(fileSystem, projectRoot, log); recoverErr != nil {
 			log.Printf("Error recovering an incomplete rename transaction: %v\n", recoverErr)
 			return toolkit.ExitFailure
@@ -4861,7 +5038,11 @@ func runRenameTool(args []string) (exitCode int) {
 	}
 
 	fmt.Print("\nProceed with this validated transaction? (y/N): ")
-	confirm, _ := stdinReader.ReadString('\n')
+	confirm, readErr := stdinReader.ReadString('\n')
+	if readErr != nil && strings.TrimSpace(confirm) == "" {
+		log.Println("\n[FAIL] Cancelled: input stream closed.")
+		return toolkit.ExitFailure
+	}
 	if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
 		log.Println("\nOperation cancelled by user.")
 		return toolkit.ExitSuccess

@@ -28,13 +28,17 @@ import (
 )
 
 const (
-	defaultAudioBitrate = "128k"
-	defaultAudioRate    = "44100"
-	ffmpegTimeout       = 12 * time.Hour
-	loudnessTolerance   = 0.5
-	peakTolerance       = 0.5
-	shortAudioThreshold = 3.0
+	defaultAudioBitrate  = "128k"
+	defaultAudioRate     = "44100"
+	defaultFFmpegTimeout = 2 * time.Hour
+	loudnessTolerance    = 0.5
+	peakTolerance        = 0.5
+	shortAudioThreshold  = 3.0
 )
+
+// ffmpegTimeout bounds every per-invocation FFmpeg call. It is configurable via
+// the -ffmpeg-timeout flag so very long encodes can extend the bounded default.
+var ffmpegTimeout = defaultFFmpegTimeout
 
 type preset struct {
 	Key          string
@@ -225,10 +229,15 @@ func Run(args []string) int {
 	flags.StringVar(&presetKey, "preset", "2", "Quality preset 1/2/3 (CI mode, default 2)")
 	flags.BoolVar(&overwrite, "overwrite", false, "Overwrite existing outputs (CI mode)")
 	flags.IntVar(&jobs, "jobs", 0, "Parallel conversion workers (default: CPU count, clamped 1..64)")
+	flags.DurationVar(&ffmpegTimeout, "ffmpeg-timeout", defaultFFmpegTimeout, "Per-invocation FFmpeg timeout (for example 45m or 2h)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if ffmpegTimeout <= 0 {
+		logging.Error("--ffmpeg-timeout must be a positive duration")
 		return 2
 	}
 	if ciMode {
@@ -249,7 +258,7 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 
 	sourcePath, err := chooseSourcePath(reader)
 	if err != nil {
-		return failWithMessage(fmt.Sprintf("Cancelled: %v", err))
+		return cancelledWithMessage(err)
 	}
 
 	info, err := os.Stat(sourcePath)
@@ -257,12 +266,21 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 		return failWithMessage(fmt.Sprintf("Failed to read input path: %v", err))
 	}
 
-	selectedPreset := choosePreset(reader)
-	selectedResolution := chooseResolution(reader)
-	settings := chooseVideoBitrate(reader, selectedPreset, selectedResolution)
+	selectedPreset, err := choosePreset(reader)
+	if err != nil {
+		return cancelledWithMessage(err)
+	}
+	selectedResolution, err := chooseResolution(reader)
+	if err != nil {
+		return cancelledWithMessage(err)
+	}
+	settings, err := chooseVideoBitrate(reader, selectedPreset, selectedResolution)
+	if err != nil {
+		return cancelledWithMessage(err)
+	}
 	outputRoot, overwrite, err := chooseOutputOptions(reader, sourcePath, info, settings.Preset)
 	if err != nil {
-		return failWithMessage(fmt.Sprintf("Cancelled: %v", err))
+		return cancelledWithMessage(err)
 	}
 
 	conversionJobs, err := buildJobs(sourcePath, info, outputRoot, settings.Preset)
@@ -285,7 +303,11 @@ func runInteractiveFlow(ctx context.Context, jobs int) int {
 	fmt.Println()
 	fmt.Println("Audio note: WebM does not support AAC in the standard container, so this tool uses Vorbis audio plus loudness normalization for broad Unity/WebM compatibility.")
 
-	if !confirm(reader, "Start conversion now? (Y/N) [default: Y]: ", true) {
+	confirmed, err := confirm(reader, "Start conversion now? (Y/N) [default: Y]: ", true)
+	if err != nil {
+		return cancelledWithMessage(err)
+	}
+	if !confirmed {
 		return failWithMessage("Operation cancelled by user.")
 	}
 
@@ -314,6 +336,10 @@ func runCi(ctx context.Context, inputPath, outputRoot, presetKey string, overwri
 	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputRoot) == "" {
 		logging.Error("--ci requires --input and --output")
 		return 2
+	}
+	if !commandExists("ffmpeg") {
+		logging.Error("ffmpeg not found in PATH")
+		return 1
 	}
 	selectedPreset, ok := findPreset(presetKey)
 	if !ok {
@@ -482,6 +508,7 @@ func chooseSourcePath(reader *bufio.Reader) (string, error) {
 		fmt.Print("Enter a video file or folder path (drag-and-drop is also supported): ")
 		text, err := readLine(reader)
 		if err != nil {
+			// A closed input (redirect, script, Ctrl+Z) must exit instead of looping.
 			return "", err
 		}
 
@@ -505,7 +532,7 @@ func chooseSourcePath(reader *bufio.Reader) (string, error) {
 	}
 }
 
-func choosePreset(reader *bufio.Reader) preset {
+func choosePreset(reader *bufio.Reader) (preset, error) {
 	fmt.Println("Quality presets")
 	for _, p := range presets {
 		fmt.Printf("  %s. %s\n", p.Key, p.Name)
@@ -516,24 +543,24 @@ func choosePreset(reader *bufio.Reader) preset {
 	fmt.Print("Select preset (1/2/3) [default: 2]: ")
 	input, err := readLine(reader)
 	if err != nil {
-		return presets[1]
+		return presets[1], err
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return presets[1]
+		return presets[1], nil
 	}
 
 	for _, p := range presets {
 		if p.Key == input {
-			return p
+			return p, nil
 		}
 	}
 
 	fmt.Println("Unknown preset selection, using Balanced / Universal.")
-	return presets[1]
+	return presets[1], nil
 }
 
-func chooseResolution(reader *bufio.Reader) resolutionOption {
+func chooseResolution(reader *bufio.Reader) (resolutionOption, error) {
 	fmt.Println("Resolution options")
 	for _, option := range resolutionOptions {
 		fmt.Printf("  %s. %s\n", option.Key, option.Name)
@@ -543,42 +570,42 @@ func chooseResolution(reader *bufio.Reader) resolutionOption {
 	fmt.Print("Select resolution option (1/2/3/4) [default: 1]: ")
 	input, err := readLine(reader)
 	if err != nil {
-		return resolutionOptions[0]
+		return resolutionOptions[0], err
 	}
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return resolutionOptions[0]
+		return resolutionOptions[0], nil
 	}
 
 	for _, option := range resolutionOptions {
 		if option.Key == input {
-			return option
+			return option, nil
 		}
 	}
 
 	fmt.Println("Unknown resolution selection, using Original.")
-	return resolutionOptions[0]
+	return resolutionOptions[0], nil
 }
 
-func chooseVideoBitrate(reader *bufio.Reader, selectedPreset preset, selectedResolution resolutionOption) encodeSettings {
+func chooseVideoBitrate(reader *bufio.Reader, selectedPreset preset, selectedResolution resolutionOption) (encodeSettings, error) {
 	fmt.Printf("Video bitrate [default: %s, examples: 12M / 8500k]: ", selectedPreset.VideoBitrate)
 	input, err := readLine(reader)
 	if err != nil {
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate)
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), err
 	}
 
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate)
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), nil
 	}
 
 	normalized, ok := normalizeBitrateInput(input)
 	if !ok {
 		fmt.Printf("Unknown bitrate format '%s', using default %s.\n", input, selectedPreset.VideoBitrate)
-		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate)
+		return buildEncodeSettings(selectedPreset, selectedResolution, selectedPreset.VideoBitrate), nil
 	}
 
-	return buildEncodeSettings(selectedPreset, selectedResolution, normalized)
+	return buildEncodeSettings(selectedPreset, selectedResolution, normalized), nil
 }
 
 func buildEncodeSettings(selectedPreset preset, selectedResolution resolutionOption, videoBitrate string) encodeSettings {
@@ -605,8 +632,20 @@ func chooseOutputOptions(reader *bufio.Reader, sourcePath string, info os.FileIn
 		outputRoot = normalizePath(outputText)
 	}
 
-	overwrite := confirm(reader, "Overwrite existing outputs? (y/N) [default: N]: ", false)
+	overwrite, err := confirm(reader, "Overwrite existing outputs? (y/N) [default: N]: ", false)
+	if err != nil {
+		return "", false, err
+	}
 	return outputRoot, overwrite, nil
+}
+
+// cancelledWithMessage converts an interactive input error into a graceful
+// exit, treating a closed input stream as a cancellation instead of a hang.
+func cancelledWithMessage(err error) int {
+	if errors.Is(err, io.EOF) {
+		return failWithMessage("Cancelled: input stream closed.")
+	}
+	return failWithMessage(fmt.Sprintf("Cancelled: %v", err))
 }
 
 func buildJobs(sourcePath string, info os.FileInfo, outputRoot string, selectedPreset preset) ([]job, error) {
@@ -1019,24 +1058,30 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
-func confirm(reader *bufio.Reader, prompt string, defaultYes bool) bool {
+func confirm(reader *bufio.Reader, prompt string, defaultYes bool) (bool, error) {
 	fmt.Print(prompt)
 	text, err := readLine(reader)
 	if err != nil {
-		return defaultYes
+		return false, err
 	}
 
-	text = strings.ToLower(strings.TrimSpace(text))
+	text = strings.ToLower(text)
 	if text == "" {
-		return defaultYes
+		return defaultYes, nil
 	}
-	return text == "y" || text == "yes"
+	return text == "y" || text == "yes", nil
 }
 
+// readLine returns (text, nil) for a normal line, and (text, nil) for the final
+// unterminated line before EOF. A closed or exhausted input stream returns
+// ("", io.EOF) so callers can cancel instead of retrying forever.
 func readLine(reader *bufio.Reader) (string, error) {
 	text, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {
 		return "", err
+	}
+	if err == io.EOF && strings.TrimSpace(text) == "" {
+		return "", io.EOF
 	}
 	return strings.TrimSpace(text), nil
 }

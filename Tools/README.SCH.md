@@ -49,7 +49,7 @@ Tools/
 | 命令 | 用途 | 备注 |
 | --- | --- | --- |
 | `rename_project` | 事务化改名 UnityStarter 派生项目 | `--dry-run` 完整只读预演；带日志、备份与回滚；可重复执行——再次改名会复用持久化状态并启用全新回退探测 |
-| `remove_unity_packages` | 从 `Packages/manifest.json` 删除显式授权的 Unity 包 | `--allow-package`、`--allow-referenced-package`、`--profile`、`--apply`、`--dry-run`；fail-closed |
+| `remove_unity_packages` | 从 `Packages/manifest.json` 删除显式授权的 Unity 包 | `--allow-package`、`--allow-referenced-package`、`--profile`、`--apply`、`--dry-run`、`--resolve-stale-transaction`；fail-closed |
 | `unity_project_full_clean` | 删除已验证缓存与 Build 所有的输出 | `--ci`、`--dry-run`、`--include-build-outputs`；交互模式输入 `CLEAN` 确认；Unity 运行中或存在恢复证据时 fail-closed |
 
 ### dev-tools（通用工具）
@@ -59,17 +59,20 @@ Tools/
 | `generate_file_tree` | 生成 Markdown 目录树 | `--profile`、`--target`、`--depth`、`--ext`、`--ignore`、`--ci`、`-i` |
 | `texture_channel_packer` | 把多张图打包进 RGBA 通道 | `-r/-g/-b/-a`、`-o`、`-size`、`-preset`、`-ci`、`--dry-run` |
 | `audio_volume_normalizer` | 按类别做音频响度归一化 | `--ci --input <dir> [--format wav\|ogg] [--jobs N]`（CI 模式 `--input` 必填）；并行 worker 池（默认 CPU 数），Ctrl+C/SIGTERM 可取消；需要 FFmpeg |
-| `unity_video_webm_converter` | 把视频转成 Unity 友好的 WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N]`；并行转换池、优雅取消；需要 FFmpeg |
+| `unity_video_webm_converter` | 把视频转成 Unity 友好的 WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N] [--ffmpeg-timeout 2h]`；并行转换池、优雅取消；需要 FFmpeg |
 
 ## 安装
 
 ### 预编译产物（无需 Go）
 
 `Tools/Executable/<OS>/<GOARCH>/` 下每个平台包都包含独立的 `unity-project-tools` 与 `dev-tools`
-可执行文件，以及用于继续产出更多平台包的 `toolsbuild`。Windows 包随仓库提交；macOS/Linux 包用一条命令
-即可生成（见下），或从 CI 工作流的 Artifacts 下载（每个平台 runner 都会上传其构建并验证过的平台包）。
+可执行文件，以及用于继续产出更多平台包的 `toolsbuild`。Windows、macOS、Linux 全部平台包均已随仓库提交；
+也可以用一条命令重新生成（见下），或从 CI 工作流的 Artifacts 下载（每个平台 runner 都会上传其构建并验证过的平台包）。
+
 在 Windows 上双击任一可执行文件都会打开其自身工具族的交互式命令菜单（按编号或名称选择工具，`q` 退出）；
-带参数运行时仍是纯 CLI。
+带参数运行时仍是纯 CLI。带参数运行结束后，双击打开的控制台窗口会保留并显示"Press Enter to exit"提示，
+方便查看成功/失败输出。该暂停仅在"进程独占一个新控制台且 stdin/stdout 均为交互终端"时发生；shell、
+脚本、重定向输出与 CI 一律不会暂停。可用 `--no-pause` 参数或 `TOOLS_NO_PAUSE=1` 环境变量显式关闭。
 
 ### 从源码构建
 
@@ -94,8 +97,8 @@ go run ./cmd/toolsbuild --verify               # 顺带冒烟测试当前平台�
 `toolsbuild` 交叉编译静态二进制（`CGO_ENABLED=0`、`-trimpath`、`-buildvcs=false`、strip）到
 `Tools/Executable/<OS>/<GOARCH>/`，任何失败都返回非零，可直接作为 CI 发布步骤使用，无需任何脚本层。
 分发的 `toolsbuild` 可执行文件也可独立运行：它按自身所在路径（而非工作目录）定位模块根，因此在任意目录下执行
-`Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` 都能工作。它是 CLI 程序，控制台窗口
-会在结束后立即关闭，请在终端中运行以查看输出。
+`Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` 都能工作。从终端运行时与普通 CLI
+程序行为一致；在 Windows 上双击运行时控制台会保留到按下回车（同样受上述 `--no-pause` / `TOOLS_NO_PAUSE=1` 约束）。
 
 ## CI/CD
 
@@ -133,3 +136,6 @@ go run ./cmd/unity-project-tools --list
 - **结构化日志**：诊断信息以 `slog` 文本行输出到 stderr（含 `cmd`、`level`、key=value），面向用户的提示、进度与汇总保持在 stdout，CI 日志可直接解析。
 - **原子化输出**：FFmpeg 类工具先写入每次运行唯一的临时文件（同目录、同扩展名），成功后 rename 就位，中断或并发运行不会在最终路径留下半成品。
 - **TTY 感知进度**：仅当 stdout 是交互终端时才绘制进度条；管道与 CI 输出保持干净。
+- **Windows 双击体验**：带参数运行结束后，新开的控制台窗口会保留到按下回车。判定逻辑集中在
+  toolkit 的 `ShouldPauseAfterRun`：仅当 stdin/stdout 均为交互终端、当前进程独占该控制台、且
+  未通过 `--no-pause` 或 `TOOLS_NO_PAUSE=1` 显式退出时才暂停。管道、脚本、shell 与 CI 一律不暂停。

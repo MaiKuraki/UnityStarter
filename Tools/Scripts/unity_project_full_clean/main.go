@@ -2,6 +2,7 @@ package unity_project_full_clean
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -13,11 +14,14 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -38,7 +42,50 @@ const (
 	maximumOwnerJSONDepth   = 64
 	maximumCleanEntries     = 500000
 	maximumCleanDepth       = 64
+	// progressReportInterval throttles deletion progress lines so multi-GB
+	// Library removals stay observable without flooding the console.
+	progressReportInterval = 2 * time.Second
+	// deletionBatchSize is how many directory entries are listed per pass.
+	// Larger batches trade a little memory for far fewer open/read/close cycles.
+	deletionBatchSize = 1024
+	// parallelDeletionDepth caps how deep the deletion fans out to worker
+	// goroutines. The wide upper levels of a Library tree benefit most from
+	// concurrency; deeper levels are usually small and not worth the overhead.
+	parallelDeletionDepth = 3
 )
+
+const (
+	// Windows reports these when another process still holds a handle inside a
+	// tree being moved or deleted.
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+// lockContentionHint appends an actionable explanation when Windows refuses a
+// move or delete because some other process still holds a handle in the tree.
+// It returns an empty string for every other error so messages stay unchanged.
+func lockContentionHint(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == windowsErrorAccessDenied || errno == windowsErrorSharingViolation) {
+		return ". Another process is holding a file in this tree: close the Unity Editor, file explorers, antivirus or indexing activity, then retry"
+	}
+	return ""
+}
+
+// deletionWorkerLimit bounds how many subtrees are deleted concurrently.
+// Tree deletion is metadata/IO bound rather than CPU bound, so a small multiple
+// of the core count keeps the device queue fed while leaving CPU, memory and
+// disk headroom for the rest of the machine.
+func deletionWorkerLimit() int {
+	limit := runtime.NumCPU()
+	if limit < 2 {
+		return 2
+	}
+	if limit > 8 {
+		return 8
+	}
+	return limit
+}
 
 var cacheDirectories = []string{
 	".vs", ".utmp", "obj", "Logs", "Library",
@@ -209,6 +256,10 @@ func Run(arguments []string) int {
 
 func run(arguments []string, stdout, stderr io.Writer) int {
 	logging.Command("unity_project_full_clean")
+	// Deleting a multi-GB Library can take minutes; honour Ctrl+C/SIGTERM so a
+	// long deletion is interruptible instead of only killable.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	flags := flag.NewFlagSet("unity_project_full_clean", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var ciMode bool
@@ -242,7 +293,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 
 	if resolveStaleQuarantine {
-		return runQuarantineResolution(projectRoot, dryRun, stdout)
+		return runQuarantineResolution(ctx, projectRoot, dryRun, stdout)
 	}
 
 	lease, err := acquireBuildWorkspaceLease(projectRoot)
@@ -360,8 +411,12 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	items = recheckedItems
 
 	start := time.Now()
-	deleted, failed, freed := executeQuarantinedCleanup(projectRoot, lease, items, stdout)
+	deleted, failed, freed := executeQuarantinedCleanup(ctx, projectRoot, lease, items, stdout)
 	fmt.Fprintf(stdout, "Deleted %d items; failed %d; reclaimed %s; elapsed %s.\n", deleted, failed, formatSize(freed), time.Since(start).Round(time.Millisecond))
+	if err := ctx.Err(); err != nil {
+		fmt.Fprintf(stdout, "[FAIL] Cleanup was cancelled (%v). Re-run to clean the remaining items.\n", err)
+		return toolkit.ExitFailure
+	}
 	if failed != 0 {
 		return toolkit.ExitFailure
 	}
@@ -722,9 +777,15 @@ func checkUnityRunning(projectRoot string) (bool, int, error) {
 	return running, instance.ProcessID, err
 }
 
+// processProbeTimeout bounds the external process-liveness probe so a wedged
+// tasklist can never hang the whole tool.
+const processProbeTimeout = 10 * time.Second
+
 func processIsRunning(pid int) (bool, error) {
 	if runtime.GOOS == "windows" {
-		command := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
+		ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
+		defer cancel()
+		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
 		output, err := command.Output()
 		if err != nil {
 			return false, err
@@ -1552,7 +1613,7 @@ func ensureNoStaleCleanupQuarantine(projectRoot string) error {
 // runQuarantineResolution completes interrupted cleanups by removing the stale quarantine
 // entries. It only ever deletes files already staged inside the quarantine - never the
 // original cache paths - and fails closed on any ambiguity.
-func runQuarantineResolution(projectRoot string, dryRun bool, stdout io.Writer) int {
+func runQuarantineResolution(ctx context.Context, projectRoot string, dryRun bool, stdout io.Writer) int {
 	lease, err := acquireBuildWorkspaceLease(projectRoot)
 	if err != nil {
 		logging.Errorf("Build workspace is busy or unsafe; quarantine resolution refused: %v", err)
@@ -1570,14 +1631,14 @@ func runQuarantineResolution(projectRoot string, dryRun bool, stdout io.Writer) 
 		logging.Errorf("Unity Editor is active for this project (PID %d). Quarantine resolution refused; there is no force mode.", pid)
 		return toolkit.ExitFailure
 	}
-	if err := resolveStaleQuarantines(projectRoot, dryRun, stdout); err != nil {
+	if err := resolveStaleQuarantines(ctx, projectRoot, dryRun, stdout); err != nil {
 		logging.Errorf("Stale cleanup quarantine resolution failed: %v", err)
 		return toolkit.ExitFailure
 	}
 	return toolkit.ExitSuccess
 }
 
-func resolveStaleQuarantines(projectRoot string, dryRun bool, stdout io.Writer) error {
+func resolveStaleQuarantines(ctx context.Context, projectRoot string, dryRun bool, stdout io.Writer) error {
 	root := filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath))
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -1629,9 +1690,21 @@ func resolveStaleQuarantines(projectRoot string, dryRun bool, stdout io.Writer) 
 			resolved++
 			continue
 		}
-		var removed int
-		if err := removeRootedTree(osRoot, relative, 0, &removed); err != nil {
-			return fmt.Errorf("failed to remove stale cleanup quarantine %s: %w", entryPath, err)
+		var removed atomic.Int64
+		itemStart := time.Now()
+		var progressMutex sync.Mutex
+		lastReport := time.Now()
+		reportProgress := func(count int64) {
+			progressMutex.Lock()
+			defer progressMutex.Unlock()
+			if time.Since(lastReport) < progressReportInterval {
+				return
+			}
+			lastReport = time.Now()
+			fmt.Fprintf(stdout, "  ... resolving %s: %d entries removed (%s elapsed)\n", entry.Name(), count, time.Since(itemStart).Round(time.Second))
+		}
+		if err := removeRootedTree(ctx, osRoot, relative, 0, 0, &removed, reportProgress); err != nil {
+			return fmt.Errorf("failed to remove stale cleanup quarantine %s: %w%s", entryPath, err, lockContentionHint(err))
 		}
 		fmt.Fprintf(stdout, "[Resolved] Removed stale cleanup quarantine: %s\n", entryPath)
 		resolved++
@@ -1664,7 +1737,7 @@ func validateStaleQuarantineJournal(entryPath string) error {
 	return nil
 }
 
-func executeQuarantinedCleanup(projectRoot string, lease *buildWorkspaceLease, items []cleanItem, output io.Writer) (int, int, int64) {
+func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *buildWorkspaceLease, items []cleanItem, output io.Writer) (int, int, int64) {
 	transactionRoot, journalPath, journal, err := createQuarantineTransaction(projectRoot, items)
 	if err != nil {
 		fmt.Fprintf(output, "[FAIL] Cannot create cleanup quarantine transaction: %v\n", err)
@@ -1719,7 +1792,7 @@ func executeQuarantinedCleanup(projectRoot string, lease *buildWorkspaceLease, i
 			claimed = append(claimed, claimedCleanItem{item: item, claimedPath: claimedPath, claimedIdentity: claimedInfo, entryIndex: index})
 		}
 		if moveErr != nil {
-			return failClaim(fmt.Errorf("no-replace quarantine move failed for '%s': %w", item.path, moveErr))
+			return failClaim(fmt.Errorf("no-replace quarantine move failed for '%s': %w%s", item.path, moveErr, lockContentionHint(moveErr)))
 		}
 		if claimedErr != nil {
 			return failClaim(fmt.Errorf("quarantined target cannot be inspected: %s: %w", claimedPath, claimedErr))
@@ -1763,7 +1836,16 @@ func executeQuarantinedCleanup(projectRoot string, lease *buildWorkspaceLease, i
 	}
 	deleted := 0
 	var freed int64
+	if len(claimed) != 0 {
+		fmt.Fprintf(output, "Deleting %d quarantined item(s); large Library caches take a while, progress is reported every %s.\n", len(claimed), progressReportInterval)
+	}
 	for _, claim := range claimed {
+		if err := ctx.Err(); err != nil {
+			journal.State = "recovery-required"
+			_ = writeQuarantineJournal(journalPath, journal, false)
+			fmt.Fprintf(output, "[FAIL] Cleanup cancelled before deleting '%s': %v. Remaining recovery evidence: %s\n", claim.item.path, err, transactionRoot)
+			return deleted, 1, freed
+		}
 		if err := lease.validate(); err != nil {
 			journal.State = "recovery-required"
 			_ = writeQuarantineJournal(journalPath, journal, false)
@@ -1786,12 +1868,25 @@ func executeQuarantinedCleanup(projectRoot string, lease *buildWorkspaceLease, i
 			fmt.Fprintf(output, "[FAIL] Cannot persist per-target delete intent: %v. Recovery evidence: %s\n", err, transactionRoot)
 			return deleted, 1, freed
 		}
-		if err := quarantineRoot.removeAll(claim.claimedPath); err != nil {
+		itemStart := time.Now()
+		var progressMutex sync.Mutex
+		lastReport := time.Now()
+		reportProgress := func(removed int64) {
+			progressMutex.Lock()
+			defer progressMutex.Unlock()
+			if time.Since(lastReport) < progressReportInterval {
+				return
+			}
+			lastReport = time.Now()
+			fmt.Fprintf(output, "  ... deleting %s %s: %d entries removed (%s elapsed)\n", claim.item.kind, claim.item.path, removed, time.Since(itemStart).Round(time.Second))
+		}
+		fmt.Fprintf(output, "Deleting %s: %s (%s)\n", claim.item.kind, claim.item.path, formatSize(claim.item.size))
+		if err := quarantineRoot.removeAll(ctx, claim.claimedPath, reportProgress); err != nil {
 			journal.State = "recovery-required"
 			if bindErr := quarantineRoot.validate(projectRoot); bindErr == nil {
 				_ = writeQuarantineJournal(journalPath, journal, false)
 			}
-			fmt.Fprintf(output, "[FAIL] Quarantined target deletion failed without permission mutation: %v. Recovery evidence: %s\n", err, transactionRoot)
+			fmt.Fprintf(output, "[FAIL] Quarantined target deletion failed without permission mutation: %v%s Recovery evidence: %s\n", err, lockContentionHint(err), transactionRoot)
 			return deleted, 1, freed
 		}
 		if err := quarantineRoot.validate(projectRoot); err != nil {
@@ -1866,7 +1961,7 @@ func (binding *boundQuarantineRoot) validate(projectRoot string) error {
 	return safefs.ValidateMountBoundary(projectRoot, binding.path)
 }
 
-func (binding *boundQuarantineRoot) removeAll(claimedPath string) error {
+func (binding *boundQuarantineRoot) removeAll(ctx context.Context, claimedPath string, onProgress func(removed int64)) error {
 	if binding == nil || binding.root == nil || binding.closed {
 		return errors.New("quarantine directory handle is not active")
 	}
@@ -1874,8 +1969,8 @@ func (binding *boundQuarantineRoot) removeAll(claimedPath string) error {
 	if err != nil || relative == "." || filepath.IsAbs(relative) || filepath.Dir(relative) != "." {
 		return fmt.Errorf("claimed path is not an immediate quarantine child: %s", claimedPath)
 	}
-	entries := 0
-	if err := removeRootedTree(binding.root, relative, 0, &entries); err != nil {
+	var entries atomic.Int64
+	if err := removeRootedTree(ctx, binding.root, relative, 0, 0, &entries, onProgress); err != nil {
 		return err
 	}
 	if _, err := binding.root.Lstat(relative); err == nil {
@@ -1889,30 +1984,52 @@ func (binding *boundQuarantineRoot) removeAll(claimedPath string) error {
 	return nil
 }
 
-func removeRootedTree(root *os.Root, relative string, depth int, entries *int) error {
+// removeRootedTree deletes a tree through a bound os.Root handle. entryType
+// carries the mode already reported by the parent's ReadDir when it is known,
+// which removes one Lstat syscall per file; pass 0 when unknown. onProgress,
+// when non-nil, receives the running entry count after every directory pass so
+// callers can report progress during multi-GB deletions.
+func removeRootedTree(ctx context.Context, root *os.Root, relative string, depth int, entryType fs.FileMode, entries *atomic.Int64, onProgress func(removed int64)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if depth > maximumCleanDepth {
 		return fmt.Errorf("rooted deletion exceeds depth %d: %s", maximumCleanDepth, relative)
 	}
-	(*entries)++
-	if *entries > maximumCleanEntries {
+	entries.Add(1)
+	if entries.Load() > maximumCleanEntries {
 		return fmt.Errorf("rooted deletion exceeds %d entries", maximumCleanEntries)
 	}
-	info, err := root.Lstat(relative)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	mode := entryType
+	if mode == 0 {
+		info, err := root.Lstat(relative)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		mode = info.Mode()
 	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if !mode.IsDir() || mode&fs.ModeSymlink != 0 {
 		return root.Remove(relative)
 	}
+	// Each pass lists a bounded batch of children and deletes them. Windows only
+	// marks a file for deletion when another process still holds a handle, and
+	// the entry stays listed until that handle closes. Without a progress check
+	// the loop would keep re-listing the same batch and spin until the entry cap
+	// is reached, so a pass that ends with an identical batch signature is
+	// reported as a failure instead of looping.
+	previousBatch := ""
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		directory, err := root.Open(relative)
 		if err != nil {
 			return err
 		}
-		children, readErr := directory.ReadDir(256)
+		children, readErr := directory.ReadDir(deletionBatchSize)
 		closeErr := directory.Close()
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return readErr
@@ -1923,12 +2040,84 @@ func removeRootedTree(root *os.Root, relative string, depth int, entries *int) e
 		if len(children) == 0 {
 			return root.Remove(relative)
 		}
-		for _, child := range children {
-			if err := removeRootedTree(root, filepath.Join(relative, child.Name()), depth+1, entries); err != nil {
+		batch := fmt.Sprintf("%d/%s", len(children), children[0].Name())
+		if batch == previousBatch {
+			names := make([]string, 0, len(children))
+			for _, child := range children {
+				names = append(names, child.Name())
+			}
+			sort.Strings(names)
+			if len(names) > 5 {
+				names = append(names[:5], "...")
+			}
+			return fmt.Errorf("directory could not be emptied after a full deletion pass: %d entr(y/ies) remain in '%s' (%s); another process is likely holding them open, so deletion stopped instead of retrying forever", len(children), relative, strings.Join(names, ", "))
+		}
+		previousBatch = batch
+		if err := removeChildren(ctx, root, relative, depth, children, entries, onProgress); err != nil {
+			return err
+		}
+		if onProgress != nil {
+			onProgress(entries.Load())
+		}
+	}
+}
+
+// removeChildren deletes one batch of directory entries. Files are removed
+// inline because each costs a single syscall, while subdirectories in the upper
+// levels are fanned out to a bounded worker pool: the metadata-heavy part of a
+// Library removal is IO bound and finishes substantially faster when several
+// subtrees are processed concurrently.
+func removeChildren(ctx context.Context, root *os.Root, parent string, depth int, children []fs.DirEntry, entries *atomic.Int64, onProgress func(removed int64)) error {
+	var directories []fs.DirEntry
+	for _, child := range children {
+		mode := child.Type()
+		if mode.IsDir() && mode&fs.ModeSymlink == 0 {
+			directories = append(directories, child)
+			continue
+		}
+		if err := removeRootedTree(ctx, root, filepath.Join(parent, child.Name()), depth+1, mode, entries, onProgress); err != nil {
+			return err
+		}
+	}
+	if len(directories) == 0 {
+		return nil
+	}
+	if len(directories) == 1 || depth+1 >= parallelDeletionDepth {
+		for _, child := range directories {
+			if err := removeRootedTree(ctx, root, filepath.Join(parent, child.Name()), depth+1, child.Type(), entries, onProgress); err != nil {
 				return err
 			}
 		}
+		return nil
 	}
+	var (
+		waitGroup sync.WaitGroup
+		mutex     sync.Mutex
+		firstErr  error
+		slots     = make(chan struct{}, deletionWorkerLimit())
+	)
+	for _, child := range directories {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Acquire the slot before spawning so the goroutine count stays at the
+		// worker limit instead of one per directory.
+		slots <- struct{}{}
+		waitGroup.Add(1)
+		go func(entry fs.DirEntry) {
+			defer waitGroup.Done()
+			defer func() { <-slots }()
+			if err := removeRootedTree(ctx, root, filepath.Join(parent, entry.Name()), depth+1, entry.Type(), entries, onProgress); err != nil {
+				mutex.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mutex.Unlock()
+			}
+		}(child)
+	}
+	waitGroup.Wait()
+	return firstErr
 }
 
 func (binding *boundQuarantineRoot) close() error {
@@ -2261,6 +2450,65 @@ func printPreview(output io.Writer, projectRoot string, items, ownedOutputs []cl
 		total += item.size
 	}
 	fmt.Fprintf(output, "Planned deletion: %d items, %s.\n", len(items), formatSize(total))
+	for _, footprint := range durableEvidenceFootprint(projectRoot) {
+		fmt.Fprintf(output, "Retained Build evidence (never cleaned): %s (%s, %d file(s)).\n", filepath.ToSlash(footprint.relative), formatSize(footprint.size), footprint.files)
+	}
+}
+
+// durableEvidenceRoots are directories this cleaner deliberately never deletes:
+// .buildpipeline carries Build transaction and recovery state that the safety
+// checks read, and Temp/BuildPipeline/Workspace carries the active lease plus
+// the cleanup quarantine. Their footprint is reported so slow growth stays
+// visible instead of silently consuming disk.
+var durableEvidenceRoots = []string{
+	".buildpipeline",
+	"Temp/BuildPipeline/Workspace",
+}
+
+// durableEvidenceScanCap bounds the advisory scan so an unexpected amount of
+// content under a protected root can never slow the preview down.
+const durableEvidenceScanCap = 50000
+
+type durableFootprint struct {
+	relative string
+	size     int64
+	files    int
+}
+
+// durableEvidenceFootprint measures the protected Build directories. It is
+// advisory only: unreadable entries are skipped rather than reported.
+func durableEvidenceFootprint(projectRoot string) []durableFootprint {
+	results := make([]durableFootprint, 0, len(durableEvidenceRoots))
+	for _, relative := range durableEvidenceRoots {
+		root := filepath.Join(projectRoot, filepath.FromSlash(relative))
+		info, err := os.Lstat(root)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		footprint := durableFootprint{relative: relative}
+		visited := 0
+		_ = filepath.WalkDir(root, func(_ string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if visited >= durableEvidenceScanCap {
+				return filepath.SkipAll
+			}
+			visited++
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return nil
+			}
+			footprint.size += info.Size()
+			footprint.files++
+			return nil
+		})
+		results = append(results, footprint)
+	}
+	return results
 }
 
 func formatSize(value int64) string {
