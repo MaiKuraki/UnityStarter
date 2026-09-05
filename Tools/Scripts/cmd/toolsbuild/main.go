@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 type target struct {
@@ -29,7 +30,12 @@ type target struct {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
+	code := run(args)
+	// Keep a double-clicked console window readable after the build; scripts and
+	// CI callers (pipes, shells, --no-pause, TOOLS_NO_PAUSE=1) are never paused.
+	toolkit.PauseAfterRun(noPause)
+	os.Exit(code)
 }
 
 func run(args []string) int {

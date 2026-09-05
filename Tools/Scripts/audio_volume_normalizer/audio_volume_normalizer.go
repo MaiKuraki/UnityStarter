@@ -479,6 +479,7 @@ func processFile(ctx context.Context, filePath string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		return fmt.Errorf("ffmpeg analysis failed: %w\nOutput:\n%s", err, pass1Stderr.String())
 	}
 	pass1Output := pass1Stderr.String()
 
