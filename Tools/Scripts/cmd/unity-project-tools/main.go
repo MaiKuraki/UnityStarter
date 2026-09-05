@@ -25,11 +25,15 @@ func main() {
 		{Name: "remove_unity_packages", Summary: "Remove explicitly authorized Unity packages.", Run: remove_unity_packages.Run},
 		{Name: "unity_project_full_clean", Summary: "Clean verified Unity caches and owned build outputs.", Run: unity_project_full_clean.Run},
 	}
-	args := os.Args[1:]
+	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	if len(args) == 0 && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
 		// Launched by double-click (or a plain no-argument run) on an interactive
 		// terminal: show the command menu instead of the usage error.
 		os.Exit(toolkit.InteractiveMenu(programName, commands, os.Stdin, os.Stdout))
 	}
-	os.Exit(toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr))
+	code := toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr)
+	// Keep a double-clicked console window readable after the run; scripts and
+	// CI callers (pipes, shells, --no-pause, TOOLS_NO_PAUSE=1) are never paused.
+	toolkit.PauseAfterRun(noPause)
+	os.Exit(code)
 }

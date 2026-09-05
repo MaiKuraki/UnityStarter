@@ -10,7 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"cyclonegames.tools/scripts/internal/term"
 )
+
+// pausedThisProcess records whether WaitForExit already paused once, so the
+// post-dispatch pause hook does not ask the user twice in a single run.
+var pausedThisProcess = false
 
 // Version is the shared release version of both tool binaries.
 // The tools have not shipped yet, so the baseline starts at 0.1.0.
@@ -72,8 +78,14 @@ func writeUsage(programName string, w io.Writer, commands []Command) {
 }
 
 // WaitForExit pauses an interactive session until the user presses Enter, so the
-// console window stays readable after the tool finishes. CI modes never call this.
+// console window stays readable after the tool finishes. The pause only happens
+// when both stdin and stdout are interactive terminals; pipes, redirects, and CI
+// runners never block here. CI modes never call this unless they run on a TTY.
 func WaitForExit() {
+	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) {
+		return
+	}
+	pausedThisProcess = true
 	fmt.Println()
 	fmt.Print("Press Enter to exit...")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
@@ -86,18 +98,33 @@ func WaitForExit() {
 // and never reach this function.
 func InteractiveMenu(programName string, commands []Command, stdin io.Reader, stdout io.Writer) int {
 	reader := bufio.NewReader(stdin)
+	firstCycle := true
 	for {
+		if firstCycle {
+			firstCycle = false
+		} else {
+			// Separate the restarted menu from the previous command's output so
+			// it does not look like the menu was printed twice by mistake.
+			fmt.Fprintln(stdout, "--------------------------------------------------------------")
+		}
 		fmt.Fprintf(stdout, "%s %s\n\n", programName, Version)
 		writeCommandList(stdout, commands)
 		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "Enter a number or command name, or q to quit:")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return ExitSuccess // closed input (Ctrl+Z / EOF)
-		}
-		choice := strings.TrimSpace(line)
-		if choice == "" {
-			continue
+
+		// Re-prompt on a bare Enter instead of redrawing the whole menu: the
+		// old behaviour silently reprinted everything, which read as a
+		// duplicated menu rather than "nothing was entered".
+		choice := ""
+		for choice == "" {
+			fmt.Fprintln(stdout, "Enter a number or command name, or q to quit:")
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return ExitSuccess // closed input (Ctrl+Z / EOF)
+			}
+			choice = strings.TrimSpace(line)
+			if choice == "" {
+				fmt.Fprintln(stdout, "Please enter a number, a command name, or q to quit.")
+			}
 		}
 		if choice == "q" || choice == "quit" || choice == "exit" {
 			return ExitSuccess

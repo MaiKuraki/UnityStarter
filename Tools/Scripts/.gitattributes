@@ -1,0 +1,5 @@
+# Normalize Go sources and module metadata to LF so gofmt and the CI format
+# check pass on any checkout configuration (e.g. core.autocrlf=true on Windows).
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

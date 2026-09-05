@@ -2,6 +2,7 @@ package remove_unity_packages
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,9 +168,15 @@ func checkUnityEditorRunning(projectRoot string) (bool, int, error) {
 	return running, instance.ProcessID, err
 }
 
+// processProbeTimeout bounds the external process-liveness probe so a wedged
+// tasklist can never hang the whole tool.
+const processProbeTimeout = 10 * time.Second
+
 func packageToolProcessIsRunning(pid int) (bool, error) {
 	if runtime.GOOS == "windows" {
-		command := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
+		ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
+		defer cancel()
+		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
 		output, err := command.Output()
 		if err != nil {
 			return false, err
