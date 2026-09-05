@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
@@ -32,12 +33,26 @@ const MAX_SAMPLERATE = 48000
 const FILENAME_SUFFIX = "_normalized"
 const LOUDNESS_TOLERANCE = 0.5 // Skip files within +/- 0.5 LUFS of target
 const PEAK_TOLERANCE = 0.5     // Skip files within +/- 0.5 dB of target peak (for SFX)
-const FFMPEG_TIMEOUT = 10 * time.Minute
+
+// defaultFFmpegTimeout bounds every ffmpeg invocation; the -ffmpeg-timeout
+// flag overrides it for very long ambient or music sources.
+const defaultFFmpegTimeout = 10 * time.Minute
 
 // Short audio threshold: files shorter than this use peak normalization instead of LUFS.
 // LUFS (ITU-R BS.1770) requires >= 400ms for reliable measurement.
 // We use a higher threshold to be safe with game SFX.
 const SHORT_AUDIO_THRESHOLD_SEC = 3.0
+
+var (
+	ffmpegTimeout = defaultFFmpegTimeout
+	// ffmpegBinary is the ffmpeg executable used by every invocation. It
+	// defaults to PATH lookup and can be overridden with the -ffmpeg flag
+	// (CI-friendly for pinned toolchain installations).
+	ffmpegBinary = "ffmpeg"
+	// monoOutput folds every output to a single channel when set (-ac 1);
+	// game SFX conventionally ship mono to halve memory and playback cost.
+	monoOutput bool
+)
 
 // Audio category loudness targets.
 // These can be matched via parent folder name (case-insensitive), e.g.:
@@ -124,8 +139,10 @@ type LoudnormInfo struct {
 	TargetOffset string `json:"target_offset"`
 }
 
+// job pairs one source file with its normalized output destination.
 type job struct {
-	path string
+	inputPath  string
+	outputPath string
 }
 
 // NEW: result struct to hold processing outcome.
@@ -200,15 +217,31 @@ func Run(args []string) int {
 	var inputRoot string
 	var formatKey string
 	var jobsFlag int
+	var ffmpegPath string
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode")
 	flags.StringVar(&inputRoot, "input", "", "Root directory to scan (CI mode, required)")
 	flags.StringVar(&formatKey, "format", "wav", "Output format: wav or ogg")
 	flags.IntVar(&jobsFlag, "jobs", 0, "Parallel worker count (default: CPU count, clamped 1..64)")
+	flags.BoolVar(&monoOutput, "mono", false, "Fold every output to a single channel (game SFX convention)")
+	flags.StringVar(&ffmpegPath, "ffmpeg", "", "Custom ffmpeg executable path (default: ffmpeg on PATH)")
+	flags.DurationVar(&ffmpegTimeout, "ffmpeg-timeout", defaultFFmpegTimeout, "Per-invocation FFmpeg timeout (for example 5m or 30m)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if ffmpegTimeout <= 0 {
+		logging.Error("--ffmpeg-timeout must be a positive duration")
+		return 2
+	}
+	if ffmpegPath != "" {
+		resolved, resolveErr := resolveCustomFFmpeg(ffmpegPath)
+		if resolveErr != nil {
+			logging.Error("ffmpeg path not usable", "path", ffmpegPath, "error", resolveErr)
+			return 2
+		}
+		ffmpegBinary = resolved
 	}
 
 	workerCount := jobsFlag
@@ -240,7 +273,7 @@ func runInteractiveFlow(ctx context.Context, workerCount int) int {
 	fmt.Println("\nUser confirmed. Starting process...")
 
 	// Verify that ffmpeg is available in the system's PATH.
-	if !commandExists("ffmpeg") {
+	if !commandExists(ffmpegBinary) {
 		logging.Error("ffmpeg not found in PATH")
 		toolkit.WaitForExit()
 		return 1
@@ -269,7 +302,7 @@ func runCi(ctx context.Context, inputRoot, formatKey string, workerCount int) in
 		logging.Error("unknown format", "format", formatKey)
 		return 2
 	}
-	if !commandExists("ffmpeg") {
+	if !commandExists(ffmpegBinary) {
 		logging.Error("ffmpeg not found in PATH")
 		return 1
 	}
@@ -287,31 +320,22 @@ func runCi(ctx context.Context, inputRoot, formatKey string, workerCount int) in
 
 // processDirectory scans rootDir, normalizes every audio file in parallel, and prints a summary.
 func processDirectory(ctx context.Context, rootDir string, workerCount int, waitAfter bool) int {
-	// First pass to count files for the progress bar.
-	var totalFiles int32
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && isAudioFile(path) && !strings.HasSuffix(strings.TrimSuffix(path, filepath.Ext(path)), FILENAME_SUFFIX) {
-			atomic.AddInt32(&totalFiles, 1)
-		}
-		return nil
-	})
+	jobs, err := collectAudioJobs(rootDir)
 	if err != nil {
-		logging.Error("file scan failed", "error", err)
+		logging.Error("audio scan failed", "error", err)
 		if waitAfter {
 			toolkit.WaitForExit()
 		}
 		return 1
 	}
-	if totalFiles == 0 {
+	if len(jobs) == 0 {
 		fmt.Println("No audio files found to process.")
 		if waitAfter {
 			toolkit.WaitForExit()
 		}
 		return 1
 	}
+	totalFiles := int32(len(jobs))
 	fmt.Printf("Found %d audio files to process.\n\n", totalFiles)
 	logging.Info("normalization started", "root", rootDir, "files", totalFiles, "workers", workerCount, "format", selectedFormat.ext)
 
@@ -319,32 +343,26 @@ func processDirectory(ctx context.Context, rootDir string, workerCount int, wait
 	progressEnabled := term.IsTerminal(os.Stdout.Fd())
 
 	var wg sync.WaitGroup
-	jobs := make(chan job)
+	jobChannel := make(chan job)
 	results := make(chan result)
 	var processedFiles int32
 
 	// Start the worker goroutines.
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go worker(ctx, i+1, &wg, jobs, results)
+		go worker(ctx, i+1, &wg, jobChannel, results)
 	}
 
-	// Start a goroutine to walk the directory and dispatch jobs.
+	// Dispatch the pre-computed job list.
 	go func() {
-		defer close(jobs)
-		_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
+		defer close(jobChannel)
+		for _, item := range jobs {
+			select {
+			case jobChannel <- item:
+			case <-ctx.Done():
+				return
 			}
-			if !info.IsDir() && isAudioFile(path) && !strings.HasSuffix(strings.TrimSuffix(path, filepath.Ext(path)), FILENAME_SUFFIX) {
-				select {
-				case jobs <- job{path: path}:
-				case <-ctx.Done():
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		})
+		}
 	}()
 
 	// Start a goroutine to close the results channel once all workers are done.
@@ -426,12 +444,65 @@ func worker(ctx context.Context, id int, wg *sync.WaitGroup, jobs <-chan job, re
 	defer wg.Done()
 	for j := range jobs {
 		if ctx.Err() != nil {
-			results <- result{path: j.path, err: context.Canceled}
+			results <- result{path: j.inputPath, err: context.Canceled}
 			continue
 		}
-		err := processFile(ctx, j.path)
-		results <- result{path: j.path, err: err}
+		err := processFile(ctx, j.inputPath, j.outputPath)
+		results <- result{path: j.inputPath, err: err}
 	}
+}
+
+// collectAudioJobs walks rootDir once and maps every non-generated audio file
+// to its normalized output destination. Multiple sources sharing a basename
+// (tone.wav + tone.flac) map to the same output and would silently overwrite
+// each other's result while both jobs report success, so a colliding plan is
+// rejected up front with the full conflict list.
+func collectAudioJobs(rootDir string) ([]job, error) {
+	var jobs []job
+	walkErr := filepath.WalkDir(rootDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !isAudioFile(path) {
+			return nil
+		}
+		if strings.HasSuffix(strings.TrimSuffix(path, filepath.Ext(path)), FILENAME_SUFFIX) {
+			return nil
+		}
+		jobs = append(jobs, job{
+			inputPath:  path,
+			outputPath: strings.TrimSuffix(path, filepath.Ext(path)) + FILENAME_SUFFIX + selectedFormat.ext,
+		})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	owners := make(map[string][]string, len(jobs))
+	order := make([]string, 0, len(jobs))
+	for _, item := range jobs {
+		if _, seen := owners[item.outputPath]; !seen {
+			order = append(order, item.outputPath)
+		}
+		owners[item.outputPath] = append(owners[item.outputPath], item.inputPath)
+	}
+	var collisions []string
+	for _, output := range order {
+		if sources := owners[output]; len(sources) > 1 {
+			collisions = append(collisions, fmt.Sprintf("  %s <- %s", output, strings.Join(sources, " + ")))
+		}
+	}
+	if len(collisions) > 0 {
+		return nil, fmt.Errorf(
+			"output collision detected: multiple sources normalize to the same output file; rename the sources or normalize them separately:\n%s",
+			strings.Join(collisions, "\n"),
+		)
+	}
+	return jobs, nil
 }
 
 // detectCategory determines the audio category based on parent folder names.
@@ -462,19 +533,19 @@ func parseDuration(ffmpegOutput string) float64 {
 }
 
 // processFile normalizes a single audio file using the appropriate strategy.
-func processFile(ctx context.Context, filePath string) error {
+func processFile(ctx context.Context, filePath, outputFilePath string) error {
 	cat := detectCategory(filePath)
 
 	// --- Step 1: FFmpeg First Pass (Analysis) ---
 	loudnormFilterPass1 := fmt.Sprintf("loudnorm=I=%.1f:TP=%.1f:LRA=11:print_format=json", cat.targetLUFS, cat.targetTP)
-	ctx1, cancel1 := context.WithTimeout(ctx, FFMPEG_TIMEOUT)
+	ctx1, cancel1 := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel1()
-	cmdPass1 := exec.CommandContext(ctx1, "ffmpeg", "-i", filePath, "-af", loudnormFilterPass1, "-f", "null", "-")
+	cmdPass1 := exec.CommandContext(ctx1, ffmpegBinary, "-i", filePath, "-af", loudnormFilterPass1, "-f", "null", "-")
 	var pass1Stderr bytes.Buffer
 	cmdPass1.Stderr = &pass1Stderr
 	if err := cmdPass1.Run(); err != nil {
 		if ctx1.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("ffmpeg analysis timed out after %v", FFMPEG_TIMEOUT)
+			return fmt.Errorf("ffmpeg analysis timed out after %v", ffmpegTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -497,7 +568,8 @@ func processFile(ctx context.Context, filePath string) error {
 		targetSampleRate = MAX_SAMPLERATE
 	}
 
-	outputFilePath := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + FILENAME_SUFFIX + selectedFormat.ext
+	// The output destination is planned by collectAudioJobs (which also guards
+	// against same-basename collisions); processFile only executes the plan.
 
 	// --- Choose Strategy ---
 	if duration >= 0 && duration < SHORT_AUDIO_THRESHOLD_SEC {
@@ -510,14 +582,14 @@ func processFile(ctx context.Context, filePath string) error {
 // LUFS measurement is unreliable for audio < 400ms and not ideal for short SFX in general.
 func processShortAudio(ctx context.Context, filePath, outputFilePath, ffmpegOutput string, cat audioCategory, targetSampleRate int) error {
 	// Use ffmpeg's volumedetect to get peak level.
-	ctx, cancel := context.WithTimeout(ctx, FFMPEG_TIMEOUT)
+	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel()
-	cmdDetect := exec.CommandContext(ctx, "ffmpeg", "-i", filePath, "-af", "volumedetect", "-f", "null", "-")
+	cmdDetect := exec.CommandContext(ctx, ffmpegBinary, "-i", filePath, "-af", "volumedetect", "-f", "null", "-")
 	var detectStderr bytes.Buffer
 	cmdDetect.Stderr = &detectStderr
 	if err := cmdDetect.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("ffmpeg volumedetect timed out after %v", FFMPEG_TIMEOUT)
+			return fmt.Errorf("ffmpeg volumedetect timed out after %v", ffmpegTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -567,18 +639,18 @@ func processShortAudio(ctx context.Context, filePath, outputFilePath, ffmpegOutp
 		return fmt.Errorf("failed to close temporary output file: %w", err)
 	}
 
-	ctx2, cancel2 := context.WithTimeout(ctx, FFMPEG_TIMEOUT)
+	ctx2, cancel2 := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel2()
 	args := []string{"-y", "-i", filePath, "-map_metadata", "-1", "-af", volumeFilter}
-	args = append(args, selectedFormat.ffmpegArgs...)
-	args = append(args, "-ar", strconv.Itoa(targetSampleRate), tempPath)
-	cmdApply := exec.CommandContext(ctx2, "ffmpeg", args...)
+	args = append(args, buildAudioEncodeArgs(targetSampleRate)...)
+	args = append(args, tempPath)
+	cmdApply := exec.CommandContext(ctx2, ffmpegBinary, args...)
 	var applyStderr bytes.Buffer
 	cmdApply.Stderr = &applyStderr
 	if err := cmdApply.Run(); err != nil {
 		_ = os.Remove(tempPath)
 		if ctx2.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("ffmpeg peak normalize timed out after %v", FFMPEG_TIMEOUT)
+			return fmt.Errorf("ffmpeg peak normalize timed out after %v", ffmpegTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -628,18 +700,18 @@ func processLongAudio(ctx context.Context, filePath, outputFilePath, pass1Output
 		return fmt.Errorf("failed to close temporary output file: %w", err)
 	}
 
-	ctx2, cancel2 := context.WithTimeout(ctx, FFMPEG_TIMEOUT)
+	ctx2, cancel2 := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel2()
 	args := []string{"-y", "-i", filePath, "-map_metadata", "-1", "-af", loudnormFilterPass2}
-	args = append(args, selectedFormat.ffmpegArgs...)
-	args = append(args, "-ar", strconv.Itoa(targetSampleRate), tempPath)
-	cmdPass2 := exec.CommandContext(ctx2, "ffmpeg", args...)
+	args = append(args, buildAudioEncodeArgs(targetSampleRate)...)
+	args = append(args, tempPath)
+	cmdPass2 := exec.CommandContext(ctx2, ffmpegBinary, args...)
 	var pass2Stderr bytes.Buffer
 	cmdPass2.Stderr = &pass2Stderr
 	if err := cmdPass2.Run(); err != nil {
 		_ = os.Remove(tempPath)
 		if ctx2.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("ffmpeg second pass timed out after %v", FFMPEG_TIMEOUT)
+			return fmt.Errorf("ffmpeg second pass timed out after %v", ffmpegTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -692,6 +764,46 @@ func isAudioFile(path string) bool {
 func commandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
+}
+
+// normalizePath trims whitespace and shell quoting artifacts from a
+// user-provided path (drag-and-drop clients often add surrounding quotes).
+func normalizePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "\"'")
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(p)
+}
+
+// buildAudioEncodeArgs assembles the output codec arguments shared by the
+// peak- and loudness-based strategies (container codec, optional mono fold,
+// capped sample rate).
+func buildAudioEncodeArgs(targetSampleRate int) []string {
+	args := append([]string{}, selectedFormat.ffmpegArgs...)
+	if monoOutput {
+		args = append(args, "-ac", "1")
+	}
+	args = append(args, "-ar", strconv.Itoa(targetSampleRate))
+	return args
+}
+
+// resolveCustomFFmpeg validates a user-provided ffmpeg path and returns its
+// cleaned absolute form.
+func resolveCustomFFmpeg(path string) (string, error) {
+	cleaned := normalizePath(path)
+	if cleaned == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory")
+	}
+	return cleaned, nil
 }
 
 // NEW: printProgressBar function to draw the progress bar.
