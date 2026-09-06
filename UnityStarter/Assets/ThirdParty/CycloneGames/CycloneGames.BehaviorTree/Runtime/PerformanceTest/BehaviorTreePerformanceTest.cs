@@ -13,7 +13,7 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
 {
 #if UNITY_EDITOR // Full class just run in Editor
 
-        public BehaviorTree Tree;
+        [SerializeField] private BehaviorTree Tree;
         private RuntimeBehaviorTree _runtimeTree;
 
         private void Start()

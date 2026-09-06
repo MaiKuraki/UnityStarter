@@ -231,7 +231,7 @@ namespace CycloneGames.Choreography.UnityAnimation
 
             _graph = PlayableGraph.Create("Choreography Unity Animation");
             _graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
-            _mixer = AnimationMixerPlayable.Create(_graph, 0, true);
+            _mixer = AnimationMixerPlayable.Create(_graph, 0);
             AnimationPlayableOutput output = AnimationPlayableOutput.Create(_graph, "Choreography", _animator);
             output.SetSourcePlayable(_mixer);
             _graph.Play();

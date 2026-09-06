@@ -28,7 +28,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 if (_instance == null)
                 {
-                    _instance = BTManagerSceneResolver.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
+                    _instance = BTManagerInstanceRegistry.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
                     if (_instance == null)
                     {
                         var go = new GameObject("[BTTickManager]");
@@ -58,11 +58,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public int TreeCount => GetOrCreateManager().Count;
 
+        private void OnEnable()
+        {
+            BTManagerInstanceRegistry.Register(this);
+        }
+
+        private void OnDisable()
+        {
+            BTManagerInstanceRegistry.Unregister(this);
+        }
+
         private void Awake()
         {
             if (_instance == null)
             {
-                _instance = BTManagerSceneResolver.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
+                _instance = BTManagerInstanceRegistry.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
             }
 
             if (_instance != null && _instance != this)
