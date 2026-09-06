@@ -80,6 +80,8 @@ dotnet run --project <unity-project>/Analyzers/CycloneGames.Analyzers.Verifier/C
 
 `DiagnosticIds` 声明 28 个 ID 常量；上表列出的是 24 条已实现规则。`CG0015`（`NativeContainerLeak`）、`CG0022`（`ActorStartBaseCall`）、`CG0023`（`PoolOnDespawnOverride`）与 `CG0024`（`GameplayTagImplicitCast`）是尚未实现、刻意保留的规则 ID。
 
+`CG0030` 通过语义模型解析字段自身的声明类型，而不是沿语法祖先查找：嵌套 struct 或普通嵌套 class 中的 public 字段不会被报告；`MonoBehaviour` 派生类（包括嵌套的 `MonoBehaviour` 类）上的 public 字段仍会被报告。
+
 ## Code Fix
 
 | Diagnostic | Fix |

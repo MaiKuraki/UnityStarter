@@ -43,11 +43,18 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                _advancedPool.ForEachActive(bullet =>
-                {
-                    Log.Debug($"Processing active bullet at {bullet.transform.position}");
-                });
+                DumpActiveBullets();
             }
+        }
+
+        // Cold, user-triggered diagnostics dump. Allocation here is acceptable by design;
+        // Update stays free of per-frame work beyond input polling.
+        private void DumpActiveBullets()
+        {
+            _advancedPool.ForEachActive(bullet =>
+            {
+                Log.Debug($"Processing active bullet at {bullet.transform.position}");
+            });
         }
 
         private void SpawnFromAdvancedPool()

@@ -60,8 +60,7 @@ namespace CycloneGames.Logging.Unity.Samples
             {
                 if (!_completionReported)
                 {
-                    Log.Info($"Submitted {MaxLogCount} sample messages in {Time.time - _startTime:F2} seconds.");
-                    _completionReported = true;
+                    ReportCompletion();
                 }
 
                 if (TryCleanup())
@@ -101,6 +100,15 @@ namespace CycloneGames.Logging.Unity.Samples
             {
                 Log.Fatal(_logCount++, AppendFatal);
             }
+        }
+
+        // One-shot completion report; runs exactly once for this component's lifetime, so the
+        // interpolated convenience API is fine here. The load loop above uses the deferred
+        // appenders instead, which is the pattern production hot paths should follow.
+        private void ReportCompletion()
+        {
+            Log.Info($"Submitted {MaxLogCount} sample messages in {Time.time - _startTime:F2} seconds.");
+            _completionReported = true;
         }
 
         private void OnDisable()

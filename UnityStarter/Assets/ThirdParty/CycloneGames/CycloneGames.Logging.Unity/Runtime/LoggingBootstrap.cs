@@ -361,6 +361,14 @@ namespace CycloneGames.Logging.Unity
             }
         }
 
+        /// <summary>
+        /// Loads the optional <see cref="LoggingSettings"/> asset. Resources is deliberate here: this
+        /// bootstrap runs at BeforeSceneLoad, before any asset pipeline (Addressables/YooAsset) exists,
+        /// and asset pipeline initialization itself emits log messages. Games that route configuration
+        /// through Addressables pass their own LoggingSettings to Initialize or Reinitialize instead;
+        /// the bootstrap never depends on that path.
+        /// </summary>
+#pragma warning disable CG0014
         private static LoggingSettings LoadSettings()
         {
 #if !UNITY_EDITOR
@@ -372,6 +380,7 @@ namespace CycloneGames.Logging.Unity
 #endif
             return Resources.Load<LoggingSettings>(LoggingSettings.SettingsResourcePath);
         }
+#pragma warning restore CG0014
 
         private static LogPipelineOptions CreateProcessingOptions(LoggingSettings settings)
         {

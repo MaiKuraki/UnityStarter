@@ -80,6 +80,8 @@ The activation flow persists only the committed DLL and `.meta` asset. Each veri
 
 `DiagnosticIds` declares 28 ID constants; the table above lists the 24 implemented rules. `CG0015` (`NativeContainerLeak`), `CG0022` (`ActorStartBaseCall`), `CG0023` (`PoolOnDespawnOverride`), and `CG0024` (`GameplayTagImplicitCast`) are reserved for rules that have not been implemented yet and intentionally have no analyzer.
 
+`CG0030` resolves the field's own declaring type through the semantic model instead of syntax ancestors: public fields on nested structs or plain nested classes are not reported, while public fields on `MonoBehaviour` subclasses — including nested `MonoBehaviour` classes — still are.
+
 ## Code Fixes
 
 | Diagnostic | Fix |
