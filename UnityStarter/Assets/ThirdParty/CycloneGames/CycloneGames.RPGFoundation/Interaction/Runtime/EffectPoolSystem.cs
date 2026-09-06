@@ -29,6 +29,19 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             SceneManager.sceneUnloaded += OnSceneUnloaded;
         }
 
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticStateForDomainReloadDisabled()
+        {
+            // With Enter Play Mode Options (Domain Reload disabled), the statics above survive
+            // across play sessions as destroyed references and stale pools. Rebuild a clean slate
+            // before any scene loads; in a normal player the fields are already fresh.
+            SceneManager.sceneUnloaded -= OnSceneUnloaded;
+            s_pools.Clear();
+            s_root = null;
+            s_initialized = false;
+            s_ownerScene = default;
+        }
+
         private static void OnSceneUnloaded(Scene scene)
         {
             if (scene == s_ownerScene && s_initialized)

@@ -599,6 +599,24 @@ For deterministic multiplayer, install `CycloneGames.RPGFoundation.Interaction.D
 | Deterministic multiplayer, rollback, or replay | `FPVector3`, `InteractionDeterministicAuthorityService` | `NetworkVector3`, `InteractionVector3` |
 | UI, debug, analytics | `FPVector3.ToInteractionVector3()` | Feeding converted float back into authority |
 
+### System Registry and Binding
+
+`InteractionSystem` exposes an explicit static registry so components never scan the scene to find it:
+
+- `InteractionSystem.ResolveDefault()` — O(1) resolution: the alive global `Instance` first, then the first alive registered system. Main thread only.
+- `InteractionSystem.SystemRegistered` — static event raised on the main thread after a new system finishes `Awake` initialization.
+- `InteractionSystem.TryGetWorld(worldId, out system)` — world-scoped lookup for split-screen, additive scenes, prediction worlds, and server simulations.
+
+Binding precedence used by `Interactable` and `InteractionDetector`:
+
+1. Explicit assignment — `Interactable.SetInteractionSystem()` or the detector's serialized `interactionSystem` reference.
+2. `InteractionSystem.ResolveDefault()`.
+3. Deferred binding — when no system exists yet (script execution order, late spawn, additive scene still loading), the component subscribes to `SystemRegistered` once and binds when a system appears. There is no scene-wide search anywhere in runtime code.
+
+Stale bindings self-heal: if the bound system is destroyed (for example, an additive scene unload while this component stays enabled), the component treats it as unbound at the next touchpoint and re-resolves. Components that are disabled and re-enabled rebind through `OnEnable` as usual.
+
+With Enter Play Mode Options (Domain Reload disabled), static registry state is rebuilt by `[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]` in `InteractionSystem` and `EffectPoolSystem`, so no stale system or pool survives between play sessions. Multi-world setups should still assign systems explicitly, because `ResolveDefault()` has no knowledge of which world a component belongs to.
+
 ### VitalRouter Integration
 
 Interactions are routed as `InteractionCommand`:
@@ -686,6 +704,8 @@ Thread-safe via `ReaderWriterLockSlim`. Query cost depends on cell size, radius,
 | Performance issues with many interactables | Cell size, radius, or density mismatch | Profile cell size and query radius in representative scenes |
 | ECS compatibility | Package uses `MonoBehaviour` paths | Subclass `InstigatorHandle` for entity identity; detector is main-thread only |
 | Use-after-destroy errors | Disposed GameObject accessed | `GameObjectInstigator.TryGetPosition` null-checks each frame |
+| Interactable never detected after scene load | `InteractionSystem` enabled after the interactable, and no serialized reference assigned | Registration defers to `SystemRegistered`; verify the system exists and logs no duplicate `WorldId` error |
+| Interactable bound to a destroyed system | Additive scene containing the system unloaded | Binding re-resolves lazily on the next position update or re-enable; toggle the component or call `SetInteractionSystem` to force it |
 
 ## Validation
 
