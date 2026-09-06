@@ -41,7 +41,7 @@ namespace CycloneGames.UIFramework.Editor
             public string reference = string.Empty;
         }
 
-        private readonly struct AssemblyTarget
+        internal readonly struct AssemblyTarget
         {
             public readonly string Name;
             public readonly string Guid;
@@ -378,6 +378,38 @@ namespace CycloneGames.UIFramework.Editor
                 return false;
             }
 
+            if (!TryResolveReferenceTarget(asmrefPath, reference, out AssemblyTarget resolved, out error))
+            {
+                return false;
+            }
+
+            target = new AssemblyTarget(
+                resolved.Name,
+                resolved.Guid,
+                asmrefPath,
+                resolved.DefinitionPath,
+                resolved.References,
+                resolved.IncludePlatforms,
+                resolved.ExcludePlatforms,
+                resolved.HasConditionalActivation,
+                resolved.AutoReferenced,
+                resolved.NoEngineReferences,
+                false);
+            error = string.Empty;
+            return true;
+        }
+
+        // Resolves the "reference" field of an asmref, which is either an assembly name or a "GUID:<guid>"
+        // token. This is split from the file reading above so both forms can be covered without an asmref
+        // asset: one checked into the package would change how every consuming project compiles, and
+        // importing one during a test run triggers a script recompile that wedges the Test Runner.
+        internal static bool TryResolveReferenceTarget(
+            string asmrefPath,
+            string reference,
+            out AssemblyTarget target,
+            out string error)
+        {
+            target = default;
             EnsureDefinitionIndex();
             if (reference.StartsWith("GUID:", StringComparison.OrdinalIgnoreCase))
             {
@@ -405,18 +437,6 @@ namespace CycloneGames.UIFramework.Editor
                 target = matches[0];
             }
 
-            target = new AssemblyTarget(
-                target.Name,
-                target.Guid,
-                asmrefPath,
-                target.DefinitionPath,
-                target.References,
-                target.IncludePlatforms,
-                target.ExcludePlatforms,
-                target.HasConditionalActivation,
-                target.AutoReferenced,
-                target.NoEngineReferences,
-                false);
             error = string.Empty;
             return true;
         }

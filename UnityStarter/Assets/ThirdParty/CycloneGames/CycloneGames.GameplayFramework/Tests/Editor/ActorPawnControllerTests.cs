@@ -6,6 +6,7 @@ using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.Logging;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -74,6 +75,68 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.IsNotNull(tagsField);
             var backingTags = (List<string>)tagsField.GetValue(actor);
             Assert.GreaterOrEqual(backingTags.Capacity, replacement.Length);
+        }
+
+        [Test]
+        public void ActorTags_HashLookupStaysConsistentAcrossMutations()
+        {
+            Actor actor = CreateActor<Actor>("HashLookupActor");
+            for (int i = 0; i < 10; i++)
+            {
+                Assert.IsTrue(actor.AddTag("Tag" + i.ToString()));
+            }
+
+            FieldInfo cacheField = typeof(Actor).GetField(
+                "tagLookupCache",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(cacheField);
+
+            Assert.IsTrue(actor.ActorHasTag("Tag7"));
+            Assert.IsNotNull(cacheField.GetValue(actor));
+
+            Assert.IsTrue(actor.AddTag("Added"));
+            Assert.IsTrue(actor.ActorHasTag("Added"));
+            Assert.IsTrue(actor.RemoveTag("Tag7"));
+            Assert.IsFalse(actor.ActorHasTag("Tag7"));
+            Assert.IsTrue(actor.ActorHasTag("Tag3"));
+
+            actor.ReplaceTags(new[]
+            {
+                "Alpha", "Beta", "Gamma", "Delta",
+                "Epsilon", "Zeta", "Eta", "Theta", "Iota",
+            });
+            Assert.IsNull(cacheField.GetValue(actor));
+            Assert.IsFalse(actor.ActorHasTag("Tag0"));
+            Assert.IsTrue(actor.ActorHasTag("Iota"));
+            Assert.AreEqual(9, actor.TagCount);
+        }
+
+        [Test]
+        public void ActorTags_HashLookupRebuildsAfterSerializedTagReplacement()
+        {
+            Actor actor = CreateActor<Actor>("SerializedTagsActor");
+            for (int i = 0; i < 9; i++)
+            {
+                Assert.IsTrue(actor.AddTag("Tag" + i.ToString()));
+            }
+
+            Assert.IsTrue(actor.ActorHasTag("Tag4"));
+
+            var serializedActor = new SerializedObject(actor);
+            SerializedProperty tagsProperty = serializedActor.FindProperty("tags");
+            Assert.IsNotNull(tagsProperty);
+            tagsProperty.arraySize = 9;
+            for (int i = 0; i < 9; i++)
+            {
+                tagsProperty.GetArrayElementAtIndex(i).stringValue = "Serial" + i.ToString();
+            }
+
+            serializedActor.ApplyModifiedPropertiesWithoutUndo();
+
+            // Same count, replaced contents: the reference guard must force a rebuild.
+            Assert.IsFalse(actor.ActorHasTag("Tag4"));
+            Assert.IsTrue(actor.ActorHasTag("Serial4"));
+            Assert.AreEqual(9, actor.TagCount);
         }
 
         [Test]

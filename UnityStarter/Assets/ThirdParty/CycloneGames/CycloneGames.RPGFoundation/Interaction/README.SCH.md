@@ -599,6 +599,24 @@ EffectPoolSystem.Spawn(smokePrefab, position, rotation);  // 手动 ReturnToPool
 | 确定性多人、rollback 或 replay | `FPVector3`、`InteractionDeterministicAuthorityService` | `NetworkVector3`、`InteractionVector3` |
 | UI、调试、统计 | `FPVector3.ToInteractionVector3()` | 把转换后的 float 再喂回权威判定 |
 
+### 系统注册表与绑定
+
+`InteractionSystem` 提供显式静态注册表，任何组件都不需要全场景扫描来查找它：
+
+- `InteractionSystem.ResolveDefault()` — O(1) 解析：优先返回存活的 `Instance`，否则返回第一个存活的已注册系统。仅限主线程。
+- `InteractionSystem.SystemRegistered` — 静态事件，在新系统完成 `Awake` 初始化后于主线程触发。
+- `InteractionSystem.TryGetWorld(worldId, out system)` — 按 world 查找，适用于分屏、叠加场景、预测世界与服务器模拟。
+
+`Interactable` 与 `InteractionDetector` 的绑定优先级：
+
+1. 显式赋值 —— `Interactable.SetInteractionSystem()` 或 detector 上序列化的 `interactionSystem` 引用。
+2. `InteractionSystem.ResolveDefault()`。
+3. 延迟绑定 —— 当系统尚不存在时（脚本执行顺序、迟到生成、叠加场景仍在加载），组件一次性订阅 `SystemRegistered`，系统出现后自动绑定。运行时代码中不存在任何全场景搜索。
+
+过期绑定可自愈：如果已绑定的系统被销毁（例如包含系统的叠加场景被卸载而本组件仍保持启用），组件会在下一次触点将其视为未绑定并重新解析。被禁用后重新启用的组件照常通过 `OnEnable` 重新绑定。
+
+在 Enter Play Mode Options（关闭 Domain Reload）下，`InteractionSystem` 与 `EffectPoolSystem` 通过 `[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]` 重建静态注册表状态，因此不会在两次 Play 之间残留过期系统或对象池。多 world 配置仍应显式赋值系统，因为 `ResolveDefault()` 无从得知组件属于哪个 world。
+
 ### VitalRouter 集成
 
 交互通过 `InteractionCommand` 经 VitalRouter 路由：
@@ -686,6 +704,8 @@ SoA 布局实现缓存友好遍历：
 | 大量可交互对象时性能差     | 单元格大小、半径或密度不匹配               | 在代表性场景中测量单元格大小和查询半径             |
 | ECS 兼容性                 | Package 使用 `MonoBehaviour` 路径          | 子类化 `InstigatorHandle` 暴露实体身份；detector 是主线程 |
 | 使用已销毁对象错误         | 访问已释放的 GameObject                    | `GameObjectInstigator.TryGetPosition` 每帧空值检查 |
+| 场景加载后 Interactable 始终未被检测 | `InteractionSystem` 晚于 interactable 启用，且未赋显式引用 | 注册会延迟到 `SystemRegistered`；确认系统存在且没有 duplicate `WorldId` 报错 |
+| Interactable 绑定到了已销毁系统 | 包含系统的叠加场景被卸载            | 绑定会在下一次位置更新或重新启用时懒重解析；切换组件启用状态或调用 `SetInteractionSystem` 可强制触发 |
 
 ## 验证
 

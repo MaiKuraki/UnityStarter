@@ -35,12 +35,53 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         }
 
         private static readonly Dictionary<int, InteractionSystem> s_systemsByWorldId = new();
+        private static readonly List<InteractionSystem> s_aliveSystems = new(8);
         private static InteractionSystem s_instance;
         private bool _registeredWorld;
 
         /// <summary>Global singleton instance. Null if no InteractionSystem exists in the scene.</summary>
         public static InteractionSystem Instance => s_instance;
         public static bool TryGetWorld(int worldId, out InteractionSystem system) => s_systemsByWorldId.TryGetValue(worldId, out system);
+
+        /// <summary>
+        /// Raised on the main thread after a new system finishes Awake initialization and is ready to
+        /// accept registrations. Consumers that could not resolve a system at enable time subscribe to
+        /// this event to defer binding instead of scanning the scene. Subscribers must unsubscribe
+        /// after binding; the event is cleared by <see cref="ResetStaticStateForDomainReloadDisabled"/>.
+        /// </summary>
+        public static event Action<InteractionSystem> SystemRegistered;
+
+        /// <summary>
+        /// Resolves the default system without any scene-wide search: the alive global
+        /// <see cref="Instance"/> first, otherwise the first alive registered system.
+        /// Returns null when no system exists yet; callers should defer binding to
+        /// <see cref="SystemRegistered"/>. Main thread only.
+        /// </summary>
+        public static InteractionSystem ResolveDefault()
+        {
+            InteractionSystem instance = s_instance;
+            if (instance != null) return instance;
+
+            for (int i = 0; i < s_aliveSystems.Count; i++)
+            {
+                InteractionSystem system = s_aliveSystems[i];
+                if (system != null) return system;
+            }
+
+            return null;
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticStateForDomainReloadDisabled()
+        {
+            // With Enter Play Mode Options (Domain Reload disabled), static fields survive across
+            // play sessions as destroyed object references. Rebuild a clean registry before any
+            // scene loads; in a normal player the fields are already fresh, so this is a no-op.
+            s_instance = null;
+            s_aliveSystems.Clear();
+            s_systemsByWorldId.Clear();
+            SystemRegistered = null;
+        }
 
         public SpatialHashGrid SpatialGrid => _spatialGrid;
         public InteractionAuthorityService Authority => _authority;
@@ -74,7 +115,31 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                     "[InteractionSystem] Duplicate WorldId detected. This system will not subscribe to global interaction commands.");
             }
 
+            s_aliveSystems.Add(this);
             Initialize();
+            RaiseSystemRegistered(this);
+        }
+
+        /// <summary>
+        /// Notifies deferred binders. Isolated per subscriber so one throwing handler cannot
+        /// break binding for the rest or abort this Awake. Cold path (scene load / late spawn).
+        /// </summary>
+        private static void RaiseSystemRegistered(InteractionSystem registered)
+        {
+            Action<InteractionSystem> handlers = SystemRegistered;
+            if (handlers == null) return;
+
+            foreach (Action<InteractionSystem> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(registered);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "[InteractionSystem] A SystemRegistered subscriber failed.");
+                }
+            }
         }
 
         private void Start()
@@ -87,13 +152,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void OnDestroy()
         {
-            if (s_instance == this) s_instance = null;
-            if (_registeredWorld && s_systemsByWorldId.TryGetValue(worldId, out InteractionSystem system) && system == this)
-            {
-                s_systemsByWorldId.Remove(worldId);
-                _registeredWorld = false;
-            }
-
             Dispose();
         }
 
@@ -114,15 +172,27 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         public void Dispose()
         {
             if (!_initialized) return;
+
+            // Detach from the static registry BEFORE any teardown so a consumer re-resolving
+            // during this call can never pick the dying system.
             if (s_instance == this)
             {
                 s_instance = null;
             }
 
-            if (_registeredWorld && s_systemsByWorldId.TryGetValue(worldId, out InteractionSystem system) && system == this)
+            if (_registeredWorld && s_systemsByWorldId.TryGetValue(worldId, out InteractionSystem registeredSystem) && registeredSystem == this)
             {
                 s_systemsByWorldId.Remove(worldId);
                 _registeredWorld = false;
+            }
+
+            for (int i = 0; i < s_aliveSystems.Count; i++)
+            {
+                if (s_aliveSystems[i] == this)
+                {
+                    s_aliveSystems.RemoveAt(i);
+                    break;
+                }
             }
 
             _subscription?.Dispose();

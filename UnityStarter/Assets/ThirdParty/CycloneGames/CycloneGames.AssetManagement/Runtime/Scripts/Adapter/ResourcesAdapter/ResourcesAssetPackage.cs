@@ -11,7 +11,7 @@ using CycloneGames.Logging;
 namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations,
-        IUnityUnusedAssetCollector, IAssetCacheMaintenanceOwner
+        IUnityUnusedAssetCollector, IAssetCacheMaintenanceOwner, IAssetReleaseRetryDriver
     {
         private static readonly LogChannel Log = AssetManagementLog.Channel;
 
@@ -332,6 +332,14 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
             return _cacheService.TrimIdleStep(maxWork);
+        }
+
+        /// <inheritdoc cref="IAssetReleaseRetryDriver.RetryPendingReleaseFailures"/>
+        public int RetryPendingReleaseFailures(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.RetryPendingReleaseFailures(maxWork);
         }
 
         public void ClearBucket(string bucket)

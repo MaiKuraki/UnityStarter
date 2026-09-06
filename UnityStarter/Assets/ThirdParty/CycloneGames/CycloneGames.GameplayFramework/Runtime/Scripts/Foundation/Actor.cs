@@ -72,6 +72,12 @@ namespace CycloneGames.GameplayFramework.Runtime
         private Action[] ownerChangedObservers = Array.Empty<Action>();
         private DamageEventHandler[] pointDamageObservers = Array.Empty<DamageEventHandler>();
         private DamageEventHandler[] radialDamageObservers = Array.Empty<DamageEventHandler>();
+        // Derived ordinal lookup for tag-heavy Actors. Never serialized; rebuilt lazily and
+        // invalidated by every runtime mutation path and by serialized edits (OnValidate).
+        private const int TAG_HASH_LOOKUP_MINIMUM_COUNT = 8;
+        private HashSet<string> tagLookupCache;
+        private List<string> tagLookupCacheSource;
+        private int tagLookupCacheSourceCount;
 
         public event Action<Actor> OnDestroyed
         {
@@ -606,7 +612,14 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            return ContainsTag(tags, tag);
+            // Small tag sets resolve fastest with a direct ordinal scan; larger sets use the
+            // derived hash lookup. Both paths return identical ordinal results.
+            if (tags.Count <= TAG_HASH_LOOKUP_MINIMUM_COUNT)
+            {
+                return ContainsTag(tags, tag);
+            }
+
+            return EnsureTagLookupCache().Contains(tag);
         }
 
         private static bool ContainsTag(List<string> source, string tag)
@@ -639,13 +652,26 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             tags.Add(tag);
+            if (tagLookupCache != null)
+            {
+                tagLookupCache.Add(tag);
+                tagLookupCacheSourceCount = tags.Count;
+            }
+
             return true;
         }
 
         public bool RemoveTag(string tag)
         {
             AssertActorOwnerThread();
-            return tags != null && tags.Remove(tag);
+            bool removed = tags != null && tags.Remove(tag);
+            if (removed && tagLookupCache != null)
+            {
+                tagLookupCache.Remove(tag);
+                tagLookupCacheSourceCount = tags.Count;
+            }
+
+            return removed;
         }
 
         public int CopyTagsTo(string[] destination, int destinationIndex = 0)
@@ -700,7 +726,6 @@ namespace CycloneGames.GameplayFramework.Runtime
                     nameof(replacement));
             }
 
-            // Validate the complete input before mutating the current tag set.
             for (int i = 0; i < count; i++)
             {
                 ValidateTag(replacement[i]);
@@ -709,6 +734,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (count == 0)
             {
                 tags?.Clear();
+                InvalidateTagLookupCache();
                 return;
             }
 
@@ -718,8 +744,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             else if (tags.Capacity < count)
             {
-                // Capacity growth is the only allocation this operation can require. Complete
-                // it before clearing so an allocation failure leaves every existing tag intact.
                 tags.Capacity = count;
             }
 
@@ -732,6 +756,47 @@ namespace CycloneGames.GameplayFramework.Runtime
                     tags.Add(tag);
                 }
             }
+
+            InvalidateTagLookupCache();
+        }
+
+        private HashSet<string> EnsureTagLookupCache()
+        {
+            if (tagLookupCache == null ||
+                !ReferenceEquals(tagLookupCacheSource, tags) ||
+                tagLookupCacheSourceCount != tags.Count)
+            {
+                RebuildTagLookupCache();
+            }
+
+            return tagLookupCache;
+        }
+
+        private void RebuildTagLookupCache()
+        {
+            var rebuilt = new HashSet<string>(tags.Count, StringComparer.Ordinal);
+            for (int i = 0; i < tags.Count; i++)
+            {
+                rebuilt.Add(tags[i]);
+            }
+
+            tagLookupCache = rebuilt;
+            tagLookupCacheSource = tags;
+            tagLookupCacheSourceCount = tags.Count;
+        }
+
+        private void InvalidateTagLookupCache()
+        {
+            tagLookupCache = null;
+            tagLookupCacheSource = null;
+            tagLookupCacheSourceCount = 0;
+        }
+
+        private void OnValidate()
+        {
+            // Editor-time serialized tag edits (Inspector, undo, SerializedObject applies) bypass
+            // the runtime mutation APIs; drop the derived lookup so the next query rebuilds.
+            InvalidateTagLookupCache();
         }
 
         private static void ValidateTag(string tag)

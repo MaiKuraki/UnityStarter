@@ -109,53 +109,54 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 sampleError);
             Assert.AreEqual("CycloneGames.UIFramework.Samples", sampleAssembly);
 
-            string probeFolder = SamplesFolder + "/__UIWindowCreatorAsmrefProbe";
-            string asmrefPath = probeFolder + "/Probe.asmref";
-            string absoluteFolder = ToAbsoluteAssetPath(probeFolder);
-            string absoluteAsmref = ToAbsoluteAssetPath(asmrefPath);
-            Directory.CreateDirectory(absoluteFolder);
-            try
-            {
-                File.WriteAllText(
-                    absoluteAsmref,
-                    "{\"reference\":\"CycloneGames.UIFramework.Runtime\"}",
-                    new UTF8Encoding(false));
-                Assert.IsTrue(
-                    UIWindowAssemblyValidator.TryResolveOutputAssemblyName(
-                        probeFolder + "/GeneratedWindow.cs",
-                        out string namedReferenceAssembly,
-                        out string namedReferenceError),
-                    namedReferenceError);
-                Assert.AreEqual(RuntimeAssemblyName, namedReferenceAssembly);
+            // The asmref forms are covered through the reference resolver instead of probe folders: an
+            // asmref checked into the package would change how every consuming project compiles, and
+            // importing one during a test run triggers a script recompile that wedges the Test Runner.
+            // The runtime asmdef is a committed fixture, so both forms resolve against real metadata.
+            string runtimeAsmdef =
+                CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(
+                    RuntimeAssemblyName);
+            Assert.IsNotEmpty(
+                runtimeAsmdef,
+                $"Assembly '{RuntimeAssemblyName}' must resolve to an asmdef path.");
+            string runtimeGuid = AssetDatabase.AssetPathToGUID(runtimeAsmdef);
+            Assert.IsNotEmpty(
+                runtimeGuid,
+                $"Assembly definition '{runtimeAsmdef}' must have a GUID.");
 
-                string runtimeAsmdef =
-                    CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(
-                        RuntimeAssemblyName);
-                Assert.IsNotEmpty(
+            Assert.IsTrue(
+                UIWindowAssemblyValidator.TryResolveReferenceTarget(
                     runtimeAsmdef,
-                    $"Assembly '{RuntimeAssemblyName}' must resolve to an asmdef path.");
-                string runtimeGuid = AssetDatabase.AssetPathToGUID(runtimeAsmdef);
-                Assert.IsNotEmpty(runtimeGuid);
-                File.WriteAllText(
-                    absoluteAsmref,
-                    "{\"reference\":\"GUID:" + runtimeGuid + "\"}",
-                    new UTF8Encoding(false));
-                Assert.IsTrue(
-                    UIWindowAssemblyValidator.TryResolveOutputAssemblyName(
-                        probeFolder + "/GeneratedWindow.cs",
-                        out string guidReferenceAssembly,
-                        out string guidReferenceError),
-                    guidReferenceError);
-                Assert.AreEqual(RuntimeAssemblyName, guidReferenceAssembly);
-            }
-            finally
-            {
-                if (Directory.Exists(absoluteFolder))
-                {
-                    Directory.Delete(absoluteFolder, true);
-                }
-                UIWindowAssemblyValidator.InvalidateCache();
-            }
+                    RuntimeAssemblyName,
+                    out UIWindowAssemblyValidator.AssemblyTarget namedTarget,
+                    out string namedReferenceError),
+                namedReferenceError);
+            Assert.AreEqual(RuntimeAssemblyName, namedTarget.Name);
+
+            Assert.IsTrue(
+                UIWindowAssemblyValidator.TryResolveReferenceTarget(
+                    runtimeAsmdef,
+                    "GUID:" + runtimeGuid,
+                    out UIWindowAssemblyValidator.AssemblyTarget guidTarget,
+                    out string guidReferenceError),
+                guidReferenceError);
+            Assert.AreEqual(RuntimeAssemblyName, guidTarget.Name);
+
+            Assert.IsFalse(
+                UIWindowAssemblyValidator.TryResolveReferenceTarget(
+                    runtimeAsmdef,
+                    "CycloneGames.UIFramework.Missing",
+                    out _,
+                    out string missingNameError));
+            Assert.IsTrue(missingNameError.Contains("missing assembly"));
+            Assert.IsFalse(
+                UIWindowAssemblyValidator.TryResolveReferenceTarget(
+                    runtimeAsmdef,
+                    "GUID:00000000000000000000000000000000",
+                    out _,
+                    out string missingGuidError));
+            Assert.IsTrue(missingGuidError.Contains("missing GUID"));
+            UIWindowAssemblyValidator.InvalidateCache();
         }
 
         [Test]
