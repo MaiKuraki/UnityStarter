@@ -996,6 +996,70 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             }
         }
 
+        /// <summary>
+        /// Retries at most <paramref name="maxWork"/> parked provider-release failures and returns the number of
+        /// release failures still parked after this pass. Best effort by design: recoverable provider failures are
+        /// counted by release-failure telemetry and stay parked for a later pass instead of throwing, so a periodic
+        /// maintenance driver can drain the queue without owning exception policy. Fatal exceptions
+        /// (out-of-memory, access violation) still propagate. Main-thread only.
+        /// </summary>
+        public int RetryPendingReleaseFailures(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfEvaluatingRetentionRules();
+            if (maxWork <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return 0;
+            }
+
+            List<Exception> failures = null;
+            int remaining;
+            lock (_gate)
+            {
+                int pending = _releaseRetryMap.Count;
+                if (pending == 0)
+                {
+                    return 0;
+                }
+
+                int work = pending < maxWork ? pending : maxWork;
+                // Enumerate without mutation, then dispose outside the enumeration. DisposeNodeBestEffort may
+                // re-park a failing node, so a key snapshot taken here stays valid for this pass.
+                _nodesToClearScratch.Clear();
+                foreach (KeyValuePair<IReferenceCounted, CacheNode> pair in _releaseRetryMap)
+                {
+                    _nodesToClearScratch.Add(pair.Value);
+                    if (_nodesToClearScratch.Count >= work)
+                    {
+                        break;
+                    }
+                }
+
+                for (int i = 0; i < _nodesToClearScratch.Count; i++)
+                {
+                    CacheNode node = _nodesToClearScratch[i];
+                    // A fatal release can interrupt a caller before its normal post-pass clears the source index.
+                    // Detach explicitly before retry so a successful retry can safely return the node to the pool.
+                    DetachNodeFromCacheIndexes(node);
+                    DisposeNodeBestEffort(node, ref failures);
+                }
+
+                _nodesToClearScratch.Clear();
+
+                remaining = _releaseRetryMap.Count;
+            }
+
+            // Recoverable failures intentionally do not surface here: each failure was already counted by
+            // release-failure telemetry, and the returned pending count tells drivers whether to schedule
+            // another pass. Throwing would turn background maintenance into an error pump.
+            return remaining;
+        }
+
         // Eviction must not happen while iterating the list (EvictNode rewires links), so matching nodes are
         // collected first, then evicted by the caller.
         private void CollectMatching(CacheNode head, long nowTimestamp, AssetCacheRetentionPolicy policy, List<CacheNode> outList)

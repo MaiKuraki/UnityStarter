@@ -402,7 +402,9 @@ namespace CycloneGames.Audio.Runtime
 
         private static bool AllowCreateInstance = true;
         private static AudioListener cachedAudioListener;
+        private static Transform cachedAudioListenerTransform;
         private static Camera cachedMainCamera;
+        private static Transform cachedMainCameraTransform;
         private static int cachedMainCameraFrame = -1;
         private static bool isTearingDown;
         private static int managerLifecycleGeneration;
@@ -420,7 +422,9 @@ namespace CycloneGames.Audio.Runtime
                 Application.quitting -= HandleQuitting;
                 Instance = null;
                 cachedAudioListener = null;
+                cachedAudioListenerTransform = null;
                 cachedMainCamera = null;
+                cachedMainCameraTransform = null;
                 cachedMainCameraFrame = -1;
                 var banksToNotify = new List<AudioBank>(loadedBanks.Count);
                 foreach (var pair in loadedBanks)
@@ -638,6 +642,10 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField] private AudioPlatformProfile platformProfileOverride;
         [Tooltip("Optional explicit AudioDuckingProfile. If assigned, it takes precedence over SetConfig and FindConfig.")]
         [SerializeField] private AudioDuckingProfile duckingProfileOverride;
+
+        [Header("Listener")]
+        [Tooltip("Optional explicit AudioListener. If assigned, it takes precedence over automatic main-camera resolution.")]
+        [SerializeField] private AudioListener audioListener;
 
         [Header("Mixing")]
         [SerializeField] private AudioMixer mainMixer;
@@ -1434,6 +1442,18 @@ namespace CycloneGames.Audio.Runtime
             if (manager == null || isTearingDown) return;
             Instance = manager;
             if (!isInitialized) manager.Initialize();
+        }
+
+        /// <summary>
+        /// Explicitly registers the authoritative AudioListener used for spatial audio and
+        /// distance-based event LOD. Registration takes precedence over the serialized override
+        /// and over automatic main-camera resolution; pass null to clear it. If the registered
+        /// listener is destroyed, re-register or call Initialize again to re-resolve.
+        /// </summary>
+        public static void SetAudioListener(AudioListener listener)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetAudioListener));
+            SetCachedAudioListener(listener);
         }
 
         internal static void ReleaseInstance(AudioManager manager)
@@ -2290,9 +2310,9 @@ namespace CycloneGames.Audio.Runtime
             bool recalcLOD = lodEnabled && (Time.frameCount % recalcInterval) == 0;
             Vector3 listenerPos = default;
             bool hasListener = false;
-            if (recalcLOD && cachedAudioListener != null && cachedAudioListener.gameObject != null)
+            if (recalcLOD && cachedAudioListenerTransform != null)
             {
-                listenerPos = cachedAudioListener.transform.position;
+                listenerPos = cachedAudioListenerTransform.position;
                 hasListener = true;
             }
 
@@ -2561,20 +2581,37 @@ namespace CycloneGames.Audio.Runtime
         {
             if (cachedAudioListener != null && cachedAudioListener.gameObject != null) return;
 
-            cachedAudioListener = FindObjectOfType<AudioListener>();
-            if (cachedAudioListener != null) return;
-
-            Camera mainCamera = GetMainCamera();
-            if (mainCamera != null)
+            // Resolution order: serialized override, existing listener on the main camera,
+            // created on the main camera, created on the manager itself. Scene-wide scans
+            // are forbidden; runtime compositions register via SetAudioListener instead.
+            AudioListener listener = audioListener;
+            if (listener == null)
             {
-                Log.Info("No AudioListener found. Creating one on the main camera.");
-                cachedAudioListener = mainCamera.gameObject.AddComponent<AudioListener>();
+                Camera mainCamera = GetMainCamera();
+                if (mainCamera != null)
+                {
+                    listener = mainCamera.GetComponent<AudioListener>();
+                    if (listener == null)
+                    {
+                        Log.Info("No AudioListener found. Creating one on the main camera.");
+                        listener = mainCamera.gameObject.AddComponent<AudioListener>();
+                    }
+                }
             }
-            else
+
+            if (listener == null)
             {
                 Log.Warning("No AudioListener or main camera found. Creating AudioListener on AudioManager.");
-                cachedAudioListener = gameObject.AddComponent<AudioListener>();
+                listener = gameObject.AddComponent<AudioListener>();
             }
+
+            SetCachedAudioListener(listener);
+        }
+
+        private static void SetCachedAudioListener(AudioListener listener)
+        {
+            cachedAudioListener = listener;
+            cachedAudioListenerTransform = listener != null ? listener.transform : null;
         }
 
         private static Camera GetMainCamera()
@@ -2584,6 +2621,7 @@ namespace CycloneGames.Audio.Runtime
                 return cachedMainCamera;
 
             cachedMainCamera = Camera.main;
+            cachedMainCameraTransform = cachedMainCamera != null ? cachedMainCamera.transform : null;
             cachedMainCameraFrame = currentFrame;
             return cachedMainCamera;
         }
@@ -2787,12 +2825,12 @@ namespace CycloneGames.Audio.Runtime
 
         internal static Vector3 GetReferenceListenerPosition()
         {
-            if (cachedAudioListener != null && cachedAudioListener.gameObject != null)
-                return cachedAudioListener.transform.position;
+            if (cachedAudioListenerTransform != null)
+                return cachedAudioListenerTransform.position;
 
             Camera mainCamera = GetMainCamera();
-            if (mainCamera != null)
-                return mainCamera.transform.position;
+            if (mainCamera != null && cachedMainCameraTransform != null)
+                return cachedMainCameraTransform.position;
 
             return Vector3.zero;
         }
@@ -3217,8 +3255,10 @@ namespace CycloneGames.Audio.Runtime
             if (Instance == null)
             {
                 if (!AllowCreateInstance) return false;
-                Instance = FindObjectOfType<AudioManager>();
-                if (Instance == null) CreateInstance();
+                // Awake owns singleton registration, including adoption of scene-placed
+                // managers and duplicate destruction. CreateInstance triggers Awake
+                // synchronously; no scene-wide scan runs on this path.
+                CreateInstance();
             }
             return Instance != null;
         }

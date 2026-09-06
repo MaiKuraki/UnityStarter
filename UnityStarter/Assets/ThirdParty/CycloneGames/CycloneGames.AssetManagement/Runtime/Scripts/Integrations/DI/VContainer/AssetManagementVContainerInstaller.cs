@@ -103,7 +103,8 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
                             provider,
                             retention.Policy,
                             TimeSpan.FromSeconds(retention.CheckIntervalSeconds),
-                            retention.LogEvictions);
+                            retention.LogEvictions,
+                            retention.RetryPendingReleaseFailures);
                         return new AssetCacheRetentionStartable(scheduler);
                     },
                     Lifetime.Singleton);
@@ -165,11 +166,19 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
         public readonly double CheckIntervalSeconds;
         public readonly bool LogEvictions;
 
+        /// <summary>
+        /// When true, every scheduler pass first retries parked provider-release failures through the package's
+        /// <see cref="IAssetReleaseRetryDriver"/> capability before applying the retention policy. Disabled by
+        /// default so retention stays a pure idle-cache concern unless a product opts into release-retry driving.
+        /// </summary>
+        public readonly bool RetryPendingReleaseFailures;
+
         public AssetCacheRetentionOptions(
             bool enabled,
             AssetCacheRetentionPolicy policy = default,
             double checkIntervalSeconds = 30d,
-            bool logEvictions = false)
+            bool logEvictions = false,
+            bool retryPendingReleaseFailures = false)
         {
             Enabled = enabled;
             Policy = enabled && policy.EvictionRules.Count == 0 && policy.PreserveRules.Count == 0
@@ -177,6 +186,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
                 : policy;
             CheckIntervalSeconds = NormalizeInterval(checkIntervalSeconds);
             LogEvictions = logEvictions;
+            RetryPendingReleaseFailures = retryPendingReleaseFailures;
         }
 
         private static double NormalizeInterval(double seconds)

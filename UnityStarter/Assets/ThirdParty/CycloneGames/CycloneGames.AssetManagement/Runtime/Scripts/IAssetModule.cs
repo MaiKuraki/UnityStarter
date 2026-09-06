@@ -417,6 +417,53 @@ namespace CycloneGames.AssetManagement.Runtime
 	}
 
 	/// <summary>
+	/// Optional capability for ensuring the provider bundle file that backs a location is present locally, and
+	/// for obtaining its provider-local file path. This is the sanctioned boundary for handing content to native
+	/// consumers (native video players, native plugins, external file IO) without copying bytes through managed
+	/// memory. Path availability is provider and file-system specific: sandbox, cache, and editor file systems
+	/// expose a real path, while a streaming/web file system may report an error instead of a path. The returned
+	/// handle is a one-shot IO operation and is intentionally not cached.
+	/// </summary>
+	public interface IAssetBundleFileProvisioner
+	{
+		/// <summary>
+		/// Starts (or joins) the provider's ensure-file operation for <paramref name="location"/>. The operation
+		/// is memoized by the returned handle: repeated callers of the same handle share one provider operation.
+		/// Cancellation is accepted only before provider mutation starts; once started, the operation completes
+		/// deterministically and the owning package drains it before destruction. Dispose must be called on the
+		/// main thread.
+		/// </summary>
+		IBundleFileProvisionHandle EnsureBundleFileAsync(string location, CancellationToken cancellationToken = default);
+	}
+
+	/// <summary>
+	/// Caller-owned one-shot lease for a provider bundle-file provision operation. <see cref="IOperation.Task"/>
+	/// is the authoritative terminal contract; diagnostic members are observational. Paths and flags are only
+	/// meaningful after the task succeeds. Dispose is idempotent and retires wrapper ownership exactly once.
+	/// </summary>
+	public interface IBundleFileProvisionHandle : IOperation, IDisposable
+	{
+		/// <summary>
+		/// The provider-local path of the ensured bundle file. Empty string until the task succeeds or when the
+		/// provider file system cannot expose a path. Treat as read-only: the caller must not move, rename, or
+		/// delete the file; the provider owns the storage.
+		/// </summary>
+		string BundleFilePath { get; }
+
+		/// <summary>
+		/// Provider-reported bundle encryption state. A true value means the on-disk bytes are provider-encrypted
+		/// and only the provider runtime can interpret them.
+		/// </summary>
+		bool IsEncrypted { get; }
+
+		/// <summary>
+		/// Provider-reported bundle type identifier. Interpretation is provider-specific; it exists so products
+		/// can route the file to the correct native consumer without string parsing.
+		/// </summary>
+		int BundleType { get; }
+	}
+
+	/// <summary>
 	/// Provider-independent module configuration.
 	/// </summary>
 	public readonly struct AssetManagementOptions

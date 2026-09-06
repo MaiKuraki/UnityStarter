@@ -22,12 +22,15 @@ namespace CycloneGames.Analyzers
     {
         private sealed class CachedOwnership
         {
-            internal CachedOwnership(bool isRepositoryOwned)
+            internal CachedOwnership(bool isRepositoryOwned, bool isNonProductionRuntimePath)
             {
                 IsRepositoryOwned = isRepositoryOwned;
+                IsNonProductionRuntimePath = isNonProductionRuntimePath;
             }
 
             internal bool IsRepositoryOwned { get; }
+
+            internal bool IsNonProductionRuntimePath { get; }
         }
 
         private const int MAX_PROJECT_ROOT_CACHE_ENTRIES = 32;
@@ -41,6 +44,15 @@ namespace CycloneGames.Analyzers
         private const string MEMORY_GOVERNANCE_SEGMENT =
             "/Assets/ThirdParty/CycloneGames.MemoryGovernance/";
         private const string PROJECT_VERSION_MARKER = "m_EditorVersion:";
+
+        // Unity Editor/Test/Sample layout folders. Sources below these segments are Editor tooling,
+        // validators, debug windows, or tests: on-demand scene scans there are legitimate tool and
+        // test behavior, so production-runtime-only rules (for example the scene-wide find family)
+        // stay silent. Segment comparisons follow the host filesystem, matching the ownership policy.
+        private const string EDITOR_SEGMENT = "/Editor/";
+        private const string TESTS_SEGMENT = "/Tests/";
+        private const string SAMPLES_SEGMENT = "/Samples/";
+        private const string SAMPLE_SEGMENT = "/Sample/";
 
         private static readonly ConditionalWeakTable<SyntaxTree, CachedOwnership>
             OwnershipBySyntaxTree = new ConditionalWeakTable<SyntaxTree, CachedOwnership>();
@@ -63,6 +75,44 @@ namespace CycloneGames.Analyzers
             return OwnershipBySyntaxTree
                 .GetValue(syntaxTree, CreateCachedOwnershipCallback)
                 .IsRepositoryOwned;
+        }
+
+        /// <summary>
+        /// Returns true when the tree lives below an Editor/Test/Sample layout folder and is
+        /// therefore tooling or test code rather than production runtime. The empty Roslyn test
+        /// path stays classified as production runtime so focused hosts remain governed.
+        /// </summary>
+        internal static bool IsNonProductionRuntimePath(SyntaxTree syntaxTree)
+        {
+            if (syntaxTree == null)
+            {
+                return false;
+            }
+
+            return OwnershipBySyntaxTree
+                .GetValue(syntaxTree, CreateCachedOwnershipCallback)
+                .IsNonProductionRuntimePath;
+        }
+
+        internal static bool IsNonProductionRuntimePath(string? filePath)
+        {
+            return IsNonProductionRuntimePath(filePath, FileSystemPathComparison);
+        }
+
+        internal static bool IsNonProductionRuntimePath(
+            string? filePath,
+            StringComparison pathComparison)
+        {
+            if (string.IsNullOrEmpty(filePath))
+            {
+                return false;
+            }
+
+            string slashPath = filePath!.Replace('\\', '/');
+            return slashPath.IndexOf(EDITOR_SEGMENT, pathComparison) >= 0 ||
+                   slashPath.IndexOf(TESTS_SEGMENT, pathComparison) >= 0 ||
+                   slashPath.IndexOf(SAMPLES_SEGMENT, pathComparison) >= 0 ||
+                   slashPath.IndexOf(SAMPLE_SEGMENT, pathComparison) >= 0;
         }
 
         internal static bool IsRepositoryOwned(string? filePath)
@@ -274,7 +324,10 @@ namespace CycloneGames.Analyzers
 
         private static CachedOwnership CreateCachedOwnership(SyntaxTree syntaxTree)
         {
-            return new CachedOwnership(IsRepositoryOwned(syntaxTree.FilePath));
+            string filePath = syntaxTree.FilePath;
+            return new CachedOwnership(
+                IsRepositoryOwned(filePath),
+                IsNonProductionRuntimePath(filePath));
         }
 
         private static StringComparer GetPathComparer()

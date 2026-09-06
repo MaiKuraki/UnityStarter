@@ -2,8 +2,6 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-using Cysharp.Threading.Tasks;
-
 using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime
@@ -12,13 +10,12 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private static long _nextHandleId;
 
+        // Delegating wrapper: the CallerMemberName argument is filled at this call site with the
+        // original caller's member name, then passed through explicitly so exception messages are
+        // unchanged for existing callers.
         public static void EnsureMainThread([CallerMemberName] string operation = null)
         {
-            if (!PlayerLoopHelper.IsMainThread)
-            {
-                throw new InvalidOperationException(
-                    $"Asset operation '{operation}' must run on the Unity main thread.");
-            }
+            AssetRuntimeAssertions.EnsureMainThread(operation);
         }
 
         public static long NextHandleId()
@@ -35,8 +32,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static bool IsRecoverableException(Exception exception)
         {
-            return exception is not OutOfMemoryException &&
-                   exception is not AccessViolationException;
+            return AssetRuntimeAssertions.IsRecoverableException(exception);
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]

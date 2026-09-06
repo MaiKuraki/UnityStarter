@@ -114,6 +114,17 @@ namespace CycloneGames.AssetManagement.Runtime
                 _bucket);
         }
 
+        /// <summary>
+        /// Ensures the provider bundle file backing the location is present locally and exposes its
+        /// provider-local path. Requires the <see cref="IAssetBundleFileProvisioner"/> capability.
+        /// </summary>
+        public IBundleFileProvisionHandle EnsureBundleFileAsync(string location, CancellationToken cancellationToken = default)
+        {
+            return RequireCapability<IAssetBundleFileProvisioner>().EnsureBundleFileAsync(
+                location,
+                cancellationToken);
+        }
+
         private TCapability RequireCapability<TCapability>() where TCapability : class
         {
             if (_package is TCapability capability)

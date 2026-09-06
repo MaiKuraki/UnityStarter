@@ -17,7 +17,7 @@ namespace CycloneGames.Audio.Tests.Editor
             try
             {
                 AudioEventRouter router = owner.AddComponent<AudioEventRouter>();
-                router.triggers = new[]
+                router.Triggers = new[]
                 {
                     new AudioTrigger
                     {
@@ -65,10 +65,10 @@ namespace CycloneGames.Audio.Tests.Editor
                     loopTimeMin = 10f,
                     loopTimeMax = 10f
                 };
-                router.triggers = new[] { firstTrigger };
+                router.Triggers = new[] { firstTrigger };
 
                 router.StartLoopingTrigger(0);
-                router.triggers[0] = replacementTrigger;
+                router.Triggers[0] = replacementTrigger;
                 router.StartLoopingTrigger(0);
 
                 Assert.AreEqual(1, router.ActiveLoopingTriggerCount);

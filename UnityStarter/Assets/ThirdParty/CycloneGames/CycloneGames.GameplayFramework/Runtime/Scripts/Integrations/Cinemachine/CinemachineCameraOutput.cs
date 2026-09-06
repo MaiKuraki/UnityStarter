@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Unity.Cinemachine;
 using UnityEngine;
 
@@ -220,21 +221,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
                 return null;
             }
 
-            CinemachineCamera[] cameras = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
-            int sceneCameraCount = 0;
-            for (int i = 0; i < cameras.Length; i++)
-            {
-                CinemachineCamera candidate = cameras[i];
-                if (candidate == null || candidate.gameObject.scene != gameObject.scene)
-                {
-                    continue;
-                }
-
-                resolved = candidate;
-                sceneCameraCount++;
-            }
-
-            if (sceneCameraCount != 1)
+            if (!TryFindUniqueSceneComponent(out resolved, out int sceneCameraCount))
             {
                 error = sceneCameraCount == 0
                     ? "No CinemachineCamera was found in the output Scene."
@@ -266,22 +253,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
                 return null;
             }
 
-            CinemachineBrain[] brains = FindObjectsByType<CinemachineBrain>(FindObjectsSortMode.None);
-            int sceneBrainCount = 0;
-            CinemachineBrain onlySceneBrain = null;
-            for (int i = 0; i < brains.Length; i++)
-            {
-                CinemachineBrain candidate = brains[i];
-                if (candidate == null || candidate.gameObject.scene != gameObject.scene)
-                {
-                    continue;
-                }
-
-                onlySceneBrain = candidate;
-                sceneBrainCount++;
-            }
-
-            if (sceneBrainCount != 1)
+            if (!TryFindUniqueSceneComponent(out resolved, out int sceneBrainCount))
             {
                 error = sceneBrainCount == 0
                     ? "No CinemachineBrain was found in the output Scene."
@@ -290,7 +262,36 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Cinemachine
             }
 
             error = null;
-            return onlySceneBrain;
+            return resolved;
+        }
+
+        private const int ESTIMATED_SCENE_CANDIDATES_PER_ROOT = 8;
+
+        private bool TryFindUniqueSceneComponent<T>(out T resolved, out int sceneComponentCount)
+            where T : Component
+        {
+            resolved = null;
+            sceneComponentCount = 0;
+            GameObject[] sceneRoots = gameObject.scene.GetRootGameObjects();
+            List<T> componentsInRoot = new List<T>(ESTIMATED_SCENE_CANDIDATES_PER_ROOT);
+            for (int i = 0; i < sceneRoots.Length; i++)
+            {
+                componentsInRoot.Clear();
+                sceneRoots[i].GetComponentsInChildren(includeInactive: true, componentsInRoot);
+                for (int j = 0; j < componentsInRoot.Count; j++)
+                {
+                    T candidate = componentsInRoot[j];
+                    if (candidate == null || !candidate.gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    resolved = candidate;
+                    sceneComponentCount++;
+                }
+            }
+
+            return sceneComponentCount == 1;
         }
 
     }

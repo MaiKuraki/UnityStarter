@@ -74,7 +74,7 @@ namespace CycloneGames.AssetManagement.Runtime
             get => _enabled;
             set
             {
-                AssetRuntimeGuard.EnsureMainThread();
+                AssetRuntimeAssertions.EnsureMainThread();
                 _enabled = value;
                 if (!value)
                 {
@@ -110,7 +110,7 @@ namespace CycloneGames.AssetManagement.Runtime
         /// </summary>
         public static void ConfigureCapacity(int capacity)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (capacity <= 0 || capacity > MAX_CAPACITY)
             {
                 throw new ArgumentOutOfRangeException(
@@ -155,7 +155,7 @@ namespace CycloneGames.AssetManagement.Runtime
             LoadSceneParameters loadParameters,
             ISceneHandle handle)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (!Enabled)
             {
                 if (handle != null) _observationIncomplete = true;
@@ -197,7 +197,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static void MarkUnloadRequested(long id)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (!Enabled) return;
             if (_trackedScenes.TryGetValue(id, out var entry))
             {
@@ -209,7 +209,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal static void MarkUnloadFailed(long id, string error)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (!Enabled) return;
             if (_trackedScenes.TryGetValue(id, out var entry))
             {
@@ -223,13 +223,13 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static void Unregister(long id)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             _trackedScenes.Remove(id);
         }
 
         public static int GetTrackedSceneCount()
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (!Enabled) return 0;
             PruneCollectedHandles();
             return _trackedScenes.Count;
@@ -241,7 +241,7 @@ namespace CycloneGames.AssetManagement.Runtime
         /// </summary>
         public static int CopyTrackedScenesTo(List<SceneInfo> destination, int maxCount)
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (destination == null) throw new ArgumentNullException(nameof(destination));
             if (maxCount < 0) throw new ArgumentOutOfRangeException(nameof(maxCount));
 
@@ -310,7 +310,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     info.RuntimeSceneName = runtimeScene.name;
                     info.RuntimeSceneLoaded = runtimeScene.IsValid() && runtimeScene.isLoaded;
                 }
-                catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+                catch (Exception ex) when (AssetRuntimeAssertions.IsRecoverableException(ex))
                 {
                     info.Error = string.IsNullOrEmpty(info.Error) ? ex.Message : info.Error;
                 }
@@ -330,7 +330,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static void Clear()
         {
-            AssetRuntimeGuard.EnsureMainThread();
+            AssetRuntimeAssertions.EnsureMainThread();
             if (_enabled) _observationIncomplete = true;
             _trackedScenes.Clear();
         }

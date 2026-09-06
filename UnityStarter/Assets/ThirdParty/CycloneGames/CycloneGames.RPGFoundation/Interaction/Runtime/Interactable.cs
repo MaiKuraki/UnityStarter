@@ -55,6 +55,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         private int _isInteractingFlag;
         private IInteractionSystem _system;
         private bool _isRegisteredWithSystem;
+        private bool _awaitingSystemRegistration;
+        private Action<InteractionSystem> _systemRegisteredHandler;
         private Vector3 _lastRegisteredPosition;
 
         // Cached position to avoid Transform access in hot paths
@@ -149,6 +151,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         protected virtual void OnDestroy()
         {
+            EndAwaitingSystemRegistration();
             CancelInteraction(InteractionCancelReason.TargetDestroyed);
             _system?.UnregisterDistanceMonitor(this);
             OnStateChanged = null;
@@ -159,27 +162,83 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         protected virtual void RegisterWithSystem()
         {
             if (_isRegisteredWithSystem) return;
-            if (_system == null)
+
+            if (!HasAliveSystem())
             {
-                _system = InteractionSystem.Instance;
-                if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
+                // Explicit registry resolution (O(1)); never scans the scene.
+                _system = InteractionSystem.ResolveDefault();
+                if (_system == null)
+                {
+                    // No system exists yet (script execution order, late spawn, or additive scene
+                    // still loading). Defer binding to InteractionSystem.SystemRegistered instead
+                    // of losing the registration silently.
+                    BeginAwaitingSystemRegistration();
+                    return;
+                }
             }
 
-            if (_system != null)
-            {
-                _lastRegisteredPosition = Position;
-                _system.Register(this);
-                _isRegisteredWithSystem = true;
-            }
+            BindToSystem();
         }
 
         protected virtual void UnregisterFromSystem()
         {
+            EndAwaitingSystemRegistration();
             if (_isRegisteredWithSystem)
             {
                 _system?.Unregister(this);
                 _isRegisteredWithSystem = false;
             }
+        }
+
+        /// <summary>
+        /// True when <see cref="_system"/> references a live system. A destroyed system is treated
+        /// as unbound so the next resolve can pick a replacement instead of no-oping forever.
+        /// Main thread only (Unity object lifetime checks).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasAliveSystem()
+        {
+            if (_system == null) return false;
+            if (_system is UnityEngine.Object systemObject && systemObject == null)
+            {
+                _system = null;
+                _isRegisteredWithSystem = false;
+                return false;
+            }
+            return true;
+        }
+
+        private void BindToSystem()
+        {
+            EndAwaitingSystemRegistration();
+            _lastRegisteredPosition = Position;
+            _system.Register(this);
+            _isRegisteredWithSystem = true;
+        }
+
+        private void BeginAwaitingSystemRegistration()
+        {
+            if (_awaitingSystemRegistration) return;
+            // Cache the delegate once per instance so pooled objects repeatedly entering the
+            // no-system window do not allocate a new Action on every enable cycle.
+            if (_systemRegisteredHandler == null)
+                _systemRegisteredHandler = HandleSystemRegisteredForBinding;
+            _awaitingSystemRegistration = true;
+            InteractionSystem.SystemRegistered += _systemRegisteredHandler;
+        }
+
+        private void EndAwaitingSystemRegistration()
+        {
+            if (!_awaitingSystemRegistration) return;
+            _awaitingSystemRegistration = false;
+            InteractionSystem.SystemRegistered -= _systemRegisteredHandler;
+        }
+
+        private void HandleSystemRegisteredForBinding(InteractionSystem system)
+        {
+            EndAwaitingSystemRegistration();
+            if (_isRegisteredWithSystem || !isActiveAndEnabled) return;
+            RegisterWithSystem();
         }
 
         public void SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)
@@ -196,7 +255,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         // Call from movement systems when position changes significantly
         public void NotifyPositionChanged()
         {
-            if (_system == null) return;
+            // Lazy self-heal: if the bound system died (e.g. additive scene unload) while this
+            // component stayed enabled, re-resolve once instead of updating a dead system.
+            if (!HasAliveSystem())
+            {
+                RegisterWithSystem();
+                if (!HasAliveSystem()) return;
+            }
+
             Vector3 pos = Position;
             Vector3 diff = pos - _lastRegisteredPosition;
             // Only update grid if moved more than configured threshold (avoid thrashing)

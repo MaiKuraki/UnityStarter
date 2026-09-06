@@ -146,6 +146,40 @@ namespace CycloneGames.Analyzers.Tests
                 Is.EqualTo(new[] { DiagnosticIds.GameObjectFind }));
         }
 
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Editor/Windows/Consumer.cs")]
+        [TestCase("Assets/ThirdParty/CycloneGames/Feature/Tests/Editor/Consumer.cs")]
+        [TestCase("Assets/Game/Samples/Demo/Runtime/Consumer.cs")]
+        [TestCase("Assets/Game/Sample/Demo/Runtime/Consumer.cs")]
+        public async Task DoesNotReportSceneScanDiagnosticsForEditorTestAndSampleFolders(
+            string pathBelowFixture)
+        {
+            string sourcePath = Path.Combine(
+                _projectRoot,
+                pathBelowFixture.Replace('/', Path.DirectorySeparatorChar));
+
+            ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(sourcePath);
+
+            Assert.That(diagnostics, Is.Empty);
+        }
+
+        [TestCase("/repo/Assets/Feature/Editor/Windows/Consumer.cs", true)]
+        [TestCase("/repo/Assets/Feature/Tests/Editor/Consumer.cs", true)]
+        [TestCase("/repo/Assets/Feature/Samples/Demo/Consumer.cs", true)]
+        [TestCase("/repo/Assets/Feature/Sample/Demo/Consumer.cs", true)]
+        [TestCase("/repo/Assets/Feature/Runtime/Consumer.cs", false)]
+        [TestCase("/repo/Assets/Feature/Editorial/Consumer.cs", false)]
+        [TestCase("/repo/Assets/Feature/Runtime/EditorToolkit.cs", false)]
+        [TestCase("", false)]
+        [TestCase(null, false)]
+        public void ClassifiesEditorTestAndSampleLayoutFoldersAsNonProductionRuntime(
+            string? sourcePath,
+            bool expected)
+        {
+            Assert.That(
+                AnalyzerSourceScope.IsNonProductionRuntimePath(sourcePath),
+                Is.EqualTo(expected));
+        }
+
         [TestCase("Assets/Build/Runtime/Consumer.cs", true)]
         [TestCase("Assets/ThirdParty/CycloneGames/Runtime/Consumer.cs", true)]
         [TestCase("Assets/ThirdParty/Vendor/Runtime/Consumer.cs", false)]

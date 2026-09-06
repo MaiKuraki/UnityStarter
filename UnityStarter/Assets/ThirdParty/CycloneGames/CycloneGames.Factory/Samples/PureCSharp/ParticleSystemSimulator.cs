@@ -11,6 +11,9 @@ namespace CycloneGames.Factory.Samples.PureCSharp
         private readonly ObjectPool<ParticleData, Particle> _particlePool;
         private int _ticksElapsed = 0;
 
+        // Cached delegate: ForEachActive receives a reused Action instead of allocating one per call.
+        private static readonly Action<Particle> TickParticle = static particle => particle.Tick();
+
         public ParticleSystemSimulator()
         {
             // 1. Create the factory for our Particle class
@@ -22,8 +25,9 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             Log.Info($"Particle System Initialized. Pool contains {_particlePool.CountInactive} inactive particles.");
         }
 
-        // This simulates one frame of the game
-        public void Update()
+        // Simulates one frame of the game. This is a console-hosted demonstration driven at a
+        // readable pace (see Program.cs), not a Unity per-frame hot path.
+        public void SimulateFrame()
         {
             _ticksElapsed++;
             Log.Debug($"Tick {_ticksElapsed}");
@@ -41,7 +45,7 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             }
 
             // Update all currently active particles
-            _particlePool.ForEachActive(p => p.Tick());
+            _particlePool.ForEachActive(TickParticle);
 
             Log.Info($"Pool Status - Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
         }

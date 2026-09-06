@@ -1,6 +1,6 @@
 {
-    "name": "CycloneGames.EventBus.Runtime.Integrations.Logging",
-    "rootNamespace": "CycloneGames.EventBus.Runtime.Integrations.Logging",
+    "name": "CycloneGames.EventBus.Integrations.Logging",
+    "rootNamespace": "CycloneGames.EventBus.Integrations.Logging",
     "references": [
         "CycloneGames.EventBus.Core",
         "CycloneGames.Logging.Core"
