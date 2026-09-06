@@ -71,7 +71,7 @@ namespace CycloneGames.Analyzers
         public static readonly DiagnosticDescriptor ResourcesLoad = new(
             DiagnosticIds.ResourcesLoad,
             "Resources.Load bypasses the asset pipeline",
-            "'Resources.Load' bypasses the project asset management pipeline. Use Addressables, AssetReference, or IAssetProvider.",
+            "'Resources.Load' bypasses the project asset management pipeline. Load through the asset management module; only IAssetPackage/IAssetModule provider implementations may call Resources APIs directly.",
             DiagnosticCategories.Safety,
             DiagnosticSeverity.Warning,
             isEnabledByDefault: true);

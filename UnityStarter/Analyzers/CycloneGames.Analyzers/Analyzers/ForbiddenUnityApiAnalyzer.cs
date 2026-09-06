@@ -18,6 +18,13 @@ namespace CycloneGames.Analyzers
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
     public class ForbiddenUnityApiAnalyzer : DiagnosticAnalyzer
     {
+        // Provider contracts of the project asset management pipeline. Matched by interface name because
+        // the analyzer must stay free of references to the analyzed assemblies; these names are unique in
+        // this repository. Types implementing them are the pipeline itself (built-in adapters and custom
+        // providers such as xasset adapters) and are the sanctioned callers of Resources.Load*.
+        private const string AssetPackageContractInterface = "IAssetPackage";
+        private const string AssetModuleContractInterface = "IAssetModule";
+
         private static readonly string[] HotPathMethods =
         {
             "Update", "LateUpdate", "FixedUpdate",
@@ -232,11 +239,48 @@ namespace CycloneGames.Analyzers
                 if (symbolInfo.Symbol is IMethodSymbol method &&
                     method.ContainingType?.ToString() == "UnityEngine.Resources")
                 {
+                    // Asset pipeline provider implementations wrap Resources.Load* as their backend;
+                    // the rule targets gameplay code that bypasses the pipeline, not the pipeline itself.
+                    if (IsAssetPipelineImplementation(context)) return;
+
                     context.ReportDiagnostic(Diagnostic.Create(
                         DiagnosticRules.ResourcesLoad,
                         memberAccess.GetLocation()));
                 }
             }
+        }
+
+        /// <summary>
+        /// Returns true when the enclosing type chain implements an asset pipeline provider contract.
+        /// The nested-type walk also covers display classes synthesized for lambdas and local functions
+        /// inside provider implementations.
+        /// </summary>
+        private static bool IsAssetPipelineImplementation(SyntaxNodeAnalysisContext context)
+        {
+            var enclosingType = context.ContainingSymbol?.ContainingType as INamedTypeSymbol;
+            for (var type = enclosingType; type != null; type = type.ContainingType)
+            {
+                if (ImplementsAssetPipelineContract(type)) return true;
+            }
+
+            return false;
+        }
+
+        private static bool ImplementsAssetPipelineContract(INamedTypeSymbol type)
+        {
+            // AllInterfaces covers explicitly and implicitly implemented interfaces of this type and of
+            // every base type, so a single membership test per nested type is sufficient.
+            ImmutableArray<INamedTypeSymbol> interfaces = type.AllInterfaces;
+            for (int i = 0; i < interfaces.Length; i++)
+            {
+                if (interfaces[i].Name == AssetPackageContractInterface ||
+                    interfaces[i].Name == AssetModuleContractInterface)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

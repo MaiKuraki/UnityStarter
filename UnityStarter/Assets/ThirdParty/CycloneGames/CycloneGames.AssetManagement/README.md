@@ -345,6 +345,42 @@ Required sequence:
 
 `PrepareAsync` never starts payload writes. A failure after provider mutation must keep content quarantined until the product's recovery policy reaches a known state. All Addressables catalog mutation must pass through its owning package adapter; direct `Addressables.UpdateCatalogs` calls create unsupported split authority.
 
+### Provider options pass-through: decryption and file systems (YooAsset)
+
+`AssetPackageInitOptions.ProviderOptions` carries the provider-native options object verbatim — the adapter forwards it without copying or filtering. For YooAsset this is `YooAsset.InitializePackageOptions` and its derived option types (`EditorSimulateModeOptions`, `OfflinePlayModeOptions`, `HostPlayModeOptions`, `WebPlayModeOptions`, `CustomPlayModeOptions`), so every provider capability is reachable without an adapter change. Custom decryption and custom file systems ride the same seam:
+
+```csharp
+var hostOptions = new HostPlayModeOptions
+{
+    // built-in/cache file system parameters as configured by the product
+};
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.AssetBundleDecryptor, new MyAssetBundleDecryptor());
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.RawBundleDecryptor, new MyRawBundleDecryptor());
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.ManifestDecryptor, new MyManifestDecryptor());
+```
+
+A custom file system is declared with `new FileSystemParameters("Namespace.TypeName,Assembly", packageRoot)`; the provider instantiates it by reflection and hands it every value added through `AddParameter`. Bundle-level policies (`DownloadUrlPolicy`, `DownloadRetryPolicy`, `WebPlatformStrategy`, `BundleUnpackPolicy`, `BuiltinFileAccessor`) use the same parameter keys. Because the adapter forwards the options object as-is, new provider play modes and parameters keep working across adapter upgrades as long as the referenced YooAsset version contains the type. The `EnsureBundleFileAsync` detail's `IsEncrypted` flag lets products detect encrypted content before handing a path to a native consumer.
+
+Custom providers such as xasset adapters implement `IAssetPackage` plus the optional capability interfaces; they are exempt from CG0014 by design and receive the same cache, lease, tracker, and telemetry plumbing.
+
+### Bundle-file provisioning for native consumers
+
+`IAssetBundleFileProvisioner.EnsureBundleFileAsync(location)` (implemented by the YooAsset adapter) ensures the provider bundle file backing a location is present locally and returns an `IBundleFileProvisionHandle`:
+
+- `BundleFilePath` is the provider-local path and is only meaningful after `Task` succeeds. Sandbox, cache, and editor file systems expose a real path; a streaming/web file system reports an error instead of a path.
+- `IsEncrypted` reports provider-side encryption; when true, only the provider runtime can interpret the on-disk bytes.
+- `BundleType` is the provider-reported bundle type for routing the file to the correct native consumer.
+- The handle is a one-shot IO operation, not a cached asset: it is never pooled, Dispose is idempotent, and package destruction drains a still-running provision through the operation tails.
+
+In-memory raw content keeps using `LoadRawFileSync`/`LoadRawFileAsync` (backed by `RawFileObject` bytes/text). Use provisioning when a native consumer needs the file path itself: native video players, native plugins, or external file IO. The caller must treat the path as provider-owned storage: never move, rename, or delete the file.
+
+### Release-failure retry driving
+
+Provider releases that fail recoverably are parked by the cache and retried on subsequent cache operations. When releases can park during a quiet period, enable the external driver: pass `retryPendingReleaseFailures: true` to `AssetCacheRetentionScheduler` (or `AssetCacheRetentionOptions` in the VContainer installer). Every pass then retries at most 64 parked failures through the package's `IAssetReleaseRetryDriver` capability before applying the retention policy, and logs a warning while failures remain parked. The retry is bounded, main-thread-affine, and never throws for recoverable failures; failure counts stay visible through release-failure telemetry.
+
 ### Runtime telemetry
 
 `IAssetRuntimeDiagnostics.GetRuntimeCacheSnapshot` returns active/idle occupancy, byte budget, and lifetime hit/miss, admission/rejection, eviction-reason, estimated-byte, release-failure, and peak counters without exposing provider handles or asset locations. `AssetRuntimeTelemetryRecorder` stores a fixed-capacity ring buffer; `AssetRuntimeTelemetryFileSink` exports a caller-supplied window as JSON Lines using atomic file replacement. Every record carries `"schemaVersion":1`. No asset location, account token, or content payload is included; package/provider names may still be operationally sensitive.

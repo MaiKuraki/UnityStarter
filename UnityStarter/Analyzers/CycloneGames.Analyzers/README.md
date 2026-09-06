@@ -134,6 +134,8 @@ dotnet_diagnostic.CG0014.severity = none
 dotnet_diagnostic.CG0001.severity = error
 ```
 
+`CG0014` is exempted semantically for asset pipeline provider implementations: when the enclosing type chain implements `IAssetPackage` or `IAssetModule` (including custom providers such as xasset adapters), the type is the pipeline itself and may call `Resources.Load*` as its backend without suppression. Gameplay code that bypasses the pipeline is still reported.
+
 Use local suppression only when the allocation or API cost is intentional and documented:
 
 ```csharp

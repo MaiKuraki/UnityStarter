@@ -206,7 +206,7 @@ namespace CycloneGames.AssetManagement.Runtime
                         // Keep worker-thread diagnostics independent of Unity API thread-affinity assumptions.
                         stackTrace = _stackTraceCapture();
                     }
-                    catch (System.Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+                    catch (System.Exception exception) when (AssetRuntimeAssertions.IsRecoverableException(exception))
                     {
                         // Diagnostics must never change the outcome or ownership of an asset operation.
                         stackTrace = null;

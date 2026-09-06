@@ -134,6 +134,8 @@ dotnet_diagnostic.CG0014.severity = none
 dotnet_diagnostic.CG0001.severity = error
 ```
 
+`CG0014` 对资产管线 provider 实现做语义豁免：当包含类型链上实现了 `IAssetPackage` 或 `IAssetModule`（包括 xasset 等自定义 provider 适配器）时，该类型就是管线自身，可以直接调用 `Resources.Load*` 作为其后端，无需局部抑制。绕过管线的业务代码仍会被报告。
+
 只有在相关分配或 API 成本是有意行为并且已记录原因时，才使用局部抑制：
 
 ```csharp
