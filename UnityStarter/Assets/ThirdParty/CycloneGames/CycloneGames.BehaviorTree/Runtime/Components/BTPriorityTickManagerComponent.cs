@@ -34,7 +34,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 if (_instance == null)
                 {
-                    _instance = BTManagerSceneResolver.FindExisting<BTPriorityTickManagerComponent>(nameof(BTPriorityTickManagerComponent));
+                    _instance = BTManagerInstanceRegistry.FindExisting<BTPriorityTickManagerComponent>(nameof(BTPriorityTickManagerComponent));
                     if (_instance == null)
                     {
                         var go = new GameObject("[BTPriorityTickManager]");
@@ -135,11 +135,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             set => _lodUpdateInterval = Mathf.Max(0.1f, value);
         }
 
+        private void OnEnable()
+        {
+            BTManagerInstanceRegistry.Register(this);
+        }
+
+        private void OnDisable()
+        {
+            BTManagerInstanceRegistry.Unregister(this);
+        }
+
         private void Awake()
         {
             if (_instance == null)
             {
-                _instance = BTManagerSceneResolver.FindExisting<BTPriorityTickManagerComponent>(nameof(BTPriorityTickManagerComponent));
+                _instance = BTManagerInstanceRegistry.FindExisting<BTPriorityTickManagerComponent>(nameof(BTPriorityTickManagerComponent));
             }
 
             if (_instance != null && _instance != this)
