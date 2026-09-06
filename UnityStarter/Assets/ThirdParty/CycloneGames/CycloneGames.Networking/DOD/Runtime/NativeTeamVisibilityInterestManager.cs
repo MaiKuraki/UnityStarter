@@ -12,8 +12,9 @@ namespace CycloneGames.Networking.DOD
     /// NativeContainer-backed team visibility interest manager with contiguous detection
     /// source data and flat native storage for reveal zones.
     ///
-    /// This assembly does not currently schedule Jobs or reference Burst. Native containers
-    /// are reused, but capacity growth and temporary native collections can allocate.
+    /// This assembly does not currently schedule Jobs or reference Burst. All native containers
+    /// are long-lived and reused across frames; steady-state PreUpdate work is allocation-free
+    /// on both the managed and native side. Capacity growth during warmup allocates once.
     ///
     /// Visibility rules (same as OOP version):
     ///   1. AlwaysRelevant → visible to all
@@ -54,6 +55,12 @@ namespace CycloneGames.Networking.DOD
         // Native hidden set for O(1) lookup during RebuildForConnection
         private NativeHashSet<uint> _hiddenSet;
 
+        // Reusable team-bucketing scratch for PreUpdate. Cleared (not recreated) each frame
+        // so steady-state updates never touch Allocator.Temp or reallocate native memory.
+        private NativeList<int> _activeTeams;
+        private NativeList<int> _teamCursors;
+        private NativeHashMap<int, int> _teamIndices;
+
         private int _nextZoneId = 1;
         private const int MaxZoneId = int.MaxValue - 1;
         private bool _disposed;
@@ -70,6 +77,9 @@ namespace CycloneGames.Networking.DOD
             _revealZones = new NativeList<RevealZoneNative>(16, Allocator.Persistent);
             _deepRevealZones = new NativeList<RevealZoneNative>(8, Allocator.Persistent);
             _hiddenSet = new NativeHashSet<uint>(64, Allocator.Persistent);
+            _activeTeams = new NativeList<int>(8, Allocator.Persistent);
+            _teamCursors = new NativeList<int>(8, Allocator.Persistent);
+            _teamIndices = new NativeHashMap<int, int>(8, Allocator.Persistent);
         }
 
         // --- Configuration API (same as OOP version) ---
@@ -164,58 +174,83 @@ namespace CycloneGames.Networking.DOD
                 });
             }
 
-            // 2. Build detection sources per team into flat contiguous array
-            //    Step 1: collect sources grouped by team into temp structure
-            //    Step 2: pack them contiguously and record ranges
+            // 2. Build detection sources per team into flat contiguous array.
+            //    Single-pass bucketing instead of one full entity rescan per team:
+            //    collect active teams, count members, convert counts to start offsets via
+            //    prefix sum, then place each source at its team's write cursor. Detection
+            //    source order within a team follows entity order, identical to the previous
+            //    per-team rescan. Entities whose team is not active are skipped, matching
+            //    the previous semantics.
             _detectionSources.Clear();
             EnsureHashMapCapacity(ref _teamSourceRanges, 16);
             _teamSourceRanges.Clear();
+            _activeTeams.Clear();
+            _teamIndices.Clear();
 
-            // Iterate entities grouped by team (teams are few: 2-8)
-            // Each team's detection sources are packed contiguously for cache-friendly inner loop
-            using (var activeTeams = new NativeList<int>(8, Allocator.Temp))
+            foreach (var kvp in _connectionTeams)
             {
-                foreach (var kvp in _connectionTeams)
+                if (!_teamIndices.ContainsKey(kvp.Value))
                 {
-                    if (!ContainsTeam(activeTeams, kvp.Value))
-                        activeTeams.Add(kvp.Value);
+                    _teamIndices[kvp.Value] = _activeTeams.Length;
+                    _activeTeams.Add(kvp.Value);
                 }
+            }
 
-                // Also include teams from entity assignments
-                foreach (var kvp in _entityTeams)
+            foreach (var kvp in _entityTeams)
+            {
+                if (!_teamIndices.ContainsKey(kvp.Value))
                 {
-                    if (!ContainsTeam(activeTeams, kvp.Value))
-                        activeTeams.Add(kvp.Value);
+                    _teamIndices[kvp.Value] = _activeTeams.Length;
+                    _activeTeams.Add(kvp.Value);
                 }
+            }
 
-                // For each team, collect detection sources contiguously
-                for (int t = 0; t < activeTeams.Length; t++)
+            int teamCount = _activeTeams.Length;
+            _teamCursors.ResizeUninitialized(teamCount);
+            for (int t = 0; t < teamCount; t++)
+            {
+                _teamCursors[t] = 0;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                var ed = _entityData[i];
+                if ((ed.Flags & 2) != 0) continue; // Hidden
+                if (!_teamIndices.TryGetValue(ed.TeamId, out int bucket)) continue;
+
+                _teamCursors[bucket]++;
+            }
+
+            int runningOffset = 0;
+            for (int t = 0; t < teamCount; t++)
+            {
+                int memberCount = _teamCursors[t];
+                _teamCursors[t] = runningOffset;
+                if (memberCount > 0)
                 {
-                    int teamId = activeTeams[t];
-                    int startIdx = _detectionSources.Length;
-
-                    for (int i = 0; i < _entityData.Length; i++)
-                    {
-                        var ed = _entityData[i];
-                        if (ed.TeamId != teamId) continue;
-                        if ((ed.Flags & 2) != 0) continue; // Hidden
-
-                        float rangeSqr = _entityDetectionRanges.TryGetValue(ed.NetworkId, out float r)
-                            ? r * r
-                            : _defaultDetectionRangeSqr;
-
-                        _detectionSources.Add(new DetectionSource
-                        {
-                            X = ed.Position.x,
-                            Z = ed.Position.z,
-                            RangeSqr = rangeSqr
-                        });
-                    }
-
-                    int sourceCount = _detectionSources.Length - startIdx;
-                    if (sourceCount > 0)
-                        _teamSourceRanges[teamId] = new int2(startIdx, sourceCount);
+                    _teamSourceRanges[_activeTeams[t]] = new int2(runningOffset, memberCount);
                 }
+                runningOffset += memberCount;
+            }
+
+            _detectionSources.ResizeUninitialized(runningOffset);
+            for (int i = 0; i < count; i++)
+            {
+                var ed = _entityData[i];
+                if ((ed.Flags & 2) != 0) continue; // Hidden
+                if (!_teamIndices.TryGetValue(ed.TeamId, out int bucket)) continue;
+
+                float rangeSqr = _entityDetectionRanges.TryGetValue(ed.NetworkId, out float r)
+                    ? r * r
+                    : _defaultDetectionRangeSqr;
+
+                int writePos = _teamCursors[bucket]++;
+                _detectionSources[writePos] = new DetectionSource
+                {
+                    X = ed.Position.x,
+                    Z = ed.Position.z,
+                    RangeSqr = rangeSqr
+                };
             }
 
             // 3. Marshal reveal zones to native
@@ -360,13 +395,6 @@ namespace CycloneGames.Networking.DOD
 
         // --- Helpers ---
 
-        private static bool ContainsTeam(NativeList<int> list, int teamId)
-        {
-            for (int i = 0; i < list.Length; i++)
-                if (list[i] == teamId) return true;
-            return false;
-        }
-
         private static void MarshalRevealZones(List<RevealZoneManaged> managed, ref NativeList<RevealZoneNative> native)
         {
             native.Clear();
@@ -424,6 +452,9 @@ namespace CycloneGames.Networking.DOD
             if (_revealZones.IsCreated) _revealZones.Dispose();
             if (_deepRevealZones.IsCreated) _deepRevealZones.Dispose();
             if (_hiddenSet.IsCreated) _hiddenSet.Dispose();
+            if (_activeTeams.IsCreated) _activeTeams.Dispose();
+            if (_teamCursors.IsCreated) _teamCursors.Dispose();
+            if (_teamIndices.IsCreated) _teamIndices.Dispose();
         }
 
         // --- Data Structures ---

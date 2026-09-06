@@ -132,7 +132,8 @@ namespace CycloneGames.Analyzers
                    fullTypeName.StartsWith("System.Span<") ||
                    fullTypeName.StartsWith("System.ReadOnlySpan<") ||
                    fullTypeName.StartsWith("System.Collections.Immutable.ImmutableArray<") ||
-                   fullTypeName.StartsWith("System.Collections.Generic.Dictionary<");
+                   fullTypeName.StartsWith("System.Collections.Generic.Dictionary<") ||
+                   fullTypeName.StartsWith("System.Collections.Generic.HashSet<");
         }
 
         private static bool IsLogOrExceptionArgument(ExpressionSyntax node)
