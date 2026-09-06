@@ -203,6 +203,11 @@ namespace CycloneGames.Analyzers
             DiagnosticDescriptor rule,
             string detail)
         {
+            // Editor tooling (project validators, debug windows) and tests below the Editor/Test/
+            // Sample layout folders legitimately perform on-demand scene scans; the scene-scan
+            // policy governs production runtime code only.
+            if (AnalyzerSourceScope.IsNonProductionRuntimePath(invocation.SyntaxTree)) return;
+
             var isCached = IsLazyInitCachePattern(invocation);
             var isInHotPath = IsInHotPathMethod(invocation);
 

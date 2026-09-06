@@ -45,7 +45,9 @@ dotnet run --project <unity-project>/Analyzers/CycloneGames.Analyzers.Verifier/C
 
 所有 Analyzer callback 只接收仓库自有源码。对于绝对源码路径，最后一个 `Assets/` segment 用于确定候选 Unity 项目根；对于规范的相对 `Assets/...` 路径，当前 host 目录必须能解析到该项目根。只有 `ProjectSettings/ProjectVersion.txt` 是带 Unity 版本 marker、大小受限、普通且非 reparse 的文件时，候选根才受信任。验证结果先进入容量有界的进程内 cache，再应用 `Assets/ThirdParty/` allowlist。路径 segment 比较遵循 host 文件系统：Windows 不区分大小写，Linux/macOS 区分大小写。这样，`Assets/Build/`、`Assets/<project-folder>/`、`Assets/ThirdParty/CycloneGames/` 与可选的 `Assets/ThirdParty/CycloneGames.MemoryGovernance/` package family 仍在治理范围内；Unity `Library/PackageCache/`、UPM `Packages/`、package 内嵌 `Assets/`、非 CycloneGames 第三方内容、generated path 和其他所有未知非空路径都会 fail-closed。即使真实 Unity checkout 位于名为 `Packages/<reverse-DNS-name>` 的祖先目录下，只要自身候选根具有 marker，仍会接受治理。只有空路径无需 marker 也在范围内；这是未提供物理路径的 focused Roslyn host/test 专用契约。
 
-`<unity-project>/Assets/Default.ruleset` 是已提交的 Unity 强制策略。`CG0010` 保持 Error；既有场景发现与定时器调用完成迁移前，`CG0011` 与 `CG0013` 保持可见 Warning，避免启用 Analyzer 时把已知迁移债直接转化为无关编译中断。GameplayAbilities sample 中两处按名称查找目标的代码是该 sample scene 专用、已局部记录的 `CG0010` 例外；生产替代边界是项目自有 targeting service。
+在仓库自有源码内部，`GameObject.Find` 与场景级 find 家族（`CG0010`、`CG0011`）只治理 production runtime 代码。位于 `Editor/`、`Tests/`、`Samples/` 或 `Sample/` path segment 之下的源码属于 Editor 工具、校验器、调试窗口或测试，其按需场景扫描是合法行为，因此该规则家族在这些位置保持沉默。该分类按 syntax tree 缓存，使用与所有权判定相同的 host 文件系统路径 segment 比较；空 Roslyn test path 仍归类为 production runtime，focused host 保持受治理。分类逻辑位于 `AnalyzerSourceScope`，并与 `UnityEditor` 使用规则（`CG0042`）共享。
+
+`<unity-project>/Assets/Default.ruleset` 是已提交的 Unity 强制策略。`CG0010` 保持 Error；既有场景发现与定时器调用完成迁移前，`CG0011` 与 `CG0013` 保持可见 Warning，避免启用 Analyzer 时把已知迁移债直接转化为无关编译中断。GameplayFramework 的 camera-output 发现（`CinemachineCameraOutput`）已不再使用场景级 find API：其绑定时机、由 authoring 显式开启的解析改为通过根对象枚举输出自身 Scene，因此 GameplayFramework runtime 代码不再产生 `CG0011` 调用点。剩余 `CG0011` 迁移债位于 GameplayFramework 之外的模块，由对应模块 owner 负责。GameplayAbilities sample 中两处按名称查找目标的代码是该 sample scene 专用、已局部记录的 `CG0010` 例外；生产替代边界是项目自有 targeting service。
 
 激活流程只持久化已提交的 DLL 与 `.meta` 资产。每个验证项目都使用独占随机 owner marker 认领；递归清理前会重新验证该 marker。`--keep-temporary-project` 会为诊断保留项目；无法确认进程树终止时也会自动保留。`bin/`、`obj/` 下的构建中间产物、带 owner marker 的操作系统临时验证项目以及 Unity import cache 均可重建；没有 Unity 进程占用时可以安全删除。
 
@@ -58,7 +60,7 @@ dotnet run --project <unity-project>/Analyzers/CycloneGames.Analyzers.Verifier/C
 | CG0003 | 热路径中的字符串构造 | Warning |
 | CG0004 | 热路径中的 `Camera.main` | Warning |
 | CG0010 | 生产代码中的 `GameObject.Find` | Error |
-| CG0011 | 场景级 `FindObjectOfType` API | Error |
+| CG0011 | 生产代码中的场景级 `FindObjectOfType` API | Error |
 | CG0012 | `SendMessage` / `BroadcastMessage` | Error |
 | CG0013 | `MonoBehaviour.Invoke` API | Error |
 | CG0014 | `Resources.Load` | Warning |

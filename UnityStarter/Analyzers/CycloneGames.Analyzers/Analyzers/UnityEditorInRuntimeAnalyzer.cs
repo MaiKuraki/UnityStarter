@@ -28,11 +28,9 @@ namespace CycloneGames.Analyzers
 
         private static bool IsAllowedDirectory(string filePath)
         {
-            var normalized = filePath.Replace('\\', '/');
-            return normalized.Contains("/Editor/") ||
-                   normalized.Contains("/Samples/") ||
-                   normalized.Contains("/Sample/") ||
-                   normalized.Contains("/Tests/");
+            // Single source of truth for the Editor/Test/Sample layout policy lives in
+            // AnalyzerSourceScope so all analyzers classify non-runtime folders identically.
+            return AnalyzerSourceScope.IsNonProductionRuntimePath(filePath);
         }
 
         /// <summary>
