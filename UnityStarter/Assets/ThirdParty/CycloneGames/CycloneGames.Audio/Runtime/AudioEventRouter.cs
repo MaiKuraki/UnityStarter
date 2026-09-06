@@ -8,7 +8,8 @@ namespace CycloneGames.Audio.Runtime
 {
     public class AudioEventRouter : MonoBehaviour
     {
-        public AudioTrigger[] triggers;
+        // Serialized name "triggers" must stay stable for existing scenes and prefabs.
+        [SerializeField] private AudioTrigger[] triggers;
         private readonly List<AudioHandle> activeOnEnabledEvents = new List<AudioHandle>(4);
         private bool[] activeLoopingTriggers = Array.Empty<bool>();
         private AudioTrigger[] activeLoopingTriggerOwners = Array.Empty<AudioTrigger>();
@@ -22,6 +23,16 @@ namespace CycloneGames.Audio.Runtime
 
         internal int ActiveLoopingTriggerCount => activeLoopingTriggerCount;
         internal int ActiveLoopingWorkerCount => activeLoopingWorkerCount;
+
+        /// <summary>
+        /// Trigger wiring for this router. Element mutation is allowed because the array is
+        /// shared with the serializer; assign a new array only during composition setup.
+        /// </summary>
+        public AudioTrigger[] Triggers
+        {
+            get { return triggers; }
+            internal set { triggers = value; }
+        }
 
         internal bool IsLoopingTriggerRegistered(int triggerNum, AudioTrigger trigger)
         {

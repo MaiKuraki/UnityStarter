@@ -8,7 +8,11 @@ namespace CycloneGames.Audio.Runtime
 {
     /// <summary>
     /// Owns the compatibility-only automatic discovery policy for Audio configuration assets.
-    /// Product configuration should prefer serialized overrides or the corresponding SetConfig method.
+    /// In the Editor, discovery falls back to an AssetDatabase type search so newly created
+    /// projects work without manual wiring. Player builds never scan or load automatically:
+    /// assign the serialized overrides on <see cref="AudioManager"/> or call the corresponding
+    /// SetConfig method (for example after loading the asset through CycloneGames.AssetManagement)
+    /// before the first configuration request.
     /// </summary>
     internal static class AudioConfigDiscovery
     {
@@ -16,43 +20,27 @@ namespace CycloneGames.Audio.Runtime
 
         internal static AudioPoolConfig DiscoverAudioPoolConfig()
         {
-            return Discover<AudioPoolConfig>(nameof(AudioPoolConfig));
+            return Discover<AudioPoolConfig>();
         }
 
         internal static AudioPlatformProfile DiscoverAudioPlatformProfile()
         {
-            return Discover<AudioPlatformProfile>(nameof(AudioPlatformProfile));
+            return Discover<AudioPlatformProfile>();
         }
 
         internal static AudioVoicePolicyProfile DiscoverAudioVoicePolicyProfile()
         {
-            return Discover<AudioVoicePolicyProfile>(nameof(AudioVoicePolicyProfile));
+            return Discover<AudioVoicePolicyProfile>();
         }
 
         internal static AudioDuckingProfile DiscoverAudioDuckingProfile()
         {
-            return Discover<AudioDuckingProfile>(nameof(AudioDuckingProfile));
+            return Discover<AudioDuckingProfile>();
         }
 
-        private static T Discover<T>(string canonicalResourcePath)
+        private static T Discover<T>()
             where T : UnityEngine.Object
         {
-            T config = Resources.Load<T>(canonicalResourcePath);
-            if (config != null)
-                return config;
-
-            T[] allConfigs = Resources.LoadAll<T>(string.Empty);
-            if (allConfigs != null && allConfigs.Length > 0)
-            {
-                if (allConfigs.Length > 1)
-                {
-                    Log.Warning(
-                        $"{typeof(T).Name}: Found {allConfigs.Length} configs in Resources. Using first.");
-                }
-
-                return allConfigs[0];
-            }
-
 #if UNITY_EDITOR
             string configTypeName = typeof(T).Name;
             string[] guids = UnityEditor.AssetDatabase.FindAssets($"t:{configTypeName}");
@@ -69,6 +57,7 @@ namespace CycloneGames.Audio.Runtime
             }
 #endif
 
+            // Player builds rely on explicit wiring: serialized overrides or SetConfig.
             return null;
         }
     }
