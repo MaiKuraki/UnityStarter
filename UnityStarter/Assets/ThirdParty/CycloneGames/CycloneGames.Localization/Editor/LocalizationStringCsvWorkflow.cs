@@ -85,6 +85,9 @@ namespace CycloneGames.Localization.Editor
         private bool _filteredOnly;
         private int _languageSelection;
         private Action<LocalizationCsvExportSelection> _onExport;
+        private LocalizationCsvExportSelection _pendingExportSelection;
+        private Action<LocalizationCsvExportSelection> _pendingExportCallback;
+        private EditorApplication.CallbackFunction _delayedExportInvoker;
 
         public static void Open(
             EditorWindow owner,
@@ -154,6 +157,20 @@ namespace CycloneGames.Localization.Editor
             _onExport = null;
         }
 
+        /// <summary>
+        /// Cached delayCall handler that preserves the one-shot deferred export after the
+        /// dialog window closes, without allocating a closure per export click.
+        /// </summary>
+        private void InvokePendingExport()
+        {
+            EditorApplication.delayCall -= _delayedExportInvoker;
+            Action<LocalizationCsvExportSelection> callback = _pendingExportCallback;
+            _pendingExportCallback = null;
+            LocalizationCsvExportSelection selection = _pendingExportSelection;
+            _pendingExportSelection = default;
+            callback?.Invoke(selection);
+        }
+
         private void OnGUI()
         {
             EditorGUILayout.Space(8f);
@@ -171,14 +188,14 @@ namespace CycloneGames.Localization.Editor
 
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("Key Scope", EditorStyles.boldLabel);
-            if (GUILayout.Toggle(!_filteredOnly, "All Keys (" + _allKeyCount + ")", EditorStyles.radioButton))
+            if (GUILayout.Toggle(!_filteredOnly, "All Keys (" + _allKeyCount.ToString(CultureInfo.InvariantCulture) + ")", EditorStyles.radioButton))
                 _filteredOnly = false;
 
             bool canUseFiltered = _hasActiveFilter && _filteredKeyCount > 0;
             using (new EditorGUI.DisabledScope(!canUseFiltered))
             {
                 string filteredLabel = _hasActiveFilter
-                    ? "Current Results (" + _filteredKeyCount + ")"
+                    ? "Current Results (" + _filteredKeyCount.ToString(CultureInfo.InvariantCulture) + ")"
                     : "Current Results (No Filter)";
                 if (GUILayout.Toggle(_filteredOnly, filteredLabel, EditorStyles.radioButton))
                     _filteredOnly = true;
@@ -212,7 +229,8 @@ namespace CycloneGames.Localization.Editor
                 : "UTF-8 without BOM";
             EditorGUILayout.Space(8f);
             EditorGUILayout.HelpBox(
-                "Summary: " + keyCount + " keys, " + languageCount + " languages\n" +
+                "Summary: " + keyCount.ToString(CultureInfo.InvariantCulture) + " keys, " +
+                languageCount.ToString(CultureInfo.InvariantCulture) + " languages\n" +
                 "Profile: " + profileLabel + "    Encoding: " + encodingLabel +
                 (_languageSelection == 0 && _hasUnregisteredLocales
                     ? "\nScope: registered locales only; inactive table assets are excluded."
@@ -237,10 +255,13 @@ namespace CycloneGames.Localization.Editor
                         _filteredOnly,
                         _languageSelection == 0 ? (int?)null : _languageSelection,
                         _languageSelection == 0 && _hasUnregisteredLocales);
-                    Action<LocalizationCsvExportSelection> callback = _onExport;
+                    _pendingExportCallback = _onExport;
+                    _pendingExportSelection = selection;
                     _onExport = null;
                     Close();
-                    EditorApplication.delayCall += () => callback?.Invoke(selection);
+                    if (_delayedExportInvoker == null)
+                        _delayedExportInvoker = InvokePendingExport;
+                    EditorApplication.delayCall += _delayedExportInvoker;
                 }
             }
             EditorGUILayout.EndHorizontal();

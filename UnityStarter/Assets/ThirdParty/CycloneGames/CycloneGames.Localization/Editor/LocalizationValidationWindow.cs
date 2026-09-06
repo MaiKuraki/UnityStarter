@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
+using System.Globalization;
 using CycloneGames.Localization.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -11,6 +12,9 @@ namespace CycloneGames.Localization.Editor
         private const string WindowTitle = "Localization Validation";
         private static readonly GUIContent s_scanLabel = new GUIContent("Scan Localization Assets");
         private static readonly GUIContent s_clearLabel = new GUIContent("Clear");
+        private static readonly GUIContent s_settingsLabel = new GUIContent(
+            "Localization Settings",
+            "Optional explicit settings. Required when the project contains multiple LocalizationSettings assets.");
 
         private readonly List<LocalizationValidationResult> _results = new List<LocalizationValidationResult>(128);
         [SerializeField] private LocalizationSettings localizationSettings;
@@ -27,9 +31,7 @@ namespace CycloneGames.Localization.Editor
         private void OnGUI()
         {
             localizationSettings = (LocalizationSettings)EditorGUILayout.ObjectField(
-                new GUIContent(
-                    "Localization Settings",
-                    "Optional explicit settings. Required when the project contains multiple LocalizationSettings assets."),
+                s_settingsLabel,
                 localizationSettings,
                 typeof(LocalizationSettings),
                 false);
@@ -45,7 +47,10 @@ namespace CycloneGames.Localization.Editor
                 _results.Clear();
 
             EditorGUILayout.LabelField("Results", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField(_results.Count == 0 ? "No issues found or scan not run." : _results.Count + " issue(s) found.");
+            EditorGUILayout.LabelField(
+                _results.Count == 0
+                    ? "No issues found or scan not run."
+                    : _results.Count.ToString(CultureInfo.InvariantCulture) + " issue(s) found.");
 
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
             for (int i = 0; i < _results.Count; i++)
