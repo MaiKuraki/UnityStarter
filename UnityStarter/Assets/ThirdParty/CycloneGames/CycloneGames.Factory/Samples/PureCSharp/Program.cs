@@ -12,7 +12,7 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             // Run the simulation for 20 "ticks"
             for (int i = 0; i < 20; i++)
             {
-                simulator.Update();
+                simulator.SimulateFrame();
                 Thread.Sleep(200); // Pause to make the output readable
             }
 

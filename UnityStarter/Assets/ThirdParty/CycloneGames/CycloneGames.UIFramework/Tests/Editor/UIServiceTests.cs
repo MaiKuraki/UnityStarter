@@ -1321,6 +1321,12 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 new InvalidOperationException("Worker provider failure during shutdown.")));
             await observer;
 
+            // Shutdown owns cancellation: cleanup starts before the provider acquisition settles, so the
+            // pending open is cancelled regardless of how the provider later completes. Waiting for the
+            // acquisition before cancelling would make shutdown hang behind a provider that never returns,
+            // so a fault arriving after cleanup is intentionally swallowed with the session. Faults that
+            // happen without a concurrent shutdown are surfaced as-is; see
+            // ProviderFaultFromWorker_CleansPreviouslyOwnedLeaseOnMainThread.
             Assert.CatchAsync<OperationCanceledException>(async () => await open);
             Assert.AreEqual(ownerThreadId, shutdownContinuationThreadId);
             Assert.IsTrue(service.IsDisposed);

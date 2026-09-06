@@ -34,14 +34,15 @@ namespace CycloneGames.Analyzers
             if (field.Modifiers.Any(SyntaxKind.ConstKeyword) || field.Modifiers.Any(SyntaxKind.StaticKeyword)) return;
             if (IsAllowedDirectory(field.SyntaxTree.FilePath)) return;
 
-            var classDecl = field.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
-            if (classDecl == null) return;
-
-            var typeSymbol = context.SemanticModel.GetDeclaredSymbol(classDecl);
-            if (!IsDerivedFrom(typeSymbol, "UnityEngine.MonoBehaviour")) return;
-
+            // The rule targets fields whose own declaring type derives from UnityEngine.MonoBehaviour.
+            // Bind the semantic containing type per variable instead of walking syntax ancestors: a
+            // field declared inside a nested struct or a plain nested class must not inherit the
+            // enclosing MonoBehaviour classification.
             foreach (var variable in field.Declaration.Variables)
             {
+                if (context.SemanticModel.GetDeclaredSymbol(variable) is not IFieldSymbol fieldSymbol) return;
+                if (!IsDerivedFrom(fieldSymbol.ContainingType, "UnityEngine.MonoBehaviour")) return;
+
                 context.ReportDiagnostic(Diagnostic.Create(
                     DiagnosticRules.PublicFieldOnMonoBehaviour,
                     variable.Identifier.GetLocation(),

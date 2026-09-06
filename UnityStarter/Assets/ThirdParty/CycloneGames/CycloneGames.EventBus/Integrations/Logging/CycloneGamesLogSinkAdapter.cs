@@ -2,7 +2,7 @@ using System;
 using CycloneGames.Logging;
 using CycloneGames.EventBus.Core;
 
-namespace CycloneGames.EventBus.Runtime.Integrations.Logging
+namespace CycloneGames.EventBus.Integrations.Logging
 {
     /// <summary>
     /// Adapts the Core's narrow <see cref="IEventBusLogSink"/> port to CycloneGames.Logging.

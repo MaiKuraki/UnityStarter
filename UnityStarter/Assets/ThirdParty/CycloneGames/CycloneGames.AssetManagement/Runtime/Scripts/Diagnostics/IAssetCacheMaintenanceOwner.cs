@@ -59,4 +59,20 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         AssetCacheTrimResult TrimIdleCacheStep(int maxWork);
     }
+
+    /// <summary>
+    /// Optional capability for driving bounded, best-effort retries of provider release failures that are parked
+    /// in the owning package's cache. This exists so a periodic maintenance driver (for example
+    /// <see cref="CacheRetention.AssetCacheRetentionScheduler"/>) can drain the retry queue even when no other
+    /// cache operation runs. Implementations are main-thread-affine, bounded by <paramref name="maxWork"/>, and
+    /// never throw for recoverable failures; fatal exceptions (out-of-memory, access violation) still propagate.
+    /// </summary>
+    public interface IAssetReleaseRetryDriver
+    {
+        /// <summary>
+        /// Retries at most <paramref name="maxWork"/> parked provider-release failures.
+        /// Returns the number of release failures still parked after this pass.
+        /// </summary>
+        int RetryPendingReleaseFailures(int maxWork);
+    }
 }

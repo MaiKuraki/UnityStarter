@@ -1,7 +1,7 @@
 using System;
 using CycloneGames.Logging;
 
-namespace CycloneGames.EventBus.Runtime.Integrations.Logging
+namespace CycloneGames.EventBus.Integrations.Logging
 {
     /// <summary>
     /// Log facade for the EventBus logging integration. Keeps every <see cref="LogChannel.Create"/>

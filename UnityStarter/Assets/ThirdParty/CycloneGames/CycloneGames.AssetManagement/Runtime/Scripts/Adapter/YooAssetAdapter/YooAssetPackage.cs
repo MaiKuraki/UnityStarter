@@ -15,8 +15,8 @@ using CycloneGames.Logging;
 namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class YooAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetBulkLoader,
-        IAssetRawFileLoader, IAssetSceneLoader, IYooAssetPackageMaintenance,
-        IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
+        IAssetRawFileLoader, IAssetBundleFileProvisioner, IAssetSceneLoader, IYooAssetPackageMaintenance,
+        IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetReleaseRetryDriver, IAssetStoragePreflight
     {
         private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
 
@@ -1013,6 +1013,38 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 ExitMaintenanceMutation();
             }
+        }
+
+        /// <inheritdoc cref="IAssetReleaseRetryDriver.RetryPendingReleaseFailures"/>
+        public int RetryPendingReleaseFailures(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.RetryPendingReleaseFailures(maxWork);
+        }
+
+        /// <inheritdoc cref="IAssetBundleFileProvisioner.EnsureBundleFileAsync"/>
+        public IBundleFileProvisionHandle EnsureBundleFileAsync(
+            string location,
+            CancellationToken cancellationToken = default)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDestroyed();
+            ValidateLocation(location);
+
+            // Provider mutations cannot be cancelled; cancellation is honored only before the provider
+            // operation starts. The operation drains deterministically and is tracked by the package's
+            // operation tails, so package destruction waits for it even when the caller walks away.
+            EnsureBundleFileOperation operation =
+                _rawPackage.EnsureBundleFileAsync(new EnsureBundleFileOptions(location));
+            long id = AssetRuntimeGuard.NextHandleId();
+            if (HandleTracker.Enabled)
+            {
+                HandleTracker.Register(id, Name, $"EnsureBundleFile : {location}");
+            }
+
+            return YooBundleFileProvisionHandle.Create(id, operation, _operationTails);
         }
 
         public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object

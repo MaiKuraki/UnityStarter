@@ -345,6 +345,42 @@ Module 级默认通过 `AssetManagementOptions.DefaultCacheTuning` 配置。Pack
 
 `PrepareAsync` 绝不启动 payload 写入。provider mutation 后的失败必须保持内容隔离，直到产品恢复 policy 达到已知状态。所有 Addressables catalog mutation 必须通过其 owning package adapter；直接 `Addressables.UpdateCatalogs` 调用会创建不支持的分裂 authority。
 
+### Provider options 透传：解密与文件系统（YooAsset）
+
+`AssetPackageInitOptions.ProviderOptions` 原样携带 provider 原生 options 对象——适配器不做拷贝或过滤。对 YooAsset 而言就是 `YooAsset.InitializePackageOptions` 及其派生类型（`EditorSimulateModeOptions`、`OfflinePlayModeOptions`、`HostPlayModeOptions`、`WebPlayModeOptions`、`CustomPlayModeOptions`），因此 provider 的全部能力都无需改动适配器即可触达。自定义解密与自定义文件系统走同一条接缝：
+
+```csharp
+var hostOptions = new HostPlayModeOptions
+{
+    // 按产品配置 builtin/cache 文件系统参数
+};
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.AssetBundleDecryptor, new MyAssetBundleDecryptor());
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.RawBundleDecryptor, new MyRawBundleDecryptor());
+hostOptions.CacheFileSystemParameters.AddParameter(
+    EFileSystemParameter.ManifestDecryptor, new MyManifestDecryptor());
+```
+
+自定义文件系统通过 `new FileSystemParameters("命名空间.类型名,程序集", packageRoot)` 声明；provider 用反射实例化它，并通过 `AddParameter` 注入全部参数。bundle 级策略（`DownloadUrlPolicy`、`DownloadRetryPolicy`、`WebPlatformStrategy`、`BundleUnpackPolicy`、`BuiltinFileAccessor`）使用同样的参数键。由于适配器原样转发 options 对象，只要引用的 YooAsset 版本包含对应类型，新增的 playmode 与参数在适配器升级后继续可用。`EnsureBundleFileAsync` 结果的 `IsEncrypted` 标志让产品在把路径交给原生消费方之前识别加密内容。
+
+xasset 等自定义 provider 适配器实现 `IAssetPackage` 加可选能力接口即可；它们按设计被 CG0014 豁免，并自动获得同一套 cache、lease、tracker 与 telemetry 基础设施。
+
+### 面向原生消费方的 bundle 文件供给
+
+`IAssetBundleFileProvisioner.EnsureBundleFileAsync(location)`（由 YooAsset 适配器实现）确保某 location 背后的 provider bundle 文件在本地就绪，并返回 `IBundleFileProvisionHandle`：
+
+- `BundleFilePath` 是 provider 本地路径，仅在 `Task` 成功后有效。sandbox、cache、editor 文件系统会给出真实路径；流式/web 文件系统以错误代替路径。
+- `IsEncrypted` 报告 provider 侧加密状态；为 true 时只有 provider 运行时能解释磁盘字节。
+- `BundleType` 是 provider 上报的 bundle 类型，用于把文件路由给正确的原生消费方。
+- 该 handle 是一次性 IO 操作，不是缓存资产：不入池、Dispose 幂等，仍在运行的供给操作由操作尾部（operation tails）在包销毁前排空。
+
+内存态的原始内容继续使用 `LoadRawFileSync`/`LoadRawFileAsync`（由 `RawFileObject` 的字节/文本承载）。当原生消费方需要的是文件路径本身时使用供给能力：原生视频播放器、原生插件或外部文件 IO。调用方必须把路径视为 provider 拥有的存储：不得移动、重命名或删除文件。
+
+### 释放失败重试驱动
+
+可恢复的 provider 释放失败会被缓存收容（park），并在后续 cache 操作时重试。当释放失败可能发生在业务静默期时，启用外部驱动：向 `AssetCacheRetentionScheduler`（或 VContainer 安装器的 `AssetCacheRetentionOptions`）传入 `retryPendingReleaseFailures: true`。此后每轮先通过包的 `IAssetReleaseRetryDriver` 能力重试至多 64 个收容失败，再应用保留策略；仍有滞留时输出 Warning 日志。重试有界、主线程亲和、对可恢复失败绝不抛出；失败计数继续通过 release-failure telemetry 可见。
+
 ### 运行时 telemetry
 
 `IAssetRuntimeDiagnostics.GetRuntimeCacheSnapshot` 返回 active/idle 占用、字节预算，以及生命周期 hit/miss、admission/rejection、eviction-reason、estimated-byte、release-failure 与 peak 计数，不暴露 provider handle 或资产地址。`AssetRuntimeTelemetryRecorder` 存储固定容量 ring buffer；`AssetRuntimeTelemetryFileSink` 用原子文件替换把调用方提供的窗口导出为 JSON Lines。每条记录携带 `"schemaVersion":1`。不包含资产地址、账号 token 或内容 payload；package/provider 名称仍可能敏感。

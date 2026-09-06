@@ -81,7 +81,7 @@ flowchart LR
 
 ### 1. 设置 Manager
 
-在运行时场景中添加 `AudioManager` 组件。确保场景中有 `AudioListener`，按需分配 Mixer 或 Profile 资产。
+在运行时场景中添加 `AudioManager` 组件，按需分配 Mixer 或 Profile 资产。管理器按以下顺序解析权威 `AudioListener`：组件上序列化的 `AudioListener` 引用、主相机上已有的监听器、在主相机上新建的监听器、最后是在管理器自身上创建。当监听器位于其他对象上时，请通过 `AudioManager.SetAudioListener(listener)` 显式注册——运行时不执行任何全场景扫描。
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -92,7 +92,9 @@ AudioManager.SetInstance(audioManagerComponent);
 
 所有音频服务和 Resolver 调用必须在 Unity 主线程。
 
-产品持有配置位置时，应在 `AudioManager` 上分配四种可选配置 override。自动发现仍是主线程同步执行的兼容 fallback。内部发现策略通过 `nameof` 将每个规范 Resources 名称绑定到对应配置类型，因此规范名称不含空格，也不需要维护重复的路径字符串字面量。每个 cache lifetime 内，每种 profile 类型会先调用 `Resources.Load`，再调用 `Resources.LoadAll<T>("")`；Editor 中还可能调用 `AssetDatabase.FindAssets`。不同名称的同类型资产仍可由按类型扫描的 fallback 找到，但不再享有特殊名称优先级。未找到结果会被负缓存；`ClearCache`、subsystem registration 或缓存的 Unity Object 被销毁后允许再次搜索。发现过程抛出异常时不会发布缓存 miss，因此下一次请求可以重试。`LoadAll` 成本会随 Resources 内容增长。若要避开首次扫描，应使用 serialized override，或在首次请求前通过外部 provider 加载并调用 `SetConfig`。接受该 fallback 前，必须在目标 Player 中 Profile 冷态首次访问。
+静态音频 API 在首次调用时自动创建管理器。场景中摆放的管理器通过自身的 `Awake` 完成接纳，并同时销毁重复实例；由于组件 `Awake` 顺序不确定，请在 `Start` 或更晚时机调用音频 API，或通过 `AudioManager.SetInstance` 显式注册。
+
+产品持有配置位置时，应在 `AudioManager` 上分配四种可选配置 override。自动发现是主线程同步执行的、仅限 Editor 的兼容 fallback：Editor 中按类型调用 `AssetDatabase.FindAssets`（取第一个命中结果，存在多个资产时给出警告）；Player 构建不执行任何扫描和加载——发现直接返回 null，负缓存持续生效，直到 `ClearCache`、subsystem registration 或缓存的 Unity Object 被销毁后才允许新的搜索。发现过程抛出异常时不会发布缓存 miss，因此下一次请求可以重试。生产构建必须显式接线：使用 serialized override，或先通过资源管理系统（例如 CycloneGames.AssetManagement）加载资产，并在首次配置请求之前调用对应的 `SetConfig` 方法。
 
 ### 2. 创作 Bank
 
@@ -465,7 +467,7 @@ IAudioBankClipLease lease = await residencyProvider
 
 运行时池化 `ActiveEvent` 和 `AudioSource`，使用固定每 Event Source/Parameter 数组，缓存准备的 Event 数据，限制图执行和 Bank/引用扫描。初始化、池增长、异步状态机、外部 Provider、集合扩容、Unity 对象创建和音频解码仍可能分配。在目标 Player 中 Profile 代表性图、Voice 数量和 Provider 行为后再设预算。
 
-`AudioEventRouter` 对每个 trigger index 最多接纳一个活动 looping task。同一 index 且同一 trigger 对象的重复 `StartLoopingTrigger` 调用在该 loop 退出或 Router 取消 loop 前保持幂等；确实需要重叠 loop 的调用方必须使用不同 trigger index。在某个 index 替换 trigger 对象并启动时，会立即取消该槽位原有的 worker。Disable 或销毁会使完整 loop generation 失效。Trigger 数组长度改变后，下一次启动请求会使旧 generation 失效；如果没有新的启动请求，已运行的 loop 会在下一次 delay 后的 index/reference 检查中退出。迟到完成不能清除新启动的 loop。
+`AudioEventRouter` 对每个 trigger index 最多接纳一个活动 looping task。同一 index 且同一 trigger 对象的重复 `StartLoopingTrigger` 调用在该 loop 退出或 Router 取消 loop 前保持幂等；确实需要重叠 loop 的调用方必须使用不同 trigger index。在某个 index 替换 trigger 对象并启动时，会立即取消该槽位原有的 worker。Disable 或销毁会使完整 loop generation 失效。Trigger 数组长度改变后，下一次启动请求会使旧 generation 失效；如果没有新的启动请求，已运行的 loop 会在下一次 delay 后的 index/reference 检查中退出。迟到完成不能清除新启动的 loop。Trigger 接线通过 `AudioEventRouter.Triggers` 属性访问（序列化字段名 `triggers` 保持不变）；由于数组与序列化器共享，允许对元素进行修改。
 
 每次 delayed action execution 都会持有一个 UniTask timer/state machine，直到执行或取消。可能重复触发的系统必须自行施加 admission/rate policy，并传入有界 lifetime token；legacy detached overload 不是 zero-allocation 或防泄漏的调度原语。
 

@@ -84,6 +84,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         private float _lastDetectionTime;
         private float _noTargetStartTime;
         private IInteractionSystem _system;
+        private bool _awaitingSystemRegistration;
+        private Action<InteractionSystem> _systemRegisteredHandler;
         private GameObjectInstigator _cachedInstigator;
 
         private readonly ReactiveProperty<IInteractable> _currentInteractable = new(null);
@@ -173,8 +175,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void Start()
         {
-            _system = interactionSystem != null ? interactionSystem : InteractionSystem.Instance;
-            if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
+            ResolveOrDeferSystemBinding();
+        }
+
+        private void OnDisable()
+        {
+            EndAwaitingSystemRegistration();
         }
 
         private void Update()
@@ -193,6 +199,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void OnDestroy()
         {
+            EndAwaitingSystemRegistration();
             _currentInteractable?.Dispose();
             _componentCache?.Clear();
             _componentCache = null;
@@ -250,6 +257,10 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void PerformDetection()
         {
+            // Lazy self-heal: re-resolve when the bound system died or none was found at Start
+            // (script execution order, late spawn, additive scene still loading).
+            if (!HasAliveSystem()) ResolveOrDeferSystemBinding();
+
             _losCheckCount = 0;
             if (detectionMode == DetectionMode.SpatialHash && _system?.SpatialGrid != null)
                 PerformSpatialHashDetection();
@@ -257,6 +268,58 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 PerformPhysics2DDetection();
             else
                 PerformPhysics3DDetection();
+        }
+
+        /// <summary>
+        /// True when <see cref="_system"/> references a live system. A destroyed system is treated
+        /// as unbound so the next resolve can pick a replacement instead of querying stale state.
+        /// Main thread only (Unity object lifetime checks).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasAliveSystem()
+        {
+            if (_system == null) return false;
+            if (_system is UnityEngine.Object systemObject && systemObject == null)
+            {
+                _system = null;
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Resolves the system from the serialized reference, then the explicit static registry
+        /// never scans the scene. Defers to <see cref="InteractionSystem.SystemRegistered"/>
+        /// when no system exists yet. Main thread only.
+        /// </summary>
+        private void ResolveOrDeferSystemBinding()
+        {
+            if (HasAliveSystem()) return;
+
+            _system = interactionSystem != null ? interactionSystem : InteractionSystem.ResolveDefault();
+            if (HasAliveSystem()) return;
+
+            if (!_awaitingSystemRegistration)
+            {
+                if (_systemRegisteredHandler == null)
+                    _systemRegisteredHandler = HandleSystemRegisteredForBinding;
+                _awaitingSystemRegistration = true;
+                InteractionSystem.SystemRegistered += _systemRegisteredHandler;
+            }
+        }
+
+        private void EndAwaitingSystemRegistration()
+        {
+            if (!_awaitingSystemRegistration) return;
+            _awaitingSystemRegistration = false;
+            InteractionSystem.SystemRegistered -= _systemRegisteredHandler;
+        }
+
+        private void HandleSystemRegisteredForBinding(InteractionSystem system)
+        {
+            EndAwaitingSystemRegistration();
+            if (HasAliveSystem()) return;
+            ResolveOrDeferSystemBinding();
         }
 
         private void PerformSpatialHashDetection()

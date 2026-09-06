@@ -110,6 +110,80 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 "The warmed Editor Mono Actor Tick path allocated managed memory.");
         }
 
+        [Test]
+        public void ActorHasTag_ManyTags_SteadyStateAllocatesZeroManagedBytesInEditorMono()
+        {
+            const int warmupQueryCount = 1_000;
+            const int measuredQueryCount = 10_000;
+            var tagActorObject = new GameObject("TaggedActor");
+            try
+            {
+                TaggedActor actor = tagActorObject.AddComponent<TaggedActor>();
+                UnityLifecycleTestUtility.InvokeAwake(actor);
+                for (int i = 0; i < 20; i++)
+                {
+                    Assert.IsTrue(actor.AddTag("Tag" + i.ToString()));
+                }
+
+                for (int i = 0; i < warmupQueryCount; i++)
+                {
+                    _ = actor.ActorHasTag("Tag3");
+                    _ = actor.ActorHasTag("Missing");
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < measuredQueryCount; i++)
+                {
+                    _ = actor.ActorHasTag("Tag3");
+                    _ = actor.ActorHasTag("Missing");
+                }
+                long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.That(
+                    allocatedBytes,
+                    Is.Zero,
+                    "The warmed Editor Mono Actor tag query path allocated managed memory.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(tagActorObject);
+            }
+        }
+
+        [Test, Performance]
+        public void ActorHasTag_ManyTags_Benchmark()
+        {
+            var tagActorObject = new GameObject("TaggedActor");
+            try
+            {
+                TaggedActor actor = tagActorObject.AddComponent<TaggedActor>();
+                UnityLifecycleTestUtility.InvokeAwake(actor);
+                for (int i = 0; i < 20; i++)
+                {
+                    Assert.IsTrue(actor.AddTag("Tag" + i.ToString()));
+                }
+
+                Measure.Method(() =>
+                    {
+                        _ = actor.ActorHasTag("Tag3");
+                        _ = actor.ActorHasTag("Missing");
+                    })
+                    .WarmupCount(5)
+                    .MeasurementCount(20)
+                    .IterationsPerMeasurement(50_000)
+                    .GC()
+                    .Run();
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(tagActorObject);
+            }
+        }
+
+        private sealed class TaggedActor : Actor
+        {
+        }
+
         private sealed class NoOpCameraMode : CameraMode
         {
             public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)

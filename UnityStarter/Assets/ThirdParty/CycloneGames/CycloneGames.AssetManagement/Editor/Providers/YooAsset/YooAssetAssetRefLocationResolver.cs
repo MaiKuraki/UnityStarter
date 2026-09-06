@@ -1,7 +1,7 @@
 #if CYCLONEGAMES_HAS_YOOASSET
 using System;
 using UnityEditor;
-using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.AssetManagement.Editor;
 using YooAsset.Editor;
 
@@ -23,6 +23,8 @@ namespace CycloneGames.AssetManagement.Editor.Providers.YooAsset
     /// </summary>
     public sealed class YooAssetAssetRefLocationResolver : IAssetRefLocationResolver
     {
+        private static readonly LogChannel Log = AssetManagementEditorLog.Channel;
+
         public int Priority => 0;
 
         public string ResolveLocation(string assetGuid, string assetPath)
@@ -64,7 +66,8 @@ namespace CycloneGames.AssetManagement.Editor.Providers.YooAsset
                                     collector.AddressRuleName);
                                 if (rule == null)
                                 {
-                                    Debug.LogWarning(
+                                    Log.Write(
+                                        LogSeverity.Warning,
                                         "[AssetRefLocationResolver] YooAsset address rule '" +
                                         collector.AddressRuleName + "' is missing for collector '" +
                                         collector.CollectPath + "' while resolving asset '" + assetPath +
@@ -92,10 +95,11 @@ namespace CycloneGames.AssetManagement.Editor.Providers.YooAsset
             }
             catch (Exception exception)
             {
-                Debug.LogWarning(
+                Log.WriteException(
+                    LogSeverity.Warning,
+                    exception,
                     "[AssetRefLocationResolver] YooAsset resolver failed for asset '" + assetPath +
-                    "', collector '" + activeCollectorPath + "', address rule '" + activeAddressRuleName +
-                    "'. Error: " + exception.Message);
+                    "', collector '" + activeCollectorPath + "', address rule '" + activeAddressRuleName + "'.");
                 return null;
             }
         }

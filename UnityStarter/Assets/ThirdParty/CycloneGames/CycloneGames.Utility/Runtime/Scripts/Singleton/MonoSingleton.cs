@@ -138,9 +138,15 @@ namespace CycloneGames.Utility.Runtime
                     return _instance;
                 }
 
+                // Cold-path singleton resolution by contract, not a hot-path cost: a generic base
+                // type cannot take a DI reference or a serialized reference, and the scan also
+                // rejects misconfigured duplicate scene instances. It runs at most once per type
+                // per session; afterwards Instance is served from the _instance cache.
+#pragma warning disable CG0011
                 T[] candidates = UnityEngine.Object.FindObjectsByType<T>(
                     FindObjectsInactive.Include,
                     FindObjectsSortMode.None);
+#pragma warning restore CG0011
 
                 if (candidates.Length > 1)
                 {
