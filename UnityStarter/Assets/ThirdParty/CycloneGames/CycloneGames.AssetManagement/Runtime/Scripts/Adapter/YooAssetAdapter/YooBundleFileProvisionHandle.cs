@@ -1,5 +1,6 @@
 #if CYCLONEGAMES_HAS_YOOASSET
 using System;
+using System.Threading;
 
 using Cysharp.Threading.Tasks;
 using YooAsset;
