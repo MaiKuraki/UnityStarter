@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.AssetManagement.Editor",
+        "CycloneGames.Logging.Core",
         "YooAsset.Editor"
     ],
     "includePlatforms": [
