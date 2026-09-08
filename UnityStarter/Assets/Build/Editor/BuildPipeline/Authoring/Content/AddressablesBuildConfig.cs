@@ -24,7 +24,14 @@ namespace Build.Pipeline.Editor
     public sealed class AddressablesBuildConfig : AssetContentBuildConfiguration
     {
         public const string ProviderIdValue = "addressables";
-        internal const string DefaultBuildOutputBaseDirectory = "Build/AddressablesContent";
+
+        // "Bundles" is the Addressables term for its published content and stays
+        // short: the default publication layout adds an invocation-id segment
+        // and ~178 characters of staged-path reserve on top of this root, so
+        // long names push deep repository checkouts over the Win32 MAX_PATH
+        // budget. See BuildPathPolicy path budgets and the preflight staging
+        // budget validation in AddressablesBuilder.
+        internal const string DefaultBuildOutputBaseDirectory = "Build/Bundles";
 
         public override string ProviderId => ProviderIdValue;
 
@@ -34,8 +41,13 @@ namespace Build.Pipeline.Editor
         [HideInInspector]
         public bool copyToOutputDirectory = true;
 
+        // New configs start with a readable fixed publication root so a fresh
+        // project can build without touching this asset. An explicitly empty
+        // value opts into the invocation-isolated default layout instead
+        // (see DefaultBuildOutputBaseDirectory). Existing assets keep whatever
+        // they serialized; the initializer only applies at creation time.
         [HideInInspector]
-        public string buildOutputDirectory = "";
+        public string buildOutputDirectory = "Build/Addressables";
 
         [HideInInspector]
         [Tooltip("Official addressables_content_state.bin from a previous pipeline publication. Used only by Incremental asset-content invocations.")]

@@ -35,6 +35,15 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         // Package metadata names are validated exactly below because they include
         // the configurable package name, version, and YooAsset file prefix.
         private const int YooAssetGeneratedChildPathReserve = 64;
+
+        // The publication transaction replaces the package target directory with
+        // ".yoo-stage-<32-hex transaction id>-<NNN>" (11 + 32 + 1 + 3 = 47
+        // characters) below the same parent, plus one separator. Without
+        // reserving that staged layout here, the per-file validation only failed
+        // after YooAsset had already spent time building content.
+        internal const int YooAssetStagingDirectoryReserve = 48;
+        private const string PublicationStageNameTemplate = ".yoo-stage-00000000000000000000000000000000-000";
+
         private readonly IBuildPipeline pipeline;
 
         public YooAsset3PackageBuildPlan(
@@ -62,11 +71,11 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             OutputPackageDirectory = BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 System.IO.Path.GetFullPath(parameters.GetPackageOutputDirectory()),
                 $"YooAsset package output directory '{parameters.PackageName}'",
-                1 + YooAssetGeneratedChildPathReserve);
+                YooAssetStagingDirectoryReserve + 1 + YooAssetGeneratedChildPathReserve);
             BundledPackageDirectory = BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 System.IO.Path.GetFullPath(parameters.GetBundledRootDirectory()),
                 $"YooAsset bundled package directory '{parameters.PackageName}'",
-                1 + YooAssetGeneratedChildPathReserve);
+                YooAssetStagingDirectoryReserve + 1 + YooAssetGeneratedChildPathReserve);
             ValidateKnownArtifactPathBudgets(
                 OutputPackageDirectory,
                 parameters.PackageName,
@@ -154,6 +163,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string packageVersion,
             string role)
         {
+            // The transaction stages the package directory as
+            // ".yoo-stage-<transaction id>-<index>" beside the target, so every
+            // known artifact is validated in its staged form, not its final form.
+            string parent = Path.GetDirectoryName(Path.GetFullPath(directory));
+            string stagedDirectory = string.IsNullOrEmpty(parent)
+                ? directory
+                : Path.Combine(parent, PublicationStageNameTemplate);
             string[] fileNames =
             {
                 YooAssetConfiguration.GetBuildReportFileName(packageName, packageVersion),
@@ -164,8 +180,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             foreach (string fileName in fileNames)
             {
                 BuildPathPolicy.EnsureWin32MaxPathBudget(
-                    Path.Combine(directory, fileName),
-                    $"YooAsset {role} package artifact '{fileName}'");
+                    Path.Combine(stagedDirectory, fileName),
+                    $"YooAsset staged {role} package artifact '{fileName}'");
             }
         }
     }

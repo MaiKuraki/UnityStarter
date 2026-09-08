@@ -40,7 +40,7 @@ Package 缺失时核心 Assembly 仍可使用，但 Provider 不可用。Package
 | --- | --- |
 | `Build Remote Catalog` | 请求生成 Remote Catalog。两个求值后的 Remote Catalog Path 都必须已定义。Incremental 必须启用。 |
 | `Copy To Output Directory` | 发布持久 Artifact Tree。关闭后，结果只保留在 Addressables 管理的 Build Location。Incremental 必须启用。 |
-| `Publication Root` | 可移植的项目相对目录。留空时解析为 `Build/AddressablesContent/<invocation-id>`，默认隔离不同 Invocation。 |
+| `Publication Root` | 可移植的项目相对目录。留空时解析为 `Build/Bundles/<invocation-id>`，默认隔离不同 Invocation。 |
 | `Baseline Asset` | 位于 `Assets/` 下、供 Incremental Invocation 使用的已导入 `addressables_content_state.bin`。与 Baseline Path 互斥。 |
 | `Baseline Path` | CI 在 Unity 启动前恢复的可移植项目相对路径。与 Baseline Asset 互斥。 |
 | `Allow External Profile Publication Sources` | 只有在 CI 明确拥有外部目录时，才允许求值后的 Addressables Profile Source Root 位于项目外。URI、Volume Root、受保护路径和 Reparse Point 仍无效。 |
@@ -104,7 +104,7 @@ Incremental 输出不能供 Player Invocation 使用。执行 Content Update 时
 启用 Publication 后，默认布局为：
 
 ~~~text
-<UnityProject>/Build/AddressablesContent/<invocation-id>/<BuildTarget>/
+<UnityProject>/Build/Bundles/<invocation-id>/<BuildTarget>/
   PlayerData/
     AddressablesVersion.json
     ...

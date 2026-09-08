@@ -40,7 +40,7 @@ Create the configuration from **Assets > Create > CycloneGames > Build > Address
 | --- | --- |
 | `Build Remote Catalog` | Requests a remote catalog. Both evaluated remote catalog paths must be defined. Required for Incremental. |
 | `Copy To Output Directory` | Publishes a durable artifact tree. If disabled, results remain only in Addressables-managed build locations. Required for Incremental. |
-| `Publication Root` | Portable project-relative directory. Empty resolves to `Build/AddressablesContent/<invocation-id>` so invocations are isolated by default. |
+| `Publication Root` | Portable project-relative directory. Empty resolves to `Build/Bundles/<invocation-id>` so invocations are isolated by default. |
 | `Baseline Asset` | Imported `addressables_content_state.bin` under `Assets/` for an Incremental invocation. Mutually exclusive with Baseline Path. |
 | `Baseline Path` | Portable project-relative path restored by CI before Unity starts. Mutually exclusive with Baseline Asset. |
 | `Allow External Profile Publication Sources` | Allows evaluated Addressables profile source roots outside the project only when CI owns them. URI, volume-root, protected, and reparse-point paths remain invalid. |
@@ -104,7 +104,7 @@ Both paths are fail-closed and require saved configuration. Concurrent Addressab
 With publication enabled, the default layout is:
 
 ~~~text
-<UnityProject>/Build/AddressablesContent/<invocation-id>/<BuildTarget>/
+<UnityProject>/Build/Bundles/<invocation-id>/<BuildTarget>/
   PlayerData/
     AddressablesVersion.json
     ...
