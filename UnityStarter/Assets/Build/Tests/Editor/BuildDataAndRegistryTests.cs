@@ -795,7 +795,7 @@ namespace Build.Pipeline.Tests.Editor
                     Is.EqualTo(Path.GetFullPath(Path.Combine(
                         projectRoot,
                         "Build",
-                        "AddressablesContent",
+                        "Bundles",
                         "content-base",
                         BuildTarget.StandaloneWindows64.ToString()))));
                 Assert.That(
@@ -803,10 +803,61 @@ namespace Build.Pipeline.Tests.Editor
                     Is.EqualTo(Path.GetFullPath(Path.Combine(
                         projectRoot,
                         "Build",
-                        "AddressablesContent",
+                        "Bundles",
                         "content-dlc",
                         BuildTarget.StandaloneWindows64.ToString()))));
                 Assert.That(first, Is.Not.EqualTo(second));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(configuration);
+            }
+        }
+
+        [Test]
+        public void AddressablesPublicationConfiguration_PreflightAcceptsCheckoutWithinStagingBudget()
+        {
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            try
+            {
+                configuration.copyToOutputDirectory = true;
+                configuration.buildOutputDirectory = string.Empty;
+                string shallowRoot = "C:" + Path.DirectorySeparatorChar
+                    + new string('d', 46) + Path.DirectorySeparatorChar + "build";
+
+                string error = AddressablesBuilder.ValidatePublicationConfiguration(
+                    "asset-content",
+                    configuration,
+                    shallowRoot);
+
+                Assert.That(error, Is.Null.Or.Empty);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(configuration);
+            }
+        }
+
+        [Test]
+        public void AddressablesPublicationConfiguration_PreflightRejectsDeepCheckoutStagingBudget()
+        {
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            try
+            {
+                configuration.copyToOutputDirectory = true;
+                configuration.buildOutputDirectory = string.Empty;
+                string deepRoot = "C:" + Path.DirectorySeparatorChar
+                    + new string('d', 51) + Path.DirectorySeparatorChar + "build";
+
+                string error = AddressablesBuilder.ValidatePublicationConfiguration(
+                    "asset-content",
+                    configuration,
+                    deepRoot);
+
+                Assert.That(error, Is.Not.Null);
+                Assert.That(error, Does.Contain("MAX_PATH"));
+                Assert.That(error, Does.Contain("Publication Root"));
+                Assert.That(error, Does.Contain("at most"));
             }
             finally
             {

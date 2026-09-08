@@ -2279,6 +2279,15 @@ namespace Build.Pipeline.Editor
                     invocationId,
                     config.buildOutputDirectory);
                 string publicationRoot = BuildPathPolicy.ResolveBuildRoot(projectRoot, outputDirectory);
+                string stagingBudgetError = ValidatePublicationStagingPathBudget(
+                    projectRoot,
+                    publicationRoot,
+                    outputDirectory);
+                if (!string.IsNullOrEmpty(stagingBudgetError))
+                {
+                    return stagingBudgetError;
+                }
+
                 if (config.additionalPublicationRoots == null)
                 {
                     return null;
@@ -2310,6 +2319,72 @@ namespace Build.Pipeline.Editor
             {
                 return exception.Message;
             }
+        }
+
+        // Worst-case staged artifact layout below the publication root, used to
+        // reject deep checkouts during preflight instead of after Addressables
+        // content build: "<BuildTarget>.stage-<32-hex transaction id>" plus the
+        // deepest artifact relative path ("PlayerData/StandaloneWindows64/" +
+        // the longest observed bundle name, including BundleName_Hash styles
+        // that prefix a readable group/asset-path name before the hash).
+        private const int PublicationStagingTargetNameReserve = 22;
+        private const int PublicationStagingTransactionSuffixReserve = 39;
+        private const int PublicationStagingArtifactRelativeReserve = 128;
+        private const int PublicationStagingSeparatorReserve = 1;
+
+        // No default publication root can fit every checkout because the Win32
+        // MAX_PATH budget is physical: project root + configured root + the
+        // fixed staging reserve above must stay within 259 characters. This
+        // preflight therefore reports the exact per-machine numbers and the
+        // largest usable configured root instead of failing late with a
+        // generic path error.
+        internal static string ValidatePublicationStagingPathBudget(
+            string projectRoot,
+            string publicationRoot,
+            string configuredOutputDirectory)
+        {
+            int projectRootLength = Path.GetFullPath(projectRoot).Length;
+            int publicationRootLength = Path.GetFullPath(publicationRoot).Length;
+            int requiredLength = publicationRootLength
+                + PublicationStagingSeparatorReserve
+                + PublicationStagingTargetNameReserve
+                + PublicationStagingTransactionSuffixReserve
+                + PublicationStagingArtifactRelativeReserve;
+            if (requiredLength <= BuildPathPolicy.Win32MaxPathCharacters)
+            {
+                return null;
+            }
+
+            int maximumConfiguredLength = BuildPathPolicy.Win32MaxPathCharacters
+                - PublicationStagingSeparatorReserve
+                - PublicationStagingTargetNameReserve
+                - PublicationStagingTransactionSuffixReserve
+                - PublicationStagingArtifactRelativeReserve
+                - projectRootLength
+                - 1;
+            if (maximumConfiguredLength < 1)
+            {
+                int oneCharacterRequiredLength = projectRootLength
+                    + 1
+                    + PublicationStagingSeparatorReserve
+                    + PublicationStagingTargetNameReserve
+                    + PublicationStagingTransactionSuffixReserve
+                    + PublicationStagingArtifactRelativeReserve;
+                return "Addressables publication staging cannot fit the Win32 MAX_PATH budget on this checkout: " +
+                    $"project root length={projectRootLength}, even a 1-character publication root requires " +
+                    $"{oneCharacterRequiredLength} characters (maximum {BuildPathPolicy.Win32MaxPathCharacters}). " +
+                    $"Move the repository to a path at least {oneCharacterRequiredLength - BuildPathPolicy.Win32MaxPathCharacters + 1} characters shorter. " +
+                    $"Configured publication root: '{configuredOutputDirectory}'.";
+            }
+
+            return "Addressables publication staging would exceed the Win32 MAX_PATH budget on this checkout: " +
+                $"project root length={projectRootLength}, publication root length={publicationRootLength} " +
+                $"('{configuredOutputDirectory}'), worst-case staged artifact length={requiredLength}, " +
+                $"maximum={BuildPathPolicy.Win32MaxPathCharacters}. " +
+                "If your Addressables groups use a custom bundle naming style, switching Bundle Naming " +
+                "to HashName shortens artifact names substantially. " +
+                $"Shorten the configured Publication Root to at most {maximumConfiguredLength} characters " +
+                "(for example 'AA'), or move the repository to a shorter path.";
         }
 
         private static string ValidateAdditionalPublicationRoot(
