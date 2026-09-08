@@ -83,7 +83,11 @@ namespace Build.Pipeline.Editor
             throw new InvalidOperationException(
                 $"{context} detected {changes.Count} unauthorized ProjectSettings change(s). "
                 + details
-                + ". No files were modified by the state guard.");
+                + ". No files were modified by the state guard. "
+                + "If your version control shows no content change for the listed files "
+                + "(for example a line-ending-only difference), Unity rewrote them with "
+                + "equivalent serialization during the Player build; check in or commit the "
+                + "rewritten files once so later builds start from Unity's own bytes.");
         }
     }
 

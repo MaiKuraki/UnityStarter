@@ -464,6 +464,7 @@ namespace Build.Pipeline.Editor
 
             if (importAssets)
             {
+                var restoredAssetPaths = new List<string>(journal.records.Length);
                 for (int index = 0; index < journal.records.Length; index++)
                 {
                     string relativePath = journal.records[index].relativePath;
@@ -473,7 +474,21 @@ namespace Build.Pipeline.Editor
                             relativePath,
                             ImportAssetOptions.ForceUpdate
                             | ImportAssetOptions.ForceSynchronousImport);
+                        restoredAssetPaths.Add(relativePath);
                     }
+                }
+
+                // ImportAsset alone cannot clear the in-memory dirty flag of
+                // loaded configuration assets that remain referenced by the
+                // caller, so a restored AddressableAssetSettings kept failing
+                // the "configuration has unsaved changes" preflight on every
+                // later build. Force-reserialize reloads each loaded object
+                // from the restored bytes, discards unsaved in-memory state,
+                // and clears the dirty flag. The transaction therefore
+                // restores the Unity serialization state, not just files.
+                if (restoredAssetPaths.Count > 0)
+                {
+                    AssetDatabase.ForceReserializeAssets(restoredAssetPaths);
                 }
             }
 
@@ -650,12 +665,21 @@ namespace Build.Pipeline.Editor
             }
 
             var info = new FileInfo(path);
-            if (info.Length != length
-                || info.LastWriteTimeUtc.Ticks != lastWriteTimeUtcTicks
-                || (int)actualAttributes != attributes
-                || !FixedTimeEquals(ComputeSha256(bytes), sha256))
+            bool contentMatches = info.Length == length
+                && FixedTimeEquals(ComputeSha256(bytes), sha256);
+            if (!contentMatches)
             {
                 throw new IOException(label + " identity changed: '" + path + "'.");
+            }
+
+            // A save during the build can rewrite identical content with a fresh
+            // timestamp: the in-memory restore writes the original values back
+            // first, and any later SaveAssets flushes them with a new write time.
+            // Content identity is authoritative here, so restore the recorded
+            // timestamp and continue instead of failing the durable recovery.
+            if (info.LastWriteTimeUtc.Ticks != lastWriteTimeUtcTicks)
+            {
+                File.SetLastWriteTimeUtc(path, new DateTime(lastWriteTimeUtcTicks, DateTimeKind.Utc));
             }
         }
 
