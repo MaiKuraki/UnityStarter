@@ -463,7 +463,7 @@ Before authoring, install Addressables, create its settings normally, select a v
 | --- | --- |
 | `Build Remote Catalog` | Required by this pipeline's Incremental mode |
 | `Copy/Publish To Output` | Required for durable CI artifacts and Incremental |
-| `Publication Root` | Empty resolves to `Build/AddressablesContent/<invocation-id>` |
+| `Publication Root` | New configs default to `Build/Addressables`. Clearing it resolves to `Build/Bundles/<invocation-id>` so invocations stay isolated. |
 | `Content Update Baseline Asset` | Drag a prior official `addressables_content_state.bin` |
 | `Content Update Baseline Path` | Project-relative baseline restored by CI |
 | `Allow External Profile Publication Sources` | Keep disabled unless CI explicitly owns and protects external roots |
@@ -474,7 +474,7 @@ Use either baseline asset or path, never both. The path must remain inside the p
 **Clean** invokes official `AddressableAssetSettings.BuildPlayerContent`, temporarily applies the requested catalog/player-version state, clears the active builder cache only when required, and restores settings afterward. A publication resembles:
 
 ```text
-Build/AddressablesContent/<invocation-id>/<BuildTarget>/
+Build/Bundles/<invocation-id>/<BuildTarget>/
   PlayerData/
   RemoteContent/
   BuildMetadata/
@@ -482,6 +482,9 @@ Build/AddressablesContent/<invocation-id>/<BuildTarget>/
   AddressablesArtifacts.json
   .buildpipeline-owner.json
 ```
+
+Windows MAX_PATH note: the staged publication layout reserves roughly 178 characters below the publication root (target name, `.stage-` transaction suffix, and the deepest artifact path). Keep the repository checkout shallow so `project root + Publication Root + 178` stays within 259 characters; otherwise preflight fails fast with the exact per-machine budget and the largest usable configured root. Configure a shorter `Publication Root` (for example `Build/Bundles`) when a checkout is deep.
+
 
 `AddressablesArtifacts.json` records target, mode, versions, profile, catalog identity, and a size/SHA-256 inventory. Hashes support integrity and provenance; they are not signatures. A Clean invocation may feed Player, and the Player session suppresses Addressables' automatic duplicate content hook. Player Only also installs the transactional suppression guard when Addressables is available, so Unity cannot silently build stale or unselected Addressables content.
 

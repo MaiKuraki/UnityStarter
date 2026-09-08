@@ -752,7 +752,7 @@ Adapter 会在 Preflight 检查预期的官方 Editor 类型和方法。它不�
 | --- | --- | --- |
 | `Build Remote Catalog` | 通过 Addressables 构建远端 Catalog | 本 Pipeline 的 Incremental 模式要求开启 |
 | `Copy/Publish To Output` | 把已验证产物复制到 Pipeline 所有的发布目录 | 持久 CI 产物和 Incremental 都要求开启 |
-| `Publication Root` | 项目相对发布根目录 | 为空时解析为 `Build/AddressablesContent/<invocation-id>` |
+| `Publication Root` | 项目相对发布根目录 | 新建的 config 默认 `Build/Addressables`；清空后解析为 `Build/Bundles/<invocation-id>`，按 Invocation 隔离 |
 | `Content Update Baseline Asset` | 拖入上一版官方 `addressables_content_state.bin` | 与路径字段二选一，不能同时设置 |
 | `Content Update Baseline Path` | CI 恢复的项目相对路径 | 必须指向之前 Pipeline 发布物中的基线 |
 | `Allow External Profile Publication Sources` | 允许 Unity 项目外的 Profile 源目录 | 除非 CI 显式拥有并保护这些目录，否则保持关闭 |
@@ -767,7 +767,7 @@ Baseline 路径必须位于项目内并以 `.bin` 结尾，且不能位于 `.git
 发布物先写入暂存区。正常结果类似：
 
 ```text
-Build/AddressablesContent/<invocation-id>/<BuildTarget>/
+Build/Bundles/<invocation-id>/<BuildTarget>/
   PlayerData/
   RemoteContent/                 # 启用远端输出时
   BuildMetadata/                 # 包含官方 content-state 数据
@@ -775,6 +775,8 @@ Build/AddressablesContent/<invocation-id>/<BuildTarget>/
   AddressablesArtifacts.json
   .buildpipeline-owner.json
 ```
+
+Windows MAX_PATH 说明：暂存发布布局在发布根之下预留约 178 字符（目标名、`.stage-` 事务后缀、最深的产物相对路径）。保持仓库 checkout 足够浅，使 `项目根 + Publication Root + 178` 不超过 259 字符；否则 preflight 会直接失败并给出该机器的精确预算与可用发布根上限。checkout 较深时请配置更短的 `Publication Root`（例如 `Build/Bundles`）。
 
 `AddressablesArtifacts.json` 记录 target、incrementality、Unity 与 Addressables player version、Profile 身份、Remote Catalog 信息，以及 size/SHA-256 清单。这些 hash 用于事务完整性和来源追踪，不是数字签名。
 
