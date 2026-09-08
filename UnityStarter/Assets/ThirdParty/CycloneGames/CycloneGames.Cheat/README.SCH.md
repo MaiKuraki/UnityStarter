@@ -26,7 +26,7 @@ Cheat 命令回答一个问题：哪个内部操作应该在哪个 router 上、
 
 ### 主要特性
 
-- **`ICheatCommand` payload**：`CheatCommand`、`CheatCommand<T>`、`CheatCommand<T1,T2>`、`CheatCommand<T1,T2,T3>` 与 `CheatCommandClass<T>`（用于引用类型 payload）。
+- **`ICheatCommand` payload**：`CheatCommand`、`CheatCommand<T>`、`CheatCommand<T1,T2>`、`CheatCommand<T1,T2,T3>`，以及 class 变体 `CheatCommandClass<T>`（引用类型 payload）和 `CheatCommandIdClass`（只有 ID），供必须按引用持有命令实例的调用方使用。
 - **`CheatCommandRuntime`**：显式 owner 的 runtime，含按 router 跟踪、重复策略、取消和 metrics。
 - **`ICheatCommandAdmissionPublisher`**：可选 capability，供必须区分成功派发与重复、容量、校验或构建开关拒绝的调用方使用。
 - **`CheatCommandExecutionOptions`**：值类型选项，在调用处指定 `Router`、`DuplicatePolicy` 和 `Source`。
@@ -130,8 +130,11 @@ public partial class DebugWorldCheatHandler : MonoBehaviour
 | `CheatCommand<T1, T2>` | 两个 struct payload。 |
 | `CheatCommand<T1, T2, T3>` | 三个 struct payload。 |
 | `CheatCommandClass<T>` | 一个引用类型 payload。热路径优先使用 struct payload。 |
+| `CheatCommandIdClass` | `CheatCommand` 的 class 变体。热路径优先使用 `CheatCommand`。 |
 
 稳定生产工作流建议定义实现 `ICheatCommand` 的专用 command struct，而不是用字符串分支处理所有操作。专用类型让 VitalRouter 提供更强的路由，并减少 handler 内部分支。
+
+struct 与 class 变体是不同的 VitalRouter command 类型。订阅方映射到某个变体后只会收到该确切类型；并且由于 command 类型参与重复判定，`CheatCommand("X")` 与 `CheatCommandIdClass("X")` 会被视为不同命令。同一 command ID 应选定一种变体，并在 publisher 与 subscriber 两侧保持一致。
 
 ### Runtime 所有权
 
@@ -141,7 +144,7 @@ public partial class DebugWorldCheatHandler : MonoBehaviour
 
 ### 重复策略
 
-`CheatDuplicatePolicy` 控制同一 command ID 在同一 `Router` 上、前一命令仍在运行时第二次 publish 的处理方式：
+`CheatDuplicatePolicy` 控制同一命令标识在同一 `Router` 上、前一命令仍在运行时第二次 publish 的处理方式。命令标识由 command ID、目标 `Router`、具体的 `ICheatCommand` 类型以及 `AllowParallel` 发布的 sequence number 共同组成：
 
 | 策略 | 行为 |
 | --- | --- |
