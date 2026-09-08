@@ -51,6 +51,21 @@ namespace CycloneGames.Cheat.Core
         }
     }
 
+    /// <summary>
+    /// Class variant of <see cref="CheatCommand"/> for callers that must hold the command
+    /// instance by reference. Heap-allocated - prefer <see cref="CheatCommand"/> on hot paths.
+    /// </summary>
+    public sealed class CheatCommandIdClass : ICheatCommand
+    {
+        public string CommandId { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommandIdClass(string commandId)
+        {
+            CommandId = commandId ?? throw new ArgumentNullException(nameof(commandId));
+        }
+    }
+
     public readonly struct CheatCommand<T1, T2> : ICheatCommand
         where T1 : struct where T2 : struct
     {

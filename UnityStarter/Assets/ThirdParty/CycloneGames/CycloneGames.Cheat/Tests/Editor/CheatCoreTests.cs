@@ -13,6 +13,7 @@ namespace CycloneGames.Cheat.Tests.Editor
             Assert.Throws<ArgumentNullException>(() => new CheatCommand<TestPayload>(null, new TestPayload(1)));
             Assert.Throws<ArgumentNullException>(() => new CheatCommandClass<string>(null, "value"));
             Assert.Throws<ArgumentNullException>(() => new CheatCommandClass<string>("Command", null));
+            Assert.Throws<ArgumentNullException>(() => new CheatCommandIdClass(null));
         }
 
         [Test]

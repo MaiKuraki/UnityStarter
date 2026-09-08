@@ -26,7 +26,7 @@ Use this module to give debug consoles, test runners, GM tools, and automation a
 
 ### Key Features
 
-- **`ICheatCommand` payloads** — `CheatCommand`, `CheatCommand<T>`, `CheatCommand<T1,T2>`, `CheatCommand<T1,T2,T3>`, and `CheatCommandClass<T>` for reference-type payloads.
+- **`ICheatCommand` payloads** — `CheatCommand`, `CheatCommand<T>`, `CheatCommand<T1,T2>`, `CheatCommand<T1,T2,T3>`, plus the class variants `CheatCommandClass<T>` (reference-type payload) and `CheatCommandIdClass` (ID only) for callers that must hold the command instance by reference.
 - **`CheatCommandRuntime`** — explicit-owner runtime with per-router tracking, duplicate policy, cancellation, and metrics.
 - **`ICheatCommandAdmissionPublisher`** — optional capability for callers that must distinguish accepted publishes from duplicate, capacity, validation, or build-gate rejection.
 - **`CheatCommandExecutionOptions`** — value-type options for `Router`, `DuplicatePolicy`, and `Source` at the call site.
@@ -130,8 +130,11 @@ Every payload implements `ICheatCommand`, which in turn implements `VitalRouter.
 | `CheatCommand<T1, T2>` | Two struct payloads. |
 | `CheatCommand<T1, T2, T3>` | Three struct payloads. |
 | `CheatCommandClass<T>` | One reference-type payload. Prefer struct payloads on hot paths. |
+| `CheatCommandIdClass` | Class variant of `CheatCommand`. Prefer `CheatCommand` on hot paths. |
 
 For stable production workflows, prefer dedicated command structs implementing `ICheatCommand` over string-heavy catch-all handlers. Dedicated types give VitalRouter stronger routing and reduce handler-side branching.
+
+Struct and class variants are distinct VitalRouter command types. A subscriber mapped to one variant only receives that exact type, and duplicate admission treats `CheatCommand("X")` and `CheatCommandIdClass("X")` as different commands because the command type is part of the duplicate identity. Pick one variant per command ID and stay consistent across publisher and subscriber.
 
 ### Runtime ownership
 
@@ -141,7 +144,7 @@ The package does not expose a global static facade. Long-lived projects keep own
 
 ### Duplicate policy
 
-`CheatDuplicatePolicy` controls how a second publish of the same command ID on the same `Router` is handled while the first is still running:
+`CheatDuplicatePolicy` controls how a second publish of the same command identity on the same `Router` is handled while the first is still running. Duplicate identity includes the command ID, the target `Router`, the concrete `ICheatCommand` type, and the sequence number for `AllowParallel` publishes:
 
 | Policy | Behavior |
 | --- | --- |
