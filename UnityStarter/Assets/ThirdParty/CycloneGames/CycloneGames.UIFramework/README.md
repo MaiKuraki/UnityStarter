@@ -76,15 +76,15 @@ flowchart LR
 | `CycloneGames.UIFramework.Runtime` | Core runtime | Always |
 | `CycloneGames.UIFramework.Editor` | Authoring tools | Editor only |
 | `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active; companion package dependency |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | Locale layout runtime | Active; companion package dependency |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Locale layout authoring | Editor only; companion package dependency |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | Locale layout runtime | `com.cyclone-games.localization` package present (UPM), or `CYCLONEGAMES_HAS_LOCALIZATION` set |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Locale layout authoring | Editor only; same activation as the runtime localization integration |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | Window injection | `jp.hadashikick.vcontainer` package present |
 | `...Integrations.LitMotion` | Window transition driver | `com.annulusgames.lit-motion` package present |
 | `...Integrations.DOTween` | Window transition driver | `com.demigiant.dotween` package present |
 | `...Integrations.PrimeTween` | Window transition driver | `com.kyrylokuzyk.primetween` package present |
 | `CycloneGames.UIFramework.Samples` | Opt-in examples | `autoReferenced: false` |
 
-The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` and `defineConstraints`; do not add their `CYCLONEGAMES_HAS_*` symbols manually to PlayerSettings. AssetManagement and Localization integrations use explicit asmdef references to their local assemblies.
+The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI, motion, and Localization integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package. Version defines cannot detect dependencies that exist only as plain `Assets/` content; in that layout the integration stays excluded until the corresponding `CYCLONEGAMES_HAS_*` symbol is set explicitly (the same opt-in convention other raw-asset dependencies use, for example `LUBAN` or `MESSAGEPACK`). Do not set these symbols manually while the dependency is installed as a UPM package: a stale symbol would force compilation without the dependency and fail the build. The AssetManagement integration keeps explicit asmdef references because AssetManagement remains a declared package dependency of this package. `com.cyclone-games.localization` is optional and is not declared in `package.json`; the localization tests live in the conditionally compiled `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` assembly.
 
 Runtime and sample diagnostics use the stable `CycloneGames.UIFramework` `LogChannel` category; general Editor tooling uses `CycloneGames.UIFramework.Editor`, and localization authoring uses `CycloneGames.UIFramework.Localization.Editor`. The package depends only on the backend-neutral `com.cyclone-games.logging` contract and leaves writer lifecycle to the host. Without a backend, `NullLogWriter` discards messages. The composition root may install `com.cyclone-games.logging.pipeline`, add `com.cyclone-games.logging.unity`, or provide another `ILogWriter`; file path, rotation, retention, redaction, flush, and disposal policy belong to that host.
 

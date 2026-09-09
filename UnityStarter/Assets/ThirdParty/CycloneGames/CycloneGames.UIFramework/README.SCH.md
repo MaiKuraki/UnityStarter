@@ -76,15 +76,15 @@ flowchart LR
 | `CycloneGames.UIFramework.Runtime` | 核心 Runtime | 始终 |
 | `CycloneGames.UIFramework.Editor` | Authoring 工具 | 仅 Editor |
 | `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active；companion package dependency |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | 语言布局 Runtime | Active；companion package dependency |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization` | 语言布局 Authoring | 仅 Editor；companion package dependency |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | 语言布局 Runtime | 存在 `com.cyclone-games.localization` 包（UPM），或设置了 `CYCLONEGAMES_HAS_LOCALIZATION` |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization` | 语言布局 Authoring | 仅 Editor；与 Localization Runtime 集成同一激活条件 |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | 窗口注入 | 存在 `jp.hadashikick.vcontainer` 包 |
 | `...Integrations.LitMotion` | 窗口过渡 driver | 存在 `com.annulusgames.lit-motion` 包 |
 | `...Integrations.DOTween` | 窗口过渡 driver | 存在 `com.demigiant.dotween` 包 |
 | `...Integrations.PrimeTween` | 窗口过渡 driver | 存在 `com.kyrylokuzyk.primetween` 包 |
 | `CycloneGames.UIFramework.Samples` | 选择性示例 | `autoReferenced: false` |
 
-核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
+核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选的 DI、Motion 与 Localization Integration 通过 asmdef 的 `versionDefines` 加 `defineConstraints` 启用：当依赖以 UPM 包形式安装时自动激活。`versionDefines` 无法探测仅以普通 `Assets/` 内容存在的依赖；这种布局下集成保持排除状态，直到显式设置对应的 `CYCLONEGAMES_HAS_*` 符号（与其他裸资产依赖使用的 opt-in 约定一致，例如 `LUBAN`、`MESSAGEPACK`）。当依赖已作为 UPM 包安装时，不要手工设置这些符号：残留符号会在缺少依赖的情况下强制编译并导致构建失败。AssetManagement Integration 保留显式 asmdef reference，因为 AssetManagement 仍是本包声明的依赖。`com.cyclone-games.localization` 为可选依赖，不在 `package.json` 中声明；Localization 测试位于条件编译的 `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` 程序集。
 
 Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category；通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`，Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，writer 生命周期由 host 负责。未安装 backend 时，`NullLogWriter` 会丢弃消息。应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
 

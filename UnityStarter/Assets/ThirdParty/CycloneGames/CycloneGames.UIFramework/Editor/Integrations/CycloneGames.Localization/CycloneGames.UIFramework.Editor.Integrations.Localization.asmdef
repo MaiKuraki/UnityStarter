@@ -18,7 +18,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_LOCALIZATION"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.localization",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_LOCALIZATION"
+        }
+    ],
     "noEngineReferences": false
 }

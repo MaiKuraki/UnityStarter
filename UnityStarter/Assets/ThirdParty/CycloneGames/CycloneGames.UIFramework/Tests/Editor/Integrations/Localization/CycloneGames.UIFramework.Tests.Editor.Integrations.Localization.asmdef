@@ -1,0 +1,37 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.Editor.Integrations.Localization",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.Editor.Integrations.Localization",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Tests.Editor",
+        "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+        "CycloneGames.UIFramework.Editor.Integrations.Localization",
+        "CycloneGames.Localization.Core",
+        "CycloneGames.Localization.Runtime",
+        "CycloneGames.Logging.Core",
+        "Unity.TextMeshPro",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_LOCALIZATION"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.localization",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_LOCALIZATION"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
