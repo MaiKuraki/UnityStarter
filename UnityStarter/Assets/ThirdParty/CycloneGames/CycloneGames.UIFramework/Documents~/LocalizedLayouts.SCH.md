@@ -243,7 +243,7 @@ Runtime 会把尚未支持的未来 schema 视为不可用，并恢复已捕获�
 
 构造、`Bind`、`Unbind`、window binding disposal、Localization mutation，以及所有 Unity UI mutation 都限定在 Unity 主线程。`LocalizationService` 在初始化时捕获 mutation owner，并拒绝 off-owner mutation。它的 immutable lookup snapshot 可并发服务 pure managed query，但本 UI integration 不从 worker thread 访问 Unity object，也不维护第二套 dispatcher 或 lock。
 
-实现仅使用 managed C#、Unity UI、TMP 与显式 asmdef reference，不包含 native plugin、file I/O、dynamic code generation、runtime reflection、unsafe code 或 worker-thread 要求。
+实现仅使用 managed C#、Unity UI、TMP 与一个 companion Integration Assembly——仅当 `com.cyclone-games.localization` 包存在（UPM `versionDefines`）或设置了 `CYCLONEGAMES_HAS_LOCALIZATION` 时才编译，不包含 native plugin、file I/O、dynamic code generation、runtime reflection、unsafe code 或 worker-thread 要求。
 
 ## 故障排查
 
