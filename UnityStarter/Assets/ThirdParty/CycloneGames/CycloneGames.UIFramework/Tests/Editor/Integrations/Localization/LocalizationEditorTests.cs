@@ -11,7 +11,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace CycloneGames.UIFramework.Tests.Editor
+namespace CycloneGames.UIFramework.Tests.Editor.Integrations.Localization
 {
     public sealed class LocalizationEditorTests
     {

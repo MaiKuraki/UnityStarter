@@ -243,7 +243,7 @@ The successful locale-application loop contains no intentional managed allocatio
 
 Construction, `Bind`, `Unbind`, window binding disposal, localization mutations, and every Unity UI mutation are confined to the Unity main thread. `LocalizationService` captures the mutation owner during initialization and rejects off-owner mutation. Its immutable lookup snapshot can serve pure managed queries concurrently, but this UI integration never accesses Unity objects from a worker thread and does not maintain a secondary dispatcher or lock.
 
-The implementation uses managed C#, Unity UI, TMP, and explicit asmdef references. It has no native plugin, file I/O, dynamic code generation, runtime reflection, unsafe code, or worker-thread requirement.
+The implementation uses managed C#, Unity UI, TMP, and a companion integration assembly that compiles only when the `com.cyclone-games.localization` package is present (UPM `versionDefines`) or `CYCLONEGAMES_HAS_LOCALIZATION` is set. It has no native plugin, file I/O, dynamic code generation, runtime reflection, unsafe code, or worker-thread requirement.
 
 ## Troubleshooting
 
