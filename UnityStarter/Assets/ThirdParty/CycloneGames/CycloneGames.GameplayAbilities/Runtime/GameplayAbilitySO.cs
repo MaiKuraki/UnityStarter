@@ -47,11 +47,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("Tags that are granted to the owner while this ability is active. Removed when the ability ends.")]
         public SerializableGameplayTagContainer ActivationOwnedTags;
 
-        [Header("Source / Target Tags (UE5 Parity)")]
-        [Tooltip("The source (owner) must have ALL of these tags for the ability to activate. UE5: SourceRequiredTags.")]
+        [Header("Source / Target Tags")]
+        [Tooltip("Caller-supplied source tags (e.g., the ASC that fired the triggering gameplay event) must contain ALL of these tags to activate. Skipped entirely when no source tags are supplied at activation.")]
         public SerializableGameplayTagContainer SourceRequiredTags;
 
-        [Tooltip("The ability is blocked from activating if the source (owner) has ANY of these tags. UE5: SourceBlockedTags.")]
+        [Tooltip("Blocked from activating if caller-supplied source tags (e.g., the ASC that fired the triggering gameplay event) contain ANY of these tags. Skipped entirely when no source tags are supplied at activation.")]
         public SerializableGameplayTagContainer SourceBlockedTags;
 
         [Tooltip("The target must have ALL of these tags for the ability's effects to be applied. UE5: TargetRequiredTags.")]
