@@ -1,6 +1,6 @@
 {
   "name": "com.cyclone-games.persistence",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "displayName": "CycloneGames.Persistence",
   "description": "Serializer-neutral, bounded, versioned single-record persistence contracts and orchestration.",
   "unity": "2022.3",
