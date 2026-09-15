@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Core;
 using CycloneGames.Logging;
 using UnityEngine;
 
@@ -18,11 +19,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             this.slamRadius = radius;
         }
 
-        public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
+        public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, ReadOnlyGameplayTagContainer sourceTags)
         {
             // For this ability, we could add a check to see if the character is airborne.
             // if (!character.IsAirborne) return false;
-            return base.CanActivate(actorInfo, spec);
+            return base.CanActivate(actorInfo, spec, sourceTags);
         }
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
