@@ -1333,9 +1333,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     null);
             }
 
-            public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
+            public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, ReadOnlyGameplayTagContainer sourceTags)
             {
-                return canActivate && base.CanActivate(actorInfo, spec);
+                return canActivate && base.CanActivate(actorInfo, spec, sourceTags);
             }
 
             public override void ActivateAbility(

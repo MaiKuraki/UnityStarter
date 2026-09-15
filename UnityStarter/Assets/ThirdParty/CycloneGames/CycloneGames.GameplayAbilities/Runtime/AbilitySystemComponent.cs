@@ -2160,7 +2160,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         // --- Ability Activation Flow ---
-        public bool TryActivateAbility(GameplayAbilitySpec spec)
+        public bool TryActivateAbility(GameplayAbilitySpec spec, ReadOnlyGameplayTagContainer sourceTags = null)
         {
             AssertRuntimeThread();
             if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
@@ -2229,7 +2229,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return TryExecuteAuthorityAbility(spec).Activated;
             }
 
-            if (!ability.CanActivate(cachedActorInfo, spec))
+            if (!ability.CanActivate(cachedActorInfo, spec, sourceTags))
             {
                 return false;
             }
@@ -2249,7 +2249,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>Executes a locally predicted ability and returns its reconciliation key.</summary>
         public bool TryActivatePredictedAbility(
             GameplayAbilitySpec spec,
-            out GASPredictionKey predictionKey)
+            out GASPredictionKey predictionKey,
+            ReadOnlyGameplayTagContainer sourceTags = null)
         {
             AssertRuntimeThread();
             predictionKey = default;
@@ -2269,7 +2270,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GameplayAbility ability = spec.GetPrimaryInstance();
             if (ability == null ||
                 ability.ExecutionPolicy != EAbilityExecutionPolicy.LocalPredicted ||
-                !ability.CanActivate(cachedActorInfo, spec))
+                !ability.CanActivate(cachedActorInfo, spec, sourceTags))
             {
                 return false;
             }
@@ -2362,7 +2363,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </remarks>
         public GASAuthorityActivationResult TryExecuteAuthorityAbility(
             GameplayAbilitySpec spec,
-            GASPredictionKey commandCorrelationKey)
+            GASPredictionKey commandCorrelationKey,
+            ReadOnlyGameplayTagContainer sourceTags = null)
         {
             AssertRuntimeThread();
             ulong currentStateVersion = stateVersion;
@@ -2410,7 +2412,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     currentStateVersion);
             }
 
-            if (spec.IsActive || !ability.CanActivate(cachedActorInfo, spec))
+            if (spec.IsActive || !ability.CanActivate(cachedActorInfo, spec, sourceTags))
             {
                 return new GASAuthorityActivationResult(
                     GASAuthorityActivationStatus.AbilityRejected,

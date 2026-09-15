@@ -18,10 +18,10 @@ namespace CycloneGames.GameplayAbilities.Sample
             this.burnEffect = burnEffectInstance;
         }
 
-        public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
+        public override bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, ReadOnlyGameplayTagContainer sourceTags)
         {
             // Add any specific checks here, e.g., if a weapon is equipped.
-            return base.CanActivate(actorInfo, spec);
+            return base.CanActivate(actorInfo, spec, sourceTags);
         }
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
