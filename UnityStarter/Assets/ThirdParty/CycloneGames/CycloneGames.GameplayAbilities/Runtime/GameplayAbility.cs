@@ -926,7 +926,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Checks all conditions (tags, cost, cooldown) to determine if the ability can be activated.
         /// </summary>
-        public virtual bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
+        public virtual bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, ReadOnlyGameplayTagContainer sourceTags = null)
         {
             if (isEnding)
             {
@@ -955,23 +955,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return false;
             }
 
-            // UE5: Source tag requirements --check tags on the source (owner)
-            if (!spec.Owner.HasAllMatchingGameplayTags(SourceRequiredTagsSnapshot))
+            if (sourceTags != null)
             {
-                if (GASTrace.Enabled)
+                if (!sourceTags.HasAll(SourceRequiredTagsSnapshot))
                 {
-                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceRequiredTags, abilitySpecHandle: spec.Handle);
+                    if (GASTrace.Enabled)
+                    {
+                        GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceRequiredTags, abilitySpecHandle: spec.Handle);
+                    }
+                    return false;
                 }
-                return false;
-            }
 
-            if (spec.Owner.HasAnyMatchingGameplayTags(SourceBlockedTagsSnapshot))
-            {
-                if (GASTrace.Enabled)
+                if (sourceTags.HasAny(SourceBlockedTagsSnapshot))
                 {
-                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceBlockedTags, abilitySpecHandle: spec.Handle);
+                    if (GASTrace.Enabled)
+                    {
+                        GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceBlockedTags, abilitySpecHandle: spec.Handle);
+                    }
+                    return false;
                 }
-                return false;
             }
 
             // UE5: Check if any active ability is blocking us via BlockAbilitiesWithTag
