@@ -483,7 +483,7 @@ Build/Bundles/<invocation-id>/<BuildTarget>/
   .buildpipeline-owner.json
 ```
 
-Windows MAX_PATH note: the staged publication layout reserves roughly 178 characters below the publication root (target name, `.stage-` transaction suffix, and the deepest artifact path). Keep the repository checkout shallow so `project root + Publication Root + 178` stays within 259 characters; otherwise preflight fails fast with the exact per-machine budget and the largest usable configured root. Configure a shorter `Publication Root` (for example `Build/Bundles`) when a checkout is deep.
+Windows MAX_PATH note: the staged publication layout reserves 174 characters below the publication root — the build-target directory, the `.stage-<transaction id>` suffix, and the deepest artifact path — with the per-layout breakdown documented on `AddressablesBuilder.PublicationStagingPathReserve`. Keep the repository checkout shallow so `project root + Publication Root + 174` stays within 259 characters; otherwise preflight fails fast with the exact per-machine budget and the largest usable configured root. Configure a shorter `Publication Root` (for example `Build/Bundles`) when a checkout is deep.
 
 
 `AddressablesArtifacts.json` records target, mode, versions, profile, catalog identity, and a size/SHA-256 inventory. Hashes support integrity and provenance; they are not signatures. A Clean invocation may feed Player, and the Player session suppresses Addressables' automatic duplicate content hook. Player Only also installs the transactional suppression guard when Addressables is available, so Unity cannot silently build stale or unselected Addressables content.
@@ -857,7 +857,7 @@ The design fails closed and preserves ambiguous state for inspection rather than
 
 ### Preflight gate
 
-Before mutable Unity state changes, the runner verifies project identity, portable safe paths, no redirection, deletion boundaries, output shape, Editor idle state, workspace cleanliness, persistent clean configurations, bounded unchanged dependencies, graph correctness, optional APIs, exclusive claims, active target/backend, source identity, scenes, and dynamic Player requirements. All applicable step errors are aggregated.
+Before mutable Unity state changes, the runner verifies project identity, portable safe paths, portable content names, no redirection, deletion boundaries, output shape, Editor idle state, workspace cleanliness, persistent clean configurations, bounded unchanged dependencies, graph correctness, optional APIs, exclusive claims, active target/backend, source identity, scenes, and dynamic Player requirements. All applicable step errors are aggregated.
 
 ### Workspace lease and statuses
 
@@ -967,8 +967,11 @@ Representative budgets include 256 invocations, 4096 edges, 512 publications, 40
 | Player transformation/preparation | `PlayerBuildExtensionConfiguration` + `IPlayerBuildExtensionAdapter` | `player` |
 | Process-global Player invariant | `IPlayerBuildEnvironmentGuard` | `player` |
 | Hard-interruption cleanup | `IBuildRecoveryParticipant` | Workspace Recovery |
+| Content portability gate | `IBuildStep` + `PortableAssetPathAudit` | `asset-path-audit` |
 
 Do not create a new step when a provider-neutral step already owns the lifecycle. An adapter keeps recipe semantics stable while the optional implementation can be installed, upgraded, or removed.
+
+A validation-only step follows the same contract as any other step: `Validate` is write-free and aggregates actionable errors, and `Execute` reports rather than mutates. Reuse `PortableAssetPathPolicy` for a single name and `PortableAssetPathAudit` for a bounded tree scan instead of writing a second walk; a new walk is a new unbounded risk.
 
 ### Assembly boundaries
 
@@ -1096,6 +1099,7 @@ Document stable IDs, config fields, availability, incrementality, exclusive clai
 | `player` | Optional `PlayerBuildConfiguration` | Single | Global state, VersionInfo, Player output |
 | `asset-content` | Required `AssetContentBuildConfiguration` | Multiple | Provider-defined |
 | `hot-update` | Required `HotUpdateBuildConfiguration` | Multiple | Adapter-defined |
+| `asset-path-audit` | Optional `AssetPathAuditConfiguration` | Single | None |
 
 | Capability | Provider ID | Configuration |
 | --- | --- | --- |
@@ -1203,9 +1207,11 @@ Assets/Build/Editor/BuildPipeline/Authoring/
 Assets/Build/Editor/BuildPipeline/Core/Contracts/
 Assets/Build/Editor/BuildPipeline/Core/Discovery/
 Assets/Build/Editor/BuildPipeline/Core/Execution/
+Assets/Build/Editor/BuildPipeline/Core/Policies/
 Assets/Build/Editor/BuildPipeline/Core/Recovery/
 Assets/Build/Editor/BuildPipeline/Core/Results/
 Assets/Build/Editor/BuildPipeline/Core/Transactions/
+Assets/Build/Editor/BuildPipeline/Core/Validation/
 Assets/Build/Editor/BuildPipeline/EntryPoints/
 Assets/Build/Editor/BuildPipeline/Steps/
 Assets/Build/Editor/BuildPipeline/Integrations/
@@ -1242,6 +1248,7 @@ The synchronized Chinese manual is [README.SCH.md](README.SCH.md). The architect
 | Incremental requires Clean | Compatibility identity changed | Run Clean and separate platform caches |
 | Source workspace is Dirty/Unknown | Local changes, submodule/LFS state, missing VCS tool, timeout, output limit, malformed output, or changing snapshot | Preserve the manifest failure code; restore a verified-clean checkout/toolchain, or explicitly relax only a Development profile |
 | Exit `2` | Evidence cannot be persisted/confirmed | Preserve artifacts, fix disk/permission/capacity, inspect before retry |
+| `non-ASCII`, `reserved character`, `reserved device name`, or MAX_PATH finding on an asset path | The name is legal in the working copy but not after the build | Rename the file or folder using ASCII letters, digits, `-`, `_`, `.`; see [Unportable asset names](#unportable-asset-names) |
 
 ### Failed build followed by platform switch
 
@@ -1271,6 +1278,41 @@ Normal success/handled failure restores prior asset/meta and removes only transa
 - **HybridCLR + Cheat rejected:** disable Cheat for that Player composition or use an adapter supporting matching defines.
 - **HybridCLR + Obfuz Incremental rejected:** use Clean; the audited vendor API cannot consume the validated baseline path.
 - **Player Obfuz mismatch:** make `ProjectSettings/Obfuz.asset` and generated VM match explicit extension selection.
+
+### Unportable asset names
+
+A name can be legal in the working copy and still fail after the build. Unity copies `Assets/StreamingAssets` verbatim into the Player, so those names become part of the shipped artifact and are addressed by name at runtime; Android reads them through the APK zip index, WebGL through a URL, and Windows build agents still reach MAX_PATH-limited Win32 APIs. A name authored on a case-insensitive volume can additionally collide or disappear on a case-sensitive checkout.
+
+Two checks cover this, at different scopes:
+
+| Scope | When it runs | Severity |
+| --- | --- | --- |
+| `Assets/StreamingAssets` | Every Player preflight, unconditionally | Always an error |
+| Whole `Assets` tree, plus configured additional roots | Only when the `asset-path-audit` step is selected in the recipe | Structural findings are errors; non-ASCII in the asset tree is a warning unless escalated |
+
+Use the `asset-path-audit` step to gate content-only builds too, or when a project must prove that the asset tree is portable before it reaches a Player. To run the same scan without a build, use `Build/Pipeline/Audit Asset Path Portability`; the report goes to the console.
+
+The segment rules are:
+
+| Rule | Rejected |
+| --- | --- |
+| Non-ASCII when enforced | `测试音效.wav`, `Audio/日本/` |
+| Reserved characters | `< > : " / \ \| ? *` |
+| Reserved device names | `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, and any of them with an extension |
+| Trailing period or space | `audio.`, `audio ` |
+| Control characters and unpaired surrogates | Any C0/C1 character, any lone surrogate |
+| Segment length | More than 255 UTF-8 bytes in one segment |
+| Path length | A composed absolute path beyond the 259-character Win32 MAX_PATH budget |
+
+Names Unity itself ignores during import — anything starting with `.` or ending with `~`, such as a UPM `Samples~` folder — are counted separately and never reported as findings. Symbolic links and junctions are not followed, because the check must stay inside the declared scope; they are reported as a count instead.
+
+The audit is bounded: it stops at an entry budget, caps details at a finding budget while still counting the remainder, sorts entries ordinally for reproducible CI reports, and treats an unreadable directory as a permissions problem rather than a naming problem.
+
+Bounded does not mean best-effort. Both limits that reduce what was actually inspected fail the build: an exhausted entry budget and a directory that could not be read. A gate that passes on a partial scan certifies content it never looked at, so `AssetPathAuditConfiguration.Maximum Entry Count` exists as a deliberate opt-in for asset trees that legitimately exceed the built-in default rather than as a silent escape hatch. The finding cap is different: it limits only how many details are reported, not what was scanned, so it never fails a build on its own.
+
+Exclusions are declared per scope and expressed project-relative; the plan translates them into each scope's own coordinate space so one scope's exclusion can never reach another. The broad asset-tree scope always skips `StreamingAssets`, which its own strict scope then scans, so one name is never reported twice with two different verdicts. Excluding `Assets/StreamingAssets` itself is rejected as a configuration error instead of being honoured, because the Player preflight enforces the same rule and a silent opt-out here would only move the failure later.
+
+Severity has two levels on purpose. `AssetPathAuditConfiguration.Fail Build On Violation` downgrades the step's findings to warnings while a project migrates; it does not disable the Player preflight, which is not configurable because `Assets/StreamingAssets` names ship verbatim.
 
 ### CI identity and disk evidence
 
