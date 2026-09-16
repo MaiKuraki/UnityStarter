@@ -80,6 +80,55 @@ namespace Build.Pipeline.Editor
                 exportAndroidProject: true);
         }
 
+        [MenuItem("Build/Pipeline/Audit Asset Path Portability", priority = 6)]
+        public static void AuditAssetPathPortability()
+        {
+            var errors = new System.Collections.Generic.List<string>();
+            PortableAssetPathAuditResult result = AssetPathAuditBuildStep.RunAudit(
+                GetCurrentProjectRoot(),
+                configuration: null,
+                errors);
+
+            var builder = new StringBuilder(1024);
+            builder.AppendLine($"{LogTag} {result.DescribeSummary()}");
+            string coverageError = result.DescribeIncompleteCoverage("Maximum Entry Count");
+            if (!string.IsNullOrEmpty(coverageError))
+            {
+                builder.AppendLine("  " + coverageError);
+            }
+
+            for (int index = 0; index < errors.Count; index++)
+            {
+                builder.AppendLine("  error: " + errors[index]);
+            }
+
+            for (int index = 0; index < result.WarningMessages.Count; index++)
+            {
+                builder.AppendLine("  warning: " + result.WarningMessages[index]);
+            }
+
+            if (result.ErrorMessages.Count == 0
+                && result.WarningMessages.Count == 0
+                && string.IsNullOrEmpty(coverageError))
+            {
+                builder.AppendLine("  No unportable asset path was found.");
+            }
+
+            if (result.ErrorMessages.Count > 0 || !string.IsNullOrEmpty(coverageError))
+            {
+                Debug.LogError(builder.ToString());
+                return;
+            }
+
+            if (result.WarningMessages.Count > 0)
+            {
+                Debug.LogWarning(builder.ToString());
+                return;
+            }
+
+            Debug.Log(builder.ToString());
+        }
+
         /// <summary>
         /// Canonical TeamCity, Jenkins, and other batch-mode entry point.
         /// </summary>
