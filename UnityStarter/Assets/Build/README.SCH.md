@@ -776,7 +776,7 @@ Build/Bundles/<invocation-id>/<BuildTarget>/
   .buildpipeline-owner.json
 ```
 
-Windows MAX_PATH 说明：暂存发布布局在发布根之下预留约 178 字符（目标名、`.stage-` 事务后缀、最深的产物相对路径）。保持仓库 checkout 足够浅，使 `项目根 + Publication Root + 178` 不超过 259 字符；否则 preflight 会直接失败并给出该机器的精确预算与可用发布根上限。checkout 较深时请配置更短的 `Publication Root`（例如 `Build/Bundles`）。
+Windows MAX_PATH 说明：暂存发布布局在发布根之下预留 174 字符——目标平台目录、`.stage-<transaction id>` 后缀，以及最深的产物相对路径，逐项构成见 `AddressablesBuilder.PublicationStagingPathReserve`。保持仓库 checkout 足够浅，使 `项目根 + Publication Root + 174` 不超过 259 字符；否则 preflight 会直接失败并给出该机器的精确预算与可用发布根上限。checkout 较深时请配置更短的 `Publication Root`（例如 `Build/Bundles`）。
 
 `AddressablesArtifacts.json` 记录 target、incrementality、Unity 与 Addressables player version、Profile 身份、Remote Catalog 信息，以及 size/SHA-256 清单。这些 hash 用于事务完整性和来源追踪，不是数字签名。
 
@@ -1489,6 +1489,7 @@ Build 模块把 Unity 设置、生成资产、Provider 输出和 CI 结果视为
 
 - request 属于当前 Editor 进程已加载的项目；
 - build root 与输出路径满足 portable path、禁止重定向、删除边界、输出形态和路径长度策略；
+- `Assets/StreamingAssets` 下的文件与目录名满足可移植命名策略（Unity 会把这些名字原样复制进 Player，因此该检查始终执行且不可关闭）；
 - Editor 没有在编译或更新资产；
 - workspace 不存在待处理事务证据；
 - 已选配置资产及其依赖是持久、已保存、有界且未变化的；
@@ -1678,8 +1679,11 @@ Evidence failure 具有更高优先级。即使 artifact 已提交，终态 mani
 | 在 Player 构建期间转换或准备输入 | `PlayerBuildExtensionConfiguration` + `IPlayerBuildExtensionAdapter` | `player` |
 | 审计进程级 Player 环境 | `IPlayerBuildEnvironmentGuard` | `player` |
 | 强制中断后恢复持久状态 | `IBuildRecoveryParticipant` | Workspace Recovery |
+| 内容命名可移植性闸门 | `IBuildStep` + `PortableAssetPathAudit` | `asset-path-audit` |
 
 如果现有 Provider-neutral Step 已拥有完整生命周期，就不要新增 Step。Provider Adapter 是更深的模块边界：Recipe 可以保持稳定，外部实现则可以独立安装、升级或移除。
+
+只做校验的 Step 与其他 Step 遵守同一契约：`Validate` 零写入并聚合可操作错误，`Execute` 只报告不修改。校验单个名字请复用 `PortableAssetPathPolicy`，扫描目录树请复用 `PortableAssetPathAudit`；再写一份递归遍历，就等于再引入一份无上限风险。
 
 ```mermaid
 flowchart TD
@@ -1965,6 +1969,7 @@ CI 通常应通过版本控制中的 Profile 选择扩展。只有明确需要�
 | `player` | 可选 `PlayerBuildConfiguration` | `Single` | `UnityGlobalState`、`VersionInfoAsset`、`PlayerOutput` |
 | `asset-content` | 必需 `AssetContentBuildConfiguration` | `Multiple` | Provider 定义；核心步骤不声明 |
 | `hot-update` | 必需 `HotUpdateBuildConfiguration` | `Multiple` | Adapter 定义 |
+| `asset-path-audit` | 可选 `AssetPathAuditConfiguration` | `Single` | 无 |
 
 **当前模块中的 Provider ID**
 
@@ -2168,9 +2173,11 @@ Assets/Build/Editor/BuildPipeline/Authoring/
 Assets/Build/Editor/BuildPipeline/Core/Contracts/
 Assets/Build/Editor/BuildPipeline/Core/Discovery/
 Assets/Build/Editor/BuildPipeline/Core/Execution/
+Assets/Build/Editor/BuildPipeline/Core/Policies/
 Assets/Build/Editor/BuildPipeline/Core/Recovery/
 Assets/Build/Editor/BuildPipeline/Core/Results/
 Assets/Build/Editor/BuildPipeline/Core/Transactions/
+Assets/Build/Editor/BuildPipeline/Core/Validation/
 Assets/Build/Editor/BuildPipeline/EntryPoints/
 Assets/Build/Editor/BuildPipeline/Steps/
 Assets/Build/Editor/BuildPipeline/Integrations/
@@ -2219,6 +2226,7 @@ Assets/Build/Tests/Editor/
 | 输出为 Foreign 或 Unowned | Destination 中的数据没有期望 Owner Identity | 选择新的空目录、备份并移走外部目录，或进行受控 Clean Publication；不得隐式接管 |
 | Output Claim 重叠 | 两个 Invocation 拥有相同或祖先/子孙 Root | 为每个 Invocation 配置独立 Root，或在单个 Provider Invocation 内组合 |
 | Incremental 要求 Clean | Target、Backend、Output、Application Identity、Unity Version、Config、Adapter 或 Baseline Identity 改变 | 对新 Identity 执行 Clean，并为各平台使用独立 Cache Root |
+| 资源路径报 `non-ASCII`、`reserved character`、`reserved device name` 或 MAX_PATH 超限 | 该名字在工作副本里合法，但进入构建产物后不成立 | 用 ASCII 字母、数字、`-`、`_`、`.` 重命名文件或目录；参见[不可移植的资源命名](#不可移植的资源命名) |
 | Exit Code `2` | 必需 Result Evidence 无法写入或严格确认 | 将本次视为失败，保留产物与日志，修复磁盘/权限/容量问题，重试前检查 Workspace |
 
 ### 构建失败后切换平台
@@ -2305,6 +2313,41 @@ Baseline 只会由成功的 Clean Release Run 发布，并且必须恰好有一�
 **Player Obfuz 状态与 Recipe 不一致**
 
 Player Extension 不会切换持久化 Obfuz Settings。选中 Extension 时，`ProjectSettings/Obfuz.asset`、生成的 Encryption VM 与所需 Pipeline Setting 必须已经有效；没有选中时，持久开启的 Obfuz Pipeline 会被拒绝，避免发生未记录的 Player Transformation。
+
+### 不可移植的资源命名
+
+一个名字可以在工作副本里完全合法，进入构建产物后却不成立。Unity 会把 `Assets/StreamingAssets` 原样复制进 Player，这些名字因此成为发布产物的一部分，并在运行时按名寻址；Android 通过 APK zip 索引读取它们，WebGL 通过 URL 解析，Windows build agent 仍然会撞上受 MAX_PATH 限制的 Win32 API。在大小写不敏感卷上写下的名字，还可能在大小写敏感的 CI checkout 上冲突或消失。
+
+覆盖这一点的检查分两个层级：
+
+| 范围 | 触发时机 | 严重级别 |
+| --- | --- | --- |
+| `Assets/StreamingAssets` | 每次 Player Preflight，无条件执行 | 始终为 Error |
+| 整个 `Assets` 树，以及配置的额外根目录 | 仅当 Recipe 选中 `asset-path-audit` Step 时 | 结构性违规为 Error；资源树内的非 ASCII 默认只警告，可显式升级为 Error |
+
+`asset-path-audit` Step 同时用于给 Content Only 构建加闸，或用于在内容进入 Player 之前证明资源树是可移植的。不跑构建、只想扫描时，使用菜单 `Build/Pipeline/Audit Asset Path Portability`，报告输出到 Console。
+
+命名规则：
+
+| 规则 | 会被拒绝的例子 |
+| --- | --- |
+| 强制 ASCII 时的非 ASCII 命名 | `测试音效.wav`、`Audio/日本/` |
+| 保留字符 | `< > : " / \ \| ? *` |
+| 保留设备名 | `CON`、`PRN`、`AUX`、`NUL`、`COM1`-`COM9`、`LPT1`-`LPT9`，以及它们带扩展名的形式 |
+| 结尾的句点或空格 | `audio.`、`audio ` |
+| 控制字符与未配对代理项 | 任意 C0/C1 字符、任意孤立代理项 |
+| 单段长度 | 单个段超过 255 个 UTF-8 字节 |
+| 路径长度 | 组合后的绝对路径超过 Win32 MAX_PATH 的 259 字符预算 |
+
+Unity 自身在导入时忽略的名字——以 `.` 开头或以 `~` 结尾，例如 UPM 的 `Samples~` 目录——会被单独计数，永远不会作为 finding 上报。符号链接与 junction 不会被跟随，因为检查必须留在声明的 scope 内；它们只以计数形式报告。
+
+审计是有界的：达到条目预算即停止；达到 finding 预算后只统计不再收集细节；条目按 ordinal 排序以保证 CI 报告可复现；不可读目录按权限问题处理，不会伪装成命名问题。
+
+有界不等于尽力而为。两个会减少"实际检查范围"的上限都会让构建失败：条目预算耗尽、以及目录无法读取。一个在部分扫描上放行的闸门，等于为它从未看过的东西背书。`AssetPathAuditConfiguration.Maximum Entry Count` 是为了让资产树确实超过内建默认值的项目显式提高预算，而不是留一个静默后门。finding 上限不同：它只限制报告多少细节，不改变扫描范围，因此单独触发时不会导致构建失败。
+
+排除项按 scope 声明，并以项目相对路径书写；计划层会把它翻译到每个 scope 自己的坐标空间，因此一个 scope 的排除项不会波及另一个 scope。宽范围的资源树 scope 始终跳过 `StreamingAssets`，由它自己的严格 scope 扫描，同一个名字不会以两种结论被报告两次。把 `Assets/StreamingAssets` 本身写进排除项会作为配置错误报出而不是被接受：Player Preflight 执行同样的规则，在这里静默放开只会把失败推迟。
+
+严重级别刻意分成两级：`AssetPathAuditConfiguration` 的 `Fail Build On Violation` 可以把该 Step 的 finding 降级为警告，便于项目分批整改；但它不会关闭 Player Preflight，因为 `Assets/StreamingAssets` 的名字是原样发布的，该项不可配置。
 
 ### CI Identity 与磁盘证据
 

@@ -2258,6 +2258,14 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        /// <summary>
+        /// Zero-write preflight for the publication half of an Addressables content
+        /// build. Deterministic configuration defects are reported before capacity
+        /// and environment preflight: a configuration that is wrong is wrong on
+        /// every machine, and reporting "move the repository to a shorter path"
+        /// while the real problem is an overlapping source root sends the author
+        /// down the wrong path.
+        /// </summary>
         internal static string ValidatePublicationConfiguration(
             string invocationId,
             AddressablesBuildConfig config,
@@ -2279,41 +2287,34 @@ namespace Build.Pipeline.Editor
                     invocationId,
                     config.buildOutputDirectory);
                 string publicationRoot = BuildPathPolicy.ResolveBuildRoot(projectRoot, outputDirectory);
-                string stagingBudgetError = ValidatePublicationStagingPathBudget(
+
+                if (config.additionalPublicationRoots != null)
+                {
+                    var destinationFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (AddressablesPublicationRoot root in config.additionalPublicationRoots)
+                    {
+                        if (root == null)
+                        {
+                            return "Addressables additional publication roots cannot contain null entries.";
+                        }
+
+                        string error = ValidateAdditionalPublicationRoot(root, projectRoot, publicationRoot);
+                        if (!string.IsNullOrEmpty(error))
+                        {
+                            return error;
+                        }
+
+                        if (!destinationFolders.Add(root.destinationFolder))
+                        {
+                            return $"Addressables publication destination folder is duplicated: '{root.destinationFolder}'.";
+                        }
+                    }
+                }
+
+                return ValidatePublicationStagingPathBudget(
                     projectRoot,
                     publicationRoot,
                     outputDirectory);
-                if (!string.IsNullOrEmpty(stagingBudgetError))
-                {
-                    return stagingBudgetError;
-                }
-
-                if (config.additionalPublicationRoots == null)
-                {
-                    return null;
-                }
-
-                var destinationFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (AddressablesPublicationRoot root in config.additionalPublicationRoots)
-                {
-                    if (root == null)
-                    {
-                        return "Addressables additional publication roots cannot contain null entries.";
-                    }
-
-                    string error = ValidateAdditionalPublicationRoot(root, projectRoot, publicationRoot);
-                    if (!string.IsNullOrEmpty(error))
-                    {
-                        return error;
-                    }
-
-                    if (!destinationFolders.Add(root.destinationFolder))
-                    {
-                        return $"Addressables publication destination folder is duplicated: '{root.destinationFolder}'.";
-                    }
-                }
-
-                return null;
             }
             catch (Exception exception)
             {
@@ -2323,14 +2324,44 @@ namespace Build.Pipeline.Editor
 
         // Worst-case staged artifact layout below the publication root, used to
         // reject deep checkouts during preflight instead of after Addressables
-        // content build: "<BuildTarget>.stage-<32-hex transaction id>" plus the
-        // deepest artifact relative path ("PlayerData/StandaloneWindows64/" +
-        // the longest observed bundle name, including BundleName_Hash styles
-        // that prefix a readable group/asset-path name before the hash).
+        // content build:
+        //
+        //   <publicationRoot>/<destinationName>.stage-<32-hex transaction id>/<artifact>
+        //
+        // Each reserve below is derived from that layout instead of being a
+        // round number:
+        //  - the destination directory is "<publicationRoot>/<BuildTarget>", and
+        //    the longest supported BuildTarget name is "StandaloneWindows64" (19),
+        //    so 22 covers it plus margin for a future, longer target name;
+        //  - the publication transaction suffix is ".stage-" plus a 32-character
+        //    hexadecimal GUID (7 + 32 = 39);
+        //  - the deepest artifact is
+        //    "PlayerData/<BuildTarget>/" (30) plus a HashName bundle
+        //    ("<32 hex>.bundle" = 39) plus room for readable BundleName_ prefixes,
+        //    additional publication-root subfolders, and artifact manifest names.
+        //
+        // The artifact reserve is an estimate that covers the supported Addressables
+        // bundle naming styles. It is deliberately not an unbounded worst case: an
+        // over-reserved preflight rejects checkouts that build correctly. The exact
+        // per-artifact budget is enforced with real paths in
+        // ValidatePublicationArtifactPathBudgets while staging, so a bundle name
+        // outside this estimate still fails with its own precise error.
+        private const int PublicationStagingSeparatorReserve = 1;
         private const int PublicationStagingTargetNameReserve = 22;
         private const int PublicationStagingTransactionSuffixReserve = 39;
-        private const int PublicationStagingArtifactRelativeReserve = 128;
-        private const int PublicationStagingSeparatorReserve = 1;
+        private const int PublicationStagingArtifactRelativeReserve = 112;
+
+        /// <summary>
+        /// Fixed number of characters that a staged publication artifact consumes
+        /// below the publication root, excluding the publication root itself.
+        /// Exposed so authoring and tests can reason about the budget without
+        /// duplicating the layout constants.
+        /// </summary>
+        internal const int PublicationStagingPathReserve =
+            PublicationStagingSeparatorReserve
+            + PublicationStagingTargetNameReserve
+            + PublicationStagingTransactionSuffixReserve
+            + PublicationStagingArtifactRelativeReserve;
 
         // No default publication root can fit every checkout because the Win32
         // MAX_PATH budget is physical: project root + configured root + the
@@ -2345,31 +2376,21 @@ namespace Build.Pipeline.Editor
         {
             int projectRootLength = Path.GetFullPath(projectRoot).Length;
             int publicationRootLength = Path.GetFullPath(publicationRoot).Length;
-            int requiredLength = publicationRootLength
-                + PublicationStagingSeparatorReserve
-                + PublicationStagingTargetNameReserve
-                + PublicationStagingTransactionSuffixReserve
-                + PublicationStagingArtifactRelativeReserve;
+            int requiredLength = publicationRootLength + PublicationStagingPathReserve;
             if (requiredLength <= BuildPathPolicy.Win32MaxPathCharacters)
             {
                 return null;
             }
 
             int maximumConfiguredLength = BuildPathPolicy.Win32MaxPathCharacters
-                - PublicationStagingSeparatorReserve
-                - PublicationStagingTargetNameReserve
-                - PublicationStagingTransactionSuffixReserve
-                - PublicationStagingArtifactRelativeReserve
+                - PublicationStagingPathReserve
                 - projectRootLength
                 - 1;
             if (maximumConfiguredLength < 1)
             {
                 int oneCharacterRequiredLength = projectRootLength
                     + 1
-                    + PublicationStagingSeparatorReserve
-                    + PublicationStagingTargetNameReserve
-                    + PublicationStagingTransactionSuffixReserve
-                    + PublicationStagingArtifactRelativeReserve;
+                    + PublicationStagingPathReserve;
                 return "Addressables publication staging cannot fit the Win32 MAX_PATH budget on this checkout: " +
                     $"project root length={projectRootLength}, even a 1-character publication root requires " +
                     $"{oneCharacterRequiredLength} characters (maximum {BuildPathPolicy.Win32MaxPathCharacters}). " +
