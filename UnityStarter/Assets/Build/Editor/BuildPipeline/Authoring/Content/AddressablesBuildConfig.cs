@@ -26,11 +26,11 @@ namespace Build.Pipeline.Editor
         public const string ProviderIdValue = "addressables";
 
         // "Bundles" is the Addressables term for its published content and stays
-        // short: the default publication layout adds an invocation-id segment
-        // and ~178 characters of staged-path reserve on top of this root, so
-        // long names push deep repository checkouts over the Win32 MAX_PATH
-        // budget. See BuildPathPolicy path budgets and the preflight staging
-        // budget validation in AddressablesBuilder.
+        // short: the default publication layout adds an invocation-id segment and
+        // AddressablesBuilder.PublicationStagingPathReserve characters of staged-path
+        // reserve on top of this root, so long names push deep repository checkouts
+        // over the Win32 MAX_PATH budget. See BuildPathPolicy path budgets and the
+        // preflight staging budget validation in AddressablesBuilder.
         internal const string DefaultBuildOutputBaseDirectory = "Build/Bundles";
 
         public override string ProviderId => ProviderIdValue;

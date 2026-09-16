@@ -143,7 +143,52 @@ namespace Build.Pipeline.Editor
 
             ValidatePlayerBuildExtensions(context, invocation, errors);
 
+            ValidateStreamingAssetsPortablePaths(request.ProjectRoot, errors);
+
             return errors;
+        }
+
+        /// <summary>
+        /// Unity copies <c>Assets/StreamingAssets</c> verbatim into the Player, so its
+        /// file and folder names become part of the shipped artifact and are addressed
+        /// by name at runtime. This check therefore runs for every Player build
+        /// regardless of the selected recipe, and it is not configurable: a
+        /// non-ASCII name here fails on Android asset addressing, WebGL URL
+        /// resolution, and case-sensitive checkouts rather than at the point the name
+        /// was authored.
+        /// Use the <c>asset-path-audit</c> step for the wider, configurable audit.
+        /// </summary>
+        private static void ValidateStreamingAssetsPortablePaths(
+            string projectRoot,
+            ICollection<string> errors)
+        {
+            PortableAssetPathAuditResult result =
+                PortableAssetPathAudit.AuditStreamingAssets(projectRoot);
+            for (int index = 0; index < result.WarningMessages.Count; index++)
+            {
+                Debug.LogWarning("[Player] " + result.WarningMessages[index]);
+            }
+
+            for (int index = 0; index < result.ErrorMessages.Count; index++)
+            {
+                errors.Add(result.ErrorMessages[index]);
+            }
+
+            // Coverage loss fails closed here too: a name this check never saw is a
+            // name that ships.
+            string coverageError = result.DescribeIncompleteCoverage(
+                "the asset-path-audit step's Maximum Entry Count");
+            if (!string.IsNullOrEmpty(coverageError))
+            {
+                errors.Add(coverageError);
+            }
+
+            if (result.ReparsePointCount > 0)
+            {
+                Debug.LogWarning(
+                    $"[Player] {result.ReparsePointCount} reparse point(s) below Assets/StreamingAssets " +
+                    "were skipped; their targets are not covered by this check.");
+            }
         }
 
         public void Execute(
