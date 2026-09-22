@@ -62,8 +62,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("If true, this effect is automatically removed when the ability that applied it ends. UE5: RemoveGameplayEffectContainerOnAbilityEnd.")]
         public bool RemoveGameplayEffectsAfterAbilityEnds;
 
-        [Tooltip("If true (default), periodic effects execute their first tick immediately upon application. If false, the first execution waits for the full period interval. UE5: bExecutePeriodicEffectOnApplication.")]
+        [Tooltip("If true (default), periodic effects execute once immediately upon application, in addition to the regular period schedule. UE5: bExecutePeriodicEffectOnApplication.")]
         public bool ExecutePeriodicEffectOnApplication = true;
+
+        [Tooltip("How the period responds when the effect is no longer inhibited. ")]
+        public EGameplayEffectPeriodInhibitionRemovedPolicy PeriodicInhibitionPolicy;
 
         [Tooltip("Effects to apply when a stacking attempt occurs while at the stack limit. UE5: OverflowEffects.")]
         public List<GameplayEffectSO> OverflowEffects;

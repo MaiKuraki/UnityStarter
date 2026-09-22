@@ -96,6 +96,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private long periodTimerRaw;
         private long cachedPeriodRaw;
         private EDurationPolicy cachedDurationPolicy;
+        private EGameplayEffectPeriodInhibitionRemovedPolicy cachedPeriodicInhibitionPolicy;
+        private EGameplayEffectStackingPeriodPolicy cachedStackPeriodResetPolicy;
+        private bool pendingImmediatePeriodicExecution;
 
         public ActiveGameplayEffect() { }
 
@@ -145,6 +148,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             periodTimerRaw = -1L;
             cachedPeriodRaw = 0L;
             cachedDurationPolicy = default;
+            cachedPeriodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset;
+            cachedStackPeriodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication;
+            pendingImmediatePeriodicExecution = false;
         }
 
         internal void SetMemoryOwner(GASRuntimeMemory owner) => memoryOwner = owner;
@@ -200,17 +206,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             cachedPeriodRaw = GASFixedValue.FromFloat(spec.Def.Period).RawValue;
             cachedDurationPolicy = spec.Def.DurationPolicy;
+            cachedPeriodicInhibitionPolicy = spec.Def.PeriodicInhibitionPolicy;
+            cachedStackPeriodResetPolicy = spec.Def.Stacking.PeriodResetPolicy;
 
-            // UE5: bExecutePeriodicEffectOnApplication
-            // If true (default), first tick fires immediately (periodTimer = 0).
-            // If false, first tick waits for the full period interval.
+            // UE5: bExecutePeriodicEffectOnApplication schedules an extra execution on the next tick.
+            // The looping period timer always starts a full period from the application moment.
             if (cachedPeriodRaw > 0L)
             {
-                periodTimerRaw = spec.Def.ExecutePeriodicEffectOnApplication ? 0L : cachedPeriodRaw;
+                periodTimerRaw = cachedPeriodRaw;
+                pendingImmediatePeriodicExecution = spec.Def.ExecutePeriodicEffectOnApplication;
             }
             else
             {
                 periodTimerRaw = -1L;
+                pendingImmediatePeriodicExecution = false;
             }
         }
 
@@ -235,10 +244,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 timeRemainingRaw = Spec.DurationRaw;
             }
 
-            if (periodTimerRaw > 0L)
-            {
-                periodTimerRaw = cachedPeriodRaw;
-            }
+            RefreshPeriodOnApplication();
         }
 
         /// <summary>
@@ -261,24 +267,55 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Refreshes duration without modifying stack count.
+        /// Refreshes duration without modifying stack count or the period timer.
         /// </summary>
-        internal void RefreshDurationAndPeriod()
+        internal void RefreshDuration()
         {
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
                 timeRemainingRaw = Spec.DurationRaw;
             }
+        }
 
-            if (periodTimerRaw >= 0L)
+        /// <summary>
+        /// Restarts the period timer to a full period and re-arms the immediate execution.
+        /// </summary>
+        internal void RefreshPeriodOnApplication()
+        {
+            if (periodTimerRaw < 0L ||
+                cachedStackPeriodResetPolicy != EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication)
             {
-                periodTimerRaw = cachedPeriodRaw;
+                return;
+            }
+
+            periodTimerRaw = cachedPeriodRaw;
+            pendingImmediatePeriodicExecution = Spec.Def.ExecutePeriodicEffectOnApplication;
+        }
+
+        /// <summary>
+        /// Applies the periodic inhibition policy when OngoingTagRequirements become satisfied again.
+        /// </summary>
+        internal void OnInhibitionRemoved()
+        {
+            if (periodTimerRaw < 0L)
+            {
+                return;
+            }
+
+            switch (cachedPeriodicInhibitionPolicy)
+            {
+                case EGameplayEffectPeriodInhibitionRemovedPolicy.ResetPeriod:
+                    periodTimerRaw = cachedPeriodRaw;
+                    break;
+                case EGameplayEffectPeriodInhibitionRemovedPolicy.ExecuteAndResetPeriod:
+                    periodTimerRaw = cachedPeriodRaw;
+                    pendingImmediatePeriodicExecution = true;
+                    break;
             }
         }
 
         /// <summary>
         /// Sets the remaining duration to a specific value.
-        /// UE5: Section 4.5.16 - Changing Active Gameplay Effect Duration.
         /// </summary>
         internal void SetRemainingDuration(float newDuration)
         {
@@ -478,38 +515,64 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal bool Tick(float deltaTime, AbilitySystemComponent asc)
         {
             long deltaTimeRaw = GASFixedValue.FromFloat(deltaTime).RawValue;
-
-            // Duration handling
-            if (!IsExpired && cachedDurationPolicy == EDurationPolicy.HasDuration)
+            bool wasExpired = IsExpired;
+            bool durationElapsed = false;
+            if (!wasExpired && cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
                 timeRemainingRaw -= deltaTimeRaw;
                 if (timeRemainingRaw <= 0L)
                 {
                     timeRemainingRaw = 0L;
-                    IsExpired = true;
+                    durationElapsed = true;
                 }
             }
 
-            // Periodic effect handling --skip entirely when inhibited (OngoingTagRequirements not met).
-            // IsInhibited is kept current by AbilitySystemComponent.RecalculateDirtyAttributes(),
-            // which runs at the START of each tick (before effects are ticked) when tags change.
-            if (!IsExpired && !IsInhibited && cachedPeriodRaw > 0L)
+            if (!wasExpired)
             {
-                periodTimerRaw -= deltaTimeRaw;
                 int executionBudget = asc?.Limits.MaxPeriodicEffectExecutionsPerTick
                     ?? GASRuntimeLimits.Default.MaxPeriodicEffectExecutionsPerTick;
-                for (int executionCount = 0;
-                     executionCount < executionBudget && periodTimerRaw <= 0L;
-                     executionCount++)
+
+                if (pendingImmediatePeriodicExecution)
                 {
-                    asc.ExecutePeriodicEffect(this);
-                    // Preserve elapsed-time remainder. If the budget is exhausted, the
-                    // non-positive timer carries deterministic backlog into later ticks.
-                    periodTimerRaw += cachedPeriodRaw;
+                    pendingImmediatePeriodicExecution = false;
+                    executionBudget = ConsumePeriodicCycle(asc, executionBudget);
                 }
+
+                if (cachedPeriodRaw > 0L)
+                {
+                    periodTimerRaw -= deltaTimeRaw;
+                    while (executionBudget > 0 && periodTimerRaw <= 0L)
+                    {
+                        executionBudget = ConsumePeriodicCycle(asc, executionBudget);
+                        // Preserve elapsed-time remainder. If the budget is exhausted, the
+                        // non-positive timer carries deterministic backlog into later ticks.
+                        periodTimerRaw += cachedPeriodRaw;
+                    }
+                }
+            }
+
+            if (durationElapsed)
+            {
+                IsExpired = true;
             }
 
             return IsExpired;
+        }
+
+        private int ConsumePeriodicCycle(AbilitySystemComponent asc, int executionBudget)
+        {
+            if (executionBudget <= 0)
+            {
+                return executionBudget;
+            }
+
+            executionBudget--;
+            if (asc != null && !IsInhibited)
+            {
+                asc.ExecutePeriodicEffect(this);
+            }
+
+            return executionBudget;
         }
 
         #endregion

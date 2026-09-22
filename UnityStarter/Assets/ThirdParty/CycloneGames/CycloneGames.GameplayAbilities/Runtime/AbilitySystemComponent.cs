@@ -5190,7 +5190,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     case EGameplayEffectStackingExpirationPolicy.RefreshDuration:
                         // Remove one stack and refresh duration
                         effect.RemoveStack();
-                        effect.RefreshDurationAndPeriod();
+                        effect.RefreshDuration();
                         effect.ClearExpired();
                         MarkActiveEffectsDirty();
                         MarkAttributesDirtyFromEffect(effect);
@@ -6734,7 +6734,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     if (spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
                     {
-                        existingEffect.RefreshDurationAndPeriod();
+                        existingEffect.RefreshDuration();
+                        existingEffect.RefreshPeriodOnApplication();
                     }
                 }
                 Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Stacking limit for ")
@@ -6872,6 +6873,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (isInhibited != effect.IsInhibited)
             {
                 effect.IsInhibited = isInhibited;
+                if (!isInhibited)
+                {
+                    effect.OnInhibitionRemoved();
+                }
+
                 effect.NotifyInhibitionChanged(isInhibited);
             }
 
