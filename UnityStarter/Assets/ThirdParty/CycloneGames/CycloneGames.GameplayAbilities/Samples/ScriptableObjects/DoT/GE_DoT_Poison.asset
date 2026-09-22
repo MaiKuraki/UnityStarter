@@ -72,6 +72,6 @@ MonoBehaviour:
     - GameplayCue.Poison.Loop
   SuppressGameplayCues: 0
   RemoveGameplayEffectsAfterAbilityEnds: 0
-  ExecutePeriodicEffectOnApplication: 1
+  ExecutePeriodicEffectOnApplication: 0
   OverflowEffects: []
   DenyOverflowApplication: 0

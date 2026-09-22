@@ -89,6 +89,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Defines how the period of a stackable effect is handled when a new stack is applied.
+    /// </summary>
+    public enum EGameplayEffectStackingPeriodPolicy
+    {
+        ResetOnSuccessfulApplication,
+        NeverReset
+    }
+
+    /// <summary>
     /// Defines what happens when a stacked effect's duration expires.
     /// UE5: EGameplayEffectStackingExpirationPolicy.
     /// </summary>
@@ -165,6 +174,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Defines how the period of an effect responds when it is no longer inhibited.
+    /// </summary>
+    public enum EGameplayEffectPeriodInhibitionRemovedPolicy
+    {
+        /// <summary>
+        /// The period keeps its accumulated progress. 
+        /// </summary>
+        NeverReset,
+        /// <summary>
+        /// The next execution happens one full period after the inhibition is removed.
+        /// </summary>
+        ResetPeriod,
+        /// <summary>
+        /// The effect executes immediately and the period restarts.
+        /// </summary>
+        ExecuteAndResetPeriod
+    }
+
+    /// <summary>
     /// Defines how an effect stacks with other instances of the same effect.
     /// </summary>
     public enum EGameplayEffectStackingType
@@ -184,14 +212,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int Limit;
         public EGameplayEffectStackingDurationPolicy DurationPolicy;
         public EGameplayEffectStackingExpirationPolicy ExpirationPolicy;
+        public EGameplayEffectStackingPeriodPolicy PeriodResetPolicy;
 
         public GameplayEffectStacking(EGameplayEffectStackingType type, int limit, EGameplayEffectStackingDurationPolicy durationPolicy,
-            EGameplayEffectStackingExpirationPolicy expirationPolicy = EGameplayEffectStackingExpirationPolicy.ClearEntireStack)
+            EGameplayEffectStackingExpirationPolicy expirationPolicy = EGameplayEffectStackingExpirationPolicy.ClearEntireStack,
+            EGameplayEffectStackingPeriodPolicy periodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication)
         {
             Type = type;
             Limit = limit;
             DurationPolicy = durationPolicy;
             ExpirationPolicy = expirationPolicy;
+            PeriodResetPolicy = periodResetPolicy;
         }
     }
 
