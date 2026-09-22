@@ -72,7 +72,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 customApplicationRequirements: null,
                 executePeriodicEffectOnApplication: ExecutePeriodicEffectOnApplication,
                 overflowEffects: runtimeOverflowEffects,
-                denyOverflowApplication: DenyOverflowApplication
+                denyOverflowApplication: DenyOverflowApplication,
+                periodicInhibitionPolicy: PeriodicInhibitionPolicy
             );
         }
 

@@ -5,7 +5,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 {
     /// <summary>
     /// Custom property drawer for GameplayEffectStacking struct.
-    /// Shows Limit, DurationPolicy, and ExpirationPolicy only when Type is not None.
+    /// Shows Limit, DurationPolicy, ExpirationPolicy, and PeriodResetPolicy only when Type is not None.
     /// </summary>
     [CustomPropertyDrawer(typeof(Runtime.GameplayEffectStacking))]
     public class GameplayEffectStackingDrawer : PropertyDrawer
@@ -20,8 +20,8 @@ namespace CycloneGames.GameplayAbilities.Editor
                 return EditorGUIUtility.singleLineHeight;
             }
 
-            // Type + Limit + DurationPolicy + ExpirationPolicy = 4 lines
-            return EditorGUIUtility.singleLineHeight * 4 + EditorGUIUtility.standardVerticalSpacing * 3;
+            // Type + Limit + DurationPolicy + ExpirationPolicy + PeriodResetPolicy = 5 lines
+            return EditorGUIUtility.singleLineHeight * 5 + EditorGUIUtility.standardVerticalSpacing * 4;
         }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
@@ -32,6 +32,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             var limitProp = property.FindPropertyRelative("Limit");
             var durationPolicyProp = property.FindPropertyRelative("DurationPolicy");
             var expirationPolicyProp = property.FindPropertyRelative("ExpirationPolicy");
+            var periodResetPolicyProp = property.FindPropertyRelative("PeriodResetPolicy");
 
             float lineHeight = EditorGUIUtility.singleLineHeight;
             float spacing = EditorGUIUtility.standardVerticalSpacing;
@@ -53,6 +54,9 @@ namespace CycloneGames.GameplayAbilities.Editor
 
                 Rect expirationRect = new Rect(position.x, position.y + (lineHeight + spacing) * 3, position.width, lineHeight);
                 EditorGUI.PropertyField(expirationRect, expirationPolicyProp, new GUIContent("Expiration Policy"));
+
+                Rect periodResetRect = new Rect(position.x, position.y + (lineHeight + spacing) * 4, position.width, lineHeight);
+                EditorGUI.PropertyField(periodResetRect, periodResetPolicyProp, new GUIContent("Period Reset"));
 
                 EditorGUI.indentLevel--;
             }

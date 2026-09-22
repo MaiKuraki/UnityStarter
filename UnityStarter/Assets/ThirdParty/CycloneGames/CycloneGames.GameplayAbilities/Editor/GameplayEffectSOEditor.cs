@@ -41,6 +41,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         // Advanced
         private SerializedProperty removeAfterAbilityEndsProp;
         private SerializedProperty executePeriodicOnAppProp;
+        private SerializedProperty periodicInhibitionPolicyProp;
         private SerializedProperty overflowEffectsProp;
         private SerializedProperty denyOverflowProp;
 
@@ -77,7 +78,10 @@ namespace CycloneGames.GameplayAbilities.Editor
             "Automatically removes this effect when the granting ability ends.");
         private static readonly GUIContent s_ExecuteOnApplicationContent = new GUIContent(
             "Execute On Application",
-            "Executes the first periodic tick immediately on application.");
+            "Executes the effect once immediately on application, in addition to the regular period schedule.");
+        private static readonly GUIContent s_PeriodicInhibitionContent = new GUIContent(
+            "Periodic Inhibition Policy",
+            "How the period responds when ongoing tag requirements become satisfied again.");
         private static readonly GUIContent s_OverflowEffectsContent = new GUIContent("Overflow Effects");
         private static readonly GUIContent s_DenyOverflowContent = new GUIContent(
             "Deny Overflow Application",
@@ -143,6 +147,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             removeAfterAbilityEndsProp = serializedObject.FindProperty("RemoveGameplayEffectsAfterAbilityEnds");
             executePeriodicOnAppProp = serializedObject.FindProperty("ExecutePeriodicEffectOnApplication");
+            periodicInhibitionPolicyProp = serializedObject.FindProperty("PeriodicInhibitionPolicy");
             overflowEffectsProp = serializedObject.FindProperty("OverflowEffects");
             denyOverflowProp = serializedObject.FindProperty("DenyOverflowApplication");
             stackingTypeProp = stackingProp?.FindPropertyRelative("Type");
@@ -232,6 +237,20 @@ namespace CycloneGames.GameplayAbilities.Editor
                 }
 
                 EditorGUILayout.PropertyField(periodProp, s_PeriodContent);
+
+                if (!serializedObject.isEditingMultipleObjects && periodProp.floatValue > 0f)
+                {
+                    GameplayEffectTimingPreview.Draw(
+                        Runtime.GameplayEffectPeriodSchedule.Compute(
+                            policy,
+                            durationProp.floatValue,
+                            periodProp.floatValue,
+                            executePeriodicOnAppProp != null && executePeriodicOnAppProp.boolValue),
+                        durationProp.floatValue,
+                        HasAnyTagsConfigured(ongoingTagReqProp),
+                        stackingTypeProp != null && stackingTypeProp.enumValueIndex != 0);
+                }
+
                 EditorGUI.indentLevel--;
             }
 
@@ -313,6 +332,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                 if (mixedDurationPolicy || (policy != Runtime.EDurationPolicy.Instant && periodProp.floatValue > 0))
                 {
                     EditorGUILayout.PropertyField(executePeriodicOnAppProp, s_ExecuteOnApplicationContent);
+                    EditorGUILayout.PropertyField(periodicInhibitionPolicyProp, s_PeriodicInhibitionContent);
                 }
 
                 EditorGUILayout.Space(4);
@@ -459,7 +479,54 @@ namespace CycloneGames.GameplayAbilities.Editor
                 hasWarnings = true;
             }
 
+            Runtime.GameplayEffectPeriodSchedule schedule = Runtime.GameplayEffectPeriodSchedule.Compute(
+                policy,
+                durationProp.floatValue,
+                periodProp.floatValue,
+                executePeriodicOnAppProp != null && executePeriodicOnAppProp.boolValue);
+
+            if (schedule.IsPeriodic)
+            {
+                if (schedule.ExecutionCount == 0)
+                {
+                    DrawWarningBox(
+                        "Period is longer than the duration and Execute On Application is off. The effect never executes.");
+                    hasWarnings = true;
+                }
+                else if (!schedule.IsUnbounded && schedule.Period > durationProp.floatValue)
+                {
+                    DrawWarningBox(string.Concat(
+                        "Period (", schedule.Period.ToString("F2"),
+                        "s) is longer than Duration (", durationProp.floatValue.ToString("F2"),
+                        "s). The periodic schedule never completes, so only the on-application tick fires."));
+                    hasWarnings = true;
+                }
+
+                if (schedule.Period < 0.05f)
+                {
+                    DrawWarningBox(
+                        "Period is below 0.05s. A single slow frame can queue several executions, bounded by MaxPeriodicEffectExecutionsPerTick.");
+                    hasWarnings = true;
+                }
+            }
+
             if (hasWarnings) EditorGUILayout.Space(4);
+        }
+
+        private static bool HasAnyTagsConfigured(SerializedProperty requirements)
+        {
+            return requirements != null &&
+                   (CountConfiguredTags(requirements, "forbiddenTags") > 0 ||
+                    CountConfiguredTags(requirements, "requiredTags") > 0);
+        }
+
+        private static int CountConfiguredTags(SerializedProperty requirements, string containerField)
+        {
+            SerializedProperty container = requirements.FindPropertyRelative(containerField);
+            if (container == null) return 0;
+
+            SerializedProperty names = container.FindPropertyRelative("explicitTagNames");
+            return names != null ? names.arraySize : 0;
         }
 
         private static void DrawWarningBox(string message)

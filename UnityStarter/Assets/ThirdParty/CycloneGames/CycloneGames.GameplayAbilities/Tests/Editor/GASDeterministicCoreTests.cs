@@ -815,7 +815,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 "Health",
                 -5f,
                 ongoingTagRequirements: ongoingRequirements,
-                period: 1f);
+                period: 1f,
+                executePeriodicEffectOnApplication: false);
 
             asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
             var activeEffect = asc.ActiveEffects[0];
@@ -826,10 +827,19 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
             Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
 
+            asc.Tick(1f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.True);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
             asc.AddLooseGameplayTag(requiredTag);
             asc.Tick(0f, true);
 
             Assert.That(activeEffect.IsInhibited, Is.False);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.Tick(1f, true);
+
             Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
             Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
 
@@ -838,9 +848,258 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(activeEffect.IsInhibited, Is.True);
             Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
-            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
 
             asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectPeriodicInhibition_ResetPeriodDiscardsProgressOnUninhibit()
+        {
+            var requiredTag = RequestPeriodicInhibitionTag(out var ongoingRequirements);
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "ResetPeriodOnUninhibit",
+                EDurationPolicy.Infinite,
+                0f,
+                "Health",
+                -5f,
+                ongoingTagRequirements: ongoingRequirements,
+                period: 1f,
+                executePeriodicEffectOnApplication: false,
+                periodicInhibitionPolicy: EGameplayEffectPeriodInhibitionRemovedPolicy.ResetPeriod);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+            asc.Tick(0.5f, true);
+
+            asc.AddLooseGameplayTag(requiredTag);
+            asc.Tick(0.5f, true);
+
+            Assert.That(asc.ActiveEffects[0].IsInhibited, Is.False);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.Tick(1f, true);
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectPeriodicInhibition_ExecuteAndResetPeriodFiresOnUninhibit()
+        {
+            var requiredTag = RequestPeriodicInhibitionTag(out var ongoingRequirements);
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "ExecuteOnUninhibit",
+                EDurationPolicy.Infinite,
+                0f,
+                "Health",
+                -5f,
+                ongoingTagRequirements: ongoingRequirements,
+                period: 1f,
+                executePeriodicEffectOnApplication: false,
+                periodicInhibitionPolicy: EGameplayEffectPeriodInhibitionRemovedPolicy.ExecuteAndResetPeriod);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            asc.AddLooseGameplayTag(requiredTag);
+            asc.Tick(0f, true);
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Tick(1f, true);
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void PeriodicEffect_ExecutesFinalTickOnDurationBoundary()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "BurningAligned",
+                EDurationPolicy.HasDuration,
+                4f,
+                "Health",
+                -5f,
+                period: 1f,
+                executePeriodicEffectOnApplication: false);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+
+            for (int i = 0; i < 3; i++)
+            {
+                asc.Tick(1f, true);
+            }
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(85).RawValue));
+            Assert.That(asc.ActiveEffects.Count, Is.EqualTo(1));
+
+            asc.Tick(1f, true);
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(80).RawValue));
+            Assert.That(asc.ActiveEffects, Is.Empty);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void PeriodicEffect_NonAlignedDurationDoesNotAddBoundaryTick()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "BurningUnaligned",
+                EDurationPolicy.HasDuration,
+                4.5f,
+                "Health",
+                -5f,
+                period: 1f,
+                executePeriodicEffectOnApplication: false);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+
+            for (int i = 0; i < 4; i++)
+            {
+                asc.Tick(1f, true);
+            }
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(80).RawValue));
+            Assert.That(asc.ActiveEffects.Count, Is.EqualTo(1));
+
+            asc.Tick(0.5f, true);
+
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(80).RawValue));
+            Assert.That(asc.ActiveEffects, Is.Empty);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void PeriodicEffect_ExecuteOnApplicationAddsImmediateTick()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "BurningImmediate",
+                EDurationPolicy.HasDuration,
+                2f,
+                "Health",
+                -5f,
+                period: 1f,
+                executePeriodicEffectOnApplication: true);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+
+            asc.Tick(0f, true);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Tick(1f, true);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+
+            asc.Tick(1f, true);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(85).RawValue));
+            Assert.That(asc.ActiveEffects, Is.Empty);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void PeriodicEffect_StackApplicationResetsPeriodAndRepeatsImmediateExecution()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "StackedPeriodic",
+                EDurationPolicy.HasDuration,
+                10f,
+                "Health",
+                -5f,
+                new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    3,
+                    EGameplayEffectStackingDurationPolicy.NeverRefresh,
+                    periodResetPolicy: EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication),
+                period: 1f,
+                executePeriodicEffectOnApplication: true);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Tick(0.5f, true);
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffects[0].StackCount, Is.EqualTo(2));
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+
+            asc.Tick(0.5f, true);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void PeriodicEffect_NeverResetStackPolicyPreservesPeriodProgress()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "StackedPeriodicNeverReset",
+                EDurationPolicy.HasDuration,
+                10f,
+                "Health",
+                -5f,
+                new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    3,
+                    EGameplayEffectStackingDurationPolicy.NeverRefresh,
+                    periodResetPolicy: EGameplayEffectStackingPeriodPolicy.NeverReset),
+                period: 1f,
+                executePeriodicEffectOnApplication: false);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0.5f, true);
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0.5f, true);
+
+            Assert.That(asc.ActiveEffects[0].StackCount, Is.EqualTo(2));
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Dispose();
+        }
+
+        private static GameplayTag RequestPeriodicInhibitionTag(out GameplayTagRequirements ongoingRequirements)
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.PeriodicEnabled", "Periodic inhibition test tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag requiredTag = GameplayTagManager.Request("Test.GAS.Effect.PeriodicEnabled");
+            var requiredTags = new GameplayTagContainer();
+            requiredTags.AddTag(requiredTag);
+            ongoingRequirements = new GameplayTagRequirements(new GameplayTagContainer(), requiredTags);
+            return requiredTag;
         }
 
         [Test]
@@ -997,7 +1256,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             GameplayTagRequirements ongoingTagRequirements = default,
             List<GameplayEffect> overflowEffects = null,
             bool denyOverflowApplication = false,
-            float period = 0f)
+            float period = 0f,
+            bool executePeriodicEffectOnApplication = true,
+            EGameplayEffectPeriodInhibitionRemovedPolicy periodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset)
         {
             return new GameplayEffect(
                 name,
@@ -1011,7 +1272,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 stacking: stacking,
                 ongoingTagRequirements: ongoingTagRequirements,
                 overflowEffects: overflowEffects,
-                denyOverflowApplication: denyOverflowApplication);
+                denyOverflowApplication: denyOverflowApplication,
+                executePeriodicEffectOnApplication: executePeriodicEffectOnApplication,
+                periodicInhibitionPolicy: periodicInhibitionPolicy);
         }
 
         private static GASPredictionWindowData CreatePredictionWindow(GASPredictionKey key)

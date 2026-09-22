@@ -294,11 +294,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public IReadOnlyList<ICustomApplicationRequirement> CustomApplicationRequirements { get; }
 
         /// <summary>
-        /// If true, periodic effects execute their first tick immediately upon application.
-        /// If false, the first execution waits for the full period interval.
-        /// UE5: bExecutePeriodicEffectOnApplication. Default is true (UE5 default).
+        /// If true, periodic effects execute once immediately upon application, in addition to the
+        /// regular period schedule. If false, no execution occurs until the first period elapses.
         /// </summary>
         public bool ExecutePeriodicEffectOnApplication { get; }
+
+        /// <summary>
+        /// How the period responds when the effect is no longer inhibited.
+        /// </summary>
+        public EGameplayEffectPeriodInhibitionRemovedPolicy PeriodicInhibitionPolicy { get; }
 
         /// <summary>
         /// Effects to apply when a stacking application attempt occurs while at the stack limit.
@@ -341,11 +345,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             List<ICustomApplicationRequirement> customApplicationRequirements = null,
             bool executePeriodicEffectOnApplication = true,
             List<GameplayEffect> overflowEffects = null,
-            bool denyOverflowApplication = false)
+            bool denyOverflowApplication = false,
+            EGameplayEffectPeriodInhibitionRemovedPolicy periodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset)
         {
             ValidateBoundedString(name, MaxNameLength, nameof(name), allowWhitespace: false);
             ValidateDuration(durationPolicy, duration, period);
             ValidateStacking(stacking);
+            ValidatePeriodicInhibitionPolicy(periodicInhibitionPolicy);
             ValidateCollectionCount(modifiers, MaxModifierCount, nameof(modifiers));
             ValidateCollectionCount(grantedAbilities, MaxGrantedAbilityCount, nameof(grantedAbilities));
             ValidateCollectionCount(customApplicationRequirements, MaxCustomApplicationRequirementCount, nameof(customApplicationRequirements));
@@ -384,6 +390,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             RemoveGameplayEffectsAfterAbilityEnds = removeGameplayEffectsAfterAbilityEnds;
             CustomApplicationRequirements = Freeze(customApplicationRequirements);
             ExecutePeriodicEffectOnApplication = executePeriodicEffectOnApplication;
+            PeriodicInhibitionPolicy = periodicInhibitionPolicy;
             OverflowEffects = Freeze(overflowEffects);
             DenyOverflowApplication = denyOverflowApplication;
 
@@ -421,6 +428,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
+        private static void ValidatePeriodicInhibitionPolicy(EGameplayEffectPeriodInhibitionRemovedPolicy policy)
+        {
+            if ((int)policy < (int)EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset ||
+                (int)policy > (int)EGameplayEffectPeriodInhibitionRemovedPolicy.ExecuteAndResetPeriod)
+            {
+                throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown periodic inhibition policy.");
+            }
+        }
+
         private static void ValidateStacking(GameplayEffectStacking stacking)
         {
             if ((int)stacking.Type < (int)EGameplayEffectStackingType.None ||
@@ -442,7 +458,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ((int)stacking.DurationPolicy < (int)EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication ||
                  (int)stacking.DurationPolicy > (int)EGameplayEffectStackingDurationPolicy.NeverRefresh ||
                  (int)stacking.ExpirationPolicy < (int)EGameplayEffectStackingExpirationPolicy.ClearEntireStack ||
-                 (int)stacking.ExpirationPolicy > (int)EGameplayEffectStackingExpirationPolicy.RefreshDuration))
+                 (int)stacking.ExpirationPolicy > (int)EGameplayEffectStackingExpirationPolicy.RefreshDuration ||
+                 (int)stacking.PeriodResetPolicy < (int)EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication ||
+                 (int)stacking.PeriodResetPolicy > (int)EGameplayEffectStackingPeriodPolicy.NeverReset))
             {
                 throw new ArgumentOutOfRangeException(nameof(stacking), "Stacking policies must use known enum values.");
             }
