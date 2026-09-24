@@ -42,7 +42,8 @@ Use this module for versioned, partitioned, transactional localization through i
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`, fallback traversal, plural categories, pseudo-localization. No `UnityEngine` reference. |
 | `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridges, `LocalizationService`, catalogs, tables, selectors. Depends on Core, UniTask, AssetManagement. |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`, `LocalizeImage`. Depends on Runtime, TMP, UGUI, AssetManagement, UniTask, Logging. |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`. Depends on Runtime, UGUI, AssetManagement, UniTask, Logging. No TextMeshPro dependency. |
+| `CycloneGames.Localization.Components.TextMeshPro` | `Runtime/Components/TextMeshPro/` | `LocalizeTMPText`. Compiles only when `CYCLONEGAMES_HAS_TEXTMESHPRO` is derived, which covers Unity 2022 LTS (`com.unity.textmeshpro`) and Unity 6 (`com.unity.ugui` 2.0.0). |
 | `CycloneGames.Localization.Editor` | `Editor/` | Inspectors, table workspaces, validation, CSV, catalog build. Depends on Runtime, Logging, UnityEditor. |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale synchronization; compiles only when Yarn Spinner is installed. |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core, runtime, catalog, and editor workflow tests. |
@@ -97,7 +98,7 @@ Runtime content is partitioned by table and locale. Projects install a base cata
 
 ## Quick Start
 
-Add asmdef references to `CycloneGames.Localization.Runtime` (and `CycloneGames.Localization.Components` for presentation), then import the namespace:
+Add asmdef references to `CycloneGames.Localization.Runtime` (and `CycloneGames.Localization.Components` for presentation, plus `CycloneGames.Localization.Components.TextMeshPro` for `LocalizeTMPText`), then import the namespace:
 
 ```csharp
 using CycloneGames.Localization.Runtime;

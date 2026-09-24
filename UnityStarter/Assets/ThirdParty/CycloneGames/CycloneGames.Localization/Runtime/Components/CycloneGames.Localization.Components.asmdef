@@ -6,8 +6,7 @@
         "CycloneGames.Localization.Core",
         "UniTask",
         "CycloneGames.Localization.Runtime",
-        "CycloneGames.AssetManagement.Runtime",
-        "Unity.TextMeshPro"
+        "CycloneGames.AssetManagement.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

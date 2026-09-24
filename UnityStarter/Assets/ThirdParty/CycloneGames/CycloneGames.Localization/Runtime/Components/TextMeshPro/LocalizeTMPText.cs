@@ -1,3 +1,23 @@
+// TextMeshPro availability across Unity versions
+// ------------------------------------------------------------------------------------------------
+// Unity 2022 LTS and earlier:
+//   TextMeshPro ships as the standalone UPM package "com.unity.textmeshpro". It is optional, it is
+//   listed in Packages/manifest.json, and Package Manager can remove it. The managed assembly it
+//   produces is named "Unity.TextMeshPro".
+//
+// Unity 6 (6000.0) and later:
+//   TextMeshPro was merged into uGUI (first with Unity 2023.2, shipped as "com.unity.ugui" 2.0.0).
+//   There is no "com.unity.textmeshpro" package to declare or remove anymore, and a versionDefines
+//   rule keyed on that package never matches. The managed assembly keeps the name
+//   "Unity.TextMeshPro", so an asmdef reference to that name keeps resolving on both Unity branches.
+//
+// Assembly gating:
+//   CycloneGames.Localization.Components.TextMeshPro derives CYCLONEGAMES_HAS_TEXTMESHPRO from two
+//   versionDefines rules, one per Unity branch, and consumes it through "defineConstraints". The
+//   TMP-free CycloneGames.Localization.Components assembly keeps compiling when TMP is absent.
+//   Never add the capability symbol to Player Settings; versionDefines owns it per assembly.
+// ------------------------------------------------------------------------------------------------
+
 using System;
 using CycloneGames.Localization.Core;
 using TMPro;

@@ -1,3 +1,12 @@
+// TextMeshPro is an optional capability for this editor slice, not a hard dependency of the package.
+//
+// Unity 2022 LTS: TMP is the removable UPM package "com.unity.textmeshpro".
+// Unity 6 (6000.0): TMP is merged into "com.unity.ugui" 2.0.0, so that package no longer exists.
+//
+// Both cases are covered by the two versionDefines rules on
+// CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro, which derive
+// CYCLONEGAMES_HAS_TEXTMESHPRO. See LocaleLayoutOverride.cs for the full rationale.
+
 using CycloneGames.Logging;
 using TMPro;
 using UnityEditor;
