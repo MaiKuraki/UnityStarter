@@ -5,7 +5,9 @@ using System.Text;
 using CycloneGames.UIFramework.Editor;
 using CycloneGames.UIFramework.Runtime;
 using NUnit.Framework;
+#if CYCLONEGAMES_HAS_TEXTMESHPRO
 using TMPro;
+#endif
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
@@ -416,6 +418,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
             }
         }
 
+#if CYCLONEGAMES_HAS_TEXTMESHPRO
         [Test]
         public void TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle()
         {
@@ -439,6 +442,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
             Assert.IsNull(root.GetComponent<UIWindow>());
             Assert.AreEqual("Inventory", title.text);
         }
+#endif
 
         [Test]
         public void CreatorTemplateInspection_RejectsNestedOrMultipleWindowAuthority()

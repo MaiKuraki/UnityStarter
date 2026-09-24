@@ -42,7 +42,8 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`、fallback traversal、plural category、pseudo-localization。不引用 `UnityEngine`。 |
 | `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridge、`LocalizationService`、catalog、table、selector。依赖 Core、UniTask、AssetManagement。 |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`、`LocalizeImage`。依赖 Runtime、TMP、UGUI、AssetManagement、UniTask、Logging。 |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`。依赖 Runtime、UGUI、AssetManagement、UniTask、Logging。不依赖 TextMeshPro。 |
+| `CycloneGames.Localization.Components.TextMeshPro` | `Runtime/Components/TextMeshPro/` | `LocalizeTMPText`。仅当派生出 `CYCLONEGAMES_HAS_TEXTMESHPRO` 时参与编译，覆盖 Unity 2022 LTS（`com.unity.textmeshpro`）与 Unity 6（`com.unity.ugui` 2.0.0）两条分支。 |
 | `CycloneGames.Localization.Editor` | `Editor/` | Inspector、table workspace、validation、CSV、catalog build。依赖 Runtime、Logging、UnityEditor。 |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale 同步；仅安装 Yarn Spinner 时参与编译。 |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core、runtime、catalog 与 Editor workflow 测试。 |
@@ -97,7 +98,7 @@ flowchart LR
 
 ## 快速上手
 
-在 asmdef 中添加对 `CycloneGames.Localization.Runtime`（以及表现层用到的 `CycloneGames.Localization.Components`）的引用，然后导入命名空间：
+在 asmdef 中添加对 `CycloneGames.Localization.Runtime`（以及表现层用到的 `CycloneGames.Localization.Components`，使用 `LocalizeTMPText` 时再加 `CycloneGames.Localization.Components.TextMeshPro`）的引用，然后导入命名空间：
 
 ```csharp
 using CycloneGames.Localization.Runtime;

@@ -4,6 +4,11 @@
 
 Localized UI Layouts apply locale-specific geometry and typography overrides to a UI prefab when the committed locale changes. The integration stores visual differences alongside the prefab and applies them deterministically, without replacing localized strings, sprites, fonts, or asset resolution.
 
+### Requirements
+
+- `CycloneGames.Localization` present under `Assets/`.
+- TextMeshPro for the `UILocaleLayout` component, because `TrackedElement.Text` is a `TMP_Text`. Unity 2022 LTS supplies it through the `com.unity.textmeshpro` package; Unity 6 supplies it through `com.unity.ugui` 2.0.0. When neither is present the `...Localization.TextMeshPro` assemblies are excluded and `UILocaleLayout` does not compile, while `LocalizationWindowBinder` keeps binding every other `ILocalizationBindingTarget`. See [TextMeshPro compatibility](TextMeshProCompatibility.md).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -243,7 +248,7 @@ The successful locale-application loop contains no intentional managed allocatio
 
 Construction, `Bind`, `Unbind`, window binding disposal, localization mutations, and every Unity UI mutation are confined to the Unity main thread. `LocalizationService` captures the mutation owner during initialization and rejects off-owner mutation. Its immutable lookup snapshot can serve pure managed queries concurrently, but this UI integration never accesses Unity objects from a worker thread and does not maintain a secondary dispatcher or lock.
 
-The implementation uses managed C#, Unity UI, TMP, and a companion integration assembly that compiles only when the `com.cyclone-games.localization` package is present (UPM `versionDefines`) or `CYCLONEGAMES_HAS_LOCALIZATION` is set. It has no native plugin, file I/O, dynamic code generation, runtime reflection, unsafe code, or worker-thread requirement.
+The implementation uses managed C#, Unity UI, TMP, and companion integration assemblies. The localization slice compiles whenever `CycloneGames.Localization` is present under `Assets/`; the TextMeshPro slice additionally requires `CYCLONEGAMES_HAS_TEXTMESHPRO`, derived from UPM `versionDefines` and covering both the Unity 2022 LTS and Unity 6 branches. It has no native plugin, file I/O, dynamic code generation, runtime reflection, unsafe code, or worker-thread requirement.
 
 ## Troubleshooting
 

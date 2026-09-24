@@ -6,8 +6,7 @@
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
         "CycloneGames.AssetManagement.Runtime",
-        "UniTask",
-        "Unity.TextMeshPro"
+        "UniTask"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,15 +14,7 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [
-        "CYCLONEGAMES_HAS_LOCALIZATION"
-    ],
-    "versionDefines": [
-        {
-            "name": "com.cyclone-games.localization",
-            "expression": "[1.0.0,2.0.0)",
-            "define": "CYCLONEGAMES_HAS_LOCALIZATION"
-        }
-    ],
+    "defineConstraints": [],
+    "versionDefines": [],
     "noEngineReferences": false
 }
