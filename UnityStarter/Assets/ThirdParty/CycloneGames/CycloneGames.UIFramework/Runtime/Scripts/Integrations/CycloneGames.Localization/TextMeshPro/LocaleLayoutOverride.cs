@@ -1,3 +1,31 @@
+// TextMeshPro availability across Unity versions
+// ------------------------------------------------------------------------------------------------
+// Unity 2022 LTS and earlier:
+//   TextMeshPro ships as the standalone UPM package "com.unity.textmeshpro". It is optional, it is
+//   listed in Packages/manifest.json, and Package Manager can remove it. The managed assembly it
+//   produces is named "Unity.TextMeshPro".
+//
+// Unity 6 (6000.0) and later:
+//   TextMeshPro was merged into uGUI. It first moved with Unity 2023.2 and ships as part of
+//   "com.unity.ugui" 2.0.0. There is no "com.unity.textmeshpro" package anymore, so Package Manager
+//   cannot install or remove it and a versionDefines rule keyed on that package never matches. The
+//   managed assembly is still named "Unity.TextMeshPro" and still ships with the editor, so an
+//   asmdef reference to that name keeps resolving.
+//
+// Assembly gating:
+//   CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro derives
+//   CYCLONEGAMES_HAS_TEXTMESHPRO from two versionDefines rules instead of one:
+//     1. "com.unity.textmeshpro" with an empty expression -> any version, covers Unity <= 2022.
+//     2. "com.unity.ugui" >= 2.0.0                        -> TMP is built into uGUI, covers Unity 6.
+//   The symbol is consumed by "defineConstraints", so this assembly is excluded from compilation
+//   when neither rule matches. Never add CYCLONEGAMES_HAS_TEXTMESHPRO to Player Settings; it is
+//   derived per assembly by versionDefines.
+//
+//   "Unity.TextMeshPro" stays in the asmdef "references" list unconditionally because Unity treats
+//   an unresolvable assembly reference as a soft reference: a missing assembly does not fail the
+//   import, it only removes the types that can be resolved.
+// ------------------------------------------------------------------------------------------------
+
 using System;
 using System.Runtime.CompilerServices;
 using TMPro;
