@@ -1,19 +1,15 @@
 {
-    "name": "CycloneGames.UIFramework.Tests.Editor.Integrations.Localization",
-    "rootNamespace": "CycloneGames.UIFramework.Tests.Editor.Integrations.Localization",
+    "name": "CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro",
+    "rootNamespace": "CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor",
     "references": [
         "CycloneGames.UIFramework.Runtime",
-        "CycloneGames.UIFramework.Tests.Editor",
-        "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+        "CycloneGames.UIFramework.Editor",
         "CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro",
         "CycloneGames.UIFramework.Editor.Integrations.Localization",
-        "CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro",
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
         "CycloneGames.Logging.Core",
-        "CycloneGames.AssetManagement.Runtime",
-        "Unity.TextMeshPro",
-        "UniTask"
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [
         "Editor"
@@ -22,7 +18,7 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": false,
+    "autoReferenced": true,
     "defineConstraints": [
         "CYCLONEGAMES_HAS_TEXTMESHPRO"
     ],
@@ -38,8 +34,5 @@
             "define": "CYCLONEGAMES_HAS_TEXTMESHPRO"
         }
     ],
-    "noEngineReferences": false,
-    "optionalUnityReferences": [
-        "TestAssemblies"
-    ]
+    "noEngineReferences": false
 }

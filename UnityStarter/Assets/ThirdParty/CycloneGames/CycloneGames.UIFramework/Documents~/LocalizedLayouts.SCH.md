@@ -4,6 +4,11 @@
 
 本地化 UI 布局在已提交的语言发生变化时，对 UI Prefab 应用按语言区分的几何与排版覆盖。集成将这些视觉差异保存在 Prefab 内并按确定性方式应用，不会替代本地化字符串、Sprite、字体或资源解析。
 
+### 前置条件
+
+- `Assets/` 下存在 `CycloneGames.Localization`。
+- `UILocaleLayout` 组件需要 TextMeshPro，因为 `TrackedElement.Text` 的类型是 `TMP_Text`。Unity 2022 LTS 通过 `com.unity.textmeshpro` 包提供它；Unity 6 通过 `com.unity.ugui` 2.0.0 提供它。两者都不存在时，`...Localization.TextMeshPro` 程序集被排除，`UILocaleLayout` 不参与编译，而 `LocalizationWindowBinder` 仍会绑定其他所有 `ILocalizationBindingTarget`。详见 [TextMeshPro 兼容性](TextMeshProCompatibility.SCH.md)。
+
 ## 目录
 
 - [概述](#概述)
@@ -243,7 +248,7 @@ Runtime 会把尚未支持的未来 schema 视为不可用，并恢复已捕获�
 
 构造、`Bind`、`Unbind`、window binding disposal、Localization mutation，以及所有 Unity UI mutation 都限定在 Unity 主线程。`LocalizationService` 在初始化时捕获 mutation owner，并拒绝 off-owner mutation。它的 immutable lookup snapshot 可并发服务 pure managed query，但本 UI integration 不从 worker thread 访问 Unity object，也不维护第二套 dispatcher 或 lock。
 
-实现仅使用 managed C#、Unity UI、TMP 与一个 companion Integration Assembly——仅当 `com.cyclone-games.localization` 包存在（UPM `versionDefines`）或设置了 `CYCLONEGAMES_HAS_LOCALIZATION` 时才编译，不包含 native plugin、file I/O、dynamic code generation、runtime reflection、unsafe code 或 worker-thread 要求。
+实现仅使用 managed C#、Unity UI、TMP 与 companion Integration Assembly。Localization 切片在 `Assets/` 下存在 `CycloneGames.Localization` 时即参与编译；TextMeshPro 切片额外要求 `CYCLONEGAMES_HAS_TEXTMESHPRO`，该符号由 UPM `versionDefines` 派生并同时覆盖 Unity 2022 LTS 与 Unity 6 两条分支。实现不包含 native plugin、file I/O、dynamic code generation、runtime reflection、unsafe code 或 worker-thread 要求。
 
 ## 故障排查
 

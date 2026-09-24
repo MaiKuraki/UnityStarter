@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.Localization.Components.TextMeshPro",
+    "rootNamespace": "CycloneGames.Localization.Runtime",
+    "references": [
+        "CycloneGames.Localization.Core",
+        "CycloneGames.Localization.Runtime",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_TEXTMESHPRO"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.textmeshpro",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_TEXTMESHPRO"
+        },
+        {
+            "name": "com.unity.ugui",
+            "expression": "2.0.0",
+            "define": "CYCLONEGAMES_HAS_TEXTMESHPRO"
+        }
+    ],
+    "noEngineReferences": false
+}
