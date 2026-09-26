@@ -1,0 +1,29 @@
+{
+  "name": "com.cyclone-games.ui-framework-localization",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.UIFramework.Localization",
+  "description": "Optional companion module that binds CycloneGames.Localization to CycloneGames.UIFramework windows, with an optional TextMeshPro slice for per-locale layout snapshots.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.11",
+    "com.cyclone-games.asset-management": "1.0.0",
+    "com.cyclone-games.localization": "1.0.0",
+    "com.cyclone-games.logging": "1.0.0",
+    "com.cyclone-games.ui-framework": "1.0.0",
+    "com.unity.ugui": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "UIFramework",
+    "Localization",
+    "UI",
+    "i18n"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

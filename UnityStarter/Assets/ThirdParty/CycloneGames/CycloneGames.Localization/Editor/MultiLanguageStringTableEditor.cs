@@ -267,13 +267,59 @@ namespace CycloneGames.Localization.Editor
             }
         }
 
+        /// <summary>
+        /// Why a single CSV row was left out of an import while the rest of the file applied.
+        /// </summary>
+        private enum CsvImportSkipReason : byte
+        {
+            KeyRemovedFromSource = 0,
+            SourceTextChanged = 1,
+            SourceRevisionConflict = 2,
+            LockedKey = 3,
+            LocaleStatusLimitExceeded = 4,
+        }
+
+        private readonly struct CsvSkippedKey
+        {
+            public readonly string Key;
+            public readonly CsvImportSkipReason Reason;
+
+            public CsvSkippedKey(string key, CsvImportSkipReason reason)
+            {
+                Key = key;
+                Reason = reason;
+            }
+
+            public string Describe()
+            {
+                switch (Reason)
+                {
+                    case CsvImportSkipReason.KeyRemovedFromSource:
+                        return "no longer exists in the Authoring Locale table";
+                    case CsvImportSkipReason.SourceTextChanged:
+                        return "authoring text changed since this CSV was exported";
+                    case CsvImportSkipReason.SourceRevisionConflict:
+                        return "SourceRevision no longer matches the project";
+                    case CsvImportSkipReason.LockedKey:
+                        return "key is locked";
+                    case CsvImportSkipReason.LocaleStatusLimitExceeded:
+                        return "would exceed the per-entry locale-status limit";
+                    default:
+                        return "skipped";
+                }
+            }
+        }
+
         private sealed class CsvImportPlan
         {
             public readonly List<CsvValueChange> ValueChanges = new List<CsvValueChange>();
             public readonly List<CsvStatusChange> StatusChanges = new List<CsvStatusChange>();
             public readonly List<string> MetadataKeysToCreate = new List<string>();
+            public readonly List<CsvSkippedKey> SkippedKeys = new List<CsvSkippedKey>();
             public int RowCount;
             public int LocaleCount;
+
+            public int AppliedRowCount => RowCount - SkippedKeys.Count;
         }
 
         private readonly struct CsvLocaleColumns
@@ -2136,13 +2182,15 @@ namespace CycloneGames.Localization.Editor
                 hasActiveFilter,
                 filteredKeyCount,
                 targetLocales,
+                (targetColumnIndex, registeredLocalesOnly) =>
+                    CountKeysNeedingTranslation(targetColumnIndex, registeredLocalesOnly),
                 selection =>
                 {
                     if (this != null)
                     {
                         ExportCsv(
                             selection.TargetColumnIndex,
-                            selection.FilteredOnly,
+                            selection.KeyScope,
                             selection.Encoding,
                             selection.RegisteredLocalesOnly);
                     }
@@ -2164,9 +2212,69 @@ namespace CycloneGames.Localization.Editor
             return count;
         }
 
+        /// <summary>
+        /// Counts authoring keys that still need translation work in at least one of the columns
+        /// an export with the supplied locale selection would include.
+        /// </summary>
+        private int CountKeysNeedingTranslation(int? targetColumnIndex, bool registeredLocalesOnly)
+        {
+            if (!_hasAuthoringColumn || _columns.Count == 0)
+                return 0;
+
+            List<int> exportColumns = BuildExportColumnIndices(targetColumnIndex, registeredLocalesOnly);
+            if (exportColumns.Count == 0)
+                return 0;
+
+            int count = 0;
+            for (int index = 0; index < _allKeys.Count; index++)
+            {
+                string key = _allKeys[index];
+                if (_columns[0].KeyToIndex.ContainsKey(key) && KeyNeedsTranslation(key, exportColumns))
+                    count++;
+            }
+            return count;
+        }
+
+        private static string DescribeEmptyExportScope(LocalizationCsvExportKeyScope keyScope)
+        {
+            switch (keyScope)
+            {
+                case LocalizationCsvExportKeyScope.CurrentResults:
+                    return "No authoring keys match the current search/filter.";
+                case LocalizationCsvExportKeyScope.NeedsTranslation:
+                    return "Every authoring key is already translated for the selected locales.";
+                default:
+                    return "The Authoring Locale table has no keys.";
+            }
+        }
+
+        private bool KeyNeedsTranslation(string key, List<int> exportColumns)
+        {
+            int sourceRevision = GetSourceRevision(key);
+            for (int index = 0; index < exportColumns.Count; index++)
+            {
+                LocaleColumn column = _columns[exportColumns[index]];
+                // No entry, or an empty entry, is an outright missing translation: CompileCore
+                // skips blank values, so they never reach the runtime lookup at all.
+                if (!column.Values.TryGetValue(key, out string value) || string.IsNullOrWhiteSpace(value))
+                    return true;
+
+                GetTranslationState(
+                    key,
+                    column.LocaleCode,
+                    out TranslationStatus status,
+                    out int translatedRevision);
+                if (status == TranslationStatus.Missing || status == TranslationStatus.Stale)
+                    return true;
+                if (translatedRevision < sourceRevision)
+                    return true;
+            }
+            return false;
+        }
+
         private void ExportCsv(
             int? targetColumnIndex,
-            bool filteredOnly,
+            LocalizationCsvExportKeyScope keyScope,
             LocalizationCsvEncoding encoding,
             bool registeredLocalesOnly)
         {
@@ -2196,16 +2304,23 @@ namespace CycloneGames.Localization.Editor
             for (int index = 0; index < _allKeys.Count; index++)
             {
                 string key = _allKeys[index];
-                if (_columns[0].KeyToIndex.ContainsKey(key) && (!filteredOnly || MatchesFilter(key)))
-                    keys.Add(key);
+                if (!_columns[0].KeyToIndex.ContainsKey(key))
+                    continue;
+                if (keyScope == LocalizationCsvExportKeyScope.CurrentResults && !MatchesFilter(key))
+                    continue;
+                if (keyScope == LocalizationCsvExportKeyScope.NeedsTranslation &&
+                    !KeyNeedsTranslation(key, exportColumns))
+                {
+                    continue;
+                }
+
+                keys.Add(key);
             }
             if (keys.Count == 0)
             {
                 EditorUtility.DisplayDialog(
                     "Export Localization CSV",
-                    filteredOnly
-                        ? "No authoring keys match the current search/filter."
-                        : "The Authoring Locale table has no keys.",
+                    DescribeEmptyExportScope(keyScope),
                     "OK");
                 return;
             }
@@ -2304,17 +2419,28 @@ namespace CycloneGames.Localization.Editor
 
             if (plan.ValueChanges.Count == 0 && plan.StatusChanges.Count == 0)
             {
-                EditorUtility.DisplayDialog("Import Localization CSV", "CSV is valid and already matches the project.", "OK");
+                EditorUtility.DisplayDialog(
+                    "Import Localization CSV",
+                    plan.SkippedKeys.Count > 0
+                        ? "Nothing to import.\n\n" + DescribeSkippedKeys(plan)
+                        : "CSV is valid and already matches the project.",
+                    "OK");
                 return;
             }
 
+            string skippedSection = plan.SkippedKeys.Count > 0
+                ? "\n\n" + DescribeSkippedKeys(plan)
+                : string.Empty;
+
             if (!EditorUtility.DisplayDialog(
                     "Import Localization CSV",
-                    "Validated " + plan.RowCount + " row(s) for " + plan.LocaleCount + " included locale(s).\n" +
+                    "Validated " + plan.AppliedRowCount + " of " + plan.RowCount +
+                    " row(s) for " + plan.LocaleCount + " included locale(s).\n" +
                     "Value changes: " + plan.ValueChanges.Count + "\n" +
                     "Status changes: " + plan.StatusChanges.Count + "\n" +
                     "Metadata entries to create: " + plan.MetadataKeysToCreate.Count + "\n\n" +
-                    "Only locales included in this CSV will be changed.",
+                    "Only locales included in this CSV will be changed." +
+                    skippedSection,
                     "Apply",
                     "Cancel"))
             {
@@ -2322,6 +2448,36 @@ namespace CycloneGames.Localization.Editor
             }
 
             ApplyImportPlan(plan);
+        }
+
+        /// <summary>
+        /// Renders the skipped-key report shown before an import applies. The list is capped so a
+        /// file that is entirely stale cannot produce an unbounded dialog message.
+        /// </summary>
+        private static string DescribeSkippedKeys(CsvImportPlan plan)
+        {
+            const int MaxListed = 8;
+
+            var builder = new StringBuilder(256);
+            builder.Append("Skipped ")
+                .Append(plan.SkippedKeys.Count)
+                .Append(" stale row(s); they were left untouched:\n");
+            int listed = Math.Min(plan.SkippedKeys.Count, MaxListed);
+            for (int index = 0; index < listed; index++)
+            {
+                CsvSkippedKey skipped = plan.SkippedKeys[index];
+                builder.Append("- ").Append(skipped.Key).Append(": ").Append(skipped.Describe()).Append('\n');
+            }
+
+            if (plan.SkippedKeys.Count > listed)
+            {
+                builder.Append("- ... and ")
+                    .Append(plan.SkippedKeys.Count - listed)
+                    .Append(" more\n");
+            }
+
+            builder.Append("\nExport a fresh CSV for those keys if they still need translation.");
+            return builder.ToString();
         }
 
         private bool TryBuildImportPlan(
@@ -2389,7 +2545,9 @@ namespace CycloneGames.Localization.Editor
             };
             var csvKeys = new HashSet<string>(StringComparer.Ordinal);
             var metadataKeys = new HashSet<string>(StringComparer.Ordinal);
-            var pendingStateLocales = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            var pendingValueChanges = new List<CsvValueChange>(localeColumns.Count);
+            var pendingStatusChanges = new List<CsvStatusChange>(localeColumns.Count);
+            var pendingNewStateLocales = new HashSet<string>(StringComparer.Ordinal);
 
             for (int rowIndex = 1; rowIndex < document.Rows.Count; rowIndex++)
             {
@@ -2406,22 +2564,33 @@ namespace CycloneGames.Localization.Editor
                     error = "CSV row " + (rowIndex + 1) + " has an empty, oversized, or duplicate key.";
                     return false;
                 }
+
+                // Staleness is a per-key condition, not a reason to reject the whole file: a
+                // vendor may return a batch weeks after export, and the rows that are still
+                // current must remain importable.
                 if (!_columns[0].Values.TryGetValue(key, out string currentSource))
                 {
-                    error = "CSV key does not exist in the Authoring Locale table: " + key;
-                    return false;
+                    result.SkippedKeys.Add(
+                        new CsvSkippedKey(key, CsvImportSkipReason.KeyRemovedFromSource));
+                    continue;
                 }
                 if (!string.Equals(row[2], currentSource, StringComparison.Ordinal))
                 {
-                    error = "Authoring text changed for key '" + key + "'. Export a fresh CSV before importing.";
-                    return false;
+                    result.SkippedKeys.Add(
+                        new CsvSkippedKey(key, CsvImportSkipReason.SourceTextChanged));
+                    continue;
                 }
                 if (!int.TryParse(row[1], NumberStyles.None, CultureInfo.InvariantCulture, out int sourceRevision) ||
                     sourceRevision < 0 || sourceRevision != GetSourceRevision(key))
                 {
-                    error = "SourceRevision conflict for key '" + key + "'. Export a fresh CSV before importing.";
-                    return false;
+                    result.SkippedKeys.Add(
+                        new CsvSkippedKey(key, CsvImportSkipReason.SourceRevisionConflict));
+                    continue;
                 }
+
+                pendingValueChanges.Clear();
+                pendingStatusChanges.Clear();
+                pendingNewStateLocales.Clear();
 
                 bool locked = _metadata.IsLocked(key);
                 for (int localeIndex = 0; localeIndex < localeColumns.Count; localeIndex++)
@@ -2471,15 +2640,10 @@ namespace CycloneGames.Localization.Editor
                         out TranslationStatus currentStatus,
                         out int currentTranslatedRevision);
                     bool statusChanged = currentStatus != committedStatus || currentTranslatedRevision != committedRevision;
-                    if (locked && (valueChanged || statusChanged))
-                    {
-                        error = "Locked key '" + key + "' would be changed. No assets were modified.";
-                        return false;
-                    }
 
                     if (valueChanged)
                     {
-                        result.ValueChanges.Add(new CsvValueChange(
+                        pendingValueChanges.Add(new CsvValueChange(
                             csvLocale.Column,
                             key,
                             incomingValue,
@@ -2487,38 +2651,39 @@ namespace CycloneGames.Localization.Editor
                     }
                     if (statusChanged)
                     {
-                        result.StatusChanges.Add(new CsvStatusChange(
+                        pendingStatusChanges.Add(new CsvStatusChange(
                             key,
                             csvLocale.Column.LocaleCode,
                             committedStatus,
                             committedRevision));
 
-                        if (!_metadata.Contains(key) && metadataKeys.Add(key))
-                            result.MetadataKeysToCreate.Add(key);
-                        if (!pendingStateLocales.TryGetValue(key, out HashSet<string> locales))
-                        {
-                            locales = new HashSet<string>(StringComparer.Ordinal);
-                            pendingStateLocales.Add(key, locales);
-                        }
-                        locales.Add(csvLocale.Column.LocaleCode);
+                        if (!HasTranslationState(key, csvLocale.Column.LocaleCode))
+                            pendingNewStateLocales.Add(csvLocale.Column.LocaleCode);
                     }
                 }
-            }
 
-            foreach (KeyValuePair<string, HashSet<string>> pair in pendingStateLocales)
-            {
-                int existingCount = GetTranslationStatusCount(pair.Key);
-                int newCount = 0;
-                foreach (string localeCode in pair.Value)
+                if (pendingValueChanges.Count == 0 && pendingStatusChanges.Count == 0)
+                    continue;
+
+                if (locked)
                 {
-                    if (!HasTranslationState(pair.Key, localeCode))
-                        newCount++;
+                    result.SkippedKeys.Add(new CsvSkippedKey(key, CsvImportSkipReason.LockedKey));
+                    continue;
                 }
-                if (existingCount + newCount > StringTableMetadata.MaxLocaleStatusesPerEntry)
+
+                if (pendingNewStateLocales.Count > 0 &&
+                    GetTranslationStatusCount(key) + pendingNewStateLocales.Count >
+                    StringTableMetadata.MaxLocaleStatusesPerEntry)
                 {
-                    error = "CSV would exceed the per-entry locale-status limit for key '" + pair.Key + "'.";
-                    return false;
+                    result.SkippedKeys.Add(
+                        new CsvSkippedKey(key, CsvImportSkipReason.LocaleStatusLimitExceeded));
+                    continue;
                 }
+
+                result.ValueChanges.AddRange(pendingValueChanges);
+                result.StatusChanges.AddRange(pendingStatusChanges);
+                if (!_metadata.Contains(key) && metadataKeys.Add(key))
+                    result.MetadataKeysToCreate.Add(key);
             }
 
             plan = result;

@@ -6,8 +6,9 @@ Localized UI Layouts apply locale-specific geometry and typography overrides to 
 
 ### Requirements
 
-- `CycloneGames.Localization` present under `Assets/`.
-- TextMeshPro for the `UILocaleLayout` component, because `TrackedElement.Text` is a `TMP_Text`. Unity 2022 LTS supplies it through the `com.unity.textmeshpro` package; Unity 6 supplies it through `com.unity.ugui` 2.0.0. When neither is present the `...Localization.TextMeshPro` assemblies are excluded and `UILocaleLayout` does not compile, while `LocalizationWindowBinder` keeps binding every other `ILocalizationBindingTarget`. See [TextMeshPro compatibility](TextMeshProCompatibility.md).
+- The `CycloneGames.UIFramework.Localization` companion module, which is what binds `CycloneGames.Localization` to `CycloneGames.UIFramework`. See the [module README](../README.md).
+- `CycloneGames.Localization` installed wherever this module is installed.
+- TextMeshPro for the `UILocaleLayout` component, because `TrackedElement.Text` is a `TMP_Text`. Unity 2022 LTS supplies it through the `com.unity.textmeshpro` package; Unity 6 supplies it through `com.unity.ugui` 2.0.0. When neither is present the `...Localization.TextMeshPro` assemblies are excluded and `UILocaleLayout` does not compile, while `LocalizationWindowBinder` keeps binding every other `ILocalizationBindingTarget`. See [TextMeshPro compatibility](../../CycloneGames.UIFramework/Documents~/TextMeshProCompatibility.md).
 
 ## Table of Contents
 
@@ -47,7 +48,7 @@ Create one `LocalizationWindowBinder` and pass it to `UIService` with the other 
 ```csharp
 IUIWindowBinder[] binders =
 {
-    new LocalizationWindowBinder(localization, assetPackage),
+    new LocalizationWindowBinder(localization),
 };
 
 var uiService = new UIService(
@@ -209,7 +210,7 @@ public sealed class LocaleSpecificIconPolicy : MonoBehaviour, ILocalizationBindi
 }
 ```
 
-Targets that load localized assets receive the optional `IAssetPackage` through `LocalizationBindingContext`; they own cancellation and handles acquired during their binding lifetime. Locale commit ordering and reentrancy are owned by `LocalizationService`. Presentation targets observe only committed, revisioned `LocalizationChange` events.
+Targets that load localized assets receive their `IAssetPackage` through their own injection point, matching the constructor-injection convention used by other CycloneGames asset consumers. The binding context carries the localization provider only, so it stays free of any asset or Unity type. Such targets own cancellation and every handle acquired during their binding lifetime. Locale commit ordering and reentrancy are owned by `LocalizationService`. Presentation targets observe only committed, revisioned `LocalizationChange` events.
 
 ### Right-to-left and alignment behavior
 

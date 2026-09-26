@@ -91,7 +91,7 @@ namespace CycloneGames.UIFramework.Editor
             public int ContentSizeFitterCount;
             public int MaskCount;
             public int CanvasCount;
-            public int TmpTextCount;
+            public int TextCount;
 
             public bool IsValid =>
                 IsPrefab &&
@@ -852,7 +852,7 @@ namespace CycloneGames.UIFramework.Editor
                 DrawPreviewRow("Objects / Graphics", inspection.ObjectCount + " / " + inspection.GraphicCount);
                 DrawPreviewRow("Selectables / Canvases", inspection.SelectableCount + " / " + inspection.CanvasCount);
                 DrawPreviewRow("Layout / Fitters", inspection.LayoutGroupCount + " / " + inspection.ContentSizeFitterCount);
-                DrawPreviewRow("Masks / TMP text", inspection.MaskCount + " / " + inspection.TmpTextCount);
+                DrawPreviewRow("Masks / text", inspection.MaskCount + " / " + inspection.TextCount);
                 DrawPreviewRow("UIWindow / Missing scripts", inspection.WindowComponentCount + " / " + inspection.MissingScriptCount);
 
                 if (!inspection.IsPrefab)
@@ -890,16 +890,49 @@ namespace CycloneGames.UIFramework.Editor
                             "The template UIWindow component is authoring-only and will be replaced by the generated window component.",
                             MessageType.None);
                     }
-                    if (inspection.TmpTextCount == 0)
+                    if (inspection.TextCount == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            "No TMP text was detected. Template title substitution will be skipped.",
+                            DescribeMissingTextComponents(),
                             MessageType.None);
                     }
                 }
             }
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(8f);
+        }
+
+        /// <summary>
+        /// Explains why no text component was recognized, naming the registered backends whose base
+        /// type cannot be resolved in this project.
+        /// </summary>
+        private static string DescribeMissingTextComponents()
+        {
+            const string NoText =
+                "No text component from a registered text backend was detected. Template title substitution will be skipped.";
+
+            string unresolvable = null;
+            foreach (UITextBackend backend in UITextBackendRegistry.Backends)
+            {
+                if (UITextBackendRegistry.TryResolveBackendType(backend, out _))
+                {
+                    continue;
+                }
+
+                string entry = "'" + backend.Id + "' (" + backend.BaseTypeName + ")";
+                unresolvable = unresolvable == null ? entry : unresolvable + ", " + entry;
+            }
+
+            if (unresolvable == null)
+            {
+                return NoText;
+            }
+
+            return NoText
+                + " Registered backend(s) " + unresolvable
+                + " could not be resolved in this project: the package that ships them is absent, or"
+                + " their base type name is stale after a rename. Check " + nameof(UITextBackend.BaseTypeName)
+                + " at the registration site.";
         }
 
         private void DrawReviewSection(CreatorSnapshot snapshot)
@@ -1521,25 +1554,12 @@ namespace CycloneGames.UIFramework.Editor
                 {
                     inspection.CanvasCount++;
                 }
-                if (IsTmpTextComponent(component.GetType()))
+                if (UITextBackendRegistry.TryMatch(component.GetType(), out _))
                 {
-                    inspection.TmpTextCount++;
+                    inspection.TextCount++;
                 }
             }
             return inspection;
-        }
-
-        private static bool IsTmpTextComponent(Type type)
-        {
-            while (type != null)
-            {
-                if (string.Equals(type.FullName, "TMPro.TMP_Text", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-                type = type.BaseType;
-            }
-            return false;
         }
 
         private void SetTemplate(GameObject template, bool saveImmediately)

@@ -22,7 +22,7 @@ CycloneGames.UIFramework 负责 Unity 中 UGUI 窗口的生命周期管理。它
 
 窗口通过稳定的字符串 ID 和 Asset Provider 加载，或通过直接的 `UIWindowConfiguration` 打开。Layer 内部按配置 Priority 确定窗口顺序。导航形成活动窗口的因果图，并支持双窗口协调过渡。Scene-bound 窗口在所属场景切换时自动关闭。
 
-可选能力保持在独立程序集边界。MVP 与导航类型位于核心 `Runtime` 程序集。Asset 加载、Localization、DI 与 Motion Driver 分别在各自的 Integration Assembly 中编译，仅在对应包存在时启用。
+可选能力保持在独立程序集边界。MVP 与导航类型位于核心 `Runtime` 程序集。Asset 加载、DI 与 Motion Driver 分别在各自的 Integration Assembly 中编译，仅在对应包存在时启用。Localization 绑定独立在 companion 模块中。
 
 ### 主要特性
 
@@ -32,7 +32,7 @@ CycloneGames.UIFramework 负责 Unity 中 UGUI 窗口的生命周期管理。它
 - **因果导航**：活动窗口图，支持协调进入/离开过渡和调用方缓冲查询。
 - **生命周期状态机**：`UIWindowState` 仅由 `UIService` 持有；回滚、清理与聚合失败上报。
 - **有界动态图集**：运行时 Sprite Packing，具有显式 Lease；详见[动态图集指南](Documents~/DynamicAtlas.SCH.md)。
-- **本地化布局**：按语言区分的几何与排版覆盖；详见[本地化布局指南](Documents~/LocalizedLayouts.SCH.md)。
+- **本地化布局**：按语言区分的几何与排版覆盖，由可选的 companion 模块 [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.SCH.md) 提供。
 
 ## 架构
 
@@ -76,10 +76,6 @@ flowchart LR
 | `CycloneGames.UIFramework.Runtime` | 核心 Runtime | 始终 |
 | `CycloneGames.UIFramework.Editor` | Authoring 工具 | 仅 Editor |
 | `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active；companion package dependency |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | 窗口作用域的 Localization 绑定（不依赖 TMP） | `Assets/` 下存在 `CycloneGames.Localization` |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `UILocaleLayout` 分语言布局快照 | `CYCLONEGAMES_HAS_TEXTMESHPRO` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Localization Authoring 共享日志 facade | 仅 Editor |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `UILocaleLayout` Inspector 与右键菜单 | 仅 Editor；`CYCLONEGAMES_HAS_TEXTMESHPRO` |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | 窗口注入 | 存在 `jp.hadashikick.vcontainer` 包 |
 | `...Integrations.LitMotion` | 窗口过渡 driver | 存在 `com.annulusgames.lit-motion` 包 |
 | `...Integrations.DOTween` | 窗口过渡 driver | 存在 `com.demigiant.dotween` 包 |
@@ -88,11 +84,13 @@ flowchart LR
 
 核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选的 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 加 `defineConstraints` 启用：当依赖以 UPM 包形式安装时自动激活。
 
-`com.cyclone-games.localization` 是可选依赖，不在 `package.json` 中声明。CycloneGames 模块位于 `Assets/` 下，Unity Package Manager 不会解析这里的 `package.json`，因此针对该包 id 的 `versionDefines` 规则永远不会命中，会导致集成被永久排除。Localization Integration 因此采用本仓库为裸资产模块规定的机制：物理隔离的 integration 目录加显式 asmdef reference。删除 `Integrations/CycloneGames.Localization/` 即可移除该集成。不要把 `CYCLONEGAMES_HAS_LOCALIZATION` 加进 PlayerSettings。
+Localization 绑定不属于本包。它位于可选的 companion 模块 [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.SCH.md) 中，因此本包在没有 `CycloneGames.Localization`、也没有任何条件编译宏的情况下照样编译。
 
-TextMeshPro 是叠加在该集成之上的另一项可选 capability。`CYCLONEGAMES_HAS_TEXTMESHPRO` 由两条 `versionDefines` 规则按程序集派生，并通过 `defineConstraints` 消费；它同时覆盖 TextMeshPro 存在的两条 Unity 分支。详见 [TextMeshPro 兼容性](Documents~/TextMeshProCompatibility.SCH.md)。Localization 测试位于条件编译的 `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` 程序集。
+这段集成之所以独立成模块、而不是放在本包内的 integration 目录，是因为 `versionDefines` 只读取已解析的 UPM 包清单。`CycloneGames.Localization` 在部分项目里是 `Assets/` 下的裸目录，在另一些项目里是 `Packages/` 下的真包，于是以 `com.cyclone-games.localization` 为键的规则会在一种布局里命中、在另一种布局里永远不命中，恰好在需要它的项目里把集成静默关掉。物理隔离是唯一在两种布局下表现一致的机制。删除模块目录即可移除集成。不要把 `CYCLONEGAMES_HAS_LOCALIZATION` 加进 PlayerSettings。
 
-Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category；通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`，Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，writer 生命周期由 host 负责。未安装 backend 时，`NullLogWriter` 会丢弃消息。应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
+TextMeshPro 是叠加在该模块之上的另一项可选 capability。`CYCLONEGAMES_HAS_TEXTMESHPRO` 由两条 `versionDefines` 规则按程序集派生，并通过 `defineConstraints` 消费；它同时覆盖 TextMeshPro 存在的两条 Unity 分支。详见 [TextMeshPro 兼容性](Documents~/TextMeshProCompatibility.SCH.md)。
+
+Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category；通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，writer 生命周期由 host 负责。未安装 backend 时，`NullLogWriter` 会丢弃消息。应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
@@ -615,4 +613,3 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 | `TryGetWindow`、`CopyActiveWindows` | 活动窗口查找/快照 |
 | `GetPerformanceStats`、`CopyLayerRuntimeStats` | 有界 Runtime 诊断 |
 | `DynamicAtlasService`、`DynamicAtlasSpriteLease` | 具有显式 Ownership 的有界 Runtime Sprite Packing |
-| `UILocaleLayout`、`LocalizationWindowBinder` | Locale Layout Snapshot 与事务化窗口作用域 Localization Binding |

@@ -20,7 +20,7 @@ CycloneGames.Localization is a Unity localization module for versioned text and 
 
 A localization system answers two questions: which text or asset should the player see, and which locale is currently committed. CycloneGames.Localization separates authoring (`LocalizationSettings`, `Locale`, `StringTable`, `AssetTable`, `StringTableMetadata` edited in the Editor) from runtime dispatch (`LocalizationService` facade over an immutable lookup snapshot), and from presentation (`LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder`). The owner authors tables and catalogs; the service validates and installs them as one atomic transaction; presentation components subscribe to committed changes and refresh on demand.
 
-The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference live in their owning adapters. UI navigation and locale-specific prefab layout use `CycloneGames.UIFramework` when present.
+The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference live in their owning adapters. UI navigation and locale-specific prefab layout use `CycloneGames.UIFramework` when present, through the optional `CycloneGames.UIFramework.Localization` companion module. That module owns `LocalizationWindowBinder` and `UILocaleLayout`, so this package never depends on `CycloneGames.UIFramework`.
 
 Use this module for versioned, partitioned, transactional localization through incremental translation deliveries across a long live-service lifetime. Font/glyph coverage and translation-management vendor bridges are separate concerns.
 
@@ -329,13 +329,18 @@ An application-owned selector reads from the same explicit, versioned save/setti
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// Localized image — requires IAssetPackage
-var imageContext = new LocalizationBindingContext(service, assetPackage);
+// Localized image — assign the asset package on the component before binding
+localizeImage.AssetPackage = assetPackage;
+var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
 // UIFramework window (when CycloneGames.UIFramework is present)
-var binder = new LocalizationWindowBinder(service, assetPackage);
+var binder = new LocalizationWindowBinder(service);
 ```
+
+`LocalizeImage` requires an `IAssetPackage` and throws `InvalidOperationException` from `Bind` when
+`AssetPackage` is null, so assign it before binding. `LocalizationBindingContext` carries no asset
+types, so only components that resolve assets need a package.
 
 `LocalizeImage` keeps the last valid handle until the candidate for the current locale finishes successfully. Cancellation, provider faults, stale completions, disable, unbind, and destruction release the handles they own; a failed candidate does not dispose the last-known-good image prematurely. `LocalizationWindowBinder` scans the instantiated window hierarchy once, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed.
 
@@ -482,9 +487,11 @@ CSV import and export are designed for partial handoff:
 
 - **Export** opens one configuration window showing destination, Key scope, language scope, encoding, and final counts together.
 - Choose **Spreadsheet (Recommended)** for human handoff (Excel, etc.) or **Automation & CI** for machine pipelines. Spreadsheet writes UTF-8 with BOM; Automation & CI writes UTF-8 without BOM. Both use the same bounded RFC 4180 writer.
-- **All Keys (N)** and **Current Results (N)** expose the exact row scope. Choose **All Languages (N)**, **All Registered Languages (N)**, or **Source + &lt;locale&gt;** from one selector.
+- **All Keys (N)**, **Current Results (N)**, and **Needs Translation (N)** expose the exact row scope. **Needs Translation** keeps a key only when at least one exported locale still has work outstanding: an absent or blank value, a `Missing` or `Stale` status, or a translated source revision behind the current source revision. Its count tracks the selected language scope, so it answers "what is left for this delivery" instead of "what does this table contain". Choose **All Languages (N)**, **All Registered Languages (N)**, or **Source + &lt;locale&gt;** from one selector.
 - Quoted commas, quotes, newlines, and Unicode round-trip through RFC 4180 parsing. Import accepts either UTF-8 form, removes one leading BOM when present, and rejects invalid UTF-8.
-- Parsing, limits, headers, keys, revisions, lock state, and locale membership are validated in a temporary model. Import shows a change summary before commit.
+- Parsing, limits, headers, keys, revisions, and locale membership are validated in a temporary model. Import shows a change summary before commit.
+- **Malformed content still aborts the whole file**: CSV structure, duplicate keys, invalid status values, invalid revisions, oversized values, and unknown or duplicated locales. Nothing is applied unless every row is well formed.
+- **Stale rows are skipped per key, not per file.** A key whose authoring text or `SourceRevision` no longer matches the project, a key that no longer exists in the authoring table, a locked key, and a key that would exceed the per-entry locale-status limit are reported and left untouched; every other row in the same file still applies. The confirmation dialog lists the skipped keys and their reasons, capped at eight entries.
 - Only locale columns and key rows present in the file are updated; omitted keys remain unchanged, so translation deliveries may contain any validated subset.
 - Blank or whitespace-only target values are imported as `Missing` and remove an existing override, restoring fallback.
 - One Undo group commits the accepted change; parse, validation, or commit failure leaves existing translations unchanged.
@@ -524,7 +531,7 @@ service.SetPseudoLocalizerEnabled(true);
 
 ### Bind a UIFramework window
 
-When `CycloneGames.UIFramework` is present, register one `LocalizationWindowBinder` with the window composition. The binder scans the instantiated window hierarchy once, finds `ILocalizationBindingTarget` components, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed. `UILocaleLayout`, `LocalizeTMPText`, and `LocalizeImage` participate in the same window lifetime.
+`LocalizationWindowBinder` lives in the optional `CycloneGames.UIFramework.Localization` companion module, not in this package. Install that module, then register one binder with the window composition. The binder scans the instantiated window hierarchy once, finds `ILocalizationBindingTarget` components, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed. `UILocaleLayout`, `LocalizeTMPText`, and `LocalizeImage` participate in the same window lifetime.
 
 ## Performance and Memory
 
@@ -617,7 +624,7 @@ Minimum module verification for a change: compile Core, Runtime, Components, Edi
 | `StringTableMetadata` | Translator context, source revision, status, locks, limits |
 | `ILocalizationBindingTarget` | Explicit presentation binding lifecycle |
 | `LocalizeTMPText` / `LocalizeImage` | TMP and UGUI presentation adapters |
-| `LocalizationWindowBinder` | UIFramework window binding lifecycle |
+| `LocalizationWindowBinder` | UIFramework window binding lifecycle; owned by the `CycloneGames.UIFramework.Localization` companion module |
 | `PseudoLocalizer` | QA-only placeholder/tag-safe text transformation |
 
 Use `Try...` APIs at untrusted or optional boundaries. Treat authoring validation errors as build blockers, and keep network, persistence, and asset-provider failure policies in their owning adapters.

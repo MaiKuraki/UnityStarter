@@ -6,8 +6,9 @@
 
 ### 前置条件
 
-- `Assets/` 下存在 `CycloneGames.Localization`。
-- `UILocaleLayout` 组件需要 TextMeshPro，因为 `TrackedElement.Text` 的类型是 `TMP_Text`。Unity 2022 LTS 通过 `com.unity.textmeshpro` 包提供它；Unity 6 通过 `com.unity.ugui` 2.0.0 提供它。两者都不存在时，`...Localization.TextMeshPro` 程序集被排除，`UILocaleLayout` 不参与编译，而 `LocalizationWindowBinder` 仍会绑定其他所有 `ILocalizationBindingTarget`。详见 [TextMeshPro 兼容性](TextMeshProCompatibility.SCH.md)。
+- companion 模块 `CycloneGames.UIFramework.Localization`，它负责把 `CycloneGames.Localization` 绑定到 `CycloneGames.UIFramework`。详见[模块 README](../README.SCH.md)。
+- 安装本模块的任何项目都必须同时安装 `CycloneGames.Localization`。
+- `UILocaleLayout` 组件需要 TextMeshPro，因为 `TrackedElement.Text` 的类型是 `TMP_Text`。Unity 2022 LTS 通过 `com.unity.textmeshpro` 包提供它；Unity 6 通过 `com.unity.ugui` 2.0.0 提供它。两者都不存在时，`...Localization.TextMeshPro` 程序集被排除，`UILocaleLayout` 不参与编译，而 `LocalizationWindowBinder` 仍会绑定其他所有 `ILocalizationBindingTarget`。详见 [TextMeshPro 兼容性](../../CycloneGames.UIFramework/Documents~/TextMeshProCompatibility.SCH.md)。
 
 ## 目录
 
@@ -47,7 +48,7 @@ localization.Initialize(localizationSettings.ToOptions());
 ```csharp
 IUIWindowBinder[] binders =
 {
-    new LocalizationWindowBinder(localization, assetPackage),
+    new LocalizationWindowBinder(localization),
 };
 
 var uiService = new UIService(
@@ -209,7 +210,7 @@ public sealed class LocaleSpecificIconPolicy : MonoBehaviour, ILocalizationBindi
 }
 ```
 
-加载本地化资产的 target 通过 `LocalizationBindingContext` 接收可选 `IAssetPackage`；它拥有 binding lifetime 内取得的 cancellation 与 handle。Locale commit ordering 与 reentrancy 由 `LocalizationService` 负责。Presentation target 只观察 committed、带 revision 的 `LocalizationChange`。
+加载本地化资产的 target 通过自己的注入点接收 `IAssetPackage`，与 CycloneGames 其他资产消费方的构造注入惯例一致。Binding context 只携带 localization provider，因此不含任何资产或 Unity 类型。这类 target 拥有 binding lifetime 内取得的 cancellation 与全部 handle。Locale commit ordering 与 reentrancy 由 `LocalizationService` 负责。Presentation target 只观察 committed、带 revision 的 `LocalizationChange`。
 
 ### RTL 与对齐行为
 

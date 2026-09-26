@@ -45,21 +45,21 @@ namespace CycloneGames.Localization.Tests.Editor
         {
             var spreadsheet = new LocalizationCsvExportSelection(
                 LocalizationCsvExportProfile.Spreadsheet,
-                false,
+                LocalizationCsvExportKeyScope.All,
                 null,
                 true);
             var automation = new LocalizationCsvExportSelection(
                 LocalizationCsvExportProfile.Automation,
-                true,
+                LocalizationCsvExportKeyScope.CurrentResults,
                 3,
                 false);
 
             Assert.That(spreadsheet.Encoding, Is.EqualTo(LocalizationCsvEncoding.Utf8WithBom));
-            Assert.That(spreadsheet.FilteredOnly, Is.False);
+            Assert.That(spreadsheet.KeyScope, Is.EqualTo(LocalizationCsvExportKeyScope.All));
             Assert.That(spreadsheet.TargetColumnIndex, Is.Null);
             Assert.That(spreadsheet.RegisteredLocalesOnly, Is.True);
             Assert.That(automation.Encoding, Is.EqualTo(LocalizationCsvEncoding.Utf8WithoutBom));
-            Assert.That(automation.FilteredOnly, Is.True);
+            Assert.That(automation.KeyScope, Is.EqualTo(LocalizationCsvExportKeyScope.CurrentResults));
             Assert.That(automation.TargetColumnIndex, Is.EqualTo(3));
             Assert.That(automation.RegisteredLocalesOnly, Is.False);
         }
