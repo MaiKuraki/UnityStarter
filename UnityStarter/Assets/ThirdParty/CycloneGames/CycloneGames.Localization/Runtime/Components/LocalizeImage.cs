@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Localization.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -40,14 +41,47 @@ namespace CycloneGames.Localization.Runtime
             }
         }
 
+        /// <summary>
+        /// Asset package used to load the resolved sprite. Assigning it is a precondition of
+        /// <see cref="Bind"/>, which throws <see cref="InvalidOperationException"/> when it is null.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="LocalizationBindingContext"/> carries no asset types, so the package is
+        /// assigned on the component itself and only components that resolve assets need one.
+        /// </para>
+        /// <para>
+        /// The composition root assigns it before binding, typically right after it collects the
+        /// binding targets it is about to hand to the window binder:
+        /// <c>GetComponent&lt;LocalizeImage&gt;().AssetPackage = package;</c>.
+        /// A component that reaches <see cref="Bind"/> without a package fails the whole window
+        /// binding.
+        /// </para>
+        /// </remarks>
+        public IAssetPackage AssetPackage { get; set; }
+
         public void Bind(in LocalizationBindingContext context)
         {
-            if (context.AssetPackage == null)
-                throw new ArgumentException("LocalizeImage requires an asset package.", nameof(context));
+            // Localized asset resolution is a CycloneGames capability, not part of the
+            // backend-agnostic contract, so this component narrows the provider it was handed.
+            if (!(context.Localization is ILocalizationService service))
+            {
+                throw new ArgumentException(
+                    "LocalizeImage resolves localized assets and therefore requires an "
+                    + nameof(ILocalizationService) + " provider.",
+                    nameof(context));
+            }
+
+            if (AssetPackage == null)
+            {
+                throw new InvalidOperationException(
+                    "LocalizeImage requires an asset package. Assign " + nameof(AssetPackage)
+                    + " before binding the component.");
+            }
 
             Unbind();
-            _service = context.Localization;
-            _package = context.AssetPackage;
+            _service = service;
+            _package = AssetPackage;
             if (isActiveAndEnabled) Subscribe();
             Refresh();
         }

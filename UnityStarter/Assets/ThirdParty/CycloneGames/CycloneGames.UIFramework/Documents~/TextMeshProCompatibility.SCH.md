@@ -2,7 +2,9 @@
 
 [English | 简体中文](TextMeshProCompatibility.md)
 
-TextMeshPro 是本包的可选 capability，不是包依赖。本文记录 Unity 各分支如何分发 TextMeshPro、capability 符号如何派生，以及 TextMeshPro 缺失时会发生什么。
+TextMeshPro 是可选 capability，不是包依赖。本文记录 Unity 各分支如何分发 TextMeshPro、capability 符号如何派生，以及 TextMeshPro 缺失时会发生什么。
+
+这些符号规则由多个 CycloneGames 模块共用。下表中前三个程序集位于 companion 模块 `CycloneGames.UIFramework.Localization`——它负责把 `CycloneGames.Localization` 绑定到 `CycloneGames.UIFramework`；它们使用的 `versionDefines` 与 `defineConstraints` 配置与本包内的程序集完全一致。
 
 ## 为什么需要 capability 符号
 
@@ -58,20 +60,20 @@ Owner：声明这些规则的 asmdef。作用域：仅限该程序集。不要�
 
 ## 消费该符号的程序集
 
-| 程序集 | `defineConstraints` | 内容 |
-| --- | --- | --- |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | 是 | `UILocaleLayout`、`TrackedElement`、`ElementSnapshot`、`LocaleSnapshot` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | 是 | `UILocaleLayoutEditor`、`LocalizeContextMenu` |
-| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | 是 | 语言布局测试 |
-| `CycloneGames.UIFramework.Tests.Editor` | 否（文件级 `#if`） | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
-| `CycloneGames.Localization.Components.TextMeshPro` | 是 | `LocalizeTMPText` |
+| 程序集 | 所属模块 | `defineConstraints` | 内容 |
+| --- | --- | --- | --- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | 是 | `UILocaleLayout`、`TrackedElement`、`ElementSnapshot`、`LocaleSnapshot` |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | 是 | `UILocaleLayoutEditor`、`LocalizeContextMenu` |
+| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | `CycloneGames.UIFramework.Localization` | 是 | 语言布局测试 |
+| `CycloneGames.UIFramework.Tests.Editor` | `CycloneGames.UIFramework` | 否（文件级 `#if`） | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
+| `CycloneGames.Localization.Components.TextMeshPro` | `CycloneGames.Localization` | 是 | `LocalizeTMPText` |
 
 `CycloneGames.UIFramework.Editor.Integrations.Localization` 中的 `UIFrameworkLocalizationEditorLog` facade 保持 internal，与本仓库所有 log facade 一致。由于 TextMeshPro Editor 切片是独立程序集，该程序集在自己的 `AssemblyInfo.cs` 中声明 `InternalsVisibleTo("CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro")`。缺少这条声明时切片会以 `CS0122` 失败。
 
 必须在没有 TextMeshPro 时继续存活的程序集不持有编译期 TextMeshPro 依赖：
 
-- `CycloneGames.UIFramework.Runtime.Integrations.Localization` —— `LocalizationWindowBinder`。
-- `CycloneGames.UIFramework.Editor.Integrations.Localization` —— 共享的 `UIFrameworkLocalizationEditorLog` facade。
+- `CycloneGames.UIFramework.Runtime.Integrations.Localization` —— `LocalizationWindowBinder`。归属于 `CycloneGames.UIFramework.Localization`。
+- `CycloneGames.UIFramework.Editor.Integrations.Localization` —— 共享的 `UIFrameworkLocalizationEditorLog` facade。归属于 `CycloneGames.UIFramework.Localization`。
 - `CycloneGames.UIFramework.Editor` —— `UIWindowCreatorWindow` 与 `UIWindowTemplateProcessor` 通过类型名字符串匹配 TextMeshPro，不做类型引用，因此不需要该程序集。
 - `CycloneGames.Localization.Components` —— `LocalizeImage`。
 
@@ -81,6 +83,57 @@ Owner：声明这些规则的 asmdef。作用域：仅限该程序集。不要�
 2. Localization 窗口 binder 仍然编译，仍然绑定窗口层级中的每一个 `ILocalizationBindingTarget`。
 3. `UILocaleLayout` 不再作为组件存在。任何挂过它的 prefab 或场景会报 missing script，其序列化快照数据不会被加载。这是一条数据丢失路径：先安装 TextMeshPro 再打开这类资产，或者先备份。
 4. `LocalizeTMPText` 不可用；字符串本地化仍然通过图片、音频与自定义绑定目标工作。
+
+## 编辑器工具与文本后端
+
+需要定位文本组件的编辑器工具——窗口创建器中的模板标题替换，以及模板 preflight 检查——不再硬编码 TextMeshPro，
+而是查询 `UITextBackendRegistry`，其中保存有序的 `UITextBackend` 描述符列表。
+
+描述符声明该后端组件共用的基类型、保存文本的序列化字段，以及标记模板标题对象的 GameObject 名称：
+
+| 后端 | 基类型 | 文本字段 | 标题对象 |
+| --- | --- | --- | --- |
+| TextMeshPro（内置） | `TMPro.TMP_Text` | `m_text` | `Text (TMP)` |
+
+匹配沿继承链进行，因此 `TextMeshProUGUI` 会命中基类型 `TMPro.TMP_Text`。TextMeshPro 作为内置后端始终在列表中；
+在没有该类型的项目上，匹配只是永远不会成功。
+
+要让编辑器认识其他文本包，在标记了 `[InitializeOnLoad]` 的静态构造函数中注册一个后端。
+注册会替换同 id 的后端，因此在 domain reload 后重复注册是幂等的。
+
+```csharp
+using CycloneGames.UIFramework.Editor;
+using UnityEditor;
+
+[InitializeOnLoad]
+internal static class UniTextBackendRegistration
+{
+    static UniTextBackendRegistration()
+    {
+        UITextBackendRegistry.Register(new UITextBackend(
+            id: "UniText",
+            displayName: "UniText",
+            baseTypeName: "<完全限定的基类型名>",
+            textFieldName: "<保存文本的序列化字段名>",
+            priority: UITextBackendRegistry.DefaultPriority,
+            titleObjectNames: "Text (UniText)"));
+    }
+}
+```
+
+上面的占位符必须替换为待注册文本包的真实类型名与字段名；匹配基于反射名称，因此注册方程序集不需要引用该文本包。
+
+后端按 `priority` 降序参与匹配，而**跨程序集的注册顺序是不确定的**，所以当一个后端需要与另一个命中相同组件类型的
+后端竞争时，priority 是唯一受支持的手段。TextMeshPro 注册在 `DefaultPriority`：想抢占共用基类型就注册得更高，
+只想作为兜底就注册得更低。
+
+`Backends` 返回不可变快照，调用方可以无锁遍历；把 `Version` 与取快照时读到的值比较，即可知道是否已有更新的集合。
+`Unregister(id)` 用于移除后端，测试与包卸载场景通过它清理。
+
+由于匹配按名称进行，`BaseTypeName` 过期（通常是上游包改了类型名）会**静默失效**：后端仍注册着，只是永远匹配不上。
+`TryResolveBackendType(backend, out type)` 就是针对这个问题的诊断手段，它**不参与匹配**，因此后端无论能否解析都照常工作。
+窗口创建器在没有发现文本组件时，会按名字列出无法解析的已注册后端。
+改名 CycloneGames 的包目录或 asmdef 不影响这段逻辑，因为 `Type.FullName` 不含程序集名。
 
 ## 验证步骤
 

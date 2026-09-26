@@ -3,7 +3,6 @@
     "rootNamespace": "CycloneGames.UIFramework.Runtime.Integrations.Localization",
     "references": [
         "CycloneGames.Localization.Core",
-        "CycloneGames.Localization.Runtime",
         "UniTask",
         "Unity.TextMeshPro"
     ],

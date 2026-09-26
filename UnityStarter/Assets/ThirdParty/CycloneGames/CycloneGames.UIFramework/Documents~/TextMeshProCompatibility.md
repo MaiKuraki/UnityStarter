@@ -2,7 +2,9 @@
 
 [English | 简体中文](TextMeshProCompatibility.SCH.md)
 
-TextMeshPro is an optional capability of this package, not a package dependency. This document records how Unity ships TextMeshPro on each supported branch, how the capability symbol is derived, and what happens when TextMeshPro is unavailable.
+TextMeshPro is an optional capability, not a package dependency. This document records how Unity ships TextMeshPro on each supported branch, how the capability symbol is derived, and what happens when TextMeshPro is unavailable.
+
+The symbol rules are shared by several CycloneGames modules. Three of the assemblies below live in the companion module `CycloneGames.UIFramework.Localization`, which is what binds `CycloneGames.Localization` to `CycloneGames.UIFramework`; they use exactly the same `versionDefines` and `defineConstraints` configuration as the assemblies in this package.
 
 ## Why a capability symbol is required
 
@@ -58,20 +60,20 @@ Owner: the asmdef that declares the rules. Scope: that assembly only. Never add 
 
 ## Assemblies that consume the symbol
 
-| Assembly | `defineConstraints` | Content |
-| --- | --- | --- |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | Yes | `UILocaleLayout`, `TrackedElement`, `ElementSnapshot`, `LocaleSnapshot` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | Yes | `UILocaleLayoutEditor`, `LocalizeContextMenu` |
-| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | Yes | Locale layout tests |
-| `CycloneGames.UIFramework.Tests.Editor` | No (file-level `#if`) | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
-| `CycloneGames.Localization.Components.TextMeshPro` | Yes | `LocalizeTMPText` |
+| Assembly | Owning module | `defineConstraints` | Content |
+| --- | --- | --- | --- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | Yes | `UILocaleLayout`, `TrackedElement`, `ElementSnapshot`, `LocaleSnapshot` |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | Yes | `UILocaleLayoutEditor`, `LocalizeContextMenu` |
+| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | `CycloneGames.UIFramework.Localization` | Yes | Locale layout tests |
+| `CycloneGames.UIFramework.Tests.Editor` | `CycloneGames.UIFramework` | No (file-level `#if`) | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
+| `CycloneGames.Localization.Components.TextMeshPro` | `CycloneGames.Localization` | Yes | `LocalizeTMPText` |
 
 `CycloneGames.UIFramework.Editor.Integrations.Localization` keeps the `UIFrameworkLocalizationEditorLog` facade internal, as every log facade in this repository is. Because the TextMeshPro editor slice is a separate assembly, that assembly declares `InternalsVisibleTo("CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro")` in its own `AssemblyInfo.cs`. Without it the slice fails with `CS0122`.
 
 Assemblies that must survive without TextMeshPro keep no compile-time TextMeshPro dependency:
 
-- `CycloneGames.UIFramework.Runtime.Integrations.Localization` — `LocalizationWindowBinder`.
-- `CycloneGames.UIFramework.Editor.Integrations.Localization` — the shared `UIFrameworkLocalizationEditorLog` facade.
+- `CycloneGames.UIFramework.Runtime.Integrations.Localization` — `LocalizationWindowBinder`. Owned by `CycloneGames.UIFramework.Localization`.
+- `CycloneGames.UIFramework.Editor.Integrations.Localization` — the shared `UIFrameworkLocalizationEditorLog` facade. Owned by `CycloneGames.UIFramework.Localization`.
 - `CycloneGames.UIFramework.Editor` — `UIWindowCreatorWindow` and `UIWindowTemplateProcessor` match TextMeshPro by type name string, not by type reference, so they never need the assembly.
 - `CycloneGames.Localization.Components` — `LocalizeImage`.
 
@@ -81,6 +83,68 @@ Assemblies that must survive without TextMeshPro keep no compile-time TextMeshPr
 2. The localization window binder still compiles and still binds every `ILocalizationBindingTarget` in a window hierarchy.
 3. `UILocaleLayout` no longer exists as a component. Any prefab or scene that carried one reports a missing script and its serialized snapshot data is not loaded. This is a data-loss path: install TextMeshPro before opening such assets, or back them up first.
 4. `LocalizeTMPText` is unavailable; string localization keeps working through image, audio, and custom binding targets.
+
+## Editor tooling and text backends
+
+Editor tooling that has to locate a text component — template title substitution in the window
+creator, and template preflight inspection — does not hard-code TextMeshPro. It asks
+`UITextBackendRegistry`, which holds an ordered list of `UITextBackend` descriptors.
+
+A descriptor names the base type shared by that backend's components, the serialized field that holds
+the text, and the GameObject names that mark a template's title object:
+
+| Backend | Base type | Text field | Title object |
+| --- | --- | --- | --- |
+| TextMeshPro (built in) | `TMPro.TMP_Text` | `m_text` | `Text (TMP)` |
+
+Matching walks the inheritance chain, so `TextMeshProUGUI` matches a base of `TMPro.TMP_Text`.
+TextMeshPro is registered as a built-in backend and is always present in the list; matching simply
+never succeeds on a project that does not have the type.
+
+To teach the editor about another text package, register a backend from a static constructor marked
+`[InitializeOnLoad]`. Registration replaces any backend with the same id, so repeating it after a
+domain reload is idempotent.
+
+```csharp
+using CycloneGames.UIFramework.Editor;
+using UnityEditor;
+
+[InitializeOnLoad]
+internal static class UniTextBackendRegistration
+{
+    static UniTextBackendRegistration()
+    {
+        UITextBackendRegistry.Register(new UITextBackend(
+            id: "UniText",
+            displayName: "UniText",
+            baseTypeName: "<fully qualified base type>",
+            textFieldName: "<serialized text field>",
+            priority: UITextBackendRegistry.DefaultPriority,
+            titleObjectNames: "Text (UniText)"));
+    }
+}
+```
+
+Placeholders above must be replaced with the real type and field names of the package being
+registered; matching is by reflected name, so the registering assembly does not need to reference the
+text package.
+
+Backends are consulted in descending `priority`, and **registration order is not deterministic**
+across assemblies, so priority is the only supported way to make one backend win over another that
+matches the same component type. TextMeshPro is registered at `DefaultPriority`: register above it to
+claim a shared base type, or below it to act only as a fallback.
+
+`Backends` returns an immutable snapshot, so a holder can iterate it without locking; compare
+`Version` against the value read at snapshot time to learn whether a newer set exists.
+`Unregister(id)` removes a backend and is how tests and package removal drop one.
+
+Because matching is by name, a stale `BaseTypeName` — usually after the upstream package renames a
+type — fails silently: the backend stays registered and simply never matches.
+`TryResolveBackendType(backend, out type)` is the diagnostic for that. It is never used for matching,
+so a backend keeps working whether or not it resolves. When the window creator finds no text
+component it lists the registered backends that could not be resolved by name. Renaming CycloneGames
+package directories or asmdefs does not affect this, because `Type.FullName` carries no assembly
+name.
 
 ## Verification
 

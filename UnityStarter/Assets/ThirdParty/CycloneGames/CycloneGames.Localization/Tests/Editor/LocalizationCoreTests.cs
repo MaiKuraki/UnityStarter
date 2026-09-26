@@ -1021,7 +1021,8 @@ namespace CycloneGames.Localization.Tests.Editor
                     out PropertyInfo spriteProperty);
 
                 SetLocalizedImageKey(binding, "icons", "flag");
-                binding.Bind(new LocalizationBindingContext(service, package));
+                SetBindingAssetPackage(binding, package);
+                binding.Bind(new LocalizationBindingContext(service));
                 Assert.That(package.Handles.Count, Is.EqualTo(1));
 
                 Assert.That(service.TrySetLocale(ja.Id), Is.True);
@@ -1088,7 +1089,8 @@ namespace CycloneGames.Localization.Tests.Editor
                     out PropertyInfo spriteProperty);
 
                 SetLocalizedImageKey(binding, "icons", "flag");
-                binding.Bind(new LocalizationBindingContext(service, package));
+                SetBindingAssetPackage(binding, package);
+                binding.Bind(new LocalizationBindingContext(service));
                 var enHandle = (ControlledAssetHandle<Sprite>)package.Handles[0];
                 enHandle.Complete(enSprite);
                 yield return null;
@@ -1224,6 +1226,18 @@ namespace CycloneGames.Localization.Tests.Editor
             string hash = hashOverride ?? LocalizationCatalog.ComputeContentHash(stringTables, assetTables);
             catalog.SetData("1.0.0", hash, stringTables, assetTables);
             return catalog;
+        }
+
+        private static void SetBindingAssetPackage(
+            ILocalizationBindingTarget binding,
+            IAssetPackage package)
+        {
+            // The binding target is resolved reflectively because the component assembly is loaded
+            // by name, so its asset package is injected the same way it is in production: through
+            // the public property the component exposes for the composition root.
+            PropertyInfo property = binding.GetType().GetProperty("AssetPackage");
+            Assert.That(property, Is.Not.Null, "LocalizeImage must expose an AssetPackage property.");
+            property.SetValue(binding, package);
         }
 
         private static void CreateImageBinding(

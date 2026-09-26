@@ -22,7 +22,7 @@ CycloneGames.UIFramework owns and coordinates UGUI windows in Unity. It validate
 
 Windows open by stable string ID through an asset provider or by direct `UIWindowConfiguration`. Layers order windows by configuration priority. Navigation forms a causal graph of active windows and supports coordinated two-window transitions. Scene-bound windows close automatically when their owner scene changes.
 
-Optional capabilities stay at assembly boundaries. MVP and navigation types live in the core `Runtime` assembly. Asset loading, localization, DI, and motion drivers compile in separate integration assemblies when their packages are present.
+Optional capabilities stay at assembly boundaries. MVP and navigation types live in the core `Runtime` assembly. Asset loading, DI, and motion drivers compile in separate integration assemblies when their packages are present. Localization binding lives in a separate companion module.
 
 ### Key Features
 
@@ -32,7 +32,7 @@ Optional capabilities stay at assembly boundaries. MVP and navigation types live
 - **Causal navigation**: active-window graph with coordinated enter/leave transitions and caller-buffered queries.
 - **Lifecycle state machine**: `UIWindowState` owned solely by `UIService`; rollback, cleanup, and aggregated failure reporting.
 - **Bounded dynamic atlas**: runtime sprite packing with explicit leases; see [Dynamic Atlas Guide](Documents~/DynamicAtlas.md).
-- **Localized layouts**: locale-specific geometry and typography overrides; see [Localized Layouts Guide](Documents~/LocalizedLayouts.md).
+- **Localized layouts**: locale-specific geometry and typography overrides, provided by the optional [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.md) companion module.
 
 ## Architecture
 
@@ -76,10 +76,6 @@ flowchart LR
 | `CycloneGames.UIFramework.Runtime` | Core runtime | Always |
 | `CycloneGames.UIFramework.Editor` | Authoring tools | Editor only |
 | `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active; companion package dependency |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | Window-scoped localization binding (TMP-free) | `CycloneGames.Localization` present under `Assets/` |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `UILocaleLayout` per-locale layout snapshots | `CYCLONEGAMES_HAS_TEXTMESHPRO` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Shared localization authoring log facade | Editor only |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `UILocaleLayout` inspector and context menus | Editor only; `CYCLONEGAMES_HAS_TEXTMESHPRO` |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | Window injection | `jp.hadashikick.vcontainer` package present |
 | `...Integrations.LitMotion` | Window transition driver | `com.annulusgames.lit-motion` package present |
 | `...Integrations.DOTween` | Window transition driver | `com.demigiant.dotween` package present |
@@ -88,11 +84,13 @@ flowchart LR
 
 The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package.
 
-`com.cyclone-games.localization` is optional and is not declared in `package.json`. CycloneGames modules live under `Assets/`, where Unity Package Manager does not resolve `package.json`, so a `versionDefines` rule on that package id never matches and would keep the integration permanently excluded. The Localization integration therefore uses the mechanism the repository mandates for raw-asset modules: a physically isolated integration folder plus explicit asmdef references. Delete `Integrations/CycloneGames.Localization/` to remove the integration. Do not add `CYCLONEGAMES_HAS_LOCALIZATION` to Player Settings.
+Localization binding is not part of this package. It lives in the optional companion module [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.md), so this package compiles without `CycloneGames.Localization` and without any conditional-compilation symbol.
 
-TextMeshPro is a separate optional capability layered on top of that integration. `CYCLONEGAMES_HAS_TEXTMESHPRO` is derived per assembly by two `versionDefines` rules and consumed by `defineConstraints`; it covers both Unity branches where TextMeshPro exists. See [TextMeshPro compatibility](Documents~/TextMeshProCompatibility.md). The localization tests live in the conditionally compiled `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` assembly.
+The integration is a separate module rather than an integration folder inside this package because `versionDefines` reads only the resolved UPM package manifest. `CycloneGames.Localization` is a raw folder under `Assets/` in some projects and a real package under `Packages/` in others, so a rule keyed on `com.cyclone-games.localization` matches in one layout and never matches in the other, silently disabling the integration in the project that needs it. Physical isolation is the only mechanism that behaves identically in both layouts. Delete the module folder to remove the integration. Do not add `CYCLONEGAMES_HAS_LOCALIZATION` to Player Settings.
 
-Runtime and sample diagnostics use the stable `CycloneGames.UIFramework` `LogChannel` category; general Editor tooling uses `CycloneGames.UIFramework.Editor`, and localization authoring uses `CycloneGames.UIFramework.Localization.Editor`. The package depends only on the backend-neutral `com.cyclone-games.logging` contract and leaves writer lifecycle to the host. Without a backend, `NullLogWriter` discards messages. The composition root may install `com.cyclone-games.logging.pipeline`, add `com.cyclone-games.logging.unity`, or provide another `ILogWriter`; file path, rotation, retention, redaction, flush, and disposal policy belong to that host.
+TextMeshPro is a separate optional capability layered on top of that module. `CYCLONEGAMES_HAS_TEXTMESHPRO` is derived per assembly by two `versionDefines` rules and consumed by `defineConstraints`; it covers both Unity branches where TextMeshPro exists. See [TextMeshPro compatibility](Documents~/TextMeshProCompatibility.md).
+
+Runtime and sample diagnostics use the stable `CycloneGames.UIFramework` `LogChannel` category; general Editor tooling uses `CycloneGames.UIFramework.Editor`. The package depends only on the backend-neutral `com.cyclone-games.logging` contract and leaves writer lifecycle to the host. Without a backend, `NullLogWriter` discards messages. The composition root may install `com.cyclone-games.logging.pipeline`, add `com.cyclone-games.logging.unity`, or provide another `ILogWriter`; file path, rotation, retention, redaction, flush, and disposal policy belong to that host.
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
@@ -615,4 +613,3 @@ For dynamic-atlas governance, configure a small page/entry/byte budget, retain o
 | `TryGetWindow`, `CopyActiveWindows` | Active window lookup/snapshot |
 | `GetPerformanceStats`, `CopyLayerRuntimeStats` | Bounded runtime diagnostics |
 | `DynamicAtlasService`, `DynamicAtlasSpriteLease` | Bounded runtime sprite packing with explicit ownership |
-| `UILocaleLayout`, `LocalizationWindowBinder` | Locale layout snapshots and transactional window-scoped localization binding |

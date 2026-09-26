@@ -20,7 +20,7 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 
 本地化系统回答两个问题：玩家应该看到哪段文本或哪个资源，以及当前提交的是哪个 locale。CycloneGames.Localization 把创作（在 Editor 中编辑的 `LocalizationSettings`、`Locale`、`StringTable`、`AssetTable`、`StringTableMetadata`）、运行时分发（基于不可变 lookup snapshot 的 `LocalizationService` facade）与表现层（`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder`）解耦。所有者负责创作 table 与 catalog；service 把它们作为一个原子事务校验并安装；表现层组件订阅已提交的变更并按需刷新。
 
-模块处理：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式归各自的 owner adapter 负责。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供。
+模块处理：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式归各自的 owner adapter 负责。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供，并通过可选的 companion 模块 `CycloneGames.UIFramework.Localization` 衔接。该模块持有 `LocalizationWindowBinder` 与 `UILocaleLayout`，因此本包始终不依赖 `CycloneGames.UIFramework`。
 
 适用于版本化、分区、事务化本地化场景，通过增量翻译交付支持长 live-service 生命周期。字体/字形覆盖和翻译管理供应商桥接是独立关注点。
 
@@ -329,13 +329,17 @@ Application-owned selector 从拥有其他用户偏好的同一个显式、versi
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// 本地化图片 —— 需要 IAssetPackage
-var imageContext = new LocalizationBindingContext(service, assetPackage);
+// 本地化图片 —— 绑定前先给组件设置 asset package
+localizeImage.AssetPackage = assetPackage;
+var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
 // UIFramework window（存在 CycloneGames.UIFramework 时）
-var binder = new LocalizationWindowBinder(service, assetPackage);
+var binder = new LocalizationWindowBinder(service);
 ```
+
+`LocalizeImage` 需要 `IAssetPackage`，`AssetPackage` 为 null 时 `Bind` 会抛 `InvalidOperationException`，
+因此必须在绑定前赋值。`LocalizationBindingContext` 不带任何资源类型，所以只有真正解析资源的组件才需要 package。
 
 `LocalizeImage` 保留最后一个有效 handle，直到 current locale 的 candidate 成功完成。Cancellation、provider fault、stale completion、disable、unbind 和 destruction 都会释放各自拥有的 handle；candidate 失败不会提前 Dispose last-known-good image。`LocalizationWindowBinder` 对实例化的 window hierarchy 扫描一次，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。
 
@@ -482,9 +486,11 @@ CSV import/export 面向分批交付：
 
 - **Export** 打开一个 configuration window，同时显示 destination、Key scope、language scope、encoding 与最终数量。
 - 人工交付（Excel 等）选择 **Spreadsheet (Recommended)**，机器 pipeline 选择 **Automation & CI**。Spreadsheet 写入 UTF-8 with BOM；Automation & CI 写入 UTF-8 without BOM；两者共用同一个有界 RFC 4180 writer。
-- **All Keys (N)** 与 **Current Results (N)** 显示准确 row scope。可从单一 selector 选择 **All Languages (N)**、**All Registered Languages (N)** 或 **Source + &lt;locale&gt;**。
+- **All Keys (N)**、**Current Results (N)** 与 **Needs Translation (N)** 显示准确 row scope。**Needs Translation** 只保留仍有待办工作的 key：至少一个被导出的 locale 没有值或值为空、状态为 `Missing` 或 `Stale`、或翻译所基于的 source revision 落后于当前 source revision。它的计数随所选 language scope 变化，因此回答的是「这次交付还差什么」，而不是「这张表里有什么」。可从单一 selector 选择 **All Languages (N)**、**All Registered Languages (N)** 或 **Source + &lt;locale&gt;**。
 - Quoted comma、quote、newline 和 Unicode 通过 RFC 4180 parser 往返。Import 接受两种 UTF-8 形式，存在一个开头 BOM 时会移除，并拒绝无效 UTF-8。
-- 在 temporary model 中先校验 parsing、limit、header、key、revision、lock state 与 locale membership。Commit 前显示 change summary。
+- 在 temporary model 中先校验 parsing、limit、header、key、revision 与 locale membership。Commit 前显示 change summary。
+- **格式错误仍然整份终止**：CSV 结构、重复 key、非法 status、非法 revision、超长 value、未知或重复 locale。只要有一行不合格式，就什么都不应用。
+- **过期行按 key 跳过，而不是整份文件失败。** key 的 source text 或 `SourceRevision` 与项目不一致、key 已不在 authoring table 中、key 被锁定、或该 key 会超出单条 entry 的 locale-status 上限时，这些 key 会被列出并保持原样，同一文件中其它行照常应用。确认对话框会列出被跳过的 key 及原因，最多显示八条。
 - 只更新文件中存在的 locale column 和 key row；项目中未出现在文件里的 key 保持不变，因此翻译交付可以只包含任意经过校验的 subset。
 - Target value 为空或只有空格时按 `Missing` 导入，并移除已有 override 以恢复 fallback。
 - 使用一个 Undo group 提交接受的变更；parse、validation 或 commit failure 不修改现有翻译。
@@ -524,7 +530,7 @@ service.SetPseudoLocalizerEnabled(true);
 
 ### 绑定 UIFramework window
 
-存在 `CycloneGames.UIFramework` 时，在 window composition 注册一个 `LocalizationWindowBinder`。Binder 对实例化的 window hierarchy 扫描一次，找到 `ILocalizationBindingTarget` component，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。`UILocaleLayout`、`LocalizeTMPText` 与 `LocalizeImage` 共享同一 window lifetime。
+`LocalizationWindowBinder` 位于可选的 companion 模块 `CycloneGames.UIFramework.Localization` 中，不在本包内。先安装该模块，再在 window composition 注册一个 binder。Binder 对实例化的 window hierarchy 扫描一次，找到 `ILocalizationBindingTarget` component，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。`UILocaleLayout`、`LocalizeTMPText` 与 `LocalizeImage` 共享同一 window lifetime。
 
 ## 性能与内存
 
@@ -617,7 +623,7 @@ Localization configuration 或 production preference 不写入 `EditorPrefs`、`
 | `StringTableMetadata` | 译者上下文、source revision、status、lock、limit |
 | `ILocalizationBindingTarget` | 显式 presentation binding lifecycle |
 | `LocalizeTMPText` / `LocalizeImage` | TMP 与 UGUI presentation adapter |
-| `LocalizationWindowBinder` | UIFramework window binding lifecycle |
+| `LocalizationWindowBinder` | UIFramework window binding lifecycle；归属于 companion 模块 `CycloneGames.UIFramework.Localization` |
 | `PseudoLocalizer` | QA 使用、保护 placeholder/tag 的文本变换 |
 
 在不可信或 optional boundary 使用 `Try...` API。Authoring validation error 应阻止 build；network、persistence 与 asset-provider failure policy 保持在各自 owner adapter 中。

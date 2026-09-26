@@ -17,7 +17,7 @@ namespace CycloneGames.Localization.Runtime.Integrations.YarnSpinner
     {
         [SerializeField] private DialogueRunner dialogueRunner;
 
-        private ILocalizationService _service;
+        private ILocalizationProvider _service;
         private bool _subscribed;
 
         public void Bind(in LocalizationBindingContext context)
