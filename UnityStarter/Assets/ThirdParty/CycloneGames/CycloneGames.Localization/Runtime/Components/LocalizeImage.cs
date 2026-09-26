@@ -42,9 +42,22 @@ namespace CycloneGames.Localization.Runtime
         }
 
         /// <summary>
-        /// Asset package used to load the resolved sprite. Injected by the composition root, matching
-        /// the constructor-injection convention used by other CycloneGames asset consumers.
+        /// Asset package used to load the resolved sprite. Assigning it is a precondition of
+        /// <see cref="Bind"/>, which throws <see cref="InvalidOperationException"/> when it is null.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="LocalizationBindingContext"/> carries no asset types, so the package is
+        /// assigned on the component itself and only components that resolve assets need one.
+        /// </para>
+        /// <para>
+        /// The composition root assigns it before binding, typically right after it collects the
+        /// binding targets it is about to hand to the window binder:
+        /// <c>GetComponent&lt;LocalizeImage&gt;().AssetPackage = package;</c>.
+        /// A component that reaches <see cref="Bind"/> without a package fails the whole window
+        /// binding.
+        /// </para>
+        /// </remarks>
         public IAssetPackage AssetPackage { get; set; }
 
         public void Bind(in LocalizationBindingContext context)

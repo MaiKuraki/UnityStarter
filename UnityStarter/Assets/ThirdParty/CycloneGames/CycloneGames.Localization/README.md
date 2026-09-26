@@ -329,13 +329,18 @@ An application-owned selector reads from the same explicit, versioned save/setti
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// Localized image — requires IAssetPackage
-var imageContext = new LocalizationBindingContext(service, assetPackage);
+// Localized image — assign the asset package on the component before binding
+localizeImage.AssetPackage = assetPackage;
+var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
 // UIFramework window (when CycloneGames.UIFramework is present)
-var binder = new LocalizationWindowBinder(service, assetPackage);
+var binder = new LocalizationWindowBinder(service);
 ```
+
+`LocalizeImage` requires an `IAssetPackage` and throws `InvalidOperationException` from `Bind` when
+`AssetPackage` is null, so assign it before binding. `LocalizationBindingContext` carries no asset
+types, so only components that resolve assets need a package.
 
 `LocalizeImage` keeps the last valid handle until the candidate for the current locale finishes successfully. Cancellation, provider faults, stale completions, disable, unbind, and destruction release the handles they own; a failed candidate does not dispose the last-known-good image prematurely. `LocalizationWindowBinder` scans the instantiated window hierarchy once, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed.
 

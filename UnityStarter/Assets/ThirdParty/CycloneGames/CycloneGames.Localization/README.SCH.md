@@ -329,13 +329,17 @@ Application-owned selector 从拥有其他用户偏好的同一个显式、versi
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// 本地化图片 —— 需要 IAssetPackage
-var imageContext = new LocalizationBindingContext(service, assetPackage);
+// 本地化图片 —— 绑定前先给组件设置 asset package
+localizeImage.AssetPackage = assetPackage;
+var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
 // UIFramework window（存在 CycloneGames.UIFramework 时）
-var binder = new LocalizationWindowBinder(service, assetPackage);
+var binder = new LocalizationWindowBinder(service);
 ```
+
+`LocalizeImage` 需要 `IAssetPackage`，`AssetPackage` 为 null 时 `Bind` 会抛 `InvalidOperationException`，
+因此必须在绑定前赋值。`LocalizationBindingContext` 不带任何资源类型，所以只有真正解析资源的组件才需要 package。
 
 `LocalizeImage` 保留最后一个有效 handle，直到 current locale 的 candidate 成功完成。Cancellation、provider fault、stale completion、disable、unbind 和 destruction 都会释放各自拥有的 handle；candidate 失败不会提前 Dispose last-known-good image。`LocalizationWindowBinder` 对实例化的 window hierarchy 扫描一次，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。
 

@@ -115,16 +115,27 @@ internal static class UniTextBackendRegistration
             displayName: "UniText",
             baseTypeName: "<完全限定的基类型名>",
             textFieldName: "<保存文本的序列化字段名>",
+            priority: UITextBackendRegistry.DefaultPriority,
             titleObjectNames: "Text (UniText)"));
     }
 }
 ```
 
-注册顺序中第一个匹配组件类型的后端胜出，而 TextMeshPro 最先注册，因此保留 TextMeshPro 并同时安装第三方文本包的
-项目，其 TextMeshPro 组件仍会解析到 TextMeshPro 后端。上面的占位符必须替换为待注册文本包的真实类型名与字段名；
-匹配基于反射名称，因此注册方程序集不需要引用该文本包。
+上面的占位符必须替换为待注册文本包的真实类型名与字段名；匹配基于反射名称，因此注册方程序集不需要引用该文本包。
 
-## ## 验证步骤
+后端按 `priority` 降序参与匹配，而**跨程序集的注册顺序是不确定的**，所以当一个后端需要与另一个命中相同组件类型的
+后端竞争时，priority 是唯一受支持的手段。TextMeshPro 注册在 `DefaultPriority`：想抢占共用基类型就注册得更高，
+只想作为兜底就注册得更低。
+
+`Backends` 返回不可变快照，调用方可以无锁遍历；把 `Version` 与取快照时读到的值比较，即可知道是否已有更新的集合。
+`Unregister(id)` 用于移除后端，测试与包卸载场景通过它清理。
+
+由于匹配按名称进行，`BaseTypeName` 过期（通常是上游包改了类型名）会**静默失效**：后端仍注册着，只是永远匹配不上。
+`TryResolveBackendType(backend, out type)` 就是针对这个问题的诊断手段，它**不参与匹配**，因此后端无论能否解析都照常工作。
+窗口创建器在没有发现文本组件时，会按名字列出无法解析的已注册后端。
+改名 CycloneGames 的包目录或 asmdef 不影响这段逻辑，因为 `Type.FullName` 不含程序集名。
+
+## 验证步骤
 
 1. Unity 2022 LTS：确认 `Packages/manifest.json` 中存在 `com.unity.textmeshpro`。
 2. Unity 6：确认 `com.unity.ugui` 解析到 2.0.0 或更高。`com.unity.textmeshpro` 必须不存在；它的缺失是预期行为，不是故障。

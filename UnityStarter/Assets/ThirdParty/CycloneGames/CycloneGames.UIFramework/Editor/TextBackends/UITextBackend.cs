@@ -9,10 +9,8 @@ namespace CycloneGames.UIFramework.Editor
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Matching compares the reflected type name instead of a loaded <see cref="Type"/>, so a backend
-    /// can be described by an assembly that does not reference it. That is what lets TextMeshPro and a
-    /// third-party text package coexist in one project: the editor registers every backend it knows
-    /// about and recognizes whichever one a prefab actually uses.
+    /// Matching compares the reflected type name, not a loaded <see cref="Type"/>, so a backend can
+    /// be described by an assembly that does not reference the package that ships it.
     /// </para>
     /// <para>
     /// Instances are immutable and safe to share across domain reloads.
@@ -36,6 +34,11 @@ namespace CycloneGames.UIFramework.Editor
         /// Serialized field that holds the text, used with
         /// <c>SerializedObject.FindProperty</c>.
         /// </param>
+        /// <param name="priority">
+        /// Match priority. Higher values are consulted first. It is the only supported way to decide
+        /// between two backends that match the same component type, because registration order
+        /// across assemblies is not deterministic.
+        /// </param>
         /// <param name="titleObjectNames">
         /// GameObject names that mark the preferred title object in a template prefab. May be empty.
         /// </param>
@@ -44,6 +47,7 @@ namespace CycloneGames.UIFramework.Editor
             string displayName,
             string baseTypeName,
             string textFieldName,
+            int priority = 0,
             params string[] titleObjectNames)
         {
             if (string.IsNullOrWhiteSpace(id))
@@ -65,6 +69,7 @@ namespace CycloneGames.UIFramework.Editor
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? id : displayName;
             BaseTypeName = baseTypeName;
             TextFieldName = textFieldName;
+            Priority = priority;
             _titleObjectNames = titleObjectNames ?? Array.Empty<string>();
         }
 
@@ -72,6 +77,11 @@ namespace CycloneGames.UIFramework.Editor
         public string DisplayName { get; }
         public string BaseTypeName { get; }
         public string TextFieldName { get; }
+
+        /// <summary>
+        /// Match priority. Higher values are consulted before lower ones.
+        /// </summary>
+        public int Priority { get; }
 
         /// <summary>
         /// GameObject names that mark the preferred title object in a template prefab.

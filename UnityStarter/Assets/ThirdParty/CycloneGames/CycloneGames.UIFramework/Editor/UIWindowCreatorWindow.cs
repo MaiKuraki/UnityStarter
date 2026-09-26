@@ -893,13 +893,46 @@ namespace CycloneGames.UIFramework.Editor
                     if (inspection.TextCount == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            "No text component from a registered text backend was detected. Template title substitution will be skipped.",
+                            DescribeMissingTextComponents(),
                             MessageType.None);
                     }
                 }
             }
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(8f);
+        }
+
+        /// <summary>
+        /// Explains why no text component was recognized, naming the registered backends whose base
+        /// type cannot be resolved in this project.
+        /// </summary>
+        private static string DescribeMissingTextComponents()
+        {
+            const string NoText =
+                "No text component from a registered text backend was detected. Template title substitution will be skipped.";
+
+            string unresolvable = null;
+            foreach (UITextBackend backend in UITextBackendRegistry.Backends)
+            {
+                if (UITextBackendRegistry.TryResolveBackendType(backend, out _))
+                {
+                    continue;
+                }
+
+                string entry = "'" + backend.Id + "' (" + backend.BaseTypeName + ")";
+                unresolvable = unresolvable == null ? entry : unresolvable + ", " + entry;
+            }
+
+            if (unresolvable == null)
+            {
+                return NoText;
+            }
+
+            return NoText
+                + " Registered backend(s) " + unresolvable
+                + " could not be resolved in this project: the package that ships them is absent, or"
+                + " their base type name is stale after a rename. Check " + nameof(UITextBackend.BaseTypeName)
+                + " at the registration site.";
         }
 
         private void DrawReviewSection(CreatorSnapshot snapshot)

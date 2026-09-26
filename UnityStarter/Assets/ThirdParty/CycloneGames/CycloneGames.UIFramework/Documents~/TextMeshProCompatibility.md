@@ -119,18 +119,34 @@ internal static class UniTextBackendRegistration
             displayName: "UniText",
             baseTypeName: "<fully qualified base type>",
             textFieldName: "<serialized text field>",
+            priority: UITextBackendRegistry.DefaultPriority,
             titleObjectNames: "Text (UniText)"));
     }
 }
 ```
 
-The first backend in registration order that matches a component type wins, and TextMeshPro is
-registered first, so a project that keeps TextMeshPro and adds a third-party package keeps resolving
-TextMeshPro components to the TextMeshPro backend. Placeholders above must be replaced with the real
-type and field names of the package being registered; matching is by reflected name, so the
-registering assembly does not need to reference the text package.
+Placeholders above must be replaced with the real type and field names of the package being
+registered; matching is by reflected name, so the registering assembly does not need to reference the
+text package.
 
-## ## Verification
+Backends are consulted in descending `priority`, and **registration order is not deterministic**
+across assemblies, so priority is the only supported way to make one backend win over another that
+matches the same component type. TextMeshPro is registered at `DefaultPriority`: register above it to
+claim a shared base type, or below it to act only as a fallback.
+
+`Backends` returns an immutable snapshot, so a holder can iterate it without locking; compare
+`Version` against the value read at snapshot time to learn whether a newer set exists.
+`Unregister(id)` removes a backend and is how tests and package removal drop one.
+
+Because matching is by name, a stale `BaseTypeName` — usually after the upstream package renames a
+type — fails silently: the backend stays registered and simply never matches.
+`TryResolveBackendType(backend, out type)` is the diagnostic for that. It is never used for matching,
+so a backend keeps working whether or not it resolves. When the window creator finds no text
+component it lists the registered backends that could not be resolved by name. Renaming CycloneGames
+package directories or asmdefs does not affect this, because `Type.FullName` carries no assembly
+name.
+
+## Verification
 
 1. Unity 2022 LTS: confirm `com.unity.textmeshpro` is in `Packages/manifest.json`.
 2. Unity 6: confirm `com.unity.ugui` resolves to 2.0.0 or newer. `com.unity.textmeshpro` must be absent; its absence is expected, not a failure.
