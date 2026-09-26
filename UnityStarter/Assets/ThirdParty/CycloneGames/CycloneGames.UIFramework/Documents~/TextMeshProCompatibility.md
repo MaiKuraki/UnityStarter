@@ -2,7 +2,9 @@
 
 [English | 简体中文](TextMeshProCompatibility.SCH.md)
 
-TextMeshPro is an optional capability of this package, not a package dependency. This document records how Unity ships TextMeshPro on each supported branch, how the capability symbol is derived, and what happens when TextMeshPro is unavailable.
+TextMeshPro is an optional capability, not a package dependency. This document records how Unity ships TextMeshPro on each supported branch, how the capability symbol is derived, and what happens when TextMeshPro is unavailable.
+
+The symbol rules are shared by several CycloneGames modules. Three of the assemblies below live in the companion module `CycloneGames.UIFramework.Localization`, which is what binds `CycloneGames.Localization` to `CycloneGames.UIFramework`; they use exactly the same `versionDefines` and `defineConstraints` configuration as the assemblies in this package.
 
 ## Why a capability symbol is required
 
@@ -58,20 +60,20 @@ Owner: the asmdef that declares the rules. Scope: that assembly only. Never add 
 
 ## Assemblies that consume the symbol
 
-| Assembly | `defineConstraints` | Content |
-| --- | --- | --- |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | Yes | `UILocaleLayout`, `TrackedElement`, `ElementSnapshot`, `LocaleSnapshot` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | Yes | `UILocaleLayoutEditor`, `LocalizeContextMenu` |
-| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | Yes | Locale layout tests |
-| `CycloneGames.UIFramework.Tests.Editor` | No (file-level `#if`) | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
-| `CycloneGames.Localization.Components.TextMeshPro` | Yes | `LocalizeTMPText` |
+| Assembly | Owning module | `defineConstraints` | Content |
+| --- | --- | --- | --- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | Yes | `UILocaleLayout`, `TrackedElement`, `ElementSnapshot`, `LocaleSnapshot` |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | Yes | `UILocaleLayoutEditor`, `LocalizeContextMenu` |
+| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | `CycloneGames.UIFramework.Localization` | Yes | Locale layout tests |
+| `CycloneGames.UIFramework.Tests.Editor` | `CycloneGames.UIFramework` | No (file-level `#if`) | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
+| `CycloneGames.Localization.Components.TextMeshPro` | `CycloneGames.Localization` | Yes | `LocalizeTMPText` |
 
 `CycloneGames.UIFramework.Editor.Integrations.Localization` keeps the `UIFrameworkLocalizationEditorLog` facade internal, as every log facade in this repository is. Because the TextMeshPro editor slice is a separate assembly, that assembly declares `InternalsVisibleTo("CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro")` in its own `AssemblyInfo.cs`. Without it the slice fails with `CS0122`.
 
 Assemblies that must survive without TextMeshPro keep no compile-time TextMeshPro dependency:
 
-- `CycloneGames.UIFramework.Runtime.Integrations.Localization` — `LocalizationWindowBinder`.
-- `CycloneGames.UIFramework.Editor.Integrations.Localization` — the shared `UIFrameworkLocalizationEditorLog` facade.
+- `CycloneGames.UIFramework.Runtime.Integrations.Localization` — `LocalizationWindowBinder`. Owned by `CycloneGames.UIFramework.Localization`.
+- `CycloneGames.UIFramework.Editor.Integrations.Localization` — the shared `UIFrameworkLocalizationEditorLog` facade. Owned by `CycloneGames.UIFramework.Localization`.
 - `CycloneGames.UIFramework.Editor` — `UIWindowCreatorWindow` and `UIWindowTemplateProcessor` match TextMeshPro by type name string, not by type reference, so they never need the assembly.
 - `CycloneGames.Localization.Components` — `LocalizeImage`.
 

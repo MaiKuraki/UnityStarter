@@ -20,7 +20,7 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 
 本地化系统回答两个问题：玩家应该看到哪段文本或哪个资源，以及当前提交的是哪个 locale。CycloneGames.Localization 把创作（在 Editor 中编辑的 `LocalizationSettings`、`Locale`、`StringTable`、`AssetTable`、`StringTableMetadata`）、运行时分发（基于不可变 lookup snapshot 的 `LocalizationService` facade）与表现层（`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder`）解耦。所有者负责创作 table 与 catalog；service 把它们作为一个原子事务校验并安装；表现层组件订阅已提交的变更并按需刷新。
 
-模块处理：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式归各自的 owner adapter 负责。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供。
+模块处理：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式归各自的 owner adapter 负责。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供，并通过可选的 companion 模块 `CycloneGames.UIFramework.Localization` 衔接。该模块持有 `LocalizationWindowBinder` 与 `UILocaleLayout`，因此本包始终不依赖 `CycloneGames.UIFramework`。
 
 适用于版本化、分区、事务化本地化场景，通过增量翻译交付支持长 live-service 生命周期。字体/字形覆盖和翻译管理供应商桥接是独立关注点。
 
@@ -524,7 +524,7 @@ service.SetPseudoLocalizerEnabled(true);
 
 ### 绑定 UIFramework window
 
-存在 `CycloneGames.UIFramework` 时，在 window composition 注册一个 `LocalizationWindowBinder`。Binder 对实例化的 window hierarchy 扫描一次，找到 `ILocalizationBindingTarget` component，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。`UILocaleLayout`、`LocalizeTMPText` 与 `LocalizeImage` 共享同一 window lifetime。
+`LocalizationWindowBinder` 位于可选的 companion 模块 `CycloneGames.UIFramework.Localization` 中，不在本包内。先安装该模块，再在 window composition 注册一个 binder。Binder 对实例化的 window hierarchy 扫描一次，找到 `ILocalizationBindingTarget` component，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。`UILocaleLayout`、`LocalizeTMPText` 与 `LocalizeImage` 共享同一 window lifetime。
 
 ## 性能与内存
 
@@ -617,7 +617,7 @@ Localization configuration 或 production preference 不写入 `EditorPrefs`、`
 | `StringTableMetadata` | 译者上下文、source revision、status、lock、limit |
 | `ILocalizationBindingTarget` | 显式 presentation binding lifecycle |
 | `LocalizeTMPText` / `LocalizeImage` | TMP 与 UGUI presentation adapter |
-| `LocalizationWindowBinder` | UIFramework window binding lifecycle |
+| `LocalizationWindowBinder` | UIFramework window binding lifecycle；归属于 companion 模块 `CycloneGames.UIFramework.Localization` |
 | `PseudoLocalizer` | QA 使用、保护 placeholder/tag 的文本变换 |
 
 在不可信或 optional boundary 使用 `Try...` API。Authoring validation error 应阻止 build；network、persistence 与 asset-provider failure policy 保持在各自 owner adapter 中。

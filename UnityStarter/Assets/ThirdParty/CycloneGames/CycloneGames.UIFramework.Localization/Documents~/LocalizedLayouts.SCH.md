@@ -6,8 +6,9 @@
 
 ### 前置条件
 
-- `Assets/` 下存在 `CycloneGames.Localization`。
-- `UILocaleLayout` 组件需要 TextMeshPro，因为 `TrackedElement.Text` 的类型是 `TMP_Text`。Unity 2022 LTS 通过 `com.unity.textmeshpro` 包提供它；Unity 6 通过 `com.unity.ugui` 2.0.0 提供它。两者都不存在时，`...Localization.TextMeshPro` 程序集被排除，`UILocaleLayout` 不参与编译，而 `LocalizationWindowBinder` 仍会绑定其他所有 `ILocalizationBindingTarget`。详见 [TextMeshPro 兼容性](TextMeshProCompatibility.SCH.md)。
+- companion 模块 `CycloneGames.UIFramework.Localization`，它负责把 `CycloneGames.Localization` 绑定到 `CycloneGames.UIFramework`。详见[模块 README](../README.SCH.md)。
+- 安装本模块的任何项目都必须同时安装 `CycloneGames.Localization`。
+- `UILocaleLayout` 组件需要 TextMeshPro，因为 `TrackedElement.Text` 的类型是 `TMP_Text`。Unity 2022 LTS 通过 `com.unity.textmeshpro` 包提供它；Unity 6 通过 `com.unity.ugui` 2.0.0 提供它。两者都不存在时，`...Localization.TextMeshPro` 程序集被排除，`UILocaleLayout` 不参与编译，而 `LocalizationWindowBinder` 仍会绑定其他所有 `ILocalizationBindingTarget`。详见 [TextMeshPro 兼容性](../../CycloneGames.UIFramework/Documents~/TextMeshProCompatibility.SCH.md)。
 
 ## 目录
 

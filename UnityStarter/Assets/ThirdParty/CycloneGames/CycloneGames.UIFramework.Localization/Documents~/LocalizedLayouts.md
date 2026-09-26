@@ -6,8 +6,9 @@ Localized UI Layouts apply locale-specific geometry and typography overrides to 
 
 ### Requirements
 
-- `CycloneGames.Localization` present under `Assets/`.
-- TextMeshPro for the `UILocaleLayout` component, because `TrackedElement.Text` is a `TMP_Text`. Unity 2022 LTS supplies it through the `com.unity.textmeshpro` package; Unity 6 supplies it through `com.unity.ugui` 2.0.0. When neither is present the `...Localization.TextMeshPro` assemblies are excluded and `UILocaleLayout` does not compile, while `LocalizationWindowBinder` keeps binding every other `ILocalizationBindingTarget`. See [TextMeshPro compatibility](TextMeshProCompatibility.md).
+- The `CycloneGames.UIFramework.Localization` companion module, which is what binds `CycloneGames.Localization` to `CycloneGames.UIFramework`. See the [module README](../README.md).
+- `CycloneGames.Localization` installed wherever this module is installed.
+- TextMeshPro for the `UILocaleLayout` component, because `TrackedElement.Text` is a `TMP_Text`. Unity 2022 LTS supplies it through the `com.unity.textmeshpro` package; Unity 6 supplies it through `com.unity.ugui` 2.0.0. When neither is present the `...Localization.TextMeshPro` assemblies are excluded and `UILocaleLayout` does not compile, while `LocalizationWindowBinder` keeps binding every other `ILocalizationBindingTarget`. See [TextMeshPro compatibility](../../CycloneGames.UIFramework/Documents~/TextMeshProCompatibility.md).
 
 ## Table of Contents
 

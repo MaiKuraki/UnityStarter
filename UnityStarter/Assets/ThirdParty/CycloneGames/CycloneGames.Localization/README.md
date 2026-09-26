@@ -20,7 +20,7 @@ CycloneGames.Localization is a Unity localization module for versioned text and 
 
 A localization system answers two questions: which text or asset should the player see, and which locale is currently committed. CycloneGames.Localization separates authoring (`LocalizationSettings`, `Locale`, `StringTable`, `AssetTable`, `StringTableMetadata` edited in the Editor) from runtime dispatch (`LocalizationService` facade over an immutable lookup snapshot), and from presentation (`LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder`). The owner authors tables and catalogs; the service validates and installs them as one atomic transaction; presentation components subscribe to committed changes and refresh on demand.
 
-The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference live in their owning adapters. UI navigation and locale-specific prefab layout use `CycloneGames.UIFramework` when present.
+The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference live in their owning adapters. UI navigation and locale-specific prefab layout use `CycloneGames.UIFramework` when present, through the optional `CycloneGames.UIFramework.Localization` companion module. That module owns `LocalizationWindowBinder` and `UILocaleLayout`, so this package never depends on `CycloneGames.UIFramework`.
 
 Use this module for versioned, partitioned, transactional localization through incremental translation deliveries across a long live-service lifetime. Font/glyph coverage and translation-management vendor bridges are separate concerns.
 
@@ -524,7 +524,7 @@ service.SetPseudoLocalizerEnabled(true);
 
 ### Bind a UIFramework window
 
-When `CycloneGames.UIFramework` is present, register one `LocalizationWindowBinder` with the window composition. The binder scans the instantiated window hierarchy once, finds `ILocalizationBindingTarget` components, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed. `UILocaleLayout`, `LocalizeTMPText`, and `LocalizeImage` participate in the same window lifetime.
+`LocalizationWindowBinder` lives in the optional `CycloneGames.UIFramework.Localization` companion module, not in this package. Install that module, then register one binder with the window composition. The binder scans the instantiated window hierarchy once, finds `ILocalizationBindingTarget` components, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed. `UILocaleLayout`, `LocalizeTMPText`, and `LocalizeImage` participate in the same window lifetime.
 
 ## Performance and Memory
 
@@ -617,7 +617,7 @@ Minimum module verification for a change: compile Core, Runtime, Components, Edi
 | `StringTableMetadata` | Translator context, source revision, status, locks, limits |
 | `ILocalizationBindingTarget` | Explicit presentation binding lifecycle |
 | `LocalizeTMPText` / `LocalizeImage` | TMP and UGUI presentation adapters |
-| `LocalizationWindowBinder` | UIFramework window binding lifecycle |
+| `LocalizationWindowBinder` | UIFramework window binding lifecycle; owned by the `CycloneGames.UIFramework.Localization` companion module |
 | `PseudoLocalizer` | QA-only placeholder/tag-safe text transformation |
 
 Use `Try...` APIs at untrusted or optional boundaries. Treat authoring validation errors as build blockers, and keep network, persistence, and asset-provider failure policies in their owning adapters.

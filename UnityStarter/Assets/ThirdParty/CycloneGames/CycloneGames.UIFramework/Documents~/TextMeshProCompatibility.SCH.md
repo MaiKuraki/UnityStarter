@@ -2,7 +2,9 @@
 
 [English | 简体中文](TextMeshProCompatibility.md)
 
-TextMeshPro 是本包的可选 capability，不是包依赖。本文记录 Unity 各分支如何分发 TextMeshPro、capability 符号如何派生，以及 TextMeshPro 缺失时会发生什么。
+TextMeshPro 是可选 capability，不是包依赖。本文记录 Unity 各分支如何分发 TextMeshPro、capability 符号如何派生，以及 TextMeshPro 缺失时会发生什么。
+
+这些符号规则由多个 CycloneGames 模块共用。下表中前三个程序集位于 companion 模块 `CycloneGames.UIFramework.Localization`——它负责把 `CycloneGames.Localization` 绑定到 `CycloneGames.UIFramework`；它们使用的 `versionDefines` 与 `defineConstraints` 配置与本包内的程序集完全一致。
 
 ## 为什么需要 capability 符号
 
@@ -58,20 +60,20 @@ Owner：声明这些规则的 asmdef。作用域：仅限该程序集。不要�
 
 ## 消费该符号的程序集
 
-| 程序集 | `defineConstraints` | 内容 |
-| --- | --- | --- |
-| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | 是 | `UILocaleLayout`、`TrackedElement`、`ElementSnapshot`、`LocaleSnapshot` |
-| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | 是 | `UILocaleLayoutEditor`、`LocalizeContextMenu` |
-| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | 是 | 语言布局测试 |
-| `CycloneGames.UIFramework.Tests.Editor` | 否（文件级 `#if`） | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
-| `CycloneGames.Localization.Components.TextMeshPro` | 是 | `LocalizeTMPText` |
+| 程序集 | 所属模块 | `defineConstraints` | 内容 |
+| --- | --- | --- | --- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | 是 | `UILocaleLayout`、`TrackedElement`、`ElementSnapshot`、`LocaleSnapshot` |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro` | `CycloneGames.UIFramework.Localization` | 是 | `UILocaleLayoutEditor`、`LocalizeContextMenu` |
+| `CycloneGames.UIFramework.Tests.Editor.Integrations.Localization` | `CycloneGames.UIFramework.Localization` | 是 | 语言布局测试 |
+| `CycloneGames.UIFramework.Tests.Editor` | `CycloneGames.UIFramework` | 否（文件级 `#if`） | `TemplateProcessor_RemovesPlaceholderWindowAndUpdatesPreferredTmpTitle` |
+| `CycloneGames.Localization.Components.TextMeshPro` | `CycloneGames.Localization` | 是 | `LocalizeTMPText` |
 
 `CycloneGames.UIFramework.Editor.Integrations.Localization` 中的 `UIFrameworkLocalizationEditorLog` facade 保持 internal，与本仓库所有 log facade 一致。由于 TextMeshPro Editor 切片是独立程序集，该程序集在自己的 `AssemblyInfo.cs` 中声明 `InternalsVisibleTo("CycloneGames.UIFramework.Editor.Integrations.Localization.TextMeshPro")`。缺少这条声明时切片会以 `CS0122` 失败。
 
 必须在没有 TextMeshPro 时继续存活的程序集不持有编译期 TextMeshPro 依赖：
 
-- `CycloneGames.UIFramework.Runtime.Integrations.Localization` —— `LocalizationWindowBinder`。
-- `CycloneGames.UIFramework.Editor.Integrations.Localization` —— 共享的 `UIFrameworkLocalizationEditorLog` facade。
+- `CycloneGames.UIFramework.Runtime.Integrations.Localization` —— `LocalizationWindowBinder`。归属于 `CycloneGames.UIFramework.Localization`。
+- `CycloneGames.UIFramework.Editor.Integrations.Localization` —— 共享的 `UIFrameworkLocalizationEditorLog` facade。归属于 `CycloneGames.UIFramework.Localization`。
 - `CycloneGames.UIFramework.Editor` —— `UIWindowCreatorWindow` 与 `UIWindowTemplateProcessor` 通过类型名字符串匹配 TextMeshPro，不做类型引用，因此不需要该程序集。
 - `CycloneGames.Localization.Components` —— `LocalizeImage`。
 
