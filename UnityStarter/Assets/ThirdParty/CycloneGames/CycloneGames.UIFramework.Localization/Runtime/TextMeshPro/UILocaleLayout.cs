@@ -2,7 +2,6 @@ using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using CycloneGames.Localization.Core;
-using CycloneGames.Localization.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
@@ -29,7 +28,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
         public int LocaleOverrideCount => _snapshots != null ? _snapshots.Length : 0;
 
         private ElementSnapshot[] _baseSnapshots;
-        private ILocalizationService _service;
+        private ILocalizationProvider _service;
         private LocaleId _appliedLocale;
         private int _ownerThreadId;
         private bool _isBaked;
@@ -75,7 +74,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
         public void Bind(in LocalizationBindingContext context)
         {
             EnsureOwnerThread();
-            ILocalizationService service = context.Localization;
+            ILocalizationProvider service = context.Localization;
             if (service == null)
             {
                 throw new ArgumentException(

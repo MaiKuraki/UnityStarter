@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.Localization.Runtime;
+using CycloneGames.Localization.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
@@ -12,9 +12,17 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
     /// Creates transactional, window-scoped localization component bindings.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Construction, binding, and disposal are confined to the Unity main thread. Component
     /// discovery is performed once for each window instance; locale changes do not rescan the
     /// hierarchy.
+    /// </para>
+    /// <para>
+    /// The binder does not require the localization service to be initialized. A window opened
+    /// before initialization completes is bound as soon as the service reports
+    /// <see cref="LocalizationChangeReason.Initialized"/>, which lets composition roots register
+    /// the binder unconditionally instead of sequencing it behind catalog loading.
+    /// </para>
     /// </remarks>
     public sealed class LocalizationWindowBinder : IUIWindowBinder
     {
@@ -26,9 +34,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
         private List<MonoBehaviour> _behaviourScratch;
         private readonly int _ownerThreadId;
 
-        public LocalizationWindowBinder(
-            ILocalizationService service,
-            IAssetPackage assetPackage = null)
+        public LocalizationWindowBinder(ILocalizationProvider service)
         {
             if (!PlayerLoopHelper.IsMainThread)
             {
@@ -37,8 +43,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
             }
 
             _localizationContext = new LocalizationBindingContext(
-                service ?? throw new ArgumentNullException(nameof(service)),
-                assetPackage);
+                service ?? throw new ArgumentNullException(nameof(service)));
             _behaviourScratch = new List<MonoBehaviour>(InitialBehaviourCapacity);
             _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
         }
@@ -46,11 +51,6 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
         public IUIWindowBinding Bind(UIWindowBindingContext context)
         {
             EnsureOwnerThread();
-            if (!_localizationContext.Localization.IsInitialized)
-            {
-                throw new InvalidOperationException(
-                    "Initialize the localization service before binding UI windows.");
-            }
 
             List<MonoBehaviour> behaviours = _behaviourScratch;
             behaviours.Clear();
@@ -60,7 +60,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
                 return new LocalizationWindowBinding(
                     in _localizationContext,
                     behaviours,
-                    _ownerThreadId);
+                    _ownerThreadId,
+                    context.Window.name);
             }
             finally
             {
@@ -87,15 +88,22 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
         private sealed class LocalizationWindowBinding : IUIWindowBinding
         {
             private readonly List<ILocalizationBindingTarget> _targets;
+            private readonly LocalizationBindingContext _localizationContext;
             private readonly int _ownerThreadId;
+            private readonly string _windowName;
             private bool _isDisposed;
+            private bool _isBound;
+            private bool _isSubscribed;
 
             public LocalizationWindowBinding(
                 in LocalizationBindingContext localizationContext,
                 List<MonoBehaviour> behaviours,
-                int ownerThreadId)
+                int ownerThreadId,
+                string windowName)
             {
                 _ownerThreadId = ownerThreadId;
+                _localizationContext = localizationContext;
+                _windowName = windowName;
                 _targets = new List<ILocalizationBindingTarget>(InitialTargetCapacity);
 
                 for (int i = 0; i < behaviours.Count; i++)
@@ -107,33 +115,22 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
                     }
                 }
 
-                int attemptedCount = 0;
-                try
+                if (localizationContext.Localization.IsInitialized)
                 {
-                    for (; attemptedCount < _targets.Count; attemptedCount++)
-                    {
-                        _targets[attemptedCount].Bind(in localizationContext);
-                    }
+                    BindTargets();
+                    return;
                 }
-                catch (Exception bindingException)
-                {
-                    // Include the target whose Bind call failed so partially acquired state can
-                    // still be released. Unbind implementations are required to be idempotent.
-                    int rollbackStart = Math.Min(attemptedCount, _targets.Count - 1);
-                    Exception rollbackException = UnbindReverse(rollbackStart);
-                    _targets.Clear();
-                    _isDisposed = true;
 
-                    if (rollbackException != null)
-                    {
-                        throw new AggregateException(
-                            "Localization component binding and rollback both failed.",
-                            bindingException,
-                            rollbackException);
-                    }
+                // The window still opens; it simply shows authored text until the service
+                // finishes loading. Failing the open here would make window availability depend
+                // on catalog load order, and skipping targets outright would leave the window
+                // permanently untranslated with no later hook to correct it.
+                UIFrameworkLocalizationLog.Channel.Warning(
+                    "Localization service is not initialized. Window '" + _windowName
+                    + "' defers localization binding until initialization completes.");
 
-                    throw;
-                }
+                localizationContext.Localization.Changed += OnLocalizationChanged;
+                _isSubscribed = true;
             }
 
             public void OnWindowStateChanged(WindowStateCallbackType state)
@@ -149,12 +146,99 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
                 }
 
                 _isDisposed = true;
-                Exception failure = UnbindReverse(_targets.Count - 1);
+                Unsubscribe();
+
+                Exception failure = _isBound ? UnbindReverse(_targets.Count - 1) : null;
+                _isBound = false;
                 _targets.Clear();
                 if (failure != null)
                 {
                     throw failure;
                 }
+            }
+
+            private void OnLocalizationChanged(LocalizationChange change)
+            {
+                if (_isDisposed || _isBound)
+                {
+                    return;
+                }
+
+                if (change.Reason != LocalizationChangeReason.Initialized &&
+                    change.Reason != LocalizationChangeReason.LocaleChanged &&
+                    change.Reason != LocalizationChangeReason.ContentChanged)
+                {
+                    return;
+                }
+
+                if (!_localizationContext.Localization.IsInitialized)
+                {
+                    return;
+                }
+
+                // Binding mutates Unity components, so it stays on the thread that owns this
+                // binding. A service initialized elsewhere leaves the window pending rather than
+                // corrupting component state from a foreign thread.
+                if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
+                {
+                    UIFrameworkLocalizationLog.Channel.Error(
+                        "Localization service was initialized off the binding owner thread. Window '"
+                        + _windowName + "' stays unlocalized.");
+                    return;
+                }
+
+                Unsubscribe();
+                BindTargets();
+            }
+
+            private void BindTargets()
+            {
+                if (_isBound)
+                {
+                    return;
+                }
+
+                int attemptedCount = 0;
+                try
+                {
+                    for (; attemptedCount < _targets.Count; attemptedCount++)
+                    {
+                        _targets[attemptedCount].Bind(in _localizationContext);
+                    }
+                }
+                catch (Exception bindingException)
+                {
+                    // Include the target whose Bind call failed so partially acquired state can
+                    // still be released. Unbind implementations are required to be idempotent.
+                    int rollbackStart = Math.Min(attemptedCount, _targets.Count - 1);
+                    Exception rollbackException = UnbindReverse(rollbackStart);
+                    _targets.Clear();
+                    _isDisposed = true;
+                    Unsubscribe();
+
+                    if (rollbackException != null)
+                    {
+                        throw new AggregateException(
+                            "Localization component binding and rollback both failed.",
+                            bindingException,
+                            rollbackException);
+                    }
+
+                    throw;
+                }
+
+                _isBound = true;
+            }
+
+            private void Unsubscribe()
+            {
+                if (!_isSubscribed)
+                {
+                    return;
+                }
+
+                _localizationContext.Localization.Changed -= OnLocalizationChanged;
+                _isSubscribed = false;
             }
 
             private Exception UnbindReverse(int startIndex)
