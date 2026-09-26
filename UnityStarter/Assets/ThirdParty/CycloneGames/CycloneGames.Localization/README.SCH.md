@@ -482,9 +482,11 @@ CSV import/export 面向分批交付：
 
 - **Export** 打开一个 configuration window，同时显示 destination、Key scope、language scope、encoding 与最终数量。
 - 人工交付（Excel 等）选择 **Spreadsheet (Recommended)**，机器 pipeline 选择 **Automation & CI**。Spreadsheet 写入 UTF-8 with BOM；Automation & CI 写入 UTF-8 without BOM；两者共用同一个有界 RFC 4180 writer。
-- **All Keys (N)** 与 **Current Results (N)** 显示准确 row scope。可从单一 selector 选择 **All Languages (N)**、**All Registered Languages (N)** 或 **Source + &lt;locale&gt;**。
+- **All Keys (N)**、**Current Results (N)** 与 **Needs Translation (N)** 显示准确 row scope。**Needs Translation** 只保留仍有待办工作的 key：至少一个被导出的 locale 没有值或值为空、状态为 `Missing` 或 `Stale`、或翻译所基于的 source revision 落后于当前 source revision。它的计数随所选 language scope 变化，因此回答的是「这次交付还差什么」，而不是「这张表里有什么」。可从单一 selector 选择 **All Languages (N)**、**All Registered Languages (N)** 或 **Source + &lt;locale&gt;**。
 - Quoted comma、quote、newline 和 Unicode 通过 RFC 4180 parser 往返。Import 接受两种 UTF-8 形式，存在一个开头 BOM 时会移除，并拒绝无效 UTF-8。
-- 在 temporary model 中先校验 parsing、limit、header、key、revision、lock state 与 locale membership。Commit 前显示 change summary。
+- 在 temporary model 中先校验 parsing、limit、header、key、revision 与 locale membership。Commit 前显示 change summary。
+- **格式错误仍然整份终止**：CSV 结构、重复 key、非法 status、非法 revision、超长 value、未知或重复 locale。只要有一行不合格式，就什么都不应用。
+- **过期行按 key 跳过，而不是整份文件失败。** key 的 source text 或 `SourceRevision` 与项目不一致、key 已不在 authoring table 中、key 被锁定、或该 key 会超出单条 entry 的 locale-status 上限时，这些 key 会被列出并保持原样，同一文件中其它行照常应用。确认对话框会列出被跳过的 key 及原因，最多显示八条。
 - 只更新文件中存在的 locale column 和 key row；项目中未出现在文件里的 key 保持不变，因此翻译交付可以只包含任意经过校验的 subset。
 - Target value 为空或只有空格时按 `Missing` 导入，并移除已有 override 以恢复 fallback。
 - 使用一个 Undo group 提交接受的变更；parse、validation 或 commit failure 不修改现有翻译。

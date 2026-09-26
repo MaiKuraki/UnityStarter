@@ -482,9 +482,11 @@ CSV import and export are designed for partial handoff:
 
 - **Export** opens one configuration window showing destination, Key scope, language scope, encoding, and final counts together.
 - Choose **Spreadsheet (Recommended)** for human handoff (Excel, etc.) or **Automation & CI** for machine pipelines. Spreadsheet writes UTF-8 with BOM; Automation & CI writes UTF-8 without BOM. Both use the same bounded RFC 4180 writer.
-- **All Keys (N)** and **Current Results (N)** expose the exact row scope. Choose **All Languages (N)**, **All Registered Languages (N)**, or **Source + &lt;locale&gt;** from one selector.
+- **All Keys (N)**, **Current Results (N)**, and **Needs Translation (N)** expose the exact row scope. **Needs Translation** keeps a key only when at least one exported locale still has work outstanding: an absent or blank value, a `Missing` or `Stale` status, or a translated source revision behind the current source revision. Its count tracks the selected language scope, so it answers "what is left for this delivery" instead of "what does this table contain". Choose **All Languages (N)**, **All Registered Languages (N)**, or **Source + &lt;locale&gt;** from one selector.
 - Quoted commas, quotes, newlines, and Unicode round-trip through RFC 4180 parsing. Import accepts either UTF-8 form, removes one leading BOM when present, and rejects invalid UTF-8.
-- Parsing, limits, headers, keys, revisions, lock state, and locale membership are validated in a temporary model. Import shows a change summary before commit.
+- Parsing, limits, headers, keys, revisions, and locale membership are validated in a temporary model. Import shows a change summary before commit.
+- **Malformed content still aborts the whole file**: CSV structure, duplicate keys, invalid status values, invalid revisions, oversized values, and unknown or duplicated locales. Nothing is applied unless every row is well formed.
+- **Stale rows are skipped per key, not per file.** A key whose authoring text or `SourceRevision` no longer matches the project, a key that no longer exists in the authoring table, a locked key, and a key that would exceed the per-entry locale-status limit are reported and left untouched; every other row in the same file still applies. The confirmation dialog lists the skipped keys and their reasons, capped at eight entries.
 - Only locale columns and key rows present in the file are updated; omitted keys remain unchanged, so translation deliveries may contain any validated subset.
 - Blank or whitespace-only target values are imported as `Missing` and remove an existing override, restoring fallback.
 - One Undo group commits the accepted change; parse, validation, or commit failure leaves existing translations unchanged.
