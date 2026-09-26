@@ -48,7 +48,7 @@ Create one `LocalizationWindowBinder` and pass it to `UIService` with the other 
 ```csharp
 IUIWindowBinder[] binders =
 {
-    new LocalizationWindowBinder(localization, assetPackage),
+    new LocalizationWindowBinder(localization),
 };
 
 var uiService = new UIService(
@@ -210,7 +210,7 @@ public sealed class LocaleSpecificIconPolicy : MonoBehaviour, ILocalizationBindi
 }
 ```
 
-Targets that load localized assets receive the optional `IAssetPackage` through `LocalizationBindingContext`; they own cancellation and handles acquired during their binding lifetime. Locale commit ordering and reentrancy are owned by `LocalizationService`. Presentation targets observe only committed, revisioned `LocalizationChange` events.
+Targets that load localized assets receive their `IAssetPackage` through their own injection point, matching the constructor-injection convention used by other CycloneGames asset consumers. The binding context carries the localization provider only, so it stays free of any asset or Unity type. Such targets own cancellation and every handle acquired during their binding lifetime. Locale commit ordering and reentrancy are owned by `LocalizationService`. Presentation targets observe only committed, revisioned `LocalizationChange` events.
 
 ### Right-to-left and alignment behavior
 

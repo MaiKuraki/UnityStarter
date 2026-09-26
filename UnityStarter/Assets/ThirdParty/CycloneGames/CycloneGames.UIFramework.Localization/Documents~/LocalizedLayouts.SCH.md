@@ -48,7 +48,7 @@ localization.Initialize(localizationSettings.ToOptions());
 ```csharp
 IUIWindowBinder[] binders =
 {
-    new LocalizationWindowBinder(localization, assetPackage),
+    new LocalizationWindowBinder(localization),
 };
 
 var uiService = new UIService(
@@ -210,7 +210,7 @@ public sealed class LocaleSpecificIconPolicy : MonoBehaviour, ILocalizationBindi
 }
 ```
 
-加载本地化资产的 target 通过 `LocalizationBindingContext` 接收可选 `IAssetPackage`；它拥有 binding lifetime 内取得的 cancellation 与 handle。Locale commit ordering 与 reentrancy 由 `LocalizationService` 负责。Presentation target 只观察 committed、带 revision 的 `LocalizationChange`。
+加载本地化资产的 target 通过自己的注入点接收 `IAssetPackage`，与 CycloneGames 其他资产消费方的构造注入惯例一致。Binding context 只携带 localization provider，因此不含任何资产或 Unity 类型。这类 target 拥有 binding lifetime 内取得的 cancellation 与全部 handle。Locale commit ordering 与 reentrancy 由 `LocalizationService` 负责。Presentation target 只观察 committed、带 revision 的 `LocalizationChange`。
 
 ### RTL 与对齐行为
 

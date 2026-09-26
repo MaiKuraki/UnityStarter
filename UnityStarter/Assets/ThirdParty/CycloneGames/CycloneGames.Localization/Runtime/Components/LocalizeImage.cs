@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Localization.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -40,14 +41,34 @@ namespace CycloneGames.Localization.Runtime
             }
         }
 
+        /// <summary>
+        /// Asset package used to load the resolved sprite. Injected by the composition root, matching
+        /// the constructor-injection convention used by other CycloneGames asset consumers.
+        /// </summary>
+        public IAssetPackage AssetPackage { get; set; }
+
         public void Bind(in LocalizationBindingContext context)
         {
-            if (context.AssetPackage == null)
-                throw new ArgumentException("LocalizeImage requires an asset package.", nameof(context));
+            // Localized asset resolution is a CycloneGames capability, not part of the
+            // backend-agnostic contract, so this component narrows the provider it was handed.
+            if (!(context.Localization is ILocalizationService service))
+            {
+                throw new ArgumentException(
+                    "LocalizeImage resolves localized assets and therefore requires an "
+                    + nameof(ILocalizationService) + " provider.",
+                    nameof(context));
+            }
+
+            if (AssetPackage == null)
+            {
+                throw new InvalidOperationException(
+                    "LocalizeImage requires an asset package. Assign " + nameof(AssetPackage)
+                    + " before binding the component.");
+            }
 
             Unbind();
-            _service = context.Localization;
-            _package = context.AssetPackage;
+            _service = service;
+            _package = AssetPackage;
             if (isActiveAndEnabled) Subscribe();
             Refresh();
         }

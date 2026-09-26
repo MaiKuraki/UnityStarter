@@ -68,7 +68,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Integrations.Localization
             public void Bind(in LocalizationBindingContext context)
             {
                 Probe.Record(TargetName + ":Bind");
-                _service = context.Localization;
+
+                // This probe drives reentrancy by switching the locale from inside its own change
+                // handler, so it needs the full service rather than the backend-agnostic provider.
+                _service = (ILocalizationService)context.Localization;
                 _service.Changed += HandleChange;
                 _isBound = true;
                 Probe.Record(TargetName + ":Locale:" + _service.CurrentLocale.Code);
@@ -629,7 +632,7 @@ namespace CycloneGames.UIFramework.Tests.Editor.Integrations.Localization
         }
 
         [Test]
-        public async Task WindowBinder_UninitializedServiceFailsBeforeSubscriptionAndCanRetryAfterInitialization()
+        public async Task WindowBinder_DefersBindingUntilInitializationWithoutFailingWindowOpen()
         {
             Locale english = CreateLocale("en");
             LocalizationService localization = OwnService();
@@ -650,8 +653,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Integrations.Localization
                     });
                 try
                 {
-                    Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                        await service.OpenAsync(configuration));
+                    await service.OpenAsync(configuration);
+
+                    // The window opens in its authored language instead of failing to open.
+                    Assert.That(service.ActiveWindowCount, Is.EqualTo(1));
                     Assert.That(probe.Events, Is.Empty);
 
                     localization.Initialize(
@@ -659,11 +664,59 @@ namespace CycloneGames.UIFramework.Tests.Editor.Integrations.Localization
                             english,
                             new[] { english },
                             detectSystemLanguage: false));
-                    await service.OpenAsync(configuration);
 
                     CollectionAssert.AreEqual(
                         new[] { "Target:Bind", "Target:Locale:en" },
                         probe.Events);
+
+                    probe.Clear();
+                    await service.CloseAsync("LateLocalization");
+                    CollectionAssert.AreEqual(new[] { "Target:Unbind" }, probe.Events);
+                }
+                finally
+                {
+                    service.Dispose();
+                }
+            }
+        }
+
+        [Test]
+        public async Task WindowBinder_ClosedBeforeInitializationNeverBindsAndDoesNotLeakSubscription()
+        {
+            Locale english = CreateLocale("en");
+            Locale japanese = CreateLocale("ja");
+            LocalizationService localization = OwnService();
+            BindingProbe probe = ScriptableObject.CreateInstance<BindingProbe>();
+            _ownedObjects.Add(probe);
+
+            using (UIRuntimeTestFixture fixture = new UIRuntimeTestFixture())
+            {
+                UIWindowConfiguration configuration = fixture.CreateDirectConfiguration("ClosedEarly");
+                RecordingLocalizationTarget target = configuration.WindowPrefab.gameObject
+                    .AddComponent<RecordingLocalizationTarget>();
+                target.Initialize(probe, "Target");
+                UIService service = new UIService(
+                    fixture.Root,
+                    binders: new IUIWindowBinder[]
+                    {
+                        new LocalizationWindowBinder(localization)
+                    });
+                try
+                {
+                    await service.OpenAsync(configuration);
+                    await service.CloseAsync("ClosedEarly");
+
+                    localization.Initialize(
+                        new LocalizationOptions(
+                            english,
+                            new[] { english, japanese },
+                            detectSystemLanguage: false));
+
+                    // Switching locale after the window closed must not reach the probe: the
+                    // binding unsubscribed when the window closed, so no subscription leaked.
+                    Assert.That(localization.TrySetLocale(new LocaleId("ja")), Is.True);
+
+                    Assert.That(probe.Events, Is.Empty);
                 }
                 finally
                 {

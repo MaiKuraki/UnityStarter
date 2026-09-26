@@ -127,8 +127,18 @@ namespace CycloneGames.Localization.Runtime
 
         public void Bind(in LocalizationBindingContext context)
         {
+            // Plural and argument formatting use the serializable LocalizedString overloads, which
+            // are a CycloneGames capability rather than part of the backend-agnostic contract.
+            if (!(context.Localization is ILocalizationService service))
+            {
+                throw new ArgumentException(
+                    "LocalizeTMPText binds a serializable " + nameof(LocalizedString)
+                    + " key and therefore requires an " + nameof(ILocalizationService) + " provider.",
+                    nameof(context));
+            }
+
             Unbind();
-            _service = context.Localization;
+            _service = service;
             if (isActiveAndEnabled) Subscribe();
             Refresh();
         }
