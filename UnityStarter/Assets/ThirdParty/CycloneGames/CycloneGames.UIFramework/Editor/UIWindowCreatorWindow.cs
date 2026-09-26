@@ -91,7 +91,7 @@ namespace CycloneGames.UIFramework.Editor
             public int ContentSizeFitterCount;
             public int MaskCount;
             public int CanvasCount;
-            public int TmpTextCount;
+            public int TextCount;
 
             public bool IsValid =>
                 IsPrefab &&
@@ -852,7 +852,7 @@ namespace CycloneGames.UIFramework.Editor
                 DrawPreviewRow("Objects / Graphics", inspection.ObjectCount + " / " + inspection.GraphicCount);
                 DrawPreviewRow("Selectables / Canvases", inspection.SelectableCount + " / " + inspection.CanvasCount);
                 DrawPreviewRow("Layout / Fitters", inspection.LayoutGroupCount + " / " + inspection.ContentSizeFitterCount);
-                DrawPreviewRow("Masks / TMP text", inspection.MaskCount + " / " + inspection.TmpTextCount);
+                DrawPreviewRow("Masks / text", inspection.MaskCount + " / " + inspection.TextCount);
                 DrawPreviewRow("UIWindow / Missing scripts", inspection.WindowComponentCount + " / " + inspection.MissingScriptCount);
 
                 if (!inspection.IsPrefab)
@@ -890,10 +890,10 @@ namespace CycloneGames.UIFramework.Editor
                             "The template UIWindow component is authoring-only and will be replaced by the generated window component.",
                             MessageType.None);
                     }
-                    if (inspection.TmpTextCount == 0)
+                    if (inspection.TextCount == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            "No TMP text was detected. Template title substitution will be skipped.",
+                            "No text component from a registered text backend was detected. Template title substitution will be skipped.",
                             MessageType.None);
                     }
                 }
@@ -1521,25 +1521,12 @@ namespace CycloneGames.UIFramework.Editor
                 {
                     inspection.CanvasCount++;
                 }
-                if (IsTmpTextComponent(component.GetType()))
+                if (UITextBackendRegistry.TryMatch(component.GetType(), out _))
                 {
-                    inspection.TmpTextCount++;
+                    inspection.TextCount++;
                 }
             }
             return inspection;
-        }
-
-        private static bool IsTmpTextComponent(Type type)
-        {
-            while (type != null)
-            {
-                if (string.Equals(type.FullName, "TMPro.TMP_Text", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-                type = type.BaseType;
-            }
-            return false;
         }
 
         private void SetTemplate(GameObject template, bool saveImmediately)

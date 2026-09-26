@@ -84,7 +84,53 @@ Assemblies that must survive without TextMeshPro keep no compile-time TextMeshPr
 3. `UILocaleLayout` no longer exists as a component. Any prefab or scene that carried one reports a missing script and its serialized snapshot data is not loaded. This is a data-loss path: install TextMeshPro before opening such assets, or back them up first.
 4. `LocalizeTMPText` is unavailable; string localization keeps working through image, audio, and custom binding targets.
 
-## Verification
+## Editor tooling and text backends
+
+Editor tooling that has to locate a text component — template title substitution in the window
+creator, and template preflight inspection — does not hard-code TextMeshPro. It asks
+`UITextBackendRegistry`, which holds an ordered list of `UITextBackend` descriptors.
+
+A descriptor names the base type shared by that backend's components, the serialized field that holds
+the text, and the GameObject names that mark a template's title object:
+
+| Backend | Base type | Text field | Title object |
+| --- | --- | --- | --- |
+| TextMeshPro (built in) | `TMPro.TMP_Text` | `m_text` | `Text (TMP)` |
+
+Matching walks the inheritance chain, so `TextMeshProUGUI` matches a base of `TMPro.TMP_Text`.
+TextMeshPro is registered as a built-in backend and is always present in the list; matching simply
+never succeeds on a project that does not have the type.
+
+To teach the editor about another text package, register a backend from a static constructor marked
+`[InitializeOnLoad]`. Registration replaces any backend with the same id, so repeating it after a
+domain reload is idempotent.
+
+```csharp
+using CycloneGames.UIFramework.Editor;
+using UnityEditor;
+
+[InitializeOnLoad]
+internal static class UniTextBackendRegistration
+{
+    static UniTextBackendRegistration()
+    {
+        UITextBackendRegistry.Register(new UITextBackend(
+            id: "UniText",
+            displayName: "UniText",
+            baseTypeName: "<fully qualified base type>",
+            textFieldName: "<serialized text field>",
+            titleObjectNames: "Text (UniText)"));
+    }
+}
+```
+
+The first backend in registration order that matches a component type wins, and TextMeshPro is
+registered first, so a project that keeps TextMeshPro and adds a third-party package keeps resolving
+TextMeshPro components to the TextMeshPro backend. Placeholders above must be replaced with the real
+type and field names of the package being registered; matching is by reflected name, so the
+registering assembly does not need to reference the text package.
+
+## ## Verification
 
 1. Unity 2022 LTS: confirm `com.unity.textmeshpro` is in `Packages/manifest.json`.
 2. Unity 6: confirm `com.unity.ugui` resolves to 2.0.0 or newer. `com.unity.textmeshpro` must be absent; its absence is expected, not a failure.

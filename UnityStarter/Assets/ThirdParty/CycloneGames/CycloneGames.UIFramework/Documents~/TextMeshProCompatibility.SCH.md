@@ -84,7 +84,47 @@ Owner：声明这些规则的 asmdef。作用域：仅限该程序集。不要�
 3. `UILocaleLayout` 不再作为组件存在。任何挂过它的 prefab 或场景会报 missing script，其序列化快照数据不会被加载。这是一条数据丢失路径：先安装 TextMeshPro 再打开这类资产，或者先备份。
 4. `LocalizeTMPText` 不可用；字符串本地化仍然通过图片、音频与自定义绑定目标工作。
 
-## 验证步骤
+## 编辑器工具与文本后端
+
+需要定位文本组件的编辑器工具——窗口创建器中的模板标题替换，以及模板 preflight 检查——不再硬编码 TextMeshPro，
+而是查询 `UITextBackendRegistry`，其中保存有序的 `UITextBackend` 描述符列表。
+
+描述符声明该后端组件共用的基类型、保存文本的序列化字段，以及标记模板标题对象的 GameObject 名称：
+
+| 后端 | 基类型 | 文本字段 | 标题对象 |
+| --- | --- | --- | --- |
+| TextMeshPro（内置） | `TMPro.TMP_Text` | `m_text` | `Text (TMP)` |
+
+匹配沿继承链进行，因此 `TextMeshProUGUI` 会命中基类型 `TMPro.TMP_Text`。TextMeshPro 作为内置后端始终在列表中；
+在没有该类型的项目上，匹配只是永远不会成功。
+
+要让编辑器认识其他文本包，在标记了 `[InitializeOnLoad]` 的静态构造函数中注册一个后端。
+注册会替换同 id 的后端，因此在 domain reload 后重复注册是幂等的。
+
+```csharp
+using CycloneGames.UIFramework.Editor;
+using UnityEditor;
+
+[InitializeOnLoad]
+internal static class UniTextBackendRegistration
+{
+    static UniTextBackendRegistration()
+    {
+        UITextBackendRegistry.Register(new UITextBackend(
+            id: "UniText",
+            displayName: "UniText",
+            baseTypeName: "<完全限定的基类型名>",
+            textFieldName: "<保存文本的序列化字段名>",
+            titleObjectNames: "Text (UniText)"));
+    }
+}
+```
+
+注册顺序中第一个匹配组件类型的后端胜出，而 TextMeshPro 最先注册，因此保留 TextMeshPro 并同时安装第三方文本包的
+项目，其 TextMeshPro 组件仍会解析到 TextMeshPro 后端。上面的占位符必须替换为待注册文本包的真实类型名与字段名；
+匹配基于反射名称，因此注册方程序集不需要引用该文本包。
+
+## ## 验证步骤
 
 1. Unity 2022 LTS：确认 `Packages/manifest.json` 中存在 `com.unity.textmeshpro`。
 2. Unity 6：确认 `com.unity.ugui` 解析到 2.0.0 或更高。`com.unity.textmeshpro` 必须不存在；它的缺失是预期行为，不是故障。
