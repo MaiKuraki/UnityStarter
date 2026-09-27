@@ -10,7 +10,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
     public sealed class YooAssetProviderActivationTests
     {
         private const string PackageId = "com.tuyoogame.yooasset";
-        private const string SupportedVersionRange = "[3.0.5,4.0.0)";
+        private const string SupportedVersionRange = "[3.0.6,4.0.0)";
         private static readonly Version MinimumSupportedVersion = new Version(3, 0, 5);
         private static readonly Version MaximumSupportedVersionExclusive = new Version(4, 0, 0);
         private const string ProviderAssemblyName =
@@ -50,9 +50,9 @@ namespace CycloneGames.AssetManagement.Tests.Editor
 
         [TestCase(null, false)]
         [TestCase("3.0.4", false)]
-        [TestCase("3.0.5-preview.1", false)]
-        [TestCase("3.0.5", true)]
-        [TestCase("3.0.5+build.1", true)]
+        [TestCase("3.0.6-preview.1", false)]
+        [TestCase("3.0.6", true)]
+        [TestCase("3.0.6+build.1", true)]
         [TestCase("3.1.0", true)]
         [TestCase("3.99.99", true)]
         [TestCase("4.0.0-preview.1", false)]

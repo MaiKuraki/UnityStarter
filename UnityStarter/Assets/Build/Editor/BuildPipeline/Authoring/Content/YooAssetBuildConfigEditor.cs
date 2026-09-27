@@ -25,7 +25,7 @@ namespace Build.Pipeline.Editor
 
             EditorGUILayout.LabelField("YooAsset 3 Build Configuration", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "The optional typed adapter supports com.tuyoogame.yooasset [3.0.5,4.0.0). " +
+                "The optional typed adapter supports com.tuyoogame.yooasset [3.0.6,4.0.0). " +
                 "Package profiles are the CI source of truth and never read YooAsset EditorPrefs.",
                 MessageType.Info);
             DrawPackageCatalogStatus();

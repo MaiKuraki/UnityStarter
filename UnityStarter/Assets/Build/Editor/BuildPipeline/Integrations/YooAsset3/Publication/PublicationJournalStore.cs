@@ -186,14 +186,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
 
             PublicationSafety.ValidateNoPathRedirection(projectRoot, journalPath);
             PublicationSafety.ValidateNoPathRedirection(projectRoot, temporaryPath);
-            if (active == null)
-            {
-                File.Move(temporaryPath, journalPath);
-            }
-            else
-            {
-                File.Replace(temporaryPath, journalPath, null);
-            }
+            PromoteTemporaryJournal(temporaryPath, journalPath);
 
             PublicationJournal promoted = ReadAndValidateJournal(journalPath, projectRoot, serializer);
             if (promoted.sequence != candidate.sequence ||
@@ -207,6 +200,35 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             return promoted;
         }
 
+
+        /// <summary>
+        /// Moves a fully written temporary journal onto the active journal path.
+        /// </summary>
+        /// <remarks>
+        /// Win32 ReplaceFile reports "Unable to remove the file to be replaced" when a stale handle, filter
+        /// driver, or security product keeps the destination open, which would otherwise strand the transaction
+        /// with no way to promote its candidate. The delete + move fallback stays recoverable: if the process
+        /// dies between the two steps the temporary journal is still on disk, and the next recovery promotes it
+        /// through the missing-destination path.
+        /// </remarks>
+        private static void PromoteTemporaryJournal(string temporaryPath, string journalPath)
+        {
+            if (!File.Exists(journalPath))
+            {
+                File.Move(temporaryPath, journalPath);
+                return;
+            }
+
+            try
+            {
+                File.Replace(temporaryPath, journalPath, null);
+            }
+            catch (IOException)
+            {
+                File.Delete(journalPath);
+                File.Move(temporaryPath, journalPath);
+            }
+        }
 
         internal static void WriteJournal(PublicationJournal value, string journalPath, bool createNew, IJournalSerializer serializer)
         {
@@ -239,9 +261,22 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                 temporaryPath,
                 "YooAsset publication temporary journal");
             PublicationSafety.ValidateNoPathRedirection(value.projectRoot, temporaryPath);
-            bool candidateIsDurable = false;
+            // Tracks whether the temporary file was consumed by the promote step. It must only be set after
+            // File.Move / File.Replace succeeds: setting it earlier leaves a temporary journal behind whenever
+            // the promote step throws, and the leftover "active.json.tmp-<transactionId>" then blocks every
+            // later write for the same transaction with "File already exists".
+            bool journalPromoted = false;
             try
             {
+                // The temporary name is derived from the transaction id, so a candidate left behind by an
+                // interrupted or previously failed write would make FileMode.CreateNew fail and block this
+                // transaction permanently. The document written below supersedes that candidate, and the
+                // recovery path only promotes candidates when no write is in flight.
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+
                 using (var stream = new FileStream(
                            temporaryPath,
                            FileMode.CreateNew,
@@ -254,24 +289,17 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
                     stream.Flush(true);
                 }
 
-                candidateIsDurable = true;
-
                 PublicationSafety.ValidateNoPathRedirection(value.projectRoot, journalPath);
                 PublicationSafety.ValidateNoPathRedirection(value.projectRoot, temporaryPath);
-                if (createNew)
+                if (createNew && (File.Exists(journalPath) || Directory.Exists(journalPath)))
                 {
-                    if (File.Exists(journalPath) || Directory.Exists(journalPath))
-                    {
-                        throw new InvalidOperationException(
-                            $"A YooAsset publication journal already exists: '{journalPath}'.");
-                    }
+                    throw new InvalidOperationException(
+                        $"A YooAsset publication journal already exists: '{journalPath}'.");
+                }
 
-                    File.Move(temporaryPath, journalPath);
-                }
-                else
-                {
-                    File.Replace(temporaryPath, journalPath, null);
-                }
+                PromoteTemporaryJournal(temporaryPath, journalPath);
+
+                journalPromoted = true;
 
                 PublicationJournal persisted = ReadAndValidateJournal(journalPath, value.projectRoot, serializer);
                 if (persisted.sequence != value.sequence ||
@@ -283,7 +311,7 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             }
             catch
             {
-                if (!candidateIsDurable && File.Exists(temporaryPath))
+                if (!journalPromoted && File.Exists(temporaryPath))
                 {
                     File.Delete(temporaryPath);
                 }

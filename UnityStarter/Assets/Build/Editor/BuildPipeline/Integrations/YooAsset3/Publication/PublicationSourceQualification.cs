@@ -228,11 +228,18 @@ namespace Build.Pipeline.Integrations.YooAsset3.Publication
             if (operation.targetInitiallyExisted)
             {
                 Directory.Move(operation.target, operation.backup);
+
+                // The original meta has to reach its protected location before the original publication is
+                // validated. Validation resolves the original meta through the directory it is handed, and for
+                // the backup directory that location is operation.protectedMeta. Until this move runs the meta
+                // is still parked at the source-qualification holding path, so validating first always reported
+                // a changed identity.
+                File.Move(paths.OriginalMeta, operation.protectedMeta);
+
                 PublicationJournalValidator.ValidateOriginalPublicationAt(
                     operation,
                     operation.backup,
                     value.projectRoot, serializer);
-                File.Move(paths.OriginalMeta, operation.protectedMeta);
                 PublicationMetaGuard.ValidateMetaFile(
                     value.projectRoot,
                     operation.protectedMeta,

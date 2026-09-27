@@ -16,7 +16,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
     /// </summary>
     internal static class YooAsset3ManifestValidator
     {
-        // YooAsset-3.0.5 PackageManifestConsts.cs
+        // YooAsset-3.0.6 PackageManifestConsts.cs
         // These constants are internal in YooAsset, so they are duplicated here.
         private const int MaxFileSize = 104857600;
         private const uint FileMagic = 0x594F4F;
@@ -29,7 +29,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         private const int MaxAssetCount = 1000000;
         private const int MaxBundleCount = 1000000;
 
-        // EFileNameStyle members (YooAsset-3.0.5 EFileNameStyle.cs:7).
+        // EFileNameStyle members (YooAsset-3.0.6 EFileNameStyle.cs:7).
         private const int HashNameStyle = 0;
         private const int BundleNameStyle = 1;
         private const int BundleNameHashStyle = 2;
@@ -150,7 +150,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             }
 
             // The hash is computed over the raw (encrypted) manifest bytes.
-            // YooAsset-3.0.5 TaskCreateManifest.cs:94
+            // YooAsset-3.0.6 TaskCreateManifest.cs:94
             string expectedHash = ComputeCrc32Hex(sourceData);
             if (!File.Exists(hashPath))
             {
@@ -192,7 +192,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             var reader = new ManifestReader(data);
 
             // File header: magic + version.
-            // YooAsset-3.0.5 DeserializeManifestOperation.cs:83-98
+            // YooAsset-3.0.6 DeserializeManifestOperation.cs:83-98
             uint magic = reader.ReadUInt32();
             if (magic != FileMagic)
             {
@@ -283,7 +283,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static string GetBundleFileName(int nameStyle, string bundleName, string fileHash)
         {
-            // YooAsset-3.0.5 BundleFileNaming.cs:17
+            // YooAsset-3.0.6 BundleFileNaming.cs:17
             switch (nameStyle)
             {
                 case HashNameStyle:
@@ -311,7 +311,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
 
         private static string ComputeCrc32Hex(byte[] data)
         {
-            // YooAsset-3.0.5 CRC32Algorithm.cs:15
+            // YooAsset-3.0.6 CRC32Algorithm.cs:15
             // Standard CRC-32 (IEEE 802.3): reflected polynomial 0xEDB88320, initial
             // 0xFFFFFFFF, final XOR 0xFFFFFFFF. HashUtility.ToHexString encodes the
             // four little-endian result bytes, so the hex string is byte-reversed
