@@ -47,7 +47,7 @@ An optional assembly becomes eligible for compilation when its dependency is ins
 | Assembly | Supported version condition |
 | --- | --- |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | `com.unity.addressables` `[2.11.1,2.11.2)` |
-| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.6,4.0.0)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | installed `jp.hadashikick.vcontainer` |
 
@@ -168,7 +168,7 @@ Pending Addressables operations reject `WaitForAsyncComplete` on every platform.
 
 ### YooAsset composition
 
-The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.5,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
+The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.6,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
 
 Pending asset, all-assets, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. This replaces the prior YooAsset behavior that asked the provider to advance a pending operation synchronously; `IAssetSyncOperations` is a separate capability and is unchanged.
 

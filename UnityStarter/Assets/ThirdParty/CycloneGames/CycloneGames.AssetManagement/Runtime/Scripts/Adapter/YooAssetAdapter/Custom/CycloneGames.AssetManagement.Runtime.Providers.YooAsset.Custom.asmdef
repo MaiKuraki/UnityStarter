@@ -1,15 +1,10 @@
 {
-    "name": "CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor",
-    "rootNamespace": "CycloneGames.AssetManagement.Tests.Editor",
+    "name": "YooAsset.Custom",
+    "rootNamespace": "",
     "references": [
-        "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.AssetManagement.Runtime.Providers.YooAsset",
-        "UniTask",
         "YooAsset"
     ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
@@ -25,8 +20,5 @@
             "define": "CYCLONEGAMES_HAS_YOOASSET"
         }
     ],
-    "noEngineReferences": false,
-    "optionalUnityReferences": [
-        "TestAssemblies"
-    ]
+    "noEngineReferences": false
 }

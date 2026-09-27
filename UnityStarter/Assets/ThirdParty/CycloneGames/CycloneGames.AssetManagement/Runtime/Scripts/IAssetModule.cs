@@ -174,6 +174,30 @@ namespace CycloneGames.AssetManagement.Runtime
 		UniTask CollectUnusedUnityAssetsAsync();
 	}
 
+	/// <summary>
+	/// Optional capability for reclaiming every provider-owned asset in a package, including assets the provider
+	/// still considers in use. Implementations release framework-owned leases before asking the provider to unload,
+	/// and can optionally wait for the engine's native unload pass to reach a terminal state.
+	/// </summary>
+	public interface IAssetProviderMemoryReclamation
+	{
+		/// <summary>
+		/// Releases every provider-owned asset in this package.
+		/// </summary>
+		/// <param name="waitForEngineUnload">
+		/// True to additionally wait for the engine's native unused-asset unload pass to complete. This makes
+		/// memory reclamation deterministic and observable, at the cost of a potentially long wait. Keep false
+		/// on frame-time sensitive paths.
+		/// </param>
+		/// <remarks>
+		/// Main-thread-affine and not cancellable once provider mutation starts; cancellation is honored only
+		/// before the provider operation begins.
+		/// </remarks>
+		UniTask UnloadAllProviderAssetsAsync(
+			bool waitForEngineUnload,
+			CancellationToken cancellationToken = default);
+	}
+
 	/// <summary>Optional synchronous asset operations. Addressables intentionally does not implement this capability.</summary>
 	public interface IAssetSyncOperations
 	{
