@@ -26,7 +26,7 @@ Provider adapter 在共享契约上归一化并暴露可选能力。资产导入
 
 - **Provider-neutral 核心**：`IAssetModule` 与 `IAssetPackage`，提供调用方持有、只 Dispose 一次的 handle。
 - **有界 SLRU 缓存**：package 本地的 Active、Probation、Protected 与 generation-Detached 状态，带数量与估算字节预算。
-- **可选 provider**：Resources、Addressables（`[2.11.1,2.11.2)`）、YooAsset（`[3.0.5,4.0.0)`），通过接口转换进行能力协商。
+- **可选 provider**：Resources、Addressables（`[2.11.1,2.11.2)`）、YooAsset（`[3.0.6,4.0.0)`），通过接口转换进行能力协商。
 - **维护原语**：`IYooAssetPackageMaintenance` 与 `IAddressablesCatalogMaintenance`，用于 manifest/catalog 激活、缓存清理与 All/Tags/Locations downloader。
 - **内容信任**：schema-2 `ContentTrustManifest`，使用 SHA-256 校验与 `RequireSignature` 或 `IntegrityOnly` policy。
 - **存储预检**：`IAssetStoragePreflight`，提供 `Available`/`Insufficient`/`Unknown`/`Failed` 结果。
@@ -72,8 +72,9 @@ flowchart TD
 | `CycloneGames.AssetManagement.Tests.PlayMode` | no | Unity PlayMode Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | no | `com.unity.addressables` `[2.11.1,2.11.2)` 加显式 consumer reference |
 | `CycloneGames.AssetManagement.Providers.Addressables.Tests.Editor` | no | Addressables 2.11.1 加 Unity Test Runner |
-| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` 加显式 consumer reference |
-| `CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor` | no | 稳定版 YooAsset `[3.0.5,4.0.0)` 加 Unity Test Runner |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.6,4.0.0)` 加显式 consumer reference |
+| `YooAsset.Custom`（文件 `CycloneGames.AssetManagement.Runtime.Providers.YooAsset.Custom.asmdef`） | no | 同样的 YooAsset 范围。程序集名固定：YooAsset 只向 `YooAsset.Custom` 开放内部成员 |
+| `CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor` | no | 稳定版 YooAsset `[3.0.6,4.0.0)` 加 Unity Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` 加显式 consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` 加显式 consumer reference |
 
@@ -83,7 +84,9 @@ AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` 
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
-YooAsset 3.0.5 是最低稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包。产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
+YooAsset 3.0.6 是最低稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包。产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
+
+YooAsset provider 必须要求 3.0.6：它使用 `UnloadAllAssetsOptions.ShouldWaitUnloadUnused`，并依赖 3.0.6 引入的 `YooAsset.Custom` 友元程序集来接入 Web 预下载。YooAsset 3.0.5 已不再支持，且不保留任何兼容分支。
 
 ## 快速上手
 
@@ -168,12 +171,15 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | `IAssetRawFileLoader` | no | no | yes |
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
-| `IAssetStoragePreflight` | no | 仅桌面卷 | 仅桌面 Host mode |
+| `IAssetStoragePreflight` | no | 仅桌面卷 | 桌面与服务器的 sandbox/editor 缓存卷；其余平台返回精确 `Unknown` |
 | `IUnityUnusedAssetCollector` | yes | no | no |
+| `IAssetProviderMemoryReclamation` | no | no | yes |
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
 
 `IAssetPackage` 刻意不提供通用 unload-unused 操作，因为各 provider 无法实现同一种语义。通用框架缓存驱逐使用 `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)`；Resources 的 Unity 进程全局扫描使用 `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync`；YooAsset 的 package-local 操作使用 `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync`。Addressables 除框架缓存 trim 外没有对应操作。这是从已删除 `IAssetPackage.UnloadUnusedAssetsAsync` 的直接迁移方式；不保留 compatibility shim。
+
+`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` 是确定性回收出口：它会释放单个 package 内所有 provider 持有的资产，包括 provider 仍视为在用者。当调用方必须确认 native 内存已真正回收时——例如内存门禁式场景切换前，或抓取 Memory Profiler 基线时——传 `waitForEngineUnload: true`；帧时间敏感路径传 `false`，此时 provider 会在引擎底层卸载完成前就上报终态。
 
 Addressables 与 YooAsset 不能同时通过这些 adapter 激活。Module 级 AssetBundle runtime guard 建立唯一的框架控制 provider authority，直到共存、shutdown 顺序与内存行为作为完整产品配置得到验证。
 
@@ -363,6 +369,33 @@ hostOptions.CacheFileSystemParameters.AddParameter(
 ```
 
 自定义文件系统通过 `new FileSystemParameters("命名空间.类型名,程序集", packageRoot)` 声明；provider 用反射实例化它，并通过 `AddParameter` 注入全部参数。bundle 级策略（`DownloadUrlPolicy`、`DownloadRetryPolicy`、`WebPlatformStrategy`、`BundleUnpackPolicy`、`BuiltinFileAccessor`）使用同样的参数键。由于适配器原样转发 options 对象，只要引用的 YooAsset 版本包含对应类型，新增的 playmode 与参数在适配器升级后继续可用。`EnsureBundleFileAsync` 结果的 `IsEncrypted` 标志让产品在把路径交给原生消费方之前识别加密内容。
+
+### 小游戏平台缓存预下载（YooAsset 3.0.6）
+
+YooAsset 3.0.6 允许 Web 网络文件系统把 bundle 预下载到平台托管缓存。该策略接口在 YooAsset 内部是 `internal`，只能从名为 `YooAsset.Custom` 的程序集访问，因此 provider 提供了一个使用该名称的友元程序集，并对外暴露公共契约：
+
+```csharp
+// 每个平台实现一次（微信、抖音……）。两个成员都在主线程、YooAsset 加载路径内执行：
+// 用平台已知状态直接回答，绝不阻塞 IO。
+public sealed class WechatPreloadPlatform : IWebPreloadPlatform
+{
+    public bool IsBundleCached(WebPreloadBundleQuery query) =>
+        WechatCache.Contains(query.BundleName, query.FileHash);
+
+    public UnityWebRequest CreatePreloadRequest(string url) =>
+        WechatCache.CreateRequest(url);
+}
+
+var webOptions = new WebPlayModeOptions
+{
+    WebNetworkFileSystemParameters =
+        FileSystemParameters.CreateDefaultWebNetworkFileSystemParameters(remoteService)
+};
+YooWebPreload.AttachPreloadStrategy(
+    webOptions.WebNetworkFileSystemParameters, new WechatPreloadPlatform());
+```
+
+预下载只被 YooAsset 的 Web 网络文件系统读取；挂到 sandbox 或 builtin 参数集上没有任何效果。`WebPreloadBundleQuery` 由所属策略跨查询复用，因此必须同步读取，且不要持有引用。
 
 xasset 等自定义 provider 适配器实现 `IAssetPackage` 加可选能力接口即可；它们按设计被 CG0014 豁免，并自动获得同一套 cache、lease、tracker 与 telemetry 基础设施。
 

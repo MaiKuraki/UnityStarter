@@ -15,7 +15,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
 {
     public sealed class YooAsset3PublicationTransactionTests
     {
-        private const string InvocationId = "yooasset-main";
+        private const string InvocationId = "m1";
         private string projectRoot;
         private string testRoot;
         private string buildOutputRoot;
@@ -25,14 +25,18 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         public void SetUp()
         {
             string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            // Keep every scratch path segment minimal. YooAsset3BuildPlan reserves a fixed suffix for the
+            // publication staging directory and for YooAsset-generated child paths, and the resolved output
+            // path still has to fit the Win32 MAX_PATH budget. The staging directory alone consumes 48
+            // characters of that reservation, so a deep scratch root makes the plan reject every test before
+            // the behaviour under test ever runs.
             testRoot = Path.Combine(
                 unityProjectRoot,
                 "Temp",
-                "BuildPipelineTests",
-                "YooAsset3Publication",
-                Guid.NewGuid().ToString("N"));
-            projectRoot = Path.Combine(testRoot, "Project");
-            buildOutputRoot = Path.Combine(projectRoot, "BuildOutput");
+                "bpt",
+                Guid.NewGuid().ToString("N").Substring(0, 6));
+            projectRoot = testRoot;
+            buildOutputRoot = Path.Combine(projectRoot, "BO");
             bundledFileRoot = Path.Combine(projectRoot, "Assets", "StreamingAssets", "YooAsset");
             Directory.CreateDirectory(Path.Combine(projectRoot, "Assets", "StreamingAssets"));
         }
@@ -1034,11 +1038,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             transaction.Publish(validatePublishedState: null, refreshAssets: NoOp);
             barrier.CommitDecision();
 
-            SimulatedTerminationException exception =
-                Assert.Throws<SimulatedTerminationException>(() =>
+            // This checkpoint lives inside CompletePendingRefresh, which runs past the commit point and
+            // re-reports every failure as a committed publication that still needs recovery.
+            CommittedPublicationException exception =
+                Assert.Throws<CommittedPublicationException>(() =>
                     transaction.Complete(NoOp, TerminateAt("CommitRefreshPreRefresh")));
 
-            StringAssert.Contains("CommitRefreshPreRefresh", exception.Message);
+            Assert.That(exception.InnerException, Is.TypeOf<SimulatedTerminationException>());
+            StringAssert.Contains("CommitRefreshPreRefresh", exception.InnerException.Message);
             Assert.That(File.Exists(GetJournalPath()), Is.True);
             Assert.That(ReadFile(transaction.Packages[0].OutputOperation.target, "payload.txt"), Is.EqualTo("new"));
 

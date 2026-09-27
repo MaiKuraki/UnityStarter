@@ -440,7 +440,7 @@ An `asset-content` invocation stores a typed configuration, not a handwritten ve
 | Addressables | `AddressablesBuildConfig` | Reflection-based adapter in the core Editor assembly | Core compiles; selected invocation fails availability/API-shape validation |
 | YooAsset 3 | `YooAssetBuildConfig` | `Build.Pipeline.Integrations.YooAsset3.Editor` | Core and authoring compile; selected invocation fails when adapter is absent |
 
-YooAsset uses a `versionDefines` package range of `[3.0.5,4.0.0)` and the assembly constraint `BUILD_PIPELINE_HAS_YOOASSET_3`. Addressables probes the official API shape it uses rather than claiming a broad compatible version range. Every package upgrade needs integration compilation and target qualification.
+YooAsset uses a `versionDefines` package range of `[3.0.6,4.0.0)` and the assembly constraint `BUILD_PIPELINE_HAS_YOOASSET_3`. Addressables probes the official API shape it uses rather than claiming a broad compatible version range. Every package upgrade needs integration compilation and target qualification.
 
 A successful content build does not prove that the Player includes the matching runtime AssetManagement provider or decryption implementation.
 
@@ -501,7 +501,7 @@ Preflight binds target, profile ID, exact Unity version, Addressables player ver
 
 ### YooAsset 3
 
-Install `com.tuyoogame.yooasset` in `[3.0.5,4.0.0)`, save one valid Bundle Collector settings asset, ensure enabled package names exist, choose an explicit package version, and reserve non-overlapping publication and bundled roots.
+Install `com.tuyoogame.yooasset` in `[3.0.6,4.0.0)`, save one valid Bundle Collector settings asset, ensure enabled package names exist, choose an explicit package version, and reserve non-overlapping publication and bundled roots.
 
 | Configuration field | Meaning |
 | --- | --- |
@@ -528,7 +528,7 @@ Bundled modes:
 
 Only a package with a bundled copy mode opens a temporary Player session. `ReplaceExactVersion` may replace only the exact build-owned package-version destination; use a new version for normal release CI.
 
-Both modes retain YooAsset's native cache and deliberately avoid `ClearBuildCacheFiles`, which deletes historical versions in YooAsset 3.0.5. The current adapter passes the same native parameters for Clean and Incremental. Incremental is therefore a cache-reuse policy, not a guarantee of a provider-native delta package.
+Both modes retain YooAsset's native cache and deliberately avoid `ClearBuildCacheFiles`, which deletes historical versions. The current adapter passes the same native parameters for Clean and Incremental. Incremental is therefore a cache-reuse policy, not a guarantee of a provider-native delta package.
 
 The Build module provides cryptography contracts, not algorithms or secrets. A product extension derives `YooAssetCryptographyConfiguration`, registers a stable adapter/runtime decrypt contract, implements `IYooAsset3CryptographyAdapter`, and ships the matching runtime decryptor. Do not store keys in `EditorPrefs`, class-name strings, BuildData, logs, or committed configuration assets.
 
@@ -1266,7 +1266,7 @@ Normal success/handled failure restores prior asset/meta and removes only transa
 
 ### YooAsset
 
-- **Provider missing:** install `com.tuyoogame.yooasset` in `[3.0.5,4.0.0)`; a source copy elsewhere is not an installed dependency.
+- **Provider missing:** install `com.tuyoogame.yooasset` in `[3.0.6,4.0.0)`; a source copy elsewhere is not an installed dependency.
 - **Version exists:** use a new version; guarded replacement requires exact build ownership.
 - **OnlyCopy cannot inherit:** restore the full bundled root and `.yoo-pub.json`.
 - **Runtime cannot decrypt:** ship the decryptor matching the recorded runtime contract; the Build module does not supply keys or algorithms.

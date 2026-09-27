@@ -160,7 +160,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             AssetRuntime.YooSceneHandle handle = CreateUninitialized<AssetRuntime.YooSceneHandle>();
             SetField(package, "_sceneOwnerToken", ownerToken);
             SetAutoProperty(handle, "OwnerToken", ownerToken);
-            SetField(handle, "_disposed", 1);
+            MarkTerminallyReleased(handle);
 
             var cancelled = new CancellationToken(canceled: true);
             Assert.That(
@@ -178,7 +178,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             AssetRuntime.YooSceneHandle handle = CreateUninitialized<AssetRuntime.YooSceneHandle>();
             SetField(package, "_sceneOwnerToken", new object());
             SetAutoProperty(handle, "OwnerToken", new object());
-            SetField(handle, "_disposed", 1);
+            MarkTerminallyReleased(handle);
 
             Assert.Throws<ArgumentException>(() => package.UnloadSceneAsync(handle));
         }
@@ -187,7 +187,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void SceneHandle_TerminalActivationFailsFast()
         {
             AssetRuntime.YooSceneHandle handle = CreateUninitialized<AssetRuntime.YooSceneHandle>();
-            SetField(handle, "_disposed", 1);
+            MarkTerminallyReleased(handle);
 
             Assert.Throws<ObjectDisposedException>(() => handle.ActivateAsync());
         }
@@ -278,6 +278,9 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             SetField(handle, "_id", 9_100_003L);
             SetField(handle, "_activationStarted", true);
             SetField(handle, "_activationTask", activation.Task);
+            // The provider handle is absent in this harness. Provider invalidation alone does not prove scene
+            // absence, so the unload path needs the scene-unloaded observation to reach terminal cleanup.
+            SetField(handle, "_providerSceneUnloaded", true);
 
             Cysharp.Threading.Tasks.UniTask unload = handle.UnloadAsync(CancellationToken.None);
 
@@ -576,6 +579,19 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         private static void SetAutoProperty(object target, string propertyName, object value)
         {
             SetField(target, $"<{propertyName}>k__BackingField", value);
+        }
+
+        /// <summary>
+        /// Drives a provider handle to its terminal released state through the real state machine instead of
+        /// writing a magic value, so the test follows the same transition the production release path uses.
+        /// </summary>
+        private static void MarkTerminallyReleased(object handle)
+        {
+            FieldInfo field = handle.GetType().GetField("_releaseState", PrivateInstance);
+            Assert.That(field, Is.Not.Null, "Missing field '_releaseState'.");
+            int state = (int)field.GetValue(handle);
+            AssetRuntime.ProviderReleaseStateMachine.MarkReleased(ref state);
+            field.SetValue(handle, state);
         }
 
         private static void AssertArgumentOutOfRange(

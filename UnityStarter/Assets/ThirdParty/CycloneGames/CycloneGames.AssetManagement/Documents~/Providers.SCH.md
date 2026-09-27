@@ -47,7 +47,7 @@ AssetManagement 提供三个 provider（Resources、Addressables、YooAsset）�
 | Assembly | 支持的版本条件 |
 | --- | --- |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | `com.unity.addressables` `[2.11.1,2.11.2)` |
-| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.6,4.0.0)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | 已安装 `jp.hadashikick.vcontainer` |
 
@@ -168,7 +168,7 @@ Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 aw
 
 ### YooAsset 组合
 
-YooAsset provider 目标为 `[3.0.5,4.0.0)` 范围内的稳定版 `com.tuyoogame.yooasset`。asmdef 范围是 compilation envelope；由于 SemVer prerelease 排在对应正式版之前，范围内的 prerelease 可能进入编译，但 activation test 会把它拒绝为不受支持。`YooAssetModule` 独占进程全局 Yoo runtime。每个需要隔离可写缓存的 client instance，都必须通过 file-system parameters 传入各自独立且显式的 `PackageRoot`。
+YooAsset provider 目标为 `[3.0.6,4.0.0)` 范围内的稳定版 `com.tuyoogame.yooasset`。asmdef 范围是 compilation envelope；由于 SemVer prerelease 排在对应正式版之前，范围内的 prerelease 可能进入编译，但 activation test 会把它拒绝为不受支持。`YooAssetModule` 独占进程全局 Yoo runtime。每个需要隔离可写缓存的 client instance，都必须通过 file-system parameters 传入各自独立且显式的 `PackageRoot`。
 
 Pending asset、all-assets、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。这替代了过去要求 YooAsset provider 同步推进 pending 操作的行为；`IAssetSyncOperations` 是独立能力，不受影响。
 
