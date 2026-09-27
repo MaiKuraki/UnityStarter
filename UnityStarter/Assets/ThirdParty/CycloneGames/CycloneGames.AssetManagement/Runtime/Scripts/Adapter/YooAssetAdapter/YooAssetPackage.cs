@@ -16,7 +16,8 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class YooAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetBulkLoader,
         IAssetRawFileLoader, IAssetBundleFileProvisioner, IAssetSceneLoader, IYooAssetPackageMaintenance,
-        IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetReleaseRetryDriver, IAssetStoragePreflight
+        IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetReleaseRetryDriver, IAssetStoragePreflight,
+        IAssetProviderMemoryReclamation
     {
         private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
 
@@ -29,7 +30,11 @@ namespace CycloneGames.AssetManagement.Runtime
         private const int MAX_SCOPE_TOTAL_CHARACTERS = 8 * 1024 * 1024;
         private const int MAX_REGISTERED_DOWNLOADERS = 128;
         private const int MAX_REGISTERED_DOWNLOADER_SCOPE_VALUES = 262_144;
-        private const string DEFAULT_CACHE_FILE_SYSTEM_CLASS = "YooAsset.SandboxFileSystem";
+        private const string SANDBOX_FILE_SYSTEM_CLASS = "YooAsset.SandboxFileSystem";
+        private const string BUILTIN_FILE_SYSTEM_CLASS = "YooAsset.BuiltinFileSystem";
+        private const string EDITOR_FILE_SYSTEM_CLASS = "YooAsset.EditorFileSystem";
+        private const string WEB_SERVER_FILE_SYSTEM_CLASS = "YooAsset.WebServerFileSystem";
+        private const string WEB_NETWORK_FILE_SYSTEM_CLASS = "YooAsset.WebNetworkFileSystem";
 
         private readonly ResourcePackage _rawPackage;
         private readonly YooAssetModule _moduleOwner;
@@ -44,10 +49,9 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly object _sceneOwnerToken = new object();
         private readonly Action<long> _onInstantiateDisposed;
         private readonly Action<YooDownloader> _onDownloaderDisposed;
-#if UNITY_STANDALONE || UNITY_EDITOR
         private string _storagePath;
         private bool _storageProbeReliable;
-#endif
+        private string _storageProbeUnavailableReason;
         private bool _initialized;
         private bool _initializing;
         private UniTask<bool> _initializeTask;
@@ -402,6 +406,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
                 if (Volatile.Read(ref _providerDestroyed) == 0)
                 {
+                    // YooAsset enables shouldWaitUnloadUnused for package destruction, so this await also covers
+                    // the engine's native unload pass. Destruction is deterministic but can take a long time;
+                    // keep it off frame-time sensitive paths.
                     DestroyPackageOperation operation = _rawPackage.DestroyPackageAsync();
                     await operation;
                     if (operation.Status != EOperationStatus.Succeeded)
@@ -1015,6 +1022,39 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
+        /// <inheritdoc cref="IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync"/>
+        public async UniTask UnloadAllProviderAssetsAsync(
+            bool waitForEngineUnload,
+            CancellationToken cancellationToken = default)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDestroyed();
+            EnterMaintenanceMutation(nameof(UnloadAllProviderAssetsAsync));
+            try
+            {
+                _cacheService.ClearAll();
+
+                // YooAsset 3.0.6 adds the engine-wait flag. Without it the provider reports terminal state before
+                // the engine's native unload pass finishes, so callers that need deterministic reclamation must
+                // opt in explicitly. Provider mutation itself is not cancellable once started.
+                var options = new UnloadAllAssetsOptions(
+                    shouldReleaseHandles: true,
+                    shouldLockLoading: true,
+                    shouldWaitUnloadUnused: waitForEngineUnload);
+                UnloadAllAssetsOperation operation = _rawPackage.UnloadAllAssetsAsync(options);
+                await operation;
+                if (operation.Status != EOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException(operation.Error ?? "YooAsset unload-all operation failed.");
+                }
+            }
+            finally
+            {
+                ExitMaintenanceMutation();
+            }
+        }
+
         /// <inheritdoc cref="IAssetReleaseRetryDriver.RetryPendingReleaseFailures"/>
         public int RetryPendingReleaseFailures(int maxWork)
         {
@@ -1150,12 +1190,13 @@ namespace CycloneGames.AssetManagement.Runtime
                         error: "Required storage cannot be negative."));
             }
 
-#if UNITY_STANDALONE || UNITY_EDITOR
+#if UNITY_STANDALONE || UNITY_EDITOR || UNITY_SERVER
             if (!_storageProbeReliable || string.IsNullOrEmpty(_storagePath))
             {
                 return UniTask.FromResult(
                     AssetStoragePreflightResult.Unknown(
-                        "The active YooAsset file system does not expose a reliable cache volume."));
+                        _storageProbeUnavailableReason ??
+                        "The YooAsset package does not expose a reliable cache volume."));
             }
 
             try
@@ -1182,6 +1223,7 @@ namespace CycloneGames.AssetManagement.Runtime
 #else
             return UniTask.FromResult(
                 AssetStoragePreflightResult.Unknown(
+                    _storageProbeUnavailableReason ??
                     "This platform does not expose a reliable provider-cache capacity probe."));
 #endif
         }
@@ -1228,21 +1270,102 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void ConfigureStorageProbe(InitializePackageOptions options)
         {
-#if UNITY_STANDALONE || UNITY_EDITOR
             _storagePath = null;
             _storageProbeReliable = false;
-            if (options is HostPlayModeOptions host &&
-                host.CacheFileSystemParameters != null &&
-                string.Equals(
-                    host.CacheFileSystemParameters.FileSystemTypeName,
-                    DEFAULT_CACHE_FILE_SYSTEM_CLASS,
-                    StringComparison.Ordinal) &&
-                !string.IsNullOrWhiteSpace(host.CacheFileSystemParameters.PackageRoot))
+            _storageProbeUnavailableReason = null;
+
+            FileSystemParameters primary = ResolvePrimaryFileSystem(options);
+            if (primary == null)
             {
-                _storagePath = host.CacheFileSystemParameters.PackageRoot;
-                _storageProbeReliable = true;
+                _storageProbeUnavailableReason = "The YooAsset package does not declare a primary file system.";
+                return;
             }
-#endif
+
+            if (IsFileSystemOfType(primary, WEB_SERVER_FILE_SYSTEM_CLASS) ||
+                IsFileSystemOfType(primary, WEB_NETWORK_FILE_SYSTEM_CLASS))
+            {
+                _storageProbeUnavailableReason =
+                    "The primary YooAsset file system is Web-backed and stores bundles in the platform cache, " +
+                    "which does not expose a host-queryable free-space value.";
+                return;
+            }
+
+            if (IsFileSystemOfType(primary, BUILTIN_FILE_SYSTEM_CLASS))
+            {
+                _storageProbeUnavailableReason =
+                    "The primary YooAsset file system reads from the read-only builtin volume, " +
+                    "which is not a writable cache target.";
+                return;
+            }
+
+            bool isCacheVolume =
+                IsFileSystemOfType(primary, SANDBOX_FILE_SYSTEM_CLASS) ||
+                IsFileSystemOfType(primary, EDITOR_FILE_SYSTEM_CLASS);
+            if (!isCacheVolume)
+            {
+                _storageProbeUnavailableReason =
+                    $"The primary YooAsset file system '{primary.FileSystemTypeName}' does not expose " +
+                    "a host-queryable cache volume.";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(primary.PackageRoot))
+            {
+                _storageProbeUnavailableReason =
+                    "The primary YooAsset cache file system does not declare a package root.";
+                return;
+            }
+
+            _storagePath = primary.PackageRoot;
+            _storageProbeReliable = true;
+        }
+
+        /// <summary>
+        /// Selects the file system that owns the package's writable content. Custom mode documents its last
+        /// entry as the primary file system; host mode prefers the cache file system over the builtin one.
+        /// </summary>
+        private static FileSystemParameters ResolvePrimaryFileSystem(InitializePackageOptions options)
+        {
+            switch (options)
+            {
+                case HostPlayModeOptions host:
+                    return host.CacheFileSystemParameters ?? host.BuiltinFileSystemParameters;
+                case OfflinePlayModeOptions offline:
+                    return offline.BuiltinFileSystemParameters;
+                case EditorSimulateModeOptions editor:
+                    return editor.EditorFileSystemParameters;
+                case WebPlayModeOptions web:
+                    return web.WebNetworkFileSystemParameters ?? web.WebServerFileSystemParameters;
+                case CustomPlayModeOptions custom:
+                    List<FileSystemParameters> parameters = custom.FileSystemParameterList;
+                    return parameters.Count > 0 ? parameters[parameters.Count - 1] : null;
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Compares a file system parameter set against a YooAsset file system class name.
+        /// <see cref="FileSystemParameters.FileSystemTypeName"/> may carry an assembly-qualified name, so only
+        /// the type portion is compared.
+        /// </summary>
+        private static bool IsFileSystemOfType(FileSystemParameters parameters, string fileSystemClass)
+        {
+            if (parameters == null || string.IsNullOrEmpty(parameters.FileSystemTypeName))
+            {
+                return false;
+            }
+
+            string typeName = parameters.FileSystemTypeName;
+            int separator = typeName.IndexOf(',');
+            int length = separator >= 0 ? separator : typeName.Length;
+            while (length > 0 && char.IsWhiteSpace(typeName[length - 1]))
+            {
+                length--;
+            }
+
+            return length == fileSystemClass.Length &&
+                   string.Compare(typeName, 0, fileSystemClass, 0, length, StringComparison.Ordinal) == 0;
         }
 
         private bool TryGetBackend(

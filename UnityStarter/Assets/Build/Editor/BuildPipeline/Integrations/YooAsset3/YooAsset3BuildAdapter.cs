@@ -452,7 +452,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             if (request.Incrementality == BuildIncrementality.Clean)
             {
                 warnings.Add(
-                    "Clean mode does not enable YooAsset ClearBuildCacheFiles because YooAsset 3.0.5 deletes every historical package version when that flag is enabled.");
+                    "Clean mode does not enable YooAsset ClearBuildCacheFiles because that flag deletes every historical package version.");
             }
 
             for (int index = 0; index < configuration.packages.Length; index++)
@@ -1474,7 +1474,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 && request.Incrementality == BuildIncrementality.Clean)
             {
                 warnings.Add(
-                    "Clean mode does not enable YooAsset ClearBuildCacheFiles because YooAsset 3.0.5 deletes every historical package version when that flag is enabled.");
+                    "Clean mode does not enable YooAsset ClearBuildCacheFiles because that flag deletes every historical package version.");
             }
 
             return AssetContentBuildResult.Failure(

@@ -714,7 +714,7 @@ flowchart LR
 | Addressables | `AddressablesBuildConfig` | `Build.Pipeline.Editor` 中基于反射的 Adapter | Core 仍可编译；已有 Addressables invocation 会在可用性或 API 形状验证中失败；Player-only 隔离器成为空操作 |
 | YooAsset 3 | `YooAssetBuildConfig` | 独立的 `Build.Pipeline.Integrations.YooAsset3.Editor` 程序集 | Core 与 authoring 配置仍可编译，但 Adapter 不存在，选中的 YooAsset invocation 在 Preflight 失败 |
 
-YooAsset 程序集使用 `[3.0.5,4.0.0)` 的 package `versionDefines` 表达式和 `BUILD_PIPELINE_HAS_YOOASSET_3` assembly constraint。Addressables 没有声明精确兼容版本区间，而是检查其使用的官方 API 形状。因此每次包升级都必须重新进行真实 integration 编译和目标平台资格构建。
+YooAsset 程序集使用 `[3.0.6,4.0.0)` 的 package `versionDefines` 表达式和 `BUILD_PIPELINE_HAS_YOOASSET_3` assembly constraint。Addressables 没有声明精确兼容版本区间，而是检查其使用的官方 API 形状。因此每次包升级都必须重新进行真实 integration 编译和目标平台资格构建。
 
 Runtime 加载是另一项职责。内容构建成功不代表 Player 已包含匹配的 CycloneGames AssetManagement Provider，也不代表 Runtime 解密实现已经存在。
 
@@ -805,7 +805,7 @@ Incremental Addressables invocation 不能向 Player 提供依赖。内容更新
 
 **前置条件与包门控**
 
-安装受支持 `[3.0.5,4.0.0)` 范围内的 `com.tuyoogame.yooasset`。独立 YooAsset integration assembly 引用 `YooAsset` 和 `YooAsset.Editor`，只有 package version define 满足时才存在。
+安装受支持 `[3.0.6,4.0.0)` 范围内的 `com.tuyoogame.yooasset`。独立 YooAsset integration assembly 引用 `YooAsset` 和 `YooAsset.Editor`，只有 package version define 满足时才存在。
 
 构建前：
 
@@ -865,7 +865,7 @@ Bundled Copy 模式具有明确的 Player 语义：
 
 **Clean 与 Incremental 语义**
 
-两种模式都保留 YooAsset 原生 Build Cache。Integration 刻意不调用 YooAsset 3.0.5 的 `ClearBuildCacheFiles`，因为该 API 会删除所有历史 Package Version。
+两种模式都保留 YooAsset 原生 Build Cache。Integration 刻意不调用 `ClearBuildCacheFiles`，因为该 API 会删除所有历史 Package Version。
 
 当前 Clean 与 Incremental 传入相同的原生 Package Build 参数。因此 Incremental 是 Pipeline Policy 和 Cache Reuse 请求，不是“YooAsset 保证只输出变化 Bundle”或“原生 Patch Set”的文档承诺。实际输出行为必须结合已安装包和项目 Collector 规则进行资格验证。
 
@@ -2274,7 +2274,7 @@ Addressables 拥有唯一进程级 Player Session。即使 Publication Root 不�
 
 **Inspector 中没有 Provider**
 
-YooAsset Integration Assembly 只对 `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` 启用。放在仓库其他目录中的 Package Source 不是已经安装的 UPM Dependency。
+YooAsset Integration Assembly 只对 `com.tuyoogame.yooasset` `[3.0.6,4.0.0)` 启用。放在仓库其他目录中的 Package Source 不是已经安装的 UPM Dependency。
 
 改变 Package 前，必须先确认没有 Pending YooAsset Transaction；之后等待重新编译并运行 Version-gated Tests。
 

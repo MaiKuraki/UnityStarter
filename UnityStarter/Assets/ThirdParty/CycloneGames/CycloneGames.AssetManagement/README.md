@@ -26,7 +26,7 @@ Provider adapters normalize the shared contract and expose optional capabilities
 
 - **Provider-neutral core**: `IAssetModule` and `IAssetPackage` with caller-owned, exactly-once disposable handles.
 - **Bounded SLRU cache**: package-local Active, Probation, Protected, and generation-Detached states with count and estimated-byte budgets.
-- **Optional providers**: Resources, Addressables (`[2.11.1,2.11.2)`), YooAsset (`[3.0.5,4.0.0)`), with capability negotiation through interface casts.
+- **Optional providers**: Resources, Addressables (`[2.11.1,2.11.2)`), YooAsset (`[3.0.6,4.0.0)`), with capability negotiation through interface casts.
 - **Maintenance primitives**: `IYooAssetPackageMaintenance` and `IAddressablesCatalogMaintenance` for manifest/catalog activation, cache cleanup, and All/Tags/Locations downloaders.
 - **Content trust**: schema-2 `ContentTrustManifest` with SHA-256 verification and `RequireSignature` or `IntegrityOnly` policies.
 - **Storage preflight**: `IAssetStoragePreflight` with `Available`/`Insufficient`/`Unknown`/`Failed` results.
@@ -72,8 +72,9 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 | `CycloneGames.AssetManagement.Tests.PlayMode` | no | Unity PlayMode Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | no | `com.unity.addressables` `[2.11.1,2.11.2)` plus an explicit consumer reference |
 | `CycloneGames.AssetManagement.Providers.Addressables.Tests.Editor` | no | Addressables 2.11.1 plus Unity Test Runner |
-| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` plus an explicit consumer reference |
-| `CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor` | no | Stable YooAsset `[3.0.5,4.0.0)` plus Unity Test Runner |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.6,4.0.0)` plus an explicit consumer reference |
+| `YooAsset.Custom` (file `CycloneGames.AssetManagement.Runtime.Providers.YooAsset.Custom.asmdef`) | no | Same YooAsset range. Assembly name is fixed: YooAsset grants internal access only to `YooAsset.Custom` |
+| `CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor` | no | Stable YooAsset `[3.0.6,4.0.0)` plus Unity Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` plus an explicit consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` plus an explicit consumer reference |
 
@@ -83,7 +84,9 @@ AssetManagement emits diagnostics through stable `LogChannel` categories under `
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
-YooAsset 3.0.5 is the minimum stable release. The asmdef range enables the provider for versions below 4.0.0; activation tests reject prerelease packages. The product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
+YooAsset 3.0.6 is the minimum stable release. The asmdef range enables the provider for versions below 4.0.0; activation tests reject prerelease packages. The product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
+
+The YooAsset provider needs 3.0.6 specifically: it consumes `UnloadAllAssetsOptions.ShouldWaitUnloadUnused` and relies on the `YooAsset.Custom` friend assembly that 3.0.6 introduced to reach Web preload. YooAsset 3.0.5 is no longer supported and no compatibility branch is retained.
 
 ## Quick Start
 
@@ -168,12 +171,15 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | `IAssetRawFileLoader` | no | no | yes |
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
-| `IAssetStoragePreflight` | no | desktop volume only | desktop Host mode only |
+| `IAssetStoragePreflight` | no | desktop volume only | sandbox/editor cache volume on desktop and server; precise `Unknown` elsewhere |
 | `IUnityUnusedAssetCollector` | yes | no | no |
+| `IAssetProviderMemoryReclamation` | no | no | yes |
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
 
 `IAssetPackage` deliberately has no generic unload-unused operation because the providers cannot implement one meaning. Use `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)` for common framework-cache eviction, `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync` for the Resources process-wide Unity pass, and `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync` for YooAsset's package-local operation. Addressables has no equivalent beyond framework-cache trimming. This is the direct migration from the removed `IAssetPackage.UnloadUnusedAssetsAsync`; no compatibility shim is retained.
+
+`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` is the deterministic escape hatch: it releases every provider-owned asset in one package, including assets the provider still counts as in use. Pass `waitForEngineUnload: true` when the caller must observe native memory actually reclaimed — for example before a memory-gated scene transition or when capturing a Memory Profiler baseline — and `false` on frame-time sensitive paths, where the provider reports terminal state before the engine's native unload pass finishes.
 
 Addressables and YooAsset cannot be active through these adapters at the same time. The module-level AssetBundle runtime guard establishes one framework-controlled provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
 
@@ -363,6 +369,33 @@ hostOptions.CacheFileSystemParameters.AddParameter(
 ```
 
 A custom file system is declared with `new FileSystemParameters("Namespace.TypeName,Assembly", packageRoot)`; the provider instantiates it by reflection and hands it every value added through `AddParameter`. Bundle-level policies (`DownloadUrlPolicy`, `DownloadRetryPolicy`, `WebPlatformStrategy`, `BundleUnpackPolicy`, `BuiltinFileAccessor`) use the same parameter keys. Because the adapter forwards the options object as-is, new provider play modes and parameters keep working across adapter upgrades as long as the referenced YooAsset version contains the type. The `EnsureBundleFileAsync` detail's `IsEncrypted` flag lets products detect encrypted content before handing a path to a native consumer.
+
+### Web preload for mini-game platform caches (YooAsset 3.0.6)
+
+YooAsset 3.0.6 lets the Web network file system pre-download bundles into a platform-managed cache. The strategy interface is `internal` to YooAsset and reachable only from an assembly named `YooAsset.Custom`, so the provider ships a friend assembly under that name and exposes a public contract:
+
+```csharp
+// Implement once per platform (WeChat, Douyin, ...). Both members run on the main thread
+// inside YooAsset's load path: answer from already-known platform state, never block on IO.
+public sealed class WechatPreloadPlatform : IWebPreloadPlatform
+{
+    public bool IsBundleCached(WebPreloadBundleQuery query) =>
+        WechatCache.Contains(query.BundleName, query.FileHash);
+
+    public UnityWebRequest CreatePreloadRequest(string url) =>
+        WechatCache.CreateRequest(url);
+}
+
+var webOptions = new WebPlayModeOptions
+{
+    WebNetworkFileSystemParameters =
+        FileSystemParameters.CreateDefaultWebNetworkFileSystemParameters(remoteService)
+};
+YooWebPreload.AttachPreloadStrategy(
+    webOptions.WebNetworkFileSystemParameters, new WechatPreloadPlatform());
+```
+
+Preload is read only by YooAsset's Web network file system; attaching it to a sandbox or builtin parameter set has no effect. `WebPreloadBundleQuery` is reused across queries by its owning strategy, so read it synchronously and never retain it.
 
 Custom providers such as xasset adapters implement `IAssetPackage` plus the optional capability interfaces; they are exempt from CG0014 by design and receive the same cache, lease, tracker, and telemetry plumbing.
 

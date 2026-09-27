@@ -306,9 +306,9 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             parameters.PackageVersion = request.PackageVersion;
             parameters.PackageNote = profile.packageNote.Trim();
 
-            // YooAsset 3.0.5 couples this flag to deleting the whole package root,
-            // including every historical version. Exact-version replacement is
-            // handled by the adapter's guarded collision policy instead.
+            // YooAsset couples this flag to deleting the whole package root, including
+            // every historical version. Exact-version replacement is handled by the
+            // adapter's guarded collision policy instead.
             parameters.ClearBuildCacheFiles = false;
 
             parameters.UseAssetDependencyDB = profile.useAssetDependencyDatabase;

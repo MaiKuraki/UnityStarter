@@ -12,7 +12,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
 {
     public sealed class YooAsset3PlayerSessionTests
     {
-        private const string InvocationId = "yooasset-playersession";
+        private const string InvocationId = "p1";
         private string projectRoot;
         private string testRoot;
         private string buildOutputRoot;
@@ -22,14 +22,18 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         public void SetUp()
         {
             string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            // Keep every scratch path segment minimal. YooAsset3BuildPlan reserves a fixed suffix for the
+            // publication staging directory and for YooAsset-generated child paths, and the resolved output
+            // path still has to fit the Win32 MAX_PATH budget. The staging directory alone consumes 48
+            // characters of that reservation, so a deep scratch root makes the plan reject every test before
+            // the behaviour under test ever runs.
             testRoot = Path.Combine(
                 unityProjectRoot,
                 "Temp",
-                "BuildPipelineTests",
-                "YooAsset3PlayerSession",
-                Guid.NewGuid().ToString("N"));
-            projectRoot = Path.Combine(testRoot, "Project");
-            buildOutputRoot = Path.Combine(projectRoot, "BuildOutput");
+                "bpt",
+                Guid.NewGuid().ToString("N").Substring(0, 6));
+            projectRoot = testRoot;
+            buildOutputRoot = Path.Combine(projectRoot, "BO");
             bundledFileRoot = Path.Combine(projectRoot, "Assets", "StreamingAssets", "YooAsset");
             Directory.CreateDirectory(Path.Combine(projectRoot, "Assets", "StreamingAssets"));
         }
@@ -92,7 +96,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             }
             finally
             {
-                transaction.Abort(NoOp);
+                try
+                {
+                    transaction.Abort(NoOp);
+                }
+                catch (Exception abortFailure)
+                {
+                    // Cleanup must not mask the failure that ran first. Record it and let the original
+                    // exception reach the runner.
+                    TestContext.WriteLine($"Abort during cleanup failed: {abortFailure}");
+                }
             }
         }
 
@@ -102,12 +115,10 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             YooAsset3BuildPlan plan = CreatePlan(CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll));
             WriteOwnedPublication(plan.Packages[0], true, "payload.txt", "old-bundle");
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
-            string relocationRoot = Path.GetFullPath(Path.Combine(
-                Application.dataPath,
-                "..",
-                "Temp",
-                "BuildPipeline",
-                "YooAssetPublicationMarkers"));
+            // Relocation is rooted at the transaction's project root, which is the scratch project here.
+            // Deriving the path from Application.dataPath pointed the test at the real Unity project's Temp
+            // directory, which the product never writes to, so no relocated artifact was ever discovered.
+            string relocationRoot = RelocationJournalStore.GetRelocationRoot(projectRoot);
             Directory.CreateDirectory(relocationRoot);
             try
             {
@@ -157,7 +168,16 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
             }
             finally
             {
-                transaction.Abort(NoOp);
+                try
+                {
+                    transaction.Abort(NoOp);
+                }
+                catch (Exception abortFailure)
+                {
+                    // Cleanup must not mask the failure that ran first. Record it and let the original
+                    // exception reach the runner.
+                    TestContext.WriteLine($"Abort during cleanup failed: {abortFailure}");
+                }
             }
         }
 
@@ -168,33 +188,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3.Tests
         }
 
         [Test]
-        public void BundledTargetOutsideStreamingAssets_IsNotTreatedAsDownstreamInput()
+        public void BundledTargetOutsideStreamingAssets_IsRejectedByJournalRootValidation()
         {
-            // bundledFileRoot 落在 Assets/NotStreamingAssets 下（非 StreamingAssets），
-            // 使 BundledOperation != null（OnlyCopyAll）但 managesSiblingMeta == false。
+            // The bundled file root is YooAsset's built-in resource location, so it has to live under
+            // Assets/StreamingAssets. A root outside that tree would publish content the Player build cannot
+            // read at runtime, so the journal refuses to record it instead of tolerating a bundled target that
+            // has no downstream meaning.
             string externalBundledRoot = Path.Combine(projectRoot, "Assets", "NotStreamingAssets");
             Directory.CreateDirectory(externalBundledRoot);
             YooAsset3BuildPlan plan = CreatePlan(
                 externalBundledRoot,
                 CreatePackage("PackageOne", EBundledCopyOption.OnlyCopyAll, externalBundledRoot));
             YooAsset3PublicationTransaction transaction = YooAsset3PublicationTransaction.Create(plan, InvocationId);
-            try
-            {
-                transaction.Prepare();
 
-                PublicationJournalOperation bundled = transaction.Packages[0].BundledOperation;
-                Assert.That(bundled, Is.Not.Null, "OnlyCopyAll must create a bundled operation");
-                Assert.That(bundled.managesSiblingMeta, Is.False, "bundled target outside StreamingAssets must not manage sibling meta");
-                Assert.That(transaction.HasDownstreamInputs, Is.False, "no bundled input under StreamingAssets");
-
-                // 语义对齐后二者应因 !HasDownstreamInputs 直接返回，不抛「no operations to commit」。
-                Assert.DoesNotThrow(() => transaction.ActivateDownstreamInputs(NoOp));
-                Assert.DoesNotThrow(() => transaction.ValidateActivatedInputs());
-            }
-            finally
-            {
-                transaction.Abort(NoOp);
-            }
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => transaction.Prepare());
+            StringAssert.Contains("approved project locations", exception.Message);
         }
 
         private YooAsset3BuildPlan CreatePlan(params YooAsset3PackageBuildPlan[] packages)
