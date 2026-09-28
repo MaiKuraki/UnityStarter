@@ -215,6 +215,19 @@ Console.WriteLine($"quarantined={profile.Diagnostics.QuarantinedItems}");
 
 `PoolProfile` 与 `PoolDiagnostics` 是 readonly struct，读取不产生分配。长时间累计值使用 `long`；当前数量和容量仍使用 `int`，因为托管集合容量以 `int` 为上限。
 
+### 所有权追踪
+
+```csharp
+using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
+    factory,
+    capacitySettings,
+    validateUniqueOwnership: true); // 默认
+
+Console.WriteLine(pool.TrackedItemCount); // 开启校验时等于 CountAll
+```
+
+每个 pool 都会校验工厂不会交回 pool 已拥有的实例。该检查默认使用一个引用身份集合，只在创建与拆除路径上维护，因此是 `O(1)` 而不是扫描 inactive 列表，批量预热保持线性。集合为每个被拥有的 item 保留一个条目；传入 `validateUniqueOwnership: false` 可去掉它及其内存开销，代价是不再检测"工厂重复返回同一个 inactive 实例"。关闭校验不改变其他任何行为，`TrackedItemCount` 在两种情况下都等于 `CountAll`。
+
 ### Prewarm、trim 与 clear
 
 ```csharp
