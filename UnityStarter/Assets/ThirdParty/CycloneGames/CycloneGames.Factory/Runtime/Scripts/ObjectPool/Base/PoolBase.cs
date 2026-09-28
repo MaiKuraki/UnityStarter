@@ -16,6 +16,13 @@ namespace CycloneGames.Factory.Runtime
         private readonly Dictionary<TValue, int> _activeItemIndices;
         private readonly PoolCapacitySettings _capacitySettings;
 
+        /// <summary>
+        /// Every item the pool owns, active or inactive, when ownership validation is enabled.
+        /// Touched only on the creation and teardown paths, never on the spawn/despawn hot path.
+        /// Null when validation is disabled.
+        /// </summary>
+        private readonly HashSet<TValue> _knownItems;
+
         private int _peakActive;
         private int _peakCountAll;
         private long _totalCreated;
@@ -33,7 +40,14 @@ namespace CycloneGames.Factory.Runtime
         private int _structuralVersion;
         private PoolLifecycleState _lifecycleState;
 
-        protected PoolBase(PoolCapacitySettings capacitySettings)
+        /// <param name="capacitySettings">Capacity, overflow and trim policy for this pool.</param>
+        /// <param name="validateUniqueOwnership">
+        /// When true (the default) the pool tracks every owned item in a reference-identity set, so
+        /// detecting a factory that returns an item this pool already owns costs O(1) instead of an O(n)
+        /// scan. This is what keeps bulk warmup linear. When false, the pool only checks the active
+        /// index, which is cheaper in memory but leaves duplicate inactive instances undetected.
+        /// </param>
+        protected PoolBase(PoolCapacitySettings capacitySettings, bool validateUniqueOwnership = true)
         {
             int initialTrackingCapacity = capacitySettings.SoftCapacity;
             _inactiveItems = new List<TValue>(initialTrackingCapacity);
@@ -41,6 +55,9 @@ namespace CycloneGames.Factory.Runtime
             _activeItemIndices = new Dictionary<TValue, int>(
                 initialTrackingCapacity,
                 ReferenceIdentityComparer<TValue>.Instance);
+            _knownItems = validateUniqueOwnership
+                ? new HashSet<TValue>(initialTrackingCapacity, ReferenceIdentityComparer<TValue>.Instance)
+                : null;
             _capacitySettings = capacitySettings;
             _lifecycleState = PoolLifecycleState.Ready;
         }
@@ -55,6 +72,14 @@ namespace CycloneGames.Factory.Runtime
         public int MaxCapacity => _capacitySettings.HardCapacity;
         public PoolOverflowPolicy OverflowPolicy => _capacitySettings.OverflowPolicy;
         public PoolTrimPolicy TrimPolicy => _capacitySettings.TrimPolicy;
+
+        /// <summary>
+        /// Number of items held by the ownership set. With validation enabled (the default) this must equal
+        /// <see cref="CountAll"/> after every completed operation, which is the invariant the ownership
+        /// tests assert. An item whose destruction throws stays tracked on purpose, so a hostile factory
+        /// cannot re-introduce it.
+        /// </summary>
+        public int TrackedItemCount => _knownItems != null ? _knownItems.Count : CountAll;
 
         public PoolDiagnostics Diagnostics => new PoolDiagnostics(
             _peakActive,
@@ -573,27 +598,25 @@ namespace CycloneGames.Factory.Runtime
                     $"Pool factory for {typeof(TValue).Name} returned an invalid item.");
             }
 
-            if (_activeItemIndices.ContainsKey(item) || ContainsInactiveReference(item))
+            if (IsAlreadyOwned(item))
             {
                 throw new InvalidOperationException(
                     $"Pool factory for {typeof(TValue).Name} returned an item already owned by this pool.");
             }
 
+            _knownItems?.Add(item);
             _totalCreated++;
             return item;
         }
 
-        private bool ContainsInactiveReference(TValue item)
+        private bool IsAlreadyOwned(TValue item)
         {
-            for (int i = 0; i < _inactiveItems.Count; i++)
+            if (_knownItems != null)
             {
-                if (ReferenceEquals(_inactiveItems[i], item))
-                {
-                    return true;
-                }
+                return _knownItems.Contains(item);
             }
 
-            return false;
+            return _activeItemIndices.ContainsKey(item);
         }
 
         private TValue PopInactive()
@@ -648,6 +671,7 @@ namespace CycloneGames.Factory.Runtime
             {
                 DestroyItem(item);
                 _totalDestroyed++;
+                _knownItems?.Remove(item);
                 return null;
             }
             catch (Exception exception)

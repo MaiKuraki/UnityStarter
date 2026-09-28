@@ -19,8 +19,8 @@ namespace CycloneGames.Factory.Runtime
         {
         }
 
-        protected FastObjectPool(PoolCapacitySettings capacitySettings, bool deferInitialPrewarm)
-            : base(capacitySettings)
+        protected FastObjectPool(PoolCapacitySettings capacitySettings, bool deferInitialPrewarm, bool validateUniqueOwnership = true)
+            : base(capacitySettings, validateUniqueOwnership)
         {
             if (!deferInitialPrewarm && capacitySettings.SoftCapacity > 0)
             {
