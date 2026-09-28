@@ -17,8 +17,8 @@ namespace CycloneGames.Factory.Runtime
         {
         }
 
-        public ObjectPool(IFactory<TValue> factory, PoolCapacitySettings capacitySettings)
-            : base(capacitySettings)
+        public ObjectPool(IFactory<TValue> factory, PoolCapacitySettings capacitySettings, bool validateUniqueOwnership = true)
+            : base(capacitySettings, validateUniqueOwnership)
         {
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
 
