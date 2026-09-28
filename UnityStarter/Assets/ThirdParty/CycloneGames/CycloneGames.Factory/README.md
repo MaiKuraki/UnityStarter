@@ -215,6 +215,19 @@ Console.WriteLine($"quarantined={profile.Diagnostics.QuarantinedItems}");
 
 `PoolProfile` and `PoolDiagnostics` are readonly structs; reading them allocates nothing. Long-running totals use `long`; current counts and capacities remain `int` because managed collection capacity is `int`-bounded.
 
+### Ownership tracking
+
+```csharp
+using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
+    factory,
+    capacitySettings,
+    validateUniqueOwnership: true); // default
+
+Console.WriteLine(pool.TrackedItemCount); // equals CountAll while validation is enabled
+```
+
+Every pool validates that a factory cannot hand back an item the pool already owns. By default that check uses a reference-identity set maintained only on the creation and teardown paths, so it costs `O(1)` instead of scanning the inactive list and bulk warmup stays linear. The set holds one entry per owned item; pass `validateUniqueOwnership: false` to drop it and the memory it uses, at the cost of no longer detecting a factory that repeats an inactive instance. Disabling validation changes nothing else, and `TrackedItemCount` reports `CountAll` either way.
+
 ### Prewarm, trim, and clear
 
 ```csharp
@@ -495,6 +508,6 @@ For a performance claim, measure a declared workload in the target Player build 
 
 ## Pool Memory Limits and Maintenance
 
-Managed pool implementations expose `IBoundedPoolMaintenance.TrimInactiveStep(targetInactiveCount, maxWork)`. One call inspects and releases no more than `maxWork` inactive entries, preserves all active leases, and keeps legacy full-trim behavior available to explicit lifecycle owners.
+Managed pool implementations expose `IBoundedPoolMaintenance.TrimInactiveStep(targetInactiveCount, maxWork)`. One call inspects and releases no more than `maxWork` inactive entries, preserves all active leases, and keeps the single-call full-trim form available to explicit lifecycle owners.
 
 Pool owners expose fixed counts, capacities, limits, admissions, and trim outcomes through package-local APIs. Caller-driven maintenance may trim only inactive entries and must never destroy active or borrowed objects. The pool remains authoritative for ownership and lifetime.
