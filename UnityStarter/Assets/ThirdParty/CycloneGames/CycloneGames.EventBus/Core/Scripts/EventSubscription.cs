@@ -16,23 +16,26 @@ namespace CycloneGames.EventBus.Core
     }
 
     /// <summary>
-    /// Subscription handle for <see cref="EventBus{T}"/>. It holds the bus and the handler directly
-    /// instead of an unsubscribe closure, so the owning bus can pool and reuse it: subscribe and
-    /// unsubscribe churn is allocation-free in steady state.
+    /// Subscription handle for <see cref="EventBus{T}"/>. It holds the bus, the handler, and the slot
+    /// it occupies instead of an unsubscribe closure, so the owning bus can pool and reuse it: both
+    /// subscribe and release are allocation-free and O(1) in steady state.
     ///
-    /// Handles are single-thread-confined and owned by the bus that produced them. Never retain a
-    /// released handle expecting to resubscribe; call <see cref="EventBus{T}.Subscribe"/> again.
+    /// Handles are single-thread-confined and owned by the bus that produced them. A handle is only
+    /// valid while it is rented; the bus may pool and re-bind it, so never retain one after releasing
+    /// it. Call <see cref="EventBus{T}.Subscribe"/> again instead.
     /// </summary>
     public sealed class EventSubscription<T> : IEventSubscription where T : struct
     {
         private EventBus<T> _bus;
         private Action<T> _handler;
+        private int _slot;
         private bool _released;
 
-        internal EventSubscription(EventBus<T> bus, Action<T> handler)
+        internal EventSubscription(EventBus<T> bus, Action<T> handler, int slot)
         {
             _bus = bus;
             _handler = handler;
+            _slot = slot;
         }
 
         public bool IsReleased => _released;
@@ -48,21 +51,40 @@ namespace CycloneGames.EventBus.Core
 
             EventBus<T> bus = _bus;
             Action<T> handler = _handler;
+            int slot = _slot;
             _bus = null;
             _handler = null;
+            _slot = -1;
 
             // A bus that was already disposed drops its handler array, so there is nothing to
             // unsubscribe and nothing to pool. Releasing after disposal stays a silent no-op, which
             // keeps deferred teardown (a MonoBehaviour OnDestroy running after the context disposed
             // the bus) safe.
-            bus?.Release(this, handler);
+            bus?.Release(this, handler, slot);
         }
 
-        internal void Reset(EventBus<T> bus, Action<T> handler)
+        internal void Reset(EventBus<T> bus, Action<T> handler, int slot)
         {
             _bus = bus;
             _handler = handler;
+            _slot = slot;
             _released = false;
+        }
+
+        /// <summary>Re-stamps the slot after compaction moved this subscription.</summary>
+        internal void MoveToSlot(int slot)
+        {
+            _slot = slot;
+        }
+
+        /// <summary>
+        /// Marks the handle as no longer owning a slot. Called when the slot dies without the handle
+        /// being disposed — an identity-based unsubscribe, a clear, or teardown — so a later
+        /// <see cref="Dispose"/> cannot address a slot that has been reassigned.
+        /// </summary>
+        internal void DetachSlot()
+        {
+            _slot = -1;
         }
     }
 
