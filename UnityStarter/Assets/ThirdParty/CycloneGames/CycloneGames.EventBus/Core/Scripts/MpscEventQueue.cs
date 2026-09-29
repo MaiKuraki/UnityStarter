@@ -320,7 +320,10 @@ namespace CycloneGames.EventBus.Core
         /// </summary>
         public static bool IsReferenceOrContainsReferences<TCheck>()
         {
-#if NETCOREAPP2_1_OR_GREATER || NETSTANDARD2_1 || NETSTANDARD2_1_OR_GREATER || UNITY_2021_2_OR_NEWER
+            // NET5_0_OR_GREATER covers modern non-Unity targets (.NET 5+), which the .NET Core era
+            // symbols below do not describe. The remaining symbols are kept as they were: Unity's
+            // profile does not define every one of them, and the fallback is correct either way.
+#if NET5_0_OR_GREATER || NETCOREAPP2_1_OR_GREATER || NETSTANDARD2_1 || NETSTANDARD2_1_OR_GREATER || UNITY_2021_2_OR_NEWER
             return System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<TCheck>();
 #else
             return true;

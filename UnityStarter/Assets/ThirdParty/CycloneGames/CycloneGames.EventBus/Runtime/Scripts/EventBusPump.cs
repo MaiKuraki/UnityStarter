@@ -18,10 +18,11 @@ namespace CycloneGames.EventBus.Runtime
     /// <see cref="MpscEventQueue{T}"/> bridges and batched <see cref="EventStream{T}"/> writers.
     ///
     /// Why this exists: a queue with no owner has no drain point, and a drain with no budget turns a
-    /// backlog into a frame spike. The pump gives both — one place that owns "when", and a per-source
-    /// ceiling that owns "how much". Every source publishes the same bounded way on every platform,
-    /// so the frame cost is a function of the configured budget rather than of whatever the network
-    /// or the job system happened to deliver.
+    /// backlog into a frame spike. The pump gives both — one place that owns "when", a per-source
+    /// ceiling that owns how much of one backlog a tick may spend, and a per-tick ceiling that owns
+    /// how much the whole drain may spend. Every source publishes the same bounded way on every
+    /// platform, so the frame cost is a function of the configured budget rather than of whatever the
+    /// network or the job system happened to deliver.
     ///
     /// The pump is plain C# and has no UnityEngine dependency: a headless server, a CLI tool or a
     /// test can drive it on their own tick. The Unity host is
@@ -145,14 +146,33 @@ namespace CycloneGames.EventBus.Runtime
         }
 
         /// <summary>
-        /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each.
+        /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each and
+        /// at most <paramref name="maxEventsPerTick"/> in total.
+        /// </summary>
+        public int Drain(int maxEventsPerTarget)
+        {
+            return Drain(maxEventsPerTarget, int.MaxValue);
+        }
+
+        /// <summary>
+        /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each and
+        /// at most <paramref name="maxEventsPerTick"/> in total.
         ///
-        /// The budget is per source, not global, so one flooded queue cannot starve the others.
+        /// The two ceilings answer different questions. Per target bounds one source's backlog, which
+        /// is fairness: a flooded queue cannot starve its neighbours. Per tick bounds the whole drain,
+        /// which is what keeps the frame bounded — the per-target budget alone leaves the frame cost
+        /// proportional to the number of registered sources. When both are supplied, the per-target
+        /// budget is applied as a per-source share of the remaining per-tick allowance, so the drain
+        /// still visits every source in order until the tick is spent.
+        ///
+        /// A <paramref name="maxEventsPerTick"/> of 0 pauses publishing without unregistering
+        /// anything; a negative value is rejected rather than read as "no limit".
+        ///
         /// Events a handler produces during the drain stay queued for the next tick, and structural
         /// changes (Add, Remove, Clear) from flush callbacks are applied when the drain completes.
         /// </summary>
         /// <returns>The total number of events published.</returns>
-        public int Drain(int maxEventsPerTarget)
+        public int Drain(int maxEventsPerTarget, int maxEventsPerTick)
         {
             if (maxEventsPerTarget <= 0)
             {
@@ -162,6 +182,11 @@ namespace CycloneGames.EventBus.Runtime
                 }
 
                 return 0;
+            }
+
+            if (maxEventsPerTick < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxEventsPerTick));
             }
 
             // Re-entrancy is rejected, not tolerated. A flush callback that drains again would
@@ -186,7 +211,16 @@ namespace CycloneGames.EventBus.Runtime
                 // count every iteration is safe and simple.
                 for (int index = 0; index < _targets.Count; index++)
                 {
-                    published += _targets[index](maxEventsPerTarget);
+                    if (published >= maxEventsPerTick)
+                    {
+                        // The tick is spent. Remaining sources keep their queued events for the next
+                        // tick rather than being drained into an already expensive frame.
+                        break;
+                    }
+
+                    int remaining = maxEventsPerTick - published;
+                    int budget = maxEventsPerTarget < remaining ? maxEventsPerTarget : remaining;
+                    published += _targets[index](budget);
                 }
             }
             finally
@@ -204,7 +238,7 @@ namespace CycloneGames.EventBus.Runtime
         /// <returns>The total number of events published.</returns>
         public int Drain()
         {
-            return Drain(int.MaxValue);
+            return Drain(int.MaxValue, int.MaxValue);
         }
 
         /// <summary>

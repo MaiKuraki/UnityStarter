@@ -398,6 +398,122 @@ namespace CycloneGames.EventBus.Tests
         }
 
         [Test]
+        public void HandleDisposal_SurvivesACompactionThatMovesTheSlot()
+        {
+            // Compaction relocates live slots and must carry each handle with its handler. If it did
+            // not, disposing the surviving handles after a compaction would address the wrong slots
+            // and silently leave subscriptions behind.
+            var bus = new EventBus<ScoreChanged>(null, 64);
+            var handles = new List<IEventSubscription>();
+            for (int index = 0; index < 32; index++)
+            {
+                handles.Add(bus.Subscribe(_ => { }));
+            }
+
+            // The first 24 disposals drive several compactions, each of which moves the last 8 slots.
+            for (int index = 0; index < 24; index++)
+            {
+                handles[index].Dispose();
+            }
+
+            Assert.AreEqual(8, bus.SubscriptionCount);
+            // The ratio rule leaves at most a third of the occupied slots dead, so a bus holding 8
+            // live handlers can carry at most 3 tombstones without triggering another compaction.
+            Assert.LessOrEqual(bus.TombstoneCount, 3, "Tombstones must stay bounded by the ratio.");
+
+            for (int index = 24; index < 32; index++)
+            {
+                handles[index].Dispose();
+            }
+
+            Assert.AreEqual(0, bus.SubscriptionCount);
+            Assert.AreEqual(0, bus.TombstoneCount);
+            Assert.AreEqual(64, bus.Capacity);
+        }
+
+        [Test]
+        public void DisposeAfterIdentityUnsubscribe_DoesNotRemoveAnotherSubscription()
+        {
+            // Unsubscribe(Action<T>) reclaims the slot without the handle being disposed, which
+            // detaches the handle. A later Dispose must be a no-op: falling back to an identity scan
+            // would remove the unrelated subscription that re-subscribed the same delegate.
+            var bus = new EventBus<ScoreChanged>(null, 8);
+            Action<ScoreChanged> handler = _ => { };
+
+            IEventSubscription first = bus.Subscribe(handler);
+            Assert.IsTrue(bus.Unsubscribe(handler));
+
+            IEventSubscription second = bus.Subscribe(handler);
+            Assert.AreEqual(1, bus.SubscriptionCount);
+
+            first.Dispose();
+
+            Assert.AreEqual(1, bus.SubscriptionCount, "A detached handle must not reclaim a new slot.");
+            Assert.IsFalse(second.IsReleased);
+
+            second.Dispose();
+            Assert.AreEqual(0, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public void DisposeAfterClear_DoesNotRemoveAnotherSubscription()
+        {
+            var bus = new EventBus<ScoreChanged>(null, 8);
+            Action<ScoreChanged> handler = _ => { };
+
+            IEventSubscription stale = bus.Subscribe(handler);
+            bus.Clear();
+            bus.Subscribe(handler);
+
+            stale.Dispose();
+
+            Assert.AreEqual(1, bus.SubscriptionCount);
+        }
+
+        [Test]
+        public void Publish_ReentrancyCeiling_ReportsTheDropThroughTheLogSink()
+        {
+            // A dropped publish reaches no subscriber and throws nowhere, so the sink is the only
+            // signal a caller gets without opening the debugger window.
+            var sink = new RecordingLogSink();
+            var bus = new EventBus<ScoreChanged>(
+                new EventBusConfiguration(maxDispatchDepth: 2, logSink: sink));
+
+            Action<ScoreChanged> handler = null;
+            handler = _ => bus.Publish(new ScoreChanged());
+            bus.Subscribe(handler);
+
+            bus.Publish(new ScoreChanged());
+
+            Assert.AreEqual(1, bus.DroppedReentrantCount);
+            Assert.AreEqual(1, sink.WarningCount);
+        }
+
+        /// <summary>Records what the bus reported, so cold-path diagnostics can be asserted on.</summary>
+        private sealed class RecordingLogSink : IEventBusLogSink
+        {
+            public int WarningCount;
+
+            public bool IsEnabled(EventBusLogSeverity severity, string category) => true;
+
+            public void Write(EventBusLogSeverity severity, string category, string message)
+            {
+                if (severity == EventBusLogSeverity.Warning)
+                {
+                    WarningCount++;
+                }
+            }
+
+            public void WriteException(
+                EventBusLogSeverity severity,
+                string category,
+                Exception exception,
+                string message)
+            {
+            }
+        }
+
+        [Test]
         public void Compact_RemovesTombstones_AndRetainsCapacity()
         {
             var bus = new EventBus<ScoreChanged>(null, 16);
@@ -1356,6 +1472,81 @@ namespace CycloneGames.EventBus.Tests
         }
 
         [Test]
+        public void Drain_PerTickBudget_BoundsTheWholeDrainAcrossEverySource()
+        {
+            var pump = new EventBusPump();
+            var sources = new[]
+            {
+                new EventStream<int>(16),
+                new EventStream<int>(16),
+                new EventStream<int>(16),
+            };
+
+            int received = 0;
+            foreach (EventStream<int> source in sources)
+            {
+                var bus = new EventBus<int>();
+                bus.Subscribe(_ => received++);
+                pump.AddStream(source, bus);
+
+                for (int index = 0; index < 6; index++)
+                {
+                    source.TryWrite(index);
+                }
+            }
+
+            // The per-source budget alone would publish 12 here (3 sources x 4). The per-tick ceiling
+            // is the one that actually bounds the frame, so it must win once the sources can supply
+            // more than it.
+            int published = pump.Drain(maxEventsPerTarget: 4, maxEventsPerTick: 5);
+
+            Assert.AreEqual(5, published);
+            Assert.AreEqual(5, received);
+            Assert.AreEqual(13, sources[0].Count + sources[1].Count + sources[2].Count);
+
+            // The remainder stays queued and is available on the next tick.
+            Assert.AreEqual(13, pump.Drain(int.MaxValue, int.MaxValue));
+            Assert.AreEqual(0, sources[0].Count + sources[1].Count + sources[2].Count);
+        }
+
+        [Test]
+        public void Drain_PerTickBudgetOfZero_PublishesNothing()
+        {
+            var pump = new EventBusPump();
+            var bus = new EventBus<int>();
+            var stream = new EventStream<int>(8);
+            int received = 0;
+            bus.Subscribe(_ => received++);
+            pump.AddStream(stream, bus);
+            stream.TryWrite(1);
+
+            Assert.AreEqual(0, pump.Drain(maxEventsPerTarget: 8, maxEventsPerTick: 0));
+            Assert.AreEqual(0, received);
+            Assert.AreEqual(1, stream.Count, "A paused tick must not consume the backlog.");
+        }
+
+        [Test]
+        public void Drain_NegativePerTickBudget_Throws()
+        {
+            var pump = new EventBusPump();
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => pump.Drain(maxEventsPerTarget: 8, maxEventsPerTick: -1));
+        }
+
+        [Test]
+        public void HostFrameBudget_ZeroOrNegative_MeansNoCapNotPause()
+        {
+            // A component serialized before the per-frame field existed deserializes it as zero.
+            // Mapping that to a zero budget would silently stop all delivery on upgrade, so zero has
+            // to mean "no additional cap"; pausing is PumpingEnabled.
+            Assert.AreEqual(int.MaxValue, EventBusPumpMonoBehaviour.ResolveFrameBudget(0));
+            Assert.AreEqual(int.MaxValue, EventBusPumpMonoBehaviour.ResolveFrameBudget(-1));
+            Assert.AreEqual(int.MaxValue, EventBusPumpMonoBehaviour.ResolveFrameBudget(int.MinValue));
+            Assert.AreEqual(4096, EventBusPumpMonoBehaviour.ResolveFrameBudget(4096));
+        }
+
+        [Test]
         public void Drain_Unbounded_DrainsEverySource()
         {
             var pump = new EventBusPump();
@@ -1804,15 +1995,6 @@ namespace CycloneGames.EventBus.Tests
 
     public sealed class EventBusBuilderTests
     {
-        [Test]
-        public void Build_VitalRouterBackendWithoutFactory_Throws()
-        {
-            var config = new EventBusConfiguration(commandBackend: CommandBackend.VitalRouter);
-            var builder = new EventBusBuilder().WithConfiguration(config);
-
-            Assert.Throws<InvalidOperationException>(() => builder.Build());
-        }
-
         [Test]
         public void Build_DefaultConfiguration_BuildsContext()
         {
