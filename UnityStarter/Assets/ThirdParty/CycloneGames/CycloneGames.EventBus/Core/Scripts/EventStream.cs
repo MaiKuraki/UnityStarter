@@ -3,13 +3,14 @@ using System;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Bounded, preallocated linear buffer that batches events of one type and flushes them into an
+    /// Bounded, preallocated ring buffer that batches events of one type and flushes them into an
     /// <see cref="EventBus{T}"/> at a moment the caller chooses.
     ///
     /// Why this exists: publishing thousands of events per frame one call at a time is correct but
     /// it makes the cost and the ordering implicit. A stream turns "N publishes scattered through the
     /// frame" into "write N, flush once", which gives three concrete properties:
-    /// - Writes are sequential into one array, so they are cache-friendly and allocation-free.
+    /// - Writes are sequential into one array and consumed entries are reclaimed by advancing a head
+    ///   index, so both cost the same regardless of the flush budget.
     /// - The flush point is explicit, so dispatch timing is deterministic and reproducible instead
     ///   of interleaved with whatever else the frame was doing.
     /// - Flush can be budgeted (<see cref="FlushTo(EventBus{T}, int)"/>), which is what keeps a
@@ -24,6 +25,13 @@ namespace CycloneGames.EventBus.Core
     public sealed class EventStream<T> where T : struct
     {
         private readonly T[] _buffer;
+
+        // Logical index of the oldest pending event; the tail is derived from head + count. A ring
+        // rather than a queue that shifts down, because the budgeted flush is the documented use and
+        // shifting would make it the most expensive one: draining capacity C in B-event chunks costs
+        // C/B copies of the remainder, proportional to sizeof(T).
+        private int _head;
+
         private int _count;
         private long _droppedCount;
         private long _rejectedCount;
@@ -35,7 +43,7 @@ namespace CycloneGames.EventBus.Core
         private long _generation;
 
         // Guards re-entrant FlushTo from one of the stream's own handlers: an inner flush would
-        // publish entries the outer round still owns and shift the buffer under its loop.
+        // publish entries the outer round still owns and advance the head under its loop.
         private bool _flushing;
 
         /// <param name="capacity">Fixed event capacity; must be at least 1.</param>
@@ -93,7 +101,16 @@ namespace CycloneGames.EventBus.Core
                 return false;
             }
 
-            _buffer[_count++] = evt;
+            int tail = _head + _count;
+            if (tail >= _buffer.Length)
+            {
+                // head and count are both below Length, so one conditional subtract always wraps.
+                // Keeps Capacity exactly what the caller asked for instead of rounding up.
+                tail -= _buffer.Length;
+            }
+
+            _buffer[tail] = evt;
+            _count++;
             return true;
         }
 
@@ -111,7 +128,7 @@ namespace CycloneGames.EventBus.Core
         {
             for (int index = 0; index < _count; index++)
             {
-                _buffer[index] = default;
+                _buffer[PhysicalIndex(index)] = default;
             }
 
             if (_count > 0)
@@ -120,6 +137,7 @@ namespace CycloneGames.EventBus.Core
             }
 
             _count = 0;
+            _head = 0;
             _generation++;
         }
 
@@ -178,7 +196,7 @@ namespace CycloneGames.EventBus.Core
             {
                 for (int index = 0; index < budget; index++)
                 {
-                    bus.Publish(in _buffer[index]);
+                    bus.Publish(in _buffer[PhysicalIndex(index)]);
                     published++;
 
                     if (_generation != generation)
@@ -204,29 +222,52 @@ namespace CycloneGames.EventBus.Core
             return published;
         }
 
+        /// <summary>
+        /// Drops the <paramref name="count"/> oldest entries by advancing the head, with no element
+        /// moves.
+        /// </summary>
         private void RemoveFront(int count)
         {
-            int remaining = _count - count;
-            if (remaining < 0)
+            int removed = count;
+            if (removed > _count)
             {
                 // Defensive: the generation guard keeps this branch unreachable today, but if a
                 // future mutation slips past it, clamping here must not corrupt the buffer.
-                remaining = 0;
+                removed = _count;
             }
 
-            if (remaining > 0)
+            // Clearing matters: event structs can hold references, and leaving them in the buffer
+            // would pin those objects for the lifetime of the stream.
+            for (int index = 0; index < removed; index++)
             {
-                Array.Copy(_buffer, count, _buffer, 0, remaining);
+                _buffer[PhysicalIndex(index)] = default;
             }
 
-            // Clearing the tail matters: event structs can hold references, and leaving them in the
-            // buffer would pin those objects for the lifetime of the stream.
-            for (int index = remaining; index < _count; index++)
+            _head += removed;
+            if (_head >= _buffer.Length)
             {
-                _buffer[index] = default;
+                // head < Length and removed <= count <= Length, so one conditional subtract wraps.
+                _head -= _buffer.Length;
             }
 
-            _count = remaining;
+            _count -= removed;
+
+            if (_count == 0)
+            {
+                // Normalize so a drained stream always restarts its writes at index 0.
+                _head = 0;
+            }
+        }
+
+        /// <summary>
+        /// Maps a logical index (0 = oldest pending) to its slot in the ring. The arithmetic relies
+        /// on both head and <paramref name="logicalIndex"/> being below the buffer length, so one
+        /// conditional subtract is a complete wrap.
+        /// </summary>
+        private int PhysicalIndex(int logicalIndex)
+        {
+            int index = _head + logicalIndex;
+            return index >= _buffer.Length ? index - _buffer.Length : index;
         }
     }
 }

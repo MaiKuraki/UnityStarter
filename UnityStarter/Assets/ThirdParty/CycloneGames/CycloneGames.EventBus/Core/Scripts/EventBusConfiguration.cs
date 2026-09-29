@@ -13,12 +13,19 @@ namespace CycloneGames.EventBus.Core
     public sealed class EventBusConfiguration
     {
         public const int DefaultCommandQueueCapacity = 64;
-        public const int DefaultMaxDispatchDepth = 32;
+
+        /// <summary>
+        /// Default re-entrancy ceiling. A stack-depth guard, not a policy knob, so it stays loose
+        /// enough that a legitimate cascade never reaches it: each hop that publishes its own event
+        /// type costs one level, and interactions routinely cascade (hit -> damage -> death -> loot ->
+        /// quest -> achievement -> UI). Exceeding it is silent at the callsite, so the default is
+        /// generous while still bounding the stack.
+        /// </summary>
+        public const int DefaultMaxDispatchDepth = 64;
 
         public static readonly EventBusConfiguration Default = new EventBusConfiguration();
 
         public EventBusConfiguration(
-            CommandBackend commandBackend = CommandBackend.InProcess,
             int commandQueueCapacity = DefaultCommandQueueCapacity,
             CommandOverflowPolicy commandOverflowPolicy = CommandOverflowPolicy.Drop,
             int maxDispatchDepth = DefaultMaxDispatchDepth,
@@ -35,15 +42,12 @@ namespace CycloneGames.EventBus.Core
                 throw new System.ArgumentOutOfRangeException(nameof(maxDispatchDepth));
             }
 
-            CommandBackend = commandBackend;
             CommandQueueCapacity = commandQueueCapacity;
             CommandOverflowPolicy = commandOverflowPolicy;
             MaxDispatchDepth = maxDispatchDepth;
             LogSink = logSink ?? NullEventBusLogSink.Instance;
             PublishErrorPolicy = publishErrorPolicy;
         }
-
-        public CommandBackend CommandBackend { get; }
 
         public int CommandQueueCapacity { get; }
 

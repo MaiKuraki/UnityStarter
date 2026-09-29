@@ -15,7 +15,15 @@
         "Microsoft.Bcl.AsyncInterfaces.dll"
     ],
     "autoReferenced": false,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_EVENTBUS_HAS_R3"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cysharp.r3",
+            "expression": "",
+            "define": "CYCLONEGAMES_EVENTBUS_HAS_R3"
+        }
+    ],
     "noEngineReferences": true
 }
