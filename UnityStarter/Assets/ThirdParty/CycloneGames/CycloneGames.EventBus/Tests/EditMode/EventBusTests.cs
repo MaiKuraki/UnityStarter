@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -183,7 +184,10 @@ namespace CycloneGames.EventBus.Tests
         {
             var bus = new EventBus<ScoreChanged>(
                 new EventBusConfiguration(publishErrorPolicy: PublishErrorPolicy.ContinueOnError));
-            bus.Subscribe(_ => ThrowFromSubscriber());
+            // Subscribed as a method group, not wrapped in a lambda: the bus invokes it indirectly
+            // through Action<T>, so its frame cannot be inlined away by the caller. See the attribute
+            // on the method for the other half of the guard.
+            bus.Subscribe(ThrowFromSubscriber);
 
             var thrown = Assert.Throws<InvalidOperationException>(
                 () => bus.Publish(new ScoreChanged()));
@@ -633,7 +637,15 @@ namespace CycloneGames.EventBus.Tests
             Assert.IsFalse(snapshot.IsDisposed);
         }
 
-        private static void ThrowFromSubscriber()
+        /// <summary>
+        /// Kept as a method group and pinned with <see cref="MethodImplOptions.NoInlining"/> because
+        /// <see cref="Publish_CapturedException_PreservesOriginalThrowSite"/> asserts on this frame
+        /// being present, and whether a callee's frame survives a stack trace is a JIT decision. Left
+        /// free to inline, this tiny throw-only body is erased and the test passes on one machine and
+        /// fails on another.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowFromSubscriber(ScoreChanged _)
         {
             throw new InvalidOperationException("thrown from a named subscriber");
         }
