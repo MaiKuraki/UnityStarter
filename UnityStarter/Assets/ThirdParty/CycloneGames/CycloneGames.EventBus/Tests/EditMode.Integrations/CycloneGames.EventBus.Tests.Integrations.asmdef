@@ -23,8 +23,21 @@
     ],
     "autoReferenced": false,
     "defineConstraints": [
-        "UNITY_INCLUDE_TESTS"
+        "UNITY_INCLUDE_TESTS",
+        "CYCLONEGAMES_EVENTBUS_HAS_R3",
+        "CYCLONEGAMES_EVENTBUS_HAS_UNITASK"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.cysharp.r3",
+            "expression": "",
+            "define": "CYCLONEGAMES_EVENTBUS_HAS_R3"
+        },
+        {
+            "name": "com.cysharp.unitask",
+            "expression": "",
+            "define": "CYCLONEGAMES_EVENTBUS_HAS_UNITASK"
+        }
+    ],
     "noEngineReferences": false
 }

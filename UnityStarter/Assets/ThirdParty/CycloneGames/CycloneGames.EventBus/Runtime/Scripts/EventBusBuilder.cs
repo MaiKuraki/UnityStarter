@@ -5,9 +5,9 @@ namespace CycloneGames.EventBus.Runtime
 {
     /// <summary>
     /// Builds a ready-to-use <see cref="EventBusContext"/> from an <see cref="EventBusConfiguration"/>.
-    /// The VitalRouter backend is only constructed by the VitalRouter integration assembly; here, the
-    /// builder resolves the backend through an injected factory so Core/Runtime never reference
-    /// VitalRouter directly.
+    /// A command backend other than the built-in <see cref="InProcessCommandPublisher"/> is supplied
+    /// through <see cref="WithCommandPublisherFactory"/>, so Core/Runtime never reference an
+    /// integration assembly directly.
     /// </summary>
     public sealed class EventBusBuilder
     {
@@ -21,9 +21,10 @@ namespace CycloneGames.EventBus.Runtime
         }
 
         /// <summary>
-        /// Installs a custom command-publisher factory that returns an <see cref="ICommandPublisher"/>
-        /// implementation (for example a DI-container-backed publisher). If none is set, the builder
-        /// falls back to <see cref="InProcessCommandPublisher"/>.
+        /// Installs a command-publisher factory that returns the <see cref="ICommandPublisher"/> the
+        /// context should use (for example a DI-container-backed publisher, or an adapter over a
+        /// third-party router). If none is set, the builder falls back to
+        /// <see cref="InProcessCommandPublisher"/>.
         /// </summary>
         public EventBusBuilder WithCommandPublisherFactory(
             Func<EventBusConfiguration, ICommandPublisher> factory)
@@ -34,30 +35,11 @@ namespace CycloneGames.EventBus.Runtime
 
         public EventBusContext Build()
         {
-            ICommandPublisher commandPublisher;
-            if (_commandPublisherFactory != null)
-            {
-                commandPublisher = _commandPublisherFactory(_configuration);
-            }
-            else if (_configuration.CommandBackend == CommandBackend.VitalRouter)
-            {
-                // The VitalRouter adapter cannot satisfy the struct-only ICommandPublisher port
-                // (it requires VitalRouter.ICommand), so it is not routable through
-                // EventBusContext.Commands. Fail loudly instead of silently building the in-process
-                // backend while the config claims VitalRouter.
-                throw new InvalidOperationException(
-                    "CommandBackend.VitalRouter is not wired through EventBusContext.Commands: the "
-                    + "VitalRouter adapter requires commands to implement VitalRouter.ICommand, so it "
-                    + "cannot satisfy the struct-only ICommandPublisher port. Use "
-                    + "VitalRouterCommandPublisher directly instead of configuring it as the command "
-                    + "backend.");
-            }
-            else
-            {
-                commandPublisher = new InProcessCommandPublisher(
+            ICommandPublisher commandPublisher = _commandPublisherFactory != null
+                ? _commandPublisherFactory(_configuration)
+                : new InProcessCommandPublisher(
                     _configuration.CommandQueueCapacity,
                     _configuration.CommandOverflowPolicy);
-            }
 
             // Construction of the context never fails after resources are created, so no rollback is
             // needed beyond disposing the publisher if an unexpected error occurs.

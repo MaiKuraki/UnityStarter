@@ -13,7 +13,21 @@
         "VitalRouter.dll"
     ],
     "autoReferenced": false,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_EVENTBUS_HAS_UNITASK",
+        "CYCLONEGAMES_EVENTBUS_HAS_VITALROUTER"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cysharp.unitask",
+            "expression": "",
+            "define": "CYCLONEGAMES_EVENTBUS_HAS_UNITASK"
+        },
+        {
+            "name": "jp.hadashikick.vitalrouter.unity",
+            "expression": "",
+            "define": "CYCLONEGAMES_EVENTBUS_HAS_VITALROUTER"
+        }
+    ],
     "noEngineReferences": true
 }
