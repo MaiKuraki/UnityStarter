@@ -48,9 +48,9 @@ Tools/
 
 | 命令 | 用途 | 备注 |
 | --- | --- | --- |
-| `rename_project` | 事务化改名 UnityStarter 派生项目 | `--dry-run` 完整只读预演；带日志、备份与回滚；可重复执行——再次改名会复用持久化状态并启用全新回退探测 |
-| `remove_unity_packages` | 从 `Packages/manifest.json` 删除显式授权的 Unity 包 | `--allow-package`、`--allow-referenced-package`、`--profile`、`--apply`、`--dry-run`、`--resolve-stale-transaction`；fail-closed |
-| `unity_project_full_clean` | 删除已验证缓存与 Build 所有的输出 | `--ci`、`--dry-run`、`--include-build-outputs`；交互模式输入 `CLEAN` 确认；Unity 运行中或存在恢复证据时 fail-closed |
+| `rename_project` | 事务化改名 UnityStarter 派生项目 | `--dry-run` 完整只读预演；`--project <path>` 显式指定项目根；带日志、备份与回滚；可重复执行——再次改名会复用持久化状态并启用全新回退探测 |
+| `remove_unity_packages` | 从 `Packages/manifest.json` 删除显式授权的 Unity 包 | `--allow-package`、`--allow-referenced-package`、`--profile`、`--project <path>`、`--apply`、`--dry-run`、`--resolve-stale-transaction`；fail-closed |
+| `unity_project_full_clean` | 删除已验证缓存与 Build 所有的输出 | `--ci`、`--dry-run`、`--project <path>`、`--include-build-outputs`；未被 marker 覆盖（非 Build 所有）的产物内容只跳过、绝不删除；交互模式输入 `CLEAN` 确认；Unity 运行中、存在恢复证据或 marker 格式非法时 fail-closed |
 
 ### dev-tools（通用工具）
 
@@ -60,6 +60,35 @@ Tools/
 | `texture_channel_packer` | 把多张图打包进 RGBA 通道 | `-r/-g/-b/-a`、`-o`、`-size`、`-preset`、`-ci`、`--dry-run` |
 | `audio_volume_normalizer` | 按类别做音频响度归一化 | `--ci --input <dir> [--format wav\|ogg] [--jobs N]`（CI 模式 `--input` 必填）；并行 worker 池（默认 CPU 数），Ctrl+C/SIGTERM 可取消；需要 FFmpeg |
 | `unity_video_webm_converter` | 把视频转成 Unity 友好的 WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N] [--ffmpeg-timeout 2h]`；并行转换池、优雅取消；需要 FFmpeg |
+
+### 项目根解析
+
+Unity 项目类命令（`rename_project`、`remove_unity_packages`、`unity_project_full_clean`）
+不会盲目信任当前工作目录，而是按以下顺序解析项目根：
+
+1. 显式 `--project <path>`：严格校验，失败即报错，绝不回退到自动探测；
+2. 当前目录本身是 Unity 项目根；
+3. 当前目录的一级子目录中存在 Unity 项目根（覆盖"仓库根包含 `UnityStarter/`"的布局）；
+4. 从当前目录向上逐级查找；
+5. 从可执行文件所在目录向上逐级查找，并在每一级同时检查其一级子目录。
+
+第 5 步是 Windows 双击可用的关键：Windows 会把工作目录设为可执行文件自身所在目录
+（`Tools/Executable/<OS>/<GOARCH>/`），该目录并不是项目，于是改从可执行文件位置向上找到
+仓库根及其 `UnityStarter/` 子目录。若始终找不到，命令会列出所有尝试过的目录并提示使用
+`--project <path>`。交互式菜单会在顶部显示 `Current project: <path>`，找不到时给出同样的可操作提示。
+
+每次解析都会记录**来源**（显式 `--project`、当前工作目录、工作目录的子目录、工作目录的祖先、
+可执行文件目录回退）。来源之所以重要，是因为“可执行文件目录回退”具有歧义：从任意无关目录运行该
+二进制，都会静默解析到随二进制一同发布的仓库。因此：
+
+- 任何写入动作之前，所有命令都会记录 `resolved Unity project root … source=…`（预演里打印
+  `Project: <root> (source: …)`），`--ci` 下同样如此；
+- **破坏性且非交互**的运行（真实的 `unity_project_full_clean`、真实的 `rename_project`、
+  `remove_unity_packages --apply` / 真实的 `--resolve-stale-transaction`）**拒绝**可执行文件回退
+  来源，并给出可操作错误：请在项目根运行，或传 `--project <path>`；
+- 交互式会话（双击菜单）允许该来源，因为它仍会先打印 `Current project: <path>` 并要求输入
+  `CLEAN` 确认；
+- `--dry-run` 允许该来源，但会打印醒目警告，说明项目根是被推断出来的。
 
 ## 安装
 
@@ -136,6 +165,15 @@ go run ./cmd/unity-project-tools --list
 - **结构化日志**：诊断信息以 `slog` 文本行输出到 stderr（含 `cmd`、`level`、key=value），面向用户的提示、进度与汇总保持在 stdout，CI 日志可直接解析。
 - **原子化输出**：FFmpeg 类工具先写入每次运行唯一的临时文件（同目录、同扩展名），成功后 rename 就位，中断或并发运行不会在最终路径留下半成品。
 - **TTY 感知进度**：仅当 stdout 是交互终端时才绘制进度条；管道与 CI 输出保持干净。
+- **所有权感知清理**：`unity_project_full_clean` 始终删除可重建缓存（`Library`、`Logs`、
+  `obj`/`Obj`、`.vs`、`.utmp`、`Temp`），但产物目录（`Build`、`Bundles`、`HybridCLRData`、
+  `yoo`、`HotUpdateAssetsPreUpload`）只有在显式传入 `--include-build-outputs` **且**存在有效
+  Build ownership marker 覆盖时才会删除。未被 marker 覆盖的内容只报为跳过、绝不删除，因此
+  手工产出的多余播放器产物不再阻塞缓存清理；而 marker 存在但格式非法时仍 fail-closed。
+  `.buildpipeline` 与 `Temp/BuildPipeline/Workspace` 永不删除。
+- **大小写不敏感缓存匹配**：Unity 生成的缓存目录大小写随版本与平台变化（程序集中间产物在
+  某些版本是 `obj`、另一些是 `Obj`，与项目 `.gitignore` 的 `/[Oo]bj/` 一致），因此缓存根
+  按大小写不敏感匹配，Windows/macOS/Linux 三平台清理同一集合。
 - **Windows 双击体验**：带参数运行结束后，新开的控制台窗口会保留到按下回车。判定逻辑集中在
   toolkit 的 `ShouldPauseAfterRun`：仅当 stdin/stdout 均为交互终端、当前进程独占该控制台、且
   未通过 `--no-pause` 或 `TOOLS_NO_PAUSE=1` 显式退出时才暂停。管道、脚本、shell 与 CI 一律不暂停。

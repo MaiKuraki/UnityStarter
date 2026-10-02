@@ -10,6 +10,7 @@ package main
 import (
 	"os"
 
+	"cyclonegames.tools/scripts/internal/projectroot"
 	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
 	"cyclonegames.tools/scripts/remove_unity_packages"
@@ -28,8 +29,21 @@ func main() {
 	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	if len(args) == 0 && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
 		// Launched by double-click (or a plain no-argument run) on an interactive
-		// terminal: show the command menu instead of the usage error.
-		os.Exit(toolkit.InteractiveMenu(programName, commands, os.Stdin, os.Stdout))
+		// terminal: show the command menu instead of the usage error. The menu
+		// reports the project it resolved so a double-clicked binary (whose
+		// working directory is its own folder) explains what it will operate on.
+		os.Exit(toolkit.InteractiveMenu(programName, commands, os.Stdin, os.Stdout,
+			toolkit.WithProjectResolver(func() (toolkit.ProjectContext, error) {
+				result, err := projectroot.Locate("")
+				if err != nil {
+					return toolkit.ProjectContext{}, err
+				}
+				return toolkit.ProjectContext{
+					Root:               result.Root,
+					Origin:             result.Origin.String(),
+					ExecutableFallback: result.Ambiguous(),
+				}, nil
+			})))
 	}
 	code := toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr)
 	// Keep a double-clicked console window readable after the run; scripts and

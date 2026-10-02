@@ -7,7 +7,55 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cyclonegames.tools/scripts/internal/projectroot"
 )
+
+func TestParseRenameOptionsAcceptsProjectFlag(t *testing.T) {
+	options, err := parseRenameOptions([]string{"--dry-run", "--project", "/repo/UnityStarter"})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !options.dryRun || options.project != "/repo/UnityStarter" {
+		t.Fatalf("options = %+v, want dryRun=true project=/repo/UnityStarter", options)
+	}
+}
+
+func TestParseRenameOptionsRejectsPositionalArguments(t *testing.T) {
+	if _, err := parseRenameOptions([]string{"unexpected"}); err == nil {
+		t.Fatalf("positional arguments must be rejected")
+	}
+}
+
+// findProjectRoot delegates to the shared resolver; running inside a project root
+// must still detect it.
+func TestFindProjectRootDetectsCurrentDirectory(t *testing.T) {
+	project := t.TempDir()
+	for _, marker := range []string{"Assets", "ProjectSettings"} {
+		if err := os.MkdirAll(filepath.Join(project, marker), 0o755); err != nil {
+			t.Fatalf("cannot create %s: %v", marker, err)
+		}
+	}
+	t.Chdir(project)
+	got, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("current directory project not detected: %v", err)
+	}
+	if got.Origin != projectroot.OriginWorkingDirectory {
+		t.Fatalf("origin = %v, want %v", got.Origin, projectroot.OriginWorkingDirectory)
+	}
+	gotResolved, err := filepath.EvalSymlinks(got.Root)
+	if err != nil {
+		t.Fatalf("cannot canonicalize resolved root: %v", err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatalf("cannot canonicalize fixture root: %v", err)
+	}
+	if gotResolved != wantResolved {
+		t.Fatalf("resolved %q, want %q", gotResolved, wantResolved)
+	}
+}
 
 func TestValidateProjectToken(t *testing.T) {
 	for _, valid := range []string{"MyGame", "_internal", "game2"} {
