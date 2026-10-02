@@ -91,12 +91,47 @@ func WaitForExit() {
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
+// ProjectContext describes the Unity project an interactive command will act on.
+type ProjectContext struct {
+	Root   string
+	Origin string
+	// ExecutableFallback marks a root inferred from the executable's own directory
+	// (the ambiguous double-click fallback), so the menu can say so explicitly.
+	ExecutableFallback bool
+}
+
+// ProjectResolver reports the Unity project context for the menu's commands.
+type ProjectResolver func() (ProjectContext, error)
+
+// MenuOption customizes InteractiveMenu.
+type MenuOption func(*menuConfig)
+
+type menuConfig struct {
+	resolveProject ProjectResolver
+}
+
+// WithProjectResolver makes the interactive menu report the resolved Unity
+// project root, and an actionable hint (including the --project usage) when none
+// can be found. Callers whose commands do not operate on a Unity project omit it.
+func WithProjectResolver(resolver ProjectResolver) MenuOption {
+	return func(config *menuConfig) {
+		config.resolveProject = resolver
+	}
+}
+
 // InteractiveMenu runs when the binary is launched without arguments on an
 // interactive terminal (for example, double-clicking the Windows executable). It
 // lists the commands, runs the selected one in-process, and returns to the menu
 // until the user quits. Non-terminal invocations keep the usage/exit-2 contract
 // and never reach this function.
-func InteractiveMenu(programName string, commands []Command, stdin io.Reader, stdout io.Writer) int {
+func InteractiveMenu(programName string, commands []Command, stdin io.Reader, stdout io.Writer, options ...MenuOption) int {
+	config := menuConfig{}
+	for _, option := range options {
+		option(&config)
+	}
+	// Resolve the project context once: the working directory does not change
+	// while the menu is open, and a failed resolution walks the filesystem.
+	projectLines := projectContextLines(config.resolveProject)
 	reader := bufio.NewReader(stdin)
 	firstCycle := true
 	for {
@@ -108,6 +143,9 @@ func InteractiveMenu(programName string, commands []Command, stdin io.Reader, st
 			fmt.Fprintln(stdout, "--------------------------------------------------------------")
 		}
 		fmt.Fprintf(stdout, "%s %s\n\n", programName, Version)
+		for _, line := range projectLines {
+			fmt.Fprintln(stdout, line)
+		}
 		writeCommandList(stdout, commands)
 		fmt.Fprintln(stdout)
 
@@ -138,6 +176,29 @@ func InteractiveMenu(programName string, commands []Command, stdin io.Reader, st
 		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "[%s] finished with exit code %d\n\n", selected.Name, code)
 	}
+}
+
+// projectContextLines renders the "current project" banner plus an actionable
+// hint. It returns nil when the caller supplied no resolver, so non-Unity tools
+// keep the original menu unchanged.
+func projectContextLines(resolver ProjectResolver) []string {
+	if resolver == nil {
+		return nil
+	}
+	context, err := resolver()
+	if err != nil {
+		return []string{
+			"Current project: not detected.",
+			"Tip: run this tool from a Unity project root (a directory containing Assets, ProjectSettings and Packages), " +
+				"or pass --project <path> to the command.",
+		}
+	}
+	lines := []string{"Current project: " + context.Root}
+	if context.ExecutableFallback {
+		lines = append(lines,
+			"  (inferred from the executable's own directory, not from the working directory or --project; pass --project <path> to be explicit)")
+	}
+	return lines
 }
 
 func matchMenuChoice(commands []Command, choice string) *Command {
