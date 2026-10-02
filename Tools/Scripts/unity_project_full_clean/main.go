@@ -27,7 +27,9 @@ import (
 	"unicode/utf16"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectroot"
 	"cyclonegames.tools/scripts/internal/safefs"
+	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
@@ -87,6 +89,12 @@ func deletionWorkerLimit() int {
 	return limit
 }
 
+// cacheDirectories are the regenerable Unity/IDE cache roots cleaned by default.
+// They are matched case-insensitively: Unity's generated folder casing differs
+// across versions and platforms (the assembly intermediates are `obj` on some
+// and `Obj` on others, which is why the project .gitignore uses `/[Oo]bj/`).
+// Windows hides the difference, so a case-sensitive lookup would silently skip
+// the folder on Linux/macOS and the three platforms would diverge.
 var cacheDirectories = []string{
 	".vs", ".utmp", "obj", "Logs", "Library",
 }
@@ -266,10 +274,12 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var dryRun bool
 	var includeBuildOutputs bool
 	var resolveStaleQuarantine bool
+	var projectPath string
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode")
 	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without deleting")
 	flags.BoolVar(&includeBuildOutputs, "include-build-outputs", false, "Delete only output trees proven to be Build-owned")
 	flags.BoolVar(&resolveStaleQuarantine, "resolve-stale-quarantine", false, "Complete interrupted cleanups by removing stale quarantine entries")
+	flags.StringVar(&projectPath, "project", "", "Unity project root to clean (default: auto-detect from the working and executable directories)")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -281,15 +291,29 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitUsage
 	}
 
-	projectRoot, err := os.Getwd()
-	if err != nil {
-		logging.Errorf("Cannot resolve current directory: %v", err)
-		return toolkit.ExitFailure
-	}
-	projectRoot, err = validateProjectRoot(projectRoot)
+	resolution, err := resolveProjectRoot(projectPath)
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
+	}
+	projectRoot := resolution.Root
+	// Make the resolved root and how it was found auditable before any mutation,
+	// including in --ci where there is no interactive confirmation.
+	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
+
+	// A root inferred from the executable's own directory is ambiguous: any
+	// invocation from an unrelated directory would resolve to the repository that
+	// shipped the binary. Destructive, non-interactive runs must refuse it; an
+	// interactive (double-click) session may proceed because it still asks for the
+	// CLEAN confirmation below.
+	if err := guardDestructiveRun(resolution, dryRun, ciMode,
+		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd())); err != nil {
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
+	}
+	if warning := resolution.FallbackWarning(); warning != "" {
+		logging.Warnf("%s", warning)
+		fmt.Fprintf(stdout, "[WARNING] %s\n", warning)
 	}
 
 	if resolveStaleQuarantine {
@@ -325,18 +349,22 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 
 	logging.Info("inspecting Build-owned outputs")
-	ownedOutputs, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
+	inspection, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
-		logging.Errorf("Foreign or invalid build output blocks cleanup: %v", err)
+		logging.Errorf("Invalid Build ownership evidence blocks cleanup: %v", err)
 		return toolkit.ExitFailure
 	}
+	if len(inspection.skipped) != 0 {
+		logging.Warnf("%d publication entr(ies) lack a verifiable Build ownership marker and will not be deleted; they are listed in the preview.", len(inspection.skipped))
+	}
+	ownedOutputs := inspection.owned
 	logging.Info("scanning cache inventory (Library/Temp/Obj/Build); large projects take a while")
 	items, err := collectCleanItems(projectRoot, ownedOutputs, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Cleanup inventory rejected: %v", err)
 		return toolkit.ExitFailure
 	}
-	printPreview(stdout, projectRoot, items, ownedOutputs, includeBuildOutputs)
+	printPreview(stdout, resolution, items, inspection, includeBuildOutputs)
 	if len(items) == 0 || dryRun {
 		if dryRun {
 			fmt.Fprintln(stdout, "[Dry Run] Lease and safety validation passed; no files were deleted.")
@@ -370,16 +398,16 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Errorf("Build recovery state changed before deletion: %v", err)
 		return toolkit.ExitFailure
 	}
-	recheckedOwnedOutputs, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
+	recheckedInspection, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Build output ownership changed before deletion: %v", err)
 		return toolkit.ExitFailure
 	}
-	if !cleanItemInventoriesEqual(ownedOutputs, recheckedOwnedOutputs) {
+	if !cleanItemInventoriesEqual(ownedOutputs, recheckedInspection.owned) {
 		logging.Errorf("Build output ownership targets changed after preview; nothing was deleted.")
 		return toolkit.ExitFailure
 	}
-	recheckedItems, err := collectCleanItems(projectRoot, recheckedOwnedOutputs, includeBuildOutputs)
+	recheckedItems, err := collectCleanItems(projectRoot, recheckedInspection.owned, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Cleanup inventory changed before deletion: %v", err)
 		return toolkit.ExitFailure
@@ -421,6 +449,27 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitFailure
 	}
 	return toolkit.ExitSuccess
+}
+
+// resolveProjectRoot locates the Unity project root this run should clean. An
+// explicit --project path is validated strictly; otherwise the shared search
+// order covers a repository-root launch, a project-root launch, and a
+// double-clicked binary whose working directory is its own folder.
+func resolveProjectRoot(explicit string) (projectroot.Result, error) {
+	resolver := projectroot.Resolver{Validate: validateProjectRoot}
+	return resolver.Resolve(explicit)
+}
+
+// guardDestructiveRun refuses a destructive, non-interactive cleanup of a root
+// that was only inferred from the executable's directory. A --dry-run preview and
+// an interactive session (which still requires the typed CLEAN confirmation) are
+// allowed.
+func guardDestructiveRun(resolution projectroot.Result, dryRun, ciMode, stdinTTY, stdoutTTY bool) error {
+	if dryRun {
+		return nil
+	}
+	interactive := !ciMode && stdinTTY && stdoutTTY
+	return projectroot.GuardDestructive(resolution, interactive)
 }
 
 func validateProjectRoot(path string) (string, error) {
@@ -851,30 +900,58 @@ func ensureNoPendingRecovery(projectRoot string) error {
 	})
 }
 
-func inspectPublicationOwnership(projectRoot string, requireDeletableIdentity bool) ([]cleanItem, error) {
-	var owned []cleanItem
+// publicationInspection is the reconciled view of the publication roots. owned
+// lists the marker-covered targets (candidates for deletion; protected when
+// --include-build-outputs is absent), and skipped lists entries this run will not
+// delete because no verifiable Build ownership marker covers them.
+type publicationInspection struct {
+	owned   []cleanItem
+	skipped []string
+}
+
+// inspectPublicationOwnership reconciles the publication roots (Build, Bundles,
+// HybridCLRData, yoo, HotUpdateAssetsPreUpload) with their Build ownership markers.
+//
+// Safety invariant: content is only ever reported as owned when a valid marker
+// covers it, so unmarked content is never a deletion target. Unlike the previous
+// behaviour, unmarked content no longer aborts the whole cleanup: it is reported
+// as skipped so that a stray hand-built player output no longer blocks cache
+// cleanup. A marker that is present but malformed still fails closed, because
+// that signals tampering or a partial write rather than "not built by the
+// pipeline" - the two cases must stay distinguishable.
+//
+// Deleting publication trees is opt-in. Only when includeBuildOutputs is set do
+// marker-covered targets become cleanup items, and even then a recognized marker
+// whose provider-specific artifact identity this cleaner cannot independently
+// verify is skipped with a warning (the Build provider owns its recovery path).
+func inspectPublicationOwnership(projectRoot string, includeBuildOutputs bool) (publicationInspection, error) {
+	inspection := publicationInspection{}
 	for _, relativeRoot := range publicationRoots {
 		root, err := safePath(projectRoot, relativeRoot, true)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, err
+			return publicationInspection{}, err
 		}
 		info, err := os.Lstat(root)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("publication root is not a directory: %s", root)
+			return publicationInspection{}, fmt.Errorf("publication root is not a directory: %s", root)
 		}
 		if err := ensurePathSegmentsNotRedirected(projectRoot, root); err != nil {
-			return nil, err
+			return publicationInspection{}, err
 		}
 		var targets []string
 		var allEntries []string
 		playerIdentities := make(map[string]*playerTreeIdentity)
 		ownerEvidences := make(map[string]*ownerMarkerEvidence)
+		// unverifiable holds targets whose marker is recognized but whose
+		// provider-specific artifact identity this cleaner cannot verify. They are
+		// never deleted; only the Build provider may reclaim them.
+		unverifiable := make(map[string]bool)
 		entries := 0
 		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -900,18 +977,18 @@ func inspectPublicationOwnership(projectRoot string, requireDeletableIdentity bo
 			case ".buildpipeline-owner.json", ".yoo-pub.json":
 				evidence, _, err := validateOwnerMarker(path, entry.Name(), "")
 				if err != nil {
+					// Present but malformed: fail closed.
 					return err
 				}
 				ownerEvidences[filepath.Dir(path)] = evidence
-				if requireDeletableIdentity {
-					return fmt.Errorf("ownership marker '%s' is recognized, but this cleaner cannot independently verify its provider-specific artifact identity; use the Build provider's recovery/cleanup path", path)
-				}
+				unverifiable[filepath.Dir(path)] = true
 				targets = append(targets, filepath.Dir(path))
 			default:
 				if strings.HasSuffix(entry.Name(), playerOwnerSuffix) {
 					target := strings.TrimSuffix(path, playerOwnerSuffix)
 					evidence, identity, err := validateOwnerMarker(path, entry.Name(), target)
 					if err != nil {
+						// Present but malformed: fail closed.
 						return err
 					}
 					playerIdentities[target] = identity
@@ -926,7 +1003,7 @@ func inspectPublicationOwnership(projectRoot string, requireDeletableIdentity bo
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return publicationInspection{}, err
 		}
 		if len(allEntries) == 0 {
 			continue
@@ -941,13 +1018,21 @@ func inspectPublicationOwnership(projectRoot string, requireDeletableIdentity bo
 				}
 			}
 			if !covered {
-				return nil, fmt.Errorf("entry is not covered by a valid Build ownership marker: %s", candidate)
+				// Unmarked content is never a deletion target. Report it and keep
+				// going instead of aborting the whole cleanup.
+				inspection.skipped = append(inspection.skipped, candidate)
 			}
 		}
 		for _, target := range targets {
+			if includeBuildOutputs {
+				if unverifiable[target] || absorbsUnverifiable(target, unverifiable) {
+					inspection.skipped = append(inspection.skipped, target)
+					continue
+				}
+			}
 			info, err := os.Lstat(target)
 			if err != nil {
-				return nil, err
+				return publicationInspection{}, err
 			}
 			kind := "Build-owned file"
 			if info.IsDir() {
@@ -955,14 +1040,47 @@ func inspectPublicationOwnership(projectRoot string, requireDeletableIdentity bo
 			}
 			item, err := inventoryItem(projectRoot, target, kind)
 			if err != nil {
-				return nil, err
+				return publicationInspection{}, err
 			}
 			item.playerIdentity = playerIdentities[target]
 			item.ownerEvidence = ownerEvidences[target]
-			owned = append(owned, item)
+			inspection.owned = append(inspection.owned, item)
 		}
 	}
-	return deduplicateItems(owned), nil
+	inspection.owned = deduplicateItems(inspection.owned)
+	// Report skipped content at the top-most level only (never every file), so a
+	// large unmarked Build tree does not flood the preview.
+	inspection.skipped = dedupeSorted(minimizeTargets(inspection.skipped))
+	return inspection, nil
+}
+
+// dedupeSorted sorts and removes duplicate entries so the preview is stable
+// regardless of directory walk order. An empty input stays nil.
+func dedupeSorted(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Strings(values)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if len(result) != 0 && result[len(result)-1] == value {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+// absorbsUnverifiable reports whether deleting target would also delete content
+// covered by an unverifiable marker (target is that marker's target or one of its
+// ancestors). Such a target is skipped so no unverifiable output is ever removed.
+func absorbsUnverifiable(target string, unverifiable map[string]bool) bool {
+	for candidate := range unverifiable {
+		if samePath(target, candidate) || isDescendant(target, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateOwnerMarker(path, name, target string) (*ownerMarkerEvidence, *playerTreeIdentity, error) {
@@ -1439,23 +1557,18 @@ func utf16OrdinalLess(left, right string) bool {
 func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuildOutputs bool) ([]cleanItem, error) {
 	var items []cleanItem
 	for _, relative := range cacheDirectories {
-		path, err := safePath(projectRoot, relative, true)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		matches, err := resolveCacheDirectories(projectRoot, relative)
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() {
-			continue
+		for _, path := range matches {
+			logging.Info("inventorying cache directory", "path", relative)
+			item, err := inventoryItem(projectRoot, path, "cache directory")
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
 		}
-		logging.Info("inventorying cache directory", "path", relative)
-		item, err := inventoryItem(projectRoot, path, "cache directory")
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
 	}
 
 	// Temp contains the authoritative lease. Delete only siblings outside the
@@ -1501,6 +1614,25 @@ func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuil
 		return nil, err
 	}
 	return items, nil
+}
+
+// resolveCacheDirectories returns the existing project-root children whose name
+// matches the cache root case-insensitively. The returned paths use the on-disk
+// name, so every downstream safety check operates on a real path. All matches are
+// returned so a case-sensitive filesystem that happens to hold two spellings of
+// the same cache folder still cleans both.
+func resolveCacheDirectories(projectRoot, name string) ([]string, error) {
+	entries, err := os.ReadDir(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	var matches []string
+	for _, entry := range entries {
+		if entry.IsDir() && strings.EqualFold(entry.Name(), name) {
+			matches = append(matches, filepath.Join(projectRoot, entry.Name()))
+		}
+	}
+	return matches, nil
 }
 
 func validateCleanItemInventory(projectRoot string, items []cleanItem) error {
@@ -2438,10 +2570,21 @@ func deduplicateItems(items []cleanItem) []cleanItem {
 	return result
 }
 
-func printPreview(output io.Writer, projectRoot string, items, ownedOutputs []cleanItem, includeOutputs bool) {
-	fmt.Fprintf(output, "Project: %s\n", projectRoot)
-	if len(ownedOutputs) != 0 && !includeOutputs {
-		fmt.Fprintf(output, "Protected Build-owned publications: %d (use -include-build-outputs after review).\n", len(ownedOutputs))
+func printPreview(output io.Writer, resolution projectroot.Result, items []cleanItem, inspection publicationInspection, includeOutputs bool) {
+	fmt.Fprintf(output, "Project: %s (source: %s)\n", resolution.Root, resolution.Origin)
+	projectRoot := resolution.Root
+	if len(inspection.owned) != 0 && !includeOutputs {
+		fmt.Fprintf(output, "Protected Build-owned publications: %d (use -include-build-outputs after review).\n", len(inspection.owned))
+	}
+	if len(inspection.skipped) != 0 {
+		fmt.Fprintf(output, "Skipped publication content without verifiable Build ownership: %d (never deleted).\n", len(inspection.skipped))
+		for _, skipped := range inspection.skipped {
+			relative, err := filepath.Rel(projectRoot, skipped)
+			if err != nil {
+				relative = skipped
+			}
+			fmt.Fprintf(output, "  [skipped] %s\n", filepath.ToSlash(relative))
+		}
 	}
 	var total int64
 	for _, item := range items {

@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectroot"
 	"cyclonegames.tools/scripts/internal/safefs"
+	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
@@ -129,14 +131,16 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var allowed stringListFlag
 	var allowReferenced stringListFlag
 	var profilePath string
+	var projectPath string
 	var dryRun bool
 	var apply bool
-		var allowLockRegeneration bool
+	var allowLockRegeneration bool
 	var listMode bool
 	var resolveStaleTransactions bool
 	flags.Var(&allowed, "allow-package", "Exact package ID authorized for removal; repeatable")
 	flags.Var(&allowReferenced, "allow-referenced-package", "Explicitly override detected source evidence; repeatable")
 	flags.StringVar(&profilePath, "profile", "", "Strict current-contract JSON removal policy")
+	flags.StringVar(&projectPath, "project", "", "Unity project root to modify (default: auto-detect from the working and executable directories)")
 	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without writing")
 	flags.BoolVar(&apply, "apply", false, "Commit the reviewed removal transaction")
 	flags.BoolVar(&allowLockRegeneration, "allow-lock-regeneration", false, "Back up then remove packages-lock.json so Unity must resolve again")
@@ -169,16 +173,29 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitSuccess
 	}
 
-	projectRoot, err := os.Getwd()
-	if err != nil {
-		logging.Errorf("Cannot resolve current directory: %v", err)
-		return toolkit.ExitFailure
-	}
-	projectRoot, err = validateUnityProjectRoot(projectRoot)
+	resolution, err := resolveProjectRoot(projectPath)
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
 	}
+	projectRoot := resolution.Root
+	// Make the resolved root and how it was found auditable before any mutation.
+	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
+	fmt.Fprintf(stdout, "Project root: %s (source: %s)\n", projectRoot, resolution.Origin)
+
+	// A root inferred from the executable's own directory is ambiguous; refuse it
+	// for any destructive, non-interactive mutation (--apply or a real stale-
+	// transaction resolution).
+	interactive := term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
+	if err := guardDestructiveRun(resolution, apply, resolveStaleTransactions, dryRun, interactive); err != nil {
+		logging.Errorf("%v", err)
+		return toolkit.ExitFailure
+	}
+	if warning := resolution.FallbackWarning(); warning != "" {
+		logging.Warnf("%s", warning)
+		fmt.Fprintf(stdout, "[WARNING] %s\n", warning)
+	}
+
 	if resolveStaleTransactions {
 		if apply || allowLockRegeneration || listMode || profilePath != "" ||
 			len(allowed) != 0 || len(allowReferenced) != 0 {
@@ -370,6 +387,26 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "[OK] Updated manifest atomically. Mandatory backups: %s\n", strings.Join(backupPaths, ", "))
 	return toolkit.ExitSuccess
+}
+
+// resolveProjectRoot locates the Unity project root this run should modify. An
+// explicit --project path is validated strictly; otherwise the shared search
+// order covers a repository-root launch, a project-root launch, and a
+// double-clicked binary whose working directory is its own folder.
+func resolveProjectRoot(explicit string) (projectroot.Result, error) {
+	resolver := projectroot.Resolver{Validate: validateUnityProjectRoot}
+	return resolver.Resolve(explicit)
+}
+
+// guardDestructiveRun refuses a destructive, non-interactive mutation against a
+// root that was only inferred from the executable's directory. A --dry-run (or a
+// non-mutating --list) and an interactive session are allowed.
+func guardDestructiveRun(resolution projectroot.Result, apply, resolveStaleTransactions, dryRun, interactive bool) error {
+	destructive := apply || (resolveStaleTransactions && !dryRun)
+	if !destructive {
+		return nil
+	}
+	return projectroot.GuardDestructive(resolution, interactive)
 }
 
 func validateUnityProjectRoot(path string) (string, error) {
