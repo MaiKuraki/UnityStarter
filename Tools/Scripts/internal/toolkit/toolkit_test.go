@@ -1,6 +1,7 @@
 package toolkit
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -79,5 +80,69 @@ func TestInteractiveMenuEmptyInputRePromptsWithoutRedraw(t *testing.T) {
 	// command; empty input must not add another redraw.
 	if got := strings.Count(output.String(), "test-tool "+Version); got != 2 {
 		t.Fatalf("banner drawn %d times, want 2, got:\n%s", got, output.String())
+	}
+}
+
+func TestInteractiveMenuShowsResolvedProjectRoot(t *testing.T) {
+	commands := []Command{{Name: "zeta", Summary: "z", Run: func([]string) int { return 0 }}}
+	var output strings.Builder
+	code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output,
+		WithProjectResolver(func() (ProjectContext, error) {
+			return ProjectContext{Root: "/repo/UnityStarter", Origin: "current working directory"}, nil
+		}))
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
+	}
+	if !strings.Contains(output.String(), "Current project: /repo/UnityStarter") {
+		t.Fatalf("menu must show the resolved project, got:\n%s", output.String())
+	}
+}
+
+// An executable-directory fallback root must be flagged in the menu so the user
+// knows the path was inferred, not chosen.
+func TestInteractiveMenuFlagsExecutableFallback(t *testing.T) {
+	commands := []Command{{Name: "zeta", Summary: "z", Run: func([]string) int { return 0 }}}
+	var output strings.Builder
+	if code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output,
+		WithProjectResolver(func() (ProjectContext, error) {
+			return ProjectContext{Root: "/repo/UnityStarter", Origin: "executable directory fallback", ExecutableFallback: true}, nil
+		})); code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
+	}
+	text := output.String()
+	if !strings.Contains(text, "Current project: /repo/UnityStarter") {
+		t.Fatalf("menu must show the fallback project, got:\n%s", text)
+	}
+	if !strings.Contains(text, "inferred from the executable's own directory") {
+		t.Fatalf("menu must flag the executable fallback, got:\n%s", text)
+	}
+}
+
+func TestInteractiveMenuHintsWhenProjectUnresolved(t *testing.T) {
+	commands := []Command{{Name: "zeta", Summary: "z", Run: func([]string) int { return 0 }}}
+	var output strings.Builder
+	code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output,
+		WithProjectResolver(func() (ProjectContext, error) { return ProjectContext{}, errors.New("no project") }))
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
+	}
+	text := output.String()
+	if !strings.Contains(text, "Current project: not detected") {
+		t.Fatalf("unresolved project must be reported as not detected, got:\n%s", text)
+	}
+	if !strings.Contains(text, "--project") {
+		t.Fatalf("unresolved project must hint at --project, got:\n%s", text)
+	}
+}
+
+// Tools without a project resolver (dev-tools) must keep the original menu header.
+func TestInteractiveMenuWithoutResolverOmitsProjectLine(t *testing.T) {
+	commands := []Command{{Name: "zeta", Summary: "z", Run: func([]string) int { return 0 }}}
+	var output strings.Builder
+	if code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output); code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
+	}
+	if strings.Contains(output.String(), "Current project") {
+		t.Fatalf("menu without a resolver must not print a project line, got:\n%s", output.String())
 	}
 }

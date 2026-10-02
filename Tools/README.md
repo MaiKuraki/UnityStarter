@@ -50,9 +50,9 @@ Tools/
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `rename_project` | Rename a UnityStarter-derived project transactionally | `--dry-run` for a complete read-only plan; journaled with backups and rollback; re-runnable — renaming again reuses the persisted state and fresh fallback detection |
-| `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--apply`, `--dry-run`, `--resolve-stale-transaction`; fails closed |
-| `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--include-build-outputs`; interactive mode types `CLEAN` to confirm; fails closed while Unity is running or recovery evidence exists |
+| `rename_project` | Rename a UnityStarter-derived project transactionally | `--dry-run` for a complete read-only plan; `--project <path>` to name the root explicitly; journaled with backups and rollback; re-runnable — renaming again reuses the persisted state and fresh fallback detection |
+| `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--project <path>`, `--apply`, `--dry-run`, `--resolve-stale-transaction`; fails closed |
+| `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--project <path>`, `--include-build-outputs`; unmarked (non-Build-owned) publication content is skipped, never deleted; interactive mode types `CLEAN` to confirm; fails closed while Unity is running, recovery evidence exists, or an ownership marker is malformed |
 
 ### dev-tools (general-purpose tools)
 
@@ -62,6 +62,45 @@ Tools/
 | `texture_channel_packer` | Pack images into RGBA texture channels | `-r/-g/-b/-a`, `-o`, `-size`, `-preset`, `-ci`, `--dry-run` |
 | `audio_volume_normalizer` | Category-aware audio loudness normalization | `--ci --input <dir> [--format wav\|ogg] [--jobs N]` (`--input` required in CI mode); parallel worker pool (default CPU count), Ctrl+C/SIGTERM cancel; requires FFmpeg |
 | `unity_video_webm_converter` | Convert videos to Unity-friendly WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N] [--ffmpeg-timeout 2h]`; parallel conversion pool, graceful cancel; requires FFmpeg |
+
+### Project root resolution
+
+The Unity-project commands (`rename_project`, `remove_unity_packages`,
+`unity_project_full_clean`) do not blindly trust the current working directory.
+They resolve the project root in this order:
+
+1. an explicit `--project <path>`, validated strictly and never falling back to a
+   discovered root;
+2. the current directory, when it is a Unity project root;
+3. a Unity project root among the current directory's immediate subdirectories
+   (the "repository root contains `UnityStarter/`" layout);
+4. the directory tree upwards from the current directory;
+5. upwards from the executable's own location, checking each level and its
+   immediate subdirectories.
+
+Step 5 is what makes a double-clicked Windows executable work: Windows sets the
+working directory to the executable's own folder (`Tools/Executable/<OS>/<GOARCH>/`),
+which is not itself a project, so the repository root and its `UnityStarter/`
+subdirectory are found from the executable path instead. When no root can be
+found the command prints every directory it inspected and suggests `--project <path>`.
+The interactive menu shows the same context up front as `Current project: <path>`,
+or the actionable hint when nothing is found.
+
+Every resolution also records its **source** (explicit `--project`, the working
+directory, a working-directory subdirectory, an ancestor, or the executable
+directory fallback). The source matters because the executable fallback is
+ambiguous: run the binary from any unrelated directory and it would silently
+resolve to the repository that shipped the binary. Therefore:
+
+- every command logs `resolved Unity project root … source=…` (and the preview
+  prints `Project: <root> (source: …)`) before any write, including in `--ci`;
+- a **destructive, non-interactive** run (real `unity_project_full_clean`, a real
+  `rename_project`, `remove_unity_packages --apply` / a real
+  `--resolve-stale-transaction`) **refuses** an executable-fallback root with an
+  actionable error telling you to run from the project root or pass `--project <path>`;
+- an interactive session (the double-click menu) may proceed, because it still
+  prints `Current project: <path>` and requires the typed `CLEAN` confirmation;
+- `--dry-run` may proceed but prints a prominent warning that the root was inferred.
 
 ## Install
 
@@ -157,6 +196,18 @@ go run ./cmd/unity-project-tools --list
   half-written file at the final path.
 - **TTY-aware progress**: progress bars are drawn only when stdout is an interactive terminal; piped
   and CI output stays clean.
+- **Ownership-aware cleanup**: `unity_project_full_clean` always removes the
+  regenerable caches (`Library`, `Logs`, `obj`/`Obj`, `.vs`, `.utmp`, `Temp`), but
+  the publication trees (`Build`, `Bundles`, `HybridCLRData`, `yoo`,
+  `HotUpdateAssetsPreUpload`) are deleted only when `--include-build-outputs` is
+  given *and* a valid Build ownership marker covers them. Unmarked content is
+  reported as skipped and never deleted, so a stray hand-built player output no
+  longer blocks cache cleanup; a marker that is present but malformed still fails
+  closed. `.buildpipeline` and `Temp/BuildPipeline/Workspace` are never deleted.
+- **Case-insensitive cache matching**: Unity's generated cache folder casing varies
+  by version and platform (the assembly intermediates are `obj` on some and `Obj`
+  on others, matching the project `.gitignore`'s `/[Oo]bj/`), so cache roots are
+  matched case-insensitively and Windows, macOS and Linux clean the same set.
 - **Windows double-click UX**: after an argument-driven run, a freshly opened console stays readable
   until Enter is pressed. The decision is centralized in the toolkit (`ShouldPauseAfterRun`): pause
   only when stdin and stdout are interactive terminals, the console hosts this process alone, and

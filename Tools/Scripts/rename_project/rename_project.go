@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectroot"
+	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
@@ -824,28 +826,13 @@ func loadState(projectRoot string) (*RenameState, error) {
 // Project Detection
 // ============================================================
 
-// findProjectRoot scans for a Unity project root directory in the current or immediate subdirectories.
-func findProjectRoot() (string, error) {
-	if _, err := os.Stat("./Assets"); err == nil {
-		if _, err := os.Stat("./ProjectSettings"); err == nil {
-			return ".", nil
-		}
-	}
-
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		return "", err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			if _, err := os.Stat(filepath.Join(entry.Name(), "Assets")); err == nil {
-				if _, err := os.Stat(filepath.Join(entry.Name(), "ProjectSettings")); err == nil {
-					return entry.Name(), nil
-				}
-			}
-		}
-	}
-	return "", fmt.Errorf("Unity project root not found in current directory or immediate subdirectories")
+// findProjectRoot scans for a Unity project root directory in the current or
+// immediate subdirectories, walking up the tree and beside the executable when
+// needed. It delegates to the shared resolver so every Unity-project tool agrees
+// on how the root is discovered (the original relative-path behaviour for the
+// current directory and its immediate subdirectories is preserved).
+func findProjectRoot() (projectroot.Result, error) {
+	return projectroot.Locate("")
 }
 
 // findMainProjectFolder intelligently detects the main project folder in Assets directory.
@@ -4821,26 +4808,34 @@ func clearScreen() {
 // Entry Point
 // ============================================================
 
-func parseRenameOptions(args []string) (bool, error) {
+type renameOptions struct {
+	dryRun  bool
+	project string
+}
+
+func parseRenameOptions(args []string) (renameOptions, error) {
 	flags := flag.NewFlagSet("rename_project", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	dryRun := flags.Bool("dry-run", false, "validate and print the complete plan without writing files")
+	options := renameOptions{}
+	flags.BoolVar(&options.dryRun, "dry-run", false, "validate and print the complete plan without writing files")
+	flags.StringVar(&options.project, "project", "", "Unity project root to rename (default: auto-detect from the working and executable directories)")
 	if err := flags.Parse(args); err != nil {
-		return false, err
+		return renameOptions{}, err
 	}
 	if flags.NArg() != 0 {
-		return false, fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+		return renameOptions{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	return *dryRun, nil
+	return options, nil
 }
 
 func printRenameUsage() {
-	fmt.Println("Usage: rename_project [--dry-run]")
-	fmt.Println("  --dry-run  Validate and print the complete plan without writing files.")
+	fmt.Println("Usage: rename_project [--dry-run] [--project <path>]")
+	fmt.Println("  --dry-run         Validate and print the complete plan without writing files.")
+	fmt.Println("  --project <path>  Unity project root to rename (default: auto-detect from the working and executable directories).")
 }
 
 func runRenameTool(args []string) (exitCode int) {
-	dryRun, err := parseRenameOptions(args)
+	options, err := parseRenameOptions(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printRenameUsage()
@@ -4850,12 +4845,32 @@ func runRenameTool(args []string) (exitCode int) {
 		printRenameUsage()
 		return toolkit.ExitUsage
 	}
+	dryRun := options.dryRun
 
-	projectRoot, err := findProjectRoot()
+	var resolution projectroot.Result
+	if options.project != "" {
+		resolution, err = projectroot.Locate(options.project)
+	} else {
+		resolution, err = findProjectRoot()
+	}
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
 	}
+	// A root inferred from the executable's own directory is ambiguous; a real
+	// (non-dry-run) rename must refuse it when non-interactive. A --dry-run
+	// preview and an interactive session may proceed.
+	if warning := resolution.FallbackWarning(); warning != "" {
+		logging.Warnf("%s", warning)
+	}
+	if !dryRun {
+		interactive := term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
+		if guardErr := projectroot.GuardDestructive(resolution, interactive); guardErr != nil {
+			logging.Errorf("%v", guardErr)
+			return toolkit.ExitFailure
+		}
+	}
+	projectRoot := resolution.Root
 	projectRoot, err = filepath.Abs(projectRoot)
 	if err != nil {
 		logging.Errorf("cannot resolve Unity project root: %v", err)
@@ -4895,7 +4910,7 @@ func runRenameTool(args []string) (exitCode int) {
 		logging.Errorf("unity project is outside the template workspace: %v", err)
 		return toolkit.ExitFailure
 	}
-	fmt.Printf("Found Unity project root at: %s\n", projectRoot)
+	fmt.Printf("Found Unity project root at: %s (source: %s)\n", projectRoot, resolution.Origin)
 	defer func() {
 		if closeErr := fileSystem.Close(); closeErr != nil {
 			logging.Errorf("cannot close rooted Unity project filesystem: %v", closeErr)
