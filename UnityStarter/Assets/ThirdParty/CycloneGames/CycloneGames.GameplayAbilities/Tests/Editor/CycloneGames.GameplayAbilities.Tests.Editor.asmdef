@@ -8,6 +8,7 @@
         "Unity.PerformanceTesting",
         "CycloneGames.DeterministicMath.Core",
         "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime",
         "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [

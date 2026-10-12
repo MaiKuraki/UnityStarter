@@ -63,7 +63,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (!effect.IsExpired && effect.TimeRemaining > timeRemaining)
                     {
                         timeRemaining = effect.TimeRemaining;
-                        totalDuration = effect.Spec.Def.Duration;
+                        // Report the per-instance spec duration so SetDuration overrides are reflected in queries.
+                        totalDuration = effect.Spec.Duration;
                     }
                 }
             }

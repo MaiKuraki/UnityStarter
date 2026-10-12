@@ -982,7 +982,7 @@ namespace CycloneGames.GameplayAbilities.Core
 
         /// <summary>
         /// Evaluates a single modifier channel. Later channels receive the value produced by
-        /// earlier channels, matching Unreal GAS' evaluation channel layering model.
+        /// earlier channels.
         /// </summary>
         private long EvaluateCurrentValueRawForChannel(
             GASAttributeId attributeId,
@@ -1057,7 +1057,6 @@ namespace CycloneGames.GameplayAbilities.Core
         /// Applies a single modifier to a base value for instant effects.
         /// Division by zero is guarded: when the modifier magnitude is near zero,
         /// the operation is silently skipped, returning the unmodified base value.
-        /// This matches UE GAS behavior where a 0-magnitude Division modifier is a no-op.
         /// </summary>
         private static long ApplyModifierToBaseRaw(long baseValueRaw, GASModifierData modifier)
         {

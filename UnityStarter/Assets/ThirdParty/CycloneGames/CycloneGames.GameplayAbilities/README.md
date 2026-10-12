@@ -564,6 +564,36 @@ Tag keys are preferred for stable gameplay contracts. Name keys are available fo
 
 Internal magnitude initialization reads missing SetByCaller inputs without logging. When submission successfully transfers ownership, the spec performs one bounded pass over its authored SetByCaller modifiers and emits the configured missing-key warnings once. A failed transfer or caller `Discard()` does not perform this warning pass. An explicit `GetSetByCallerMagnitude(..., warnIfNotFound: true)` remains an immediate diagnostic read and can warn independently.
 
+### Spec duration override
+
+`GameplayEffectSpec.SetDuration` / `SetDurationRaw` override the duration of one caller-owned spec instance before submission (UE5: `FGameplayEffectSpec::SetDuration`). The shared `GameplayEffect` definition is never mutated:
+
+```csharp
+protected override GameplayEffectSpec CreateCooldownEffectSpec(
+    AbilitySystemComponent asc, GameplayAbilitySpec spec)
+{
+    GameplayEffectSpec cooldownSpec = base.CreateCooldownEffectSpec(asc, spec);
+    // Example: cooldown = base interval / attack speed, or base CD * (1 - cooldown reduction).
+    cooldownSpec?.SetDuration(computedCooldownSeconds);
+    return cooldownSpec;
+}
+```
+
+The override is only valid while the caller owns the spec (before submission); submission itself is the lock, so UE's `bDurationLocked` flag is unnecessary. The definition must use `EDurationPolicy.HasDuration`; `Instant` and `Infinite` definitions reject the call. `SetDuration` requires a positive finite value; `SetDurationRaw` additionally accepts zero (the effect expires on its first tick). Active-effect initialization, stacking duration refresh, and the authoritative replication channel all read the per-spec duration, so the override flows through every consumption path. `GetCooldownInfo` reports the per-instance spec duration, matching UE's `GetCooldownTimeRemainingAndDuration`.
+
+For data-driven durations that need no ability code at all, the definition can instead carry a `DurationMagnitude` (UE5: `FGameplayEffectDurationMagnitude`): a level-scalable constant, a captured attribute (e.g. a cooldown-reduction stat), or a SetByCaller key. Each created spec evaluates it once through the fixed-point magnitude pipeline, the server-replicated `durationRaw` carries the result to every client without client-side re-evaluation, and an explicit `SetDuration` call always wins over later SetByCaller-driven re-evaluation. Evaluated negative durations clamp to zero. When no `DurationMagnitude` is configured, `def.Duration` behaves exactly as before.
+
+```csharp
+var cooldownEffect = new GameplayEffect(
+    "GE.Cooldown.Fireball",
+    EDurationPolicy.HasDuration,
+    duration: 0f, // ignored when DurationMagnitude is set
+    durationMagnitude: new DurationMagnitudeInfo(
+        new AttributeBasedMagnitude("CooldownDuration")));
+```
+
+The same source is authorable on `GameplayEffectSO` assets: enable **Duration Magnitude** in the Inspector (visible for `HasDuration` effects), pick the calculation type, and fill only the relevant fields. The Inspector summary shows `Duration: data-driven (<type>)`, and validation warns on rejected combinations (magnitude on non-`HasDuration` policies, SetByCaller without a key, `ExtendDuration` without `ClearEntireStack` expiration).
+
 ### Magnitudes, aggregation, and execution
 
 Modifier operations are `Add`, `Multiply`, `Division`, and `Override`. Magnitudes can be:
@@ -580,6 +610,8 @@ Evaluation channels provide ordered aggregation when effects need independent mo
 ### Stacking and ongoing state
 
 `GameplayEffectStacking` selects no stacking, aggregation by source, or aggregation by target; it also defines stack limit, duration refresh, and expiration behavior. Overflow effects and denial policy handle applications at the limit.
+
+Three stacking duration policies are supported (UE5: `EGameplayEffectStackingDurationPolicy`). `RefreshOnSuccessfulApplication` resets the remaining time to the new application's duration, including `SetDuration` overrides; the active effect keeps its original spec lease and adopts only the incoming duration. `NeverRefresh` keeps the original timer. `ExtendDuration` sums the new application's duration onto the remaining time with saturating fixed-point arithmetic and must be paired with `ClearEntireStack` expiration, which the definition validator enforces. Predicted applications that would stack onto an existing effect fail closed with `PredictionUnsupported` before any mutation, so predicted paths cannot perturb an authoritative duration timer.
 
 Application requirements run before insertion. Ongoing requirements control whether an active effect contributes while tags change. Removal tags support dispel behavior. Duration and infinite effects may grant tags and abilities for their active lifetime.
 

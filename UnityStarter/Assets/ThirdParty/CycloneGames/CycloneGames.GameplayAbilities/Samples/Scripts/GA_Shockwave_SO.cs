@@ -88,6 +88,15 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [INTERMEDIATE] Radial knockback-style AoE that only hits hostile factions.
+    /// Combines area targeting with tag-based faction filtering.
+    ///
+    /// Key Concepts:
+    /// - Faction filtering with GameplayTagContainer
+    /// - Area-of-effect damage application
+    /// - CommitAbility with cost and cooldown
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_Shockwave", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Shockwave")]
     public class GA_Shockwave_SO : GameplayAbilitySO
     {

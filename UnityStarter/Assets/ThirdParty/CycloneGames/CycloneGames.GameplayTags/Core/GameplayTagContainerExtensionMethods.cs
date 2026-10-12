@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayTags.Core
    /// </para>
    /// <para>
    /// <b>Semantics.</b> The non-Exact forms test against the expanded set - the container's tags plus
-   /// every ancestor of each - matching Unreal's <c>FGameplayTagContainer</c>. The Exact forms test only
+   /// every ancestor of each. The Exact forms test only
    /// the explicitly held tags. "Has all of an empty set" is true, "has any of an empty set" is false.
    /// </para>
    /// <para>

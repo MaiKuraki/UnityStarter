@@ -5,7 +5,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that waits for a GameplayEffect to be applied to the owner's ASC.
-    /// UE5: UAbilityTask_WaitGameplayEffectApplied.
     /// </summary>
     public class AbilityTask_WaitGameplayEffectApplied : AbilityTask
     {
@@ -112,7 +111,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// AbilityTask that waits for a GameplayEffect to be removed from the owner's ASC.
-    /// UE5: UAbilityTask_WaitGameplayEffectRemoved.
     /// </summary>
     public class AbilityTask_WaitGameplayEffectRemoved : AbilityTask
     {

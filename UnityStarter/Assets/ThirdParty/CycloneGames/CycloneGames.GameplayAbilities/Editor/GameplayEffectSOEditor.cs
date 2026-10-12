@@ -21,6 +21,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         private SerializedProperty effectNameProp;
         private SerializedProperty durationPolicyProp;
         private SerializedProperty durationProp;
+        private SerializedProperty durationMagnitudeProp;
         private SerializedProperty periodProp;
         private SerializedProperty modifiersProp;
         private SerializedProperty executionProp;
@@ -61,6 +62,9 @@ namespace CycloneGames.GameplayAbilities.Editor
         private static readonly GUIContent s_NameContent = new GUIContent("Name");
         private static readonly GUIContent s_DurationPolicyContent = new GUIContent("Duration Policy");
         private static readonly GUIContent s_DurationContent = new GUIContent("Duration (sec)");
+        private static readonly GUIContent s_DurationMagnitudeContent = new GUIContent(
+            "Duration Magnitude",
+            "Optional data-driven duration source. When enabled, it overrides the static Duration value for every spec.");
         private static readonly GUIContent s_PeriodContent = new GUIContent("Period (sec)");
         private static readonly GUIContent s_StackingContent = new GUIContent("Stacking");
         private static readonly GUIContent s_ModifiersContent = new GUIContent("Attribute Modifiers");
@@ -130,6 +134,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             effectNameProp = serializedObject.FindProperty("EffectName");
             durationPolicyProp = serializedObject.FindProperty("DurationPolicy");
             durationProp = serializedObject.FindProperty("Duration");
+            durationMagnitudeProp = serializedObject.FindProperty("DurationMagnitude");
             periodProp = serializedObject.FindProperty("Period");
             modifiersProp = serializedObject.FindProperty("SerializableModifiers");
             executionProp = serializedObject.FindProperty("ExecutionDefinition");
@@ -234,6 +239,10 @@ namespace CycloneGames.GameplayAbilities.Editor
                 if (mixedDurationPolicy || policy == Runtime.EDurationPolicy.HasDuration)
                 {
                     EditorGUILayout.PropertyField(durationProp, s_DurationContent);
+                    if (durationMagnitudeProp != null)
+                    {
+                        EditorGUILayout.PropertyField(durationMagnitudeProp, s_DurationMagnitudeContent, true);
+                    }
                 }
 
                 EditorGUILayout.PropertyField(periodProp, s_PeriodContent);
@@ -387,7 +396,15 @@ namespace CycloneGames.GameplayAbilities.Editor
                     sb.Append("  \u2022  <color=#6BB8E0>Instant</color>");
                     break;
                 case Runtime.EDurationPolicy.HasDuration:
-                    sb.Append("  \u2022  <color=#4CA65F>Duration: ").Append(durationProp.floatValue.ToString("F1")).Append("s</color>");
+                    if (IsDurationMagnitudeEnabled())
+                    {
+                        sb.Append("  \u2022  <color=#4CA65F>Duration: data-driven (")
+                            .Append(GetDurationMagnitudeTypeLabel()).Append(")</color>");
+                    }
+                    else
+                    {
+                        sb.Append("  \u2022  <color=#4CA65F>Duration: ").Append(durationProp.floatValue.ToString("F1")).Append("s</color>");
+                    }
                     break;
                 case Runtime.EDurationPolicy.Infinite:
                     sb.Append("  \u2022  <color=#9B6CC0>Infinite</color>");
@@ -440,11 +457,48 @@ namespace CycloneGames.GameplayAbilities.Editor
                 hasWarnings = true;
             }
 
-            // HasDuration with zero or negative duration
-            if (policy == Runtime.EDurationPolicy.HasDuration && durationProp.floatValue <= 0f)
+            // HasDuration with zero or negative duration and no data-driven source
+            if (policy == Runtime.EDurationPolicy.HasDuration && durationProp.floatValue <= 0f && !IsDurationMagnitudeEnabled())
             {
-                DrawWarningBox("Duration Policy is 'HasDuration' but Duration is \u2264 0. The effect will expire immediately.");
+                DrawWarningBox("Duration Policy is 'HasDuration' but Duration is \u2264 0 and no Duration Magnitude is enabled. The effect will expire immediately.");
                 hasWarnings = true;
+            }
+
+            if (IsDurationMagnitudeEnabled() && policy != Runtime.EDurationPolicy.HasDuration)
+            {
+                DrawWarningBox("Duration Magnitude is enabled but Duration Policy is not 'HasDuration'. The runtime definition rejects this combination.");
+                hasWarnings = true;
+            }
+
+            // Duration Magnitude SetByCaller without any key
+            if (IsDurationMagnitudeEnabled())
+            {
+                var calculationTypeProp = durationMagnitudeProp.FindPropertyRelative("CalculationType");
+                if (calculationTypeProp != null &&
+                    calculationTypeProp.enumValueIndex == (int)Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller)
+                {
+                    string tagName = durationMagnitudeProp.FindPropertyRelative("SetByCallerDataTag")?.FindPropertyRelative("tagName")?.stringValue;
+                    string dataName = durationMagnitudeProp.FindPropertyRelative("SetByCallerDataName")?.stringValue;
+                    if (string.IsNullOrEmpty(tagName) && string.IsNullOrEmpty(dataName))
+                    {
+                        DrawWarningBox("Duration Magnitude is SetByCaller but neither a Data Tag nor a Data Name is set. The default value is always used.");
+                        hasWarnings = true;
+                    }
+                }
+            }
+
+            // ExtendDuration stacking requires ClearEntireStack expiration
+            if (stackingTypeProp != null && stackingTypeProp.enumValueIndex != 0)
+            {
+                var stackingDurationPolicyProp = stackingProp.FindPropertyRelative("DurationPolicy");
+                var stackingExpirationPolicyProp = stackingProp.FindPropertyRelative("ExpirationPolicy");
+                if (stackingDurationPolicyProp != null && stackingExpirationPolicyProp != null &&
+                    stackingDurationPolicyProp.enumValueIndex == (int)Runtime.EGameplayEffectStackingDurationPolicy.ExtendDuration &&
+                    stackingExpirationPolicyProp.enumValueIndex != (int)Runtime.EGameplayEffectStackingExpirationPolicy.ClearEntireStack)
+                {
+                    DrawWarningBox("ExtendDuration stacking requires ClearEntireStack expiration. The runtime definition rejects this combination.");
+                    hasWarnings = true;
+                }
             }
 
             // Period on Instant (meaningless)
@@ -561,6 +615,38 @@ namespace CycloneGames.GameplayAbilities.Editor
         #endregion
 
         #region Helpers
+
+        private bool IsDurationMagnitudeEnabled()
+        {
+            if (durationMagnitudeProp == null)
+            {
+                return false;
+            }
+
+            var enabledProp = durationMagnitudeProp.FindPropertyRelative("Enabled");
+            return enabledProp != null && enabledProp.boolValue;
+        }
+
+        private string GetDurationMagnitudeTypeLabel()
+        {
+            var calculationTypeProp = durationMagnitudeProp?.FindPropertyRelative("CalculationType");
+            if (calculationTypeProp == null)
+            {
+                return "?";
+            }
+
+            switch ((Runtime.EGameplayEffectMagnitudeCalculation)calculationTypeProp.enumValueIndex)
+            {
+                case Runtime.EGameplayEffectMagnitudeCalculation.ScalableFloat:
+                    return "ScalableFloat";
+                case Runtime.EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    return "AttributeBased";
+                case Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    return "SetByCaller";
+                default:
+                    return "?";
+            }
+        }
 
         private void UpdateModifiersFoldoutLabel(int modifierCount, int abilityCount)
         {
@@ -701,6 +787,165 @@ namespace CycloneGames.GameplayAbilities.Editor
                         AddRelativePropertyHeight(ref height, property, "Magnitude", true);
                         break;
                 }
+            }
+
+            return height;
+        }
+
+        private static void DrawRelativeProperty(
+            ref Rect line,
+            SerializedProperty property,
+            string relativePropertyName,
+            GUIContent label,
+            bool includeChildren = false)
+        {
+            var relativeProperty = property.FindPropertyRelative(relativePropertyName);
+            line.height = EditorGUI.GetPropertyHeight(relativeProperty, includeChildren);
+            EditorGUI.PropertyField(line, relativeProperty, label, includeChildren);
+            Advance(ref line);
+        }
+
+        private static void AddRelativePropertyHeight(
+            ref float height,
+            SerializedProperty property,
+            string relativePropertyName,
+            bool includeChildren = false)
+        {
+            var relativeProperty = property.FindPropertyRelative(relativePropertyName);
+            height += VERTICAL_SPACING + EditorGUI.GetPropertyHeight(relativeProperty, includeChildren);
+        }
+
+        private static void Advance(ref Rect line)
+        {
+            line.y += line.height + VERTICAL_SPACING;
+            line.height = EditorGUIUtility.singleLineHeight;
+        }
+    }
+
+    /// <summary>
+    /// Drawer for the data-driven duration source on effect assets: an enable toggle, the
+    /// calculation type, and only the fields relevant to the selected type.
+    /// </summary>
+    [CustomPropertyDrawer(typeof(Runtime.DurationMagnitudeSerializable))]
+    public sealed class DurationMagnitudeSerializableDrawer : PropertyDrawer
+    {
+        private const float VERTICAL_SPACING = 2f;
+        private static readonly GUIContent s_Enabled = new GUIContent("Enabled");
+        private static readonly GUIContent s_CalculationType = new GUIContent("Calculation Type");
+        private static readonly GUIContent s_Magnitude = new GUIContent("Magnitude (sec)");
+        private static readonly GUIContent s_BackingAttribute = new GUIContent("Backing Attribute");
+        private static readonly GUIContent s_CaptureSource = new GUIContent("Capture Source");
+        private static readonly GUIContent s_AttributeValue = new GUIContent("Attribute Value");
+        private static readonly GUIContent s_CaptureTiming = new GUIContent("Capture Timing");
+        private static readonly GUIContent s_Coefficient = new GUIContent("Coefficient");
+        private static readonly GUIContent s_PreAdd = new GUIContent("Pre Add");
+        private static readonly GUIContent s_PostAdd = new GUIContent("Post Add");
+        private static readonly GUIContent s_DataTag = new GUIContent("Data Tag");
+        private static readonly GUIContent s_DataName = new GUIContent("Data Name");
+        private static readonly GUIContent s_DefaultValue = new GUIContent("Default Value (sec)");
+        private static readonly GUIContent s_WarnIfMissing = new GUIContent("Warn If Missing");
+
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        {
+            EditorGUI.BeginProperty(position, label, property);
+
+            var line = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
+            property.isExpanded = EditorGUI.Foldout(line, property.isExpanded, label, true);
+            if (!property.isExpanded)
+            {
+                EditorGUI.EndProperty();
+                return;
+            }
+
+            EditorGUI.indentLevel++;
+            Advance(ref line);
+
+            var enabledProp = property.FindPropertyRelative("Enabled");
+            EditorGUI.PropertyField(line, enabledProp, s_Enabled);
+            Advance(ref line);
+
+            if (!enabledProp.boolValue)
+            {
+                EditorGUI.indentLevel--;
+                EditorGUI.EndProperty();
+                return;
+            }
+
+            var calculationTypeProp = property.FindPropertyRelative("CalculationType");
+            EditorGUI.PropertyField(line, calculationTypeProp, s_CalculationType);
+            Advance(ref line);
+
+            switch ((Runtime.EGameplayEffectMagnitudeCalculation)calculationTypeProp.enumValueIndex)
+            {
+                case Runtime.EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    DrawRelativeProperty(ref line, property, "BackingAttributeName", s_BackingAttribute);
+                    DrawRelativeProperty(ref line, property, "AttributeCaptureSource", s_CaptureSource);
+                    DrawRelativeProperty(ref line, property, "AttributeCalculationType", s_AttributeValue);
+                    DrawRelativeProperty(ref line, property, "AttributeSnapshotPolicy", s_CaptureTiming);
+                    DrawRelativeProperty(ref line, property, "AttributeCoefficient", s_Coefficient, true);
+                    DrawRelativeProperty(ref line, property, "AttributePreMultiplyAdditiveValue", s_PreAdd, true);
+                    DrawRelativeProperty(ref line, property, "AttributePostMultiplyAdditiveValue", s_PostAdd, true);
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    DrawRelativeProperty(ref line, property, "SetByCallerDataTag", s_DataTag);
+                    DrawRelativeProperty(ref line, property, "SetByCallerDataName", s_DataName);
+                    DrawRelativeProperty(ref line, property, "SetByCallerDefaultValue", s_DefaultValue);
+                    DrawRelativeProperty(ref line, property, "WarnIfSetByCallerMissing", s_WarnIfMissing);
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                    line.height = EditorGUIUtility.singleLineHeight * 2.2f;
+                    EditorGUI.HelpBox(line, "CustomCalculation is not supported for durations.", MessageType.Warning);
+                    Advance(ref line);
+                    break;
+                default:
+                    DrawRelativeProperty(ref line, property, "Magnitude", s_Magnitude, true);
+                    break;
+            }
+
+            EditorGUI.indentLevel--;
+            EditorGUI.EndProperty();
+        }
+
+        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+        {
+            float height = EditorGUIUtility.singleLineHeight;
+            if (!property.isExpanded)
+            {
+                return height;
+            }
+
+            var enabledProp = property.FindPropertyRelative("Enabled");
+            AddRelativePropertyHeight(ref height, property, "Enabled");
+            if (enabledProp == null || !enabledProp.boolValue)
+            {
+                return height;
+            }
+
+            AddRelativePropertyHeight(ref height, property, "CalculationType");
+            var calculationTypeProp = property.FindPropertyRelative("CalculationType");
+            switch ((Runtime.EGameplayEffectMagnitudeCalculation)calculationTypeProp.enumValueIndex)
+            {
+                case Runtime.EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    AddRelativePropertyHeight(ref height, property, "BackingAttributeName");
+                    AddRelativePropertyHeight(ref height, property, "AttributeCaptureSource");
+                    AddRelativePropertyHeight(ref height, property, "AttributeCalculationType");
+                    AddRelativePropertyHeight(ref height, property, "AttributeSnapshotPolicy");
+                    AddRelativePropertyHeight(ref height, property, "AttributeCoefficient", true);
+                    AddRelativePropertyHeight(ref height, property, "AttributePreMultiplyAdditiveValue", true);
+                    AddRelativePropertyHeight(ref height, property, "AttributePostMultiplyAdditiveValue", true);
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    AddRelativePropertyHeight(ref height, property, "SetByCallerDataTag");
+                    AddRelativePropertyHeight(ref height, property, "SetByCallerDataName");
+                    AddRelativePropertyHeight(ref height, property, "SetByCallerDefaultValue");
+                    AddRelativePropertyHeight(ref height, property, "WarnIfSetByCallerMissing");
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                    height += VERTICAL_SPACING + (EditorGUIUtility.singleLineHeight * 2.2f);
+                    break;
+                default:
+                    AddRelativePropertyHeight(ref height, property, "Magnitude", true);
+                    break;
             }
 
             return height;

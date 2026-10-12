@@ -87,6 +87,16 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [BASIC] The recommended starting point. A single-target projectile with instant damage,
+    /// a burn follow-up, cost/cooldown commit, and a gameplay cue.
+    ///
+    /// Key Concepts:
+    /// - CommitAbility with cost and cooldown
+    /// - Instant damage via GameplayEffectSpec
+    /// - SetByCaller magnitudes (damage multiplier snapshot)
+    /// - GameplayCues for impact VFX/SFX
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_Fireball", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Fireball")]
     public class GA_Fireball_SO : GameplayAbilitySO
     {

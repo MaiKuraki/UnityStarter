@@ -12,7 +12,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Determines how an ability is automatically triggered.
-    /// UE5: EGameplayAbilityTriggerSource::Type.
     /// </summary>
     public enum EAbilityTriggerSource
     {
@@ -32,7 +31,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Defines how an ability can be automatically triggered.
-    /// UE5: FAbilityTriggerData.
     /// </summary>
     [System.Serializable]
     public struct AbilityTriggerData
@@ -84,8 +82,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public enum EGameplayEffectStackingDurationPolicy
     {
-        RefreshOnSuccessfulApplication, // Resets the duration to its full value.
-        NeverRefresh                    // The original duration is maintained.
+        RefreshOnSuccessfulApplication, // Resets the duration to the new application's duration.
+        NeverRefresh,                   // The original duration is maintained.
+        /// <summary>
+        /// A new stack adds its spec's duration onto the current remaining time (fixed-point add,
+        /// saturating at long.MaxValue). This policy must be paired with
+        /// EGameplayEffectStackingExpirationPolicy.ClearEntireStack; the definition validator enforces it.
+        /// </summary>
+        ExtendDuration
     }
 
     /// <summary>
@@ -99,7 +103,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Defines what happens when a stacked effect's duration expires.
-    /// UE5: EGameplayEffectStackingExpirationPolicy.
     /// </summary>
     public enum EGameplayEffectStackingExpirationPolicy
     {
@@ -119,7 +122,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Determines how an attribute value is captured for effect calculations.
-    /// UE5: EGameplayEffectAttributeCaptureSource.
     /// </summary>
     public enum EGameplayEffectAttributeCaptureSource
     {
@@ -135,7 +137,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Determines when an attribute value is captured (snapshotted).
-    /// UE5: bSnapshot on FGameplayEffectAttributeCaptureDefinition.
     /// </summary>
     public enum EGameplayEffectAttributeCaptureSnapshot
     {
@@ -152,7 +153,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Defines how a modifier magnitude is calculated.
-    /// UE5: EGameplayEffectMagnitudeCalculation.
     /// </summary>
     public enum EGameplayEffectMagnitudeCalculation
     {
@@ -164,7 +164,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Defines which part of a captured attribute contributes to an attribute-based magnitude.
-    /// UE5: EAttributeBasedFloatCalculationType.
     /// </summary>
     public enum EAttributeBasedFloatCalculationType
     {
@@ -200,6 +199,67 @@ namespace CycloneGames.GameplayAbilities.Runtime
         None,             // No stacking. A new, independent instance is always created.
         AggregateBySource,// Stacks are aggregated for each unique source.
         AggregateByTarget // Stacks are aggregated on the target, regardless of the source.
+    }
+
+    /// <summary>
+    /// Declarative, data-driven duration source for a HasDuration GameplayEffect.
+    /// Immutable definition data: construct once and share through the GameplayEffect definition.
+    /// The magnitude is evaluated once per spec at creation time through the same fixed-point
+    /// pipeline as modifier magnitudes, so results are deterministic and replicated through the
+    /// existing per-spec durationRaw channel. A caller-side SetDuration override always wins
+    /// over subsequent SetByCaller-driven re-evaluation.
+    /// </summary>
+    public sealed class DurationMagnitudeInfo
+    {
+        public readonly EGameplayEffectMagnitudeCalculation CalculationType;
+        public readonly ScalableFloat Magnitude;
+        public readonly AttributeBasedMagnitude AttributeBased;
+        public readonly SetByCallerMagnitude SetByCaller;
+
+        /// <summary>Level-scalable constant duration.</summary>
+        public DurationMagnitudeInfo(ScalableFloat magnitude)
+        {
+            CalculationType = EGameplayEffectMagnitudeCalculation.ScalableFloat;
+            Magnitude = magnitude;
+            AttributeBased = default;
+            SetByCaller = default;
+        }
+
+        /// <summary>Duration captured from an attribute (e.g. a CooldownReduction stat).</summary>
+        public DurationMagnitudeInfo(AttributeBasedMagnitude attributeBased)
+        {
+            CalculationType = EGameplayEffectMagnitudeCalculation.AttributeBased;
+            Magnitude = default;
+            AttributeBased = attributeBased;
+            SetByCaller = default;
+        }
+
+        /// <summary>Duration supplied per spec through a SetByCaller key.</summary>
+        public DurationMagnitudeInfo(SetByCallerMagnitude setByCaller)
+        {
+            CalculationType = EGameplayEffectMagnitudeCalculation.SetByCaller;
+            Magnitude = default;
+            AttributeBased = default;
+            SetByCaller = setByCaller;
+        }
+
+        /// <summary>
+        /// Evaluates the duration in raw fixed-point. CustomCalculation is intentionally not
+        /// supported: the duration magnitude surface has no custom-calculation channel, and keeping the
+        /// surface closed preserves deterministic replication review.
+        /// </summary>
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
+        {
+            switch (CalculationType)
+            {
+                case EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    return AttributeBased.CalculateMagnitudeRaw(spec, level);
+                case EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    return SetByCaller.CalculateMagnitudeRaw(spec);
+                default:
+                    return GASFixedValue.FromFloat(Magnitude.GetValueAtLevel(level)).RawValue;
+            }
+        }
     }
 
     /// <summary>
@@ -271,7 +331,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Calculates a modifier magnitude from a captured source or target attribute.
-    /// Formula matches the UE GAS attribute-based float core:
+    /// Formula:
     /// Coefficient * (AttributeValue + PreMultiplyAdditiveValue) + PostMultiplyAdditiveValue.
     /// </summary>
     [System.Serializable]
@@ -452,7 +512,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Determines whether the modifier magnitude is snapshotted at application time
-        /// or recalculated live each evaluation. Default is Snapshot (UE5 default behavior).
+        /// or recalculated live each evaluation. Default is Snapshot.
         /// </summary>
         public readonly EGameplayEffectAttributeCaptureSnapshot SnapshotPolicy;
 

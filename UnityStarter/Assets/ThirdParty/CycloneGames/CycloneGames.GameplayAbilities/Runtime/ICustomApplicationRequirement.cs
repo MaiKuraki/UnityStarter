@@ -2,7 +2,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// Interface for custom gameplay effect application requirements.
-    /// UE5: UGameplayEffectCustomApplicationRequirement.
     /// 
     /// Implement this interface to define complex, code-driven conditions that determine
     /// whether a GameplayEffect can be applied to a target. This is checked during
