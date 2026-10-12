@@ -317,13 +317,15 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
                     out BehaviorTreeStatePayloadMessage message), Is.True);
 
                 Assert.That(message.PayloadKind, Is.EqualTo(BehaviorTreeNetworkPayloadKind.BlackboardDelta));
-                Assert.That(message.Payload[0], Is.EqualTo((byte)'B'));
-                Assert.That(message.Payload[1], Is.EqualTo((byte)'T'));
-                Assert.That(message.Payload[2], Is.EqualTo((byte)'D'));
-                Assert.That(message.Payload[3], Is.EqualTo((byte)'P'));
-                Assert.That(message.Payload[4], Is.EqualTo(1));
-                Assert.That(message.Payload[5], Is.EqualTo(0));
-                Assert.That(ReadInt32LittleEndian(message.Payload, 8), Is.EqualTo(message.Payload.Length - 16));
+                byte[] payloadBytes = message.Payload.Array;
+                int payloadOffset = message.Payload.Offset;
+                Assert.That(payloadBytes[payloadOffset], Is.EqualTo((byte)'B'));
+                Assert.That(payloadBytes[payloadOffset + 1], Is.EqualTo((byte)'T'));
+                Assert.That(payloadBytes[payloadOffset + 2], Is.EqualTo((byte)'D'));
+                Assert.That(payloadBytes[payloadOffset + 3], Is.EqualTo((byte)'P'));
+                Assert.That(payloadBytes[payloadOffset + 4], Is.EqualTo(1));
+                Assert.That(payloadBytes[payloadOffset + 5], Is.EqualTo(0));
+                Assert.That(ReadInt32LittleEndian(message.Payload, 8), Is.EqualTo(message.Payload.Count - 16));
                 Assert.That(TryApplyFirst(bridge, target, message), Is.True);
                 Assert.That(target.Blackboard.GetBool(AlertKey), Is.True);
             }
@@ -1299,6 +1301,11 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
                  | (buffer[offset + 1] << 8)
                  | (buffer[offset + 2] << 16)
                  | (buffer[offset + 3] << 24);
+        }
+
+        private static int ReadInt32LittleEndian(ArraySegment<byte> segment, int offset)
+        {
+            return ReadInt32LittleEndian(segment.Array, segment.Offset + offset);
         }
 
         private static RuntimeBehaviorTree CreateTree(RuntimeState state)

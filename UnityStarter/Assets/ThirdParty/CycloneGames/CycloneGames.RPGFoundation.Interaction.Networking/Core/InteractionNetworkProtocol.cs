@@ -24,6 +24,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
         private const ulong REQUEST_SCHEMA_V1 = 0xD76DBACD901D2BB7UL;
         private const ulong RESULT_SCHEMA_V1 = 0x50B6ECBD2F378EC9UL;
         private const ulong CANCEL_REQUEST_SCHEMA_V1 = 0x00E384398B2C4151UL;
+        private const ulong DETERMINISTIC_REQUEST_SCHEMA_V1 = 0x883AF62EA5C98FCBUL;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
@@ -89,9 +90,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
                     CANCEL_REQUEST_CHANNEL,
                     MAX_PAYLOAD_BYTES)
                 .AddMessage(
-                    "InteractionNetworkRequest:v1",
+                    "InteractionNetworkDeterministicRequest:v1",
                     DETERMINISTIC_REQUEST_MESSAGE_ID,
-                    REQUEST_SCHEMA_V1,
+                    DETERMINISTIC_REQUEST_SCHEMA_V1,
                     DETERMINISTIC_REQUEST_CHANNEL,
                     MAX_PAYLOAD_BYTES);
 
