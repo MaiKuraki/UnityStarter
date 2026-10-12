@@ -54,17 +54,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("Blocked from activating if caller-supplied source tags (e.g., the ASC that fired the triggering gameplay event) contain ANY of these tags. Skipped entirely when no source tags are supplied at activation.")]
         public SerializableGameplayTagContainer SourceBlockedTags;
 
-        [Tooltip("The target must have ALL of these tags for the ability's effects to be applied. UE5: TargetRequiredTags.")]
+        [Tooltip("The target must have ALL of these tags for the ability's effects to be applied.")]
         public SerializableGameplayTagContainer TargetRequiredTags;
 
-        [Tooltip("The ability's effects are blocked from applying if the target has ANY of these tags. UE5: TargetBlockedTags.")]
+        [Tooltip("The ability's effects are blocked from applying if the target has ANY of these tags.")]
         public SerializableGameplayTagContainer TargetBlockedTags;
 
         [Header("Activation")]
-        [Tooltip("If true, this ability is automatically activated when granted and deactivated when removed. Used for passive abilities like auras and buffs. UE5: bActivateAbilityOnGranted.")]
+        [Tooltip("If true, this ability is automatically activated when granted and deactivated when removed. Used for passive abilities like auras and buffs.")]
         public bool ActivateAbilityOnGranted;
 
-        [Tooltip("Defines triggers that can automatically activate this ability (e.g., on gameplay event or tag change). UE5: FAbilityTriggerData.")]
+        [Tooltip("Defines triggers that can automatically activate this ability (e.g., on gameplay event or tag change).")]
         public List<AbilityTriggerData> AbilityTriggerDataList;
 
         private GameplayAbility runtimeDefinition;

@@ -54,6 +54,16 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [ADVANCED] Ground-targeted meteor: the player picks a location with a spawned targeting
+    /// actor, then the strike resolves after confirmation. The most involved activation flow
+    /// in the sample set.
+    ///
+    /// Key Concepts:
+    /// - AbilityTask_WaitTargetData with a spawned target actor
+    /// - Confirm/cancel input flow during activation
+    /// - Delayed area effect resolution at a chosen location
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_Meteor", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Meteor")]
     public class GA_Meteor_SO : GameplayAbilitySO
     {

@@ -213,8 +213,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// The total duration of the effect in seconds. This is only used if DurationPolicy is <c>HasDuration</c>.
+        /// When <see cref="DurationMagnitude"/> is set, the magnitude wins and this value is ignored
         /// </summary>
         public float Duration { get; }
+
+        /// <summary>
+        /// Optional declarative duration source.
+        /// When set, each created spec evaluates this magnitude (level-scalable constant,
+        /// captured attribute, or SetByCaller key) as its duration instead of <see cref="Duration"/>.
+        /// Only valid with <see cref="EDurationPolicy.HasDuration"/>. Null preserves legacy behavior.
+        /// </summary>
+        public DurationMagnitudeInfo DurationMagnitude { get; }
 
         /// <summary>
         /// The interval in seconds at which the effect's instant components are re-applied.
@@ -275,21 +284,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// If true, gameplay cues (VFX/SFX) are suppressed for this effect.
-        /// UE5: bSuppressGameplayCues on UGameplayEffect.
         /// Useful for silent/debug application without visual feedback.
         /// </summary>
         public bool SuppressGameplayCues { get; }
 
         /// <summary>
         /// If true, gameplay effects applied by the granting ability are automatically removed when the ability ends.
-        /// UE5: RemoveGameplayEffectContainerOnAbilityEnd / bRemoveGameplayEffectsAfterAbilityEnds.
         /// </summary>
         public bool RemoveGameplayEffectsAfterAbilityEnds { get; }
 
         /// <summary>
         /// Optional custom application requirement. If set, CanApplyGameplayEffect is called before application.
         /// Requirement implementations are shared strategy objects and must remain stateless.
-        /// UE5: TArray&lt;TSubclassOf&lt;UGameplayEffectCustomApplicationRequirement&gt;&gt;.
         /// </summary>
         public IReadOnlyList<ICustomApplicationRequirement> CustomApplicationRequirements { get; }
 
@@ -306,13 +312,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Effects to apply when a stacking application attempt occurs while at the stack limit.
-        /// UE5: OverflowEffects.
         /// </summary>
         public IReadOnlyList<GameplayEffect> OverflowEffects { get; }
 
         /// <summary>
         /// If true, the original effect application (duration refresh, etc.) is denied when overflow occurs.
-        /// UE5: bDenyOverflowApplication.
         /// </summary>
         public bool DenyOverflowApplication { get; }
 
@@ -346,10 +350,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             bool executePeriodicEffectOnApplication = true,
             List<GameplayEffect> overflowEffects = null,
             bool denyOverflowApplication = false,
-            EGameplayEffectPeriodInhibitionRemovedPolicy periodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset)
+            EGameplayEffectPeriodInhibitionRemovedPolicy periodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset,
+            DurationMagnitudeInfo durationMagnitude = null)
         {
             ValidateBoundedString(name, MaxNameLength, nameof(name), allowWhitespace: false);
-            ValidateDuration(durationPolicy, duration, period);
+            ValidateDuration(durationPolicy, duration, period, durationMagnitude);
             ValidateStacking(stacking);
             ValidatePeriodicInhibitionPolicy(periodicInhibitionPolicy);
             ValidateCollectionCount(modifiers, MaxModifierCount, nameof(modifiers));
@@ -381,6 +386,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Name = name;
             DurationPolicy = durationPolicy;
             Duration = duration;
+            DurationMagnitude = durationMagnitude;
             Period = period;
             Modifiers = FreezeModifiers(modifiers);
             Execution = execution;
@@ -404,17 +410,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
             OngoingForbiddenTagsSnapshot = OngoingTagRequirements.ForbiddenTags.Snapshot;
         }
 
-        private static void ValidateDuration(EDurationPolicy durationPolicy, float duration, float period)
+        private static void ValidateDuration(EDurationPolicy durationPolicy, float duration, float period, DurationMagnitudeInfo durationMagnitude)
         {
             if ((int)durationPolicy < (int)EDurationPolicy.Instant || (int)durationPolicy > (int)EDurationPolicy.Infinite)
             {
                 throw new ArgumentOutOfRangeException(nameof(durationPolicy), durationPolicy, "Unknown duration policy.");
             }
 
-            ValidateFinite(duration, nameof(duration));
-            if (durationPolicy == EDurationPolicy.HasDuration && duration <= 0f)
+            if (durationMagnitude != null && durationPolicy != EDurationPolicy.HasDuration)
             {
-                throw new ArgumentOutOfRangeException(nameof(duration), duration, "HasDuration effects require a positive duration.");
+                throw new ArgumentException("DurationMagnitude is only valid for HasDuration effects.", nameof(durationMagnitude));
+            }
+
+            ValidateFinite(duration, nameof(duration));
+            if (durationPolicy == EDurationPolicy.HasDuration && durationMagnitude == null && duration <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(duration), duration, "HasDuration effects require a positive duration (or a DurationMagnitude).");
             }
 
             if (float.IsNaN(period) || float.IsInfinity(period) || period < 0f)
@@ -456,13 +467,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (stacking.Type != EGameplayEffectStackingType.None &&
                 ((int)stacking.DurationPolicy < (int)EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication ||
-                 (int)stacking.DurationPolicy > (int)EGameplayEffectStackingDurationPolicy.NeverRefresh ||
+                 (int)stacking.DurationPolicy > (int)EGameplayEffectStackingDurationPolicy.ExtendDuration ||
                  (int)stacking.ExpirationPolicy < (int)EGameplayEffectStackingExpirationPolicy.ClearEntireStack ||
                  (int)stacking.ExpirationPolicy > (int)EGameplayEffectStackingExpirationPolicy.RefreshDuration ||
                  (int)stacking.PeriodResetPolicy < (int)EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication ||
                  (int)stacking.PeriodResetPolicy > (int)EGameplayEffectStackingPeriodPolicy.NeverReset))
             {
                 throw new ArgumentOutOfRangeException(nameof(stacking), "Stacking policies must use known enum values.");
+            }
+
+            // ExtendDuration requires ClearEntireStack expiration; per-stack expiry timers are not tracked.
+            if (stacking.Type != EGameplayEffectStackingType.None &&
+                stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.ExtendDuration &&
+                stacking.ExpirationPolicy != EGameplayEffectStackingExpirationPolicy.ClearEntireStack)
+            {
+                throw new ArgumentException(
+                    "ExtendDuration stacking requires ClearEntireStack expiration; per-stack expiry timers are not tracked.",
+                    nameof(stacking));
             }
         }
 

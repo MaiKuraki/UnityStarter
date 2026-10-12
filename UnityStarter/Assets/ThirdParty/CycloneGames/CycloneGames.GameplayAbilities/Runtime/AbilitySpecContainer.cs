@@ -5,7 +5,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// Owns granted ability specs, ticking specs, and ability specs granted by active effects.
-    /// This mirrors Unreal GAS' dedicated ability spec container while keeping Unity runtime code allocation-aware.
+    /// Allocation-aware: steady-state queries avoid managed allocation.
     /// </summary>
     internal sealed class AbilitySpecContainer
     {

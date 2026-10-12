@@ -3,7 +3,7 @@ using System;
 namespace CycloneGames.GameplayAbilities.Core
 {
     /// <summary>
-    /// UE GAS-style facade over the core state container.
+    /// Facade over the core state container.
     /// Runtime adapters should expose familiar ASC methods while delegating state mutation here.
     /// </summary>
     public sealed class GASAbilitySystemFacade

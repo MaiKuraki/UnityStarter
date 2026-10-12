@@ -124,8 +124,7 @@ namespace CycloneGames.GameplayTags.Core
    /// no dictionary, so a container costs roughly <c>8 bytes per distinct tag</c> plus the bitset.
    /// </para>
    /// <para>
-   /// <see cref="GameplayTag.HasTag"/> resolves against the expanded set, matching Unreal's
-   /// <c>FGameplayTagContainer::HasTag</c> semantics: a container holding "A.B.C" answers yes for "A.B.C",
+   /// <see cref="GameplayTag.HasTag"/> resolves against the expanded set: a container holding "A.B.C" answers yes for "A.B.C",
    /// "A.B", and "A". <see cref="GameplayTag"/>-level helpers live in
    /// <see cref="GameplayTagContainerExtensionMethods"/>.
    /// </para>

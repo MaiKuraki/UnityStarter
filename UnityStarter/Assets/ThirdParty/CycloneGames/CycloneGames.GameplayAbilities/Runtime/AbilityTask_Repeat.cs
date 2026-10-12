@@ -4,7 +4,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that performs an action repeatedly on a fixed interval.
-    /// UE5: UAbilityTask_Repeat.
     /// </summary>
     public class AbilityTask_Repeat : AbilityTask, IAbilityTaskTick
     {
