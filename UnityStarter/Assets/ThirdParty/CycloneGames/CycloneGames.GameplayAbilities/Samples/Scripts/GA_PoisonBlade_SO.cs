@@ -76,6 +76,15 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [BASIC] Melee hit that applies two effects: instant impact damage plus a periodic
+    /// poison debuff. Introduces HasDuration effects and periodic execution.
+    ///
+    /// Key Concepts:
+    /// - HasDuration effects with a Period (damage over time)
+    /// - Applying multiple effects from one activation
+    /// - CommitAbility with cost and cooldown
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/PoisonBlade")]
     public class GA_PoisonBlade_SO : GameplayAbilitySO
     {

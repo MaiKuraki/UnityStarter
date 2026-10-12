@@ -79,7 +79,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// True when the definition executes once immediately on application, in addition to the
-        /// regular period schedule. UE5: bExecutePeriodicEffectOnApplication.
+        /// regular period schedule.
         /// </summary>
         public bool ExecutesOnApplication { get; }
 
@@ -95,8 +95,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float LastExecutionTime { get; }
 
         /// <summary>
-        /// True when the last execution lands exactly on the duration expiry. UE5 issues that tick
-        /// through CheckForFinalPeriodicExec; before that existed, an entire tick was silently lost.
+        /// True when the last execution lands exactly on the duration expiry; the final tick is
+        /// issued rather than silently lost.
         /// </summary>
         public bool EndsOnDurationBoundary { get; }
 

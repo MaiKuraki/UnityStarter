@@ -189,39 +189,39 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// If true, this ability is automatically activated when granted and deactivated when removed.
-        /// UE5: bActivateAbilityOnGranted. Used for passive abilities (auras, buffs).
+        /// Automatically activates when granted. Used for passive abilities (auras, buffs).
         /// </summary>
         public bool ActivateAbilityOnGranted { get; private set; }
 
         /// <summary>
         /// The source (caster) must have ALL of these tags for the ability to activate.
-        /// UE5: SourceRequiredTags on FGameplayTagRequirements.
+        /// Tags the source must have.
         /// </summary>
         public GameplayDefinitionTagSet SourceRequiredTags { get; private set; }
 
         /// <summary>
         /// The ability is blocked if the source (caster) has ANY of these tags.
-        /// UE5: SourceBlockedTags on FGameplayTagRequirements.
+        /// Tags the source must not have.
         /// </summary>
         public GameplayDefinitionTagSet SourceBlockedTags { get; private set; }
 
         /// <summary>
         /// The target must have ALL of these tags for the ability to activate on that target.
-        /// UE5: TargetRequiredTags on FGameplayTagRequirements.
+        /// Tags the target must have.
         /// Checked in CanApplyToTarget().
         /// </summary>
         public GameplayDefinitionTagSet TargetRequiredTags { get; private set; }
 
         /// <summary>
         /// The ability is blocked if the target has ANY of these tags.
-        /// UE5: TargetBlockedTags on FGameplayTagRequirements.
+        /// Tags the target must not have.
         /// Checked in CanApplyToTarget().
         /// </summary>
         public GameplayDefinitionTagSet TargetBlockedTags { get; private set; }
 
         /// <summary>
         /// Defines automatic triggers for this ability (event received, tag added/removed).
-        /// UE5: TArray<FAbilityTriggerData> AbilityTriggers.
+        /// Triggers that can automatically activate this ability.
         /// </summary>
         public IReadOnlyList<AbilityTriggerData> AbilityTriggers { get; private set; }
 
@@ -673,7 +673,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Called when the ability's bound input action is pressed while the ability is active.
         /// Override this to implement channeling or hold-type ability behavior.
-        /// UE5: UGameplayAbility::InputPressed.
         /// </summary>
         public virtual void InputPressed(GameplayAbilitySpec spec)
         {
@@ -682,7 +681,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Called when the ability's bound input action is released while the ability is active.
         /// Override this to implement release-to-fire or charged ability behavior.
-        /// UE5: UGameplayAbility::InputReleased.
         /// </summary>
         public virtual void InputReleased(GameplayAbilitySpec spec)
         {
@@ -976,7 +974,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            // UE5: Check if any active ability is blocking us via BlockAbilitiesWithTag
+            // Check if any active ability is blocking us via BlockAbilitiesWithTag
             if (AbilityTags != null && !AbilityTags.IsEmpty && spec.Owner.AreAbilitiesBlockedByTag(AbilityTags))
             {
                 if (GASTrace.Enabled)
@@ -1011,7 +1009,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks whether this ability can be applied to the given target based on TargetRequiredTags and TargetBlockedTags.
-        /// UE5: DoesAbilitySatisfyTagRequirements for target checks.
         /// </summary>
         /// <param name="target">The target ASC to check against.</param>
         /// <returns>True if the target meets the tag requirements.</returns>
@@ -1231,18 +1228,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return true;
         }
 
-        #region Convenience API (UE5 parity)
+        #region Convenience API
 
         /// <summary>
         /// Gets the current level of this ability from its spec.
-        /// UE5: GetAbilityLevel().
         /// </summary>
         public int GetAbilityLevel() => Spec?.Level ?? 1;
 
         /// <summary>
         /// Creates a GameplayEffectSpec from a GameplayEffect definition, automatically populating
         /// the context with this ability as the source. This is the primary way to create effect specs from abilities.
-        /// UE5: MakeOutgoingGameplayEffectSpec.
         /// </summary>
         /// <param name="effectDef">The GameplayEffect definition to create a spec from.</param>
         /// <param name="level">Override level. If -1, uses the ability's current level.</param>
@@ -1271,7 +1266,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Creates and applies a GameplayEffect to the specified target.
-        /// UE5: ApplyGameplayEffectToTarget.
         /// </summary>
         /// <param name="effectDef">The GameplayEffect definition.</param>
         /// <param name="target">The target AbilitySystemComponent.</param>
@@ -1303,7 +1297,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Creates and applies a GameplayEffect to the owning ASC.
-        /// UE5: ApplyGameplayEffectToOwner / K2_ApplyGameplayEffectToOwner.
         /// </summary>
         /// <param name="effectDef">The GameplayEffect definition.</param>
         /// <param name="level">Override level. If -1, uses the ability's current level.</param>
@@ -1320,7 +1313,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Creates and applies a GameplayEffectSpec to the specified target.
         /// Use this when you need to configure the spec (e.g., SetByCaller) before applying.
-        /// UE5: ApplyGameplayEffectSpecToTarget.
         /// </summary>
         public GameplayEffectApplicationResult ApplyGameplayEffectSpecToTarget(GameplayEffectSpec spec, AbilitySystemComponent target)
         {

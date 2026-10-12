@@ -73,7 +73,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 executePeriodicEffectOnApplication: ExecutePeriodicEffectOnApplication,
                 overflowEffects: runtimeOverflowEffects,
                 denyOverflowApplication: DenyOverflowApplication,
-                periodicInhibitionPolicy: PeriodicInhibitionPolicy
+                periodicInhibitionPolicy: PeriodicInhibitionPolicy,
+                durationMagnitude: DurationMagnitude?.ToRuntimeInfo()
             );
         }
 

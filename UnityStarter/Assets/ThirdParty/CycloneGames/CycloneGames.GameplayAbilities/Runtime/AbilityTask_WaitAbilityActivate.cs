@@ -4,7 +4,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that waits for any ability to be activated on the owning ASC.
-    /// UE5: UAbilityTask_WaitAbilityActivate.
     /// </summary>
     public class AbilityTask_WaitAbilityActivate : AbilityTask
     {
@@ -102,7 +101,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// AbilityTask that waits for any ability to end on the owning ASC.
-    /// UE5: UAbilityTask_WaitAbilityEnd (subset of WaitGameplayAbilityEnd).
     /// </summary>
     public class AbilityTask_WaitAbilityEnd : AbilityTask
     {

@@ -221,6 +221,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private GameplayEffectContext context;
         private int level;
         private long durationRaw;
+        // Set by an explicit SetDuration* call. While set, declarative DurationMagnitude
+        // re-evaluation (e.g. triggered by SetByCaller changes) no longer touches durationRaw:
+        // an explicit caller override always wins over data-driven re-evaluation.
+        private bool durationExplicitlyOverridden;
         /// <summary>
         /// The stateless definition (template) of this effect.
         /// </summary>
@@ -280,6 +284,77 @@ namespace CycloneGames.GameplayAbilities.Runtime
             private set { durationRaw = value; }
         }
 
+        #region Duration Override
+
+        /// <summary>
+        /// Overrides the duration of this specific spec instance before submission.
+        /// The shared GameplayEffect definition is never mutated; only this caller-owned
+        /// spec instance is affected. ActiveGameplayEffect initialization, stacking
+        /// duration refresh, and the authoritative replication channel all read the
+        /// per-spec duration, so the override flows through every consumption path.
+        /// Mutation is only valid while the caller owns the spec; submission is the lock.
+        /// Typical usage: override GameplayAbility.CreateCooldownEffectSpec and call
+        /// SetDuration with a computed cooldown (attack speed, cooldown reduction, ...).
+        /// </summary>
+        /// <param name="seconds">The new duration in seconds. Must be positive and finite.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The spec is no longer caller-owned (already submitted or released), an
+        /// extension callback is evaluating it, or the definition's DurationPolicy
+        /// is not <see cref="EDurationPolicy.HasDuration"/>.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">The value is not positive and finite.</exception>
+        public void SetDuration(float seconds)
+        {
+            EnsureDurationOverrideAllowed();
+            if (float.IsNaN(seconds) || float.IsInfinity(seconds) || seconds <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(seconds), seconds, "Effect duration override must be positive and finite.");
+            }
+
+            durationRaw = GASFixedValue.FromFloat(seconds).RawValue;
+            durationExplicitlyOverridden = true;
+        }
+
+        /// <summary>
+        /// Fixed-point overload of <see cref="SetDuration(float)"/> for simulation paths
+        /// that must avoid float at the API edge.
+        /// </summary>
+        public void SetDuration(GASFixedValue seconds)
+        {
+            SetDurationRaw(seconds.RawValue);
+        }
+
+        /// <summary>
+        /// Raw fixed-point overload of <see cref="SetDuration(float)"/>.
+        /// Zero is accepted (the effect expires on its first tick); negative is rejected.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">Same gating as <see cref="SetDuration(float)"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+        public void SetDurationRaw(long durationRaw)
+        {
+            EnsureDurationOverrideAllowed();
+            if (durationRaw < 0L)
+            {
+                throw new ArgumentOutOfRangeException(nameof(durationRaw), durationRaw, "Effect duration override cannot be negative.");
+            }
+
+            this.durationRaw = durationRaw;
+            durationExplicitlyOverridden = true;
+        }
+
+        private void EnsureDurationOverrideAllowed()
+        {
+            EnsureCallerOwned();
+            ThrowIfEvaluatingReplicatedState();
+            if (definition == null || definition.DurationPolicy != EDurationPolicy.HasDuration)
+            {
+                throw new InvalidOperationException(
+                    $"SetDuration requires DurationPolicy.HasDuration; effect '{definition?.Name ?? "<null>"}' uses '{definition?.DurationPolicy}'.");
+            }
+        }
+
+        #endregion
+
         private float[] modifierMagnitudes = System.Array.Empty<float>();
         private long[] modifierMagnitudeRawValues = System.Array.Empty<long>();
         private GameplayAttribute[] targetAttributes = System.Array.Empty<GameplayAttribute>();
@@ -314,7 +389,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Tags added at runtime to this specific spec instance, supplementing the definition's GrantedTags.
-        /// UE5: FGameplayEffectSpec::DynamicGrantedTags.
         /// These tags are granted to the target in addition to Def.GrantedTags.
         /// </summary>
         public GameplayEffectSpecTagView DynamicGrantedTags
@@ -328,7 +402,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Tags added at runtime to this specific spec instance, supplementing the definition's AssetTags.
-        /// UE5: FGameplayEffectSpec::DynamicAssetTags.
         /// These tags describe this specific instance and can be used for immunity/removal checks.
         /// </summary>
         public GameplayEffectSpecTagView DynamicAssetTags
@@ -568,7 +641,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Def = def;
             Source = source;
             Level = level;
-            DurationRaw = GASFixedValue.FromFloat(def.Duration).RawValue;
+            // A configured DurationMagnitude wins over the static def.Duration. Evaluation reuses
+            // the fixed-point magnitude pipeline and travels through the same replicated
+            // durationRaw channel.
+            DurationRaw = def.DurationMagnitude != null
+                ? CalculateDurationMagnitudeRawGuarded(def.DurationMagnitude, level)
+                : GASFixedValue.FromFloat(def.Duration).RawValue;
             maxSetByCallerEntries = source?.Limits.MaxSetByCallerEntries ?? GASRuntimeLimits.Default.MaxSetByCallerEntries;
 
             Context = context ?? (source != null ? source.MakeEffectContext() : new GameplayEffectContext());
@@ -728,6 +806,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 throw new ObjectDisposedException(
                     nameof(GameplayEffectSpec),
                     "GameplayEffectSpec lease has been released.");
+            }
+        }
+
+        /// <summary>
+        /// Evaluates the declarative DurationMagnitude under the same external-evaluation and
+        /// warning-suppression guards as modifier magnitudes. Negative results clamp to zero
+        /// (the effect expires on its first tick); evaluation itself stays deterministic.
+        /// </summary>
+        private long CalculateDurationMagnitudeRawGuarded(DurationMagnitudeInfo info, int level)
+        {
+            BeginExternalEvaluation();
+            setByCallerWarningSuppressionDepth++;
+            try
+            {
+                long raw = info.CalculationType == EGameplayEffectMagnitudeCalculation.SetByCaller
+                    ? CalculateSetByCallerMagnitudeRawWithoutWarning(info.SetByCaller)
+                    : info.CalculateMagnitudeRaw(this, level);
+                return raw < 0L ? 0L : raw;
+            }
+            finally
+            {
+                setByCallerWarningSuppressionDepth--;
+                EndExternalEvaluation();
             }
         }
 
@@ -1681,6 +1782,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (Def == null)
             {
                 return;
+            }
+
+            // A SetByCaller-sourced duration follows SetByCaller updates, unless the caller
+            // explicitly overrode the duration via SetDuration*.
+            if (!durationExplicitlyOverridden &&
+                Def.DurationMagnitude != null &&
+                Def.DurationMagnitude.CalculationType == EGameplayEffectMagnitudeCalculation.SetByCaller)
+            {
+                durationRaw = CalculateDurationMagnitudeRawGuarded(Def.DurationMagnitude, Level);
             }
 
             int modCount = Def.Modifiers.Count;

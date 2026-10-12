@@ -6,7 +6,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that waits for a specific attribute to change value.
-    /// UE5: UAbilityTask_WaitAttributeChange.
     /// </summary>
     public class AbilityTask_WaitAttributeChange : AbilityTask
     {

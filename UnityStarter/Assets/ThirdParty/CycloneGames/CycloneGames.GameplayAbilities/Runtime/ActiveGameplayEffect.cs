@@ -30,7 +30,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// True when the effect's OngoingTagRequirements are not met and its modifiers are temporarily suppressed.
-        /// UE5: bIsInhibited / OnInhibitionChanged.
         /// </summary>
         public bool IsInhibited { get; internal set; }
 
@@ -54,7 +53,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Fired when the inhibition state changes (true = now inhibited, false = no longer inhibited).
-        /// UE5: OnInhibitionChanged delegate.
         /// </summary>
         public event Action<bool> OnInhibitionChanged
         {
@@ -209,7 +207,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cachedPeriodicInhibitionPolicy = spec.Def.PeriodicInhibitionPolicy;
             cachedStackPeriodResetPolicy = spec.Def.Stacking.PeriodResetPolicy;
 
-            // UE5: bExecutePeriodicEffectOnApplication schedules an extra execution on the next tick.
+            // An extra execution is scheduled on the next tick when the effect executes on application.
             // The looping period timer always starts a full period from the application moment.
             if (cachedPeriodRaw > 0L)
             {
@@ -237,14 +235,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         internal void OnStackApplied()
         {
+            OnStackApplied(Spec.DurationRaw);
+        }
+
+        /// <summary>
+        /// Called when a new stack is successfully applied.
+        /// The duration refresh uses the incoming application's duration (including SetDuration
+        /// overrides). The active effect retains its original spec lease; only the duration
+        /// is adopted.
+        /// </summary>
+        /// <param name="applicationDurationRaw">
+        /// The raw duration of the incoming application spec, read before its lease is released.
+        /// </param>
+        internal void OnStackApplied(long applicationDurationRaw)
+        {
             StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.Limit);
 
-            if (Spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
-            {
-                timeRemainingRaw = Spec.DurationRaw;
-            }
+            ApplyStackDurationPolicy(applicationDurationRaw);
 
             RefreshPeriodOnApplication();
+        }
+
+        /// <summary>
+        /// Applies the stacking duration policy for one accepted application whose spec carried
+        /// <paramref name="applicationDurationRaw"/> as its duration.
+        /// </summary>
+        internal void ApplyStackDurationPolicy(long applicationDurationRaw)
+        {
+            switch (Spec.Def.Stacking.DurationPolicy)
+            {
+                case EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication:
+                    timeRemainingRaw = applicationDurationRaw;
+                    break;
+                case EGameplayEffectStackingDurationPolicy.ExtendDuration:
+                    // Saturating fixed-point add: deterministic and overflow-safe for
+                    // arbitrarily repeated applications.
+                    timeRemainingRaw = SaturatingAddRaw(timeRemainingRaw, applicationDurationRaw);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Adds one application's duration onto the remaining time without touching stack count or
+        /// the period timer.
+        /// </summary>
+        internal void ExtendDuration(long durationRaw)
+        {
+            if (cachedDurationPolicy == EDurationPolicy.HasDuration)
+            {
+                timeRemainingRaw = SaturatingAddRaw(timeRemainingRaw, durationRaw);
+            }
+        }
+
+        private static long SaturatingAddRaw(long a, long b)
+        {
+            long sum = a + b;
+            // Both operands are non-negative durations; a negative sum means long overflow.
+            return sum < 0L ? long.MaxValue : sum;
         }
 
         /// <summary>
@@ -271,9 +318,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         internal void RefreshDuration()
         {
+            RefreshDuration(Spec.DurationRaw);
+        }
+
+        /// <summary>
+        /// Refreshes duration without modifying stack count or the period timer, using the
+        /// duration of the incoming application spec (see OnStackApplied).
+        /// </summary>
+        internal void RefreshDuration(long durationRaw)
+        {
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemainingRaw = Spec.DurationRaw;
+                timeRemainingRaw = durationRaw;
             }
         }
 
