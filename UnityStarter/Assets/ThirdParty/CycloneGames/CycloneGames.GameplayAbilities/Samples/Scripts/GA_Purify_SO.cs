@@ -123,6 +123,15 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [INTERMEDIATE] Area dispel: removes debuffs from allies in radius. Introduces
+    /// removal-by-tag effects and faction tag filtering.
+    ///
+    /// Key Concepts:
+    /// - GameplayEffect.RemoveGameplayEffectsWithTags (dispel mechanics)
+    /// - TargetRequiredTags / TargetBlockedTags style faction filtering
+    /// - Area-of-effect friendly targeting
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_Purify", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Purify")]
     public class GA_Purify_SO : GameplayAbilitySO
     {

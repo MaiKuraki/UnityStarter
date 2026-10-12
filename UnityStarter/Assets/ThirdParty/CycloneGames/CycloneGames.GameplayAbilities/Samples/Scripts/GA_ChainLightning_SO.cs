@@ -126,6 +126,15 @@ namespace CycloneGames.GameplayAbilities.Sample
     }
 
 
+    /// <summary>
+    /// [INTERMEDIATE] Lightning that bounces between enemies with per-bounce damage falloff.
+    /// Introduces iterative multi-target application and SetByCaller scaling per bounce.
+    ///
+    /// Key Concepts:
+    /// - Chained target resolution with bounce limits
+    /// - Per-target GameplayEffectSpec creation with different magnitudes
+    /// - Damage falloff via SetByCaller
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_ChainLightning", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/ChainLightning")]
     public class GA_ChainLightning_SO : GameplayAbilitySO
     {

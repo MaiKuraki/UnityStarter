@@ -9,7 +9,7 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    /// <remarks>
    /// <para>
-   /// This is the equivalent of Unreal's <c>UE_DEFINE_GAMEPLAY_TAG</c>: the tag is named once, registered
+   /// The tag is named once, registered
    /// through a catalog, and afterwards game code reads <see cref="Tag"/> without ever touching a string.
    /// The alternative - calling <see cref="GameplayTagManager.Request"/> with a literal everywhere - pays a
    /// dictionary lookup per call and puts the tag's identity in a string that a typo breaks silently.

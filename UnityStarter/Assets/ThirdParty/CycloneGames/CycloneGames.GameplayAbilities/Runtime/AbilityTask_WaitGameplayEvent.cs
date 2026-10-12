@@ -7,7 +7,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// AbilityTask that waits for a GameplayEvent with a specific tag to be received.
     /// Listens to the ASC's GameplayEvent delegate system (SendGameplayEventToActor pattern),
-    /// NOT tag count changes. This matches UE5's UAbilityTask_WaitGameplayEvent behavior.
+    /// NOT tag count changes.
     /// </summary>
     public class AbilityTask_WaitGameplayEvent : AbilityTask
     {

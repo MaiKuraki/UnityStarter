@@ -20,6 +20,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("The total duration of the effect in seconds. This is only used if DurationPolicy is 'HasDuration'. Use -1 for an infinite duration.")]
         public float Duration;
 
+        [Tooltip("Optional data-driven duration source. When enabled, each spec's duration is evaluated from this magnitude (level-scaled constant, captured attribute, or SetByCaller key) instead of the static Duration value. A SetDuration call on the spec still wins at runtime.")]
+        public DurationMagnitudeSerializable DurationMagnitude;
+
         [Tooltip("The interval in seconds for periodic effects (like Damage over Time). Set to 0 or less to disable. Only applicable for 'HasDuration' or 'Infinite' effects.")]
         public float Period;
 
@@ -59,19 +62,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool SuppressGameplayCues;
 
         [Header("Advanced")]
-        [Tooltip("If true, this effect is automatically removed when the ability that applied it ends. UE5: RemoveGameplayEffectContainerOnAbilityEnd.")]
+        [Tooltip("If true, this effect is automatically removed when the ability that applied it ends.")]
         public bool RemoveGameplayEffectsAfterAbilityEnds;
 
-        [Tooltip("If true (default), periodic effects execute once immediately upon application, in addition to the regular period schedule. UE5: bExecutePeriodicEffectOnApplication.")]
+        [Tooltip("If true (default), periodic effects execute once immediately upon application, in addition to the regular period schedule.")]
         public bool ExecutePeriodicEffectOnApplication = true;
 
         [Tooltip("How the period responds when the effect is no longer inhibited. ")]
         public EGameplayEffectPeriodInhibitionRemovedPolicy PeriodicInhibitionPolicy;
 
-        [Tooltip("Effects to apply when a stacking attempt occurs while at the stack limit. UE5: OverflowEffects.")]
+        [Tooltip("Effects to apply when a stacking attempt occurs while at the stack limit.")]
         public List<GameplayEffectSO> OverflowEffects;
 
-        [Tooltip("If true, the original effect's duration refresh is denied when overflow occurs. UE5: bDenyOverflowApplication.")]
+        [Tooltip("If true, the original effect's duration refresh is denied when overflow occurs.")]
         public bool DenyOverflowApplication;
 
         private GameplayEffect _runtimeCache;

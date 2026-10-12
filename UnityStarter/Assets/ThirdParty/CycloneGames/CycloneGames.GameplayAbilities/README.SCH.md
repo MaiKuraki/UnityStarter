@@ -575,6 +575,36 @@ GameplayEffectApplicationResult result =
 
 Internal Magnitude Initialization 会静默读取缺失的 SetByCaller Input。提交成功转移 Ownership 时，Spec 会对已创作的 SetByCaller Modifier 执行一次有界检查，并且只发出一次配置要求的 Missing-key Warning。Ownership Transfer 失败或 Caller 调用 `Discard()` 时，不执行该 Warning Pass。显式调用 `GetSetByCallerMagnitude(..., warnIfNotFound: true)` 仍是即时诊断读取，可以独立产生 Warning。
 
+### Spec Duration 覆写
+
+`GameplayEffectSpec.SetDuration` / `SetDurationRaw` 在提交前覆写单个 Caller-owned Spec 实例的 Duration（对标 UE5 `FGameplayEffectSpec::SetDuration`），共享的 `GameplayEffect` Definition 不会被修改：
+
+```csharp
+protected override GameplayEffectSpec CreateCooldownEffectSpec(
+    AbilitySystemComponent asc, GameplayAbilitySpec spec)
+{
+    GameplayEffectSpec cooldownSpec = base.CreateCooldownEffectSpec(asc, spec);
+    // 示例：冷却 = 基础间隔 / 攻击速度，或 基础 CD * (1 - 冷却缩减)。
+    cooldownSpec?.SetDuration(computedCooldownSeconds);
+    return cooldownSpec;
+}
+```
+
+覆写仅在 Caller 持有 Spec（提交前）时有效——提交本身即是锁定，因此不需要 UE 的 `bDurationLocked` 标记。Definition 必须使用 `EDurationPolicy.HasDuration`；`Instant` 与 `Infinite` 会拒绝调用。`SetDuration` 要求正有限值；`SetDurationRaw` 额外允许 0（Effect 在首个 Tick 到期）。Active Effect 初始化、Stacking Duration 刷新与权威复制通道都读取 Per-spec Duration，覆写会贯穿所有消费路径。`GetCooldownInfo` 返回实例 Spec 的实际 Duration，与 UE 的 `GetCooldownTimeRemainingAndDuration` 一致。
+
+如果需要完全数据驱动、不写技能代码的时长，Definition 可以携带 `DurationMagnitude`（对标 UE5 `FGameplayEffectDurationMagnitude`）：随等级缩放的常量、捕获的属性（如冷却缩减属性）或 SetByCaller 键。每个 Spec 创建时通过定点数 Magnitude 管道求值一次，结果随服务器复制的 `durationRaw` 下发到所有客户端（客户端不重算，不会发散）；显式 `SetDuration` 永远优先于后续 SetByCaller 触发的重算。求值为负时钳到 0。未配置 `DurationMagnitude` 时，`def.Duration` 行为与之前完全一致。
+
+```csharp
+var cooldownEffect = new GameplayEffect(
+    "GE.Cooldown.Fireball",
+    EDurationPolicy.HasDuration,
+    duration: 0f, // 设置 DurationMagnitude 后该值被忽略
+    durationMagnitude: new DurationMagnitudeInfo(
+        new AttributeBasedMagnitude("CooldownDuration")));
+```
+
+同一能力也可以在 `GameplayEffectSO` 资产上配置：在 Inspector 中启用 **Duration Magnitude**（`HasDuration` 时可见），选择 Calculation Type 后只显示相关字段。Inspector 摘要会显示 `Duration: data-driven (<type>)`，并对被拒绝的组合给出警告（非 `HasDuration` 启用 Magnitude、SetByCaller 未配置键、`ExtendDuration` 未搭配 `ClearEntireStack`）。
+
 ### Magnitude、聚合与 Execution
 
 Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magnitude 可以采用：
@@ -591,6 +621,8 @@ Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magni
 ### Stacking 与持续状态
 
 `GameplayEffectStacking` 可以选择不堆叠、按 Source 聚合或按 Target 聚合，同时定义 Stack Limit、Duration Refresh 和 Expiration 行为。Overflow Effect 与 Deny Policy 处理达到上限后的应用。
+
+支持三种 Stacking Duration 策略（对标 UE5 `EGameplayEffectStackingDurationPolicy`）。`RefreshOnSuccessfulApplication` 将剩余时间重置为新一次应用的 Duration（包括 `SetDuration` 覆写）；Active Effect 保留原 Spec 的 Lease，仅采用新应用的 Duration。`NeverRefresh` 保持原计时。`ExtendDuration` 将新应用的 Duration 累加到剩余时间（定点数饱和加法），必须搭配 `ClearEntireStack` Expiration（Definition 校验强制）。预测应用若会堆叠到已有 Effect 上，会在任何变更前以 `PredictionUnsupported` 失败关闭，因此预测路径不会扰动权威 Duration Timer。
 
 Application Requirement 在插入前执行。Ongoing Requirement 决定 Active Effect 在 Tag 变化后是否继续贡献。Removal Tag 支持 Dispel。Duration 与 Infinite Effect 可以在 Active Lifetime 内授予 Tag 和 Ability。
 

@@ -6,7 +6,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that waits for a specific gameplay tag to be added to the owner.
-    /// UE5: UAbilityTask_WaitGameplayTagAdded.
     /// </summary>
     public class AbilityTask_WaitGameplayTagAdded : AbilityTask
     {
@@ -137,7 +136,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// AbilityTask that waits for a specific gameplay tag to be removed from the owner.
-    /// UE5: UAbilityTask_WaitGameplayTagRemoved.
     /// </summary>
     public class AbilityTask_WaitGameplayTagRemoved : AbilityTask
     {

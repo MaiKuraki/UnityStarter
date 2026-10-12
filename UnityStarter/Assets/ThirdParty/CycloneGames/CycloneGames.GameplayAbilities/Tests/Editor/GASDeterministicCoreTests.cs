@@ -125,7 +125,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
-        public void AttributeBasedMagnitude_UsesUnrealStyleFormula()
+        public void AttributeBasedMagnitude_UsesCoefficientFormula()
         {
             var context = new GASRuntimeContext();
             var source = CreateMagnitudeTestAsc(context, out var sourceAttributes);

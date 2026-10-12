@@ -113,6 +113,15 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
+    /// <summary>
+    /// [BASIC] Point-blank area attack: instant damage to every character in radius.
+    /// The simplest multi-target sample.
+    ///
+    /// Key Concepts:
+    /// - Area-of-effect target resolution
+    /// - Instant damage via GameplayEffectSpec
+    /// - CommitAbility with cost and cooldown
+    /// </summary>
     [CreateAssetMenu(fileName = "GA_SlamAttack", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Slam Attack")]
     public class GA_SlamAttack_SO : GameplayAbilitySO
     {

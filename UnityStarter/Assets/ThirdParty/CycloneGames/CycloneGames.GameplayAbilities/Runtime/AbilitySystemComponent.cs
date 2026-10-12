@@ -87,7 +87,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASAbilitySystemLimits CoreLimits { get; }
     }
 
-    // Delegate for gameplay event delivery (UE5: SendGameplayEventToActor)
+    // Delegate for gameplay event delivery
     public delegate void GameplayEventDelegate(GameplayEventData eventData);
 
     // Delegate for effect lifecycle events
@@ -981,7 +981,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // Cached ActorInfo to avoid repeated struct construction
         private GameplayAbilityActorInfo cachedActorInfo;
 
-        // --- Events (UE5: OnGameplayEffectAppliedDelegateToSelf, OnAnyGameplayEffectRemovedDelegate) ---
+        // --- Events ---
         private readonly GASCallbackList<ActiveEffectDelegate> effectAppliedObservers = new GASCallbackList<ActiveEffectDelegate>(4);
         private readonly GASCallbackList<ActiveEffectDelegate> effectRemovedObservers = new GASCallbackList<ActiveEffectDelegate>(4);
         private readonly GASCallbackList<GameplayCueCommittedDelegate> gameplayCueCommittedObservers =
@@ -1031,7 +1031,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        // --- Ability Lifecycle Events (UE5: AbilityActivatedCallbacks, AbilityEndedCallbacks, AbilityCommittedCallbacks) ---
+        // --- Ability Lifecycle Events ---
         private readonly GASCallbackList<Action<GameplayAbility>> abilityActivatedObservers = new GASCallbackList<Action<GameplayAbility>>(4);
         private readonly GASCallbackList<Action<GameplayAbility>> abilityEndedObservers = new GASCallbackList<Action<GameplayAbility>>(4);
         private readonly GASCallbackList<Action<GameplayAbility>> abilityCommittedObservers = new GASCallbackList<Action<GameplayAbility>>(4);
@@ -1091,7 +1091,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         public bool StateDeltaResyncRequired => stateDeltaResyncRequired;
 
-        // --- Gameplay Event System (UE5: SendGameplayEventToActor) ---
+        // --- Gameplay Event System ---
         private readonly Dictionary<GameplayTag, GASCallbackList<GameplayEventDelegate>> eventDelegates =
             new Dictionary<GameplayTag, GASCallbackList<GameplayEventDelegate>>(8);
         private readonly Dictionary<GameplayTag, GASCallbackList<OnTagCountChangedDelegate>> tagNewOrRemovedObservers =
@@ -1099,7 +1099,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<GameplayTag, GASCallbackList<OnTagCountChangedDelegate>> tagAnyCountObservers =
             new Dictionary<GameplayTag, GASCallbackList<OnTagCountChangedDelegate>>(8);
 
-        // --- Ability Trigger System (UE5: FAbilityTriggerData) ---
+        // --- Ability Trigger System ---
         // Maps trigger tags to the specs whose abilities should be activated when the trigger fires.
         private readonly Dictionary<GameplayTag, List<GameplayAbilitySpec>> triggerEventAbilities = new Dictionary<GameplayTag, List<GameplayAbilitySpec>>(8);
         private readonly Dictionary<GameplayTag, List<GameplayAbilitySpec>> triggerTagAddedAbilities = new Dictionary<GameplayTag, List<GameplayAbilitySpec>>(8);
@@ -1197,7 +1197,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #endregion
 
-        #region Gameplay Event System (UE5: SendGameplayEventToActor)
+        #region Gameplay Event System
 
         /// <summary>
         /// Registers a delegate to handle gameplay events with a specific tag.
@@ -1234,7 +1234,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Sends a gameplay event to this ASC. Matching handlers and waiting AbilityTasks will be notified.
         /// Also triggers abilities registered with GameplayEvent trigger type.
-        /// UE5 equivalent: UAbilitySystemBlueprintLibrary::SendGameplayEventToActor.
         /// </summary>
         public void HandleGameplayEvent(GameplayEventData eventData)
         {
@@ -1826,7 +1825,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Removes an AttributeSet from this ASC at runtime.
-        /// UE5: UAbilitySystemComponent::GetSpawnedAttributes_Mutable().Remove()
         /// </summary>
         public void RemoveAttributeSet(AttributeSet set)
         {
@@ -2048,11 +2046,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     RegisterGrantedAbilityInCore(spec, ability, level);
 
-                    // UE5: Register ability triggers (FAbilityTriggerData)
+                    // Register ability triggers
                     RegisterAbilityTriggers(spec);
                     MarkGrantedAbilitiesDirty();
 
-                    // UE5: bActivateAbilityOnGranted --auto-activate passive abilities
+                    // Auto-activate passive abilities when configured to activate on grant
                     if (ability.ActivateAbilityOnGranted && reconciliationApplyScopeDepth == 0)
                     {
                         RequestTriggerActivation(spec);
@@ -2129,7 +2127,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 int removedSpecHandle = spec.Handle;
 
-                // UE5: Unregister ability triggers before removal
+                // Unregister ability triggers before removal
                 UnregisterAbilityTriggers(spec);
                 UnregisterAbilityGrantedByEffect(spec);
 
@@ -4703,7 +4701,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return GameplayEffectApplicationResultCode.BlockedByForbiddenTags;
             }
 
-            //  Custom Application Requirements (UE5: UGameplayEffectCustomApplicationRequirement)
+            //  Custom Application Requirements
             var requirements = spec.Def.CustomApplicationRequirements;
             for (int i = 0; i < requirements.Count; i++)
             {
@@ -5177,7 +5175,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Handles effect expiration with stack expiration policy support.
-        /// UE5: EGameplayEffectStackingExpirationPolicy.
         /// </summary>
         private void HandleEffectExpiration(ActiveGameplayEffect effect, int index)
         {
@@ -5232,7 +5229,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Recalculates all dirty attributes using UE5-style aggregation formula.
+        /// Recalculates all dirty attributes using the channel-ordered aggregation formula.
         /// Formula: ((BaseValue + Additive) * Multiplicative) / Division
         /// Multiplicative uses bias-based summation: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
         /// Division uses same bias formula: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
@@ -5824,11 +5821,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        #region Missing UE5 GAS Features
+        #region Extended Tag and Duration API
 
         /// <summary>
         /// Cancels all currently active abilities that have ANY of the specified tags.
-        /// UE5: Integrated into ability activation flow via CancelAbilitiesWithTag.
+        /// Integrated into the ability activation flow via CancelAbilitiesWithTag.
         /// </summary>
         public void CancelAbilitiesWithTags(GameplayTagContainer tags)
         {
@@ -5873,7 +5870,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks if any currently active ability is blocking the given tags.
-        /// UE5: BlockAbilitiesWithTag check during CanActivateAbility.
+        /// BlockAbilitiesWithTag check during CanActivateAbility.
         /// </summary>
         public bool AreAbilitiesBlockedByTag(GameplayTagContainer abilityTags)
         {
@@ -5895,7 +5892,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Changes the remaining duration of an active gameplay effect.
-        /// UE5: Section 4.5.16 - Changing Active Gameplay Effect Duration.
+        /// Changing the duration of an active gameplay effect.
         /// </summary>
         /// <returns>True if the effect was found and its duration was changed.</returns>
         public bool ChangeActiveEffectDuration(ActiveGameplayEffect effect, float newDuration)
@@ -6131,7 +6128,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Gets the current stack count of an active effect by its definition.
         /// Returns 0 if the effect is not active.
-        /// UE5: GetCurrentStackCount.
         /// </summary>
         public int GetCurrentStackCount(GameplayEffect def)
         {
@@ -6145,7 +6141,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks if the owner has a specific gameplay tag.
-        /// UE5: HasMatchingGameplayTag.
         /// </summary>
         public bool HasMatchingGameplayTag(GameplayTag tag)
         {
@@ -6155,7 +6150,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks if the owner has ALL of the specified gameplay tags.
-        /// UE5: HasAllMatchingGameplayTags.
         /// </summary>
         public bool HasAllMatchingGameplayTags(GameplayTagContainer tags)
         {
@@ -6185,7 +6179,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks if the owner has ANY of the specified gameplay tags.
-        /// UE5: HasAnyMatchingGameplayTags.
         /// </summary>
         public bool HasAnyMatchingGameplayTags(GameplayTagContainer tags)
         {
@@ -6240,7 +6233,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Gets the count of how many times a specific tag is applied (from loose + effects).
-        /// UE5: GetTagCount.
         /// </summary>
         public int GetTagCount(GameplayTag tag)
         {
@@ -6716,10 +6708,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return false;
             }
 
-            // Found a stackable effect
+            // Found a stackable effect.
+            // Predicted applications that would stack onto an existing effect are rejected
+            // (PredictionUnsupported) before reaching this point, so every stacking duration
+            // mutation here is authoritative.
             if (existingEffect.StackCount >= spec.Def.Stacking.Limit)
             {
-                // UE5: Overflow --apply overflow effects when stack limit is reached.
+                // Apply overflow effects when the stack limit is reached.
                 if (spec.Def.OverflowEffects.Count > 0)
                 {
                     for (int i = 0; i < spec.Def.OverflowEffects.Count; i++)
@@ -6729,13 +6724,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                // UE5: bDenyOverflowApplication --skip duration refresh if denied.
+                // Skip the duration refresh when overflow application is denied.
                 if (!spec.Def.DenyOverflowApplication)
                 {
-                    if (spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
+                    switch (spec.Def.Stacking.DurationPolicy)
                     {
-                        existingEffect.RefreshDuration();
-                        existingEffect.RefreshPeriodOnApplication();
+                        case EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication:
+                            existingEffect.RefreshDuration(spec.DurationRaw);
+                            existingEffect.RefreshPeriodOnApplication();
+                            break;
+                        case EGameplayEffectStackingDurationPolicy.ExtendDuration:
+                            existingEffect.ExtendDuration(spec.DurationRaw);
+                            existingEffect.RefreshPeriodOnApplication();
+                            break;
                     }
                 }
                 Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Stacking limit for ")
@@ -6743,7 +6744,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else
             {
-                existingEffect.OnStackApplied();
+                existingEffect.OnStackApplied(spec.DurationRaw);
             }
 
             MarkActiveEffectsDirty();
