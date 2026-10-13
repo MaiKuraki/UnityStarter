@@ -8,13 +8,16 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
     {
         private readonly IMovementNetworkInputValidator _validator;
         private readonly MovementNetworkInputHistory _history;
+        private readonly MovementTimeDilationAuditor _dilationAuditor;
 
         public MovementNetworkInputAuthority(
             MovementNetworkInputHistory history,
-            IMovementNetworkInputValidator validator = null)
+            IMovementNetworkInputValidator validator = null,
+            MovementTimeDilationAuditor dilationAuditor = null)
         {
             _history = history ?? throw new ArgumentNullException(nameof(history));
             _validator = validator ?? DefaultMovementNetworkInputValidator.Instance;
+            _dilationAuditor = dilationAuditor;
         }
 
         public MovementNetworkInputHistory History
@@ -40,6 +43,17 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             {
                 result = NetworkActionResult.Reject(
                     NetworkActionResultCode.Duplicate,
+                    context.ServerTick,
+                    command.InputSequence,
+                    command.PredictionKey);
+                return false;
+            }
+
+            if (_dilationAuditor != null &&
+                !_dilationAuditor.Audit(command.EntityId, command.DeltaTime, (int)context.ServerTick.Value))
+            {
+                result = NetworkActionResult.Reject(
+                    NetworkActionResultCode.RateLimited,
                     context.ServerTick,
                     command.InputSequence,
                     command.PredictionKey);

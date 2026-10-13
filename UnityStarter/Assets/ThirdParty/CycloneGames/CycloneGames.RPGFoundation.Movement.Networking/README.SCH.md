@@ -111,7 +111,7 @@ graph TD
 
 `MovementNetworkProtocol` 在共享 `NetworkMessageRanges.Module` 范围（`1000-29999`）内拥有 `16000-16999` 消息 ID。`CreateProtocolManifest` 构造完整 manifest，`RegisterMessageCatalog` / `TryRegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交它。Catalog 要么同时提交 range 和全部 descriptor，要么拒绝 manifest 且不留下部分注册。
 
-每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `MovementNetworkSnapshotMessage:v1`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间协调 `CurrentVersion` / `MinimumSupportedVersion`。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
+每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `MovementNetworkSnapshotMessage:v1`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。注意：fingerprint 只钉住 contract identity——本包不提供 wire codec，二进制 payload layout 由集成方选用的 serializer 决定，fingerprint 无法验证它。通信双方通过共享 serializer 配置来约定 layout；任何 layout 变化都必须以新 contract identity 发布。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间协调 `CurrentVersion` / `MinimumSupportedVersion`。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
 
 | Message | ID | Channel | Payload |
 | --- | ---: | --- | --- |

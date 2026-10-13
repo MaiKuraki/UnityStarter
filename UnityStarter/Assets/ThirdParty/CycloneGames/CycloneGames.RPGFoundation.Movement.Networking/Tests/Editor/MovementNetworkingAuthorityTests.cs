@@ -119,9 +119,87 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
             Assert.That(correction.Snapshot.IsTeleport, Is.True);
         }
 
+        [Test]
+        public void TimeDilationAuditor_Rejects_SustainedSpeedUp_Stream()
+        {
+            // Tick rate 30, window 32 commands: an honest 30 Hz stream claims
+            // ~1.07 s of simulation per server second; the cheater claims 30x.
+            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
+
+            for (int i = 0; i < 31; i++)
+                Assert.IsTrue(auditor.Audit(ENTITY_ID, claimedDeltaSeconds: 1.0f, serverTick: i),
+                    "Window must not judge before it fills.");
+
+            // At command 32 the window closes: 32 claimed seconds over ~1 server second.
+            Assert.IsFalse(auditor.Audit(ENTITY_ID, claimedDeltaSeconds: 1.0f, serverTick: 31),
+                "A stream claiming 32 s of simulation in ~1 s of wall time is time-dilation abuse.");
+        }
+
+        [Test]
+        public void TimeDilationAuditor_Accepts_HonestStream_WithJitter()
+        {
+            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
+
+            for (int i = 0; i < 64; i++)
+            {
+                // Alternating jitter around 1/30 s, well inside the 1.25x tolerance.
+                float delta = (i & 1) == 0 ? 0.028f : 0.038f;
+                Assert.IsTrue(auditor.Audit(ENTITY_ID, delta, serverTick: i),
+                    $"Honest jittered stream must stay accepted (command {i}).");
+            }
+        }
+
+        [Test]
+        public void TimeDilationAuditor_IsBounded_AndFailClosed()
+        {
+            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 4, maxEntities: 2);
+            auditor.Audit(1, 0.016f, 0);
+            auditor.Audit(2, 0.016f, 0);
+
+            Assert.IsFalse(auditor.Audit(3, 0.016f, 0),
+                "A full audit table must reject new entities rather than grow or go silent.");
+            Assert.AreEqual(2, auditor.TrackedEntityCount);
+        }
+
+        [Test]
+        public void InputAuthority_WithAuditor_RejectsDilatedInput_AfterWindow()
+        {
+            var history = new MovementNetworkInputHistory(capacity: 128);
+            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 8, maxDilationRatio: 1.25f);
+            var authority = new MovementNetworkInputAuthority(history, dilationAuditor: auditor);
+
+            int rejected = 0;
+            for (int i = 0; i < 16; i++)
+            {
+                MovementInputCommandMessage command = CreateInput(clientTick: i + 1, sequence: (ushort)(i + 1), deltaTime: 0.9f);
+                var context = new MovementNetworkInputValidationContext(
+                    sender: null,
+                    serverTick: new NetworkTickId(i + 1),
+                    lastAcceptedClientTick: new NetworkTickId(i),
+                    lastAcceptedInputSequence: (ushort)i);
+
+                if (!authority.TryAccept(command, context, out NetworkActionResult result))
+                {
+                    rejected++;
+                    Assert.AreEqual(NetworkActionResultCode.RateLimited, result.Code);
+                }
+            }
+
+            Assert.Greater(rejected, 0, "The auditor must eventually reject a 27x-dilated stream.");
+        }
+
         private static MovementInputCommandMessage CreateInput(
             int clientTick,
             ushort sequence,
+            int predictionKey = 0)
+        {
+            return CreateInput(clientTick, sequence, 0.016f, predictionKey);
+        }
+
+        private static MovementInputCommandMessage CreateInput(
+            int clientTick,
+            ushort sequence,
+            float deltaTime,
             int predictionKey = 0)
         {
             return new MovementInputCommandMessage(
@@ -131,7 +209,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
                 inputSequence: sequence,
                 buttonMask: 1U,
                 customFlags: 0U,
-                deltaTime: 0.016f,
+                deltaTime: deltaTime,
                 moveAxes: new NetworkVector3(1f, 0f, 0f),
                 aimDirection: NetworkVector3.Forward,
                 predictionKey: predictionKey);

@@ -10,6 +10,7 @@ CycloneGames.Networking is a transport-neutral foundation for versioned message 
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
+- [Performance Tiers and Session Scaling](#performance-tiers-and-session-scaling)
 - [Usage Guide](#usage-guide)
 - [Advanced Topics](#advanced-topics)
 - [Common Scenarios](#common-scenarios)
@@ -156,6 +157,145 @@ The manifest and catalog fingerprints are deterministic over the stable contract
 
 The FNV-1a checksum detects accidental corruption and parser disagreement; it is not a MAC. Validate the frame and descriptor payload budget before deserialization. Serializer settings, compression rules, quantization ranges, and baselines are versioned protocol state.
 
+## Performance Tiers and Session Scaling
+
+One runtime profile cannot fit every device and every session. A flagship PC hosting a 4-player co-op game, a mid-range phone joining a 128-player battle, and a dedicated server absorbing 1,024 connections need different budgets — but they must still speak exactly the same protocol, at a cadence the whole session agrees on. The profile system solves this with two independent axes plus an endpoint role, composed into one `NetworkRuntimeProfile`.
+
+```mermaid
+flowchart LR
+    subgraph Inputs
+        HW[Hardware capability<br/>NetworkPerformanceTier]
+        SC[Session size<br/>NetworkSessionScale]
+        RO[Endpoint role<br/>NetworkEndpointRole]
+    end
+    subgraph Classification
+        SYS[Static heuristics<br/>cores / memory / VRAM]
+        PRB[NetworkCapabilityProbe<br/>measured hot-path score]
+        SYS --> HW
+        PRB --> HW
+    end
+    HW --> CMP[NetworkProfileComposer]
+    SC --> CMP
+    RO --> CMP
+    CMP --> PROF[NetworkRuntimeProfile]
+    PROF -->|server derives| TUN[NetworkSessionTuning<br/>rate ceiling]
+    TUN -->|client clamps<br/>min local server| PROF2[Client profile]
+```
+
+The three questions the system answers separately:
+
+| Axis | Question | Values |
+| --- | --- | --- |
+| `NetworkPerformanceTier` | How strong is this machine? | `Low`, `Medium`, `High`, `Server` |
+| `NetworkSessionScale` | How large is this session? | `Coop` (8), `Room` (32), `Battle` (128), `Massive` (1024) |
+| `NetworkEndpointRole` | What does this endpoint do? | `Client`, `ListenHost`, `DedicatedServer` |
+
+### Step 1 — Take a tier profile (simplest)
+
+```csharp
+using CycloneGames.Networking;
+
+NetworkRuntimeProfile profile = NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Medium);
+```
+
+Tier specs only tune capacity (pools, buffers, connection counts) and rates. Protocol values — MTU, payload limits, message format — are identical on every tier, so a Low-tier phone and a High-tier PC interoperate in the same session.
+
+### Step 2 — Classify the local device
+
+```csharp
+// Static heuristics: core count and memory. Works everywhere, no measurement.
+NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(
+    SystemInfo.processorCount, SystemInfo.systemMemorySize, isDedicatedServer: false);
+
+// Richer input: unreported dimensions (0) never participate in the decision.
+var hardware = new NetworkHardwareInfo(
+    logicalProcessorCount: SystemInfo.processorCount,
+    systemMemoryMB: SystemInfo.systemMemorySize,
+    graphicsMemoryMB: SystemInfo.graphicsMemorySize);
+NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
+```
+
+Threshold tables are data, not code. `NetworkTierThresholds.CreateStandard()` fits devices with generous memory and cooling; `CreateConstrained()` fits memory/thermally constrained devices. The platform layer picks the table — core code encodes no device-category assumptions. Replace the global table at composition time via `NetworkDeviceProfiles.DefaultThresholds`, or pass one per call.
+
+### Step 3 — Compose tier with session scale and role
+
+```csharp
+// A low-end device joining a large battle as a pure client.
+NetworkRuntimeProfile profile = NetworkProfileComposer.Compose(
+    NetworkPerformanceTier.Low, NetworkSessionScale.Battle, NetworkEndpointRole.Client);
+```
+
+Composition rules, and the reasoning behind them:
+
+- **Capacities take `max(tier, scale)` per knob.** A weak device in a large session still gets the buffers the session demands; a strong device in a small session keeps its budget.
+- **Rates come from the tier axis only.** Freshness is a function of what the machine sustains, not of how many participants there are.
+- **Clients ignore connection counts.** A client holds exactly one connection; `MaxConnections` only applies to endpoints that accept connections.
+- **`Massive` scale rejects `ListenHost`** at composition time. A player-hosted instance cannot absorb thousand-connection pressure; the failure is explicit, not a runtime collapse.
+- **Anything past `Massive` is an architecture problem**, not a profile problem: world partitioning, interest management and sharding live above this system.
+
+### Step 4 — Measure instead of guessing (recommended)
+
+Core count is a poor proxy for networking throughput: heterogeneous big.LITTLE cores and 2–3x per-core spreads across architectures make static tables misjudge real devices. `NetworkCapabilityProbe` measures the actual hot path (checksum + copy + pool churn) in a bounded time budget:
+
+```csharp
+double scoreMBps = NetworkCapabilityProbe.MeasureThroughputMBps();
+var hardware = new NetworkHardwareInfo(
+    SystemInfo.processorCount, SystemInfo.systemMemorySize,
+    SystemInfo.graphicsMemorySize, benchmarkScoreMBps: scoreMBps);
+NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(hardware);
+```
+
+The probe runs multiple warmed rounds over MTU-sized and 64 KB payloads, scores each round by its worse payload class, and returns the median — a single GC pause, scheduler hiccup or VM time-slice gap ruins one round, not the result. Cache the score per install instead of re-probing every launch.
+
+Scores are only comparable **within the same scripting backend**. Measured on the same desktop: Unity Editor (Mono JIT) ≈ 600 MB/s vs CoreCLR ≈ 1.0–1.7 GB/s. Therefore:
+
+- Never classify from an Editor-measured score using player-calibrated thresholds — in the Editor everything looks 2–3x slower. In the Editor, use static heuristics.
+- Calibrate the benchmark ceilings in `NetworkTierThresholds` from IL2CPP development builds on real target hardware, per backend. The shipped defaults (800/2500, 500/1500 MB/s) are starting points, not universal facts.
+- When Unity's runtime evolves (e.g. CoreCLR-based Unity), the probe automatically measures the new reality; only the threshold data needs recalibration.
+
+### Step 5 — Let the server set the cadence
+
+Rates are a session-level contract. If every endpoint derived cadence from its own tier, two peers could disagree on input/snapshot timing — an asymmetry that is extremely hard to debug. The server derives a tuning from its own profile and hands it to clients during session setup (the wire transport belongs to the handshake/adapter layer):
+
+```csharp
+// Server side:
+NetworkSessionTuning tuning = NetworkSessionTuning.FromProfile(serverProfile);
+// ... send tuning to clients through the session handshake ...
+
+// Client side:
+NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
+```
+
+`ApplyTo` clamps with **ceiling semantics**: effective rates are `min(local, server)` per knob. A client on a weak uplink may run slower than the ceiling, but no endpoint may run faster, so session cadence stays single-sourced. Local capacity budgets (pools, buffers) are never overridden.
+
+### Step 6 — Customize without touching core code
+
+Every table in the system is replaceable data. Games override at composition/bootstrap time, before any profile is consumed:
+
+```csharp
+// Retune one tier for this product:
+NetworkDeviceProfiles.RegisterTierOverride(NetworkPerformanceTier.Low,
+    new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10));
+
+// Retune one session scale:
+NetworkSessionScaleTable.RegisterScaleOverride(
+    NetworkSessionScale.Coop, new NetworkScaleSpec(4, maxConnections: 4));
+
+// Or bypass the tables entirely:
+NetworkRuntimeProfile custom = NetworkDeviceProfiles.ForSpec(
+    new NetworkTierSpec("tournament", "Tournament Rules", sendRate: 60));
+```
+
+### Fairness and consistency guarantees
+
+When differently-profiled devices share a session, the design keeps three invariants:
+
+1. **Protocol is locked.** MTU, payload limits and message formats are uniform across tiers; there is nothing to mismatch.
+2. **Cadence is single-sourced.** Rates come from the server ceiling; no device runs faster than the session, and authority-sensitive decisions (damage validation, simulation) stay server-side.
+3. **Capacity is self-affecting only.** A smaller local buffer can only degrade the experience of the device that owns it — deterministic overflow policies (`RejectNew` / `DropOldest`) drop that device's own queued data, never a peer's. A weak phone stutters itself; it cannot eat another player's packets.
+
+One convention the integration layer must uphold: **interpolation delay is a session constant** (e.g. 100 ms, agreed via session tuning), not derived from local buffer capacity. `SnapshotBufferSize` exists to absorb jitter, not to stretch delay — otherwise weaker devices would see the world later than strong ones, which is a real competitive asymmetry.
+
 ## Usage Guide
 
 ### Runtime building blocks
@@ -293,15 +433,14 @@ registered across destruction or a domain reload.
 | `FrameUnavailable` | The frame is future or was never finalized locally. | `true` | No |
 | `Expired` | The frame is outside the retained history window. | `true` | No |
 
-Use `TryGetFrameHash` before sending a historical hash. Legacy `GetFrameHash` remains for
-source compatibility and reads the raw ring slot, which may belong to another frame after
-reuse. `Reset` clears both hashes and frame stamps. Unavailable and expired verdicts are
+Use `TryGetFrameHash` before sending a historical hash; it reports whether the exact frame
+is still retained. `Reset` clears both hashes and frame stamps. Unavailable and expired verdicts are
 protocol blind spots, not proof of synchronization; the product decides whether to retry,
 request a snapshot, disconnect, or record diagnostics.
 
-`OnDesyncDetected` is now reserved for confirmed `HashMismatch` results. Earlier revisions
-also raised it for expired evidence; callers that used that behavior as a blind-spot warning
-must migrate to `OnValidationUnavailable` or inspect `EvaluateRemoteHash`. Frame ordering uses
+`OnDesyncDetected` fires only for confirmed `HashMismatch` results. Blind-spot conditions —
+unavailable or expired evidence — are surfaced through `OnValidationUnavailable` and
+`EvaluateRemoteHash` instead. Frame ordering uses
 modular `int` arithmetic and supports `int.MaxValue` to `int.MinValue` rollover; comparisons
 separated by `2^31` or more ticks are intentionally unsupported because their ordering is
 ambiguous.

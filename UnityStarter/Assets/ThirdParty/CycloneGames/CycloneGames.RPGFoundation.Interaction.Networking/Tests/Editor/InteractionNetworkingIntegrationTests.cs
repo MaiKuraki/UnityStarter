@@ -202,6 +202,58 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
             Assert.That(networkCancel.IsValid, Is.False);
         }
 
+        [Test]
+        public void NetworkAuthorityBridge_ServerPosition_OverridesClientClaim()
+        {
+            var authority = CreateAuthority();
+            authority.TryRegisterTarget(CreateTarget());
+            var bridge = new InteractionNetworkAuthorityBridge(authority);
+
+            // Cheating client: claims to stand on top of the target while the
+            // server simulation knows the instigator is 100 units away.
+            var request = new InteractionNetworkRequest(
+                1,
+                INSTIGATOR_ID,
+                TARGET_ID,
+                InteractionActionIds.Default.Register("open"),
+                100,
+                WORLD_ID,
+                NetworkVector3.Zero);
+
+            InteractionValidationResult clientClaimPath = bridge.Validate(request, serverTick: 100);
+            Assert.That(clientClaimPath.IsAccepted, Is.True,
+                "Client-claim path accepts the spoofed position; documented permissive semantics.");
+
+            // Same spoof, new request id: the replay window must not mask the verdict.
+            request.RequestId = 2;
+            var serverPosition = new InteractionVector3(100f, 0f, 0f);
+            InteractionValidationResult serverPositionPath = bridge.Validate(request, serverPosition, serverTick: 100);
+            Assert.That(serverPositionPath.IsAccepted, Is.False);
+            Assert.That(serverPositionPath.Failure, Is.EqualTo(InteractionValidationFailure.OutOfRange),
+                "Server-resolved position must reject the spoofed request.");
+        }
+
+        [Test]
+        public void NetworkAuthorityBridge_ServerPosition_AcceptsLegitimateRequest()
+        {
+            var authority = CreateAuthority();
+            authority.TryRegisterTarget(CreateTarget());
+            var bridge = new InteractionNetworkAuthorityBridge(authority);
+
+            var request = new InteractionNetworkRequest(
+                1,
+                INSTIGATOR_ID,
+                TARGET_ID,
+                InteractionActionIds.Default.Register("open"),
+                100,
+                WORLD_ID,
+                new NetworkVector3(999f, 0f, 0f));
+
+            InteractionValidationResult result = bridge.Validate(request, new InteractionVector3(1f, 0f, 0f), serverTick: 100);
+            Assert.That(result.IsAccepted, Is.True,
+                "A genuinely in-range instigator passes even when the claimed position is wrong.");
+        }
+
         private static InteractionAuthorityService CreateAuthority()
         {
             return new InteractionAuthorityService(new InteractionAuthorityOptions(worldId: WORLD_ID));

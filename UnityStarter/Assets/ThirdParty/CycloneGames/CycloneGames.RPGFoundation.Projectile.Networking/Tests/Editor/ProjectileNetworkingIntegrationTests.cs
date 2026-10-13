@@ -229,6 +229,66 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
             return ProjectileSnapshotMessage.FromSnapshot(in snapshot, sequence);
         }
 
+        [Test]
+        public void DefaultValidator_Spawn_RejectsImpersonatedOwner_WhenOwnershipBound()
+        {
+            var spawn = new ProjectileSpawnMessage(
+                projectileEntityId: 42UL,
+                ownerEntityId: 999UL, // Victim's entity, not the sender's.
+                targetEntityId: 0UL,
+                definitionId: 100,
+                serverTick: 2,
+                predictionKey: 0,
+                seed: 1U,
+                lifecycleFlags: 0U,
+                position: NetworkVector3.Zero,
+                direction: NetworkVector3.Forward,
+                initialVelocity: new NetworkVector3(0f, 0f, 10f));
+
+            var unbound = new ProjectileNetworkValidationContext(
+                sender: new TestConnection(isAuthenticated: true),
+                serverTick: new NetworkTickId(2),
+                lastAcceptedServerTick: NetworkTickId.Invalid);
+            Assert.That(DefaultProjectileNetworkMessageValidator.Instance.ValidateSpawn(spawn, unbound).Code,
+                Is.EqualTo(NetworkActionResultCode.Accepted),
+                "Unbound context keeps the permissive baseline; the composition root must bind ownership.");
+
+            var bound = new ProjectileNetworkValidationContext(
+                sender: new TestConnection(isAuthenticated: true),
+                serverTick: new NetworkTickId(2),
+                lastAcceptedServerTick: NetworkTickId.Invalid,
+                senderOwnedEntityId: 1UL);
+            NetworkActionResult result = DefaultProjectileNetworkMessageValidator.Instance.ValidateSpawn(spawn, bound);
+            Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.Unauthorized),
+                "A spawn claiming another player's OwnerEntityId must be rejected as impersonation.");
+        }
+
+        [Test]
+        public void DefaultValidator_Spawn_AcceptsOwnEntity_WhenOwnershipBound()
+        {
+            var spawn = new ProjectileSpawnMessage(
+                projectileEntityId: 42UL,
+                ownerEntityId: 1UL,
+                targetEntityId: 0UL,
+                definitionId: 100,
+                serverTick: 2,
+                predictionKey: 0,
+                seed: 1U,
+                lifecycleFlags: 0U,
+                position: NetworkVector3.Zero,
+                direction: NetworkVector3.Forward,
+                initialVelocity: new NetworkVector3(0f, 0f, 10f));
+
+            var bound = new ProjectileNetworkValidationContext(
+                sender: new TestConnection(isAuthenticated: true),
+                serverTick: new NetworkTickId(2),
+                lastAcceptedServerTick: NetworkTickId.Invalid,
+                senderOwnedEntityId: 1UL);
+
+            Assert.That(DefaultProjectileNetworkMessageValidator.Instance.ValidateSpawn(spawn, bound).Code,
+                Is.EqualTo(NetworkActionResultCode.Accepted));
+        }
+
         private sealed class TestConnection : INetConnection
         {
             public TestConnection(bool isAuthenticated)

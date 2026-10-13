@@ -371,24 +371,22 @@ namespace CycloneGames.BehaviorTree.Networking
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.BlackboardDelta)
             {
                 ulong sourceRevision;
+                RuntimeBlackboard candidate = CloneBlackboard(
+                    tree.Blackboard,
+                    EffectiveMaxSnapshotPayloadBytes,
+                    _profile.MaxTrackedBlackboardKeys,
+                    out sourceRevision);
                 try
                 {
-                    using (RuntimeBlackboard candidate = CloneBlackboard(
-                               tree.Blackboard,
-                               EffectiveMaxSnapshotPayloadBytes,
-                               _profile.MaxTrackedBlackboardKeys,
-                               out sourceRevision))
+                    BTBlackboardDelta.Apply(
+                        candidate,
+                        message.Payload,
+                        _profile.MaxTrackedBlackboardKeys);
+                    ulong candidateHash = candidate.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
+                    if (candidateHash != message.BlackboardHash ||
+                        ComputeLiveTreeStateHash(tree, candidateHash) != message.TreeStateHash)
                     {
-                        BTBlackboardDelta.Apply(
-                            candidate,
-                            message.Payload,
-                            _profile.MaxTrackedBlackboardKeys);
-                        ulong candidateHash = candidate.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
-                        if (candidateHash != message.BlackboardHash ||
-                            ComputeLiveTreeStateHash(tree, candidateHash) != message.TreeStateHash)
-                        {
-                            return RejectIncomingPayload();
-                        }
+                        return RejectIncomingPayload();
                     }
                 }
                 catch (InvalidDataException)
@@ -642,7 +640,7 @@ namespace CycloneGames.BehaviorTree.Networking
                     _profile.MaxTrackedBlackboardKeys));
         }
 
-        private static ulong ComputeSnapshotBlackboardHash(
+        private ulong ComputeSnapshotBlackboardHash(
             BTStateSnapshot snapshot,
             RuntimeBlackboard target,
             BTNetworkSync.Limits limits)
@@ -653,28 +651,58 @@ namespace CycloneGames.BehaviorTree.Networking
                 return 0UL;
             }
 
-            using (var candidate = new RuntimeBlackboard(
-                       schema: target.Schema,
-                       applySchemaDefaults: false))
+            RuntimeBlackboard candidate = GetScratchBlackboard(target.Schema, target.StringHashFunc);
+            EnsureCloneStream();
+            MemoryStream stream = _cloneStream;
+            stream.SetLength(0);
+            stream.Write(snapshot.BlackboardData, 0, length);
+            stream.Position = 0;
+            candidate.ReadFrom(_cloneReader, limits.BlackboardLimits);
+            if (stream.Position != stream.Length)
             {
-                candidate.StringHashFunc = target.StringHashFunc;
-                using (var stream = new MemoryStream(snapshot.BlackboardData, 0, length, false))
-                using (var reader = new BinaryReader(stream))
-                {
-                    candidate.ReadFrom(reader, limits.BlackboardLimits);
-                    if (stream.Position != stream.Length)
-                    {
-                        throw new InvalidDataException("Behavior tree snapshot blackboard payload contains trailing bytes.");
-                    }
-                }
-
-                return candidate.ComputeHash(RuntimeBlackboardNetworkScope.Snapshot);
+                throw new InvalidDataException("Behavior tree snapshot blackboard payload contains trailing bytes.");
             }
+
+            return candidate.ComputeHash(RuntimeBlackboardNetworkScope.Snapshot);
         }
 
         private MemoryStream _cloneStream;
         private BinaryWriter _cloneWriter;
         private BinaryReader _cloneReader;
+        private RuntimeBlackboard _scratchBlackboard;
+
+        private void EnsureCloneStream()
+        {
+            // Bridge-owned reusable stream: the clone round-trip runs once per
+            // validated delta, so it must not allocate per message.
+            if (_cloneStream == null)
+            {
+                _cloneStream = new MemoryStream(1024);
+                _cloneWriter = new BinaryWriter(_cloneStream, System.Text.Encoding.UTF8, true);
+                _cloneReader = new BinaryReader(_cloneStream, System.Text.Encoding.UTF8, true);
+            }
+        }
+
+        // Scratch candidate reused across messages: RuntimeBlackboard.ReadFrom
+        // replaces the networked-scope content, so a cleared board is
+        // semantically equivalent to a fresh one without per-message allocation.
+        // Callers must not dispose the returned board; the bridge owns it.
+        private RuntimeBlackboard GetScratchBlackboard(
+            RuntimeBlackboardSchema schema,
+            StringHashFunction stringHashFunc)
+        {
+            if (_scratchBlackboard == null || !ReferenceEquals(_scratchBlackboard.Schema, schema))
+            {
+                _scratchBlackboard?.Dispose();
+                _scratchBlackboard = new RuntimeBlackboard(
+                    schema: schema,
+                    applySchemaDefaults: false);
+            }
+
+            _scratchBlackboard.Clear();
+            _scratchBlackboard.StringHashFunc = stringHashFunc;
+            return _scratchBlackboard;
+        }
 
         private RuntimeBlackboard CloneBlackboard(
             RuntimeBlackboard source,
@@ -682,49 +710,28 @@ namespace CycloneGames.BehaviorTree.Networking
             int maxEntries,
             out ulong sourceRevision)
         {
-            var clone = new RuntimeBlackboard(
-                schema: source.Schema,
-                applySchemaDefaults: false)
+            RuntimeBlackboard clone = GetScratchBlackboard(source.Schema, source.StringHashFunc);
+            EnsureCloneStream();
+
+            MemoryStream stream = _cloneStream;
+            stream.SetLength(0);
+            sourceRevision = source.WriteTo(
+                _cloneWriter,
+                RuntimeBlackboardNetworkScope.Networked,
+                maxSerializedBytes);
+            _cloneWriter.Flush();
+
+            stream.Position = 0;
+            clone.ReadFrom(
+                _cloneReader,
+                new RuntimeBlackboardSerializationLimits(maxEntries, maxEntries),
+                RuntimeBlackboardNetworkScope.Networked);
+            if (stream.Position != stream.Length)
             {
-                StringHashFunc = source.StringHashFunc
-            };
-
-            try
-            {
-                // Bridge-owned reusable stream: the clone round-trip runs once per
-                // validated delta, so it must not allocate per message.
-                if (_cloneStream == null)
-                {
-                    _cloneStream = new MemoryStream(1024);
-                    _cloneWriter = new BinaryWriter(_cloneStream, System.Text.Encoding.UTF8, true);
-                    _cloneReader = new BinaryReader(_cloneStream, System.Text.Encoding.UTF8, true);
-                }
-
-                MemoryStream stream = _cloneStream;
-                stream.SetLength(0);
-                sourceRevision = source.WriteTo(
-                    _cloneWriter,
-                    RuntimeBlackboardNetworkScope.Networked,
-                    maxSerializedBytes);
-                _cloneWriter.Flush();
-
-                stream.Position = 0;
-                clone.ReadFrom(
-                    _cloneReader,
-                    new RuntimeBlackboardSerializationLimits(maxEntries, maxEntries),
-                    RuntimeBlackboardNetworkScope.Networked);
-                if (stream.Position != stream.Length)
-                {
-                    throw new InvalidDataException("Local blackboard clone contains trailing bytes.");
-                }
-
-                return clone;
+                throw new InvalidDataException("Local blackboard clone contains trailing bytes.");
             }
-            catch
-            {
-                clone.Dispose();
-                throw;
-            }
+
+            return clone;
         }
 
         private ulong ComputeLiveTreeStateHash(RuntimeBehaviorTree tree, ulong blackboardHash)
@@ -772,6 +779,7 @@ namespace CycloneGames.BehaviorTree.Networking
             EnsureOwnerThread();
             _disposed = true;
             _snapshotBuffer.Dispose();
+            _scratchBlackboard?.Dispose();
             _cloneWriter?.Dispose();
             _cloneReader?.Dispose();
             _cloneStream?.Dispose();
