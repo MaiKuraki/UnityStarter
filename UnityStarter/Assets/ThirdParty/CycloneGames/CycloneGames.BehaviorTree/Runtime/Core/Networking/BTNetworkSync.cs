@@ -266,14 +266,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 return default;
             }
 
-            if (data.Length > limits.MaxSnapshotBytes)
+            return DeserializeSnapshot(new ArraySegment<byte>(data), limits);
+        }
+
+        public static BTStateSnapshot DeserializeSnapshot(ArraySegment<byte> data, Limits limits)
+        {
+            if (data.Array == null || data.Count == 0)
+            {
+                return default;
+            }
+
+            if (data.Count > limits.MaxSnapshotBytes)
             {
                 throw new InvalidDataException(
-                    $"Behavior tree snapshot size {data.Length} exceeds max snapshot bytes {limits.MaxSnapshotBytes}.");
+                    $"Behavior tree snapshot size {data.Count} exceeds max snapshot bytes {limits.MaxSnapshotBytes}.");
             }
 
             var snapshot = new BTStateSnapshot();
-            using (var ms = new MemoryStream(data))
+            using (var ms = new MemoryStream(data.Array, data.Offset, data.Count, false))
             using (var reader = new BinaryReader(ms))
             {
                 uint magic = reader.ReadUInt32();
