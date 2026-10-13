@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.Networking.Tests.Performance",
+    "rootNamespace": "CycloneGames.Networking.Tests.Performance",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.DeterministicMath.Core",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_NETWORKING_HAS_PERFORMANCE_TESTING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.test-framework.performance",
+            "expression": "3.0.0",
+            "define": "CYCLONEGAMES_NETWORKING_HAS_PERFORMANCE_TESTING"
+        }
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

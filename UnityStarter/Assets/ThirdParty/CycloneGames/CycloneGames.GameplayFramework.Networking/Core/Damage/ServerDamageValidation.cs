@@ -385,6 +385,46 @@ namespace CycloneGames.GameplayFramework.Networking
             _lastAcceptedByInstigator.Clear();
         }
 
+        /// <summary>
+        /// Removes entries idle longer than <paramref name="idleTimeoutSeconds"/>, scanning at most
+        /// <paramref name="maxWork"/> entries per call so periodic pruning never spikes the frame.
+        /// Actors destroyed without an explicit <see cref="Remove"/> are reclaimed here.
+        /// </summary>
+        public int PruneIdle(double currentTimeSeconds, double idleTimeoutSeconds, int maxWork = 256)
+        {
+            AssertOwnerThread();
+            if (currentTimeSeconds < 0d || double.IsNaN(currentTimeSeconds) || double.IsInfinity(currentTimeSeconds))
+                throw new ArgumentOutOfRangeException(nameof(currentTimeSeconds));
+            if (idleTimeoutSeconds <= 0d || double.IsNaN(idleTimeoutSeconds) || double.IsInfinity(idleTimeoutSeconds))
+                throw new ArgumentOutOfRangeException(nameof(idleTimeoutSeconds));
+            if (maxWork < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+
+            if (_lastAcceptedByInstigator.Count == 0 || maxWork == 0)
+                return 0;
+
+            int scanned = 0;
+            int removed = 0;
+            _pruneScratch.Clear();
+            foreach (KeyValuePair<int, double> pair in _lastAcceptedByInstigator)
+            {
+                if (scanned++ >= maxWork)
+                    break;
+                if (currentTimeSeconds - pair.Value >= idleTimeoutSeconds)
+                    _pruneScratch.Add(pair.Key);
+            }
+
+            for (int i = 0; i < _pruneScratch.Count; i++)
+            {
+                _lastAcceptedByInstigator.Remove(_pruneScratch[i]);
+                removed++;
+            }
+            _pruneScratch.Clear();
+            return removed;
+        }
+
+        private readonly List<int> _pruneScratch = new List<int>(64);
+
         internal void AssertOwnerThread()
         {
             if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)

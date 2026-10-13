@@ -109,14 +109,17 @@ namespace CycloneGames.Networking.Adapter.Mirage
             }
         }
 
+        // Channel mapping: Mirage exposes only Reliable/Unreliable. ReliableUnordered
+        // degrades to Reliable and UnreliableSequenced to Unreliable, preserving the
+        // strongest guarantee available (see NetworkChannelNegotiation).
         public int GetChannelId(NetworkChannel channel)
         {
             return channel switch
             {
                 NetworkChannel.Reliable => (int)Channel.Reliable,
+                NetworkChannel.ReliableUnordered => (int)Channel.Reliable,
                 NetworkChannel.Unreliable => (int)Channel.Unreliable,
-                NetworkChannel.ReliableUnordered => throw new NotSupportedException("Mirage does not advertise a reliable-unordered channel."),
-                NetworkChannel.UnreliableSequenced => throw new NotSupportedException("Mirage does not advertise a distinct unreliable-sequenced channel."),
+                NetworkChannel.UnreliableSequenced => (int)Channel.Unreliable,
                 _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, "Unknown network channel.")
             };
         }

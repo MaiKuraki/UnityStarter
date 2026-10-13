@@ -52,6 +52,12 @@ namespace CycloneGames.BehaviorTree.Networking
         }
     }
 
+    /// <summary>
+    /// Ownership: <see cref="Payload"/> is a view over a producer-owned buffer.
+    /// Producers document how long the view stays valid (bridge captures: until the
+    /// next capture of the same kind on the same bridge). Copy the segment if the
+    /// consumer must retain it beyond that window.
+    /// </summary>
     public struct BehaviorTreeStatePayloadMessage
     {
         public uint TargetNetworkId;
@@ -62,7 +68,7 @@ namespace CycloneGames.BehaviorTree.Networking
         public ulong BlackboardHash;
         public ulong TreeStateHash;
         public uint AuthorityGeneration;
-        public byte[] Payload;
+        public System.ArraySegment<byte> Payload;
 
         public BehaviorTreeStatePayloadMessage(
             uint targetNetworkId,
@@ -72,7 +78,7 @@ namespace CycloneGames.BehaviorTree.Networking
             ulong treeTemplateHash,
             ulong blackboardHash,
             ulong treeStateHash,
-            byte[] payload,
+            System.ArraySegment<byte> payload,
             uint authorityGeneration = 0u)
         {
             TargetNetworkId = targetNetworkId;
@@ -92,7 +98,7 @@ namespace CycloneGames.BehaviorTree.Networking
             {
                 return TargetNetworkId != 0u &&
                        PayloadKind != BehaviorTreeNetworkPayloadKind.Unknown &&
-                       (PayloadKind == BehaviorTreeNetworkPayloadKind.HashOnly || (Payload != null && Payload.Length > 0));
+                       (PayloadKind == BehaviorTreeNetworkPayloadKind.HashOnly || Payload.Count > 0);
             }
         }
     }

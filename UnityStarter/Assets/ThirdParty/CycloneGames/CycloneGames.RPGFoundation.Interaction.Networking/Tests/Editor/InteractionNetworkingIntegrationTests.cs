@@ -32,7 +32,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
                 1,
                 INSTIGATOR_ID,
                 TARGET_ID,
-                "open",
+                InteractionActionIds.Default.Register("open"),
                 100,
                 WORLD_ID,
                 new NetworkVector3(float.NaN, 0f, 0f));
@@ -50,7 +50,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
                 12,
                 INSTIGATOR_ID,
                 TARGET_ID,
-                "open",
+                InteractionActionIds.Default.Register("open"),
                 200,
                 WORLD_ID,
                 NetworkVector3.Zero);
@@ -111,7 +111,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
         }
 
         [Test]
-        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        public void ProtocolManifest_UsesFrozenSchemasAndFingerprint()
         {
             NetworkProtocolManifest manifest = InteractionNetworkProtocol.CreateProtocolManifest();
             string[] canonicalSchemaLiterals =
@@ -119,17 +119,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
                 "InteractionNetworkRequest:v1",
                 "InteractionNetworkResult:v1",
                 "InteractionNetworkCancelRequest:v1",
-                "InteractionNetworkRequest:v1"
+                "InteractionNetworkDeterministicRequest:v1"
             };
             ulong[] expectedSchemaHashes =
             {
                 0xD76DBACD901D2BB7UL,
                 0x50B6ECBD2F378EC9UL,
                 0x00E384398B2C4151UL,
-                0xD76DBACD901D2BB7UL
+                0x883AF62EA5C98FCBUL
             };
 
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0xCC0BA75DE490D6CEUL));
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0x5174F5208F2F55A6UL));
             Assert.That(InteractionNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
