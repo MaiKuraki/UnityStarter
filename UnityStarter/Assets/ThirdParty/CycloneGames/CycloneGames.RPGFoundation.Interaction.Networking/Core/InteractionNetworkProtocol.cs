@@ -3,6 +3,14 @@ using CycloneGames.RPGFoundation.Interaction.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Networking
 {
+    /// <summary>
+    /// Contract registration for interaction networking. This package ships no wire codec:
+    /// descriptor schema hashes pin the contract IDENTITY (the exact ContractId
+    /// string), not the binary payload layout. The wire format is owned by the
+    /// integrator's chosen INetSerializer; peers agree on the layout by sharing
+    /// serializer configuration, and any layout change must ship under a new
+    /// contract identity.
+    /// </summary>
     public static class InteractionNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.RPGFoundation.Interaction";
