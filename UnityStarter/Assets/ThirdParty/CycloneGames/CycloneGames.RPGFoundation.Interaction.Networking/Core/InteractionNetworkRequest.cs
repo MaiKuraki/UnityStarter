@@ -11,6 +11,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
         public ulong ActionIdHash;
         public int Tick;
         public int WorldId;
+        /// <summary>
+        /// Client-reported instigator position. Untrusted: servers enforcing range
+        /// authoritatively must resolve the position from their own simulation and
+        /// use the server-position overloads on
+        /// <see cref="InteractionNetworkAuthorityBridge"/>.
+        /// </summary>
         public NetworkVector3 InstigatorPosition;
 
         public InteractionNetworkRequest(

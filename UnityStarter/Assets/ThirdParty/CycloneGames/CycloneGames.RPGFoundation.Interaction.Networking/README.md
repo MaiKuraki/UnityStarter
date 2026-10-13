@@ -12,11 +12,13 @@ The base Interaction module remains usable without `CycloneGames.Networking`. Th
 CycloneGames.RPGFoundation.Interaction.Networking/
   Core/
     CycloneGames.RPGFoundation.Interaction.Networking.Core.asmdef
+    InteractionActionIdRegistry.cs
     InteractionNetworkAuthorityBridge.cs
     InteractionNetworkCancelRequest.cs
     InteractionNetworkProtocol.cs
     InteractionNetworkRequest.cs
     InteractionNetworkResult.cs
+    InteractionRequestReplayWindow.cs
     InteractionNetworkVectorExtensions.cs
   Tests/Editor/
     CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor.asmdef
@@ -69,7 +71,7 @@ graph LR
 
 `InteractionNetworkProtocol` owns message IDs `13000-13999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
 
-Every descriptor declares an explicit printable-ASCII `ContractId` such as `InteractionNetworkRequest:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
+Every descriptor declares an explicit printable-ASCII `ContractId` such as `InteractionNetworkRequest:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. The fingerprint pins contract identity only: this package ships no wire codec, so the binary payload layout is owned by the integrator's chosen serializer and is NOT verified by the fingerprint. Peers agree on the layout by sharing serializer configuration, and any layout change must ship under a new contract identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
 
 | Message | ID | Channel | Purpose |
 | --- | ---: | --- | --- |

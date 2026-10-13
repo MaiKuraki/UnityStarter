@@ -25,6 +25,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 return Reject(NetworkActionResultCode.InvalidPayload, message.ServerTick, 0, message.PredictionKey);
             }
 
+            // When the composition root has bound the sender's owned entity, a
+            // spawn claiming a different owner is impersonation.
+            if (context.HasBoundOwnership && !context.IsOwnedBySender(message.OwnerEntityId))
+            {
+                return Reject(NetworkActionResultCode.Unauthorized, message.ServerTick, 0, message.PredictionKey);
+            }
+
             return ValidateEnvelope(message.ServerTick, 0, message.PredictionKey, context);
         }
 
@@ -51,6 +58,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             if (!message.IsValid)
             {
                 return Reject(NetworkActionResultCode.InvalidPayload, message.ServerTick, 0, message.PredictionKey);
+            }
+
+            if (context.HasBoundOwnership && !context.IsOwnedBySender(message.OwnerEntityId))
+            {
+                return Reject(NetworkActionResultCode.Unauthorized, message.ServerTick, 0, message.PredictionKey);
             }
 
             return ValidateEnvelope(message.ServerTick, 0, message.PredictionKey, context);
