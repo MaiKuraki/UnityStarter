@@ -119,7 +119,10 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.AreEqual(NetworkChannelFlags.Reliable, transport.Capabilities.SupportedChannels);
             Assert.AreEqual(0, transport.Capabilities.MaxUnreliablePacketSize);
-            Assert.AreEqual(0, transport.GetMaxPacketSize(transport.GetChannelId(NetworkChannel.Unreliable)));
+            // Channel negotiation deterministically downgrades every requested channel to reliable.
+            Assert.AreEqual(transport.GetChannelId(NetworkChannel.Reliable), transport.GetChannelId(NetworkChannel.Unreliable));
+            Assert.AreEqual(transport.GetMaxPacketSize(transport.GetChannelId(NetworkChannel.Reliable)),
+                transport.GetMaxPacketSize(transport.GetChannelId(NetworkChannel.Unreliable)));
         }
 
         [Test]

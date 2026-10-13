@@ -98,7 +98,15 @@ namespace CycloneGames.Networking.Transports
 
         #region Channel & QoS
 
-        public int GetChannelId(NetworkChannel channel) => (int)channel;
+        // Loopback is a deterministic reliable pipe; every requested channel maps to
+        // Reliable, which is never weaker than the request (see NetworkChannelNegotiation).
+        public int GetChannelId(NetworkChannel channel)
+        {
+            if (channel < NetworkChannel.Reliable || channel > NetworkChannel.UnreliableSequenced)
+                throw new ArgumentOutOfRangeException(nameof(channel), channel, "Unknown network channel.");
+
+            return (int)NetworkChannel.Reliable;
+        }
         public int GetMaxPacketSize(int channelId) =>
             channelId == GetChannelId(NetworkChannel.Reliable) ? NetworkConstants.DefaultMTU : 0;
         public NetworkStatistics GetStatistics()

@@ -8,7 +8,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
         public int RequestId;
         public ulong InstigatorStableId;
         public ulong TargetStableId;
-        public string ActionId;
+        public ulong ActionIdHash;
         public int Tick;
         public int WorldId;
         public NetworkVector3 InstigatorPosition;
@@ -17,7 +17,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
             int requestId,
             ulong instigatorStableId,
             ulong targetStableId,
-            string actionId,
+            ulong actionIdHash,
             int tick,
             int worldId,
             NetworkVector3 instigatorPosition)
@@ -25,7 +25,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
             RequestId = requestId;
             InstigatorStableId = instigatorStableId;
             TargetStableId = targetStableId;
-            ActionId = actionId;
+            ActionIdHash = actionIdHash;
             Tick = tick;
             WorldId = worldId;
             InstigatorPosition = instigatorPosition;
@@ -35,11 +35,18 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
 
         public InteractionRequest ToInteractionRequest()
         {
+            return ToInteractionRequest(InteractionActionIds.Default);
+        }
+
+        public InteractionRequest ToInteractionRequest(InteractionActionIdRegistry registry)
+        {
+            string actionId = null;
+            registry?.TryResolve(ActionIdHash, out actionId);
             return new InteractionRequest(
                 RequestId,
                 InstigatorStableId,
                 TargetStableId,
-                ActionId,
+                actionId,
                 Tick,
                 WorldId);
         }
@@ -54,11 +61,23 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
             in InteractionRequest request,
             NetworkVector3 instigatorPosition)
         {
+            return From(request, instigatorPosition, InteractionActionIds.Default);
+        }
+
+        public static InteractionNetworkRequest From(
+            in InteractionRequest request,
+            NetworkVector3 instigatorPosition,
+            InteractionActionIdRegistry registry)
+        {
+            ulong actionIdHash = registry != null && request.ActionId != null
+                ? registry.Register(request.ActionId)
+                : InteractionActionIds.ComputeHash(request.ActionId);
+
             return new InteractionNetworkRequest(
                 request.RequestId,
                 request.InstigatorStableId,
                 request.TargetStableId,
-                request.ActionId,
+                actionIdHash,
                 request.Tick,
                 request.WorldId,
                 instigatorPosition);

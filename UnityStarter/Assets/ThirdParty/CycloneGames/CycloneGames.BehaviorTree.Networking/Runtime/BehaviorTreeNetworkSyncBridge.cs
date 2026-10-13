@@ -93,6 +93,11 @@ namespace CycloneGames.BehaviorTree.Networking
         private readonly BehaviorTreeNetworkProfile _profile;
         private readonly BTStateSnapshotBuffer _snapshotBuffer = new BTStateSnapshotBuffer();
         private readonly int _ownerThreadId;
+        // Scratch payloads for outgoing messages, grown once to the effective budget and
+        // reused. A message payload view stays valid until the next capture of the same
+        // kind on this bridge; consumers retaining it longer must copy.
+        private byte[] _snapshotPayloadScratch;
+        private byte[] _deltaPayloadScratch;
         private long _capturedSnapshotCount;
         private long _capturedDeltaCount;
         private long _capturedHashOnlyCount;
@@ -175,9 +180,8 @@ namespace CycloneGames.BehaviorTree.Networking
             BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(tree, _snapshotBuffer, limits);
             ArraySegment<byte> segment = BTNetworkSync.SerializeSnapshot(snapshot, _snapshotBuffer, limits);
 
-            var payload = new byte[segment.Count];
-            Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
-            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.FullSnapshot, payload.Length);
+            ArraySegment<byte> payload = CopyToScratch(segment, ref _snapshotPayloadScratch);
+            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.FullSnapshot, payload.Count);
 
             return new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
@@ -218,9 +222,8 @@ namespace CycloneGames.BehaviorTree.Networking
                 return false;
             }
 
-            var payload = new byte[segment.Count];
-            Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
-            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.BlackboardDelta, payload.Length);
+            ArraySegment<byte> payload = CopyToScratch(segment, ref _deltaPayloadScratch);
+            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.BlackboardDelta, payload.Count);
 
             ulong blackboardHash = tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
             ulong treeStateHash = ComputeLiveTreeStateHash(tree, blackboardHash);
@@ -269,8 +272,20 @@ namespace CycloneGames.BehaviorTree.Networking
                 treeTemplateHash,
                 blackboardHash,
                 treeStateHash,
-                null,
+                default,
                 authorityGeneration);
+        }
+
+        private static ArraySegment<byte> CopyToScratch(in ArraySegment<byte> source, ref byte[] scratch)
+        {
+            if (scratch == null || scratch.Length < source.Count)
+            {
+                int capacity = Math.Max(source.Count, scratch != null ? scratch.Length * 2 : 256);
+                scratch = new byte[capacity];
+            }
+
+            Buffer.BlockCopy(source.Array, source.Offset, scratch, 0, source.Count);
+            return new ArraySegment<byte>(scratch, 0, source.Count);
         }
 
         public bool TryApplyPayload(
@@ -279,7 +294,7 @@ namespace CycloneGames.BehaviorTree.Networking
             ref BehaviorTreePayloadReceiveState receiveState)
         {
             EnsureUsable();
-            RecordIncomingPayload(message.Payload != null ? message.Payload.Length : 0);
+            RecordIncomingPayload(message.Payload.Count);
             if (tree == null || tree.Blackboard == null || !message.IsValid || !receiveState.CanAccept(message))
             {
                 return RejectIncomingPayload();
@@ -366,7 +381,7 @@ namespace CycloneGames.BehaviorTree.Networking
                     {
                         BTBlackboardDelta.Apply(
                             candidate,
-                            new ArraySegment<byte>(message.Payload),
+                            message.Payload,
                             _profile.MaxTrackedBlackboardKeys);
                         ulong candidateHash = candidate.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
                         if (candidateHash != message.BlackboardHash ||
@@ -408,7 +423,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 {
                     BTBlackboardDelta.Apply(
                         tree.Blackboard,
-                        new ArraySegment<byte>(message.Payload),
+                        message.Payload,
                         _profile.MaxTrackedBlackboardKeys,
                         sourceRevision);
                 }
@@ -601,10 +616,10 @@ namespace CycloneGames.BehaviorTree.Networking
 
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.HashOnly)
             {
-                return message.Payload == null || message.Payload.Length == 0;
+                return message.Payload.Count == 0;
             }
 
-            if (message.Payload == null || message.Payload.Length == 0)
+            if (message.Payload.Count == 0)
             {
                 return false;
             }
@@ -613,7 +628,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 ? EffectiveMaxSnapshotPayloadBytes
                 : EffectiveMaxDeltaPayloadBytes;
 
-            return message.Payload.Length <= maxPayloadSize;
+            return message.Payload.Count <= maxPayloadSize;
         }
 
         private BTNetworkSync.Limits CreateSnapshotLimits(int maxSnapshotPayloadBytes)
@@ -657,7 +672,11 @@ namespace CycloneGames.BehaviorTree.Networking
             }
         }
 
-        private static RuntimeBlackboard CloneBlackboard(
+        private MemoryStream _cloneStream;
+        private BinaryWriter _cloneWriter;
+        private BinaryReader _cloneReader;
+
+        private RuntimeBlackboard CloneBlackboard(
             RuntimeBlackboard source,
             int maxSerializedBytes,
             int maxEntries,
@@ -672,29 +691,31 @@ namespace CycloneGames.BehaviorTree.Networking
 
             try
             {
-                using (var stream = new MemoryStream(256))
+                // Bridge-owned reusable stream: the clone round-trip runs once per
+                // validated delta, so it must not allocate per message.
+                if (_cloneStream == null)
                 {
-                    using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
-                    {
-                        sourceRevision = source.WriteTo(
-                            writer,
-                            RuntimeBlackboardNetworkScope.Networked,
-                            maxSerializedBytes);
-                        writer.Flush();
-                    }
+                    _cloneStream = new MemoryStream(1024);
+                    _cloneWriter = new BinaryWriter(_cloneStream, System.Text.Encoding.UTF8, true);
+                    _cloneReader = new BinaryReader(_cloneStream, System.Text.Encoding.UTF8, true);
+                }
 
-                    stream.Position = 0;
-                    using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, true))
-                    {
-                        clone.ReadFrom(
-                            reader,
-                            new RuntimeBlackboardSerializationLimits(maxEntries, maxEntries),
-                            RuntimeBlackboardNetworkScope.Networked);
-                        if (stream.Position != stream.Length)
-                        {
-                            throw new InvalidDataException("Local blackboard clone contains trailing bytes.");
-                        }
-                    }
+                MemoryStream stream = _cloneStream;
+                stream.SetLength(0);
+                sourceRevision = source.WriteTo(
+                    _cloneWriter,
+                    RuntimeBlackboardNetworkScope.Networked,
+                    maxSerializedBytes);
+                _cloneWriter.Flush();
+
+                stream.Position = 0;
+                clone.ReadFrom(
+                    _cloneReader,
+                    new RuntimeBlackboardSerializationLimits(maxEntries, maxEntries),
+                    RuntimeBlackboardNetworkScope.Networked);
+                if (stream.Position != stream.Length)
+                {
+                    throw new InvalidDataException("Local blackboard clone contains trailing bytes.");
                 }
 
                 return clone;
@@ -751,6 +772,9 @@ namespace CycloneGames.BehaviorTree.Networking
             EnsureOwnerThread();
             _disposed = true;
             _snapshotBuffer.Dispose();
+            _cloneWriter?.Dispose();
+            _cloneReader?.Dispose();
+            _cloneStream?.Dispose();
         }
 
         private void EnsureUsable()

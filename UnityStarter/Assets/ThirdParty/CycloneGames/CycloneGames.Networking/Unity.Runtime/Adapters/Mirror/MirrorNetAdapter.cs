@@ -108,15 +108,17 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
         }
 
-        // Channel Mapping
+        // Channel mapping: Mirror exposes only Reliable/Unreliable. ReliableUnordered
+        // degrades to Reliable and UnreliableSequenced to Unreliable, preserving the
+        // strongest guarantee available (see NetworkChannelNegotiation).
         public int GetChannelId(NetworkChannel channel)
         {
             return channel switch
             {
                 NetworkChannel.Reliable => Channels.Reliable,
+                NetworkChannel.ReliableUnordered => Channels.Reliable,
                 NetworkChannel.Unreliable => Channels.Unreliable,
-                NetworkChannel.ReliableUnordered => throw new NotSupportedException("Mirror does not advertise a reliable-unordered channel."),
-                NetworkChannel.UnreliableSequenced => throw new NotSupportedException("Mirror does not advertise a distinct unreliable-sequenced channel."),
+                NetworkChannel.UnreliableSequenced => Channels.Unreliable,
                 _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, "Unknown network channel.")
             };
         }
