@@ -2,6 +2,14 @@ using CycloneGames.Networking;
 
 namespace CycloneGames.RPGFoundation.Projectile.Networking
 {
+    /// <summary>
+    /// Contract registration for projectile networking. This package ships no wire codec:
+    /// descriptor schema hashes pin the contract IDENTITY (the exact ContractId
+    /// string), not the binary payload layout. The wire format is owned by the
+    /// integrator's chosen INetSerializer; peers agree on the layout by sharing
+    /// serializer configuration, and any layout change must ship under a new
+    /// contract identity.
+    /// </summary>
     public static class ProjectileNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.RPGFoundation.Projectile";

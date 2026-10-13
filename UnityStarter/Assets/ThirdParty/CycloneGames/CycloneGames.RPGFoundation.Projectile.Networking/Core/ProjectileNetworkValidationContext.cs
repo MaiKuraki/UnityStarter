@@ -19,6 +19,14 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
         public readonly float MaxSnapshotVelocitySqr;
         public readonly float MaxRadius;
         public readonly float MaxAge;
+        /// <summary>
+        /// Entity the sender connection is known to own, bound by the composition
+        /// root from its session/roster state. 0 means unbound, in which case
+        /// ownership is not checked. Products that accept client-originated spawn
+        /// or hit messages MUST bind this: without it, a client can claim any
+        /// <c>OwnerEntityId</c> and impersonate another player's projectiles.
+        /// </summary>
+        public readonly ulong SenderOwnedEntityId;
 
         public ProjectileNetworkValidationContext(
             INetConnection sender,
@@ -33,7 +41,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             float maxInitialVelocity = 512f,
             float maxSnapshotVelocity = 512f,
             float maxRadius = 16f,
-            float maxAge = 3600f)
+            float maxAge = 3600f,
+            ulong senderOwnedEntityId = 0UL)
         {
             if (maxAcceptedTickDrift < -1)
             {
@@ -73,6 +82,19 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             MaxSnapshotVelocitySqr = maxSnapshotVelocity * maxSnapshotVelocity;
             MaxRadius = maxRadius;
             MaxAge = maxAge;
+            SenderOwnedEntityId = senderOwnedEntityId;
+        }
+
+        /// <summary>True when ownership is bound and the claimed owner matches the sender's entity.</summary>
+        public bool IsOwnedBySender(ulong claimedOwnerEntityId)
+        {
+            return SenderOwnedEntityId != 0UL && claimedOwnerEntityId == SenderOwnedEntityId;
+        }
+
+        /// <summary>True when ownership is bound at all; unbound contexts skip ownership checks.</summary>
+        public bool HasBoundOwnership
+        {
+            get { return SenderOwnedEntityId != 0UL; }
         }
 
         public bool IsAuthenticated
