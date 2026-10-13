@@ -10,6 +10,7 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 - [架构](#架构)
 - [快速上手](#快速上手)
 - [核心概念](#核心概念)
+- [性能分级与会话规模](#性能分级与会话规模)
 - [使用指南](#使用指南)
 - [进阶主题](#进阶主题)
 - [常见场景](#常见场景)
@@ -156,6 +157,145 @@ Manifest 与 catalog fingerprint 只基于稳定 contract fact 计算。Version 
 
 FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先校验 frame 与 descriptor payload budget，再执行 deserialize。Serializer setting、compression rule、quantization range 和 baseline 都是版本化 protocol state。
 
+## 性能分级与会话规模
+
+一份 runtime profile 不可能同时适合所有设备和所有会话。旗舰 PC 开 4 人合作房、中端手机加入 128 人战场、dedicated server 承接 1024 个连接，三者需要的预算完全不同——但它们必须讲完全相同的协议，并且节奏由整局会话统一决定。Profile 系统用两条相互独立的轴加端点角色来解决这个问题，最终合成为一份 `NetworkRuntimeProfile`。
+
+```mermaid
+flowchart LR
+    subgraph Inputs
+        HW[硬件能力<br/>NetworkPerformanceTier]
+        SC[会话规模<br/>NetworkSessionScale]
+        RO[端点角色<br/>NetworkEndpointRole]
+    end
+    subgraph Classification
+        SYS[静态启发式<br/>核心数 / 内存 / 显存]
+        PRB[NetworkCapabilityProbe<br/>实测热路径分数]
+        SYS --> HW
+        PRB --> HW
+    end
+    HW --> CMP[NetworkProfileComposer]
+    SC --> CMP
+    RO --> CMP
+    CMP --> PROF[NetworkRuntimeProfile]
+    PROF -->|server 派生| TUN[NetworkSessionTuning<br/>速率上限]
+    TUN -->|client 钳制<br/>min local server| PROF2[Client profile]
+```
+
+系统分别回答三个问题：
+
+| 轴 | 问题 | 取值 |
+| --- | --- | --- |
+| `NetworkPerformanceTier` | 这台机器有多强？ | `Low`、`Medium`、`High`、`Server` |
+| `NetworkSessionScale` | 这局会话有多大？ | `Coop`(8)、`Room`(32)、`Battle`(128)、`Massive`(1024) |
+| `NetworkEndpointRole` | 这个端点做什么？ | `Client`、`ListenHost`、`DedicatedServer` |
+
+### 第一步 —— 直接取一份 tier profile（最简单）
+
+```csharp
+using CycloneGames.Networking;
+
+NetworkRuntimeProfile profile = NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Medium);
+```
+
+Tier spec 只调节容量（pool、buffer、连接数）和速率。协议值——MTU、payload 上限、消息格式——在所有 tier 上完全一致，所以 Low 档手机和 High 档 PC 可以在同一局里互通。
+
+### 第二步 —— 对本地设备分类
+
+```csharp
+// 静态启发式：核心数 + 内存。任何环境可用，无需测量。
+NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(
+    SystemInfo.processorCount, SystemInfo.systemMemorySize, isDedicatedServer: false);
+
+// 更完整的输入：未上报的维度（填 0）不参与判定。
+var hardware = new NetworkHardwareInfo(
+    logicalProcessorCount: SystemInfo.processorCount,
+    systemMemoryMB: SystemInfo.systemMemorySize,
+    graphicsMemoryMB: SystemInfo.graphicsMemorySize);
+NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
+```
+
+阈值表是数据，不是代码。`NetworkTierThresholds.CreateStandard()` 适合内存和散热宽裕的设备；`CreateConstrained()` 适合内存/热受限的设备。选哪张表由平台层决定——Core 不编码任何设备类别假设。可以在 composition 阶段通过 `NetworkDeviceProfiles.DefaultThresholds` 全局替换，也可以按调用传入。
+
+### 第三步 —— 用 tier + 会话规模 + 角色合成 profile
+
+```csharp
+// 低端设备以纯 client 身份加入大型战场。
+NetworkRuntimeProfile profile = NetworkProfileComposer.Compose(
+    NetworkPerformanceTier.Low, NetworkSessionScale.Battle, NetworkEndpointRole.Client);
+```
+
+合成规则及其理由：
+
+- **容量按旋钮取 `max(tier, scale)`。** 弱设备进大会话也能拿到会话需要的缓冲；强设备进小会话不会被套小预算。
+- **速率只来自 tier 轴。** 数据新鲜度取决于机器能持续输出多少，与人数无关。
+- **Client 忽略连接数。** Client 永远只有一个连接；`MaxConnections` 只对接受连接的端点有意义。
+- **`Massive` 拒绝 `ListenHost`**，在 composition 期直接失败。玩家主机扛不住千级连接压力，显式失败好过运行时崩溃。
+- **超过 `Massive` 的规模是架构问题，不是 profile 问题**：世界分区、兴趣管理和分片属于这个系统之上的层。
+
+### 第四步 —— 用实测代替猜测（推荐）
+
+核心数是网络吞吐的很差的代理指标：big.LITTLE 异构核心、不同架构 2–3 倍的单核差距，会让静态表误判真实设备。`NetworkCapabilityProbe` 在有限时间预算内测量真实热路径（checksum + copy + pool 周转）：
+
+```csharp
+double scoreMBps = NetworkCapabilityProbe.MeasureThroughputMBps();
+var hardware = new NetworkHardwareInfo(
+    SystemInfo.processorCount, SystemInfo.systemMemorySize,
+    SystemInfo.graphicsMemorySize, benchmarkScoreMBps: scoreMBps);
+NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(hardware);
+```
+
+探针运行多轮预热过的测量，每轮覆盖 MTU 大小和 64 KB 两种载荷、按较差者计分，最终取中位数——一次 GC 停顿、调度抖动或 VM 时间片空洞只会毁掉一轮，不会毁掉结果。分数应按安装缓存，不要每次启动都重测。
+
+分数**只在同一 scripting backend 内可比**。同一台桌面机实测：Unity Editor（Mono JIT）≈ 600 MB/s，CoreCLR ≈ 1.0–1.7 GB/s。因此：
+
+- 不要用 Editor 实测分数套用按 player 校准的阈值——Editor 里一切都慢 2–3 倍，旗舰 CPU 也会被判成 Low。Editor 下用静态启发式。
+- `NetworkTierThresholds` 的 benchmark 阈值要用 IL2CPP development build 在真实目标硬件上按后端分别校准。出厂默认值（800/2500、500/1500 MB/s）是起点，不是普适事实。
+- Unity 运行时演进（例如 CoreCLR 化的 Unity）时，探针自动测出新现实，只需重新校准阈值数据。
+
+### 第五步 —— 让 server 决定节奏
+
+速率是 session 级契约。如果每个端点各自按 tier 推导节奏，两个 peer 可能在输入/快照时序上不一致——这种不对称极难排查。Server 从自己的 profile 派生 tuning，在 session 建立时交给 client（线上传输属于 handshake/adapter 层）：
+
+```csharp
+// Server 侧：
+NetworkSessionTuning tuning = NetworkSessionTuning.FromProfile(serverProfile);
+// …通过 session handshake 把 tuning 发给 client…
+
+// Client 侧：
+NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
+```
+
+`ApplyTo` 采用**上限（ceiling）语义**：每个旋钮的有效速率为 `min(local, server)`。上行弱的 client 可以比上限更慢，但任何端点都不能比上限更快，因此会话节奏保持单源。本地容量预算（pool、buffer）永不被覆盖。
+
+### 第六步 —— 不改核心代码完成定制
+
+系统里每张表都是可替换的数据。游戏在 composition/bootstrap 阶段、任何 profile 被消费之前完成覆盖：
+
+```csharp
+// 为本产品重调某一档 tier：
+NetworkDeviceProfiles.RegisterTierOverride(NetworkPerformanceTier.Low,
+    new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10));
+
+// 重调某一档会话规模：
+NetworkSessionScaleTable.RegisterScaleOverride(
+    NetworkSessionScale.Coop, new NetworkScaleSpec(4, maxConnections: 4));
+
+// 或者完全绕过表：
+NetworkRuntimeProfile custom = NetworkDeviceProfiles.ForSpec(
+    new NetworkTierSpec("tournament", "Tournament Rules", sendRate: 60));
+```
+
+### 公平性与一致性保证
+
+当不同 profile 的设备同局游戏时，设计保证三条不变量：
+
+1. **协议锁死。** MTU、payload 上限和消息格式跨 tier 一致，不存在可错位的东西。
+2. **节奏单源。** 速率来自 server 上限；没有设备能比会话更快，权威敏感的判定（伤害校验、模拟）都在 server 侧。
+3. **容量只影响自己。** 更小的本地缓冲只会降低拥有者自己的体验——确定性溢出策略（`RejectNew` / `DropOldest`）丢的是这台设备自己排队的数据，永远不会丢对端的。弱手机只会让自己卡顿，吃不掉其他玩家的包。
+
+集成层必须遵守一条约定：**插值延迟是 session 常量**（例如统一的 100 ms，经 session tuning 协商），不得从本地缓冲容量推导。`SnapshotBufferSize` 的作用是吸收抖动，而不是拉长延迟——否则弱设备看到的世界会比强设备晚，这是真实的竞技不对称。
+
 ## 使用指南
 
 ### Runtime 基础能力
@@ -290,14 +430,12 @@ Unity adapter 通过 `OnDisable`/`OnDestroy` 清理 backend callback；销毁或
 | `FrameUnavailable` | Frame 尚在未来，或本地从未 finalize。 | `true` | 无 |
 | `Expired` | Frame 已超出保留历史窗口。 | `true` | 无 |
 
-发送历史 hash 前使用 `TryGetFrameHash`。旧 `GetFrameHash` 为 source compatibility 保留，读取
-raw ring slot；slot 复用后其中可能属于其他 frame。`Reset` 会同时清除 hash 与 frame stamp。
-Unavailable 与 expired 是 protocol blind spot，不代表同步成立；产品负责决定 retry、请求 snapshot、
+发送历史 hash 前使用 `TryGetFrameHash`；它会报告该精确 frame 是否仍在保留窗口内。
+`Reset` 会同时清除 hash 与 frame stamp。Unavailable 与 expired 是 protocol blind spot，不代表同步成立；产品负责决定 retry、请求 snapshot、
 断开连接或记录 diagnostics。
 
-`OnDesyncDetected` 现在只表示已确认的 `HashMismatch`。旧版本还会在证据过期时触发该事件；将它
-作为 blind-spot warning 的调用方必须迁移到 `OnValidationUnavailable`，或直接检查
-`EvaluateRemoteHash`。Frame 排序使用 modular `int` arithmetic，支持从 `int.MaxValue` rollover
+`OnDesyncDetected` 只对已确认的 `HashMismatch` 触发。blind spot 条件——证据不可用或已过期——
+通过 `OnValidationUnavailable` 与 `EvaluateRemoteHash` 呈现。Frame 排序使用 modular `int` arithmetic，支持从 `int.MaxValue` rollover
 到 `int.MinValue`；相距 `2^31` tick 或更远的比较因顺序存在歧义而明确不支持。
 
 ### 主机移交与 Session 恢复

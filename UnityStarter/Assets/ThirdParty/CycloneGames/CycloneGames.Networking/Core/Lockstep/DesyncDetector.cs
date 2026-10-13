@@ -312,18 +312,6 @@ namespace CycloneGames.Networking.Lockstep
         }
 
         /// <summary>
-        /// Gets the raw ring-buffer slot for compatibility. The returned value may belong
-        /// to another frame after slot reuse; new callers should use
-        /// <see cref="TryGetFrameHash"/>.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ulong GetFrameHash(int frame)
-        {
-            _threadGuard.AssertOwnerThread();
-            return _hashHistory[frame & _historyMask];
-        }
-
-        /// <summary>
         /// Reset detector state.
         /// </summary>
         public void Reset()

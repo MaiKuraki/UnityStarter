@@ -353,7 +353,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 {
                     var detector = new DesyncDetector<Fnv1aHasher>(historySize: 4);
                     RecordFrame(detector, 0, 7);
-                    detector.ValidateRemoteHash(0, detector.GetFrameHash(0));
+                    detector.TryGetFrameHash(0, out ulong hash);
+                    detector.ValidateRemoteHash(0, hash);
                 }
                 catch (Exception exception)
                 {
