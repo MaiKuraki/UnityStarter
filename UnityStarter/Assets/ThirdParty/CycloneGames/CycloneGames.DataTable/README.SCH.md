@@ -15,9 +15,9 @@ CycloneGames.DataTable 是面向 Unity、纯 C# Host、工具和服务器的强�
 - [Runtime 加载管线](#runtime-加载管线)
 - [所有权与生命周期](#所有权与生命周期)
 - [性能与平台注意事项](#性能与平台注意事项)
+- [跨端配置一致性](#跨端配置一致性)
 - [安全与持久化](#安全与持久化)
 - [扩展点](#扩展点)
-- [故障排查](#故障排查)
 - [验证](#验证)
 - [API 导航](#api-导航)
 
@@ -113,20 +113,25 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CallerOwned: 创建已校验 candidate
-    CallerOwned --> Published: TryPublish committed
-    CallerOwned --> CallerOwned: superseded 或 non-monotonic
-    CallerOwned --> Disposed: caller dispose
-    Published --> Latest: Store 持有 candidate 资源
-    Latest --> Retired: 发布新 generation 或 reset
-    Retired --> Released: 最后一个固定 reader 离开
+    [*] --> CallerOwned: candidate 校验通过
+    CallerOwned --> Published: TryPublish 提交
+    CallerOwned --> Disposed: 调用方释放
+    Published --> Latest: Store 接管资源
+    Latest --> Retired: 发布新代或 reset
+    Retired --> Released: 最后的 reader 离开
     Released --> [*]
 
-    state Latest {
-        [*] --> ReaderPinned
-        ReaderPinned --> ReaderPinned: 稳态读取
-        ReaderPinned --> NewGeneration: 在安全点 Refresh
-    }
+    note right of CallerOwned
+        被拒绝的发布（已取代或非单调）
+        不改变所有权，
+        candidate 仍归调用方。
+    end note
+
+    note right of Latest
+        每个已注册 reader 恰好钉住一代。
+        发布不会移动 reader；
+        在安全点 Refresh() 才是代际边界。
+    end note
 ```
 
 发布成功会消费 candidate；被拒绝时 candidate 仍归 caller。发布不会移动现有 reader，`Refresh()` 才是切换 generation 的边界。已退役的 generation 要等最后一个固定 reader 离开才释放 resource owner。
@@ -432,7 +437,7 @@ using var candidate = new DataTableCandidate(
     backingResourceOwner);
 ```
 
-`descriptors` 是 `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`。Collector 在调用任何 getter 前会 snapshot 并校验所有 descriptor，拒绝重复 contract，不做反射发现。Revision sequence 必须大于零并严格超过 Store 已接受的 high-water mark。Identity 使用稳定且非空的值，例如已经认证的 content-release ID。
+`descriptors` 是 `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`。Collector 在调用任何 getter 前会 snapshot 并校验所有 descriptor，拒绝重复 contract，不做反射发现。Revision sequence 必须大于零并严格超过 Store 已接受的 high-water mark。Identity 使用稳定且非空的值，例如经产品核验的 content-release ID。
 
 可选 `backingResourceOwner` 必须被独占持有。Thread-affine owner 要包装进显式 dispatch adapter。
 
@@ -519,11 +524,83 @@ while (!release.IsComplete);
 - IL2CPP 与 stripping 使用 generated serializer 与显式 table descriptor。必须验证精确 Player backend；Editor 或静态分析不能证明 AOT 行为。
 - WebGL 不能依赖后台线程或直接 filesystem 访问 `StreamingAssets`。使用平台适用的异步获取，并为同步 decode 工作设置预算。
 
+## 跨端配置一致性
+
+### 为什么一致性是一个独立问题
+
+当多个端基于配置运行同一套逻辑时，每个端必须读取完全相同的配置内容。内容分歧不会显式报错：每一侧都能正常加载、校验、解码，然后对同一份数据产生不一致的理解。要发现分歧，必须在共享活动开始之前比较各端的内容身份。
+
+本模块只提供原语：`DataTableRevision`（单调发布身份）、`DataTableManifest`（逐表声明长度与 SHA-256）、`DataTableConfigFingerprint`（聚合内容身份），以及通过 `DataTableStore`/`DataTableReader` 实现的 generation 钉住。传输、握手时序、由哪一端做权威、以及每种比较结果的应对方式，都由产品决定。
+
+### 指纹字节契约
+
+`DataTableConfigFingerprint.Compute(manifest)` 对一条确定字节流计算 SHA-256：
+
+```text
+"DTF1" | int32 schemaVersion | int32 entryCount
+每个 entry，按规范化表名做 ordinal 排序：
+    int32 nameByteCount | 表名 UTF-8 字节
+    byte flags（bit0 = 有声明长度，bit1 = 有 SHA-256）
+    若 bit0：int64 声明字节长度
+    若 bit1：64 字节小写 SHA-256 hex 的 UTF-8
+```
+
+在所有平台与架构上，整数一律为小端。Manifest 内 entry 的顺序不影响结果。`Location` 与 `Required` 被有意排除：location 是随环境变化的路径而非内容身份，`Required` 是本地准入策略。空 manifest 只对 header 做 hash，因此它有明确定义的指纹，且不会与任何非空 manifest 冲突。该布局就是跨端契约；权威表述在 `DataTableConfigFingerprint` 的类注释中，EditMode 测试用独立实现计算的 golden vector 将其钉死。
+
+### 最简用法：计算并比较
+
+```csharp
+DataTableConfigFingerprint local = DataTableConfigFingerprint.Compute(manifest);
+string wireForm = local.ToString(); // 64 个小写 hex 字符；发送给对端。
+bool identical = local.Equals(peerFingerprint); // 固定时间比较。
+```
+
+`Equals` 与 `==` 使用常量时间比较，比较过程不会泄露第一个不同字节的位置。指纹覆盖的是声明身份（表名、长度、hash）；由于 manifest 在加载时已用这些声明校验过每个 payload 的真实字节，指纹相等即意味着已验证内容相等。
+
+### 先分类对端，再决定动作
+
+```csharp
+DataTableConfigReconciliationStatus status = DataTableConfigReconciliation.Classify(
+    localFingerprint, localRevision,
+    peerFingerprint, peerRevision);
+```
+
+| 状态 | 含义 | 典型的产品侧应对 |
+| --- | --- | --- |
+| `Same` | 内容一致。 | 继续。 |
+| `PeerStale` | 本地 revision 更新。 | 向对端提供或指向更新的内容。 |
+| `PeerAhead` | 对端 revision 更新。 | 先获取、校验并发布更新的内容。 |
+| `Mismatch` | revision 相同但内容不同。 | 拒绝；重同步无法调和一次分叉。 |
+
+指纹相等永远分类为 `Same`，即使 sequence 不同：重新发布相同内容不算分歧。更高的 sequence 是否可信属于 anti-rollback 范畴，是产品层的信任策略——与传给 `DataTableStore` 构造函数的 trusted revision-sequence floor 是同一条策略。
+
+### 通用加入握手
+
+```mermaid
+sequenceDiagram
+    participant A as 端 A
+    participant B as 端 B
+    A->>B: revision 与指纹
+    B->>B: Classify(local, remote)
+    alt Same
+        B->>A: 接受
+    else PeerStale 或 PeerAhead
+        B->>A: 重同步更新的 manifest 与 payload
+        A->>B: 校验、重新计算、再次比较
+    else Mismatch
+        B->>A: 拒绝
+    end
+```
+
+### 为共享活动钉住 generation
+
+校验通过只保证了比较那一刻的一致。共享活动开始时注册一个 `DataTableReader`，在需要一致读取期间不要调用 `Refresh()`；只在产品定义的安全点刷新，并在该边界重建由 table row 派生的状态。每一端都要保持已发布 row 不可变：任何一端修改共享 row object，指纹达成的一致都会被破坏。
+
 ## 安全与持久化
 
 文件、远程配置、patch、mod、命令行选择与用户控制的路径都应视为不可信输入。在昂贵操作前限制 payload count、bytes、row、名称、location、decompression、parser depth、string、diagnostics 与处理时间。可移植名称规范化会拒绝 rooted path、traversal、空 segment、control/surrogate/format character、平台无效字符与 reserved name。
 
-SHA-256 检测损坏与标识内容，不提供认证。远程 manifest 与 payload identity 必须先经产品持有的 signature 与 trust policy 认证，再发布。不要记录完整恶意 payload 或 secret。
+SHA-256 提供完整性校验：检测损坏或被篡改的内容，并标识 payload 声称的身份。它本身不构成信任。远程 manifest 与 payload identity 的信任决策——接受哪些 signature 或来源——属于产品层，必须在发布前完成。Core 中的 hash 比较使用固定时间相等性，比较过程不会泄露第一个差异出现的位置。不要记录完整恶意 payload 或 secret。
 
 Core 不写文件，也不使用 `EditorPrefs`、`PlayerPrefs` 或 `SessionState`。需要持久化的东西都是显式 artifact：
 
@@ -561,7 +638,6 @@ Core 默认使用静默的 `NullDataTableDiagnostics`。Host 可通过 owner-che
 | --- | --- | --- |
 | `CycloneGames.GameplayTags.DataTable` | 消费 Core `IDataTableRows<TRow>` 或 `IReadOnlyList<TRow>`。File I/O 和 decoding 仍由产品 composition root 负责。 | 不绑定 Luban、MessagePack、AssetManagement 或其他 decoder。 |
 | `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | 将 Core `IDataTable<TRow>` 或 lookup delegate 适配为 level-value provider、modifier calculation 和 attribute initialization。该 assembly 为 opt-in 且 `autoReferenced: false`。 | 不负责 payload acquisition、decode 或 publication；其 UPM `versionDefines` 条件不会被当前 asset-style DataTable checkout 激活。 |
-| MemoryGovernance DataTable companion | 只操作 caller 显式传入并持有的 `DataTableBytesCache`，使用其 memory snapshot 和 bounded close/release contract。Caller 保持所有权并协调 reader quiescence。 | 无法发现 AssetManagement loader 私有 cache、decoded row 或 `DataTableStore` 保留的 generation。 |
 
 ## 验证
 
@@ -610,6 +686,7 @@ dotnet run --configuration Release --no-build -- --self-test
 | 发布 | `DataTableRevision`、`DataTableCandidate`、`DataTableStore`、`DataTableStoreMetadata`、`DataTablePublishResult`、`DataTableReader`、`DataTableSnapshot` |
 | Payload | `IDataTableBytesProvider`、`IDataTableBytesInventory`、`DataTableBytesCache`、`DataTableBytesCacheReleaseBudget`、`DataTableBytesCacheMemorySnapshot` |
 | 完整性与 Location | `DataTableManifest`、`DataTableManifestEntry`、`DataTableHashUtility`、`DataTableNameUtility`、`IDataTableLocationResolver`、`DataTableLocationResolver` |
+| 跨端一致性 | `DataTableConfigFingerprint`、`DataTableConfigReconciliation`、`DataTableConfigReconciliationStatus` |
 | Diagnostics | `IDataTableDiagnostics`、`DataTableDiagnostics`、`DataTableDiagnosticChannel`、`DataTableLogWriterAdapter` |
 | 解码 | `LubanDataTableDecoder`、`MessagePackDataTableDecoder` |
 | Unity 获取 | `AssetManagementDataTableBytesLoader`、`AssetManagementDataTableRawFileBytesLoader`、`DataTableAssetLoadContext` |

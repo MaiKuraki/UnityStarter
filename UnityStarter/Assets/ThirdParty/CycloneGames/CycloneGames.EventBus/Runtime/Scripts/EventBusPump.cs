@@ -14,27 +14,14 @@ namespace CycloneGames.EventBus.Runtime
     public delegate int EventPumpFlush(int maxEvents);
 
     /// <summary>
-    /// Frame-scheduling owner for buffered event sources: cross-thread
-    /// <see cref="MpscEventQueue{T}"/> bridges and batched <see cref="EventStream{T}"/> writers.
+    /// Frame-scheduling owner for buffered event sources (<see cref="MpscEventQueue{T}"/> bridges
+    /// and <see cref="EventStream{T}"/> writers). A queue with no owner has no drain point, and a
+    /// drain with no budget turns a backlog into a frame spike: the pump owns "when", a per-source
+    /// ceiling, and a per-tick ceiling, so frame cost is a function of configuration.
     ///
-    /// Why this exists: a queue with no owner has no drain point, and a drain with no budget turns a
-    /// backlog into a frame spike. The pump gives both — one place that owns "when", a per-source
-    /// ceiling that owns how much of one backlog a tick may spend, and a per-tick ceiling that owns
-    /// how much the whole drain may spend. Every source publishes the same bounded way on every
-    /// platform, so the frame cost is a function of the configured budget rather than of whatever the
-    /// network or the job system happened to deliver.
-    ///
-    /// The pump is plain C# and has no UnityEngine dependency: a headless server, a CLI tool or a
-    /// test can drive it on their own tick. The Unity host is
-    /// <see cref="EventBusPumpMonoBehaviour"/>, which is only a thin adapter.
-    ///
-    /// Single-thread-confined, like every bus it feeds.
-    ///
-    /// Structural changes during a drain are deferred: a flush callback that Adds, Removes or
-    /// Clears while <see cref="Drain"/> is iterating takes effect when the drain completes, never
-    /// mid-iteration. That keeps the target list immutable for the duration of the tick — a source
-    /// that removes itself cannot skip its neighbour, a newly registered source cannot execute in
-    /// the same tick that registered it, and a Clear cannot cut the tick short.
+    /// Plain C# with no UnityEngine dependency; <see cref="EventBusPumpMonoBehaviour"/> is the thin
+    /// Unity host. Single-thread-confined. Structural changes (Add/Remove/Clear) during a drain are
+    /// deferred to drain completion, keeping the target list immutable for the tick.
     /// </summary>
     public sealed class EventBusPump
     {
@@ -54,8 +41,8 @@ namespace CycloneGames.EventBus.Runtime
         public int Count => _targets.Count;
 
         /// <summary>
-        /// Registers a custom flush callback. Cold path: registration is not per event. During a
-        /// drain the registration is deferred and takes effect when the drain completes.
+        /// Registers a custom flush callback. During a drain the registration is deferred to
+        /// drain completion.
         /// </summary>
         public EventPumpFlush Add(EventPumpFlush flush)
         {
@@ -155,21 +142,11 @@ namespace CycloneGames.EventBus.Runtime
         }
 
         /// <summary>
-        /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each and
-        /// at most <paramref name="maxEventsPerTick"/> in total.
-        ///
-        /// The two ceilings answer different questions. Per target bounds one source's backlog, which
-        /// is fairness: a flooded queue cannot starve its neighbours. Per tick bounds the whole drain,
-        /// which is what keeps the frame bounded — the per-target budget alone leaves the frame cost
-        /// proportional to the number of registered sources. When both are supplied, the per-target
-        /// budget is applied as a per-source share of the remaining per-tick allowance, so the drain
-        /// still visits every source in order until the tick is spent.
-        ///
-        /// A <paramref name="maxEventsPerTick"/> of 0 pauses publishing without unregistering
-        /// anything; a negative value is rejected rather than read as "no limit".
-        ///
-        /// Events a handler produces during the drain stay queued for the next tick, and structural
-        /// changes (Add, Remove, Clear) from flush callbacks are applied when the drain completes.
+        /// Drains every source, publishing at most <paramref name="maxEventsPerTarget"/> from each
+        /// (fairness: a flooded source cannot starve its neighbours) and at most
+        /// <paramref name="maxEventsPerTick"/> in total (the frame bound). A tick value of 0 pauses
+        /// publishing; negative is rejected. Events produced by handlers during the drain stay
+        /// queued for the next tick.
         /// </summary>
         /// <returns>The total number of events published.</returns>
         public int Drain(int maxEventsPerTarget, int maxEventsPerTick)
@@ -189,10 +166,7 @@ namespace CycloneGames.EventBus.Runtime
                 throw new ArgumentOutOfRangeException(nameof(maxEventsPerTick));
             }
 
-            // Re-entrancy is rejected, not tolerated. A flush callback that drains again would
-            // re-walk the same targets inside one tick, which breaks the per-tick budget ("a source
-            // publishes at most N events this tick") and, via a self-registering callback, recurses
-            // until the stack dies. Failing loudly is the only semantics that keeps the budget true.
+            // Re-entrancy is rejected: an inner drain would break the per-tick budget guarantee.
             if (_drainDepth > 0)
             {
                 throw new InvalidOperationException(
@@ -205,10 +179,8 @@ namespace CycloneGames.EventBus.Runtime
             _drainDepth++;
             try
             {
-                // Indexed loop, not foreach: List<T>'s struct enumerator would be fine here, but
-                // the indexed form keeps the drain free of any enumerator state on every platform.
-                // The list cannot mutate during the loop — mutations are deferred — so reading the
-                // count every iteration is safe and simple.
+                // Indexed loop: no enumerator state, and the list cannot mutate mid-drain
+                // (mutations are deferred).
                 for (int index = 0; index < _targets.Count; index++)
                 {
                     if (published >= maxEventsPerTick)

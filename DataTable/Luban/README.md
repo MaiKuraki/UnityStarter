@@ -41,7 +41,7 @@ Run repository commands from `<repo-root>`. The scoped tool requires exactly the
 UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/global.json
 ```
 
-The current file pins .NET SDK `10.0.302` with roll-forward disabled. The project targets `net8.0` and C# 12. The launchers change into the CodeGen directory before `dotnet run`, so this scoped SDK select
+The current file pins .NET SDK `10.0.302` with roll-forward disabled. The project targets `net8.0` and C# 12. The launchers change into the CodeGen directory before `dotnet run`, so the SDK pin applies only to this tool and does not affect other tools in the repository.
 
 Prepare this logical layout:
 

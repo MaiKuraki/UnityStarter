@@ -1,8 +1,8 @@
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Non-generic diagnostics view of a bus, so the facade, the debugger, and a future
-    /// MemoryGovernance metric source can enumerate heterogeneous buses without knowing T.
+    /// Non-generic diagnostics view of a bus, so the facade, the debugger, and external metrics
+    /// sources can enumerate heterogeneous buses without knowing T.
     /// </summary>
     public interface IEventBusDiagnostics
     {

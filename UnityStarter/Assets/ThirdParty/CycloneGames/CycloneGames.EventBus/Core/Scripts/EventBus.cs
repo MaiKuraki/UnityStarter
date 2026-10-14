@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -7,49 +8,30 @@ using System.Threading;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Zero-allocation one-to-many notification bus. This is the hot path: <see cref="Publish"/> is
-    /// synchronous, deterministic, and performs no managed allocation, no boxing, no LINQ, no
-    /// closure, no string formatting and no logging on the dispatch path.
+    /// Zero-allocation one-to-many synchronous notification bus. Handlers run in subscription
+    /// order; <see cref="Publish"/> performs no managed allocation, no boxing, no closure and no
+    /// logging on the dispatch path.
     ///
-    /// Thread model: single-thread-confined. Subscribe, Unsubscribe, Publish, Compact, Clear and
-    /// Dispose must all run on one owner thread (in Unity, the main thread). Confinement is the
-    /// safety guarantee and the precondition for zero allocation, so <see cref="Publish"/> takes no
-    /// lock. To cross a thread boundary, publish into an <see cref="MpscEventQueue{T}"/> from the
-    /// background and drain it into this bus on the owner thread. A callback that fires on a
-    /// foreign thread (a cancellation registration, a foreign completion) releases its
-    /// subscription through <see cref="ScheduleRemoval"/> instead of touching the bus directly.
+    /// Thread model: single-thread-confined. All members except <see cref="ScheduleRemoval"/> must
+    /// run on one owner thread; confinement is the safety guarantee and the precondition for being
+    /// lock-free. Cross a thread boundary through <see cref="MpscEventQueue{T}"/> drained on the
+    /// owner thread; a foreign-thread callback releases subscriptions via <see cref="ScheduleRemoval"/>.
     ///
-    /// Ordering: handlers run in subscription order, on every platform and every scripting backend.
-    /// There is no priority, no reordering and no async completion, so a publish is a fully
-    /// deterministic call tree that can be reasoned about and profiled frame by frame.
-    ///
-    /// Structural changes during dispatch:
-    /// - A handler subscribed during Publish never fires in that round: it lands at or beyond the
-    ///   slot-count snapshot the loop captured on entry.
-    /// - A handler unsubscribed during Publish is skipped from the moment its slot reads null, so a
-    ///   handler that removes a later handler suppresses it within the same round.
-    /// - Compaction never runs mid-dispatch. An unsubscribe during dispatch marks the bus and the
-    ///   outermost dispatch frame performs a single in-place compaction on exit.
-    /// - Dispose during Publish is also deferred: the round is atomic, so the handlers captured by
-    ///   the loop still run, <see cref="IsDisposed"/> turns true immediately (nested Publish and
-    ///   Subscribe throw), and the outermost dispatch frame tears the bus down on exit.
+    /// Structural changes during dispatch: a handler subscribed mid-round fires from the next
+    /// round; a handler unsubscribed mid-round is skipped from that point; compaction and teardown
+    /// are deferred to the outermost dispatch frame, so slot indices never shift under an active
+    /// iteration and a dispatch round is atomic.
     /// </summary>
-    public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics where T : struct
+    public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics, IEventBusSubscriberInspection where T : struct
     {
         /// <summary>Storage reserved when no explicit capacity is supplied.</summary>
         private const int DefaultCapacity = 8;
 
-        /// <summary>
-        /// Compact once tombstones reach 1/N of the occupied slots. The ratio is required for
-        /// amortization: compaction is O(_slots), so an absolute tombstone count would make the cost
-        /// of an unsubscribe grow with the subscriber count.
-        /// </summary>
+        // Compact once tombstones reach 1/N of the occupied slots. Compaction is O(_slots); a
+        // proportional (not absolute) threshold keeps an unsubscribe amortized O(1).
         private const int CompactRatio = 3;
 
-        /// <summary>
-        /// Upper bound on retained subscription handles. Bounding the pool keeps a churn-heavy bus
-        /// from pinning an unbounded number of handles; surplus handles are simply collected.
-        /// </summary>
+        // Upper bound on retained handles so a churn-heavy bus cannot pin them without limit.
         private const int HandlePoolLimit = 32;
 
         // Deferred-unsubscribe inbox close states (documented on _closeState).
@@ -62,12 +44,8 @@ namespace CycloneGames.EventBus.Core
         private readonly IEventBusLogSink _logSink;
         private readonly PublishErrorPolicy _publishErrorPolicy;
 
-        /// <summary>
-        /// One subscription slot. The owning handle is stored beside the handler rather than looked
-        /// up from it, which is what lets a handle release its slot in O(1): compaction moves both
-        /// fields together and re-stamps the handle, so the mapping can never go stale. Keeping them
-        /// in one array rather than two lockstep arrays means they cannot desynchronize.
-        /// </summary>
+        // Handle stored beside the handler so a handle releases its slot in O(1); compaction moves
+        // both fields together and re-stamps the handle, so the mapping never goes stale.
         private struct HandlerSlot
         {
             public Action<T> Handler;
@@ -80,14 +58,12 @@ namespace CycloneGames.EventBus.Core
         private int _dispatchDepth;
         private bool _compactPending;
 
-        // Owner-thread fast flag for the "is this bus still usable" checks on the entry points. Not
-        // the teardown trigger: the outermost dispatch frame decides from _closeState, which is the
-        // properly synchronized field.
+        // Owner-thread fast flag for the entry-point checks. The teardown trigger is _closeState,
+        // the properly synchronized field.
         private bool _disposed;
 
-        // Thread-safe deferred-unsubscribe inbox. Foreign-thread callbacks enqueue here; the owner
-        // thread applies the removals at its next entry point. The count exists so the hot
-        // publish path pays one volatile read instead of touching the queue.
+        // Deferred-unsubscribe inbox for foreign threads; the owner thread applies removals at its
+        // next entry point. The count keeps the hot publish path at one volatile read.
         private readonly ConcurrentQueue<IEventSubscription> _pendingRemovals =
             new ConcurrentQueue<IEventSubscription>();
         private int _pendingRemovalCount;
@@ -95,27 +71,19 @@ namespace CycloneGames.EventBus.Core
         private EventSubscription<T>[] _handlePool;
         private int _handlePoolCount;
 
-        // Close protocol for the deferred-unsubscribe inbox (see ScheduleRemoval).
-        //   0 = Open: foreign threads enqueue removals for the owner thread to apply.
-        //   1 = DisposeRequested: a Dispose has been observed; teardown is running or waiting for
-        //       an in-flight dispatch. Enqueue is still accepted so no handle is dropped, and the
-        //       teardown performs a final drain.
-        //   2 = Closed: teardown finished. A foreign thread must release synchronously instead of
-        //       enqueueing, because nothing will ever drain the queue again.
-        // The state is written with Interlocked/Volatile and re-checked after every enqueue so a
-        // check-then-enqueue race cannot strand a subscription.
+        // Close protocol for the inbox (see ScheduleRemoval):
+        //   Open: foreign threads enqueue removals for the owner thread.
+        //   DisposeRequested: teardown pending or running; enqueue still accepted, teardown drains.
+        //   Closed: teardown done; foreign threads must release synchronously.
+        // Re-checked after every enqueue so a check-then-enqueue race cannot strand a subscription.
         private int _closeState;
 
-        // Serializes "enqueue + re-check" against "publish Closed + final drain". Both sides drain,
-        // so each alone leaves a window: the enqueuer can re-check before Closed is published, and
-        // the closer can drain before the enqueue lands. Holding this gate across each side's
-        // check-then-act removes the interleaving. It is never touched by Publish/Subscribe/Remove,
-        // only by the foreign-thread cold path (ScheduleRemoval) and the one-shot teardown.
+        // Serializes "enqueue + re-check" against "publish Closed + final drain". Touched only by
+        // the foreign-thread cold path (ScheduleRemoval) and the one-shot teardown.
         private readonly object _closeGate = new object();
 
-        // Exactly-once claim on TeardownCore: the outermost dispatch frame and a foreign-thread
-        // Dispose can both decide to tear down, and the loser must not clear the handler array
-        // underneath the winner. 0 = unclaimed, 1 = claimed.
+        // Exactly-once claim on TeardownCore between the outermost dispatch frame and a
+        // foreign-thread Dispose. 0 = unclaimed, 1 = claimed.
         private int _teardownClaimed;
 
         private long _publishCount;
@@ -130,8 +98,7 @@ namespace CycloneGames.EventBus.Core
 
         /// <param name="configuration">Immutable composition choices; <c>null</c> selects defaults.</param>
         /// <param name="initialCapacity">
-        /// Slots to reserve up front. Sizing this to the expected steady-state subscriber count
-        /// avoids every array growth on the subscribe path and removes a GC spike from warm-up.
+        /// Slots reserved up front; size to the steady-state subscriber count to avoid array growth.
         /// </param>
         public EventBus(EventBusConfiguration configuration, int initialCapacity)
         {
@@ -153,21 +120,21 @@ namespace CycloneGames.EventBus.Core
         public int SubscriptionCount => _slots - _tombstones;
 
         /// <summary>
-        /// Dead slots left by unsubscribe. Compaction is automatic and bounded by the compaction
-        /// ratio, so a value above zero is normal but never arbitrarily large; one that keeps
-        /// climbing means subscribers are being added and removed faster than the ratio absorbs,
-        /// which is a signal to gate the subscription with an activity flag instead of churning it.
+        /// Dead slots left by unsubscribe. Bounded by the compaction ratio; a value that keeps
+        /// climbing signals subscription churn that should be gated with an activity flag.
         /// </summary>
         public int TombstoneCount => _tombstones;
 
+        // Long counters are written by the owner thread only; Interlocked.Read keeps reads from
+        // tooling threads (the debugger window) free of torn values on 32-bit platforms.
         /// <summary>Total successful dispatch entries since construction.</summary>
-        public long PublishCount => _publishCount;
+        public long PublishCount => Interlocked.Read(ref _publishCount);
 
         /// <summary>Publishes rejected because <see cref="DispatchDepth"/> hit the configured limit.</summary>
-        public long DroppedReentrantCount => _droppedReentrantCount;
+        public long DroppedReentrantCount => Interlocked.Read(ref _droppedReentrantCount);
 
         /// <summary>Subscriber exceptions handled according to the configured policy.</summary>
-        public long SubscriberErrorCount => _subscriberErrorCount;
+        public long SubscriberErrorCount => Interlocked.Read(ref _subscriberErrorCount);
 
         /// <summary>Highest live subscriber count observed. Use it to size <c>initialCapacity</c>.</summary>
         public int PeakSubscriptionCount => _peakSubscriptionCount;
@@ -195,10 +162,8 @@ namespace CycloneGames.EventBus.Core
                 throw new ArgumentNullException(nameof(handler));
             }
 
-            // Tombstone reuse is only safe outside dispatch: reusing a slot below the loop's count
-            // snapshot would let a handler subscribed mid-round fire in that same round. The scan is
-            // skipped when there is no tombstone, otherwise it walks the whole occupied range to no
-            // effect before falling through to the append below.
+            // Tombstone reuse is only safe outside dispatch: reusing a slot below the dispatch
+            // loop's count snapshot would let a mid-round subscribe fire in that same round.
             DrainPendingRemovals();
             if (_dispatchDepth == 0 && _tombstones > 0)
             {
@@ -223,10 +188,7 @@ namespace CycloneGames.EventBus.Core
             return PlaceHandler(handler, slot);
         }
 
-        /// <summary>
-        /// Pairs <paramref name="handler"/> with a freshly rented handle in <paramref name="index"/>.
-        /// The handle must exist before the slot does, because the slot is what records it.
-        /// </summary>
+        // The handle is rented before the slot is written, because the slot records it.
         private IEventSubscription PlaceHandler(Action<T> handler, int index)
         {
             EventSubscription<T> handle = RentHandle(handler, index);
@@ -236,10 +198,8 @@ namespace CycloneGames.EventBus.Core
         }
 
         /// <summary>
-        /// Removes <paramref name="handler"/>; returns true when it was subscribed, false when it was
-        /// not found. Unsubscribing a disposed bus is a no-op because disposal already dropped every
-        /// handler, which keeps deferred scope disposal (a MonoBehaviour OnDestroy running after the
-        /// context disposed the bus) safe.
+        /// Removes <paramref name="handler"/>; returns true when it was subscribed. A no-op on a
+        /// disposed bus, which keeps deferred scope disposal (OnDestroy after context teardown) safe.
         /// </summary>
         public bool Unsubscribe(Action<T> handler)
         {
@@ -258,13 +218,8 @@ namespace CycloneGames.EventBus.Core
 
         /// <summary>
         /// Dispatches <paramref name="evt"/> to every subscriber in subscription order.
-        ///
-        /// Zero allocation on the happy path. Under <see cref="PublishErrorPolicy.Stop"/> the first
-        /// subscriber exception propagates and the remaining handlers are skipped. Under
-        /// <see cref="PublishErrorPolicy.Swallow"/> every subscriber runs and failures are recorded.
-        /// Under <see cref="PublishErrorPolicy.ContinueOnError"/> every subscriber runs and the first
-        /// failure is rethrown once the round completes, so a fault can never be silently lost and
-        /// can never cost another subscriber its delivery.
+        /// Zero allocation on the happy path. Subscriber exceptions follow the configured
+        /// <see cref="PublishErrorPolicy"/>; see <see cref="EventBusConfiguration"/>.
         /// </summary>
         public void Publish(in T evt)
         {
@@ -276,15 +231,11 @@ namespace CycloneGames.EventBus.Core
             // Apply deferred foreign-thread removals before the round snapshots its state.
             DrainPendingRemovals();
 
-            // Re-entrancy ceiling. Dropping here is deliberate: an unbounded recursive publish chain
-            // is a design error, and the alternative is a stack overflow that the runtime cannot
-            // recover from on any platform. The drop is counted, logged and surfaced by diagnostics.
+            // Re-entrancy ceiling: an unbounded recursive publish chain would otherwise end in an
+            // unrecoverable stack overflow. The drop is counted and logged.
             if (_dispatchDepth >= _maxDispatchDepth)
             {
                 _droppedReentrantCount++;
-
-                // Counted is not enough on its own: the event reaches no subscriber and throws
-                // nowhere, so the callsite has no other signal. Cold branch.
                 LogDroppedReentrant();
                 return;
             }
@@ -292,14 +243,12 @@ namespace CycloneGames.EventBus.Core
             _dispatchDepth++;
             _publishCount++;
 
-            // Per-frame, not per-bus: a nested dispatch must not inherit or steal the fault captured
-            // by the frame that called it.
+            // Per-frame, not per-bus: a nested dispatch must not inherit the outer frame's fault.
             ExceptionDispatchInfo pendingFault = null;
             try
             {
-                // The array is re-read every iteration on purpose. A subscriber that subscribes
-                // during dispatch can replace the backing array; holding a stale local would keep
-                // invoking handlers the bus has already forgotten.
+                // The array field is re-read every iteration: a mid-dispatch subscribe can replace
+                // the backing array, and a hoisted local would keep invoking forgotten handlers.
                 int count = _slots;
                 for (int index = 0; index < count; index++)
                 {
@@ -315,10 +264,7 @@ namespace CycloneGames.EventBus.Core
                     }
                     catch (Exception exception)
                     {
-                        // Routed unconditionally: `pendingFault ??= OnSubscriberException(...)`
-                        // would short-circuit and silently drop every fault after the first, so a
-                        // Swallow/ContinueOnError round would under-count. Only the *rethrow* keeps
-                        // the first fault; logging and counting must see all of them.
+                        // Every fault is routed for counting/logging; only the first is rethrown.
                         ExceptionDispatchInfo fault = OnSubscriberException(exception);
                         pendingFault ??= fault;
                     }
@@ -326,28 +272,20 @@ namespace CycloneGames.EventBus.Core
 
                 if (pendingFault != null)
                 {
-                    // Rethrows with the original stack intact. The enclosing finally still runs, so
-                    // dispatch depth is restored before the exception leaves the bus.
+                    // Original stack preserved; the finally still restores depth first.
                     pendingFault.Throw();
                 }
             }
             finally
             {
-                // Depth is restored unconditionally: a subscriber that throws must not leave the bus
-                // permanently unable to publish. Teardown and compaction are deferred to the
-                // outermost frame so slot indices never shift underneath an in-flight iteration.
+                // Depth restored unconditionally; teardown and compaction deferred to the outermost
+                // frame so slot indices never shift under an in-flight iteration.
                 if (--_dispatchDepth == 0)
                 {
-                    // The decision reads _closeState rather than _disposed because _closeState is the
-                    // field Dispose and ScheduleRemoval exchange with Interlocked/Volatile, so a
-                    // disposal requested from another thread cannot be missed here. Missing it would
-                    // leave teardown unfinished and _closeState stuck at DisposeRequested, stranding
-                    // every later removal in the inbox.
+                    // _closeState (not _disposed) is the synchronized field a foreign-thread Dispose
+                    // exchanges, so a cross-thread disposal cannot be missed here.
                     if (Volatile.Read(ref _closeState) != Open)
                     {
-                        // Dispose was requested while this round was running. Replacing the array
-                        // mid-round would make the loop read past the end, so the teardown the
-                        // caller asked for happens here instead.
                         TeardownCore();
                     }
                     else if (_compactPending)
@@ -360,11 +298,8 @@ namespace CycloneGames.EventBus.Core
         }
 
         /// <summary>
-        /// Removes tombstone slots in place. Allocation-free and non-shrinking: capacity is retained
-        /// so the steady state performs no array work at all.
-        ///
-        /// Automatic, so calling this directly is normally unnecessary. It exists for a one-shot
-        /// reclaim after a burst of unsubscribes and for tests.
+        /// Removes tombstone slots in place. Allocation-free and non-shrinking. Runs automatically
+        /// on the unsubscribe path; direct calls are for a one-shot reclaim after a burst.
         /// </summary>
         /// <exception cref="InvalidOperationException">Dispatch is in progress.</exception>
         public void Compact()
@@ -381,9 +316,8 @@ namespace CycloneGames.EventBus.Core
         }
 
         /// <summary>
-        /// Removes every subscription without disposing the bus, so the same instance can be reused
-        /// across a scene or mode reset. Diagnostic counters are preserved because they describe the
-        /// bus lifetime, not the current subscription set.
+        /// Removes every subscription without disposing the bus, so the instance can be reused
+        /// across a reset. Diagnostic counters are preserved: they describe the bus lifetime.
         /// </summary>
         /// <exception cref="InvalidOperationException">Dispatch is in progress.</exception>
         public void Clear()
@@ -404,30 +338,49 @@ namespace CycloneGames.EventBus.Core
             return new EventBusSnapshot(
                 SubscriptionCount,
                 TombstoneCount,
-                _publishCount,
-                _droppedReentrantCount,
-                _subscriberErrorCount,
+                Interlocked.Read(ref _publishCount),
+                Interlocked.Read(ref _droppedReentrantCount),
+                Interlocked.Read(ref _subscriberErrorCount),
                 _peakSubscriptionCount,
                 _dispatchDepth,
                 _handlers.Length,
                 _disposed);
         }
 
+        /// <inheritdoc cref="IEventBusSubscriberInspection.CopySubscribersTo"/>
+        public void CopySubscribersTo(List<EventSubscriberInfo> destination)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            for (int index = 0; index < _slots; index++)
+            {
+                Action<T> handler = _handlers[index].Handler;
+                if (handler == null)
+                {
+                    continue;
+                }
+
+                destination.Add(new EventSubscriberInfo
+                {
+                    MethodName = handler.Method.Name,
+                    DeclaringTypeName = handler.Method.DeclaringType?.Name ?? string.Empty,
+                    Target = handler.Target,
+                });
+            }
+        }
+
         /// <summary>
-        /// Tears the bus down. Idempotent. Called during an active dispatch round it is deferred:
-        /// the round is atomic (its remaining handlers still run), <see cref="IsDisposed"/> turns
-        /// true immediately so nested Publish and Subscribe throw, and the outermost dispatch frame
-        /// performs the actual teardown on exit — replacing the handler array mid-round would make
-        /// the dispatch loop read past the end.
-        ///
-        /// Owner thread only, like every other member. A foreign-thread call still completes, driven
-        /// by the owner thread's outermost dispatch frame, but <see cref="ScheduleRemoval"/> is the
-        /// only entry point a foreign thread needs.
+        /// Tears the bus down. Idempotent. During an active dispatch round the teardown is
+        /// deferred: the round is atomic, <see cref="IsDisposed"/> turns true immediately (nested
+        /// Publish/Subscribe throw), and the outermost dispatch frame tears down on exit.
+        /// Owner thread only, like every other member.
         /// </summary>
         public void Dispose()
         {
-            // Atomic close handshake: the first caller wins and every later call is a no-op, so
-            // Dispose can never interleave with itself or leave the inbox half-open.
+            // Atomic close handshake: the first caller wins; later calls are no-ops.
             if (Interlocked.CompareExchange(ref _closeState, DisposeRequested, Open) != Open)
             {
                 return;
@@ -437,9 +390,8 @@ namespace CycloneGames.EventBus.Core
 
             if (_dispatchDepth > 0)
             {
-                // An in-flight Publish is iterating the handler array right now; the outermost
-                // dispatch frame tears the bus down on exit. TeardownCore re-checks this itself, so
-                // a stale answer on a foreign thread cannot cause a bad clear.
+                // An in-flight Publish owns the teardown; the outermost frame re-enters
+                // TeardownCore on exit.
                 return;
             }
 
@@ -448,11 +400,8 @@ namespace CycloneGames.EventBus.Core
 
         /// <summary>
         /// Thread-safe deferred unsubscribe — the only sanctioned way to release a subscription
-        /// from a thread that does not own this bus, e.g. a cancellation callback or a foreign
-        /// completion source. The removal is applied on the owner thread at the next
-        /// <see cref="Publish"/>, <see cref="Subscribe"/>, <see cref="Clear"/> or Dispose. Calling
-        /// this from the owner thread is correct too; disposing the subscription directly is just
-        /// cheaper there.
+        /// from a non-owner thread. The removal is applied on the owner thread at the next
+        /// <see cref="Publish"/>, <see cref="Subscribe"/>, <see cref="Clear"/> or Dispose.
         /// </summary>
         public void ScheduleRemoval(IEventSubscription subscription)
         {
@@ -463,9 +412,8 @@ namespace CycloneGames.EventBus.Core
 
             lock (_closeGate)
             {
-                // Already torn down: nothing will drain the inbox again, so release synchronously.
-                // EventBus.Release short-circuits on a disposed bus and EventSubscription.Dispose is
-                // idempotent, so this is a safe no-op rather than a handler-array mutation.
+                // Closed: nothing drains the inbox again; release synchronously. Safe because
+                // Release short-circuits on a disposed bus and Dispose is idempotent.
                 if (_closeState == Closed)
                 {
                     subscription.Dispose();
@@ -484,10 +432,7 @@ namespace CycloneGames.EventBus.Core
             }
         }
 
-        /// <summary>
-        /// Removals waiting in the deferred inbox. Non-zero after <see cref="Dispose"/> indicates a
-        /// close-protocol leak; tests and the diagnostics surface assert on it.
-        /// </summary>
+        // Non-zero after Dispose indicates a close-protocol leak; tests assert on it.
         internal int PendingRemovalCount => Volatile.Read(ref _pendingRemovalCount);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -500,50 +445,49 @@ namespace CycloneGames.EventBus.Core
                 return;
             }
 
+            int drained = 0;
             while (_pendingRemovals.TryDequeue(out IEventSubscription subscription))
             {
-                Interlocked.Decrement(ref _pendingRemovalCount);
+                drained++;
 
                 // A subscription may be disposed directly as well (owner-thread double release);
                 // Dispose is idempotent, so a duplicate here is harmless.
                 subscription.Dispose();
             }
+
+            if (drained > 0)
+            {
+                // One atomic update for the whole batch instead of one per entry.
+                Interlocked.Add(ref _pendingRemovalCount, -drained);
+            }
         }
 
         private void TeardownCore()
         {
-            // Exactly-once claim: whoever arrives second must not clear the handler array underneath
-            // the first.
+            // Exactly-once claim: the loser must not clear the handler array under the winner.
             if (Interlocked.Exchange(ref _teardownClaimed, 1) != 0)
             {
                 return;
             }
 
-            // A dispatch may still be iterating. Clearing in place would start feeding that loop
-            // nulled slots, cutting the round short in contradiction of the documented "the round is
-            // atomic" guarantee; replacing the array would make it read past the end. Release the
-            // claim so the outermost dispatch frame — which re-enters here with _dispatchDepth back
-            // at zero — performs the clear. Only reachable when Dispose is called off the owner
-            // thread, which the contract forbids.
+            // A dispatch may still be iterating; clearing now would violate the atomic-round
+            // guarantee. Release the claim so the outermost dispatch frame performs the teardown.
             if (Volatile.Read(ref _dispatchDepth) > 0)
             {
                 Interlocked.Exchange(ref _teardownClaimed, 0);
                 return;
             }
 
-            // Release the backing array so a retained (not-yet-collected) bus no longer pins a
-            // large handler array, and drop the handle pool with it. A disposed bus cannot be
-            // reused. Pending foreign-thread removals are drained so the inbox does not retain
-            // them; their Dispose is a no-op on a disposed bus.
+            // Release the backing array and pool so a retained bus no longer pins them.
             DrainPendingRemovals();
             ClearCore();
             _handlers = Array.Empty<HandlerSlot>();
             _handlePool = null;
             _handlePoolCount = 0;
 
-            // Publish Closed and run the final drain as one critical section against ScheduleRemoval:
-            // either the enqueuer sees Open and this drain collects its entry, or it sees Closed and
-            // releases the entry itself. No interleaving can leave an entry uncollected.
+            // Publish Closed and run the final drain in one critical section against
+            // ScheduleRemoval: either the enqueuer sees Open and this drain collects its entry,
+            // or it sees Closed and releases the entry itself.
             lock (_closeGate)
             {
                 Volatile.Write(ref _closeState, Closed);
@@ -560,17 +504,13 @@ namespace CycloneGames.EventBus.Core
                 return;
             }
 
-            // A negative slot means the slot was already reclaimed without this handle being disposed:
-            // an identity-based Unsubscribe, Clear, or teardown. There is nothing left to remove, and
-            // falling back to an identity scan could remove an unrelated subscription that happens to
-            // share the delegate.
+            // Negative slot: already reclaimed without this handle (identity Unsubscribe, Clear, or
+            // teardown). Nothing to remove; an identity scan could hit an unrelated subscription
+            // sharing the delegate.
             if (slot >= 0)
             {
-                // O(1) fast path. The slot records its own handle, and compaction re-stamps that
-                // handle when it moves it, so a match proves the slot still belongs to this handle and
-                // the removal needs no lookup. Handle identity is the whole guard: a stale index
-                // cannot address a different subscriber's slot, because the handle in it would be a
-                // different object. The scan is a defensive fallback only.
+                // O(1) fast path: the slot records its own handle and compaction re-stamps it, so
+                // identity proves ownership. The scan is a defensive fallback only.
                 if (slot < _slots && ReferenceEquals(_handlers[slot].Handle, handle))
                 {
                     MarkSlotDead(slot);
@@ -603,7 +543,7 @@ namespace CycloneGames.EventBus.Core
 
         private bool RemoveCore(Action<T> handler)
         {
-            // Hoisting the array is safe here: nothing in this method can re-enter the bus.
+            // Hoisting is safe: nothing in this method can re-enter the bus.
             HandlerSlot[] handlers = _handlers;
             for (int index = 0; index < _slots; index++)
             {
@@ -619,11 +559,8 @@ namespace CycloneGames.EventBus.Core
             return false;
         }
 
-        /// <summary>
-        /// Kills one live slot: detaches its handle, clears both fields, and runs the compaction
-        /// threshold check. Shared by the identity-based <see cref="Unsubscribe"/> and the O(1)
-        /// handle release so both maintain the same invariants.
-        /// </summary>
+        // Kills one live slot and runs the compaction threshold check. Shared by identity-based
+        // Unsubscribe and the O(1) handle release so both maintain the same invariants.
         private void MarkSlotDead(int index)
         {
             _handlers[index].Handle.DetachSlot();
@@ -631,9 +568,8 @@ namespace CycloneGames.EventBus.Core
             _handlers[index].Handle = null;
             _tombstones++;
 
-            // Maintenance lives on the unsubscribe path, never on the publish path: unsubscribe
-            // is the only thing that creates tombstones, so checking there costs one compare on a
-            // cold path instead of one branch per dispatch.
+            // Maintenance lives on the unsubscribe path (the only tombstone producer), never on
+            // the dispatch path.
             if (_dispatchDepth == 0)
             {
                 MaybeCompact();
@@ -646,14 +582,8 @@ namespace CycloneGames.EventBus.Core
             LogSubscription("unsubscribed");
         }
 
-        /// <summary>
-        /// Compacts only on a proportional tombstone share, never on an absolute count. Compaction is
-        /// O(_slots), so an absolute threshold would charge a full pass against a fixed number of
-        /// unsubscribes and the amortized cost of an unsubscribe would grow with the subscriber
-        /// count. Small buses need no floor: _slots / CompactRatio is already 2-3 at that size, so
-        /// they compact immediately. A caller that wants a denser array than the ratio leaves should
-        /// call <see cref="Compact"/> after a burst.
-        /// </summary>
+        // Proportional threshold only: an absolute count would make an unsubscribe's amortized
+        // cost grow with the subscriber count, since compaction is O(_slots).
         private void MaybeCompact()
         {
             if (_tombstones == 0)
@@ -679,8 +609,8 @@ namespace CycloneGames.EventBus.Core
                     continue;
                 }
 
-                // Moves the handle with its handler and re-stamps it, so the O(1) release path stays
-                // valid across compaction. Compaction is the only thing that relocates live slots.
+                // The handle moves with its handler and is re-stamped, keeping the O(1) release
+                // path valid. Compaction is the only relocator of live slots.
                 EventSubscription<T> handle = handlers[readIndex].Handle;
                 handle.MoveToSlot(writeIndex);
                 handlers[writeIndex].Handler = handler;
@@ -688,9 +618,7 @@ namespace CycloneGames.EventBus.Core
                 writeIndex++;
             }
 
-            // Clearing the tail is not cosmetic. Stale delegate references keep subscriber objects
-            // alive; on destroyed MonoBehaviours that is a real leak the profiler will show as
-            // managed heap that never comes back down.
+            // The tail must be cleared: stale delegates keep subscriber objects alive.
             for (int index = writeIndex; index < _slots; index++)
             {
                 handlers[index].Handler = null;
@@ -706,8 +634,7 @@ namespace CycloneGames.EventBus.Core
             HandlerSlot[] handlers = _handlers;
             for (int index = 0; index < _slots; index++)
             {
-                // Detach before dropping the reference: an outstanding handle that was never disposed
-                // must not keep pointing at a slot that no longer belongs to it.
+                // Detach first: an undisposed handle must not address a reassigned slot later.
                 handlers[index].Handle?.DetachSlot();
                 handlers[index].Handler = null;
                 handlers[index].Handle = null;
@@ -740,21 +667,16 @@ namespace CycloneGames.EventBus.Core
             }
         }
 
-        /// <summary>
-        /// Cold-path exception routing, kept out of line so the dispatch loop stays tight.
-        ///
-        /// Returns the fault to rethrow once the round finishes, or null when the policy swallows it.
-        /// Under <see cref="PublishErrorPolicy.Stop"/> it rethrows here with the original stack
-        /// preserved, which aborts the round and skips the remaining subscribers.
-        /// </summary>
+        // Cold-path exception routing, out of line to keep the dispatch loop tight. Returns the
+        // fault to rethrow after the round, or null when the policy swallows it. Under Stop it
+        // rethrows here, aborting the round.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private ExceptionDispatchInfo OnSubscriberException(Exception exception)
         {
             _subscriberErrorCount++;
             LogException(exception);
 
-            // ExceptionDispatchInfo is used instead of `throw exception` because rethrowing a caught
-            // exception by value rewrites its stack trace and destroys the original throw site.
+            // Capture preserves the original stack; `throw exception` would rewrite it.
             ExceptionDispatchInfo captured = ExceptionDispatchInfo.Capture(exception);
 
             if (_publishErrorPolicy == PublishErrorPolicy.Stop)
@@ -765,10 +687,7 @@ namespace CycloneGames.EventBus.Core
             return _publishErrorPolicy == PublishErrorPolicy.ContinueOnError ? captured : null;
         }
 
-        /// <summary>
-        /// Reports a publish refused by the re-entrancy ceiling. Cold path; the enable check runs
-        /// first, so a disabled sink costs one call and the message is a constant.
-        /// </summary>
+        // Cold path; the enable check precedes any work and the message is a constant.
         private void LogDroppedReentrant()
         {
             if (!_logSink.IsEnabled(EventBusLogSeverity.Warning, _category))
@@ -799,8 +718,7 @@ namespace CycloneGames.EventBus.Core
 
         private void LogSubscription(string operation)
         {
-            // No reflection: the delegate method name is deliberately omitted so the cold path stays
-            // AOT-safe. The event type is already carried by the category.
+            // No reflection: the delegate method name is omitted to stay AOT-safe.
             Log(operation);
         }
 
@@ -820,8 +738,7 @@ namespace CycloneGames.EventBus.Core
 
         private void Log(string message)
         {
-            // The enable check must stay ahead of anything that allocates. Every message passed here
-            // is a constant literal, so the enabled path allocates nothing either.
+            // The enable check stays ahead of any work; every message here is a constant literal.
             if (!_logSink.IsEnabled(EventBusLogSeverity.Debug, _category))
             {
                 return;
