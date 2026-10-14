@@ -3,20 +3,10 @@ using UnityEngine;
 namespace CycloneGames.EventBus.Runtime
 {
     /// <summary>
-    /// Unity host for an <see cref="EventBusPump"/>. Attach one to a bootstrap object, register the
-    /// queues and streams that need draining, and every buffered event enters its bus at a known
-    /// point in the frame with a known ceiling.
-    ///
-    /// Execution order is deliberately early (before the default time). Cross-thread events that
-    /// arrived during the last frame are delivered before most gameplay <c>Update</c> calls run, so
-    /// gameplay reads current state in the same frame rather than lagging one frame behind. Change
-    /// the order on the component if your game wants the opposite.
-    ///
-    /// Two budgets are exposed: the per-source one bounds how much of a single backlog a frame may
-    /// spend, the per-frame one bounds the whole drain. Only the second bounds the frame, because the
-    /// first multiplies by the number of registered sources.
-    ///
-    /// Main-thread only, like everything it drives.
+    /// Unity host for an <see cref="EventBusPump"/>. Runs early ([DefaultExecutionOrder(-500)]) so
+    /// cross-thread events from the last frame are delivered before most Update calls. Both budgets
+    /// are runtime-tunable so a build can lower them on constrained hardware without a code change.
+    /// Main-thread only.
     /// </summary>
     [DefaultExecutionOrder(-500)]
     [AddComponentMenu("CycloneGames/EventBus Pump")]
@@ -69,23 +59,16 @@ namespace CycloneGames.EventBus.Runtime
             set => maxEventsPerFrame = value;
         }
 
-        /// <summary>
-        /// Clamps the per-source budget to its documented domain: 0 pauses publishing, any positive
-        /// value is the budget, negatives collapse to 0. Shared by the setter, <c>OnValidate</c> and
-        /// <c>Update</c> so the runtime never depends on an Editor-only pass.
-        /// </summary>
+        // Clamps the per-source budget domain: 0 pauses, positive is the budget, negatives
+        // collapse to 0. Shared by setter, OnValidate and Update (OnValidate is Editor-only).
         internal static int ClampBudget(int value)
         {
             return value < 0 ? 0 : value;
         }
 
-        /// <summary>
-        /// Maps the serialized per-frame budget onto the pump parameter. Zero and negative mean "no
-        /// additional cap" rather than "spend nothing", which is why this is not <see cref="ClampBudget"/>:
-        /// a component serialized before this field existed deserializes it as zero, and mapping that
-        /// to a zero budget would silently stop every buffered event from being delivered on upgrade.
-        /// Pausing is <see cref="PumpingEnabled"/>, so this field does not need a pause value.
-        /// </summary>
+        // Maps the serialized per-frame budget: zero/negative mean "no additional cap", because a
+        // component serialized before this field existed deserializes it as zero. Pausing is
+        // PumpingEnabled's job.
         internal static int ResolveFrameBudget(int value)
         {
             return value > 0 ? value : int.MaxValue;
@@ -93,9 +76,7 @@ namespace CycloneGames.EventBus.Runtime
 
         private void OnValidate()
         {
-            // Deserialization bypasses the property setter, so a prefab or scene authored (or
-            // hand-edited) with a negative value would otherwise reach Drain every frame and throw.
-            // Clamping here keeps the stored field honest for every later serialize.
+            // Deserialization bypasses the property setter.
             maxEventsPerTargetPerFrame = ClampBudget(maxEventsPerTargetPerFrame);
         }
 
@@ -110,8 +91,6 @@ namespace CycloneGames.EventBus.Runtime
         {
             if (pumpingEnabled)
             {
-                // Same clamp as OnValidate: OnValidate does not run in a Player build, and a
-                // serialized negative value must not become a per-frame ArgumentOutOfRangeException.
                 _pump.Drain(
                     ClampBudget(maxEventsPerTargetPerFrame),
                     ResolveFrameBudget(maxEventsPerFrame));

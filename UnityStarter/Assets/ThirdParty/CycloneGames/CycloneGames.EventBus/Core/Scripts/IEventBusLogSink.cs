@@ -3,19 +3,11 @@ using System;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Narrow, BCL-only logging port used by the EventBus Core for cold-path diagnostics.
-    /// It is intentionally free of any concrete logging dependency; a separate integration assembly
-    /// adapts this to a real backend.
+    /// Narrow, BCL-only logging port for cold-path diagnostics, free of any concrete logging
+    /// dependency; an integration assembly adapts it to a real backend.
     ///
-    /// <see cref="Write"/> takes a finished string rather than an
-    /// <c>Action&lt;StringBuilder&gt;</c> builder. A builder would let the caller defer formatting
-    /// until after the enable check, which is a real win for interpolated messages — but every
-    /// message the bus emits is a constant literal, so the deferral bought nothing while costing a
-    /// closure display class on every subscribe and unsubscribe. Measured: 24 bytes per call,
-    /// allocated even when the sink was disabled, because Roslyn hoists the display class to the top
-    /// of the enclosing method, ahead of the guard.
-    ///
-    /// A sink that needs to enrich a message can do so on its side of the boundary.
+    /// <see cref="Write"/> takes a finished string rather than a builder: every message the bus
+    /// emits is a constant literal, so deferred formatting would only add a closure allocation.
     /// </summary>
     public interface IEventBusLogSink
     {

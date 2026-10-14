@@ -10,16 +10,11 @@ using CycloneGames.EventBus.Core;
 namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
 {
     /// <summary>
-    /// Awaits a single event from a Core <see cref="EventBus{T}"/>. UniTask types appear only in this
-    /// integration assembly; the Core layer never depends on UniTask.
-    ///
-    /// This is the one place where a bus is consumed asynchronously, and the shape is deliberately
-    /// narrow: wait for one event, with an optional filter and a cancellation token. There is no
-    /// async enumerable over a bus, because a bus has no completion and no backpressure — an open
-    /// async stream over one is an unbounded subscription that most callers forget to dispose.
-    ///
-    /// Cost: one subscription handle (pooled by the bus) plus one completion source per wait. This is
-    /// a gameplay/sequencing construct, not a per-frame path; do not use it in a tight loop.
+    /// Awaits a single event from a Core <see cref="EventBus{T}"/>. Deliberately narrow: one event,
+    /// optional filter, cancellation token. There is no async enumerable over a bus — a bus has no
+    /// completion and no backpressure, so an open async stream is an unbounded subscription.
+    /// Cost per wait: one pooled subscription handle plus one completion source. A sequencing
+    /// construct, not a per-frame path.
     /// </summary>
     public static class EventBusUniTaskExtensions
     {
@@ -64,16 +59,10 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
             return new EventAwaiter<T>(bus, predicate).Run(cancellationToken);
         }
 
-        /// <summary>
-        /// One-shot waiter. Separated into its own type so the subscription handle, the completion
-        /// source and the cancellation registration have one owner with one release path — releasing
-        /// any of them independently is how these helpers leak handlers.
-        ///
-        /// Race protocol, in order: the cancellation registration is created first (so it exists
-        /// before any settle path can run and can never be missed), the subscription second, then
-        /// the settled flag is re-checked to close the window between the two, and a single
-        /// try/finally disposes the registration on every exit.
-        /// </summary>
+        // One-shot waiter with one owner and one release path for the subscription, the completion
+        // source and the cancellation registration.
+        // Race protocol: register cancellation first (can never be missed), subscribe second,
+        // re-check settled to close the window, single try/finally releases the registration.
         private sealed class EventAwaiter<T> where T : struct
         {
             private readonly EventBus<T> _bus;
@@ -81,9 +70,8 @@ namespace CycloneGames.EventBus.Runtime.Integrations.UniTask
             private readonly Action<T> _handler;
             private readonly UniTaskCompletionSource<T> _completion = new UniTaskCompletionSource<T>();
 
-            // The thread WaitAsync ran on — the bus owner thread by contract. The cancellation
-            // callback compares against it to decide between a direct release and the deferred
-            // thread-safe removal inbox.
+            // The bus owner thread by contract; the cancellation callback compares against it to
+            // choose between a direct release and the deferred thread-safe removal inbox.
             private readonly int _ownerThreadId;
 
             private IEventSubscription _subscription;

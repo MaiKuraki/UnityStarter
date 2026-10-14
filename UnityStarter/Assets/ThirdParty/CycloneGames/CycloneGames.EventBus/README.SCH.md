@@ -2,396 +2,345 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.EventBus 是面向 Unity 与纯 C# 宿主的零分配一对多通知总线。它把通常被混在一起的三件事分开：一条不分配、不加锁的同步派发路径；一座给异线程生产者使用的有界桥；以及一个带显式成本上限的帧调度排空点。总线本身是单线程密闭且无锁的，跨线程是一个显式动作，而不是一种环境属性。
+面向 Unity 与纯 C# 宿主的零分配一对多事件总线，按生产环境负载设计：同步确定性派发、显式的线程边界、有界容器、可配置的帧成本上限——在包括移动端、WebGL、主机在内的所有平台上行为一致。
 
 ## 目录
 
-- [概述](#概述)
-- [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [诊断](#诊断)
-- [故障排查](#故障排查)
-- [验证](#验证)
+- [CycloneGames.EventBus](#cyclonegameseventbus)
+  - [目录](#目录)
+  - [为什么需要这个模块](#为什么需要这个模块)
+  - [架构](#架构)
+  - [第 1 级：最小可用总线](#第-1-级最小可用总线)
+  - [第 2 级：用 Scope 成组管理订阅](#第-2-级用-scope-成组管理订阅)
+  - [第 3 级：用 EventStream 做批量缓冲](#第-3-级用-eventstream-做批量缓冲)
+  - [第 4 级：跨线程边界](#第-4-级跨线程边界)
+  - [第 5 级：用 EventBusContext 做组合](#第-5-级用-eventbuscontext-做组合)
+  - [第 6 级：异步与响应式集成](#第-6-级异步与响应式集成)
+  - [可以依赖的语义](#可以依赖的语义)
+    - [派发期间的结构变更](#派发期间的结构变更)
+    - [错误策略](#错误策略)
+    - [重入上限](#重入上限)
+    - [线程模型速查](#线程模型速查)
+  - [容量、预算与背压](#容量预算与背压)
+  - [性能与平台说明](#性能与平台说明)
+  - [诊断与故障排查](#诊断与故障排查)
+  - [示例](#示例)
+  - [验证](#验证)
 
-## 概述
+## 为什么需要这个模块
 
-事件总线回答一个问题：某件事发生时，哪些处理器会运行、按什么顺序、付出多少成本？CycloneGames.EventBus 用一组小类型回答，每一个类型只负责一个答案。
+解耦通知看起来很简单——一个回调列表加一个循环——但生产环境会以可预期的方式击碎简单实现：
 
-- `EventBus<T>` 负责同步派发。`Publish` 是一棵确定性的调用树：处理器按订阅顺序运行，在所有平台和所有脚本后端上一致，没有优先级、没有重排、没有异步完成。正常路径上派发是零分配的。
-- `MpscEventQueue<T>` 负责线程边界。任意数量的后台线程入队，恰好一个 owner 线程排空到总线。有界、无锁、两侧都零分配。
-- `EventStream<T>` 负责批处理。写入 N 个事件，在调用方选定的时刻一次性 flush，可选单次 flush 预算。
-- `EventBusPump` 负责帧调度。由一个地方决定缓冲源何时排空、一帧允许花多少。
+| 朴素实现的问题 | 生产环境中的代价 | 本模块的方案 |
+| --- | --- | --- |
+| `List<Action>` + `foreach` 派发 | 每次发布都有枚举器与闭包分配，移动端出现 GC 尖峰 | `EventBus<T>`：句柄池化、数组派发，发布路径 **0 字节** |
+| "处处线程安全"的总线 | 热路径上的锁或并发集合，在弱多核硬件上代价最高 | 单线程密闭总线（无锁）+ 唯一一座显式跨线程桥（`MpscEventQueue<T>`） |
+| 后台生产者的无界队列 | 消费者一旦停滞，内存无限增长直到进程死亡 | 有界容器：拒绝、计数、施加背压 |
+| 无帧成本控制 | 积压在一帧内排空，直接卡帧 | `EventBusPump` 双预算（每源 + 每帧） |
+| 订阅者抛异常 | 一个坏掉的监听者会静默阻断排在它后面的所有人 | 显式 `PublishErrorPolicy`；默认策略永不跳过任何订阅者 |
+| 派发中订阅/退订 | 视时序不同导致处理器被跳过、重复投递或崩溃 | 有文档、有测试覆盖的结构变更语义 |
 
-适用场景：
-
-- 多个监听者需要对同一个事件做出反应，而发布者不需要知道它们是谁。
-- 通知路径不能分配内存、不能加锁，并且需要能逐帧剖析。
-- 异线程生产者（网络、资源加载、Job 完成回调）需要触达主线程 gameplay，但不应把总线变成线程安全的。
-
-不要把它当作异步消息队列、网络传输层或持久化日志使用。它不提供跨进程投递保证、不做持久化，也不提供有界容器之外的背压。
-
-### 主要特性
-
-- **零分配 `Publish`**：派发路径上没有托管分配、没有装箱、没有 LINQ、没有闭包、没有字符串格式化、没有日志。
-- **单线程密闭且无锁**：密闭既是安全保证，也是零分配的前提，因此 `Publish` 不加锁。
-- **确定性顺序**：处理器按订阅顺序运行；派发期间的结构变更语义有文档、有测试。
-- **自动压缩**：退订留下 tombstone，压缩按摊还触发，订阅句柄被池化，因此稳态下订阅/退订抖动是零分配的。
-- **有界跨线程桥**：Vyukov 风格的 MPSC 环，并且把"被拒绝"和"已丢失"分开计数。
-- **显式错误策略**：单个坏订阅者不会静默地让其他订阅者失去投递。
-- **纯 C# 核心**：`noEngineReferences: true`，无 `unsafe`、无反射、无动态代码生成、无 P/Invoke。
+贯穿全部设计的原则：**热路径几乎什么都不做，其他一切都是显式的**。发布就是一次数组扫描——无锁、无分配、无日志。跨线程、批处理、调度、错误处理都是按需组合的机制，而不是无论用不用都要付费的环境行为。
 
 ## 架构
 
 | 程序集 | 路径 | 职责 |
 | --- | --- | --- |
-| `CycloneGames.EventBus.Core` | `Core/` | 总线、配置、容器、命令端口、诊断。不引用 `UnityEngine`。 |
-| `CycloneGames.EventBus.Runtime` | `Runtime/` | 组合根门面、帧 pump、`MonoBehaviour` 宿主。 |
-| `CycloneGames.EventBus.Editor` | `Editor/` | 只读诊断窗口，仅 Editor 平台。 |
-| `CycloneGames.EventBus.Integrations.Logging` | `Integrations/Logging/` | `IEventBusLogSink` 到 CycloneGames.Logging 的适配器。 |
-| `CycloneGames.EventBus.Runtime.Integrations.R3` | `Runtime/Integrations/R3/` | 双向 `Observable<T>` 桥。仅在存在 `com.cysharp.r3` 时启用。 |
-| `CycloneGames.EventBus.Runtime.Integrations.UniTask` | `Runtime/Integrations/UniTask/` | `WaitAsync` 一次性等待器。仅在存在 `com.cysharp.unitask` 时启用。 |
-| `CycloneGames.EventBus.Runtime.Integrations.VitalRouter` | `Runtime/Integrations/VitalRouter/` | 基于 VitalRouter `Router` 的适配器。仅在存在该包时启用。 |
-| `CycloneGames.EventBus.Tests.EditMode` | `Tests/EditMode/` | 总线、流、环、作用域契约。 |
-| `CycloneGames.EventBus.Tests.Integrations` | `Tests/EditMode.Integrations/` | 关闭边界、pump 语义、所有权、集成适配器。 |
+| `CycloneGames.EventBus.Core` | `Core/` | 总线、容器、配置、命令端口、诊断。不引用 `UnityEngine`（`noEngineReferences: true`）。 |
+| `CycloneGames.EventBus.Runtime` | `Runtime/` | 组合门面、帧泵、两个薄 `MonoBehaviour` 宿主。 |
+| `CycloneGames.EventBus.Editor` | `Editor/` | 只读诊断窗口。 |
+| `CycloneGames.EventBus.Integrations.Logging` | `Integrations/Logging/` | 对接 CycloneGames.Logging 的 `IEventBusLogSink` 适配器。 |
+| `...Runtime.Integrations.R3` | `Runtime/Integrations/R3/` | `Observable<T>` 桥。仅在安装 `com.cysharp.r3` 时编译（asmdef `versionDefines`）。 |
+| `...Runtime.Integrations.UniTask` | `Runtime/Integrations/UniTask/` | 一次性 `WaitAsync`。仅在安装 UniTask 时编译。 |
+| `...Runtime.Integrations.VitalRouter` | `Runtime/Integrations/VitalRouter/` | VitalRouter `Router` 适配器。仅在安装 VitalRouter 时编译。 |
+| `...Tests.EditMode` / `...Tests.Integrations` | `Tests/` | 契约、并发、零分配与生命周期测试套件。 |
 
 ```mermaid
 flowchart LR
-    Producer["后台生产者"] -->|TryEnqueue| Ring["MpscEventQueue"]
-    Batch["批量写入方"] -->|TryWrite| Stream["EventStream"]
-    Ring --> Pump["EventBusPump.Drain"]
-    Stream --> Pump
-    Pump -->|Publish| Bus["EventBus of T"]
-    Direct["owner 线程"] -->|Publish| Bus
-    Bus --> Handlers["订阅者，按订阅顺序"]
+    subgraph Foreign["任意线程"]
+        P[后台生产者] -->|TryEnqueue| Q[MpscEventQueue]
+    end
+    subgraph Owner["属主线程（Unity 主线程）"]
+        S[批量写入方] -->|TryWrite| ST[EventStream]
+        Q --> Pump[EventBusPump.Drain]
+        ST --> Pump
+        Pump -->|按预算 Publish| Bus[EventBus]
+        Direct[直接调用方] -->|Publish| Bus
+        Bus --> H[处理器，按订阅顺序]
+    end
 ```
 
-从其他线程进入总线唯一受支持的路径是：先入队到容器，再由 pump 在 owner 线程排空。`EventBus<T>` 永远不变为线程安全。
+保证可移植性的依赖规则：**Core 只依赖 BCL**——无引擎 API、无 `unsafe`、无反射、无动态代码生成。非 Unity 宿主（headless 服务器、CLI 工具、其他引擎）可以原样使用 Core，只需用自己的 tick 驱动替换两个 `MonoBehaviour` 适配器。
 
-### 依赖方向
+## 第 1 级：最小可用总线
 
-`Core` 只依赖 BCL。`Runtime` 依赖 `Core` 与 `UnityEngine`。`Editor` 依赖 `Core` 与 `Runtime`。每个集成程序集依赖 `Core` 加它自己的第三方包，绝不反向。测试程序集通过 `InternalsVisibleTo` 访问内部不变量，从而在不扩大公开 API 的前提下保持可测试性。
-
-## 快速上手
-
-只用总线时引用 `CycloneGames.EventBus.Core`；需要 `MonoBehaviour` 或组合根门面时引用 `CycloneGames.EventBus.Runtime`。
+事件就是普通的 struct。不需要接口、基类或特性：
 
 ```csharp
 using CycloneGames.EventBus.Core;
 
-public struct DamageEvent
+public struct ValueChangedEvent
 {
-    public int TargetId;
-    public int Amount;
+    public int Id;
+    public float NewValue;
 }
 ```
 
-### 订阅与发布
+创建总线、订阅、发布、退订：
 
 ```csharp
-var bus = new EventBus<DamageEvent>();
+var bus = new EventBus<ValueChangedEvent>();
 
-// 缓存委托：bus.Subscribe(OnDamage) 每次调用都会分配新委托，
+// 缓存委托：把方法组直接传给 Subscribe 每次都会分配一个新委托，
 // 因为 C# 不会缓存实例方法组转换。
-Action<DamageEvent> handler = OnDamage;
+Action<ValueChangedEvent> handler = OnValueChanged;
 IEventSubscription subscription = bus.Subscribe(handler);
 
-bus.Publish(new DamageEvent { TargetId = 7, Amount = 12 });
+bus.Publish(new ValueChangedEvent { Id = 7, NewValue = 0.5f });
 
-subscription.Dispose();
+subscription.Dispose(); // 幂等。O(1) 退订。
 
-static void OnDamage(DamageEvent evt)
-{
-    // 同步运行，运行在发布者线程上。
-}
+static void OnValueChanged(ValueChangedEvent evt) { /* 同步执行 */ }
 ```
 
-### 一次性释放成组订阅
+即使在这个最小级别，你也已经获得：
+
+- **同步、有序派发**——处理器按订阅顺序在发布线程上执行。无队列、无异步完成、无重排。
+- **零分配**——预热之后 `Publish` 不分配任何内存。这一点由测试断言，不只是口头承诺。
+- **确定性成本**——每次发布 `O(订阅数)`，每个处理器一次间接调用。可以逐帧 profiling。
+
+## 第 2 级：用 Scope 成组管理订阅
+
+真实系统会订阅多个事件，并且必须在关闭时全部释放。Scope 收集句柄并按相反顺序统一释放：
 
 ```csharp
 var scope = new SubscriptionScope();
 scope.Add(bus, handler);
 scope.Add(otherBus, otherHandler);
 
-// 释放作用域会释放它记录的全部订阅。
-scope.Dispose();
+scope.Dispose(); // 释放记录的所有订阅。幂等。
 ```
 
-`EventBusScopeMonoBehaviour` 把作用域绑定到 `GameObject` 生命周期，因此模式、窗口或控制器根节点可以通过 `Scope` 订阅，并在销毁时自动释放。
-
-### 跨线程边界
+在 Unity 中，`EventBusScopeMonoBehaviour` 把 Scope 绑定到 `GameObject` 生命周期：
 
 ```csharp
-var queue = new MpscEventQueue<DamageEvent>(capacity: 1024);
+public sealed class PanelController : MonoBehaviour
+{
+    private void Awake()
+    {
+        EventBusScopeMonoBehaviour scope = gameObject.AddComponent<EventBusScopeMonoBehaviour>();
+        scope.Subscribe(bus, OnValueChanged); // 销毁时自动释放。
+    }
+
+    private void OnValueChanged(ValueChangedEvent evt) { }
+}
+```
+
+显式 Scope——而不是弱引用——是本模块对"陈旧订阅者"的答案。弱事件模式会把泄漏问题换成非确定性投递和额外 GC 压力；Scope 让释放时机成为代码中可见的设计决定。
+
+## 第 3 级：用 EventStream 做批量缓冲
+
+当一个系统每帧产生大量事件时，逐个立即发布会让派发成本和顺序变成隐式的——与帧内其他工作交织在一起。`EventStream<T>` 把"一帧内散落的 N 次发布"变成"写 N 次，冲洗一次"：
+
+```csharp
+var stream = new EventStream<ValueChangedEvent>(capacity: 512);
 var pump = new EventBusPump();
-pump.AddQueue(queue, bus);
+pump.AddStream(stream, bus);
 
-// 任意线程：
-queue.TryEnqueue(new DamageEvent { TargetId = 7, Amount = 12 });
+// 生产者侧，帧内任意时刻：
+stream.TryWrite(new ValueChangedEvent { Id = 7, NewValue = 0.5f });
 
-// owner 线程，每帧一次：
+// 每帧一个显式冲洗点：
 pump.Drain(maxEventsPerTarget: 256, maxEventsPerTick: 2048);
 ```
 
-环满时 `TryEnqueue` 返回 `false`。此后该事件由调用方决定重试、丢弃还是计数；队列无法知道调用方的意图。
+换来的性质：
 
-## 核心概念
+- **显式的派发时机**——冲洗点是一个决定，可复现、可 profiling。
+- **帧成本上限**——`FlushTo(bus, budget)` 可以把大批量摊到多帧。
+- **有界内存**——容量构造时固定。写满时拒绝写入并计入 `RejectedCount`；永不增长。
 
-### 线程模型
+## 第 4 级：跨线程边界
 
-`EventBus<T>` 是单线程密闭的。`Subscribe`、`Unsubscribe`、`Publish`、`Compact`、`Clear` 与 `Dispose` 必须全部运行在同一个 owner 线程上——在 Unity 中即主线程。这是硬契约而非偏好：密闭正是 `Publish` 能够无锁且零分配的前提。
-
-触达密闭总线只有两种受支持的方式：
-
-1. **仅 owner 线程**：直接调用 `Publish`。
-2. **异线程**：入队到 `MpscEventQueue<T>` 或 `EventStream<T>`，由 `EventBusPump` 在 owner 线程排空。
-
-在异线程上触发、且必须释放订阅的回调，使用 `EventBus<T>.ScheduleRemoval` 而不是直接释放句柄。延迟移除会在 owner 线程的下一个入口点被应用。UniTask 适配器在取消令牌由线程池线程触发时走的正是这条路径。
-
-### 派发期间的结构变更
-
-语义是定义清晰且有测试覆盖的，因此处理器可以安全地修改订阅集合：
-
-| 变更 | 效果 |
-| --- | --- |
-| 在 `Publish` 中订阅 | 新处理器本轮不会触发；它落在进入时捕获的槽位数量快照之上或之后。 |
-| 在 `Publish` 中退订 | 从它的槽位读到 null 的那一刻起被跳过，因此移除后续处理器的处理器可以在同一轮内抑制它。 |
-| 在 `Publish` 中压缩 | 永不在派发中途运行。退订会给总线打标记，由最外层派发帧在退出时执行一次原地压缩。 |
-| 在 `Publish` 中调用 `Compact()` 或 `Clear()` | 抛出 `InvalidOperationException`：槽位下标会在迭代中发生位移。 |
-| 在 `Publish` 中调用 `Dispose()` | 延迟。该轮是原子的（剩余处理器仍会运行），`IsDisposed` 立即变为 true，由最外层派发帧在退出时拆除总线。 |
-
-### 错误策略
-
-`PublishErrorPolicy` 决定订阅者抛异常时的行为。没有任何策略会在不留下计数器或异常的情况下丢弃故障。
-
-| 策略 | 行为 | 适用 |
-| --- | --- | --- |
-| `Stop` | 首个异常立即传播，剩余处理器被跳过，原始栈保留。 | 小规模总线、需要快速失败的调试。 |
-| `Swallow` | 所有处理器都运行，故障被记录并计数，`Publish` 正常返回。 | 尽力而为的表现层监听者：伤害数字、音频、特效。 |
-| `ContinueOnError` | 所有处理器都运行，随后首个异常带着原始栈被重新抛出。后续异常只记录和计数，不再抛出。 | 大型项目的默认值。 |
-
-在订阅者超过寥寥几个的总线上，`Stop` 意味着一个坏监听者会静默地让之后每一个监听者失去投递——这是大型项目中最难定位的失败模式。`ContinueOnError` 正是因此成为默认值。
-
-### 重入上限
-
-`MaxDispatchDepth`（默认 `64`）限制递归发布。无界递归发布链是设计错误，其代价是栈溢出，而任何平台都无法从栈溢出中恢复。超过上限的发布会被丢弃、计入 `DroppedReentrantCount`，并以 `Warning` 级别经日志 sink 上报。否则超限在调用点是完全静默的，所以默认值刻意设得宽松：gameplay 事件级联每跳只消耗一层，合法链路不应触及它。
-
-### 命令端口
-
-`ICommandPublisher` 是总线之外的一个定向、且可能异步的对应物：
+总线按设计是单线程密闭的——这正是它能无锁的原因。后台工作（网络、加载、任务完成回调）通过 `MpscEventQueue<T>` 进入，这是一座有界、无锁的多生产者/单消费者环：
 
 ```csharp
-ValueTask PublishAsync<TCommand>(in TCommand command, CancellationToken cancellationToken = default)
-    where TCommand : struct;
+var queue = new MpscEventQueue<AssetLoadedEvent>(capacity: 1024);
+var pump = new EventBusPump();
+pump.AddQueue(queue, bus);
+
+// 任意后台线程：
+bool accepted = queue.TryEnqueue(new AssetLoadedEvent { AssetId = 42 });
+
+// 属主线程，每帧一次：
+pump.Drain(maxEventsPerTarget: 256, maxEventsPerTick: 2048);
 ```
 
-`InProcessCommandPublisher` 是无依赖实现。它立即派发命令；若已有处理器在运行（重入发布），命令会进入有界队列，并在当前处理器完成后按序排空。溢出时应用 `CommandOverflowPolicy`：`Drop` 静默丢弃，`FailFast` 抛异常。
+```mermaid
+sequenceDiagram
+    participant BG as 后台线程（可多个）
+    participant Q as MpscEventQueue
+    participant Pump as EventBusPump
+    participant Bus as EventBus（属主线程）
 
-命令负载在重入路径上会被装箱进队列闭包。这是可接受的，因为命令路径不是零分配热路径——`EventBus<T>` 才是。写在这里是为了不让这项成本变成意外。
+    BG->>Q: TryEnqueue（无锁、零分配）
+    Note over Q: 满了？返回 false，RejectedCount++<br/>生产者重试或丢弃
+    loop 每帧一次
+        Pump->>Q: 按预算 TryDequeue
+        Q-->>Pump: 事件，按生产者各自顺序
+        Pump->>Bus: Publish（同步）
+    end
+```
 
-更换后端通过 builder 而不是配置：
+三条规则保证安全：
+
+1. **只有属主线程接触总线。** 队列就是线程边界的全部。
+2. **`TryEnqueue` 返回 `false` 是背压，不是丢失。** 事件仍在你手里：重试、丢弃或自行计数。`RejectedCount` 持续上升说明消费者跟不上——加大容量或排空预算。
+3. **关闭顺序**：先 `Close()` 入口 → 生产者观察到 `false` 后停止 → 在属主线程排空（或 `Clear()`）剩余事件。关闭后已入队的事件仍可排空。
+
+必须在其他线程释放订阅的回调（例如线程池线程上触发的取消），使用 `bus.ScheduleRemoval(handle)`——总线上唯一线程安全的成员。移除会在属主线程的下一个入口点生效。
+
+## 第 5 级：用 EventBusContext 做组合
+
+一个应用拥有很多总线。`EventBusContext` 是组合根门面：总线、命令发布器、根 Scope 的统一入口，带显式销毁顺序（订阅 → 子 Scope → 拥有的总线 → 命令后端）：
 
 ```csharp
 using EventBusContext context = new EventBusBuilder()
-    .WithConfiguration(configuration)
-    .WithCommandPublisherFactory(cfg => new MyRouterPublisher(cfg))
+    .WithConfiguration(new EventBusConfiguration(
+        maxDispatchDepth: 64,
+        publishErrorPolicy: PublishErrorPolicy.ContinueOnError))
     .Build();
+
+EventBus<ValueChangedEvent> bus = context.GetOrCreateBus<ValueChangedEvent>();
+context.RootScope.Add(bus, handler);
 ```
 
-## 使用指南
-
-### 选择容器
-
-| 需求 | 类型 | 理由 |
-| --- | --- | --- |
-| 在 owner 线程上立即触发事件 | `EventBus<T>.Publish` | 同步、确定性、零分配 |
-| 把事件从其他线程搬到 owner 线程 | `MpscEventQueue<T>` + `EventBusPump` | 有界、无锁、可观测背压 |
-| 一帧内写入大量事件并在选定时刻派发 | `EventStream<T>` + `EventBusPump` | 顺序写入、flush 点显式、可预算 |
-| 异步等待一个事件 | `EventBusUniTaskExtensions.WaitAsync` | 一个订阅加一个完成源 |
-| 把总线接入响应式管线 | `EventBusObservableExtensions.ToObservable` | R3 桥，只在冷路径分配 |
-| 把命令路由到单个处理器 | `ICommandPublisher` | 定向，而非一对多 |
-
-`EventStream<T>` 与 `MpscEventQueue<T>` 看起来相似但不可互换。流是 owner 线程密闭的，存在意义是让 flush 点显式；环是多生产者，存在意义是跨越线程边界。当批量写入方与后台生产者都要喂同一个总线时，两者都会用到。
-
-### 容器容量定档
-
-容量在构造时固定且永不增长；容器满时拒绝并计数，因此失控的生产者无法分配内存。
-
-- `EventBus<T>` 的 `initialCapacity` 按预期稳态订阅者数量定档。这样可以避免订阅路径上的每一次数组增长，并消除预热阶段的 GC 尖峰。用 `PeakSubscriptionCount` 报告的高水位来实测定档。
-- 流的容量按最坏帧定档，而不是平均帧。拒绝会计入 `RejectedCount`，它是"容量太小"或"漏了一次 flush"的信号。
-- 环的容量按你愿意持有的最大积压定档。满时生产者会观察到 `false`；重试是正常的背压响应，这种模式下 `RejectedCount` 很大是正常的。
-
-### 生命周期与所有权
-
-`EventBusContext` 是带显式释放顺序的组合根门面：先释放订阅，再释放子作用域，再释放自有总线，最后释放命令后端。总线所有权在注册调用点显式可见：
+总线所有权在注册调用点显式声明：
 
 | 方法 | 所有权 |
 | --- | --- |
-| `RegisterBus<T>` | 调用方所有。Context 不释放它；按契约它的生命周期长于 context。 |
-| `RegisterOwnedBus<T>` | 所有权转移给 context。`Dispose` 会释放它。 |
-| `GetOrCreateBus<T>` | 由 context 创建并拥有。 |
+| `RegisterBus<T>` | 调用方所有；Context 永不销毁它。 |
+| `RegisterOwnedBus<T>` | 所有权转移给 Context。 |
+| `GetOrCreateBus<T>` | 由 Context 创建并拥有。 |
 
-这里刻意不提供进程级单例。宿主持有一个 context 实例并按需传递。`EventBusGlobal<T>` 的存在是为完全没有组合根的代码，它带有通常的 Service Locator 代价：依赖变得隐式、测试必须重置状态。凡是有组合根的地方，优先使用构造函数注入或 context。
+模块刻意不提供进程级单例。对完全没有组合根的代码，`EventBusGlobal<T>` 提供按类型的静态持有者——同时带有服务定位器通常的代价（依赖隐式化、测试必须重置状态）。有组合根的地方优先使用 Context 或构造函数注入。
 
-### 退订
+命令端口（`ICommandPublisher`）覆盖"定向、单处理器"的命令场景，与一对多通知互补。内置 `InProcessCommandPublisher` 是零依赖实现；其他后端（例如 VitalRouter 适配器）通过 `EventBusBuilder.WithCommandPublisherFactory` 注入，因此 Core 永不引用任何集成程序集。
 
-两种机制，成本不同，失败模式也不同：
+## 第 6 级：异步与响应式集成
 
-- **句柄**：`Subscribe` 返回一个 `IEventSubscription`，`Dispose` 时退订。O(1)。幂等。总线已释放后再释放句柄是安全的空操作，这正是延迟拆除（`OnDestroy` 晚于 context 结束）安全的原因。
-- **标识**：`Unsubscribe(Action<T>)` 移除第一个持有该委托的槽位，返回是否找到，是线性扫描。它同时会解除该槽位所属句柄的绑定，因此之后释放该句柄是空操作，而不会发生第二次移除。以委托本身作键时用标识退订；需要 O(1) 与显式所有权时用句柄。
-
-绝不要持有一个已释放的句柄并期望之后重新订阅。句柄是被池化复用的；一个被保留的已释放句柄会指向另一个订阅。请重新调用 `Subscribe`。
-
-## 进阶主题
-
-### 在长跑总线上回收内存
-
-容量按设计保留：压缩在原地移除 tombstone 且永不缩容，因此稳态下完全不做数组操作。对逐帧总线这是正确的默认值，对一个峰值负载只出现一次、之后不会再出现的进程则是错误的默认值。`Compact()` 可按需回收 tombstone 槽位；模块不提供自动缩容。
-
-### 给病态帧设上界
-
-per-target 排空预算约束单个源的积压——这是公平性属性，用于阻止被灌满的队列饿死邻居。它不约束帧成本，因为它会乘以已注册源的数量。真正约束帧的是 per-tick 预算：
+可选，仅在安装对应包时编译：
 
 ```csharp
-// 每个源最多 256 个事件；整次排空最多 4096 个事件。
-int published = pump.Drain(maxEventsPerTarget: 256, maxEventsPerTick: 4096);
+// UniTask：等待下一个匹配事件。一次池化订阅 + 一个完成源。
+ValueChangedEvent evt = await bus.WaitAsync(e => e.Id == 7, cancellationToken);
+
+// R3：把总线适配为 observable（或把 observable 订阅进总线）。
+Observable<ValueChangedEvent> observable = bus.ToObservable();
 ```
 
-`maxEventsPerTick` 为 `0` 表示暂停发布但不注销任何源。传负值会被拒绝，而不会被解读为"无上限"。
+集成类型只出现在各自的程序集中；Core 不依赖 UniTask、R3、VitalRouter 或任何日志库。日志走窄端口 `IEventBusLogSink`（默认 `NullEventBusLogSink`：冷路径一次 `IsEnabled` 调用，派发路径零成本）。
 
-`EventBusPumpMonoBehaviour` 把这两个预算暴露为序列化字段与运行时属性，因此场景或构建可以在不改代码的前提下调整：`MaxEventsPerTargetPerFrame`（默认 1024）与 `MaxEventsPerFrame`（默认 8192）。在宿主上，per-frame 上限为 0 或负值表示**不再额外限流**，而不是"暂停"——暂停请用 `PumpingEnabled`。这样在该字段存在之前就已序列化的组件会保持原有行为，而不会静默地什么都不投递。
+## 可以依赖的语义
 
-### 降低高频事件的投递量
+### 派发期间的结构变更
 
-容器提供背压、预算与拒绝；它们都不做合并。如果同一个逻辑事实在一帧内被广播很多次——例如每次伤害结算都会变化的血量值，或被多个系统轮询的进度值——每一次发布都是对每个订阅者的一次完整派发，而中间值在被算出来之后立刻被接收方丢弃。
+处理器可以在派发中安全地订阅、退订或销毁总线。语义有定义且有测试覆盖：
 
-两个选择，按推荐程度排序：
+| `Publish` 期间的变更 | 行为 |
+| --- | --- |
+| 订阅 | 新处理器从**下一轮**开始触发，本轮绝不触发。 |
+| 退订 | 从该时刻起跳过，同一轮内生效。 |
+| `Compact()` / `Clear()` | 抛 `InvalidOperationException`（索引会在循环下方移动）。自动压缩会被推迟。 |
+| `Dispose()` | 推迟：当前轮原子地完成，`IsDisposed` 立即为 true，最外层轮退出时执行拆除。 |
 
-1. **少发。** 在生产者处用变化值判断或频率门控。
-2. **批量写入、一次 flush。** 把生产者接到 `EventStream<T>`，每帧 flush 一次，N 次写入变成一个显式派发点。
+### 错误策略
 
-合并（取最新值）不属于本模块；需要它的调用方应自己持有槽位并决定哪个值保留下来。
+通过 `EventBusConfiguration.PublishErrorPolicy` 按总线配置：
 
-### 被遗弃的总线
+| 策略 | 行为 | 适用 |
+| --- | --- | --- |
+| `Stop` | 第一个异常立即传播；其余处理器跳过。 | 小总线、调试期快速暴露。 |
+| `Swallow` | 全部执行；故障记录并计数；`Publish` 正常返回。 | 尽力而为的监听者。 |
+| `ContinueOnError`（默认） | 全部执行；轮结束后以原始堆栈重抛第一个异常。 | 大型项目的默认值：一个坏监听者永远不会静默吞掉其他人的投递。 |
 
-`EventBus<T>` 不提供判断委托目标对象是否仍然存活的手段。在 Unity 中，被销毁的 `MonoBehaviour` 作为委托目标依然有效，因此残留处理器会继续被调用，其异常会像其他故障一样由 `PublishErrorPolicy` 路由。请显式释放订阅，优先通过 `ISubscriptionScope` 或 `EventBusScopeMonoBehaviour`。
+### 重入上限
 
-## 常见场景
+`MaxDispatchDepth`（默认 64）为递归发布设界——处理器发布的事件又回到自身。无界链只可能以栈溢出告终，而栈溢出在任何平台上都无法恢复。被拒绝的发布计入 `DroppedReentrantCount` 并以 `Warning` 记录日志；该计数上升意味着存在需要打断的发布环，而不是应该盲目调高的上限。
 
-### Gameplay 通知
+### 线程模型速查
 
-```text
-gameplay 系统 -> Publish(EventBus<DamageEvent>) -> 伤害数字、音频、特效、任务、成就
-```
+| 类型 | 契约 |
+| --- | --- |
+| `EventBus<T>`、`EventStream<T>`、`EventBusPump`、`EventBusContext`、`SubscriptionScope` | 单线程密闭（属主线程） |
+| `MpscEventQueue<T>` | `TryEnqueue`/`Close` 任意线程；`TryDequeue`/`FlushTo`/`Clear` 仅属主线程 |
+| `EventBus<T>.ScheduleRemoval` | 任意线程——总线唯一的跨线程成员 |
 
-使用 `ContinueOnError`，这样坏掉的表现层监听者不会阻止 gameplay 系统接收事件。
+同步原语仅限 `Interlocked` 与 `Volatile`。派发路径无锁、无自旋、不创建线程。
 
-### 跨线程入口
+## 容量、预算与背压
 
-```text
-网络线程 / Job 线程
-    -> MpscEventQueue.TryEnqueue  （有界，满则拒绝）
-    -> EventBusPump.Drain         （owner 线程，每帧一次，带预算）
-    -> EventBus.Publish           （同步、确定性）
-```
+模块内的一切都是**有界的、构造时定容的**。这就是长期运行稳定性的答案：没有任何结构随运行时间增长，因此内存与帧成本在进程生命周期内保持平稳。
 
-总线成为异线程数据进入 gameplay 的唯一入口，排空预算成为该入口的帧成本上限。
+- **总线**用 `initialCapacity` 按稳态订阅数定容；用 `PeakSubscriptionCount` 实测校准。后备数组只增不减——一次性峰值之后用 `Clear()` 或重建总线。
+- **Stream 和 Ring 按最坏的一帧定容**，而不是平均帧。容器满了会拒绝并计数（`RejectedCount`），而不是分配。
+- **帧上界**用泵的双预算控制：每源预算（公平性——一个被打满的源不能饿死邻居）与每帧预算（真正的帧成本上限）。两者在 `EventBusPumpMonoBehaviour` 上都可在运行时调整，因此针对低配设备无需改代码即可调低。
+- **拒绝 ≠ 丢失。** `RejectedCount` 是被拒绝的写入（调用方可重试——正常背压）；`DroppedCount` 是确认的丢失（已进入容器、被 `Clear` 丢弃未读）。两者分开，离线排查才有可能。
 
-### owner 线程批量生产者
+对高频事件，优先减少发布（在源头做变更检测或限频）或通过 Stream 批量冲洗。合并（latest-value-wins）刻意不内置——哪个值存活是产品决策，由调用方拥有。
 
-```text
-生成器在一帧内写入 500 个事件
-    -> EventStream.TryWrite        （顺序写入，无逐事件派发成本）
-    -> EventBusPump.Drain          （单一 flush 点，可预算）
-    -> EventBus.Publish            （按写入顺序）
-```
+## 性能与平台说明
 
-这让派发时机变得显式，而不是与帧内其他工作交错在一起。
+| 路径 | 复杂度 | 模块自身分配 |
+| --- | --- | --- |
+| `Publish` | `O(订阅数)` | 0 字节 |
+| `Subscribe` / 句柄 `Dispose` | 摊还 `O(1)` | 稳态 0 字节（句柄池化） |
+| `Unsubscribe(Action<T>)` | `O(槽位数)` | 0 字节 |
+| `Compact` | `O(槽位数)` | 0 字节 |
+| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 字节（Vyukov 环，位置与争用计数器缓存行填充） |
+| `EventStream.TryWrite` / `FlushTo` | `O(1)` / `O(冲洗数)` | 0 字节 |
+| `EventBusPump.Drain` | `O(源数 + 排空数)` | 0 字节 |
 
-### 等待单个事件
+- **AOT / IL2CPP / 裁剪安全**：无反射、无动态代码生成、无 `unsafe`、无 P/Invoke。
+- **WebGL**：线程原语在单线程目标上编译为空操作；环退化为普通 FIFO，行为不变。
+- **移动端 / ARM64**：环位置与争用计数器按 128 字节填充，同时覆盖 64 字节与 128 字节缓存行架构。
+- **内存卫生**：压缩清理陈旧委托、含引用的已消费环槽被清零、句柄池有上界——已销毁的监听者不会被模块钉活。
 
-```csharp
-DamageEvent evt = await bus.WaitAsync(evt => evt.TargetId == 7, cancellationToken);
-```
+## 诊断与故障排查
 
-一个订阅加一个完成源。这是序列编排构件，不是逐帧路径。这里刻意不提供对总线的异步可枚举：总线没有完成语义也没有背压，因此一个开放的异步流就是多数调用方会忘记释放的无界订阅。
-
-## 性能与内存
-
-| 路径 | 复杂度 | 模块自有分配 | 说明 |
-| --- | --- | --- | --- |
-| `Publish` | `O(订阅者数)` | 0 字节 | 每个存活处理器一次间接委托调用 |
-| `Subscribe` | 摊还 `O(1)` | 稳态 0 字节 | 句柄池化；无 tombstone 时不扫描 |
-| `IEventSubscription.Dispose` | 摊还 `O(1)` | 0 字节 | 每个槽位记录自己的句柄 |
-| `Unsubscribe(Action<T>)` | `O(槽位数)` | 0 字节 | 线性标识扫描 |
-| `Compact` | `O(槽位数)` | 0 字节 | 原地、不缩容、按退订次数摊还 |
-| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 字节 | Vyukov 环，逐槽序号 |
-| `EventStream.TryWrite` | `O(1)` | 0 字节 | 环形写入 |
-| `EventStream.FlushTo` | `O(已 flush 数)` | 0 字节 | 头指针推进；任意预算下都无元素搬移 |
-| `EventBusPump.Drain` | `O(源数量)` | 0 字节 | 加上被排空的事件 |
-
-### 线程
-
-- `EventBus<T>`、`EventStream<T>`、`EventBusPump`、`EventBusContext`、`SubscriptionScope`、`EventBusGlobal<T>` 为单线程密闭。
-- `MpscEventQueue<T>` 为多生产者单消费者：`TryEnqueue` 与 `Close` 可从任意线程调用，`TryDequeue`、`FlushTo`、`Clear` 仅限 owner 线程。
-- `EventBus<T>.ScheduleRemoval` 可从任意线程调用，是总线上唯一的跨线程成员。
-- 同步原语仅限 `Interlocked` 与 `Volatile`。派发路径上没有锁、没有 sleep、没有无界重试自旋、不创建线程。
-
-### 平台行为
-
-`Core` 程序集在所有平台启用，不引用 `UnityEngine`、不引用平台 SDK、无 unsafe 代码、无原生插件、无反射。它不使用动态代码生成，因此在 IL2CPP、AOT 与 managed stripping 下是安全的。在单线程 WebGL 上，`Interlocked`/`Volatile` 屏障会被编译掉，环退化为普通 FIFO；行为不变，只是它原本要保护的并发并不存在。
-
-模块中唯一的引擎耦合是 `Runtime/` 下的两个 `MonoBehaviour` 宿主。非 Unity 宿主用自身的 tick 驱动替换它们，其余 `EventBusPump`、`EventBusContext` 与各容器可直接复用。
-
-发布验证应在目标脚本后端下运行 EditMode 测试套件，并用目标 Player 与 Profiler 确认派发分配与帧成本。Editor 的数字不能替代这些验证。
-
-## 诊断
-
-`IEventBusDiagnostics` 只暴露计数，从不暴露内部集合：
+每总线计数器（`IEventBusDiagnostics`，由 `EventBusContext.GetDiagnosticsSnapshot` 聚合，可在 `Tools/CycloneGames/EventBus/Debugger` 的只读窗口中查看）：
 
 | 计数器 | 含义 |
 | --- | --- |
-| `SubscriptionCount` | 存活订阅者数。 |
-| `TombstoneCount` | 退订留下的死槽位。受压缩比例约束。 |
-| `PublishCount` | 自构造以来成功的派发次数。 |
-| `DroppedReentrantCount` | 被重入上限拒绝的发布次数。 |
-| `SubscriberErrorCount` | 按策略处理过的订阅者异常数。 |
-| `PeakSubscriptionCount` | 存活订阅者数最高水位，用于定档 `initialCapacity`。 |
-| `DispatchDepth` | 当前嵌套深度；空闲时为 0。 |
+| `SubscriptionCount` / `PeakSubscriptionCount` | 当前订阅数 / 历史峰值（定容依据）。 |
+| `TombstoneCount` | 待压缩的死槽。持续上升 = 订阅抖动；应改用活动标志门控，而不是反复订阅。 |
+| `PublishCount` | 构造以来的派发次数。 |
+| `DroppedReentrantCount` | 被重入上限拒绝的发布。 |
+| `SubscriberErrorCount` | 被策略处理的订阅者异常。 |
 
-`EventBusContext.GetDiagnosticsSnapshot` 跨已注册总线聚合。`Tools/CycloneGames/EventBus/Debugger` 只读渲染它，并采用保留式模型，使 `OnGUI` 重绘不分配内存。
+**泄漏定位工作流**：调试器出现红色 `Dead N` pill 或错误横幅，意味着有订阅者比它的 target 活得久。展开对应 bus 行——每个 `DESTROYED` 行都给出处理方法名、声明类型与已销毁 target 的类型，用一次 IDE 全局搜索即可定位到那条 `Subscribe` 调用。修复方式是结构性的而不是加判空：把订阅绑定到生命周期（`EventBusScopeMonoBehaviour` 或 `SubscriptionScope`），让销毁时自动释放。
 
-在容器上，`RejectedCount` 与 `DroppedCount` 被刻意分开。被容器拒绝的写入不是丢失——调用方可以重试——而进入容器后未被读取即被丢弃的事件才是确认的丢失。把这两者混为一谈会让线下排查无法进行。
-
-## 故障排查
-
-| 现象 | 可能原因 | 处理 |
+| 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
-| `Publish` 抛 `ObjectDisposedException` | 总线已释放但仍有引用被持有 | 通过作用域释放订阅，并在释放宿主前停止发布 |
-| 处理器不触发 | 在派发轮内订阅，或订阅的是另一个总线实例 | 轮内订阅的处理器从下一轮开始触发；确认发布的是你订阅的那个总线 |
-| `Compact` 或 `Clear` 抛 `InvalidOperationException` | 在处理器内部调用 | 结构压缩会自动延迟；不要在派发期间调用它们 |
-| `DroppedReentrantCount` 增长 | 处理器发布了自己所属的事件类型，直接或经由环路 | 打断环路，或拆分事件类型 |
-| `EventBusPump.Drain` 抛 "not re-entrant" | flush 回调排空了正在排空它的 pump | 拆成第二个 pump，或推迟到下一 tick |
-| 后台线程的事件丢失 | 直接发布到总线而非入队 | 在 owner 线程发布；用 `MpscEventQueue<T>` 加 `EventBusPump` 跨越边界 |
-| 反复出现派发深度上限的警告 | 合法级联比 `MaxDispatchDepth` 更深 | 提高 `MaxDispatchDepth`，但先确认是否存在环路 |
-| `TombstoneCount` 持续增长 | 订阅者的增删速度快于压缩比例能吸收的速度 | 用活动标志门控订阅，而不要让它抖动 |
-| Profiler 里看到分配 | 分配发生在处理器里，而不是 `Publish` 里 | 剖析完整调用路径；`Publish` 本身不分配 |
+| 调试器出现 `DESTROYED` 行 / "destroyed subscriber targets" 警告 | 订阅者的 target 已销毁但未退订。委托会钉住其整个对象图（真实泄漏，内存受限设备上最严重），且仍会被调用——若 handler 访问 Unity API 则每次发布付一次异常成本 | 按行内显示的方法名、声明类型、target 类型全局搜索对应的 `Subscribe` 调用，然后改用 `EventBusScopeMonoBehaviour`、`SubscriptionScope`，或在 `OnDestroy` 中显式 `Dispose` |
+| 处理器不触发 | 在派发轮中订阅，或发布到了另一个总线实例 | 轮中订阅下一轮生效；检查实例 |
+| `DroppedReentrantCount` 上升 | 处理器在环中发布自己的事件类型 | 打断环或拆分事件类型 |
+| `Compact`/`Clear` 抛 `InvalidOperationException` | 在处理器内调用 | 派发中这些操作会自动推迟；请在派发外调用 |
+| `Drain` 抛"不可重入" | 冲洗回调排空了自己所在的泵 | 拆到第二个泵或推迟到下一帧 |
+| 后台事件丢失 | 从其他线程直接 Publish | 走 `MpscEventQueue<T>` + 泵 |
+| Profiler 抓到分配 | 分配发生在处理器内部，不在 `Publish` | 对完整调用链 profiling；派发路径本身不分配 |
+
+## 示例
+
+`Samples/` 目录内置了一个 Demo。把 `EventBusSampleBootstrap` 组件挂到场景中任意 GameObject 上并进入 Play 模式：它会构建 `EventBusContext` 并通过每种容器驱动真实流量——直接发布、批量 `EventStream`、后台线程 `MpscEventQueue`，外加可选的故障注入（会抛异常的订阅者、订阅抖动、销毁未退订的泄漏目标、触发深度上限的递归发布链），让调试窗口的每个计数器都有真实数据可看。Editor 桥接会自动注册 context；打开 `Tools/CycloneGames/EventBus/Debugger` 后按 Play 即可。流量速率与故障注入均可在 Inspector 调整。删除 `Samples` 文件夹即可完全移除。
 
 ## 验证
 
-从 Unity Test Runner 运行测试套件，或使用命令行：
+EditMode 套件（契约、并发、零分配、生命周期）：
 
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.EditMode -testResults <result-path> -quit
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.Integrations -testResults <result-path> -quit
 ```
 
-`CycloneGames.EventBus.Tests.Integrations` 仅在 `UNITY_INCLUDE_TESTS`、R3 与 UniTask 同时存在时参与编译。
-
-## 内存所有权
-
-除 `EventBusGlobal<T>` 外，本包不保留任何进程级可变引用状态；`EventBusGlobal<T>` 是显式选择加入的持有者，并提供 `ClearIf` 以应对延迟拆除。每个容器在实例生命周期内持有自身存储，并在 `Dispose` 时释放；每个句柄池都是有界的。若要新增进程级可变状态，需要重新做一次所有权与容量评审。
+零分配断言使用 `GC.GetAllocatedBytesForCurrentThread`——这是托管侧代理指标，不能替代真机证据。发布到受限平台前，请在目标 Player + Profiler 下确认：在 IL2CPP（或发布所用后端）下，代表性帧的派发路径无 `GC.Alloc`。

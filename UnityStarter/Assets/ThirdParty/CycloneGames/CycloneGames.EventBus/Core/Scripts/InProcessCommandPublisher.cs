@@ -6,15 +6,13 @@ using System.Threading.Tasks;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Synchronous, single-thread-confined command publisher used when VitalRouter is not wired.
-    /// A command is dispatched immediately; if a handler is already running (re-entrant publish), the
-    /// command is placed in a bounded queue and drained in order after the running handler completes.
-    /// Overflow beyond the capacity applies <see cref="CommandOverflowPolicy"/>, so the queue never
-    /// grows without bound.
+    /// Synchronous, single-thread-confined command publisher used when no external router is wired.
+    /// A command is dispatched immediately; a re-entrant publish is placed in a bounded queue and
+    /// drained in order after the running handler completes, with <see cref="CommandOverflowPolicy"/>
+    /// applied on overflow.
     ///
-    /// Command payloads are boxed into the queue closures, which is acceptable because the command
-    /// path is not the zero-allocation hot path — that is <see cref="EventBus{T}"/>. Use the
-    /// VitalRouter backend for zero-allocation command routing.
+    /// Command payloads are boxed into queue closures on the re-entrant path; the command path is
+    /// not the zero-allocation hot path (<see cref="EventBus{T}"/> is).
     /// </summary>
     public sealed class InProcessCommandPublisher : ICommandPublisher, IDisposable
     {
@@ -119,8 +117,8 @@ namespace CycloneGames.EventBus.Core
             _running = true;
             try
             {
-                // Deliberately no ConfigureAwait(false): the publisher is single-thread-confined, so
-                // the drain loop and the _running flag must resume on the owner thread.
+                // No ConfigureAwait(false): single-thread-confined, the drain loop must resume on
+                // the owner thread.
                 await handler(command, cancellationToken);
 
                 while (_pending.Count > 0)

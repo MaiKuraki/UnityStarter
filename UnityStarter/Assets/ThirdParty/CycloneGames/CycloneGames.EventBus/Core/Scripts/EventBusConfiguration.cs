@@ -1,25 +1,19 @@
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Immutable composition choices for an EventBus. Built by the composition root and consumed by
-    /// the facade and the per-bus instances.
-    ///
-    /// The default error policy is <see cref="PublishErrorPolicy.ContinueOnError"/>, not
-    /// <see cref="PublishErrorPolicy.Stop"/>. On a bus with more than a handful of subscribers,
-    /// <c>Stop</c> means one broken listener silently costs every later listener its delivery — the
-    /// failure mode that is hardest to trace in a large project. <c>ContinueOnError</c> still
-    /// surfaces the fault (rethrown after the round) and still never skips a subscriber.
+    /// Immutable composition choices for an EventBus, built by the composition root.
+    /// The default error policy is <see cref="PublishErrorPolicy.ContinueOnError"/>: on a bus with
+    /// many subscribers, <c>Stop</c> lets one broken listener silently cost every later listener
+    /// its delivery. <c>ContinueOnError</c> surfaces the fault after the round and never skips a
+    /// subscriber.
     /// </summary>
     public sealed class EventBusConfiguration
     {
         public const int DefaultCommandQueueCapacity = 64;
 
         /// <summary>
-        /// Default re-entrancy ceiling. A stack-depth guard, not a policy knob, so it stays loose
-        /// enough that a legitimate cascade never reaches it: each hop that publishes its own event
-        /// type costs one level, and interactions routinely cascade (hit -> damage -> death -> loot ->
-        /// quest -> achievement -> UI). Exceeding it is silent at the callsite, so the default is
-        /// generous while still bounding the stack.
+        /// Default re-entrancy ceiling. A stack-depth guard, not a policy knob: generous enough
+        /// that a legitimate cascade never reaches it, bounded enough to prevent a stack overflow.
         /// </summary>
         public const int DefaultMaxDispatchDepth = 64;
 
