@@ -233,7 +233,7 @@ Runtime code uses no unsafe code, dynamic code generation, runtime reflection di
 - Unity-specific composition stays here; do not expose `LoggingSettings`, `UnityConsoleLogSink`, or `UnityEngine` types through a PureCore API.
 - A custom Unity/platform sink belongs in an integration assembly that references the pipeline and its optional SDK.
 - A cross-thread sink copies only bounded data into its own queue and documents capacity, overflow, thread affinity, retries, flush, and shutdown ownership.
-- MemoryGovernance integration should consume `ILogPipelineMonitor` and `LogMemoryPools` from the pure C# pipeline package; it does not need a dependency on this Unity package unless it provides Unity lifecycle scheduling.
+- An external memory-governance integration should consume `ILogPipelineMonitor` and `LogMemoryPools` from the pure C# pipeline package; it does not need a dependency on this Unity package unless it provides Unity lifecycle scheduling.
 
 ## Troubleshooting
 

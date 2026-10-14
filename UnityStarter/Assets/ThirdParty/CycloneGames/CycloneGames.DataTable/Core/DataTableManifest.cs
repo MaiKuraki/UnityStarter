@@ -283,7 +283,7 @@ namespace CycloneGames.DataTable
             }
 
             string actualHash = DataTableHashUtility.ComputeSha256Hex(bytes);
-            if (!string.Equals(actualHash, entry.Sha256Hex, StringComparison.Ordinal))
+            if (!DataTableHashUtility.FixedTimeEqualsHex(actualHash, entry.Sha256Hex))
             {
                 throw new InvalidOperationException(
                     $"Data-table SHA-256 mismatch. Table={entry.TableName}, Expected={entry.Sha256Hex}, Actual={actualHash}");

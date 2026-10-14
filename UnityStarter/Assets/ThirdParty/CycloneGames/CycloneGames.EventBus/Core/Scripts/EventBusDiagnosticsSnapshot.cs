@@ -2,7 +2,7 @@ namespace CycloneGames.EventBus.Core
 {
     /// <summary>
     /// Fixed-size, allocation-free diagnostic view of a single bus. Counters are monotonic and expose
-    /// no internal handler array and no object graph, so a profiler window, a MemoryGovernance metric
+    /// no internal handler array and no object graph, so a profiler window, an external metrics
     /// source or a CI assertion can read it without touching bus internals.
     /// </summary>
     public readonly struct EventBusSnapshot
