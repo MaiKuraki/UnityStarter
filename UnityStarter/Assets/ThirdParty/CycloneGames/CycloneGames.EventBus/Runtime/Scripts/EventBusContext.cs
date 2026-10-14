@@ -5,13 +5,10 @@ using CycloneGames.EventBus.Core;
 namespace CycloneGames.EventBus.Runtime
 {
     /// <summary>
-    /// The composition-root facade: one stable entry point for the game's notification buses, the
-    /// command publisher, and the root subscription scope. It owns explicit disposal order — stop
-    /// receiving, release subscriptions, then dispose child scopes and the command backend.
-    ///
-    /// Instances are single-thread-confined. There is deliberately no process-global singleton: the
-    /// host owns a context instance (constructed manually or resolved from a DI container) and passes
-    /// it where needed. That keeps dependencies explicit and testable.
+    /// Composition-root facade: one entry point for the buses, the command publisher, and the root
+    /// subscription scope, with explicit disposal order (subscriptions, child scopes, owned buses,
+    /// command backend). Single-thread-confined; deliberately no process-global singleton — the
+    /// host owns the instance and passes it where needed.
     /// </summary>
     public sealed class EventBusContext : IDisposable
     {
@@ -34,10 +31,8 @@ namespace CycloneGames.EventBus.Runtime
         }
 
         /// <summary>
-        /// True after <see cref="Dispose"/>. Tooling needs this to stop observing a context that is
-        /// gone: the snapshot of a disposed context is legitimately all zeros (the bus map is
-        /// cleared), so a debugger that keeps reading it would silently show an empty world instead
-        /// of telling the user the context ended.
+        /// True after <see cref="Dispose"/>. Tooling checks this to stop observing a dead context:
+        /// its snapshot is legitimately all zeros.
         /// </summary>
         public bool IsDisposed => _disposed;
 
@@ -48,12 +43,8 @@ namespace CycloneGames.EventBus.Runtime
         public EventBusConfiguration Configuration => _configuration;
 
         /// <summary>
-        /// Registers a caller-owned bus for <typeparamref name="T"/>. This is the DI-friendly entry
-        /// point: a container (or manual composition root) constructs the bus and registers it here,
-        /// so the context never creates buses behind the caller's back.
-        ///
-        /// The context does NOT dispose a bus registered here — the caller outlives the context and
-        /// keeps ownership. Use <see cref="RegisterOwnedBus{T}"/> to hand a bus over, or
+        /// Registers a caller-owned bus for <typeparamref name="T"/> (DI-friendly). The context
+        /// does NOT dispose it; use <see cref="RegisterOwnedBus{T}"/> to transfer ownership, or
         /// <see cref="GetOrCreateBus{T}"/> to let the context create and own one.
         /// </summary>
         public void RegisterBus<T>(EventBus<T> bus) where T : struct
@@ -76,9 +67,7 @@ namespace CycloneGames.EventBus.Runtime
 
         /// <summary>
         /// Registers a bus for <typeparamref name="T"/> and transfers ownership to this context:
-        /// <see cref="Dispose"/> will dispose it. Use this when a bus is constructed outside the
-        /// context but its lifetime should end with it — the ownership is explicit at the call site
-        /// instead of hidden behind a bool parameter.
+        /// <see cref="Dispose"/> will dispose it.
         /// </summary>
         public void RegisterOwnedBus<T>(EventBus<T> bus) where T : struct
         {
@@ -130,10 +119,7 @@ namespace CycloneGames.EventBus.Runtime
             return scope;
         }
 
-        /// <summary>
-        /// Aggregates all registered buses into one fixed-size snapshot. Computing it is O(active
-        /// buses) on the cold diagnostic path; each per-bus count is O(1).
-        /// </summary>
+        /// <summary>Aggregates all registered buses into one fixed-size snapshot.</summary>
         public EventBusDiagnosticsSnapshot GetDiagnosticsSnapshot()
         {
             int subscriptionCount = 0;

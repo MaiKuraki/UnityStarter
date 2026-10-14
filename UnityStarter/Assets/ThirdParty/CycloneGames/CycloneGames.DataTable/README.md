@@ -15,9 +15,9 @@ This README is the solution-design and runtime reference. The transactional Luba
 - [Runtime Loading Pipeline](#runtime-loading-pipeline)
 - [Ownership and Lifetime](#ownership-and-lifetime)
 - [Performance and Platform Notes](#performance-and-platform-notes)
+- [Cross-Endpoint Configuration Consistency](#cross-endpoint-configuration-consistency)
 - [Security and Persistence](#security-and-persistence)
 - [Extension Points](#extension-points)
-- [Troubleshooting](#troubleshooting)
 - [Validation](#validation)
 - [API Navigation](#api-navigation)
 
@@ -113,20 +113,26 @@ Build-time generation and runtime loading are separate contracts. The pipeline c
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CallerOwned: create validated candidate
+    [*] --> CallerOwned: candidate validated
     CallerOwned --> Published: TryPublish committed
-    CallerOwned --> CallerOwned: superseded or non-monotonic
     CallerOwned --> Disposed: caller disposes
-    Published --> Latest: store owns candidate resources
-    Latest --> Retired: a newer generation is published or reset
-    Retired --> Released: final pinned reader leaves
+    Published --> Latest: store owns resources
+    Latest --> Retired: newer generation or reset
+    Retired --> Released: last reader leaves
     Released --> [*]
 
-    state Latest {
-        [*] --> ReaderPinned
-        ReaderPinned --> ReaderPinned: steady-state reads
-        ReaderPinned --> NewGeneration: Refresh at a safe point
-    }
+    note right of CallerOwned
+        Rejected publishes (superseded or
+        non-monotonic) never change ownership;
+        the candidate stays caller-owned.
+    end note
+
+    note right of Latest
+        Each registered reader pins exactly
+        one generation. Publication never
+        moves a reader; Refresh() at a safe
+        point is the generation boundary.
+    end note
 ```
 
 A successful publication consumes the candidate. A rejected publication leaves it caller-owned. Publication never moves an existing reader; `Refresh()` is the generation boundary. A retired generation releases its resource owner only after its final pinned reader leaves.
@@ -432,7 +438,7 @@ using var candidate = new DataTableCandidate(
     backingResourceOwner);
 ```
 
-`descriptors` is an `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`. The collector snapshots and validates all descriptors before invoking any getter, rejects duplicate contracts, and performs no reflection discovery. A revision sequence must be greater than zero and strictly exceed the Store's accepted high-water mark. Use a stable non-empty identity such as an authenticated content-release ID.
+`descriptors` is an `IReadOnlyList<DataTableGeneratedTableCollector.TableDescriptor<TTableSet>>`. The collector snapshots and validates all descriptors before invoking any getter, rejects duplicate contracts, and performs no reflection discovery. A revision sequence must be greater than zero and strictly exceed the Store's accepted high-water mark. Use a stable non-empty identity such as a product-verified content-release ID.
 
 The optional `backingResourceOwner` must be exclusively owned. Wrap thread-affine owners in an explicit dispatch adapter.
 
@@ -519,11 +525,83 @@ Stop writers, stop new requests, dispose readers, then dispose the Store. A reso
 - For IL2CPP and stripping, use generated serializers and explicit table descriptors. Validate the exact Player backend; Editor or static analysis does not prove AOT behavior.
 - WebGL must not depend on background threads or direct filesystem access to `StreamingAssets`. Use platform-appropriate asynchronous acquisition and budget synchronous decode work.
 
+## Cross-Endpoint Configuration Consistency
+
+### Why consistency is a distinct problem
+
+When several endpoints run the same logic against configuration, every endpoint must read exactly the same configuration content. Divergent content does not fail loudly: each side loads, validates, and decodes successfully, then silently disagrees about the data. Catching this requires comparing content identity between endpoints before the shared activity begins.
+
+This module provides the primitives only: `DataTableRevision` (monotonic publication identity), `DataTableManifest` (per-table declared lengths and SHA-256), `DataTableConfigFingerprint` (one aggregate content identity), and generation pinning through `DataTableStore`/`DataTableReader`. Transport, handshake timing, which endpoint is authoritative, and the response to each comparison result remain product decisions.
+
+### The fingerprint byte contract
+
+`DataTableConfigFingerprint.Compute(manifest)` hashes one deterministic byte stream with SHA-256:
+
+```text
+"DTF1" | int32 schemaVersion | int32 entryCount
+per entry, sorted by normalized table name (ordinal):
+    int32 nameByteCount | UTF-8 name bytes
+    byte flags (bit0 = has expected byte length, bit1 = has SHA-256)
+    if bit0: int64 expected byte length
+    if bit1: 64 UTF-8 bytes of lowercase SHA-256 hex
+```
+
+All integers are little-endian on every platform and architecture. Entry order inside the manifest does not affect the result. `Location` and `Required` are excluded on purpose: a location is an environment-specific path rather than content identity, and `Required` is a local admission policy. An empty manifest hashes its header only, so it has a well-defined fingerprint that cannot collide with a non-empty one. The layout is the cross-endpoint contract; the authoritative statement lives in the `DataTableConfigFingerprint` class documentation, and the EditMode suite pins it with an independently computed golden vector.
+
+### Minimal use: compute and compare
+
+```csharp
+DataTableConfigFingerprint local = DataTableConfigFingerprint.Compute(manifest);
+string wireForm = local.ToString(); // 64 lowercase hex characters; send to the peer.
+bool identical = local.Equals(peerFingerprint); // Fixed-time comparison.
+```
+
+`Equals` and `==` use a constant-time comparison so the check does not leak which byte differs first. The fingerprint covers declared identities (names, lengths, hashes); because the manifest already verified each payload's real bytes against those declarations while loading, equal fingerprints imply equal verified content.
+
+### Classify the peer before reacting
+
+```csharp
+DataTableConfigReconciliationStatus status = DataTableConfigReconciliation.Classify(
+    localFingerprint, localRevision,
+    peerFingerprint, peerRevision);
+```
+
+| Status | Meaning | Typical product response |
+| --- | --- | --- |
+| `Same` | Identical content. | Proceed. |
+| `PeerStale` | Local revision is newer. | Serve or point the peer at the newer content. |
+| `PeerAhead` | Peer revision is newer. | Acquire, validate, and publish the newer content first. |
+| `Mismatch` | Same revision, different content. | Refuse; resynchronization cannot reconcile a fork. |
+
+Equal fingerprints always classify as `Same`, even when sequences differ: republishing identical content is not divergence. Whether a higher sequence should be trusted at all is rollback protection, which is product trust policy — the same policy that supplies the trusted revision-sequence floor to the `DataTableStore` constructor.
+
+### A generic join handshake
+
+```mermaid
+sequenceDiagram
+    participant A as Endpoint A
+    participant B as Endpoint B
+    A->>B: revision and fingerprint
+    B->>B: Classify(local, remote)
+    alt Same
+        B->>A: accept
+    else PeerStale or PeerAhead
+        B->>A: resync newer manifest and payloads
+        A->>B: validate, recompute, compare again
+    else Mismatch
+        B->>A: refuse
+    end
+```
+
+### Pin the generation for the shared activity
+
+A verified comparison is only as strong as what happens afterwards. Register one `DataTableReader` when the shared activity starts and do not call `Refresh()` while consistent reads are required; refresh only at product-defined safe points, and rebuild state derived from table rows at that boundary. Keep published rows immutable on every endpoint: fingerprint agreement cannot survive one endpoint mutating shared row objects.
+
 ## Security and Persistence
 
 Treat files, remote configuration, patches, mods, command-line selections, and user-controlled paths as untrusted. Bound payload count, bytes, rows, names, locations, decompression, parser depth, strings, diagnostics, and processing time before expensive work. Portable name normalization rejects rooted paths, traversal, empty segments, control/surrogate/format characters, platform-invalid characters, and reserved names.
 
-SHA-256 detects corruption and identifies content; it is not authentication. Authenticate remotely supplied manifests and payload identities with a product-owned signature and trust policy before publication. Never log complete hostile payloads or secrets.
+SHA-256 provides integrity verification: it detects corrupted or tampered content and identifies what a payload claims to be. It does not establish trust by itself. The trust decision for remotely supplied manifests and payload identities — which signatures or sources to accept — belongs to the product layer and must be applied before publication. Hash comparisons in Core use fixed-time equality, so a comparison does not leak where the first difference occurs. Never log complete hostile payloads or secrets.
 
 Core writes no files and uses no `EditorPrefs`, `PlayerPrefs`, or `SessionState`. Persistence is always explicit:
 
@@ -561,7 +639,6 @@ Core defaults to silent `NullDataTableDiagnostics`. A host can install a process
 | --- | --- | --- |
 | `CycloneGames.GameplayTags.DataTable` | Consumes Core `IDataTableRows<TRow>` or `IReadOnlyList<TRow>` values. File I/O and decoding remain in the product composition root. | It does not bind to Luban, MessagePack, AssetManagement, or another decoder. |
 | `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | Adapts Core `IDataTable<TRow>` values or lookup delegates into level-value providers, modifier calculations, and attribute initialization. The assembly is opt-in and `autoReferenced: false`. | It does not acquire, decode, or publish payloads. Its UPM `versionDefines` condition is not activated by this asset-style DataTable checkout. |
-| MemoryGovernance DataTable companion | Operates only on a caller-owned `DataTableBytesCache` supplied explicitly, using its memory snapshot and bounded close/release contract. The caller retains ownership and coordinates reader quiescence. | It cannot discover an AssetManagement loader's private cache, decoded rows, or generations retained by `DataTableStore`. |
 
 ## Validation
 
@@ -610,6 +687,7 @@ The current checkout cannot pass pipeline generation until the missing source in
 | Publication | `DataTableRevision`, `DataTableCandidate`, `DataTableStore`, `DataTableStoreMetadata`, `DataTablePublishResult`, `DataTableReader`, `DataTableSnapshot` |
 | Payloads | `IDataTableBytesProvider`, `IDataTableBytesInventory`, `DataTableBytesCache`, `DataTableBytesCacheReleaseBudget`, `DataTableBytesCacheMemorySnapshot` |
 | Integrity and locations | `DataTableManifest`, `DataTableManifestEntry`, `DataTableHashUtility`, `DataTableNameUtility`, `IDataTableLocationResolver`, `DataTableLocationResolver` |
+| Cross-end consistency | `DataTableConfigFingerprint`, `DataTableConfigReconciliation`, `DataTableConfigReconciliationStatus` |
 | Diagnostics | `IDataTableDiagnostics`, `DataTableDiagnostics`, `DataTableDiagnosticChannel`, `DataTableLogWriterAdapter` |
 | Decoding | `LubanDataTableDecoder`, `MessagePackDataTableDecoder` |
 | Unity acquisition | `AssetManagementDataTableBytesLoader`, `AssetManagementDataTableRawFileBytesLoader`, `DataTableAssetLoadContext` |

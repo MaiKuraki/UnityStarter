@@ -233,7 +233,7 @@ Runtime code 不使用 unsafe code、动态代码生成、runtime reflection dis
 - Unity-specific composition 留在本包，不通过 PureCore API 暴露 `LoggingSettings`、`UnityConsoleLogSink` 或 `UnityEngine` 类型。
 - 自定义 Unity/platform sink 放入引用 Pipeline 与可选 SDK 的 integration assembly。
 - 跨线程 sink 只复制有界数据到自己的 queue，并说明 capacity、overflow、thread affinity、retry、flush 与 shutdown ownership。
-- MemoryGovernance integration 应消费纯 C# Pipeline 包中的 `ILogPipelineMonitor` 与 `LogMemoryPools`；除非提供 Unity lifecycle scheduling，否则不需要依赖本 Unity 包。
+- 外部 memory-governance integration 应消费纯 C# Pipeline 包中的 `ILogPipelineMonitor` 与 `LogMemoryPools`；除非提供 Unity lifecycle scheduling，否则不需要依赖本 Unity 包。
 
 ## 故障排查
 

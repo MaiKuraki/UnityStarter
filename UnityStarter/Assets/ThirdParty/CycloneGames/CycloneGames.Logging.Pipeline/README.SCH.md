@@ -211,7 +211,7 @@ Open/write failure 会使 sink 进入 degraded 或 faulted，并通过 `FileLogS
 
 `ILogPipelineMonitor` 通过 `IsFaulted` 与 `GetStatistics()` 提供观察能力，不授予 lifecycle authority。`LogPipelineStatistics` 包含 queued/reserved/in-flight 与峰值、保留字符、enqueue/process/drop 总数、critical drop、stop 后拒绝、sink failure/quarantine/disposal、filter budget、timestamp provider failure 与 builder failure。
 
-`LogMemoryPools.GetStatistics()` 报告进程级 idle `LogEvent` 与 `StringBuilder` cache。`LogMemoryPools.TrimStep(targetEvents, targetBuilders, maxWork)` 最多按调用方预算释放 idle pool，不删除 queued 或 in-flight 记录。该接口适合可选 MemoryGovernance integration，因为它只提供监控与有界 idle 维护，不转移 pipeline 所有权。
+`LogMemoryPools.GetStatistics()` 报告进程级 idle `LogEvent` 与 `StringBuilder` cache。`LogMemoryPools.TrimStep(targetEvents, targetBuilders, maxWork)` 最多按调用方预算释放 idle pool，不删除 queued 或 in-flight 记录。该接口适合可选的外部 memory-governance integration，因为它只提供监控与有界 idle 维护，不转移 pipeline 所有权。
 
 这些统计是诊断信息，不是完整 heap profile；它们不包含 caller-owned string、sink buffer、操作系统 buffer 与许多 runtime allocation。
 

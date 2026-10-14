@@ -9,24 +9,24 @@ namespace CycloneGames.EventBus.Editor
     /// reference — it does not own or dispose the context. It is an editor tooling compromise, not a
     /// runtime service locator.
     /// </summary>
-    internal static class EventBusEditorDiagnostics
+    public static class EventBusEditorDiagnostics
     {
         private static EventBusContext _context;
 
-        internal static void Register(EventBusContext context)
+        /// <summary>Hands a context to the debugger window. Editor-only code should call this.</summary>
+        public static void Register(EventBusContext context)
         {
             _context = context;
         }
 
-        internal static EventBusContext Current => _context;
+        public static EventBusContext Current => _context;
 
         /// <summary>
-        /// Releases the borrowed reference. Callers use this when the observed context ends: the
-        /// static would otherwise keep the context (and every bus it owns) reachable for the whole
-        /// Editor session, which is a real leak for a window that outlives several play sessions.
-        /// Idempotent.
+        /// Releases the borrowed reference. Call when the observed context ends: the static would
+        /// otherwise keep the context (and every bus it owns) reachable for the whole Editor
+        /// session. Idempotent.
         /// </summary>
-        internal static void Clear()
+        public static void Clear()
         {
             _context = null;
         }

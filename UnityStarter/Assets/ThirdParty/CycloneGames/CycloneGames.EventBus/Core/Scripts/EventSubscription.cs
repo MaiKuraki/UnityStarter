@@ -3,11 +3,8 @@ using System;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Non-generic handle returned by <see cref="EventBus{T}.Subscribe"/>. Disposing it releases the
-    /// subscription exactly once; subsequent disposal is a no-op.
-    ///
-    /// The non-generic shape is deliberate: a scope, a command router, or an R3 bridge can aggregate
-    /// subscriptions across many event types without knowing <c>T</c>.
+    /// Non-generic handle returned by <see cref="EventBus{T}.Subscribe"/>. Disposal is idempotent.
+    /// The non-generic shape lets scopes and bridges aggregate subscriptions across event types.
     /// </summary>
     public interface IEventSubscription : IDisposable
     {
@@ -16,13 +13,10 @@ namespace CycloneGames.EventBus.Core
     }
 
     /// <summary>
-    /// Subscription handle for <see cref="EventBus{T}"/>. It holds the bus, the handler, and the slot
-    /// it occupies instead of an unsubscribe closure, so the owning bus can pool and reuse it: both
-    /// subscribe and release are allocation-free and O(1) in steady state.
-    ///
-    /// Handles are single-thread-confined and owned by the bus that produced them. A handle is only
-    /// valid while it is rented; the bus may pool and re-bind it, so never retain one after releasing
-    /// it. Call <see cref="EventBus{T}.Subscribe"/> again instead.
+    /// Subscription handle for <see cref="EventBus{T}"/>. Holds (bus, handler, slot) instead of an
+    /// unsubscribe closure so the bus can pool it: subscribe and release are allocation-free and
+    /// O(1) in steady state. Single-thread-confined; a released handle may be re-bound by the pool,
+    /// so never retain one after release — call Subscribe again.
     /// </summary>
     public sealed class EventSubscription<T> : IEventSubscription where T : struct
     {
@@ -77,11 +71,8 @@ namespace CycloneGames.EventBus.Core
             _slot = slot;
         }
 
-        /// <summary>
-        /// Marks the handle as no longer owning a slot. Called when the slot dies without the handle
-        /// being disposed — an identity-based unsubscribe, a clear, or teardown — so a later
-        /// <see cref="Dispose"/> cannot address a slot that has been reassigned.
-        /// </summary>
+        // Marks the handle as no longer owning a slot (identity unsubscribe, clear, or teardown),
+        // so a later Dispose cannot address a reassigned slot.
         internal void DetachSlot()
         {
             _slot = -1;
@@ -89,12 +80,9 @@ namespace CycloneGames.EventBus.Core
     }
 
     /// <summary>
-    /// Wraps an arbitrary teardown callback as an <see cref="IEventSubscription"/>, so heterogeneous
-    /// cleanups (R3 disposables, CancellationToken registrations, pooled-object returns) can live in
-    /// an <see cref="ISubscriptionScope"/> alongside real bus subscriptions.
-    ///
-    /// This type is not pooled: it is for cold-path composition, not the subscribe/unsubscribe hot
-    /// path.
+    /// Wraps an arbitrary teardown callback as an <see cref="IEventSubscription"/> so heterogeneous
+    /// cleanups can live in an <see cref="ISubscriptionScope"/> alongside bus subscriptions.
+    /// Not pooled: cold-path composition only.
     /// </summary>
     public sealed class CallbackSubscription : IEventSubscription
     {

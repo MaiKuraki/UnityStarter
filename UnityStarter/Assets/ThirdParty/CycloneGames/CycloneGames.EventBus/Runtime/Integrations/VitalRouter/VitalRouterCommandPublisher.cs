@@ -37,18 +37,9 @@ namespace CycloneGames.EventBus.Runtime.Integrations.VitalRouter
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Copy the `in` parameter to a local: an async method cannot declare `in`, so the body
-            // lives in a separate async method that takes the struct by value.
-            TCommand captured = command;
-            return PublishCoreAsync(captured);
-        }
-
-        private async ValueTask PublishCoreAsync<TCommand>(TCommand command)
-            where TCommand : struct, ICommand
-        {
-            // Await directly so the adapter is agnostic to whether VitalRouter returns UniTask or
-            // ValueTask.
-            await _router.PublishAsync(command);
+            // Direct forwarding: no wrapper state machine, and the token reaches the router so
+            // its interceptors and subscribers observe mid-dispatch cancellation.
+            return _router.PublishAsync(command, cancellationToken);
         }
 
         public void Dispose()

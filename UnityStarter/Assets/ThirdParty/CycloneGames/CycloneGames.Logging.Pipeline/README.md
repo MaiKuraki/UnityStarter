@@ -211,7 +211,7 @@ Logs are plaintext and may include source locations or application data. Redact 
 
 `ILogPipelineMonitor` exposes `IsFaulted` and `GetStatistics()` without lifecycle authority. `LogPipelineStatistics` includes queued/reserved/in-flight and peak counts, retained characters, enqueue/process/drop totals, critical drops, after-stop rejection, sink failure/quarantine/disposal, filter budget, timestamp-provider failure, and builder failure.
 
-`LogMemoryPools.GetStatistics()` reports the process-wide idle `LogEvent` and `StringBuilder` caches. `LogMemoryPools.TrimStep(targetEvents, targetBuilders, maxWork)` releases at most the caller budget from idle pools. It never removes queued or in-flight records. This surface is suitable for an optional MemoryGovernance integration because it grants monitoring and bounded idle maintenance without transferring pipeline ownership.
+`LogMemoryPools.GetStatistics()` reports the process-wide idle `LogEvent` and `StringBuilder` caches. `LogMemoryPools.TrimStep(targetEvents, targetBuilders, maxWork)` releases at most the caller budget from idle pools. It never removes queued or in-flight records. This surface is suitable for an optional external memory-governance integration because it grants monitoring and bounded idle maintenance without transferring pipeline ownership.
 
 Statistics are diagnostics, not a complete heap profile. They exclude caller-owned strings, sink buffers, operating-system buffers, and many runtime allocations.
 

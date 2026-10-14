@@ -5,23 +5,13 @@ using System.Threading;
 namespace CycloneGames.EventBus.Core
 {
     /// <summary>
-    /// Per-event-type static holder, for hosts that do not use a DI container or an
-    /// <see cref="EventBusContext"/>.
+    /// Per-event-type static holder for hosts without a DI container or an EventBusContext.
+    /// A generic static field read is a single load — no hashing, no cast — so publishing through
+    /// this holder costs the same as through a directly held reference.
     ///
-    /// Resolving a bus through a <c>Dictionary&lt;Type, ...&gt;</c> per publish costs roughly 3 ns on
-    /// desktop x64 and measurably more on mobile, which is comparable to the entire dispatch of a
-    /// small event. A generic static field read is a single load with no hashing and no cast, so
-    /// publishing through this holder costs the same as publishing through a directly held
-    /// reference.
-    ///
-    /// This is a service locator, and it carries the usual trade-off: dependencies become implicit
-    /// and tests must reset state. It exists because the alternative for non-DI code is worse, not
-    /// because it is the preferred shape. Prefer constructor injection
-    /// (<c>EventBus&lt;T&gt;</c> as a constructor parameter) or an <see cref="EventBusContext"/> where
-    /// a composition root exists.
-    ///
-    /// Assign holders once at startup and clear them during teardown. Single-thread-confined like
-    /// the buses they point at.
+    /// This is a service locator: dependencies become implicit and tests must reset state. Prefer
+    /// constructor injection or an EventBusContext where a composition root exists.
+    /// Single-thread-confined like the buses it points at; assign at startup, clear at teardown.
     /// </summary>
     public static class EventBusGlobal<T> where T : struct
     {
@@ -30,8 +20,9 @@ namespace CycloneGames.EventBus.Core
         /// <summary>The bus for <typeparamref name="T"/>, or null when none has been assigned.</summary>
         public static EventBus<T> Instance
         {
-            get => _instance;
-            set => _instance = value;
+            get => Volatile.Read(ref _instance);
+            // Volatile write to match the atomic exchange in ClearIf.
+            set => Volatile.Write(ref _instance, value);
         }
 
         public static bool HasInstance => _instance != null;
