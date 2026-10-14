@@ -19,6 +19,13 @@ namespace CycloneGames.DataTable.Tests.Performance
         private const long MaxLargeComputeMilliseconds = 1_000;
         private const long MaxLargeComputeAllocatedBytes = 2L * 1024L * 1024L;
 
+        // LargeEntryCount exceeds the default 4,096-table guardrail, so the fixture manifests
+        // carry their own admission budget.
+        private static readonly DataTableLoadLimits ManifestLimits = new DataTableLoadLimits(
+            maxTableCount: 16_384,
+            maxBytesPerTable: 64 * 1024 * 1024,
+            maxTotalBytes: 512L * 1024L * 1024L);
+
         private DataTableManifest _smallManifest;
         private DataTableManifest _largeManifest;
         private DataTableConfigFingerprint _fingerprintSink;
@@ -102,7 +109,7 @@ namespace CycloneGames.DataTable.Tests.Performance
                     sha256Hex: i.ToString("x64"));
             }
 
-            return new DataTableManifest(1, entries);
+            return new DataTableManifest(1, entries, ManifestLimits);
         }
     }
 }
