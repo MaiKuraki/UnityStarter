@@ -62,10 +62,7 @@ namespace CycloneGames.DataTable
             }
 
             string actualHash = ComputeSha256Hex(bytes);
-            return string.Equals(
-                actualHash,
-                normalizedExpectedHash,
-                StringComparison.Ordinal);
+            return FixedTimeEqualsHex(actualHash, normalizedExpectedHash);
         }
 
         public static string NormalizeSha256Hex(string value)
@@ -83,7 +80,26 @@ namespace CycloneGames.DataTable
                 : value.Trim().ToLowerInvariant();
         }
 
-        private static string ToLowerHex(byte[] bytes)
+        // Constant-time ordinal equality for hex digests. Comparison time depends only on the
+        // (public) digest length, never on the position of the first differing character.
+        internal static bool FixedTimeEqualsHex(string left, string right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (left == null || right == null || left.Length != right.Length)
+            {
+                return false;
+            }
+
+            return CryptographicOperations.FixedTimeEquals(
+                MemoryMarshal.AsBytes(left.AsSpan()),
+                MemoryMarshal.AsBytes(right.AsSpan()));
+        }
+
+        internal static string ToLowerHex(byte[] bytes)
         {
             char[] chars = new char[bytes.Length * 2];
             for (int i = 0; i < bytes.Length; i++)

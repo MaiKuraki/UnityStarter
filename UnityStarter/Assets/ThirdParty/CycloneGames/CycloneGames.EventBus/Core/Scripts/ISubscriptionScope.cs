@@ -12,5 +12,8 @@ namespace CycloneGames.EventBus.Core
         int Count { get; }
 
         void Add(IEventSubscription subscription);
+
+        /// <summary>Subscribes to a bus and records the returned handle in this scope.</summary>
+        IEventSubscription Add<T>(EventBus<T> bus, Action<T> handler) where T : struct;
     }
 }

@@ -650,6 +650,57 @@ namespace CycloneGames.EventBus.Tests
             throw new InvalidOperationException("thrown from a named subscriber");
         }
 
+        [Test]
+        public void CopySubscribersTo_ReturnsLiveSubscribersInSlotOrder()
+        {
+            var bus = new EventBus<ScoreChanged>();
+            Action<ScoreChanged> first = StaticSubscriber;
+            Action<ScoreChanged> second = InstanceSubscriber;
+            bus.Subscribe(first);
+            bus.Subscribe(second);
+
+            var inspection = (IEventBusSubscriberInspection)bus;
+            var destination = new List<EventSubscriberInfo>();
+            inspection.CopySubscribersTo(destination);
+
+            Assert.AreEqual(2, destination.Count);
+            Assert.AreEqual(nameof(StaticSubscriber), destination[0].MethodName);
+            Assert.IsNull(destination[0].Target, "A static handler must report a null target.");
+            Assert.AreEqual(nameof(InstanceSubscriber), destination[1].MethodName);
+            Assert.AreSame(this, destination[1].Target);
+            Assert.AreEqual(nameof(EventBusTests), destination[1].DeclaringTypeName);
+        }
+
+        [Test]
+        public void CopySubscribersTo_SkipsTombstones()
+        {
+            var bus = new EventBus<ScoreChanged>();
+            bus.Subscribe(StaticSubscriber).Dispose();
+            bus.Subscribe(InstanceSubscriber);
+
+            var destination = new List<EventSubscriberInfo>();
+            ((IEventBusSubscriberInspection)bus).CopySubscribersTo(destination);
+
+            Assert.AreEqual(1, destination.Count);
+            Assert.AreEqual(nameof(InstanceSubscriber), destination[0].MethodName);
+        }
+
+        [Test]
+        public void CopySubscribersTo_NullDestination_Throws()
+        {
+            var bus = new EventBus<ScoreChanged>();
+            Assert.Throws<ArgumentNullException>(
+                () => ((IEventBusSubscriberInspection)bus).CopySubscribersTo(null));
+        }
+
+        private static void StaticSubscriber(ScoreChanged _)
+        {
+        }
+
+        private void InstanceSubscriber(ScoreChanged _)
+        {
+        }
+
         private struct ScoreChanged
         {
             public int Score;
