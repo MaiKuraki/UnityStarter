@@ -225,7 +225,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         protected virtual void ApplyDefaultInstantEffectModification(GameplayEffectModCallbackData data)
         {
-            var attribute = GetAttribute(data.Modifier.AttributeName);
+            // Reuse the attribute resolved by the ASC when it belongs to this set;
+            // otherwise resolve by name (externally constructed callback data).
+            var attribute = data.ResolvedAttribute;
+            if (attribute == null || attribute.OwningSet != this)
+            {
+                attribute = GetAttribute(data.Modifier.AttributeName);
+            }
             if (attribute == null)
             {
                 return;
@@ -271,6 +277,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public AbilitySystemComponent Target { get; }
         public AbilitySystemComponent Source => EffectSpec.Source;
 
+        /// <summary>
+        /// The attribute resolved by the AbilitySystemComponent when dispatching this modifier.
+        /// When non-null and owned by the executing AttributeSet, it is used directly;
+        /// otherwise the attribute is resolved by name. Both paths resolve the same attribute.
+        /// </summary>
+        internal GameplayAttribute ResolvedAttribute { get; }
+
         public GameplayEffectModCallbackData(GameplayEffectSpec spec, ModifierInfo modifier, float magnitude, AbilitySystemComponent target)
             : this(spec, modifier, GASFixedValue.FromFloat(magnitude).RawValue, target)
         {
@@ -283,6 +296,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EvaluatedMagnitudeRaw = magnitudeRaw;
             EvaluatedMagnitude = GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
             Target = target;
+            ResolvedAttribute = null;
+        }
+
+        internal GameplayEffectModCallbackData(GameplayEffectSpec spec, ModifierInfo modifier, long magnitudeRaw, AbilitySystemComponent target, GameplayAttribute resolvedAttribute)
+        {
+            EffectSpec = spec;
+            Modifier = modifier;
+            EvaluatedMagnitudeRaw = magnitudeRaw;
+            EvaluatedMagnitude = GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
+            Target = target;
+            ResolvedAttribute = resolvedAttribute;
         }
     }
 }
