@@ -159,6 +159,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal GameplayTag[] ReplicatedDynamicGrantedTagScratch = Array.Empty<GameplayTag>();
         internal GameplayTag[] ReplicatedDynamicAssetTagScratch = Array.Empty<GameplayTag>();
         internal long[] ReplicatedModifierMagnitudeScratch = Array.Empty<long>();
+        internal GameplayAttribute[] ModifierGroupAttributes = Array.Empty<GameplayAttribute>();
+        internal int[] ModifierGroupStarts = Array.Empty<int>();
+        internal int[] ModifierGroupIndices = Array.Empty<int>();
 
         internal void ClearSensitiveData()
         {
@@ -176,6 +179,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Clear(ReplicatedDynamicGrantedTagScratch);
             Clear(ReplicatedDynamicAssetTagScratch);
             Clear(ReplicatedModifierMagnitudeScratch);
+            Clear(ModifierGroupAttributes);
+            Clear(ModifierGroupStarts);
+            Clear(ModifierGroupIndices);
         }
 
         private static void Clear<T>(T[] values)
@@ -364,9 +370,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // modifiers affecting a dirty attribute. Indices within each group are in ascending
         // modifier order, which defines the per-attribute modifier evaluation order.
         // Rebuilt lazily whenever targetAttributes content changes (modifierGroupingDirty).
+        // The arrays ride the pooled spec backing (swapped in AttachBacking/ReleaseBackingToOwner);
+        // standalone specs without a backing own their arrays directly.
         private GameplayAttribute[] modifierGroupAttributes = System.Array.Empty<GameplayAttribute>();
         private int[] modifierGroupStarts = System.Array.Empty<int>();
-        private int[] modifierGroupCursor = System.Array.Empty<int>();
         private int[] modifierGroupIndices = System.Array.Empty<int>();
         private int modifierGroupCount;
         private bool modifierGroupingDirty = true;
@@ -534,6 +541,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             replicatedDynamicGrantedTagScratch = value.ReplicatedDynamicGrantedTagScratch;
             replicatedDynamicAssetTagScratch = value.ReplicatedDynamicAssetTagScratch;
             replicatedModifierMagnitudeScratch = value.ReplicatedModifierMagnitudeScratch;
+            modifierGroupAttributes = value.ModifierGroupAttributes;
+            modifierGroupStarts = value.ModifierGroupStarts;
+            modifierGroupIndices = value.ModifierGroupIndices;
         }
 
         internal void ReleaseUnacquiredBacking()
@@ -566,6 +576,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             released.ReplicatedDynamicGrantedTagScratch = replicatedDynamicGrantedTagScratch;
             released.ReplicatedDynamicAssetTagScratch = replicatedDynamicAssetTagScratch;
             released.ReplicatedModifierMagnitudeScratch = replicatedModifierMagnitudeScratch;
+            released.ModifierGroupAttributes = modifierGroupAttributes;
+            released.ModifierGroupStarts = modifierGroupStarts;
+            released.ModifierGroupIndices = modifierGroupIndices;
             ResetDetachedBackingReferences();
 
             if (owner != null)
@@ -595,6 +608,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             replicatedDynamicGrantedTagScratch = Array.Empty<GameplayTag>();
             replicatedDynamicAssetTagScratch = Array.Empty<GameplayTag>();
             replicatedModifierMagnitudeScratch = Array.Empty<long>();
+            modifierGroupAttributes = Array.Empty<GameplayAttribute>();
+            modifierGroupStarts = Array.Empty<int>();
+            modifierGroupIndices = Array.Empty<int>();
         }
 
         #region Factory Methods
@@ -770,12 +786,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 int count = modifierGroupStarts[group];
                 modifierGroupStarts[group] = total;
-                modifierGroupCursor[group] = total;
                 total += count;
             }
             modifierGroupStarts[modifierGroupCount] = total;
 
             // Pass 2: place modifier indices into their group slots, preserving ascending order.
+            // modifierGroupStarts doubles as the fill cursor; after the fill each entry holds the
+            // end of its group, and one right-shift restores the begin offsets.
             for (int i = 0; i < modifierCount; i++)
             {
                 GameplayAttribute attribute = targetAttributes[i];
@@ -785,8 +802,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
 
                 int group = FindModifierGroup(attribute);
-                modifierGroupIndices[modifierGroupCursor[group]++] = i;
+                modifierGroupIndices[modifierGroupStarts[group]++] = i;
             }
+
+            for (int group = modifierGroupCount; group > 0; group--)
+            {
+                modifierGroupStarts[group] = modifierGroupStarts[group - 1];
+            }
+            modifierGroupStarts[0] = 0;
 
             modifierGroupingDirty = false;
         }
@@ -810,7 +833,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 int newSize = System.Math.Max(required, modifierGroupAttributes.Length == 0 ? 8 : modifierGroupAttributes.Length * 2);
                 System.Array.Resize(ref modifierGroupAttributes, newSize);
                 System.Array.Resize(ref modifierGroupStarts, newSize);
-                System.Array.Resize(ref modifierGroupCursor, newSize);
                 System.Array.Resize(ref modifierGroupIndices, newSize);
             }
         }
