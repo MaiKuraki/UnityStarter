@@ -106,7 +106,7 @@ static void OnValueChanged(ValueChangedEvent evt) { /* 同步执行 */ }
 即使在这个最小级别，你也已经获得：
 
 - **同步、有序派发**——处理器按订阅顺序在发布线程上执行。无队列、无异步完成、无重排。
-- **零分配**——预热之后 `Publish` 不分配任何内存。这一点由测试断言，不只是口头承诺。
+- **零分配**——预热之后 `Publish` 不分配任何内存。
 - **确定性成本**——每次发布 `O(订阅数)`，每个处理器一次间接调用。可以逐帧 profiling。
 
 ## 第 2 级：用 Scope 成组管理订阅
@@ -286,20 +286,24 @@ Observable<ValueChangedEvent> observable = bus.ToObservable();
 - **Stream 和 Ring 按最坏的一帧定容**，而不是平均帧。容器满了会拒绝并计数（`RejectedCount`），而不是分配。
 - **帧上界**用泵的双预算控制：每源预算（公平性——一个被打满的源不能饿死邻居）与每帧预算（真正的帧成本上限）。两者在 `EventBusPumpMonoBehaviour` 上都可在运行时调整，因此针对低配设备无需改代码即可调低。
 - **拒绝 ≠ 丢失。** `RejectedCount` 是被拒绝的写入（调用方可重试——正常背压）；`DroppedCount` 是确认的丢失（已进入容器、被 `Clear` 丢弃未读）。两者分开，离线排查才有可能。
+- **容器计数器要送进面板。** 总线计数器对背压是盲的，因此把你关心的容器用 `context.RegisterContainer(队列|Stream|发布器)` 注册进去。它们的 `Pending` / `Rejected` / `Dropped` 随即出现在调试器的 **Containers** 标签页，并聚合进 Summary 的 **Backpressure** 分区。注册是借用引用：context 从不会 dispose 容器。
 
 对高频事件，优先减少发布（在源头做变更检测或限频）或通过 Stream 批量冲洗。合并（latest-value-wins）刻意不内置——哪个值存活是产品决策，由调用方拥有。
 
 ## 性能与平台说明
 
-| 路径 | 复杂度 | 模块自身分配 |
-| --- | --- | --- |
-| `Publish` | `O(订阅数)` | 0 字节 |
-| `Subscribe` / 句柄 `Dispose` | 摊还 `O(1)` | 稳态 0 字节（句柄池化） |
-| `Unsubscribe(Action<T>)` | `O(槽位数)` | 0 字节 |
-| `Compact` | `O(槽位数)` | 0 字节 |
-| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 字节（Vyukov 环，位置与争用计数器缓存行填充） |
-| `EventStream.TryWrite` / `FlushTo` | `O(1)` / `O(冲洗数)` | 0 字节 |
-| `EventBusPump.Drain` | `O(源数 + 排空数)` | 0 字节 |
+| 路径 | 复杂度 | 模块自身分配 | 说明（使该复杂度成立的前提） |
+| --- | --- | --- | --- |
+| `Publish` | `O(订阅数)` | 0 字节 | 每个存活处理器一次间接调用 |
+| `Subscribe` | `O(1)` | 稳态 0 字节 | 经死槽空闲链表 O(1) 复用；仅当抖动幅度不超过句柄池上限（见下）时才零分配 |
+| `IEventSubscription.Dispose` | `O(1)` | 0 字节 | 每个槽位记录自己的句柄 |
+| `Unsubscribe(Action<T>)` | `O(槽位数)` | 0 字节 | 线性标识扫描 |
+| `Compact` | `O(槽位数)` | 0 字节 | 原地、不缩容，按退订摊还 |
+| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 字节 | Vyukov 环，位置与争用计数器缓存行填充 |
+| `EventStream.TryWrite` / `FlushTo` | `O(1)` / `O(冲洗数)` | 0 字节 | 有界环，无元素搬运 |
+| `EventBusPump.Drain` | `O(源数 + 排空数)` | 0 字节 | 索引循环，无枚举器 |
+
+- **句柄池上限。** `Subscribe` / `Dispose` 只有在**同时存活**的句柄数不超过池上限时才零分配。上限随总线容量在固定边界内缩放（下界 32，硬上限 4096）：为 N 个订阅者定容的总线最多保留 N 个句柄。抖动幅度超过上限时，多出的句柄会被重新构造而不是回收，因此应按预期的并发订阅/退订峰值幅度为总线定容。单句柄的稳态抖动（常见情形）永远不会触及上限。
 
 - **AOT / IL2CPP / 裁剪安全**：无反射、无动态代码生成、无 `unsafe`、无 P/Invoke。
 - **WebGL**：线程原语在单线程目标上编译为空操作；环退化为普通 FIFO，行为不变。
@@ -318,6 +322,12 @@ Observable<ValueChangedEvent> observable = bus.ToObservable();
 | `DroppedReentrantCount` | 被重入上限拒绝的发布。 |
 | `SubscriberErrorCount` | 被策略处理的订阅者异常。 |
 
+窗口默认打开 **Issues** 标签页：按严重度排序的总览（严重度 / 类别 / 主体 / 定位 / 数值 / Δ / 修复 / 趋势），一屏回答*哪个事件、在哪里、为什么、怎么修*。每行可点击跳到所属 bus（自动展开）或容器；每个 bus/容器保留最近 32 次快照的迷你趋势条。订阅者异常在此直接透出异常类型、消息与肇事 handler，无需再跳 Console。
+
+最近一次订阅者异常由第三个冷路径端口 `IEventBusFaultInspection`（`TryGetLastFault` → `Count`、`ExceptionTypeName`、截断至 256 字符的 `Message`、`SubscriberName`、`DeclaringTypeName`）暴露。它读取委托元数据，故 `SubscriberName`/`DeclaringTypeName` 在 Player 构建中可能被裁剪——与 `IEventBusSubscriberInspection` 同为编辑器工具契约。
+
+容器背压是另一个更窄的端口（`IEventBusContainerDiagnostics`）：`MpscEventQueue<T>`、`EventStream<T>`、`InProcessCommandPublisher` 与 `EventBusPump` 各自暴露 `GetContainerSnapshot()`。用 `context.RegisterContainer(...)` 注册后，调试器的 **Containers** 标签页逐行列出，Summary 标签页聚合 Pending / Rejected / Dropped。队列被写满、Stream 拒绝写入、或泵的某个源积压，都会在这里最先暴露——总线计数器看不见这些。
+
 **泄漏定位工作流**：调试器出现红色 `Dead N` pill 或错误横幅，意味着有订阅者比它的 target 活得久。展开对应 bus 行——每个 `DESTROYED` 行都给出处理方法名、声明类型与已销毁 target 的类型，用一次 IDE 全局搜索即可定位到那条 `Subscribe` 调用。修复方式是结构性的而不是加判空：把订阅绑定到生命周期（`EventBusScopeMonoBehaviour` 或 `SubscriptionScope`），让销毁时自动释放。
 
 | 症状 | 可能原因 | 处理 |
@@ -332,15 +342,17 @@ Observable<ValueChangedEvent> observable = bus.ToObservable();
 
 ## 示例
 
-`Samples/` 目录内置了一个 Demo。把 `EventBusSampleBootstrap` 组件挂到场景中任意 GameObject 上并进入 Play 模式：它会构建 `EventBusContext` 并通过每种容器驱动真实流量——直接发布、批量 `EventStream`、后台线程 `MpscEventQueue`，外加可选的故障注入（会抛异常的订阅者、订阅抖动、销毁未退订的泄漏目标、触发深度上限的递归发布链），让调试窗口的每个计数器都有真实数据可看。Editor 桥接会自动注册 context；打开 `Tools/CycloneGames/EventBus/Debugger` 后按 Play 即可。流量速率与故障注入均可在 Inspector 调整。删除 `Samples` 文件夹即可完全移除。
+`Samples/` 目录内置了一个 Demo。把 `EventBusSampleBootstrap` 组件挂到场景中任意 GameObject 上并进入 Play 模式：它会构建 `EventBusContext` 并通过每种容器驱动真实流量——直接发布、批量 `EventStream`、后台线程 `MpscEventQueue`，外加可选的故障注入（会抛异常的订阅者、订阅抖动、销毁未退订的泄漏目标、触发深度上限的递归发布链），让调试窗口的每个计数器都有真实数据可看。它还会注册所有容器，并故意灌满一个偏小的 Stream，使调试器的 **Containers** 标签页里 `Rejected`（被拒绝的写入）与 `Dropped`（缓冲区事件被丢弃未读）双双上升——这正是总线计数器无法提供的背压视图。Editor 桥接会自动注册 context；打开 `Tools/CycloneGames/EventBus/Debugger` 后按 Play 即可。流量速率与故障注入均可在 Inspector 调整。删除 `Samples` 文件夹即可完全移除。
 
 ## 验证
 
-EditMode 套件（契约、并发、零分配、生命周期）：
+EditMode 套件（契约、并发、抖动伸缩、生命周期）：
 
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.EditMode -testResults <result-path> -quit
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.Integrations -testResults <result-path> -quit
 ```
 
-零分配断言使用 `GC.GetAllocatedBytesForCurrentThread`——这是托管侧代理指标，不能替代真机证据。发布到受限平台前，请在目标 Player + Profiler 下确认：在 IL2CPP（或发布所用后端）下，代表性帧的派发路径无 `GC.Alloc`。
+抖动路径由 `EventBusChurnScalingTests` 守护，它断言三条性质：订阅/退订复用不随存活订阅数增长；超过句柄池上限的抖动不构造任何新句柄；派发扇出保持在宽松预算内。
+
+> 测量注意：`GC.GetAllocatedBytesForCurrentThread` 在 **Editor 的 Mono 下不可靠**（返回常数，对它断言等于空断言）。因此句柄回收断言用精确的句柄回收计数而非字节数。真机零分配证明仍需目标 Player + Profiler 在 IL2CPP（或发布后端）下确认：代表性帧的派发路径无 `GC.Alloc`。

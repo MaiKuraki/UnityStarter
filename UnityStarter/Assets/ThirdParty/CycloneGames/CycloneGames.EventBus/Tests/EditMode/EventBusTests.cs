@@ -200,6 +200,70 @@ namespace CycloneGames.EventBus.Tests
         }
 
         [Test]
+        public void FaultInspection_RecordsLastSubscriberException()
+        {
+            var policies = new[]
+            {
+                PublishErrorPolicy.Stop,
+                PublishErrorPolicy.Swallow,
+                PublishErrorPolicy.ContinueOnError,
+            };
+
+            foreach (PublishErrorPolicy policy in policies)
+            {
+                var bus = new EventBus<ScoreChanged>(
+                    new EventBusConfiguration(publishErrorPolicy: policy));
+                bus.Subscribe(ThrowFromSubscriber);
+
+                // Stop throws immediately, ContinueOnError rethrows after the round, Swallow returns.
+                try
+                {
+                    bus.Publish(new ScoreChanged());
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                Assert.IsTrue(bus.TryGetLastFault(out EventBusFaultInfo fault),
+                    $"{policy}: a handled fault must be recorded.");
+                Assert.AreEqual(policy, bus.PublishErrorPolicy, $"{policy}: the bus reports its own policy.");
+                Assert.AreEqual(1, fault.Count, $"{policy}: fault count.");
+                Assert.AreEqual(typeof(InvalidOperationException).FullName, fault.ExceptionTypeName);
+                Assert.AreEqual("thrown from a named subscriber", fault.Message);
+                Assert.AreEqual(nameof(ThrowFromSubscriber), fault.SubscriberName);
+                Assert.AreEqual(nameof(EventBusTests), fault.DeclaringTypeName);
+
+                // A second fault advances the count but keeps the same offender recorded.
+                try
+                {
+                    bus.Publish(new ScoreChanged());
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                Assert.IsTrue(bus.TryGetLastFault(out EventBusFaultInfo second));
+                Assert.AreEqual(2, second.Count, $"{policy}: fault count after a second fault.");
+                Assert.AreEqual(nameof(ThrowFromSubscriber), second.SubscriberName);
+            }
+        }
+
+        [Test]
+        public void FaultInspection_ReturnsFalse_WhenNoFault()
+        {
+            var bus = new EventBus<ScoreChanged>();
+            Assert.IsFalse(bus.TryGetLastFault(out _), "A fresh bus has recorded no fault.");
+            Assert.AreEqual(PublishErrorPolicy.ContinueOnError, bus.PublishErrorPolicy,
+                "A bus with default configuration reports the default policy.");
+
+            bus.Subscribe(_ => { });
+            bus.Publish(new ScoreChanged());
+
+            Assert.IsFalse(bus.TryGetLastFault(out _), "A healthy publish records no fault.");
+            Assert.AreEqual(0, bus.SubscriberErrorCount);
+        }
+
+        [Test]
         public void Publish_AfterSubscriberException_DispatchDepthIsRestored()
         {
             var bus = new EventBus<ScoreChanged>(
@@ -581,13 +645,21 @@ namespace CycloneGames.EventBus.Tests
                 bus.Publish(in evt);
             }
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int index = 0; index < 5000; index++)
+            // The probe self-checks the host counter; where it is unusable the test is SKIPPED rather
+            // than passing against a counter that cannot move.
+            long allocated;
+            bool measurable = AllocProbe.TryMeasure(() =>
             {
-                bus.Publish(in evt);
-            }
+                for (int index = 0; index < 5000; index++)
+                {
+                    bus.Publish(in evt);
+                }
+            }, out allocated);
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (!measurable)
+            {
+                AllocProbe.SkipUnmeasurable("EventBus.Publish");
+            }
 
             // Proxy assertion: managed allocation only. It does not replace a Profiler GC.Alloc
             // measurement of a real frame.
@@ -600,23 +672,52 @@ namespace CycloneGames.EventBus.Tests
             var bus = new EventBus<ScoreChanged>(null, 16);
             Action<ScoreChanged> handler = _ => { };
 
-            // Warm up the pool so every later subscribe rents instead of allocating.
+            // Primary judgement (GC-independent, always runs): the pool must RECYCLE, so the measured
+            // phase constructs no handle it has not already seen. Configuring a handle IS the
+            // allocation, which makes this a stricter signal than a byte counter — and it works where
+            // the counter does not.
+            var seen = new HashSet<object>(AllocProbe.ReferenceComparer.Instance);
+
+            // Warm up the pool AND populate `seen` from the same loop, so the measurement counts only
+            // instances that are genuinely new: a pre-warmed handle first rented inside the measured
+            // phase must not be mistaken for a fresh construction.
             for (int index = 0; index < 200; index++)
             {
-                bus.Subscribe(handler).Dispose();
+                IEventSubscription warmup = bus.Subscribe(handler);
+                seen.Add(warmup);
+                warmup.Dispose();
             }
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int index = 0; index < 5000; index++)
+            int novelHandles = 0;
+
+            long allocated;
+            bool measurable = AllocProbe.TryMeasure(() =>
             {
-                bus.Subscribe(handler).Dispose();
+                for (int index = 0; index < 5000; index++)
+                {
+                    IEventSubscription handle = bus.Subscribe(handler);
+                    if (seen.Add(handle))
+                    {
+                        novelHandles++;
+                    }
+
+                    handle.Dispose();
+                }
+            }, out allocated);
+
+            Assert.AreEqual(0, novelHandles,
+                $"Subscribe/Dispose churn constructed {novelHandles} new handle instances after warm-up; "
+                + "the pool failed to recycle.");
+
+            if (measurable)
+            {
+                Assert.AreEqual(0, allocated,
+                    $"Subscribe/Dispose churn allocated {allocated} bytes (probe reading {allocated}).");
             }
-
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            // The handle holds (bus, handler) directly instead of an unsubscribe closure, so the
-            // steady state rents from the pool and allocates nothing.
-            Assert.AreEqual(0, allocated, $"Subscribe/Dispose churn allocated {allocated} bytes.");
+            else
+            {
+                AllocProbe.NoteUnmeasurable("Subscribe/Dispose churn");
+            }
         }
 
         [Test]
@@ -909,8 +1010,8 @@ namespace CycloneGames.EventBus.Tests
             stream.TryWrite(2);
             stream.TryWrite(3);
 
-            // Regression: the loop used to keep reading the zeroed buffer and publish default
-            // phantom events, and the trailing RemoveFront then destroyed events written after
+            // The loop must stop at the count snapshotted at entry, so it never reads the zeroed buffer
+            // and publishes phantom default events, and RemoveFront never discards events written after
             // the clear.
             Assert.AreEqual(1, stream.FlushTo(bus));
             CollectionAssert.AreEqual(new[] { 1 }, received);
@@ -1052,14 +1153,21 @@ namespace CycloneGames.EventBus.Tests
                 stream.FlushTo(bus);
             }
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int index = 0; index < 5000; index++)
+            long allocated;
+            bool measurable = AllocProbe.TryMeasure(() =>
             {
-                stream.TryWrite(index);
-                stream.FlushTo(bus);
+                for (int index = 0; index < 5000; index++)
+                {
+                    stream.TryWrite(index);
+                    stream.FlushTo(bus);
+                }
+            }, out allocated);
+
+            if (!measurable)
+            {
+                AllocProbe.SkipUnmeasurable("EventStream write/flush");
             }
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.AreEqual(0, allocated, $"EventStream write/flush allocated {allocated} bytes.");
         }
 
@@ -1298,14 +1406,20 @@ namespace CycloneGames.EventBus.Tests
                 queue.FlushTo(bus);
             }
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int index = 0; index < 5000; index++)
+            long allocated;
+            bool measurable = AllocProbe.TryMeasure(() =>
             {
-                queue.TryEnqueue(index);
-                queue.FlushTo(bus);
-            }
+                for (int index = 0; index < 5000; index++)
+                {
+                    queue.TryEnqueue(index);
+                    queue.FlushTo(bus);
+                }
+            }, out allocated);
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (!measurable)
+            {
+                AllocProbe.SkipUnmeasurable("MPSC enqueue/drain");
+            }
 
             // The whole point of the ring: a ConcurrentQueue<T> would allocate one node per event
             // (~21 bytes/op measured on desktop x64), which is the drip that becomes GC spikes.
@@ -1674,8 +1788,8 @@ namespace CycloneGames.EventBus.Tests
 
             pump.Drain(16);
 
-            // A source that removes itself mid-drain used to shift the list and skip its
-            // neighbour in the same tick.
+            // Removing a source mid-drain must not shift the list: its neighbour still runs in the
+            // same tick.
             Assert.AreEqual(2, received);
 
             // The self-removal took effect at the end of the tick; only the second source remains.
@@ -1738,7 +1852,7 @@ namespace CycloneGames.EventBus.Tests
 
             pump.Drain(16);
 
-            // A Clear mid-drain used to empty the list and cut the iteration short.
+            // A Clear mid-drain drops pending work without cutting the current iteration short.
             Assert.AreEqual(1, received);
             Assert.AreEqual(0, pump.Count);
 
@@ -1762,9 +1876,9 @@ namespace CycloneGames.EventBus.Tests
     }
 
     /// <summary>
-    /// Regression coverage for disposing a bus from inside its own dispatch round. Dispose used to
-    /// replace the handler array with an empty one while <see cref="EventBus{T}.Publish"/> was
-    /// iterating it, which threw IndexOutOfRangeException on the next slot read.
+    /// Disposing a bus from inside its own dispatch round: teardown is deferred to the end of the
+    /// round, so <see cref="EventBus{T}.Publish"/> keeps a valid handler array for every slot it has
+    /// not read yet.
     /// </summary>
     public sealed class EventBusDisposeDuringDispatchTests
     {

@@ -22,7 +22,7 @@ namespace CycloneGames.EventBus.Core
     /// are deferred to the outermost dispatch frame, so slot indices never shift under an active
     /// iteration and a dispatch round is atomic.
     /// </summary>
-    public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics, IEventBusSubscriberInspection where T : struct
+    public sealed class EventBus<T> : IDisposable, IEventBusDiagnostics, IEventBusSubscriberInspection, IEventBusFaultInspection where T : struct
     {
         /// <summary>Storage reserved when no explicit capacity is supplied.</summary>
         private const int DefaultCapacity = 8;
@@ -31,8 +31,13 @@ namespace CycloneGames.EventBus.Core
         // proportional (not absolute) threshold keeps an unsubscribe amortized O(1).
         private const int CompactRatio = 3;
 
-        // Upper bound on retained handles so a churn-heavy bus cannot pin them without limit.
-        private const int HandlePoolLimit = 32;
+        // Handle-pool bounds. The ceiling scales with the current capacity (a bus that has room for
+        // 1024 subscribers may retain up to 1024 handles) inside fixed bounds, so retention stays
+        // proportional to what the bus can actually use and is always bounded. Retained handles
+        // hold only (bus, handler, slot) and no user objects, at ~40 B each, so the hard cap is
+        // 4096 * 40 B ~= 160 KB, reached only once the bus itself has grown to that size.
+        private const int HandlePoolMinLimit = 32;
+        private const int HandlePoolMaxLimit = 4096;
 
         // Deferred-unsubscribe inbox close states (documented on _closeState).
         private const int Open = 0;
@@ -71,6 +76,13 @@ namespace CycloneGames.EventBus.Core
         private EventSubscription<T>[] _handlePool;
         private int _handlePoolCount;
 
+        // Dead-slot free list: a LIFO stack of slot indices reclaimed by unsubscribe. It replaces
+        // the first-fit scan, so slot reuse is O(1) regardless of the live subscriber count. Kept
+        // in lockstep with _handlers (grown together in EnsureCapacity; emptied by compaction,
+        // Clear, and teardown) at 4 B per slot, bounded by the slot array length.
+        private int[] _freeSlots;
+        private int _freeCount;
+
         // Close protocol for the inbox (see ScheduleRemoval):
         //   Open: foreign threads enqueue removals for the owner thread.
         //   DisposeRequested: teardown pending or running; enqueue still accepted, teardown drains.
@@ -90,6 +102,17 @@ namespace CycloneGames.EventBus.Core
         private long _droppedReentrantCount;
         private long _subscriberErrorCount;
         private int _peakSubscriptionCount;
+
+        // Most recent handled subscriber exception, for IEventBusFaultInspection. Cold path only:
+        // the recording runs exclusively on the exception branch, never on the dispatch hot path.
+        // Strings are rebuilt only when the fault changes (see RecordFault), and the message is
+        // truncated to bound the memory the bus retains.
+        private const int FaultMessageMaxLength = 256;
+        private int _faultCount;
+        private string _faultExceptionTypeName;
+        private string _faultMessage;
+        private string _faultSubscriberName;
+        private string _faultDeclaringTypeName;
 
         public EventBus(EventBusConfiguration configuration = null)
             : this(configuration, DefaultCapacity)
@@ -114,6 +137,7 @@ namespace CycloneGames.EventBus.Core
             _publishErrorPolicy = configuration.PublishErrorPolicy;
             _category = typeof(T).Name;
             _handlers = new HandlerSlot[initialCapacity];
+            _freeSlots = new int[initialCapacity];
         }
 
         /// <summary>Live subscribers. O(1).</summary>
@@ -163,22 +187,18 @@ namespace CycloneGames.EventBus.Core
             }
 
             // Tombstone reuse is only safe outside dispatch: reusing a slot below the dispatch
-            // loop's count snapshot would let a mid-round subscribe fire in that same round.
+            // loop's count snapshot would let a mid-round subscribe fire in that same round. The
+            // reclaimed slot comes off the free list, so reuse is O(1) and independent of the live
+            // subscriber count. (The cost model that matters: a first-fit scan here would be
+            // O(first dead slot), which after a compaction is O(live) — the holes sit at the tail.)
             DrainPendingRemovals();
-            if (_dispatchDepth == 0 && _tombstones > 0)
+            if (_dispatchDepth == 0 && _freeCount > 0)
             {
-                for (int index = 0; index < _slots; index++)
-                {
-                    if (_handlers[index].Handler != null)
-                    {
-                        continue;
-                    }
-
-                    _tombstones--;
-                    TrackPeak();
-                    LogSubscription("subscribed (reused tombstone slot)");
-                    return PlaceHandler(handler, index);
-                }
+                int reusedSlot = _freeSlots[--_freeCount];
+                _tombstones--;
+                TrackPeak();
+                LogSubscription("subscribed (reused tombstone slot)");
+                return PlaceHandler(handler, reusedSlot);
             }
 
             EnsureCapacity(_slots + 1);
@@ -265,7 +285,7 @@ namespace CycloneGames.EventBus.Core
                     catch (Exception exception)
                     {
                         // Every fault is routed for counting/logging; only the first is rethrown.
-                        ExceptionDispatchInfo fault = OnSubscriberException(exception);
+                        ExceptionDispatchInfo fault = OnSubscriberException(exception, handler);
                         pendingFault ??= fault;
                     }
                 }
@@ -484,6 +504,8 @@ namespace CycloneGames.EventBus.Core
             _handlers = Array.Empty<HandlerSlot>();
             _handlePool = null;
             _handlePoolCount = 0;
+            _freeSlots = null;
+            _freeCount = 0;
 
             // Publish Closed and run the final drain in one critical section against
             // ScheduleRemoval: either the enqueuer sees Open and this drain collects its entry,
@@ -521,19 +543,37 @@ namespace CycloneGames.EventBus.Core
                 }
             }
 
+            // Ceiling scales with capacity inside fixed bounds. A bus sized for N subscribers may
+            // retain up to N handles — exactly the churn amplitude it can be asked to recycle;
+            // beyond the hard cap a surplus handle is left to the collector rather than pinning
+            // memory. See HandlePoolMaxLimit for the absolute bound and its size.
+            int limit = _handlers.Length < HandlePoolMinLimit ? HandlePoolMinLimit : _handlers.Length;
+            if (limit > HandlePoolMaxLimit)
+            {
+                limit = HandlePoolMaxLimit;
+            }
+
             if (_handlePool == null)
             {
                 _handlePool = new EventSubscription<T>[4];
             }
             else if (_handlePoolCount == _handlePool.Length)
             {
-                if (_handlePoolCount >= HandlePoolLimit)
+                if (_handlePoolCount >= limit)
                 {
                     // Pool is full: let this handle be collected instead of growing without bound.
                     return;
                 }
 
-                var grown = new EventSubscription<T>[_handlePoolCount * 2];
+                // Grow without overshooting the ceiling, so the pool never reserves more than a
+                // churn could ever use.
+                int nextCapacity = _handlePoolCount * 2;
+                if (nextCapacity > limit)
+                {
+                    nextCapacity = limit;
+                }
+
+                var grown = new EventSubscription<T>[nextCapacity];
                 Array.Copy(_handlePool, grown, _handlePoolCount);
                 _handlePool = grown;
             }
@@ -567,6 +607,7 @@ namespace CycloneGames.EventBus.Core
             _handlers[index].Handler = null;
             _handlers[index].Handle = null;
             _tombstones++;
+            _freeSlots[_freeCount++] = index;
 
             // Maintenance lives on the unsubscribe path (the only tombstone producer), never on
             // the dispatch path.
@@ -627,6 +668,7 @@ namespace CycloneGames.EventBus.Core
 
             _slots = writeIndex;
             _tombstones = 0;
+            _freeCount = 0;
         }
 
         private void ClearCore()
@@ -642,6 +684,7 @@ namespace CycloneGames.EventBus.Core
 
             _slots = 0;
             _tombstones = 0;
+            _freeCount = 0;
             _compactPending = false;
         }
 
@@ -671,9 +714,10 @@ namespace CycloneGames.EventBus.Core
         // fault to rethrow after the round, or null when the policy swallows it. Under Stop it
         // rethrows here, aborting the round.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private ExceptionDispatchInfo OnSubscriberException(Exception exception)
+        private ExceptionDispatchInfo OnSubscriberException(Exception exception, Action<T> handler)
         {
             _subscriberErrorCount++;
+            RecordFault(exception, handler);
             LogException(exception);
 
             // Capture preserves the original stack; `throw exception` would rewrite it.
@@ -685,6 +729,60 @@ namespace CycloneGames.EventBus.Core
             }
 
             return _publishErrorPolicy == PublishErrorPolicy.ContinueOnError ? captured : null;
+        }
+
+        // Records the most recent fault for IEventBusFaultInspection. Runs only on the exception
+        // path, so the dispatch hot path pays nothing. The type/subscriber/message strings are
+        // rebuilt only when the offender or the exception type changes: a handler that throws the
+        // same exception type repeatedly keeps its first captured message and allocates no further
+        // strings (the message getter is not even called on a repeat).
+        private void RecordFault(Exception exception, Action<T> handler)
+        {
+            _faultCount++;
+
+            string typeName = exception.GetType().FullName;
+            string subscriberName = handler?.Method.Name;
+            string declaringTypeName = handler?.Method.DeclaringType?.Name;
+
+            if (string.Equals(_faultExceptionTypeName, typeName, StringComparison.Ordinal)
+                && string.Equals(_faultSubscriberName, subscriberName, StringComparison.Ordinal)
+                && _faultMessage != null)
+            {
+                _faultDeclaringTypeName = declaringTypeName;
+                return;
+            }
+
+            string message = exception.Message;
+            if (message != null && message.Length > FaultMessageMaxLength)
+            {
+                message = message.Substring(0, FaultMessageMaxLength);
+            }
+
+            _faultExceptionTypeName = typeName;
+            _faultMessage = message;
+            _faultSubscriberName = subscriberName;
+            _faultDeclaringTypeName = declaringTypeName;
+        }
+
+        /// <inheritdoc cref="IEventBusFaultInspection.PublishErrorPolicy"/>
+        public PublishErrorPolicy PublishErrorPolicy => _publishErrorPolicy;
+
+        /// <inheritdoc cref="IEventBusFaultInspection.TryGetLastFault"/>
+        public bool TryGetLastFault(out EventBusFaultInfo fault)
+        {
+            if (_faultCount == 0)
+            {
+                fault = default;
+                return false;
+            }
+
+            fault = new EventBusFaultInfo(
+                _faultCount,
+                _faultExceptionTypeName,
+                _faultMessage,
+                _faultSubscriberName,
+                _faultDeclaringTypeName);
+            return true;
         }
 
         // Cold path; the enable check precedes any work and the message is a constant.
@@ -714,6 +812,12 @@ namespace CycloneGames.EventBus.Core
             var next = new HandlerSlot[nextCapacity];
             Array.Copy(_handlers, next, _slots);
             _handlers = next;
+
+            // The free list must track the slot array: grow it to the same length so a push onto
+            // the list can never index past the end.
+            var nextFree = new int[nextCapacity];
+            Array.Copy(_freeSlots, nextFree, _freeCount);
+            _freeSlots = nextFree;
         }
 
         private void LogSubscription(string operation)

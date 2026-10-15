@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.EventBus.Core",
         "CycloneGames.EventBus.Runtime",
+        "CycloneGames.EventBus.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],
