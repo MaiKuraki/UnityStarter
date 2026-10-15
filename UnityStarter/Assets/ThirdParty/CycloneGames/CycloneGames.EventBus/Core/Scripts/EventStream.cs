@@ -12,7 +12,7 @@ namespace CycloneGames.EventBus.Core
     /// grows, so a runaway producer cannot allocate. Size to the worst-case frame.
     /// Single-thread-confined, like the buses it flushes into.
     /// </summary>
-    public sealed class EventStream<T> where T : struct
+    public sealed class EventStream<T> : IEventBusContainerDiagnostics where T : struct
     {
         private readonly T[] _buffer;
 
@@ -59,6 +59,21 @@ namespace CycloneGames.EventBus.Core
         /// skipped flush. Not a loss count: a caller that retries loses nothing.
         /// </summary>
         public long RejectedCount => _rejectedCount;
+
+        /// <inheritdoc cref="IEventBusContainerDiagnostics.GetContainerSnapshot"/>
+        public EventBusContainerSnapshot GetContainerSnapshot()
+        {
+            // The stream has no close protocol, so RejectedAfterCloseCount stays 0 and IsClosed is
+            // always false.
+            return new EventBusContainerSnapshot(
+                "EventStream<" + typeof(T).Name + ">",
+                Capacity,
+                Count,
+                DroppedCount,
+                RejectedCount,
+                0,
+                false);
+        }
 
         /// <summary>True when no event is waiting.</summary>
         public bool IsEmpty => _count == 0;

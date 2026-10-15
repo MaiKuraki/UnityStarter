@@ -23,7 +23,7 @@ namespace CycloneGames.EventBus.Runtime
     /// Unity host. Single-thread-confined. Structural changes (Add/Remove/Clear) during a drain are
     /// deferred to drain completion, keeping the target list immutable for the tick.
     /// </summary>
-    public sealed class EventBusPump
+    public sealed class EventBusPump : IEventBusContainerDiagnostics
     {
         private readonly List<EventPumpFlush> _targets = new List<EventPumpFlush>();
         private readonly List<EventPumpFlush> _pendingAdds = new List<EventPumpFlush>();
@@ -39,6 +39,25 @@ namespace CycloneGames.EventBus.Runtime
 
         /// <summary>Registered sources.</summary>
         public int Count => _targets.Count;
+
+        /// <summary>
+        /// Diagnostics port. The pump schedules drains and holds no backlog of its own, so the only
+        /// meaningful number is how many sources are registered: it is reported as Capacity. Pending
+        /// / Dropped / Rejected / RejectedAfterClose are 0 and IsClosed is false. The queue and
+        /// stream counters that actually describe backpressure are read from those containers
+        /// directly, not from the pump.
+        /// </summary>
+        public EventBusContainerSnapshot GetContainerSnapshot()
+        {
+            return new EventBusContainerSnapshot(
+                "EventBusPump",
+                _targets.Count,
+                0,
+                0,
+                0,
+                0,
+                false);
+        }
 
         /// <summary>
         /// Registers a custom flush callback. During a drain the registration is deferred to
@@ -102,8 +121,8 @@ namespace CycloneGames.EventBus.Runtime
         }
 
         /// <summary>
-        /// Removes a previously registered flush delegate. During a drain the removal is deferred
-        /// and takes effect when the drain completes.
+        /// Unregisters a flush delegate. During a drain the removal is deferred and takes effect when
+        /// the drain completes.
         /// </summary>
         public bool Remove(EventPumpFlush flush)
         {

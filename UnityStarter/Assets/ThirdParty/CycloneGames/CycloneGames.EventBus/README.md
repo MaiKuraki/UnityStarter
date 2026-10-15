@@ -106,7 +106,7 @@ static void OnValueChanged(ValueChangedEvent evt) { /* runs synchronously */ }
 What you get even at this level:
 
 - **Synchronous, ordered dispatch** — handlers run in subscription order on the publishing thread. No queue, no async completion, no reordering.
-- **Zero allocation** — after warm-up, `Publish` allocates nothing. This is asserted by tests, not just claimed.
+- **Zero allocation** — after warm-up, `Publish` allocates nothing. 
 - **Deterministic cost** — `O(subscriber count)` per publish, one indirect call per handler. You can profile it frame by frame.
 
 ## Level 2: Grouping Subscriptions with Scopes
@@ -286,20 +286,24 @@ Everything in this module is **bounded and sized at construction**. That is the 
 - **Size streams and rings to the worst frame**, not the average one. Full containers refuse and count (`RejectedCount`) instead of allocating.
 - **Bound the frame** with the pump's two budgets: per-source (fairness — one flooded source cannot starve others) and per-tick (the actual frame ceiling). Both are runtime-tunable on `EventBusPumpMonoBehaviour`, so a build can lower them on constrained hardware without a code change.
 - **Rejected ≠ dropped.** `RejectedCount` is a refused write (caller may retry — normal backpressure). `DroppedCount` is a confirmed loss (entered the container, discarded unread by `Clear`). Keeping them separate is what makes offline triage possible.
+- **Container counters reach the panel.** The bus counters are blind to backpressure, so register the containers you care about with `context.RegisterContainer(queueOrStreamOrPublisher)`. Their `Pending` / `Rejected` / `Dropped` counters then appear on the debugger's **Containers** tab and aggregate into the Summary **Backpressure** section. Registration is a borrowed reference: the context never disposes a container.
 
 For high-frequency events, prefer publishing less (gate at the source on a changed-value check or a rate) or batching through a stream. Coalescing (latest-value-wins) is deliberately not built in — which value survives is a product decision, owned by the caller.
 
 ## Performance and Platform Notes
 
-| Path | Complexity | Module-owned allocation |
-| --- | --- | --- |
-| `Publish` | `O(subscribers)` | 0 bytes |
-| `Subscribe` / handle `Dispose` | `O(1)` amortized | 0 bytes in steady state (pooled handles) |
-| `Unsubscribe(Action<T>)` | `O(slots)` | 0 bytes |
-| `Compact` | `O(slots)` | 0 bytes |
-| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 bytes (Vyukov ring, cache-line-padded positions) |
-| `EventStream.TryWrite` / `FlushTo` | `O(1)` / `O(flushed)` | 0 bytes |
-| `EventBusPump.Drain` | `O(targets + drained)` | 0 bytes |
+| Path | Complexity | Module-owned allocation | Notes (the precondition that makes it hold) |
+| --- | --- | --- | --- |
+| `Publish` | `O(subscribers)` | 0 bytes | One indirect call per live handler |
+| `Subscribe` | `O(1)` | 0 bytes in steady state | O(1) reuse off a dead-slot free list; allocation-free only while the churn amplitude is within the handle-pool ceiling (below) |
+| `IEventSubscription.Dispose` | `O(1)` | 0 bytes | Each slot records its own handle |
+| `Unsubscribe(Action<T>)` | `O(slots)` | 0 bytes | Linear identity scan |
+| `Compact` | `O(slots)` | 0 bytes | In place, non-shrinking, amortized against unsubscribes |
+| `TryEnqueue` / `TryDequeue` | `O(1)` | 0 bytes | Vyukov ring, cache-line-padded positions |
+| `EventStream.TryWrite` / `FlushTo` | `O(1)` / `O(flushed)` | 0 bytes | Bounded ring, no element moves |
+| `EventBusPump.Drain` | `O(targets + drained)` | 0 bytes | Indexed loop, no enumerator |
+
+- **Handle-pool ceiling.** `Subscribe` / `Dispose` are allocation-free only while the number of *simultaneously live* handles stays within the pool ceiling. The ceiling scales with the bus capacity inside fixed bounds (floor 32, hard cap 4096): a bus sized for N subscribers retains up to N handles. A churn amplitude above the ceiling constructs the surplus handles instead of recycling them, so size the bus to the peak concurrent subscribe/dispose amplitude you expect. Steady churn of a single handle (the common case) never touches the ceiling.
 
 - **AOT / IL2CPP / stripping safe**: no reflection, no dynamic code generation, no `unsafe`, no P/Invoke.
 - **WebGL**: threading primitives compile away on the single-threaded target; the ring degenerates to a plain FIFO with identical behavior.
@@ -318,6 +322,12 @@ Per-bus counters (`IEventBusDiagnostics`, aggregated by `EventBusContext.GetDiag
 | `DroppedReentrantCount` | Publishes refused by the re-entrancy ceiling. |
 | `SubscriberErrorCount` | Subscriber exceptions handled by policy. |
 
+The window opens on an **Issues** tab: a severity-sorted overview (severity / category / subject / where / value / delta / fix / trend) that answers *which event, where, why, and how to fix* on one screen. Each row clicks through to the owning bus (expanded) or container, and a per-bus/container mini trend bar shows the last 32 snapshots. Subscriber exceptions surface here with their exception type and message and the offending handler, so the Console round-trip is no longer needed.
+
+The most recent subscriber exception is exposed by a third cold-path port, `IEventBusFaultInspection` (`TryGetLastFault` → `Count`, `ExceptionTypeName`, `Message` truncated to 256 chars, `SubscriberName`, `DeclaringTypeName`). It reads delegate metadata, so `SubscriberName`/`DeclaringTypeName` may be stripped in a Player build — same Editor-tooling contract as `IEventBusSubscriberInspection`.
+
+Container backpressure is a separate, narrower port (`IEventBusContainerDiagnostics`): `MpscEventQueue<T>`, `EventStream<T>`, `InProcessCommandPublisher`, and `EventBusPump` each expose `GetContainerSnapshot()`. Register one with `context.RegisterContainer(...)`; the debugger's **Containers** tab lists each row, and the Summary tab aggregates Pending / Rejected / Dropped. This is where a saturated queue, a refused stream write, or a backlog in one pump source shows up first — the bus counters cannot see any of it.
+
 **Leak detection workflow**: a red `Dead N` pill or error banner in the debugger means subscribers outlived their targets. Expand the bus row — each `DESTROYED` row names the handler method, its declaring type, and the dead target's type, which is enough to find the offending `Subscribe` call with one IDE search. The fix is structural, not a null check: bind the subscription to a lifetime (`EventBusScopeMonoBehaviour` or a `SubscriptionScope`) so release happens on destroy.
 
 | Symptom | Likely cause | Resolution |
@@ -332,15 +342,17 @@ Per-bus counters (`IEventBusDiagnostics`, aggregated by `EventBusContext.GetDiag
 
 ## Samples
 
-A self-contained Demo lives in `Samples/`. Add the `EventBusSampleBootstrap` component to any GameObject in a scene and enter Play mode: it builds an `EventBusContext` and drives live traffic through every container — direct publishes, a batched `EventStream`, a background-thread `MpscEventQueue`, plus opt-in fault injection (a faulty subscriber, subscription churn, destroyed-target leaks, and a re-entrant publish chain that exercises the depth ceiling) so every counter in the debugger window has meaningful data. The Editor bridge registers the context automatically; open `Tools/CycloneGames/EventBus/Debugger` and press Play. Traffic rates and fault injection are tunable in the Inspector. Delete the `Samples` folder to remove the Demo entirely.
+A self-contained Demo lives in `Samples/`. Add the `EventBusSampleBootstrap` component to any GameObject in a scene and enter Play mode: it builds an `EventBusContext` and drives live traffic through every container — direct publishes, a batched `EventStream`, a background-thread `MpscEventQueue`, plus opt-in fault injection (a faulty subscriber, subscription churn, destroyed-target leaks, and a re-entrant publish chain that exercises the depth ceiling) so every counter in the debugger window has meaningful data. It also registers every container, and floods a deliberately undersized stream, so the debugger's **Containers** tab shows `Rejected` climbing (refused writes) and `Dropped` climbing (buffered events discarded unread) — the backpressure view the bus counters cannot provide. The Editor bridge registers the context automatically; open `Tools/CycloneGames/EventBus/Debugger` and press Play. Traffic rates and fault injection are tunable in the Inspector. Delete the `Samples` folder to remove the Demo entirely.
 
 ## Validation
 
-EditMode suites (contract, concurrency, zero-allocation, lifecycle):
+EditMode suites (contract, concurrency, churn-scaling, lifecycle):
 
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.EditMode -testResults <result-path> -quit
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.EventBus.Tests.Integrations -testResults <result-path> -quit
 ```
 
-Zero-allocation assertions use `GC.GetAllocatedBytesForCurrentThread` — a managed proxy, not a substitute for device proof. Before shipping to a constrained target, confirm with the target Player + Profiler that a representative frame produces no `GC.Alloc` on the dispatch path, under IL2CPP or the shipping backend.
+The churn path is guarded by `EventBusChurnScalingTests`, which asserts three properties: subscribe/dispose reuse does not scale with the live subscriber count; churn above the handle-pool ceiling constructs no new handles; dispatch fanout stays within a coarse budget.
+
+> Measurement caveat: `GC.GetAllocatedBytesForCurrentThread` is **not reliable under the Editor's Mono** (it returns a constant, so an assertion against it is vacuous). The handle-recycling assertion therefore counts exact handle recycling instead of bytes. Real device proof of zero allocation still requires the target Player + Profiler under IL2CPP (or the shipping backend): confirm that a representative frame produces no `GC.Alloc` on the dispatch path.

@@ -20,6 +20,8 @@ namespace CycloneGames.EventBus.Runtime
         // buses and deliberately leaves them out; GetOrCreateBus and RegisterOwnedBus add to it.
         private readonly HashSet<Type> _ownedBuses = new HashSet<Type>();
         private readonly List<ISubscriptionScope> _scopes = new List<ISubscriptionScope>();
+        private readonly List<IEventBusContainerDiagnostics> _containers =
+            new List<IEventBusContainerDiagnostics>();
         private readonly SubscriptionScope _rootScope = new SubscriptionScope();
 
         private bool _disposed;
@@ -168,6 +170,43 @@ namespace CycloneGames.EventBus.Runtime
             return result;
         }
 
+        /// <summary>
+        /// Registers a bounded container (queue, stream, or command publisher) so its backpressure
+        /// counters reach the diagnostics surface. The context does NOT own it: <see cref="Dispose"/>
+        /// only drops the reference, leaving the container to the host, exactly like
+        /// <see cref="RegisterBus{T}"/>. Registering the same container twice throws.
+        /// </summary>
+        public void RegisterContainer(IEventBusContainerDiagnostics container)
+        {
+            ThrowIfDisposed();
+            if (container == null)
+            {
+                throw new ArgumentNullException(nameof(container));
+            }
+
+            for (int index = 0; index < _containers.Count; index++)
+            {
+                if (ReferenceEquals(_containers[index], container))
+                {
+                    throw new InvalidOperationException("This container is already registered.");
+                }
+            }
+
+            _containers.Add(container);
+        }
+
+        /// <summary>Copies the registered container diagnostics ports for tooling.</summary>
+        public IReadOnlyList<IEventBusContainerDiagnostics> GetRegisteredContainers()
+        {
+            var result = new List<IEventBusContainerDiagnostics>(_containers.Count);
+            for (int index = 0; index < _containers.Count; index++)
+            {
+                result.Add(_containers[index]);
+            }
+
+            return result;
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -199,6 +238,9 @@ namespace CycloneGames.EventBus.Runtime
 
             _ownedBuses.Clear();
             _buses.Clear();
+
+            // Containers are caller-owned; drop the references without disposing them.
+            _containers.Clear();
 
             // 3. Release the command backend last.
             if (_commandPublisher is IDisposable disposablePublisher)
