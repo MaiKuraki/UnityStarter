@@ -73,6 +73,8 @@ namespace CycloneGames.UIFramework.Runtime
                 if (leavingGroup != null)
                 {
                     leavingGroup.alpha = 0f;
+                    leavingGroup.interactable = leavingState.Interactable;
+                    leavingGroup.blocksRaycasts = leavingState.BlocksRaycasts;
                 }
 
                 if (enteringGroup != null)
@@ -96,14 +98,7 @@ namespace CycloneGames.UIFramework.Runtime
 
         private static CanvasGroup ResolveCanvasGroup(UIWindow window)
         {
-            if (window == null)
-            {
-                return null;
-            }
-
-            CanvasGroup group = window.GetComponent<CanvasGroup>();
-
-            return group != null ? group : window.gameObject.AddComponent<CanvasGroup>();
+            return UIWindowTransitionUtility.GetOrAddCanvasGroup(window);
         }
 
         private static void SetInputEnabled(CanvasGroup group, bool enabled)

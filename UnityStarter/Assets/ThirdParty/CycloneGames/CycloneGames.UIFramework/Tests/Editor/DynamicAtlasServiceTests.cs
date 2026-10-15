@@ -133,7 +133,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 DynamicAtlasInsertStatus status = service.TryAcquire("rejected", source, out DynamicAtlasSpriteLease rejected);
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.EntryCapacityReached));
-                Assert.That(rejected, Is.Null);
+                Assert.That(rejected.IsValid, Is.False);
                 active.Dispose();
             }
             finally
@@ -167,7 +167,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                     out DynamicAtlasSpriteLease rejected);
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.EntryCapacityReached));
-                Assert.That(rejected, Is.Null);
+                Assert.That(rejected.IsValid, Is.False);
                 Assert.That(loadCount, Is.Zero);
                 active.Dispose();
             }
@@ -193,7 +193,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 DynamicAtlasInsertStatus status = service.TryAcquire("large/b", source, out DynamicAtlasSpriteLease second);
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.PageCapacityReached));
-                Assert.That(second, Is.Null);
+                Assert.That(second.IsValid, Is.False);
                 first.Dispose();
             }
             finally
@@ -221,7 +221,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 DynamicAtlasInsertStatus status = service.TryAcquire("cpu/b", source, out DynamicAtlasSpriteLease second);
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.MemoryBudgetReached));
-                Assert.That(second, Is.Null);
+                Assert.That(second.IsValid, Is.False);
                 Assert.That(service.GetStats().EstimatedTextureBytes, Is.EqualTo(config.memoryBudgetBytes));
                 first.Dispose();
             }
@@ -249,8 +249,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
 
                 Assert.That(invalidRegion, Is.EqualTo(DynamicAtlasInsertStatus.InvalidRegion));
                 Assert.That(oversized, Is.EqualTo(DynamicAtlasInsertStatus.OversizedSource));
-                Assert.That(invalidLease, Is.Null);
-                Assert.That(oversizedLease, Is.Null);
+                Assert.That(invalidLease.IsValid, Is.False);
+                Assert.That(oversizedLease.IsValid, Is.False);
                 Assert.That(service.GetStats().EntryCount, Is.Zero);
             }
             finally
@@ -273,7 +273,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
             {
                 DynamicAtlasInsertStatus failure = service.TryAcquireLocation("too-large", out DynamicAtlasSpriteLease failedLease);
                 Assert.That(failure, Is.EqualTo(DynamicAtlasInsertStatus.OversizedSource));
-                Assert.That(failedLease, Is.Null);
+                Assert.That(failedLease.IsValid, Is.False);
                 Assert.That(unloadCount, Is.EqualTo(1));
 
                 config = DynamicAtlasConfigTests.CreateSmallConfig();
@@ -302,7 +302,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 out DynamicAtlasSpriteLease lease);
 
             Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.LoaderUnavailable));
-            Assert.That(lease, Is.Null);
+            Assert.That(lease.IsValid, Is.False);
             Assert.That(service.GetStats().EntryCount, Is.Zero);
         }
 
@@ -321,7 +321,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                     out DynamicAtlasSpriteLease lease);
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.InvalidRegion));
-                Assert.That(lease, Is.Null);
+                Assert.That(lease.IsValid, Is.False);
                 Assert.That(service.GetStats().PageCount, Is.Zero);
                 Assert.That(service.GetStats().EntryCount, Is.Zero);
             }
@@ -779,7 +779,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 DynamicAtlasStats stats = service.GetStats();
 
                 Assert.That(status, Is.EqualTo(DynamicAtlasInsertStatus.CopyUnsupported));
-                Assert.That(rejected, Is.Null);
+                Assert.That(rejected.IsValid, Is.False);
                 Assert.That(service.TryGetSprite("raw/retained", out _), Is.True);
                 Assert.That(stats.CpuRawCopyCount, Is.EqualTo(1));
                 Assert.That(stats.SynchronousReadbackCount, Is.Zero);
@@ -898,6 +898,194 @@ namespace CycloneGames.UIFramework.Tests.Editor
             {
                 Destroy(sourceSprite);
                 Destroy(sourceTexture);
+            }
+        }
+
+        [Test]
+        public void CacheHitLeaseAcquireAndDispose_AfterWarmup_DoesNotAllocateManagedMemory()
+        {
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            using var service = new DynamicAtlasService(DynamicAtlasConfigTests.CreateSmallConfig());
+
+            try
+            {
+                AssertSuccessful(service.TryAcquire("hot-lease", source, out DynamicAtlasSpriteLease warmup));
+                warmup.Dispose();
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 128; i++)
+                {
+                    _ = service.TryAcquire("hot-lease", source, out DynamicAtlasSpriteLease lease);
+                    lease.Dispose();
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.That(allocated, Is.Zero);
+            }
+            finally
+            {
+                Destroy(source);
+            }
+        }
+
+        [Test]
+        public void StaleLeaseHandle_DisposeDoesNotReleaseTheReplacementRental()
+        {
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            using var service = new DynamicAtlasService(DynamicAtlasConfigTests.CreateSmallConfig());
+
+            try
+            {
+                AssertSuccessful(service.TryAcquire("stale/key", source, out DynamicAtlasSpriteLease stale));
+                stale.Dispose();
+
+                AssertSuccessful(service.TryAcquire("stale/key", source, out DynamicAtlasSpriteLease current));
+                Assert.That(stale.IsDisposed, Is.True);
+                Assert.That(stale.Sprite, Is.Null);
+
+                stale.Dispose();
+
+                Assert.That(current.Sprite, Is.Not.Null);
+                Assert.That(service.GetStats().ActiveReferenceCount, Is.EqualTo(1));
+                current.Dispose();
+            }
+            finally
+            {
+                Destroy(source);
+            }
+        }
+
+        [Test]
+        public void LeaseDispose_IsIdempotent()
+        {
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            using var service = new DynamicAtlasService(DynamicAtlasConfigTests.CreateSmallConfig());
+
+            try
+            {
+                AssertSuccessful(service.TryAcquire("idempotent", source, out DynamicAtlasSpriteLease lease));
+
+                lease.Dispose();
+                lease.Dispose();
+
+                DynamicAtlasStats stats = service.GetStats();
+                Assert.That(stats.ActiveReferenceCount, Is.Zero);
+                Assert.That(stats.RetainedEntryCount, Is.EqualTo(1));
+                Assert.That(lease.IsDisposed, Is.True);
+                Assert.That(lease.Sprite, Is.Null);
+            }
+            finally
+            {
+                Destroy(source);
+            }
+        }
+
+        [Test]
+        public void DefaultLeaseHandle_IsInvalidAndHarmless()
+        {
+            DynamicAtlasSpriteLease lease = default;
+
+            Assert.That(lease.IsValid, Is.False);
+            Assert.That(lease.IsDisposed, Is.True);
+            Assert.That(lease.Sprite, Is.Null);
+            Assert.DoesNotThrow(() => lease.Dispose());
+        }
+
+        [Test]
+        public void MissBudget_ThrottlesSameFrameMissesWithoutInvokingLoaderAndRecoversNextFrame()
+        {
+            int frame = 100;
+            int loadCount = 0;
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            DynamicAtlasConfig config = DynamicAtlasConfigTests.CreateSmallConfig();
+            config.maxMissesPerFrame = 1;
+            config.loadFunc = _ =>
+            {
+                loadCount++;
+                return source;
+            };
+            config.unloadFunc = (_, __) => { };
+            using var service = new DynamicAtlasService(config);
+            TestReflection.SetField(service, "_frameCountProvider", (Func<int>)(() => frame));
+
+            try
+            {
+                AssertSuccessful(service.TryAcquireLocation("budget/first", out DynamicAtlasSpriteLease first));
+                Assert.That(loadCount, Is.EqualTo(1));
+
+                DynamicAtlasInsertStatus throttled = service.TryAcquireLocation(
+                    "budget/second",
+                    out DynamicAtlasSpriteLease second);
+
+                Assert.That(throttled, Is.EqualTo(DynamicAtlasInsertStatus.Throttled));
+                Assert.That(second.IsValid, Is.False);
+                Assert.That(loadCount, Is.EqualTo(1));
+
+                frame++;
+                AssertSuccessful(service.TryAcquireLocation("budget/second", out DynamicAtlasSpriteLease retried));
+                Assert.That(loadCount, Is.EqualTo(2));
+
+                first.Dispose();
+                retried.Dispose();
+            }
+            finally
+            {
+                Destroy(source);
+            }
+        }
+
+        [Test]
+        public void MissBudget_IsConfigurableAndZeroDisablesThrottling()
+        {
+            int frame = 7;
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            DynamicAtlasConfig config = DynamicAtlasConfigTests.CreateSmallConfig();
+            config.maxMissesPerFrame = 2;
+            using var service = new DynamicAtlasService(config);
+            TestReflection.SetField(service, "_frameCountProvider", (Func<int>)(() => frame));
+
+            try
+            {
+                AssertSuccessful(service.TryAcquire("budget/a", source, out DynamicAtlasSpriteLease first));
+                AssertSuccessful(service.TryAcquire("budget/b", source, out DynamicAtlasSpriteLease second));
+                DynamicAtlasInsertStatus third = service.TryAcquire(
+                    "budget/c",
+                    source,
+                    out DynamicAtlasSpriteLease rejected);
+
+                Assert.That(third, Is.EqualTo(DynamicAtlasInsertStatus.Throttled));
+                Assert.That(rejected.IsValid, Is.False);
+                first.Dispose();
+                second.Dispose();
+            }
+            finally
+            {
+                Destroy(source);
+            }
+        }
+
+        [Test]
+        public void MissBudget_ZeroBudgetAllowsUnlimitedSameFrameMisses()
+        {
+            Texture2D source = CreateTexture(8, 8, TextureFormat.RGBA32, Color.white);
+            DynamicAtlasConfig config = DynamicAtlasConfigTests.CreateSmallConfig();
+            Assert.That(config.maxMissesPerFrame, Is.Zero);
+            using var service = new DynamicAtlasService(config);
+            TestReflection.SetField(service, "_frameCountProvider", (Func<int>)(() => 3));
+
+            try
+            {
+                for (int i = 0; i < 12; i++)
+                {
+                    AssertSuccessful(service.TryAcquire("unbounded/" + i, source, out DynamicAtlasSpriteLease lease));
+                    lease.Dispose();
+                }
+
+                Assert.That(service.GetStats().CacheMissCount, Is.EqualTo(12));
+            }
+            finally
+            {
+                Destroy(source);
             }
         }
 

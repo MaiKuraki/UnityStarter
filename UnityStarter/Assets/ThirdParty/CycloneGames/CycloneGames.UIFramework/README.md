@@ -75,14 +75,14 @@ flowchart LR
 | --- | --- | --- |
 | `CycloneGames.UIFramework.Runtime` | Core runtime | Always |
 | `CycloneGames.UIFramework.Editor` | Authoring tools | Editor only |
-| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active; companion package dependency |
+| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | `CYCLONEGAMES_HAS_ASSETMANAGEMENT` define; `versionDefines` watches the `com.cyclone-games.asset-management` UPM package |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | Window injection | `jp.hadashikick.vcontainer` package present |
 | `...Integrations.LitMotion` | Window transition driver | `com.annulusgames.lit-motion` package present |
 | `...Integrations.DOTween` | Window transition driver | `com.demigiant.dotween` package present |
 | `...Integrations.PrimeTween` | Window transition driver | `com.kyrylokuzyk.primetween` package present |
 | `CycloneGames.UIFramework.Samples` | Opt-in examples | `autoReferenced: false` |
 
-The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package.
+The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package. The AssetManagement integration follows the same rule: `versionDefines` watches the `com.cyclone-games.asset-management` UPM package and emits `CYCLONEGAMES_HAS_ASSETMANAGEMENT`. When AssetManagement exists only as a folder under `Assets/`, the define never fires and the integration assembly is silently skipped; install AssetManagement as a UPM or embedded package, or define the symbol yourself where the asmdef can see it.
 
 Localization binding is not part of this package. It lives in the optional companion module [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.md), so this package compiles without `CycloneGames.Localization` and without any conditional-compilation symbol.
 
@@ -264,8 +264,11 @@ A `UIRoot` requires an explicit root `Canvas` and a serialized list of `UILayer`
 | `Priority` | Ordering within that layer |
 | `IsSceneBound` | Close when the owning active scene changes |
 | `CanvasIsolationPolicy` | Inherit the layer Canvas or add an isolated child Canvas |
+| `CullWhenHidden` | `SetVisible(false)` deactivates the GameObject, fully culling rendering and events |
 
 The prefab root must contain a `UIWindow`-derived component. `UIAssetReference.Location` is the runtime contract; `EditorGuid` is authoring metadata and must not be treated as a Player address.
+
+`CullWhenHidden` chooses between two hidden-window costs. With the default `false`, `SetVisible(false)` only drives the `CanvasGroup` (alpha to zero, interaction and raycasts off): the window keeps rendering and batching on the GPU, but showing it again has zero layout-rebuild cost. With `true`, hiding additionally calls `gameObject.SetActive(false)`, which culls the window from rendering and event processing entirely (the Canvas subtree stops batching); showing it again reactivates the GameObject with the visible `CanvasGroup` state already applied. Enable it for heavy windows that stay hidden for long periods; keep the default for windows toggled frequently, where repeated activation would rebuild layout every time.
 
 ### AssetManagement-backed windows
 
@@ -441,11 +444,17 @@ UIWindow inventory = await ui.NavigateAsync(
 
 `IUIWindowTransitionDriver` controls one window's open and close animation; `IUITransitionCoordinator` controls a pair during navigation. Set a default driver through `UIServiceOptions`, or override per open. Use `suppressWindowTransition: true` only when another authority animates the complete operation. Optional motion assemblies provide drivers for `FadeConfig`, `ScaleConfig`, `SlideConfig`, and `CompositeConfig`; they compile only when the corresponding package is installed.
 
+The built-in transitions share one cancellation contract. The three motion drivers (DOTween, LitMotion, PrimeTween) and the built-in coordinators throw `OperationCanceledException` when handed an already-cancelled token, so a caller can handle cancellation with a single `catch (OperationCanceledException)`. On both the completion and the cancellation path, a coordinator restores the `interactable` and `blocksRaycasts` flags of the leaving and entering windows to the snapshot captured before the transition, so input is never left blocked.
+
+All built-in transitions animate through a `CanvasGroup`. When a window has none, the CrossFade/Slide coordinators and the three motion drivers add one at runtime via `UIWindowTransitionUtility.GetOrAddCanvasGroup`. The added component is permanent and is destroyed together with the window GameObject.
+
+The LitMotion driver starts its fade, scale, and slide animations from the window's current value (alpha, local scale, anchored position) toward the target, so interrupting and re-entering a transition resumes smoothly instead of snapping to a fixed start pose.
+
 ### Canvas, input, and resolution
 
 - Configure `CanvasScaler` on the root Canvas for the product's reference resolution and match policy.
 - Keep most windows on `InheritLayerCanvas`; it preserves batching and avoids an extra Canvas and raycaster. Use `IsolatedCanvas` only when measured to help.
-- Add `CanvasGroup` to windows that need visibility control or built-in coordinated transitions.
+- Add `CanvasGroup` to windows that need visibility control; built-in transitions add one at runtime when missing (see [Window transitions](#window-transitions)).
 - Layer Canvases own sorting ranges; configuration priority controls sibling order only within one layer.
 
 `GetRootCanvasSize()` returns the current root `RectTransform` size. `GetUICamera()` may return `null` for overlay configurations.
@@ -507,7 +516,7 @@ UIWindow inventory = await ui.NavigateAsync(
     cancellationToken: token);
 ```
 
-Coordinators must restore modified visual and input state before propagating pre-commit cancellation. A newly opened entering window is rolled back if opening, coordination, cancellation, or ownership validation fails before commit.
+Built-in coordinators restore the leaving and entering windows' `interactable`/`blocksRaycasts` snapshot on both the completion and the cancellation path; custom coordinators must do the same before propagating pre-commit cancellation. A newly opened entering window is rolled back if opening, coordination, cancellation, or ownership validation fails before commit.
 
 ### Scene-bound popup cleanup
 
@@ -533,7 +542,7 @@ For recurring diagnostics and navigation queries, retain and reuse `List<T>` buf
 
 ### Cache and lease policy
 
-The window-session service keeps no window pool or closed-window cache. The provider may share underlying assets, but every successful acquisition returns a session-owned lease, disposed after binding cleanup and window destruction. Dynamic atlas retention is an independent, explicitly bounded cache with its own sprite leases and trimming policy. Add pooling only when profiling shows instance churn is a material cost and the product can define capacity, reset, exhaustion, stale-reference, scene, and shutdown policies.
+The window-session service keeps no window pool or closed-window cache. The provider may share underlying assets, but every successful acquisition returns a session-owned lease, disposed after binding cleanup and window destruction. Dynamic atlas retention is an independent, explicitly bounded cache with its own sprite leases and trimming policy. `DynamicAtlasSpriteLease` is a value-type handle over pooled records, so cache-hit acquisition allocates nothing; on a miss, `maxMissesPerFrame` bounds per-frame pixel work and excess misses return the transient `DynamicAtlasInsertStatus.Throttled`, which callers retry on a later frame. Add pooling only when profiling shows instance churn is a material cost and the product can define capacity, reset, exhaustion, stale-reference, scene, and shutdown policies.
 
 `DynamicAtlasStats` reports configured `PageCapacity`, `EntryCapacity`, and `MemoryBudgetBytes` beside current pages, entries, references, retained entries, estimated bytes, pending-destruction bytes, and pressure counters. Admission continues to fail through explicit `DynamicAtlasInsertStatus` values when a page, entry, or byte ceiling is reached; active sprite leases are never evicted. `TrimUnused(maximumEntriesToRemove)` is the safe owner-local mitigation and removes only zero-reference retained entries; values at or below zero are a no-op. The legacy no-argument call remains source-compatible and may drain every eligible entry, but total work is still bounded by validated `maxEntries` (hard maximum 65,535); pressure orchestration should always supply its smaller per-pump work budget.
 
@@ -568,7 +577,7 @@ The core avoids reflection discovery, runtime code generation, and JIT-only dele
 | Coordinated navigation already in progress | Overlap call | Serialize navigation commands in the application flow |
 | Calls fail from a worker thread | Off-main-thread use | Marshal to the Unity main thread before using `IUIService` |
 | Asset retained after close | Provider sharing/cache policy | Inspect provider sharing/cache policy and confirm lease disposal |
-| Input blocked after cancellation | Transition did not restore state | Ensure the custom transition restores `CanvasGroup` and focus in `finally` |
+| Input blocked after a transition | Custom transition did not restore state | Built-in coordinators restore `CanvasGroup` `interactable`/`blocksRaycasts` on both completion and cancellation; custom drivers/coordinators must restore in `finally` |
 
 ## Validation
 

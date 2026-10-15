@@ -73,6 +73,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _bytesPerPixel = TextureFormatHelper.GetBytesPerPixel(format);
             _releasedSlots = new List<RectInt>(Mathf.Min(maxEntries, 128));
             Mode = mode;
+            // Pages are created only on the owning service's main thread; the single-threaded
+            // owner contract covers this unguarded static increment.
             PageId = ++_nextPageId;
 
             Texture = new Texture2D(size, size, format, mipChain: false, linear: false)

@@ -51,6 +51,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly Dictionary<string, AtlasEntry> _entries;
         private readonly List<DynamicAtlasPage> _pages;
         private readonly Stack<AtlasEntry> _entryPool;
+        private readonly Stack<DynamicAtlasSpriteLease.LeaseRecord> _leaseRecordPool;
         private readonly Func<string, Texture2D> _loadFunc;
         private readonly Action<string, Texture2D> _unloadFunc;
 
@@ -58,6 +59,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private int _batchDepth;
         private long _batchEpoch = 1;
         private long _nextEntryGeneration;
+        private long _nextRentalId;
+        private int _missesThisFrame;
+        private int _missFrame = -1;
+        private Func<int> _frameCountProvider;
         private AtlasEntry _oldestRetainedEntry;
         private AtlasEntry _newestRetainedEntry;
         private long _useSequence;
@@ -111,6 +116,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 StringComparer.Ordinal);
             _pages = new List<DynamicAtlasPage>(_config.maxPages);
             _entryPool = new Stack<AtlasEntry>(Mathf.Min(MaximumPooledEntries, _config.maxEntries));
+            _leaseRecordPool = new Stack<DynamicAtlasSpriteLease.LeaseRecord>(
+                Mathf.Min(MaximumPooledEntries, _config.maxEntries));
             _loadFunc = _config.loadFunc;
             _unloadFunc = _config.unloadFunc;
 
@@ -164,7 +171,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             out DynamicAtlasSpriteLease lease)
         {
             _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireSprite));
-            lease = null;
+            lease = default;
 
             DynamicAtlasInsertStatus state = ValidateOperationAndKey(key);
             if (state != DynamicAtlasInsertStatus.Success)
@@ -253,7 +260,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             out DynamicAtlasSpriteLease lease)
         {
             _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireLocation));
-            lease = null;
+            lease = default;
 
             DynamicAtlasInsertStatus state = ValidateOperationAndKey(location);
             if (state != DynamicAtlasInsertStatus.Success)
@@ -316,7 +323,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public bool TryAcquireCached(string key, out DynamicAtlasSpriteLease lease)
         {
             _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireCached));
-            lease = null;
+            lease = default;
 
             if (_disposed || !IsValidKey(key))
             {
@@ -546,15 +553,26 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 #endif
         }
 
-        internal void ReleaseLease(string key, long entryGeneration)
+        internal void ReleaseLease(DynamicAtlasSpriteLease.LeaseRecord record)
         {
             _threadGuard.ThrowIfNotOwnerThread(nameof(ReleaseLease));
-            if (_disposed || !_entries.TryGetValue(key, out AtlasEntry entry) || entry.Generation != entryGeneration)
+            if (record.RentalId == 0)
             {
                 return;
             }
 
-            ReleaseEntryReference(entry);
+            if (!_disposed &&
+                _entries.TryGetValue(record.Key, out AtlasEntry entry) &&
+                entry.Generation == record.EntryGeneration)
+            {
+                ReleaseEntryReference(entry);
+            }
+
+            record.Reset();
+            if (_leaseRecordPool.Count < MaximumPooledEntries)
+            {
+                _leaseRecordPool.Push(record);
+            }
         }
 
         internal void EndBatch(long batchEpoch)
@@ -1072,6 +1090,22 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private bool TryPrepareCacheMiss(out DynamicAtlasInsertStatus failureStatus)
         {
             _cacheMissCount++;
+
+            int frame = _frameCountProvider != null ? _frameCountProvider() : Time.frameCount;
+            if (frame != _missFrame)
+            {
+                _missFrame = frame;
+                _missesThisFrame = 0;
+            }
+
+            _missesThisFrame++;
+            if (_config.maxMissesPerFrame > 0 && _missesThisFrame > _config.maxMissesPerFrame)
+            {
+                // Throttled misses skip all pixel work; callers are expected to retry on a later frame.
+                failureStatus = DynamicAtlasInsertStatus.Throttled;
+                return false;
+            }
+
             if (_entries.Count >= _config.maxEntries && _oldestRetainedEntry == null)
             {
                 failureStatus = DynamicAtlasInsertStatus.EntryCapacityReached;
@@ -1189,9 +1223,31 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private DynamicAtlasSpriteLease CreateLease(AtlasEntry entry)
         {
-            return entry == null
-                ? null
-                : new DynamicAtlasSpriteLease(this, entry.Key, entry.Generation, entry.Sprite);
+            if (entry == null)
+            {
+                return default;
+            }
+
+            DynamicAtlasSpriteLease.LeaseRecord record = _leaseRecordPool.Count > 0
+                ? _leaseRecordPool.Pop()
+                : new DynamicAtlasSpriteLease.LeaseRecord();
+            record.Owner = this;
+            record.Key = entry.Key;
+            record.EntryGeneration = entry.Generation;
+            record.Sprite = entry.Sprite;
+            record.RentalId = NextRentalId();
+            return new DynamicAtlasSpriteLease(record, record.RentalId);
+        }
+
+        private long NextRentalId()
+        {
+            _nextRentalId++;
+            if (_nextRentalId == 0)
+            {
+                _nextRentalId = 1;
+            }
+
+            return _nextRentalId;
         }
 
         private AtlasEntry RentEntry()

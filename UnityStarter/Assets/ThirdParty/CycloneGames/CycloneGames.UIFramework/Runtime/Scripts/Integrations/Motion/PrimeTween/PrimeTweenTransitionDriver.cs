@@ -47,7 +47,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             SetupInitialState(context, OpenConfig, true);
@@ -63,7 +64,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayCloseAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             context.CanvasGroup.interactable = false;
@@ -181,24 +183,27 @@ namespace CycloneGames.UIFramework.Runtime
             await UniTask.WhenAll(tasks);
         }
 
+        /// <summary>
+        /// Awaits a tween to completion, cancellation, or external kill. PrimeTween's isAlive
+        /// reads the shared tween registry, so polling a struct copy stays valid and an
+        /// externally killed tween completes the await instead of hanging forever.
+        /// PrimeTween has no SetLink equivalent (DOTween KillOnDestroy); tweens bound to a
+        /// destroyed target stop on their next tick, and callers drive cancellation through
+        /// the window lifetime token.
+        /// </summary>
         private static async UniTask AwaitTweenAsync(Tween tween, CancellationToken ct)
         {
-            if (!tween.isAlive) return;
-
-            var tcs = new UniTaskCompletionSource();
-            // Capture tween reference in a one-element array to avoid struct-copy staleness
-            // across the async boundary; the tween struct may have been replaced by .OnComplete().
-            var tweenHolder = new Tween[1];
-            tweenHolder[0] = tween.OnComplete(tcs, static state => state.TrySetResult());
-
             try
             {
-                await tcs.Task.AttachExternalCancellation(ct);
+                while (tween.isAlive)
+                {
+                    await UniTask.Yield(PlayerLoopTiming.Update, ct);
+                }
             }
             catch (System.OperationCanceledException)
             {
-                if (tweenHolder[0].isAlive)
-                    tweenHolder[0].Stop();
+                if (tween.isAlive)
+                    tween.Stop();
                 throw;
             }
         }
@@ -260,8 +265,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             var go = window.gameObject;
             var rt = window.transform as RectTransform;
-            var group = go.GetComponent<CanvasGroup>();
-            if (group == null) group = go.AddComponent<CanvasGroup>();
+            var group = UIWindowTransitionUtility.GetOrAddCanvasGroup(window);
 
             return new TransitionContext
             {

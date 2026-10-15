@@ -124,6 +124,12 @@ namespace CycloneGames.UIFramework.Runtime
                     enteringTransform.anchoredPosition = enteringOrigin;
                 }
 
+                if (leavingGroup != null)
+                {
+                    leavingGroup.interactable = leavingInteractable;
+                    leavingGroup.blocksRaycasts = leavingBlocksRaycasts;
+                }
+
                 if (enteringGroup != null)
                 {
                     enteringGroup.interactable = enteringInteractable;
@@ -168,12 +174,7 @@ namespace CycloneGames.UIFramework.Runtime
 
         private static CanvasGroup ResolveCanvasGroup(UIWindow window)
         {
-            if (window == null)
-            {
-                return null;
-            }
-
-            return window.GetComponent<CanvasGroup>();
+            return UIWindowTransitionUtility.GetOrAddCanvasGroup(window);
         }
 
         private static void SetInputEnabled(CanvasGroup group, bool enabled)
