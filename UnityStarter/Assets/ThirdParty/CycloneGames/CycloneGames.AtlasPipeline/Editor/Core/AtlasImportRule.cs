@@ -112,6 +112,14 @@ namespace CycloneGames.AtlasPipeline
         [SerializeField] private int compressionQuality = AtlasPlatformFormats.DefaultCompressionQuality;
         [SerializeField] private AtlasGranularity atlasGranularity = AtlasGranularity.PerSourceFolder;
         [SerializeField] private AtlasRotationMode atlasRotationMode = AtlasRotationMode.Inherit;
+
+        // Marks this rule's atlases as extractable at runtime (e.g. by a dynamic atlas system that
+        // copies sprite regions out of the packed pages). Extraction reads rectangular regions and
+        // samples the page pixels directly, so the preset hard-forces rotation off, tight packing
+        // off and RGBA32 on every platform, overriding the global toggles and this rule's own
+        // format fields. Default false: rules serialized before this field existed keep their exact
+        // previous behaviour.
+        [SerializeField] private bool runtimeExtraction;
         [SerializeField] private string atlasGroup = "General";
         [SerializeField] private int recommendedMaxTextureSize = 2048;
         [SerializeField] private int atlasMaxTextureSize = 2048;
@@ -173,6 +181,13 @@ namespace CycloneGames.AtlasPipeline
         public int CompressionQuality => compressionQuality;
         public AtlasGranularity AtlasGranularity => atlasGranularity;
         public AtlasRotationMode AtlasRotationMode => atlasRotationMode;
+
+        /// <summary>
+        /// Runtime Extraction preset. See the field declaration: when on, the rule's atlases are
+        /// forced to rotation off, tight packing off and RGBA32 on every platform so a runtime
+        /// extractor can read sprite regions straight out of the packed pages.
+        /// </summary>
+        public bool RuntimeExtraction => runtimeExtraction;
         public string AtlasGroup => string.IsNullOrWhiteSpace(atlasGroup) ? "General" : atlasGroup;
         public int RecommendedMaxTextureSize => recommendedMaxTextureSize;
         public int AtlasMaxTextureSize => atlasMaxTextureSize;
@@ -423,7 +438,8 @@ namespace CycloneGames.AtlasPipeline
             IEnumerable<string> pathKeywords = null,
             IEnumerable<string> excludedFolderPaths = null,
             IEnumerable<string> excludedNameKeywords = null,
-            string outputSubfolder = null)
+            string outputSubfolder = null,
+            bool runtimeExtraction = false)
         {
             return new AtlasImportRule
             {
@@ -463,6 +479,7 @@ namespace CycloneGames.AtlasPipeline
                     ? new List<string>()
                     : new List<string>(excludedNameKeywords),
                 outputSubfolder = outputSubfolder ?? string.Empty,
+                runtimeExtraction = runtimeExtraction,
             };
         }
 
@@ -474,7 +491,9 @@ namespace CycloneGames.AtlasPipeline
             // Note the deliberate asymmetry with ResolveAlphaDilation: dilation on pixel art is
             // merely pointless (nothing samples the padding), so Force On may still opt in there,
             // while rotation actively destroys the art and may not be opted into at all.
-            if (pixelArt)
+            // Runtime Extraction is the same kind of hard block: a rotated sprite has no axis-
+            // aligned region in the page, so there is nothing rectangular to copy out.
+            if (pixelArt || runtimeExtraction)
             {
                 return false;
             }
@@ -488,6 +507,23 @@ namespace CycloneGames.AtlasPipeline
                 default:
                     return globalEnableRotation;
             }
+        }
+
+        /// <summary>
+        /// Whether packing may trace each sprite's polygon outline instead of its bounding
+        /// rectangle. Pixel art and the Runtime Extraction preset are hard blocks, symmetric with
+        /// <see cref="ResolveAtlasRotation"/>: tight-packed sprites are stored as outlines, not
+        /// rectangles, so a consumer copying rectangular regions from the page (and any reader
+        /// assuming a rectangular texel grid) has nothing to address.
+        /// </summary>
+        public bool ResolveTightPacking(bool globalEnableTightPacking)
+        {
+            if (pixelArt || runtimeExtraction)
+            {
+                return false;
+            }
+
+            return globalEnableTightPacking;
         }
 
         public bool MatchesPath(string normalizedAssetPath)

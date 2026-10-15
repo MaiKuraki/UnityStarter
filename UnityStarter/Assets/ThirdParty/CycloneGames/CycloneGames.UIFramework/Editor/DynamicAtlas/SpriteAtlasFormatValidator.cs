@@ -264,24 +264,51 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 
         private void AddResult(SpriteAtlas atlas, string path)
         {
-            SpriteAtlasPackingSettings packing = atlas.GetPackingSettings();
-            SpriteAtlasTextureSettings textureSettings = atlas.GetTextureSettings();
+            GetImporterSettings(
+                path,
+                out bool rotationEnabled,
+                out bool tightPackingEnabled,
+                out bool readable);
             GetAtlasFormat(atlas, out string formatName, out bool isExplicitRgba32);
             Compatibility compatibility = ClassifyCompatibility(
-                packing.enableRotation,
-                packing.enableTightPacking,
+                rotationEnabled,
+                tightPackingEnabled,
                 isExplicitRgba32,
-                textureSettings.readable);
+                readable);
             IncrementCompatibilityCount(compatibility);
 
             _results.Add(new ValidationResult(
                 path,
                 atlas.name,
                 formatName,
-                textureSettings.readable,
-                packing.enableRotation,
-                packing.enableTightPacking,
+                readable,
+                rotationEnabled,
+                tightPackingEnabled,
                 compatibility));
+        }
+
+        // Packing and texture settings live on the importer; the runtime SpriteAtlas type does
+        // not expose them.
+        internal static void GetImporterSettings(
+            string assetPath,
+            out bool rotationEnabled,
+            out bool tightPackingEnabled,
+            out bool readable)
+        {
+            SpriteAtlasImporter importer = AssetImporter.GetAtPath(assetPath) as SpriteAtlasImporter;
+            if (importer != null)
+            {
+                SpriteAtlasPackingSettings packing = importer.packingSettings;
+                SpriteAtlasTextureSettings textureSettings = importer.textureSettings;
+                rotationEnabled = packing.enableRotation;
+                tightPackingEnabled = packing.enableTightPacking;
+                readable = textureSettings.readable;
+                return;
+            }
+
+            rotationEnabled = false;
+            tightPackingEnabled = false;
+            readable = false;
         }
 
         internal static Compatibility ClassifyCompatibility(
@@ -326,11 +353,21 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 
         private void GetAtlasFormat(SpriteAtlas atlas, out string formatName, out bool isExplicitRgba32)
         {
+            GetAtlasFormat(atlas, _selectedPlatform, ref _spriteBuffer, out formatName, out isExplicitRgba32);
+        }
+
+        internal static void GetAtlasFormat(
+            SpriteAtlas atlas,
+            BuildTarget platform,
+            ref Sprite[] spriteBuffer,
+            out string formatName,
+            out bool isExplicitRgba32)
+        {
             string assetPath = AssetDatabase.GetAssetPath(atlas);
             SpriteAtlasImporter importer = AssetImporter.GetAtPath(assetPath) as SpriteAtlasImporter;
             if (importer != null)
             {
-                TextureImporterPlatformSettings platformSettings = importer.GetPlatformSettings(GetPlatformName(_selectedPlatform));
+                TextureImporterPlatformSettings platformSettings = importer.GetPlatformSettings(GetPlatformName(platform));
                 if (!platformSettings.overridden)
                 {
                     platformSettings = importer.GetPlatformSettings("DefaultTexturePlatform");
@@ -344,17 +381,17 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             int count = atlas.spriteCount;
             if (count > 0)
             {
-                if (_spriteBuffer.Length < count)
+                if (spriteBuffer.Length < count)
                 {
-                    _spriteBuffer = new Sprite[count];
+                    spriteBuffer = new Sprite[count];
                 }
 
                 try
                 {
-                    int copiedCount = atlas.GetSprites(_spriteBuffer);
-                    if (copiedCount > 0 && _spriteBuffer[0] != null && _spriteBuffer[0].texture != null)
+                    int copiedCount = atlas.GetSprites(spriteBuffer);
+                    if (copiedCount > 0 && spriteBuffer[0] != null && spriteBuffer[0].texture != null)
                     {
-                        TextureFormat runtimeFormat = _spriteBuffer[0].texture.format;
+                        TextureFormat runtimeFormat = spriteBuffer[0].texture.format;
                         formatName = runtimeFormat.ToString();
                         isExplicitRgba32 = runtimeFormat == TextureFormat.RGBA32;
                         return;
@@ -362,7 +399,7 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
                 }
                 finally
                 {
-                    Array.Clear(_spriteBuffer, 0, Mathf.Min(count, _spriteBuffer.Length));
+                    Array.Clear(spriteBuffer, 0, Mathf.Min(count, spriteBuffer.Length));
                 }
             }
 
@@ -387,7 +424,7 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             }
         }
 
-        private static string GetPlatformName(BuildTarget target)
+        internal static string GetPlatformName(BuildTarget target)
         {
             switch (target)
             {

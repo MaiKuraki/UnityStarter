@@ -21,6 +21,7 @@ namespace CycloneGames.AtlasPipeline
         private SerializedProperty _atlasPaddingProperty;
         private SerializedProperty _enableRotationProperty;
         private SerializedProperty _enableTightPackingProperty;
+        private SerializedProperty _atlasReadableProperty;
         private SerializedProperty _enableAlphaDilationProperty;
         private SerializedProperty _blockOffsetProperty;
         private SerializedProperty _includeInBuildProperty;
@@ -55,7 +56,7 @@ namespace CycloneGames.AtlasPipeline
         private const int IdentityRows = 5;         // name/group, folder, path label, subfolder, foldout
         private const int SpriteImportRows = 5;     // mode/ppu, pixel art, filter/wrap, mip/read, compression/granularity
         private const int AtlasCompositionRows = 3; // atlas max, recommended/warn, platform format row
-        private const int OverridesRows = 5;        // section label, size header, size row, toggles, rotation
+        private const int OverridesRows = 6;        // section label, size header, size row, toggles, extraction preset, rotation
         private const int ListCount = 3;            // path keywords, excluded folders, excluded keywords
 
         /// <summary>Each list draws a section header plus the row its Add button sits on.</summary>
@@ -72,6 +73,12 @@ namespace CycloneGames.AtlasPipeline
         /// </summary>
         private float _introWidth = -1f;
         private float _introHeight;
+
+        // Same memoisation as the overrides intro: the Runtime Extraction hint is a wrapped
+        // HelpBox whose height the analytic element-height callback must know before the draw
+        // pass has a rect to measure.
+        private float _hintWidth = -1f;
+        private float _hintHeight;
 
         private IReadOnlyList<string> _cachedValidationErrors = new List<string>();
 
@@ -415,6 +422,15 @@ namespace CycloneGames.AtlasPipeline
                 AtlasPipelineUi.TightPacking);
 
             DrawToggleGuidance(AtlasPipelineUi.TightPackingGuidance);
+
+            EditorGUILayout.Space(4f);
+
+            // CPU access: a readable atlas keeps a full CPU-side copy of every page, so this is
+            // an opt-in for projects whose runtime actually reads the packed textures.
+            EditorGUILayout.LabelField("Runtime Access", EditorStyles.miniBoldLabel);
+            EditorGUILayout.PropertyField(
+                _atlasReadableProperty,
+                AtlasPipelineUi.AtlasReadable);
 
             EditorGUILayout.Space(4f);
 
@@ -803,6 +819,7 @@ namespace CycloneGames.AtlasPipeline
             _atlasPaddingProperty = _settingsObject.FindProperty("atlasPadding");
             _enableRotationProperty = _settingsObject.FindProperty("enableRotation");
             _enableTightPackingProperty = _settingsObject.FindProperty("enableTightPacking");
+            _atlasReadableProperty = _settingsObject.FindProperty("atlasReadable");
             _enableAlphaDilationProperty = _settingsObject.FindProperty("enableAlphaDilation");
             _blockOffsetProperty = _settingsObject.FindProperty("blockOffset");
             _includeInBuildProperty = _settingsObject.FindProperty("includeInBuild");
@@ -938,6 +955,7 @@ namespace CycloneGames.AtlasPipeline
             public SerializedProperty IncludeInBuild;
             public SerializedProperty AlphaDilation;
             public SerializedProperty AtlasRotation;
+            public SerializedProperty RuntimeExtraction;
             public SerializedProperty PathKeywords;
             public SerializedProperty ExcludedFolders;
             public SerializedProperty ExcludedKeywords;
@@ -993,6 +1011,7 @@ namespace CycloneGames.AtlasPipeline
             view.IncludeInBuild = root.FindPropertyRelative("includeInBuildOverride");
             view.AlphaDilation = root.FindPropertyRelative("alphaDilationOverride");
             view.AtlasRotation = root.FindPropertyRelative("atlasRotationMode");
+            view.RuntimeExtraction = root.FindPropertyRelative("runtimeExtraction");
             view.PathKeywords = root.FindPropertyRelative("pathKeywords");
             view.ExcludedFolders = root.FindPropertyRelative("excludedFolderPaths");
             view.ExcludedKeywords = root.FindPropertyRelative("excludedNameKeywords");
@@ -1234,8 +1253,36 @@ namespace CycloneGames.AtlasPipeline
                 ref rect,
                 line,
                 spacing,
-                view.AtlasRotation,
-                AtlasPipelineUi.AtlasRotationRule);
+                view.RuntimeExtraction,
+                AtlasPipelineUi.RuntimeExtraction);
+
+            // The hint only shows while the atlas is NOT extractable: the preset is off and the
+            // effective configuration (global toggles + this rule's overrides and formats) does
+            // not satisfy the extraction contract. The button is the one-click fix.
+            if (!view.RuntimeExtraction.boolValue)
+            {
+                DrawRuntimeExtractionHint(ref rect, line, spacing, view);
+            }
+
+            if (view.RuntimeExtraction.boolValue)
+            {
+                // Rotation is forced off by the preset; the row stays visible (read-only) so the
+                // management is explicit instead of the field silently vanishing.
+                EditorGUI.LabelField(
+                    new Rect(rect.x, rect.y, rect.width, line),
+                    AtlasPipelineUi.AtlasRotationRule,
+                    AtlasPipelineUi.ManagedByRuntimeExtraction);
+                NextLine(ref rect, line, spacing);
+            }
+            else
+            {
+                DrawSinglePropertyField(
+                    ref rect,
+                    line,
+                    spacing,
+                    view.AtlasRotation,
+                    AtlasPipelineUi.AtlasRotationRule);
+            }
 
             // ── Keywords & Excludes ─────────────────────────────────────────────────
             DrawPathKeywordList(
@@ -1583,12 +1630,60 @@ namespace CycloneGames.AtlasPipeline
             NextLine(ref rect, line, spacing);
         }
 
+        /// <summary>
+        /// Info-level hint shown while a rule is render-only-in-effect: Runtime Extraction is off
+        /// and the effective configuration (rotation, tight packing, platform formats) does not
+        /// satisfy the extraction contract. The compatibility question is answered by the same
+        /// resolution the generator and the build gate use, so the hint can never disagree with
+        /// what the pipeline would actually write.
+        /// </summary>
+        private void DrawRuntimeExtractionHint(
+            ref Rect rect,
+            float line,
+            float spacing,
+            RuleView view)
+        {
+            var asset = view.Object.targetObject as AtlasRuleAsset;
+            AtlasImportRule rule = asset != null ? asset.Rule : null;
+            if (rule == null
+                || AtlasPipeline.IsRuntimeExtractionEffective(AtlasPipeline.Settings, rule))
+            {
+                return;
+            }
+
+            float hintHeight = MeasureRuntimeExtractionHintHeight(rect.width);
+            EditorGUI.HelpBox(
+                new Rect(rect.x, rect.y, rect.width, hintHeight),
+                AtlasPipelineUi.RuntimeExtractionWarning.text,
+                MessageType.Info);
+            rect.y += hintHeight + spacing;
+
+            if (GUI.Button(
+                new Rect(rect.x, rect.y, rect.width, line),
+                AtlasPipelineUi.EnableRuntimeExtractionButton))
+            {
+                view.RuntimeExtraction.boolValue = true;
+            }
+
+            NextLine(ref rect, line, spacing);
+        }
+
         private static void DrawPlatformFormatRow(
             ref Rect rect,
             float line,
             float spacing,
             RuleView view)
         {
+            if (view.RuntimeExtraction.boolValue)
+            {
+                EditorGUI.LabelField(
+                    new Rect(rect.x, rect.y, rect.width, line),
+                    "Platform Formats",
+                    "RGBA32 on all platforms (managed by Runtime Extraction preset)");
+                NextLine(ref rect, line, spacing);
+                return;
+            }
+
             if (view.PixelArt.boolValue)
             {
                 EditorGUI.LabelField(
@@ -1956,9 +2051,49 @@ namespace CycloneGames.AtlasPipeline
                 ? _introWidth
                 : EditorGUIUtility.currentViewWidth - 60f;
 
-            return rows * (line + spacing)
-                   + MeasureIntroHeight(introWidth) + spacing
-                   + padding;
+            float height = rows * (line + spacing)
+                           + MeasureIntroHeight(introWidth) + spacing
+                           + padding;
+
+            // The Runtime Extraction hint is conditional (preset off AND configuration not
+            // extractable); when visible it adds a wrapped HelpBox plus the enable button row.
+            // The visibility check reads the same applied rule state the draw reads after its
+            // SerializedObject update, so the two sides agree.
+            if (asset != null
+                && asset.Rule != null
+                && !GetRuleView(asset).RuntimeExtraction.boolValue
+                && !AtlasPipeline.IsRuntimeExtractionEffective(
+                    AtlasPipeline.Settings,
+                    asset.Rule))
+            {
+                height += MeasureRuntimeExtractionHintHeight(introWidth) + spacing
+                          + line + spacing;
+            }
+
+            return height;
+        }
+
+        /// <summary>
+        /// Wrapped height of the Runtime Extraction hint HelpBox at the given width, memoised on
+        /// that width — the same contract as <see cref="MeasureIntroHeight"/>, which the height
+        /// callback and the draw pass share so both reserve the same space.
+        /// </summary>
+        private float MeasureRuntimeExtractionHintHeight(float width)
+        {
+            if (width <= 0f)
+            {
+                return EditorGUIUtility.singleLineHeight * 2f;
+            }
+
+            if (_hintWidth < 0f || Mathf.Abs(width - _hintWidth) > 0.5f)
+            {
+                _hintWidth = width;
+                _hintHeight = EditorStyles.helpBox.CalcHeight(
+                    AtlasPipelineUi.RuntimeExtractionWarning,
+                    width);
+            }
+
+            return _hintHeight;
         }
 
         /// <summary>
