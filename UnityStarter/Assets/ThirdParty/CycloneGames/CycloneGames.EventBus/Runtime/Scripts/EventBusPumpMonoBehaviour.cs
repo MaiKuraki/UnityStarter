@@ -66,8 +66,8 @@ namespace CycloneGames.EventBus.Runtime
             return value < 0 ? 0 : value;
         }
 
-        // Maps the serialized per-frame budget: zero/negative mean "no additional cap", because a
-        // component serialized before this field existed deserializes it as zero. Pausing is
+        // Maps the serialized per-frame budget: a zero or negative value means "no additional cap",
+        // which keeps older serialized data working (the field reads as zero). Pausing is
         // PumpingEnabled's job.
         internal static int ResolveFrameBudget(int value)
         {

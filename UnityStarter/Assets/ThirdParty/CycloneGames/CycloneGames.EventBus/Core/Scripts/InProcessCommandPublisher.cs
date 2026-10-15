@@ -14,7 +14,7 @@ namespace CycloneGames.EventBus.Core
     /// Command payloads are boxed into queue closures on the re-entrant path; the command path is
     /// not the zero-allocation hot path (<see cref="EventBus{T}"/> is).
     /// </summary>
-    public sealed class InProcessCommandPublisher : ICommandPublisher, IDisposable
+    public sealed class InProcessCommandPublisher : ICommandPublisher, IEventBusContainerDiagnostics, IDisposable
     {
         private readonly Dictionary<Type, Delegate> _handlers = new Dictionary<Type, Delegate>();
         private readonly int _capacity;
@@ -38,6 +38,22 @@ namespace CycloneGames.EventBus.Core
         }
 
         public int PendingCommandCount => _pending.Count;
+
+        /// <inheritdoc cref="IEventBusContainerDiagnostics.GetContainerSnapshot"/>
+        /// <remarks>Overflow follows <see cref="CommandOverflowPolicy"/> (Drop discards silently,
+        /// FailFast throws); there is no reject/drop counter, so those fields stay 0. IsClosed
+        /// mirrors the disposed flag.</remarks>
+        public EventBusContainerSnapshot GetContainerSnapshot()
+        {
+            return new EventBusContainerSnapshot(
+                "InProcessCommandPublisher",
+                _capacity,
+                PendingCommandCount,
+                0,
+                0,
+                0,
+                _disposed);
+        }
 
         public void RegisterHandler<TCommand>(Func<TCommand, CancellationToken, ValueTask> handler)
             where TCommand : struct

@@ -47,6 +47,10 @@ namespace CycloneGames.EventBus.Sample
             + "driving the dispatch depth to the ceiling so the Dropped counter becomes visible.")]
         private bool enableReentrancyDemo = true;
 
+        [SerializeField, Tooltip("Flood a deliberately small stream so the Containers tab shows "
+            + "Rejected (full) climbing, and periodically Clear it so Dropped (confirmed loss) does too.")]
+        private bool enableBackpressureDemo = true;
+
         [Header("Budgets")]
         [SerializeField] private int maxEventsPerTargetPerFrame = 512;
         [SerializeField] private int maxEventsPerFrame = 4096;
@@ -62,6 +66,7 @@ namespace CycloneGames.EventBus.Sample
         private EventBus<SampleBurstEvent> _burstBus;
         private EventStream<SampleMetricTickEvent> _metricStream;
         private MpscEventQueue<SampleAssetLoadedEvent> _assetQueue;
+        private EventStream<SampleBurstEvent> _pressureStream;
         private SubscriptionScope _churnScope;
 
         private Thread _producerThread;
@@ -74,6 +79,8 @@ namespace CycloneGames.EventBus.Sample
         private float _nextChurnTime;
         private float _nextLeakTime;
         private float _nextReentrantTime;
+        private float _nextPressureTime;
+        private float _nextPressureClearTime;
         private bool _reentrantDemoActive;
 
         private void Awake()
@@ -90,10 +97,24 @@ namespace CycloneGames.EventBus.Sample
 
             _metricStream = new EventStream<SampleMetricTickEvent>(1024);
             _assetQueue = new MpscEventQueue<SampleAssetLoadedEvent>(2048);
+            // Deliberately undersized and never flushed: exists only so the Containers tab shows
+            // backpressure counters climbing.
+            _pressureStream = new EventStream<SampleBurstEvent>(64);
 
             _pump = new EventBusPump();
             _pump.AddStream(_metricStream, _metricBus);
             _pump.AddQueue(_assetQueue, _assetBus);
+
+            // Surface the container counters on the debugger's Containers tab. Containers are
+            // caller-owned; the context only holds the diagnostics references.
+            _context.RegisterContainer(_metricStream);
+            _context.RegisterContainer(_assetQueue);
+            _context.RegisterContainer(_pressureStream);
+            _context.RegisterContainer(_pump);
+            if (_context.Commands is IEventBusContainerDiagnostics commandDiagnostics)
+            {
+                _context.RegisterContainer(commandDiagnostics);
+            }
 
             SubscribeHandlers();
             StartProducer();
@@ -102,6 +123,8 @@ namespace CycloneGames.EventBus.Sample
             _nextFaultTime = Time.unscaledTime + 2f;
             _nextChurnTime = Time.unscaledTime + 1.5f;
             _nextLeakTime = Time.unscaledTime + 3f;
+            _nextPressureTime = Time.unscaledTime + 1f;
+            _nextPressureClearTime = Time.unscaledTime + 5f;
 
             ActiveContext = _context;
         }
@@ -227,6 +250,27 @@ namespace CycloneGames.EventBus.Sample
                 _reentrantDemoActive = true;
                 _burstBus.Publish(new SampleBurstEvent { BurstId = -1, IndexInBurst = 0 });
                 _reentrantDemoActive = false;
+            }
+
+            if (enableBackpressureDemo)
+            {
+                if (now >= _nextPressureTime)
+                {
+                    _nextPressureTime = now + 1f;
+                    // Overflow the 64-slot stream: the surplus writes increment RejectedCount.
+                    for (int index = 0; index < burstSize; index++)
+                    {
+                        _pressureStream.TryWrite(new SampleBurstEvent { BurstId = -2, IndexInBurst = index });
+                    }
+                }
+
+                if (now >= _nextPressureClearTime)
+                {
+                    _nextPressureClearTime = now + 5f;
+                    // Discarding the buffered events unread increments DroppedCount (confirmed loss),
+                    // distinguishing it in the panel from the refused writes above.
+                    _pressureStream.Clear();
+                }
             }
 
             _pump.Drain(

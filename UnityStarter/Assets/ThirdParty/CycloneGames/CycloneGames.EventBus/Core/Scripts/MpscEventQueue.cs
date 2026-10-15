@@ -40,7 +40,7 @@ namespace CycloneGames.EventBus.Core
         public long Value;
     }
 
-    public sealed class MpscEventQueue<T> where T : struct
+    public sealed class MpscEventQueue<T> : IEventBusContainerDiagnostics where T : struct
     {
         private struct Slot
         {
@@ -129,6 +129,19 @@ namespace CycloneGames.EventBus.Core
 
         /// <summary>Events rejected because the queue was already closed. Diagnostics only.</summary>
         public long RejectedAfterCloseCount => Interlocked.Read(ref _rejectedAfterCloseCount);
+
+        /// <inheritdoc cref="IEventBusContainerDiagnostics.GetContainerSnapshot"/>
+        public EventBusContainerSnapshot GetContainerSnapshot()
+        {
+            return new EventBusContainerSnapshot(
+                "MpscEventQueue<" + typeof(T).Name + ">",
+                Capacity,
+                PendingCount,
+                DroppedCount,
+                RejectedCount,
+                RejectedAfterCloseCount,
+                IsClosed);
+        }
 
         /// <summary>
         /// Closes the ingress. Idempotent, callable from any thread. Already-queued events remain
