@@ -5239,10 +5239,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         private void RecalculateDirtyAttributes()
         {
+#if UNITY_EDITOR
+            GASAggregationProbe.OnRecalculateBegin(System.Diagnostics.Stopwatch.GetTimestamp());
+#endif
             for (int d = 0; d < dirtyAttributes.Count; d++)
             {
                 var attr = dirtyAttributes[d];
                 attr.IsDirty = false;
+#if UNITY_EDITOR
+                GASAggregationProbe.OnDirtyAttribute();
+#endif
 
                 var currentValue = attr.OwningSet.GetBaseFixedValue(attr);
                 for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
@@ -5259,14 +5265,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     bool isInhibited = RefreshInhibitionState(effect);
                     if (def.Period > 0 || isInhibited)
                     {
+#if UNITY_EDITOR
+                        GASAggregationProbe.OnEffectSkipped();
+#endif
                         continue;
                     }
 
                     var modifiers = def.Modifiers;
                     int stackCount = effect.StackCount;
-                    for (int m = 0; m < modifiers.Count; m++)
+                    // Iterate only the modifiers targeting this dirty attribute; the spec's
+                    // per-attribute grouping yields indices in ascending modifier order.
+                    int matchCount = effect.Spec.GetModifierIndicesForAttribute(attr, out int[] modifierIndices, out int modifierStart);
+                    for (int k = 0; k < matchCount; k++)
                     {
-                        if (effect.Spec.TargetAttributes[m] != attr) continue;
+                        int m = modifierIndices[modifierStart + k];
+#if UNITY_EDITOR
+                        GASAggregationProbe.OnModifierVisit(true);
+#endif
 
                         // For non-snapshotted dynamic magnitudes, recalculate live.
                         long baseMagnitudeRaw;
@@ -5330,6 +5345,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             dirtyAttributes.Clear();
+#if UNITY_EDITOR
+            GASAggregationProbe.OnRecalculateEnd(System.Diagnostics.Stopwatch.GetTimestamp());
+#endif
         }
 
         private void OnEffectApplied(ActiveGameplayEffect effect)
@@ -6818,7 +6836,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Otherwise, this is a permanent modification.
             // The AttributeSet is SOLELY responsible for handling it via PostGameplayEffectExecute.
             // The ASC's job is just to deliver the data.
-            var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitudeRaw, this);
+            var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitudeRaw, this, attribute);
             targetAttributeSet.PostGameplayEffectExecute(callbackData);
         }
         private void MarkAttributesDirtyFromEffect(ActiveGameplayEffect activeEffect)

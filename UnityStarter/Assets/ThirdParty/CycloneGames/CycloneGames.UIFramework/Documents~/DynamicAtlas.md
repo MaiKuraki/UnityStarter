@@ -135,7 +135,7 @@ The service does not relocate active sprites. Relocation would invalidate `Image
 | `TryAcquireLocation(location, out lease)` | Explicit synchronous loader | Loader and unloader form one ownership pair; a cache miss returns `LoaderUnavailable` when the pair is absent |
 | `TryAcquireCached(key, out lease)` | Existing cache entry | Does not load or insert content |
 
-`TryAcquireSprite` accepts rectangular, non-rotated sprite geometry. A packed sprite is rejected when rotation or Tight Packing is enabled, or when its packed rectangle changes the logical sprite dimensions. Configure source `SpriteAtlas` assets with rotation and Tight Packing disabled.
+`TryAcquireSprite` requires rectangular, non-rotated sprite geometry from its source atlas — see [Consuming build-time atlases](#consuming-build-time-atlases).
 
 Location acquisition never falls back to `Resources.Load`. Supply both delegates before service construction.
 
@@ -149,6 +149,20 @@ DynamicAtlasInsertStatus status = atlas.TryAcquireLocation(
     "liveops/icons/reward-0042",
     out DynamicAtlasSpriteLease lease);
 ```
+
+### Consuming build-time atlases
+
+`TryAcquireSprite` accepts rectangular, non-rotated sprite geometry. A packed sprite is rejected when rotation or Tight Packing is enabled, or when its packed rectangle changes the logical sprite dimensions.
+
+Three content paths cover most projects:
+
+| Content | Path |
+| --- | --- |
+| Static, known at build time | Keep it in a build-time `SpriteAtlas` with rotation, Tight Packing, and compression enabled; never send it through the dynamic atlas |
+| Dynamic (downloaded or live-service) | Feed loose or remote textures directly to `TryAcquire` / `TryAcquireRegion` |
+| Mixed (authored sprites that must also enter a runtime page) | Enable the Runtime Extraction preset on the CycloneGames.AtlasPipeline rule so the generated atlas is packed rotation-off, tight-off, `RGBA32` |
+
+The `SpriteAtlas Compatibility Validator` and the [Atlas Compatibility Dashboard](#atlas-compatibility-dashboard) grade every source atlas: `FastPathCandidate` (green) and `FastPathWithCpuFallback` (blue) atlases can be consumed as-is, `ReadbackRequired` (yellow) works but pays a synchronous readback on insertion, and `UnsupportedPacking` (red) is rejected at acquisition time.
 
 ### Capacity and memory configuration
 
@@ -280,11 +294,17 @@ Service construction validates the page size and destination texture format on t
 
 Open `Tools > CycloneGames > UI Framework > Dynamic Atlas Debugger` during Play Mode to inspect active services. Entry snapshots are bounded to 4,096 entries per service. Open `Tools > CycloneGames > UI Framework > SpriteAtlas Compatibility Validator` to inspect source atlas packing, readability, and platform import formats. The validator never rewrites assets.
 
+### Atlas Compatibility Dashboard
+
+Open `Tools > CycloneGames > UI Framework > Atlas Compatibility Dashboard` to grade every `SpriteAtlas` in the project for dynamic-atlas consumption. After a SpriteAtlas asset is imported, moved, or deleted, the dashboard rescans automatically with a 0.5-second throttle; disable **Auto Scan On Import** to scan manually only. Each atlas is graded into one of four levels: green `FastPathCandidate` (GPU-only copy), blue `FastPathWithCpuFallback`, yellow `ReadbackRequired`, and red `UnsupportedPacking`. The list shows at most 256 entries.
+
 ### Persistence and security
 
 The module does not write files, preferences, caches, or assets. All pages and metadata are process-local and destroyed with the service. Treat remote locations and keys as untrusted input. Bound key length, decoded dimensions, item counts, download size, and insertion frequency before creating a `Texture2D`. Removing an entry destroys its generated `Sprite` and releases packing metadata but does not zero the corresponding pixels inside a retained page.
 
 ## Troubleshooting
+
+In the Editor and in Development Builds, a `TryAcquire*` call rejected for packing or format reasons logs a one-time warning per key that states the reason and the fix. Release builds do not pay for this reporting.
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |

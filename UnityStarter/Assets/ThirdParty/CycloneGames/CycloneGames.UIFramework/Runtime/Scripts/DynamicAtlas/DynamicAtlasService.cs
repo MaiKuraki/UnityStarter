@@ -84,6 +84,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             new List<WeakReference<DynamicAtlasService>>(8);
 #endif
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private const string PackingFixGuidance =
+            "Disable rotation and tight packing on the source SpriteAtlas, or mark its import rule for runtime extraction.";
+        private const string FormatFixGuidance =
+            "Use an uncompressed readable RGBA32 source or permit a CPU-copy fallback, or mark its import rule for runtime extraction.";
+
+        private readonly HashSet<string> _rejectionWarningKeys = new HashSet<string>(StringComparer.Ordinal);
+#endif
+
         public DynamicAtlasConfig Configuration => _config.Copy();
         public bool IsDisposed => _disposed;
         internal bool IsOwnerThread => _threadGuard.IsOwnerThread;
@@ -198,11 +207,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 return DynamicAtlasInsertStatus.InvalidSource;
             }
 
-            if (source.packed &&
-                (source.packingMode == SpritePackingMode.Tight ||
-                 source.packingRotation != SpritePackingRotation.None))
+            if (IsUnsupportedPacking(source.packed, source.packingMode, source.packingRotation))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                WarnRejectionOnce(key, DescribePackingRejection(source), PackingFixGuidance);
+#endif
                 return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
@@ -214,6 +224,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             catch (UnityException)
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                WarnRejectionOnce(
+                    key,
+                    "the packed sprite texture rectangle could not be queried",
+                    PackingFixGuidance);
+#endif
                 return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
@@ -228,12 +244,24 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 !Mathf.Approximately(textureRect.height, sourceSpriteRect.height))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                WarnRejectionOnce(
+                    key,
+                    "the sprite rect does not match its packed texture rect, which indicates trimmed or rotated packing",
+                    PackingFixGuidance);
+#endif
                 return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
             if (!HasFullRectGeometry(source, sourceSpriteRect))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                WarnRejectionOnce(
+                    key,
+                    "the sprite uses non-rectangular mesh geometry produced by tight packing",
+                    PackingFixGuidance);
+#endif
                 return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
@@ -723,6 +751,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (!IsSuccessful(insertStatus))
                 {
                     RecordRejection(insertStatus);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    if (insertStatus == DynamicAtlasInsertStatus.CopyUnsupported)
+                    {
+                        WarnRejectionOnce(
+                            key,
+                            $"the source texture format {source.format} cannot be copied into an RGBA32 atlas page under the configured copy fallback policy",
+                            FormatFixGuidance);
+                    }
+#endif
                 }
 
                 return insertStatus;
@@ -1213,6 +1250,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _oldestRetainedEntry = null;
             _newestRetainedEntry = null;
             _estimatedTextureBytes = _pendingDestructionBytes;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            _rejectionWarningKeys.Clear();
+#endif
             _batchDepth = 0;
             _batchEpoch++;
             if (_batchEpoch == 0)
@@ -1430,6 +1470,44 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 _rejectionCount++;
             }
+        }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // Rejection paths are cold; the per-key set bounds console noise without touching hot paths.
+        private void WarnRejectionOnce(string key, string reason, string guidance)
+        {
+            if (string.IsNullOrEmpty(key) || !_rejectionWarningKeys.Add(key))
+            {
+                return;
+            }
+
+            Log.Warning($"[DynamicAtlasService] Rejected sprite acquisition for '{key}': {reason}. {guidance}");
+        }
+
+        private static string DescribePackingRejection(Sprite source)
+        {
+            bool rotated = source.packingRotation != SpritePackingRotation.None;
+            bool tight = source.packingMode == SpritePackingMode.Tight;
+            if (rotated && tight)
+            {
+                return "the source atlas has rotation and tight packing enabled";
+            }
+
+            return rotated
+                ? "the source atlas has rotation enabled"
+                : "the source atlas uses tight packing";
+        }
+#endif
+
+        // Rectangular runtime copies cannot preserve rotated or tight packed geometry.
+        internal static bool IsUnsupportedPacking(
+            bool packed,
+            SpritePackingMode packingMode,
+            SpritePackingRotation packingRotation)
+        {
+            return packed &&
+                   (packingMode == SpritePackingMode.Tight ||
+                    packingRotation != SpritePackingRotation.None);
         }
 
         private static bool IsSuccessful(DynamicAtlasInsertStatus status)
