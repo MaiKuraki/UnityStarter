@@ -1,5 +1,7 @@
 # CycloneGames.AtlasPipeline
 
+[English](README.md) | 简体中文
+
 面向 Unity 2022.3+ 的数据驱动 Sprite 导入与 `SpriteAtlas`（V2）生成管线。为大型 2D 项目设计：确定性输出、增量索引、批量友好的资产编辑、零分配热路径、构建期校验。
 
 ## 核心特性
@@ -33,6 +35,30 @@
 4. `Apply Importers` 写入导入设置、`Rebuild Index` 重扫索引、`Regenerate Atlases` 重建全部图集。
 
 图集输出目录由设置资产中的 `Output Atlas Folder` 指定。
+
+## 运行时提取（DynamicAtlas）
+
+大多数图集是纯静态内容，应保留渲染最优的默认配置：开启 rotation、开启 tight packing、使用分平台压缩格式。少数图集需要把 Sprite 交给运行时 `DynamicAtlas` 消费（见 [UIFramework 包文档](../CycloneGames.UIFramework/Documents~/DynamicAtlas.SCH.md)），后者要求矩形、未旋转、未压缩的源几何。在规则上启用 **Runtime Extraction (DynamicAtlas)** 可以把这组要求作为一键预设应用，无需手动调整三个字段。
+
+### 选择图集策略
+
+| 内容 | 推荐路径 |
+| --- | --- |
+| 构建期已知的静态 UI | 构建期 `SpriteAtlas`，使用默认设置（rotation、tight packing、压缩） |
+| 运行时下载或 Live Service 图片 | 运行时把松散或远程纹理直接喂给 `DynamicAtlasService`（UIFramework 包） |
+| 混合：既要打进图集又要进入运行时图集的创作 Sprite | 在规则上启用 Runtime Extraction 预设 |
+
+### Runtime Extraction 预设
+
+在规则 Inspector 中启用 **Runtime Extraction (DynamicAtlas)**。预设强制关闭 rotation、关闭 tight packing、平台格式固定为 `RGBA32`；被管理的字段变为只读（标注 *Managed by preset*）。未启用预设但当前配置会被运行时图集拒绝时，Inspector 会显示提示并提供一键修复按钮。`pixelArt` 规则行为相同：同时禁用 rotation 与 tight packing。
+
+### 图集可读性
+
+全局设置 **Atlas Readable**（Packing 面板 *Runtime Access* 区）让所有生成的图集纹理可从 CPU 代码读取。默认关闭，图集走 GPU-only 快速路径；只有确实需要 CPU 读回图集页面的项目才应显式开启。
+
+### 构建期校验
+
+`RunForBuild` 会校验所有启用 Runtime Extraction 的规则所生成图集的「rotation 关闭 / tight packing 关闭 / `RGBA32`」三元组，任何违规都会使构建失败——配置错误的图集在构建期暴露，而不是等到第一次运行时获取。
 
 ## 构建集成
 

@@ -2124,6 +2124,11 @@ namespace CycloneGames.AtlasPipeline
             // instead of as missing sprites at runtime.
             VerifyExpectedAtlases(failures);
 
+            // Runtime Extraction contract: a preset-marked atlas whose on-disk import settings
+            // drifted from the preset (hand edit, stale file, third-party tool) must fail the
+            // build here instead of breaking extraction at runtime.
+            VerifyRuntimeExtractionAtlases(failures);
+
             // Capacity overflow is only knowable once the sprite rects are loaded, so it is collected
             // during generation and promoted to a failure here. Unity packs one texture per atlas and
             // silently drops whatever does not fit; shipping that means shipping missing sprites that
@@ -2289,6 +2294,124 @@ namespace CycloneGames.AtlasPipeline
                         + "disk is a different shape than the manifest describes, regenerate with "
                         + "force (the Regenerate Atlases action bypasses fingerprints).");
                     break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Build gate for the Runtime Extraction preset: every atlas produced by a rule with
+        /// RuntimeExtraction on must carry the extraction-safe import settings on disk — rotation
+        /// off, tight packing off, RGBA32 on every platform. The expected values come from the
+        /// same resolution the writer uses, so the gate cannot drift from the generator; a
+        /// violation means the file was written by something else (hand edit, stale asset,
+        /// third-party tool) and the build must not ship it.
+        /// </summary>
+        internal static void VerifyRuntimeExtractionAtlases(ICollection<string> failures)
+        {
+            AtlasPipelineSettings settings = _settingsCache;
+            if (settings == null || !settings.IsOutputFolderValid)
+            {
+                return;
+            }
+
+            // Cheap pre-scan: with no preset rules the gate touches no assets at all.
+            bool anyPreset = false;
+            for (int i = 0; i < RuleCache.Count; i++)
+            {
+                if (RuleCache[i] != null && RuleCache[i].RuntimeExtraction)
+                {
+                    anyPreset = true;
+                    break;
+                }
+            }
+
+            if (!anyPreset)
+            {
+                return;
+            }
+
+            string folder = settings.NormalizedOutputAtlasFolder;
+            IReadOnlyList<AtlasBucket> buckets = Index.GetBuckets();
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                AtlasBucket bucket = buckets[i];
+                if (bucket.Count == 0)
+                {
+                    continue;
+                }
+
+                AtlasImportRule rule = ResolveAtlasRule(bucket.Key);
+                if (rule == null || !rule.RuntimeExtraction)
+                {
+                    continue;
+                }
+
+                int pageCount = GetKnownPageCount(bucket.Key);
+                for (int page = 0; page < pageCount; page++)
+                {
+                    string pagePath = BuildAtlasAssetPath(
+                        folder,
+                        AtlasCapacityPlanner.BuildPageKey(bucket.Key, page, pageCount));
+                    VerifyRuntimeExtractionAtlas(pagePath, settings, rule, failures);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Verifies one generated atlas against the Runtime Extraction contract. A missing file is
+        /// skipped — reporting it is <see cref="VerifyExpectedAtlases"/>' job, and double-reporting
+        /// would bury the actual violation.
+        /// </summary>
+        internal static void VerifyRuntimeExtractionAtlas(
+            string atlasPath,
+            AtlasPipelineSettings settings,
+            AtlasImportRule rule,
+            ICollection<string> failures)
+        {
+            SpriteAtlasImporter importer =
+                AssetImporter.GetAtPath(atlasPath) as SpriteAtlasImporter;
+            if (importer == null)
+            {
+                return;
+            }
+
+            ResolveEffectivePacking(
+                settings,
+                rule,
+                out bool expectedRotation,
+                out bool expectedTightPacking);
+            SpriteAtlasPackingSettings packing = importer.packingSettings;
+            if (packing.enableRotation != expectedRotation
+                || packing.enableTightPacking != expectedTightPacking)
+            {
+                failures?.Add(
+                    $"Atlas '{atlasPath}' (rule '{rule.Name}') violates the Runtime Extraction "
+                    + "preset: packing must be rotation "
+                    + (expectedRotation ? "on" : "off")
+                    + " / tight packing "
+                    + (expectedTightPacking ? "on" : "off")
+                    + ", but the file on disk has rotation "
+                    + (packing.enableRotation ? "on" : "off")
+                    + " / tight packing "
+                    + (packing.enableTightPacking ? "on" : "off")
+                    + ". Regenerate the atlases so the runtime extractor can read the pages.");
+            }
+
+            for (int p = 0; p < CapacityPlatforms.Length; p++)
+            {
+                AtlasPlatform platform = CapacityPlatforms[p];
+                TextureImporterPlatformSettings platformSettings =
+                    importer.GetPlatformSettings(AtlasPlatformFormats.GetPlatformName(platform));
+                AtlasTextureFormat expectedFormat = GetEffectiveFormat(rule, platform);
+                if (platformSettings.format
+                    != AtlasPlatformFormats.ToTextureImporterFormat(expectedFormat))
+                {
+                    failures?.Add(
+                        $"Atlas '{atlasPath}' (rule '{rule.Name}') violates the Runtime Extraction "
+                        + $"preset: platform '{AtlasPlatformFormats.GetPlatformName(platform)}' "
+                        + $"must use {AtlasPlatformFormats.GetDisplayName(expectedFormat)} but the "
+                        + $"file on disk uses {platformSettings.format}. Regenerate the atlases "
+                        + "so the runtime extractor can read the pages.");
                 }
             }
         }
@@ -4426,7 +4549,7 @@ namespace CycloneGames.AtlasPipeline
 
             importer.includeInBuild = ResolveIncludeInBuild(settings, rule);
             importer.packingSettings = CreatePackingSettings(settings, rule);
-            importer.textureSettings = CreateTextureSettings(filterMode);
+            importer.textureSettings = CreateTextureSettings(settings, filterMode);
 
             // Per platform, not one shared value: a low-end Android build that caps its atlas at
             // 1024px costs nothing in package size, which is exactly why this is the first lever to
@@ -4548,7 +4671,7 @@ namespace CycloneGames.AtlasPipeline
                     CreatePackingSettings(settings, rule))
                 || !TextureSettingsEqual(
                     importer.textureSettings,
-                    CreateTextureSettings(filterMode))
+                    CreateTextureSettings(settings, filterMode))
                 || !PlatformSettingsEqual(
                     importer.GetPlatformSettings(AtlasPlatformFormats.AndroidPlatformName),
                     ResolvePlatformSettings(rule, AtlasPlatform.Android))
@@ -4592,9 +4715,11 @@ namespace CycloneGames.AtlasPipeline
             AtlasPipelineSettings settings,
             AtlasImportRule rule = null)
         {
-            bool enableRotation = rule != null
-                ? rule.ResolveAtlasRotation(settings.EnableRotation)
-                : settings.EnableRotation;
+            ResolveEffectivePacking(
+                settings,
+                rule,
+                out bool enableRotation,
+                out bool enableTightPacking);
             bool enableAlphaDilation = rule != null
                 ? rule.ResolveAlphaDilation(settings.EnableAlphaDilation)
                 : settings.EnableAlphaDilation;
@@ -4604,9 +4729,67 @@ namespace CycloneGames.AtlasPipeline
                 padding = settings.AtlasPadding,
                 blockOffset = settings.BlockOffset,
                 enableRotation = enableRotation,
-                enableTightPacking = settings.EnableTightPacking,
+                enableTightPacking = enableTightPacking,
                 enableAlphaDilation = enableAlphaDilation,
             };
+        }
+
+        /// <summary>
+        /// The single decision point for an atlas's effective rotation and tight-packing values:
+        /// the global defaults as overridden by the rule, with the pixel-art hard blocks and the
+        /// Runtime Extraction preset applied inside the rule's resolve methods. The writer
+        /// (<see cref="CreatePackingSettings"/>), the configuration comparison, the build gate
+        /// (<see cref="VerifyRuntimeExtractionAtlas"/>) and the rule inspector all resolve through
+        /// here, so they can never disagree about what an atlas should carry.
+        /// </summary>
+        internal static void ResolveEffectivePacking(
+            AtlasPipelineSettings settings,
+            AtlasImportRule rule,
+            out bool enableRotation,
+            out bool enableTightPacking)
+        {
+            enableRotation = rule != null
+                ? rule.ResolveAtlasRotation(settings.EnableRotation)
+                : settings.EnableRotation;
+            enableTightPacking = rule != null
+                ? rule.ResolveTightPacking(settings.EnableTightPacking)
+                : settings.EnableTightPacking;
+        }
+
+        /// <summary>
+        /// Whether the rule's atlases, as currently configured, satisfy the runtime-extraction
+        /// contract (rotation off, tight packing off, RGBA32 on every platform). The inspector
+        /// uses this to offer the preset exactly when the effective configuration would not be
+        /// extractable; the preset itself is what makes a non-compliant rule compliant.
+        /// </summary>
+        internal static bool IsRuntimeExtractionEffective(
+            AtlasPipelineSettings settings,
+            AtlasImportRule rule)
+        {
+            if (settings == null || rule == null)
+            {
+                return false;
+            }
+
+            ResolveEffectivePacking(
+                settings,
+                rule,
+                out bool enableRotation,
+                out bool enableTightPacking);
+            if (enableRotation || enableTightPacking)
+            {
+                return false;
+            }
+
+            for (int p = 0; p < CapacityPlatforms.Length; p++)
+            {
+                if (GetEffectiveFormat(rule, CapacityPlatforms[p]) != AtlasTextureFormat.Rgba32)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -4622,11 +4805,15 @@ namespace CycloneGames.AtlasPipeline
                 : settings.IncludeInBuild;
         }
 
-        private static SpriteAtlasTextureSettings CreateTextureSettings(FilterMode filterMode)
+        internal static SpriteAtlasTextureSettings CreateTextureSettings(
+            AtlasPipelineSettings settings,
+            FilterMode filterMode)
         {
             return new SpriteAtlasTextureSettings
             {
-                readable = false,
+                // CPU accessibility is a project-level opt-in: a readable atlas keeps a full
+                // CPU-side copy of every page, doubling its memory, so the default stays off.
+                readable = settings.AtlasReadable,
                 generateMipMaps = false,
                 sRGB = true,
                 filterMode = filterMode,
@@ -4651,12 +4838,15 @@ namespace CycloneGames.AtlasPipeline
             };
         }
 
-        private static AtlasTextureFormat GetEffectiveFormat(
+        internal static AtlasTextureFormat GetEffectiveFormat(
             AtlasImportRule rule,
             AtlasPlatform platform)
         {
             AtlasTextureFormat format;
-            if (rule != null && rule.PixelArt)
+            // Runtime Extraction forces RGBA32 for the same reason pixel art does not compress:
+            // the page pixels are read directly, and a block-compressed page has no pixel-exact
+            // regions to copy. sRGB is unaffected — it is a sampling flag, not a pixel encoding.
+            if (rule != null && (rule.PixelArt || rule.RuntimeExtraction))
             {
                 format = AtlasTextureFormat.Rgba32;
             }

@@ -135,7 +135,7 @@ Service 不会搬迁活跃 Sprite，搬迁会让 `Image.sprite` 引用失效。�
 | `TryAcquireLocation(location, out lease)` | 显式同步 loader | Loader 与 unloader 构成一组所有权契约；缓存未命中且未提供该组合时返回 `LoaderUnavailable` |
 | `TryAcquireCached(key, out lease)` | 已存在的缓存条目 | 不加载也不插入内容 |
 
-`TryAcquireSprite` 接受矩形未旋转的 Sprite 几何。如果打包 Sprite 启用了 rotation 或 Tight Packing，或打包后矩形改变了逻辑 Sprite 尺寸，操作会被拒绝。源 `SpriteAtlas` 应关闭 rotation 与 Tight Packing。
+`TryAcquireSprite` 要求源图集提供矩形、未旋转的 Sprite 几何——见[使用构建期图集](#使用构建期图集)。
 
 Location 获取不会隐式回退到 `Resources.Load`。必须在 Service 构造前同时提供两个 delegate。
 
@@ -149,6 +149,20 @@ DynamicAtlasInsertStatus status = atlas.TryAcquireLocation(
     "liveops/icons/reward-0042",
     out DynamicAtlasSpriteLease lease);
 ```
+
+### 使用构建期图集
+
+`TryAcquireSprite` 接受矩形未旋转的 Sprite 几何。如果打包 Sprite 启用了 rotation 或 Tight Packing，或打包后矩形改变了逻辑 Sprite 尺寸，操作会被拒绝。
+
+三种内容路径覆盖大多数项目：
+
+| 内容 | 路径 |
+| --- | --- |
+| 静态、构建期已知 | 保留在构建期 `SpriteAtlas` 中，开启 rotation、Tight Packing 与压缩；不要经过动态图集 |
+| 动态（下载或 Live Service） | 把松散或远程纹理直接喂给 `TryAcquire` / `TryAcquireRegion` |
+| 混合（创作 Sprite 同时需要进入运行时页面） | 在 CycloneGames.AtlasPipeline 规则上启用 Runtime Extraction 预设，生成的图集将按 rotation 关闭、tight packing 关闭、`RGBA32` 打包 |
+
+`SpriteAtlas Compatibility Validator` 与 [Atlas Compatibility Dashboard](#atlas-compatibility-dashboard) 会对每个源图集分级：`FastPathCandidate`（绿）与 `FastPathWithCpuFallback`（蓝）可直接消费，`ReadbackRequired`（黄）可用但插入时需付出一次同步 Readback，`UnsupportedPacking`（红）在获取时会被拒绝。
 
 ### 容量与内存配置
 
@@ -280,11 +294,17 @@ Service 构造时会在活跃设备上验证页面尺寸与目标纹理格式；
 
 Play Mode 下通过 `Tools > CycloneGames > UI Framework > Dynamic Atlas Debugger` 检查活跃 Service。每个 Service 的条目快照上限为 4096。通过 `Tools > CycloneGames > UI Framework > SpriteAtlas Compatibility Validator` 检查源图集 packing、readable 状态与各平台导入格式。Validator 不会改写资产。
 
+### Atlas Compatibility Dashboard
+
+通过 `Tools > CycloneGames > UI Framework > Atlas Compatibility Dashboard` 对项目中每个 `SpriteAtlas` 做动态图集消费分级。SpriteAtlas 资产被导入、移动或删除后，Dashboard 会以 0.5 秒节流自动重扫；关闭 **Auto Scan On Import** 则只手动扫描。每个图集被分为四级：绿色 `FastPathCandidate`（GPU-only 拷贝）、蓝色 `FastPathWithCpuFallback`、黄色 `ReadbackRequired`、红色 `UnsupportedPacking`。列表最多显示 256 条。
+
 ### 持久化与安全
 
 模块不写入文件、偏好设置、缓存或资产。所有页面与 metadata 都位于当前进程，随 Service 销毁。远程 location 与 key 均为不可信输入。创建 `Texture2D` 前必须限制 key 长度、解码后尺寸、条目数量、下载大小与插入频率。移除条目会销毁生成的 `Sprite` 并释放 packing metadata，但不会清零保留页面中的对应像素。
 
 ## 故障排查
+
+在 Editor 与 Development Build 中，`TryAcquire*` 因 packing 或格式原因被拒绝时，会按 key 一次性输出 Warning，说明原因与修复指引；Release 构建不承担此开销。
 
 | 现象 | 可能原因 | 解决方法 |
 | --- | --- | --- |
