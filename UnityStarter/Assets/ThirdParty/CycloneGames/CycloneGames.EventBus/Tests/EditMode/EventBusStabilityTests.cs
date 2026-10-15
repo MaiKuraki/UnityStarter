@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -163,30 +164,62 @@ namespace CycloneGames.EventBus.Tests
             Action<StabilityEvent> handler = _ => { };
             bus.Subscribe(handler);
 
+            // Primary judgement for the churn leg (GC-independent, always runs): after warm-up the
+            // subscribe/dispose leg must not construct new handles (the same signal as the
+            // handle-recycling check).
+            var seen = new HashSet<object>(AllocProbe.ReferenceComparer.Instance);
+            int novelHandles = 0;
+
+            // Warm every path AND populate `seen` from the same loop, so the measured phase counts only
+            // instances that are genuinely new: a pre-warmed handle first rented inside the measured
+            // phase must not be mistaken for a fresh construction.
             const int cycles = 20000;
-            Action run = () =>
+            for (int index = 0; index < cycles; index++)
+            {
+                IEventSubscription warmup = bus.Subscribe(handler);
+                seen.Add(warmup);
+                warmup.Dispose();
+                bus.Publish(new StabilityEvent { Value = index });
+                stream.TryWrite(new StabilityEvent { Value = index });
+                stream.FlushTo(bus);
+                queue.TryEnqueue(new StabilityEvent { Value = index });
+                queue.FlushTo(bus);
+            }
+
+            long allocated;
+            bool measurable = AllocProbe.TryMeasure(() =>
             {
                 for (int index = 0; index < cycles; index++)
                 {
-                    bus.Subscribe(handler).Dispose();
+                    IEventSubscription handle = bus.Subscribe(handler);
+                    if (seen.Add(handle))
+                    {
+                        novelHandles++;
+                    }
+
+                    handle.Dispose();
                     bus.Publish(new StabilityEvent { Value = index });
                     stream.TryWrite(new StabilityEvent { Value = index });
                     stream.FlushTo(bus);
                     queue.TryEnqueue(new StabilityEvent { Value = index });
                     queue.FlushTo(bus);
                 }
-            };
+            }, out allocated);
 
-            run();
+            Assert.AreEqual(0, novelHandles,
+                $"Sustained mixed-path load constructed {novelHandles} new handle instances after warm-up.");
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            run();
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            // Proxy assertion: managed allocation on this thread only. Device proof still requires
-            // a target Player + Profiler pass under the shipping backend.
-            Assert.AreEqual(0, allocated,
-                $"Sustained mixed-path load allocated {allocated} bytes after warm-up.");
+            if (measurable)
+            {
+                // Proxy assertion: managed allocation on this thread only. Device proof still requires
+                // a target Player + Profiler pass under the shipping backend.
+                Assert.AreEqual(0, allocated,
+                    $"Sustained mixed-path load allocated {allocated} bytes after warm-up (probe reading {allocated}).");
+            }
+            else
+            {
+                AllocProbe.NoteUnmeasurable("Sustained mixed-path load");
+            }
         }
 
         private struct StabilityEvent
