@@ -21,6 +21,14 @@ namespace CycloneGames.AtlasPipeline
         [SerializeField] private bool enableTightPacking = true;
 
         /// <summary>
+        /// Keeps every generated atlas texture readable from CPU code. Off by default — a readable
+        /// texture keeps a full CPU-side copy of every page, doubling the atlas's memory — so
+        /// projects opt in only when a runtime consumer (for example CPU-side sprite extraction)
+        /// actually reads the pages.
+        /// </summary>
+        [SerializeField] private bool atlasReadable;
+
+        /// <summary>
         /// Expands each sprite's colour into fully transparent neighbours before packing. Keeps edges
         /// from bleeding when the atlas is filtered, at the cost of a slightly larger atlas. Off only
         /// if the art already carries its own padding.
@@ -81,6 +89,7 @@ namespace CycloneGames.AtlasPipeline
         public int AtlasPadding => atlasPadding;
         public bool EnableRotation => enableRotation;
         public bool EnableTightPacking => enableTightPacking;
+        public bool AtlasReadable => atlasReadable;
         public bool EnableAlphaDilation => enableAlphaDilation;
         public int BlockOffset => blockOffset;
         public bool IncludeInBuild => includeInBuild;

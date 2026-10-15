@@ -86,6 +86,13 @@ namespace CycloneGames.AtlasPipeline
             "Tight Packing",
             "Pack to the sprite's polygon outline instead of its bounding rectangle.");
 
+        public static readonly GUIContent AtlasReadable = new GUIContent(
+            "Atlas Readable",
+            "Keeps the packed atlas texture readable from CPU code. Off is the default and "
+            + "halves the atlas's memory footprint (no CPU-side copy of every page); turn on "
+            + "only when a runtime consumer reads the pages on the CPU, such as a dynamic "
+            + "atlas system's readback fallback.");
+
         public static readonly GUIContent AlphaDilationDefault = new GUIContent(
             "Alpha Dilation",
             "Global default. Per-rule overrides live on each rule's Alpha Dilation.");
@@ -152,6 +159,24 @@ namespace CycloneGames.AtlasPipeline
             "Inherit uses the global default; Enabled forces rotation; "
             + "Disabled disables rotation for this rule. Pixel Art rules "
             + "always disable rotation to avoid non-integer texel sampling.");
+
+        public static readonly GUIContent RuntimeExtraction = new GUIContent(
+            "Runtime Extraction (DynamicAtlas)",
+            "Marks this rule's atlases as extractable at runtime. Forces rotation off, tight "
+            + "packing off and RGBA32 on every platform — overriding the global toggles and "
+            + "this rule's own format fields — because a runtime extractor copies rectangular "
+            + "regions straight out of the packed pages. The build validates the generated "
+            + "atlases against this contract.");
+
+        public static readonly GUIContent ManagedByRuntimeExtraction = new GUIContent(
+            "Managed by Runtime Extraction preset");
+
+        public static readonly GUIContent RuntimeExtractionWarning = new GUIContent(
+            "This atlas cannot be extracted by DynamicAtlas at runtime "
+            + "(rotation/tight/compressed). Enable Runtime Extraction or keep it render-only.");
+
+        public static readonly GUIContent EnableRuntimeExtractionButton = new GUIContent(
+            "Enable Runtime Extraction");
 
         public static readonly GUIContent RecommendedMaxPopup = new GUIContent(
             "Recommended Max",

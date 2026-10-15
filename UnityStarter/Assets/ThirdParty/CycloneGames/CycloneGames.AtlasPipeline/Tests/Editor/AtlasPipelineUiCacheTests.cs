@@ -118,6 +118,11 @@ namespace CycloneGames.AtlasPipeline.Tests
         [Category(RequiresEditorGui)]
         public void RichHelpBoxStyle_EnablesRichText()
         {
+            if (Application.isBatchMode)
+            {
+                Assert.Ignore("Requires an interactive editor GUI skin.");
+            }
+
             // EditorStyles.helpBox ships with richText = false, which renders <b> markup literally.
             Assert.IsTrue(
                 AtlasPipelineUi.RichHelpBoxStyle.richText,

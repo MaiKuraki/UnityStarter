@@ -1,5 +1,7 @@
 # CycloneGames.AtlasPipeline
 
+[English | 简体中文](README.SCH.md)
+
 Data-driven sprite import and `SpriteAtlas` (V2) generation pipeline for Unity 2022.3+. Designed for large 2D projects: deterministic output, incremental indexing, batch-friendly asset editing, zero-allocation hot paths, and build-time validation.
 
 ## Highlights
@@ -33,6 +35,30 @@ For a standalone UPM distribution, copy the `CycloneGames.AtlasPipeline` folder 
 4. Use `Apply Importers` to write import settings, `Rebuild Index` to rescan, and `Regenerate Atlases` to (re)build every configured atlas.
 
 Atlases are generated into `Assets/Settings`-adjacent content folders — the exact location is configured by `Output Atlas Folder` in the settings asset.
+
+## Runtime Extraction (DynamicAtlas)
+
+Most atlases are purely static content and should keep the render-optimal defaults: rotation on, tight packing on, and a compressed per-platform format. A small number of atlases need their sprites consumed by a runtime `DynamicAtlas` (see the [UIFramework package documentation](../CycloneGames.UIFramework/Documents~/DynamicAtlas.md)), which requires rectangular, unrotated, uncompressed source geometry. Enabling **Runtime Extraction (DynamicAtlas)** on a rule applies that requirement as a one-click preset instead of hand-tuning three separate fields.
+
+### Choosing an atlas strategy
+
+| Content | Recommended path |
+| --- | --- |
+| Static UI known at build time | Build-time `SpriteAtlas` with default settings (rotation, tight packing, compression) |
+| Runtime-downloaded or live-service images | Feed loose or remote textures directly to `DynamicAtlasService` at runtime (UIFramework package) |
+| Mixed: authored sprites that must also enter a runtime atlas | Enable the Runtime Extraction preset on the rule |
+
+### Runtime Extraction preset
+
+Enable **Runtime Extraction (DynamicAtlas)** in the rule Inspector. The preset hard-forces rotation off, tight packing off, and the platform format `RGBA32`; the managed fields become read-only (labeled *Managed by preset*). When the preset is off but the current configuration would be rejected by a runtime atlas, the Inspector shows a hint with a one-click fix button. `pixelArt` rules behave the same way: they disable both rotation and tight packing.
+
+### Atlas readability
+
+The global **Atlas Readable** setting (Packing panel, *Runtime Access* section) keeps every generated atlas texture readable from CPU code. It is off by default so atlases stay GPU-only on the fast path; enable it only for projects that explicitly need CPU readback of atlas pages.
+
+### Build-time validation
+
+`RunForBuild` validates the rotation-off / tight-packing-off / `RGBA32` triplet for every atlas whose rule enables Runtime Extraction and fails the build on any violation, so a misconfigured atlas surfaces at build time instead of at the first runtime acquisition.
 
 ## Build Integration
 
