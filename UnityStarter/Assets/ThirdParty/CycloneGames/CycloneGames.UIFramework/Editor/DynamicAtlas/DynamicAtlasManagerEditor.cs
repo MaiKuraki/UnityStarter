@@ -22,6 +22,7 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             "maxEntries",
             "maxEntriesPerPage",
             "maxKeyLength",
+            "maxMissesPerFrame",
             "memoryBudgetBytes",
             "padding",
             "enableBleed",
@@ -571,6 +572,7 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             configuration.FindPropertyRelative("maxEntries").intValue = profile.maxEntries;
             configuration.FindPropertyRelative("maxEntriesPerPage").intValue = profile.maxEntriesPerPage;
             configuration.FindPropertyRelative("maxKeyLength").intValue = profile.maxKeyLength;
+            configuration.FindPropertyRelative("maxMissesPerFrame").intValue = profile.maxMissesPerFrame;
             configuration.FindPropertyRelative("memoryBudgetBytes").longValue = profile.memoryBudgetBytes;
             configuration.FindPropertyRelative("padding").intValue = profile.padding;
             configuration.FindPropertyRelative("enableBleed").boolValue = profile.enableBleed;

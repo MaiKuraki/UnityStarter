@@ -34,6 +34,7 @@ namespace CycloneGames.UIFramework.Editor
         private SerializedProperty _priority;
         private SerializedProperty _isSceneBound;
         private SerializedProperty _subCanvasPolicy;
+        private SerializedProperty _cullWhenHidden;
 
         private bool _showIdentity = true;
         private bool _showPrefab = true;
@@ -58,6 +59,7 @@ namespace CycloneGames.UIFramework.Editor
             _priority = serializedObject.FindProperty("priority");
             _isSceneBound = serializedObject.FindProperty("isSceneBound");
             _subCanvasPolicy = serializedObject.FindProperty("subCanvasPolicy");
+            _cullWhenHidden = serializedObject.FindProperty("cullWhenHidden");
             _cachedEditorGuid = null;
             _cachedTrackedPrefab = null;
             _cachedTrackedPrefabHasWindow = false;
@@ -146,6 +148,9 @@ namespace CycloneGames.UIFramework.Editor
                 EditorGUILayout.PropertyField(_subCanvasPolicy, new GUIContent(
                     "Sub-Canvas Policy",
                     "Inherit the layer canvas for batching, or isolate the window when it needs its own Canvas boundary."));
+                EditorGUILayout.PropertyField(_cullWhenHidden, new GUIContent(
+                    "Cull When Hidden",
+                    "SetVisible(false) also deactivates the GameObject so the hidden window is fully culled from rendering."));
 
                 if (!_subCanvasPolicy.hasMultipleDifferentValues &&
                     _subCanvasPolicy.enumValueIndex == (int)UIWindowConfiguration.SubCanvasPolicy.IsolatedCanvas)

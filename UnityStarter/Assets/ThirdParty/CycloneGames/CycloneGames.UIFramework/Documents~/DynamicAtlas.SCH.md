@@ -19,7 +19,9 @@
 ### 主要特性
 
 - **有界页面**：显式 `pageSize`、`maxPages`、`maxEntries` 与 `memoryBudgetBytes` 上限。
-- **显式 Lease**：`DynamicAtlasSpriteLease` 持有每个条目一个引用；Dispose 幂等。
+- **显式 Lease**：`DynamicAtlasSpriteLease` 是值类型句柄，持有每个条目一个引用；Dispose 幂等，过期句柄为 no-op。
+- **零分配缓存命中**：条目与 Lease 记录全部池化（上限 256），重复获取缓存内容不产生分配。
+- **每帧 Miss 预算**：`maxMissesPerFrame` 限制每帧 cache miss 的像素工作；超出预算返回 `Throttled`，下一帧自动恢复。
 - **GPU 优先复制**：格式匹配时通过 `Graphics.CopyTexture` 写入 GPU-only 页面；可读 CPU raw copy 与显式同步 Readback 作为可选 fallback。
 - **稳定 key**：ordinal、区分大小写、带命名空间、长度有界的 key。
 - **Retention 策略**：`RemoveWhenUnused` 或 `RetainUntilCapacityPressure`，配合 `TrimUnused`。
@@ -68,8 +70,8 @@ public sealed class InventoryIcon : MonoBehaviour
     private void OnDisable()
     {
         image.sprite = null;
-        iconLease?.Dispose();
-        iconLease = null;
+        iconLease.Dispose();
+        iconLease = default;
     }
 
     private void OnDestroy()
@@ -88,7 +90,9 @@ public sealed class InventoryIcon : MonoBehaviour
 
 `DynamicAtlasService` 拥有生成的 `Sprite` 与图集页 `Texture2D`。创建、调用和 Dispose 必须位于同一个 Unity 主线程。直接传入源纹理时由调用方拥有；Service 不会销毁调用方提供的 `Texture2D` 或 `Sprite`。
 
-`DynamicAtlasSpriteLease` 持有一个条目引用。Dispose Lease 会精确释放一个引用。重复 Dispose 安全，`Clear()` 或 Service Dispose 后再 Dispose Lease 也安全。
+`DynamicAtlasSpriteLease` 是只读值类型句柄，内部引用一个池化的 Lease 记录。它持有一个条目引用，Dispose Lease 会精确释放一个引用。重复 Dispose 安全，句柄的过期副本为 no-op，`Clear()` 或 Service Dispose 后再 Dispose Lease 也安全。
+
+由于 Lease 是 struct，判断有效性使用 `lease.IsValid`，清空已保存的句柄使用 `lease = default`。Lease 没有 finalizer：从未 Dispose 的 Lease 会让其条目永久驻留。必须在原本要释放 Sprite 的同一边界显式 Dispose。
 
 ```mermaid
 flowchart LR
@@ -161,10 +165,43 @@ DynamicAtlasInsertStatus status = atlas.TryAcquireLocation(
 | `enableBleed` | 为双线性采样把一个边缘像素复制到 padding |
 | `oversizePolicy` | 拒绝或显式缩放超过页面的内容 |
 | `copyFallback` | 选择仅 GPU、可读 CPU raw-copy 或显式同步 Readback 权限 |
+| `maxMissesPerFrame` | 每帧 cache miss 预算；超出预算返回 `Throttled`。`0` 表示禁用预算 |
 
 无参配置采用有界的 GPU-first 基线：1024 像素页面、最多两个页面、512 个条目，以及 16 MiB 最坏情况页面纹理预算。只有在目标 workload 已具有实测插入时间与内存预算后，才应选择更大的 Profile。
 
 `EstimatedTextureBytes` 覆盖活跃图集页的纹理副本以及 Play Mode 中等待 Unity 延迟销毁的页面；`PendingDestructionBytes` 单独报告延迟销毁部分。Metadata、生成的 `Sprite`、源资源与临时纹理分配由独立边界约束。
+
+### 每帧 Miss 预算
+
+一次 cache miss 可能触发同步像素拷贝，同一帧内大量首次使用的图标会抬高帧时间。`maxMissesPerFrame`（默认 8）限制每帧允许执行像素工作的 miss 数量。预算耗尽后，所有 miss 缓存的 `TryAcquire*` 调用都返回 `DynamicAtlasInsertStatus.Throttled`，不执行像素拷贝，也不调用 loader。预算在下一帧自动重置。设为 `0` 可禁用节流。
+
+与容量失败不同，`Throttled` 是瞬态状态。调用方应保留 placeholder 并在后续帧重试。
+
+```csharp
+using Cysharp.Threading.Tasks;
+using CycloneGames.UIFramework.DynamicAtlas;
+
+public async UniTask AcquireIconAsync(string key, Sprite source, CancellationToken ct)
+{
+    while (true)
+    {
+        DynamicAtlasInsertStatus status = atlas.TryAcquireSprite(key, source, out iconLease);
+        if (status == DynamicAtlasInsertStatus.Success ||
+            status == DynamicAtlasInsertStatus.CacheHit)
+        {
+            image.sprite = iconLease.Sprite;
+            return;
+        }
+
+        if (status != DynamicAtlasInsertStatus.Throttled)
+        {
+            return; // Non-transient failure; keep the placeholder.
+        }
+
+        await UniTask.Yield(ct); // Retry once the per-frame budget resets.
+    }
+}
+```
 
 ### 批量插入
 
@@ -218,7 +255,7 @@ DI 容器拥有同一生命周期时，可注册 `IDynamicAtlas` 或 `DynamicAtl
 
 **CPU-backed 页面** -- `AllowCpuRawCopy` 允许使用可读页面并读取与目标 `GraphicsFormat` 完全一致的可读源。`AllowSynchronousReadback` 还允许在无法 raw copy 时使用临时 RenderTexture 与 `ReadPixels`。同步 Readback 可能阻塞渲染线程；`DynamicAtlasStats.SynchronousReadbackCount` 会显示使用次数。
 
-**目标格式** -- 运行时页面支持 `RGBA32`。运行时压缩 block packing 不受支持。需要压缩页面存储时使用构建期 `SpriteAtlas`。
+**目标格式：为什么是 RGBA32** -- 图集页必须同时接受来自 CPU（`SetPixels`/`Apply`）与 GPU（`Graphics.CopyTexture`）的高效部分区域写入。GPU 压缩格式（ASTC、BC、ETC）不支持高效的部分更新，从 CPU 直接写入压缩块也不可行，因此页面纹理固定为非压缩 `RGBA32`。代价是每像素 4 字节，由 `maxPages`、`pageSize` 与 `memoryBudgetBytes` 三级预算约束。构建期已知的内容应使用压缩的构建期 `SpriteAtlas`；运行时压缩 block packing 不受支持。
 
 ### ScaleDown
 
@@ -228,12 +265,12 @@ DI 容器拥有同一生命周期时，可注册 `IDynamicAtlas` 或 `DynamicAtl
 
 `CreateForCurrentPlatform()` 会为已识别的桌面、移动端与 WebGL Target 选择以下有界 Profile。未知平台族会取得无参兼容基线。
 
-| Profile | 页面 | 页面数 | 条目数 | 纹理估算预算 | Fallback |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `DesktopHighEnd` | 2048 | 4 | 4096 | 64 MiB | 仅 GPU |
-| `MobileHighEnd` | 2048 | 2 | 2048 | 32 MiB | 仅 GPU |
-| `MobileLowEnd` | 1024 | 2 | 768 | 16 MiB 最坏情况 | GPU 优先；允许 readable CPU raw copy |
-| `WebGL` | 1024 | 2 | 512 | 20 MiB | 允许 CPU raw copy；拒绝同步 Readback |
+| Profile | 页面 | 页面数 | 条目数 | 纹理估算预算 | 每帧 Miss 数 | Fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `DesktopHighEnd` | 2048 | 4 | 4096 | 64 MiB | 16 | 仅 GPU |
+| `MobileHighEnd` | 2048 | 2 | 2048 | 32 MiB | 8 | 仅 GPU |
+| `MobileLowEnd` | 1024 | 2 | 768 | 16 MiB 最坏情况 | 4 | GPU 优先；允许 readable CPU raw copy |
+| `WebGL` | 1024 | 2 | 512 | 20 MiB | 2 | 允许 CPU raw copy；拒绝同步 Readback |
 
 Service 构造时会在活跃设备上验证页面尺寸与目标纹理格式；源与目标 `GraphicsFormat` 是否一致以及 `CopyTexture` 支持情况，会在插入选择复制路径时解析。主机平台与未列出硬件档位应根据目标设备实测预算构建显式配置。
 
@@ -263,7 +300,8 @@ Play Mode 下通过 `Tools > CycloneGames > UI Framework > Dynamic Atlas Debugge
 | `CopyUnsupported` | GPU Copy 不可用且 fallback 关闭 | 提供匹配格式，或启用 fallback |
 | `CopyFailed` | 图形操作失败 | 保留 placeholder 并记录诊断 |
 | `Disposed` | Service 生命周期已结束 | 停止调用并修正生命周期顺序 |
+| `Throttled` | 每帧 miss 预算耗尽 | 保留 placeholder 并在后续帧重试 |
 | Borrowed sprite 在帧之间失效 | `TryGetSprite` 结果未受 Lease 保护 | 使用 `TryAcquireCached` 或其他获取 API |
 | 同步 Readback 阻塞渲染线程 | 热路径使用了 `AllowSynchronousReadback` | 准备匹配的非压缩源变体 |
 
-不要每帧重试容量失败。应使用 backoff，或等待 Release/Trim 边界改变状态。
+不要每帧重试容量失败。应使用 backoff，或等待 Release/Trim 边界改变状态。`Throttled` 是例外：它在下一帧自动清除，因此下一帧重试是预期处理方式。

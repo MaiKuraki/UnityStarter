@@ -28,6 +28,9 @@ namespace CycloneGames.UIFramework.Runtime
         [SerializeField, Range(-100, 400)] private int priority;
         [SerializeField] private bool isSceneBound;
         [SerializeField] private SubCanvasPolicy subCanvasPolicy = SubCanvasPolicy.InheritLayerCanvas;
+        [SerializeField]
+        [Tooltip("When enabled, SetVisible(false) also deactivates the GameObject so hidden windows are fully culled from rendering instead of only fading their CanvasGroup.")]
+        private bool cullWhenHidden;
 
         public string WindowId => windowId ?? string.Empty;
         public PrefabSource Source => source;
@@ -41,6 +44,7 @@ namespace CycloneGames.UIFramework.Runtime
         public int Priority => priority;
         public bool IsSceneBound => isSceneBound;
         public SubCanvasPolicy CanvasIsolationPolicy => subCanvasPolicy;
+        public bool CullWhenHidden => cullWhenHidden;
 
         public UIAssetReference EffectiveAssetReference
         {

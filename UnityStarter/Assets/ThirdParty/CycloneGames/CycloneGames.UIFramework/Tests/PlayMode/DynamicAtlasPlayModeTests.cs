@@ -2,6 +2,7 @@ using System.Collections;
 using CycloneGames.UIFramework.DynamicAtlas;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.TestTools;
 
 namespace CycloneGames.UIFramework.Tests.PlayMode
@@ -37,7 +38,7 @@ namespace CycloneGames.UIFramework.Tests.PlayMode
                     source,
                     out DynamicAtlasSpriteLease sameFrameLease);
                 Assert.That(sameFrameStatus, Is.EqualTo(DynamicAtlasInsertStatus.MemoryBudgetReached));
-                Assert.That(sameFrameLease, Is.Null);
+                Assert.That(sameFrameLease.IsValid, Is.False);
 
                 yield return null;
 
@@ -80,7 +81,7 @@ namespace CycloneGames.UIFramework.Tests.PlayMode
                     source,
                     out DynamicAtlasSpriteLease sameFrameLease);
                 Assert.That(sameFrameStatus, Is.EqualTo(DynamicAtlasInsertStatus.PageCapacityReached));
-                Assert.That(sameFrameLease, Is.Null);
+                Assert.That(sameFrameLease.IsValid, Is.False);
 
                 yield return null;
 
@@ -88,6 +89,64 @@ namespace CycloneGames.UIFramework.Tests.PlayMode
                     service.TryAcquire("pending-page/next-frame", source, out DynamicAtlasSpriteLease nextFrame),
                     Is.EqualTo(DynamicAtlasInsertStatus.Success));
                 nextFrame.Dispose();
+            }
+            finally
+            {
+                service.Dispose();
+                Object.Destroy(source);
+            }
+        }
+
+        [Test]
+        public void GpuCopy_SupportedEnvironment_IncrementsGpuCopyCount()
+        {
+            if ((SystemInfo.copyTextureSupport & CopyTextureSupport.Basic) == 0)
+            {
+                Assert.Inconclusive(
+                    "CopyTextureSupport.Basic is unavailable on this device; the GPU copy path cannot run.");
+            }
+
+            var config = new DynamicAtlasConfig
+            {
+                pageSize = 256,
+                maxPages = 2,
+                minRetainedPages = 0,
+                maxEntries = 4,
+                maxEntriesPerPage = 4,
+                maxKeyLength = 64,
+                memoryBudgetBytes = 1024L * 1024L,
+                padding = 1,
+                enableBleed = false,
+                retentionPolicy = DynamicAtlasRetentionPolicy.RemoveWhenUnused,
+                oversizePolicy = DynamicAtlasOversizePolicy.Reject,
+                copyFallback = DynamicAtlasCopyFallback.GpuOnly,
+                maxMissesPerFrame = 0,
+            };
+            Texture2D source = CreateTexture(16, 16);
+            var service = new DynamicAtlasService(config);
+
+            try
+            {
+                Assert.That(
+                    service.TryAcquire("gpu-copy/first", source, out DynamicAtlasSpriteLease first),
+                    Is.EqualTo(DynamicAtlasInsertStatus.Success));
+
+                DynamicAtlasStats afterFirst = service.GetStats();
+                Assert.That(afterFirst.GpuCopyCount, Is.EqualTo(1));
+                Assert.That(afterFirst.CpuRawCopyCount, Is.Zero);
+                Assert.That(afterFirst.SynchronousReadbackCount, Is.Zero);
+
+                Assert.That(
+                    service.TryAcquire("gpu-copy/second", source, out DynamicAtlasSpriteLease second),
+                    Is.EqualTo(DynamicAtlasInsertStatus.Success));
+
+                DynamicAtlasStats afterSecond = service.GetStats();
+                Assert.That(afterSecond.GpuCopyCount, Is.EqualTo(2));
+                Assert.That(afterSecond.CpuRawCopyCount, Is.Zero);
+                Assert.That(afterSecond.SynchronousReadbackCount, Is.Zero);
+
+                first.Dispose();
+                second.Dispose();
             }
             finally
             {

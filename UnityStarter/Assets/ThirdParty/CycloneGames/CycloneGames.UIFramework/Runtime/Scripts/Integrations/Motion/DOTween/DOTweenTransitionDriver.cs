@@ -65,7 +65,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             SetupInitialState(context, OpenConfig, true);
@@ -81,7 +82,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayCloseAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             context.CanvasGroup.interactable = false;
@@ -249,8 +251,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             var go = window.gameObject;
             var rt = window.transform as RectTransform;
-            var group = go.GetComponent<CanvasGroup>();
-            if (group == null) group = go.AddComponent<CanvasGroup>();
+            var group = UIWindowTransitionUtility.GetOrAddCanvasGroup(window);
 
             return new TransitionContext
             {

@@ -2,57 +2,95 @@ using UnityEngine;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
+    /// <summary>Controls what happens to an entry when its reference count reaches zero.</summary>
     public enum DynamicAtlasRetentionPolicy
     {
+        /// <summary>The entry is destroyed immediately and its slot becomes reusable.</summary>
         RemoveWhenUnused = 0,
+        /// <summary>The entry stays cached until capacity pressure evicts it in LRU order.</summary>
         RetainUntilCapacityPressure = 1,
     }
 
+    /// <summary>Controls how sources larger than one page are handled.</summary>
     public enum DynamicAtlasOversizePolicy
     {
+        /// <summary>Oversized sources are rejected with <see cref="DynamicAtlasInsertStatus.OversizedSource"/>.</summary>
         Reject = 0,
+        /// <summary>Oversized sources are scaled down through the synchronous readback path.</summary>
         ScaleDown = 1,
     }
 
+    /// <summary>Controls which pixel-copy paths may run when GPU copy is unavailable.</summary>
     public enum DynamicAtlasCopyFallback
     {
+        /// <summary>Only Graphics.CopyTexture; everything else is rejected.</summary>
         GpuOnly = 0,
+        /// <summary>Also permit a synchronous Blit/ReadPixels fallback.</summary>
         AllowSynchronousReadback = 1,
+        /// <summary>Also permit a direct CPU raw copy between matching readable formats.</summary>
         AllowCpuRawCopy = 2,
     }
 
+    /// <summary>Result of an acquire call. Only <see cref="Success"/> and <see cref="CacheHit"/> produce a valid lease.</summary>
     public enum DynamicAtlasInsertStatus
     {
+        /// <summary>New entry inserted; the lease owns the first reference.</summary>
         Success = 0,
+        /// <summary>Existing entry retained; no pixel work ran.</summary>
         CacheHit = 1,
+        /// <summary>Key is null, empty, or longer than the configured maximum.</summary>
         InvalidKey = 2,
+        /// <summary>Source texture or sprite is null, destroyed, or otherwise unusable.</summary>
         InvalidSource = 3,
+        /// <summary>Requested region is empty or outside the source bounds.</summary>
         InvalidRegion = 4,
+        /// <summary>Source exceeds one page and the oversize policy rejected it.</summary>
         OversizedSource = 5,
+        /// <summary>Acquisition by location requires a configured loader.</summary>
         LoaderUnavailable = 6,
+        /// <summary>Sprite packing or geometry is incompatible with region extraction.</summary>
         UnsupportedSpritePacking = 7,
+        /// <summary>Entry count ceiling reached and no zero-reference entry could be evicted.</summary>
         EntryCapacityReached = 8,
+        /// <summary>Page count ceiling reached, including pages pending destruction.</summary>
         PageCapacityReached = 9,
+        /// <summary>Texture byte budget would be exceeded.</summary>
         MemoryBudgetReached = 10,
+        /// <summary>No configured copy path supports the source/destination format pair.</summary>
         CopyUnsupported = 11,
+        /// <summary>The selected copy path failed at runtime.</summary>
         CopyFailed = 12,
+        /// <summary>The service is disposed.</summary>
         Disposed = 13,
+        /// <summary>
+        /// The per-frame miss budget was exhausted. No pixel work ran; callers should retry on a later frame.
+        /// </summary>
+        Throttled = 14,
     }
 
+    /// <summary>Pixel-copy path used for an insert, reported in stats and snapshots.</summary>
     public enum DynamicAtlasCopyPath
     {
+        /// <summary>No copy performed (cache hit or rejected insert).</summary>
         None = 0,
+        /// <summary>Graphics.CopyTexture on the GPU.</summary>
         GpuCopy = 1,
+        /// <summary>Direct CPU copy between matching readable formats.</summary>
         CpuRawCopy = 2,
+        /// <summary>Blit/ReadPixels fallback.</summary>
         SynchronousGpuReadback = 3,
     }
 
+    /// <summary>Page texture residency.</summary>
     public enum DynamicAtlasPageMode
     {
+        /// <summary>GPU-only texture, not readable after upload.</summary>
         GpuOnly = 0,
+        /// <summary>Texture keeps a CPU copy for raw writes and bleed padding.</summary>
         CpuBacked = 1,
     }
 
+    /// <summary>Bounded counters snapshot; all values are read on the owner thread.</summary>
     public readonly struct DynamicAtlasStats
     {
         public readonly int PageCount;
@@ -127,6 +165,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         }
     }
 
+    /// <summary>Point-in-time view of one atlas page, written into a caller-owned buffer.</summary>
     public readonly struct DynamicAtlasPageSnapshot
     {
         public readonly int PageId;
@@ -159,6 +198,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         }
     }
 
+    /// <summary>Point-in-time view of one atlas entry, written into a caller-owned buffer.</summary>
     public readonly struct DynamicAtlasEntrySnapshot
     {
         public readonly string Key;
