@@ -170,6 +170,17 @@ namespace CycloneGames.UIFramework.Runtime
                 _canvasGroup.alpha = visible ? 1f : 0f;
                 _canvasGroup.interactable = visible;
                 _canvasGroup.blocksRaycasts = visible;
+
+                if (_configuration != null && _configuration.CullWhenHidden)
+                {
+                    // Culling deactivates the whole GameObject; the CanvasGroup state set
+                    // above is what the window comes back with when re-shown.
+                    if (gameObject.activeSelf != visible)
+                    {
+                        gameObject.SetActive(visible);
+                    }
+                }
+
                 return;
             }
 

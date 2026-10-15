@@ -61,6 +61,38 @@ namespace CycloneGames.UIFramework.Tests.Editor
         }
 
         [Test]
+        public void UIWindow_SetVisible_CullWhenHidden_DeactivatesAndRestoresGameObject()
+        {
+            GameObject windowObject = Track(new GameObject(
+                "Window",
+                typeof(RectTransform),
+                typeof(CanvasGroup)));
+            CanvasGroup canvasGroup = windowObject.GetComponent<CanvasGroup>();
+            UIWindow window = windowObject.AddComponent<UIWindow>();
+            TestReflection.Invoke(window, "Awake");
+
+            UIWindowConfiguration configuration =
+                ScriptableObject.CreateInstance<UIWindowConfiguration>();
+            _configurations.Add(configuration);
+            TestReflection.SetField(configuration, "cullWhenHidden", true);
+            TestReflection.SetField(window, "_configuration", configuration);
+
+            window.SetVisible(false);
+
+            Assert.IsFalse(windowObject.activeSelf);
+            Assert.AreEqual(0f, canvasGroup.alpha);
+            Assert.IsFalse(canvasGroup.interactable);
+            Assert.IsFalse(canvasGroup.blocksRaycasts);
+
+            window.SetVisible(true);
+
+            Assert.IsTrue(windowObject.activeSelf);
+            Assert.AreEqual(1f, canvasGroup.alpha);
+            Assert.IsTrue(canvasGroup.interactable);
+            Assert.IsTrue(canvasGroup.blocksRaycasts);
+        }
+
+        [Test]
         public void UILayer_AuthoringSerializesOnlyStableLayerIdentity()
         {
             UILayer layer = CreateLayer();

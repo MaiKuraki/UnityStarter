@@ -107,6 +107,12 @@ namespace CycloneGames.UIFramework.Runtime
                 throw new ArgumentNullException(nameof(affectedWindowIds));
             }
 
+            if (!Enum.IsDefined(typeof(ChildClosePolicy), policy))
+            {
+                // An undefined policy fails the Try-style call without touching the caller buffer or the graph.
+                return false;
+            }
+
             affectedWindowIds.Clear();
 
             if (string.IsNullOrEmpty(windowId) || !_nodes.TryGetValue(windowId, out Node node))

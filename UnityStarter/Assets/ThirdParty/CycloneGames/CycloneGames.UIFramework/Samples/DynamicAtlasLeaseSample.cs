@@ -52,7 +52,7 @@ namespace CycloneGames.UIFramework.Samples
 
         private void OnEnable()
         {
-            if (_spriteLease != null)
+            if (_spriteLease.IsValid)
             {
                 return;
             }
@@ -75,7 +75,7 @@ namespace CycloneGames.UIFramework.Samples
                 return;
             }
 
-            _spriteLease = null;
+            _spriteLease = default;
             Log.Error(
                 status,
                 static (value, builder) => builder
@@ -98,7 +98,7 @@ namespace CycloneGames.UIFramework.Samples
 
         private void ReleaseSprite()
         {
-            if (_spriteLease == null)
+            if (!_spriteLease.IsValid)
             {
                 return;
             }
@@ -109,7 +109,7 @@ namespace CycloneGames.UIFramework.Samples
             }
 
             _spriteLease.Dispose();
-            _spriteLease = null;
+            _spriteLease = default;
         }
     }
 }

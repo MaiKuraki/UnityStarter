@@ -12,7 +12,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.asset-management",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+        }
+    ],
     "noEngineReferences": false
 }

@@ -60,15 +60,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public void Configure(
             Func<string, Texture2D> load,
             Action<string, Texture2D> unload,
-            int size = 0,
+            int pageSize = 0,
             bool autoScaleLargeTextures = true)
         {
             DynamicAtlasConfig config = DynamicAtlasConfig.CreateForCurrentPlatform(
                 loadFunc: load,
                 unloadFunc: unload);
-            if (size > 0)
+            if (pageSize > 0)
             {
-                config.pageSize = size;
+                config.pageSize = pageSize;
             }
 
             config.oversizePolicy = autoScaleLargeTextures &&
@@ -76,15 +76,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 ? DynamicAtlasOversizePolicy.ScaleDown
                 : DynamicAtlasOversizePolicy.Reject;
             Configure(config);
-        }
-
-        public void ConfigurePlatformOptimized(
-            Func<string, Texture2D> load = null,
-            Action<string, Texture2D> unload = null)
-        {
-            Configure(DynamicAtlasConfig.CreateForCurrentPlatform(
-                loadFunc: load,
-                unloadFunc: unload));
         }
 
         public void Initialize(DynamicAtlasConfig config = null)

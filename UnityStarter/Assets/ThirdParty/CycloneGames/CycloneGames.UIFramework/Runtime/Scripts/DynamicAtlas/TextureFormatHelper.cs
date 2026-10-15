@@ -24,6 +24,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
         }
 
+        /// <summary>
+        /// Saturating per-page byte estimate for the given size and copy fallback;
+        /// returns long.MaxValue for invalid input so budget checks fail safely.
+        /// </summary>
         public static long EstimatePageBytes(int pageSize, DynamicAtlasCopyFallback fallback)
         {
             if (pageSize <= 0 ||

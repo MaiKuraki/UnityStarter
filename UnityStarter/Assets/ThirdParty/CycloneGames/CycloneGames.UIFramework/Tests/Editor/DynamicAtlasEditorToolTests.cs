@@ -109,6 +109,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
             Assert.That(actual.maxEntries, Is.EqualTo(expected.maxEntries));
             Assert.That(actual.maxEntriesPerPage, Is.EqualTo(expected.maxEntriesPerPage));
             Assert.That(actual.maxKeyLength, Is.EqualTo(expected.maxKeyLength));
+            Assert.That(actual.maxMissesPerFrame, Is.EqualTo(expected.maxMissesPerFrame));
             Assert.That(actual.memoryBudgetBytes, Is.EqualTo(expected.memoryBudgetBytes));
             Assert.That(actual.padding, Is.EqualTo(expected.padding));
             Assert.That(actual.enableBleed, Is.EqualTo(expected.enableBleed));
