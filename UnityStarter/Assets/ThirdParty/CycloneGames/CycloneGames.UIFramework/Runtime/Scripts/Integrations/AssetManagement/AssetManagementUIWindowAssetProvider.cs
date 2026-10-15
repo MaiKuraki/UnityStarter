@@ -1,3 +1,4 @@
+#if CYCLONEGAMES_HAS_ASSETMANAGEMENT
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -27,7 +28,14 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
                 get
                 {
                     EnsureMainThread();
-                    return _handle != null ? _handle.Asset : null;
+                    if (_handle == null)
+                    {
+                        throw new ObjectDisposedException(
+                            nameof(AssetLease<TAsset>),
+                            "The asset lease has been disposed.");
+                    }
+
+                    return _handle.Asset;
                 }
             }
 
@@ -40,6 +48,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
                     return;
                 }
 
+                // Clear before disposing: a backend that throws on an externally disposed
+                // handle must not turn a retry into a double release.
                 _handle = null;
                 handle.Dispose();
             }
@@ -120,7 +130,9 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
 
             try
             {
-                await handle.Task;
+                // The external token cancels only this wait; the catch below still disposes
+                // the handle exactly once and rethrows the OperationCanceledException.
+                await handle.Task.AttachExternalCancellation(cancellationToken);
                 await UniTask.SwitchToMainThread();
                 cancellationToken.ThrowIfCancellationRequested();
                 if (handle.Asset == null)
@@ -171,3 +183,4 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
         }
     }
 }
+#endif

@@ -66,7 +66,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             SetupInitialState(context, OpenConfig, true);
@@ -82,7 +83,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public async UniTask PlayCloseAsync(UIWindow window, CancellationToken ct)
         {
-            if (window == null || ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
+            if (window == null) return;
 
             var context = CreateContext(window);
             context.CanvasGroup.interactable = false;
@@ -138,7 +140,8 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize fade animation.</summary>
         protected virtual async UniTask AnimateFade(TransitionContext ctx, float duration, bool isOpen, Ease ease, CancellationToken ct)
         {
-            float from = isOpen ? 0f : ctx.CanvasGroup.alpha;
+            // Animate from the live value so an interrupted close resumes seamlessly.
+            float from = ctx.CanvasGroup.alpha;
             float to = isOpen ? 1f : 0f;
             var handle = LMotion.Create(from, to, duration)
                 .WithEase(ease)
@@ -150,9 +153,8 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize scale animation.</summary>
         protected virtual async UniTask AnimateScale(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease, CancellationToken ct)
         {
-            Vector3 from = isOpen
-                ? ctx.OriginalScale * config.ScaleFrom
-                : ctx.Transform.localScale;
+            // Start from the current scale for interruption-safe transitions.
+            Vector3 from = ctx.Transform.localScale;
             Vector3 to = isOpen
                 ? ctx.OriginalScale
                 : ctx.OriginalScale * config.ScaleFrom;
@@ -171,8 +173,8 @@ namespace CycloneGames.UIFramework.Runtime
                 ctx.RectTransform,
                 config,
                 ctx.OriginalPosition);
-            // Use current position as 'from' for close to handle mid-open interruption
-            Vector2 from = isOpen ? offset : ctx.RectTransform.anchoredPosition;
+            // Use the current position as 'from' for interruption-safe transitions.
+            Vector2 from = ctx.RectTransform.anchoredPosition;
             Vector2 to = isOpen ? ctx.OriginalPosition : offset;
             var handle = LMotion.Create(from, to, config.Duration)
                 .WithEase(ease)
@@ -257,8 +259,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             var go = window.gameObject;
             var rt = window.transform as RectTransform;
-            var group = go.GetComponent<CanvasGroup>();
-            if (group == null) group = go.AddComponent<CanvasGroup>();
+            var group = UIWindowTransitionUtility.GetOrAddCanvasGroup(window);
 
             return new TransitionContext
             {

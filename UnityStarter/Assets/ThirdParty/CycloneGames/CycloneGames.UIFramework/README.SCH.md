@@ -75,14 +75,14 @@ flowchart LR
 | --- | --- | --- |
 | `CycloneGames.UIFramework.Runtime` | 核心 Runtime | 始终 |
 | `CycloneGames.UIFramework.Editor` | Authoring 工具 | 仅 Editor |
-| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | Active；companion package dependency |
+| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | 依赖 `CYCLONEGAMES_HAS_ASSETMANAGEMENT` define；`versionDefines` 监视 `com.cyclone-games.asset-management` UPM 包 |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | 窗口注入 | 存在 `jp.hadashikick.vcontainer` 包 |
 | `...Integrations.LitMotion` | 窗口过渡 driver | 存在 `com.annulusgames.lit-motion` 包 |
 | `...Integrations.DOTween` | 窗口过渡 driver | 存在 `com.demigiant.dotween` 包 |
 | `...Integrations.PrimeTween` | 窗口过渡 driver | 存在 `com.kyrylokuzyk.primetween` 包 |
 | `CycloneGames.UIFramework.Samples` | 选择性示例 | `autoReferenced: false` |
 
-核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选的 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 加 `defineConstraints` 启用：当依赖以 UPM 包形式安装时自动激活。
+核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选的 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 加 `defineConstraints` 启用：当依赖以 UPM 包形式安装时自动激活。AssetManagement 集成遵循同一规则：`versionDefines` 监视 `com.cyclone-games.asset-management` UPM 包并生成 `CYCLONEGAMES_HAS_ASSETMANAGEMENT`。当 AssetManagement 只以 `Assets/` 下文件夹形式存在时，该 define 不会生效，集成程序集会被静默跳过；需要以 UPM 或 embedded 包形式安装 AssetManagement，或在 asmdef 可见的位置自行定义该宏。
 
 Localization 绑定不属于本包。它位于可选的 companion 模块 [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.SCH.md) 中，因此本包在没有 `CycloneGames.Localization`、也没有任何条件编译宏的情况下照样编译。
 
@@ -264,8 +264,11 @@ await ui.OpenAsync(
 | `Priority` | 同一 Layer 内的排序优先级 |
 | `IsSceneBound` | Owner 活动场景切换时关闭 |
 | `CanvasIsolationPolicy` | 继承 Layer Canvas，或添加隔离的子 Canvas |
+| `CullWhenHidden` | `SetVisible(false)` 同时禁用 GameObject，完全剔除渲染与事件 |
 
 Prefab 根对象必须包含 `UIWindow` 派生组件。`UIAssetReference.Location` 是 Runtime 契约；`EditorGuid` 只是 authoring metadata，不能作为 Player 地址。
+
+`CullWhenHidden` 在两种隐藏窗口成本之间做选择。默认 `false` 时，`SetVisible(false)` 只驱动 `CanvasGroup`（alpha 归零，关闭交互与射线）：窗口仍参与 GPU 渲染与合批，但重新显示时没有布局重建成本。设为 `true` 时，隐藏会额外调用 `gameObject.SetActive(false)`，将窗口从渲染与事件处理中完全剔除（Canvas 子树停止合批）；重新显示时 GameObject 重新激活，且可见状态的 `CanvasGroup` 已一并应用。对长期隐藏的重型窗口启用该选项；对频繁切换的窗口保持默认，避免每次激活都重建布局。
 
 ### 使用 AssetManagement 加载窗口
 
@@ -441,11 +444,17 @@ UIWindow inventory = await ui.NavigateAsync(
 
 `IUIWindowTransitionDriver` 控制单个窗口的打开与关闭动画；`IUITransitionCoordinator` 控制导航时的双窗口动画。通过 `UIServiceOptions` 设置默认 Driver，或对单次打开覆盖。只有另一个 authority 负责完整动画操作时，才使用 `suppressWindowTransition: true`。可选 Motion 程序集为 `FadeConfig`、`ScaleConfig`、`SlideConfig` 与 `CompositeConfig` 提供 Driver，并只在相应包已安装时编译。
 
+内置过渡共享同一份取消契约。三个 Motion Driver（DOTween、LitMotion、PrimeTween）与内置 Coordinator 在收到已取消的 Token 时抛出 `OperationCanceledException`，调用方可以用一个 `catch (OperationCanceledException)` 统一处理取消。无论走完成路径还是取消路径，Coordinator 都会把 leaving 与 entering 双方窗口的 `interactable` 与 `blocksRaycasts` 恢复到过渡前捕获的快照，输入不会被永久阻塞。
+
+所有内置过渡都通过 `CanvasGroup` 动画。窗口缺失 `CanvasGroup` 时，CrossFade/Slide Coordinator 与三个 Motion Driver 会通过 `UIWindowTransitionUtility.GetOrAddCanvasGroup` 在运行时补挂一个；该组件为一次性组件，随窗口 GameObject 一起销毁。
+
+LitMotion Driver 的 fade、scale 与 slide 动画从窗口当前值（alpha、local scale、anchored position）出发向目标值动画，因此中断后重入过渡会从当前姿态平滑继续，而不是跳回固定起始姿态。
+
 ### Canvas、输入与分辨率
 
 - 在 Root Canvas 上配置适合产品参考分辨率的 `CanvasScaler` 与 Match Policy。
 - 大多数窗口使用 `InheritLayerCanvas`，以保留批处理并避免额外 Canvas 与 Raycaster。只有实测有收益时才使用 `IsolatedCanvas`。
-- 需要显隐控制或内置协调过渡的窗口应添加 `CanvasGroup`。
+- 需要显隐控制的窗口应添加 `CanvasGroup`；内置过渡在缺失时会于运行时补挂（见[窗口过渡](#窗口过渡)）。
 - Layer Canvas 持有 Sorting Range；配置 Priority 只控制同一 Layer 内的 Sibling 顺序。
 
 `GetRootCanvasSize()` 返回当前 Root `RectTransform` 尺寸。Overlay 配置下 `GetUICamera()` 可以返回 `null`。
@@ -507,7 +516,7 @@ UIWindow inventory = await ui.NavigateAsync(
     cancellationToken: token);
 ```
 
-Coordinator 在传播提交前取消之前，必须恢复自己修改的视觉与输入状态。在提交前发生打开、协调、取消或 ownership 校验失败时，本次新打开的进入窗口会被回滚。
+内置 Coordinator 在完成与取消两条路径上都会恢复 leaving 与 entering 窗口的 `interactable`/`blocksRaycasts` 快照；自定义 Coordinator 在传播提交前取消之前也必须做到同样的事。在提交前发生打开、协调、取消或 ownership 校验失败时，本次新打开的进入窗口会被回滚。
 
 ### Scene-bound 弹窗清理
 
@@ -533,7 +542,7 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 
 ### 缓存与 Lease policy
 
-窗口会话 Service 不保留窗口池或已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease，在 Binding 清理和窗口销毁后 Dispose。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
+窗口会话 Service 不保留窗口池或已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease，在 Binding 清理和窗口销毁后 Dispose。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。`DynamicAtlasSpriteLease` 是引用池化记录的值类型句柄，缓存命中路径零分配；cache miss 时 `maxMissesPerFrame` 限制每帧像素工作，超出预算返回瞬态的 `DynamicAtlasInsertStatus.Throttled`，调用方在后续帧重试即可。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
 
 `DynamicAtlasStats` 会在当前 page、entry、reference、retained entry、estimated bytes、pending-destruction bytes 与压力 counter 之外，报告配置的 `PageCapacity`、`EntryCapacity` 和 `MemoryBudgetBytes`。达到 page、entry 或 byte ceiling 时，admission 继续通过显式 `DynamicAtlasInsertStatus` 失败；active sprite lease 永不被驱逐。`TrimUnused(maximumEntriesToRemove)` 是安全的 owner-local mitigation，只移除零引用 retained entry；参数小于等于零时 no-op。legacy 无参数调用保持源码兼容，并可能清空全部 eligible entry，但总 work 仍受已校验的 `maxEntries` 限制（hard maximum 为 65,535）；pressure orchestration 应始终传入更小的单 pump work budget。
 
@@ -568,7 +577,7 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 | 已有协调导航运行 | 重叠调用 | 在应用流程中序列化 Navigation Command |
 | Worker Thread 调用失败 | 脱离主线程 | 使用 `IUIService` 前切回 Unity 主线程 |
 | Close 后 Asset 仍被持有 | Provider Sharing/Cache Policy | 检查 Provider Sharing/Cache Policy，并确认 Lease Dispose |
-| 取消后输入仍被阻塞 | Transition 未恢复状态 | 确保自定义 Transition 在 `finally` 恢复 `CanvasGroup` 与焦点 |
+| 过渡后输入仍被阻塞 | 自定义 Transition 未恢复状态 | 内置 Coordinator 在完成与取消两条路径都会恢复 `CanvasGroup` 的 `interactable`/`blocksRaycasts`；自定义 Driver/Coordinator 必须在 `finally` 中恢复 |
 
 ## 验证
 

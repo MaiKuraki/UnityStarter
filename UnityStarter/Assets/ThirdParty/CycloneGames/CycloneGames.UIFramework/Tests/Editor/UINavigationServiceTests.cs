@@ -133,6 +133,19 @@ namespace CycloneGames.UIFramework.Tests.Editor
         }
 
         [Test]
+        public void Unregister_UndefinedPolicy_PreservesCallerBufferAndGraph()
+        {
+            RegisterHierarchy();
+            _ids.Add("stale");
+
+            Assert.IsFalse(_navigation.Unregister("Inventory", (ChildClosePolicy)999, _ids));
+
+            CollectionAssert.AreEqual(new[] { "stale" }, _ids);
+            Assert.AreEqual("Shield", _navigation.CurrentWindow);
+            Assert.AreEqual(4, _navigation.CopyHistory(_history));
+        }
+
+        [Test]
         public void Clear_ReleasesEntriesAndResetsSequence()
         {
             _navigation.Register("Root", context: new object());

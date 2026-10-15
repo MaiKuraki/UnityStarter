@@ -71,12 +71,17 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         [Tooltip("Pixels-per-unit used for sprites created from textures or regions.")]
         public float defaultPixelsPerUnit = 100f;
 
+        [Min(0)]
+        [Tooltip("Maximum cache-miss insertions allowed per frame. Excess misses return Throttled without running pixel work and should be retried on a later frame. 0 disables the budget.")]
+        public int maxMissesPerFrame = 8;
+
         [NonSerialized]
         public Func<string, Texture2D> loadFunc;
 
         [NonSerialized]
         public Action<string, Texture2D> unloadFunc;
 
+        /// <summary>Creates a validated starting profile for an explicit platform tier.</summary>
         public static DynamicAtlasConfig CreateForTier(
             PlatformTier tier,
             Func<string, Texture2D> loadFunc = null,
@@ -98,6 +103,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxEntriesPerPage = 2048;
                     config.memoryBudgetBytes = 64L * 1024L * 1024L;
                     config.copyFallback = DynamicAtlasCopyFallback.GpuOnly;
+                    config.maxMissesPerFrame = 16;
                     break;
 
                 case PlatformTier.MobileHighEnd:
@@ -108,6 +114,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxEntriesPerPage = 1024;
                     config.memoryBudgetBytes = 32L * 1024L * 1024L;
                     config.copyFallback = DynamicAtlasCopyFallback.GpuOnly;
+                    config.maxMissesPerFrame = 8;
                     break;
 
                 case PlatformTier.MobileLowEnd:
@@ -118,6 +125,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxEntriesPerPage = 512;
                     config.memoryBudgetBytes = 16L * 1024L * 1024L;
                     config.copyFallback = DynamicAtlasCopyFallback.AllowCpuRawCopy;
+                    config.maxMissesPerFrame = 4;
                     break;
 
                 case PlatformTier.WebGL:
@@ -128,6 +136,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxEntriesPerPage = 384;
                     config.memoryBudgetBytes = 20L * 1024L * 1024L;
                     config.copyFallback = DynamicAtlasCopyFallback.AllowCpuRawCopy;
+                    config.maxMissesPerFrame = 2;
                     break;
 
                 default:
@@ -137,6 +146,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             return config;
         }
 
+        /// <summary>Creates a starting profile for the platform this build targets.</summary>
         public static DynamicAtlasConfig CreateForCurrentPlatform(
             bool preferLowMemoryProfile = false,
             Func<string, Texture2D> loadFunc = null,
@@ -165,13 +175,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 #endif
         }
 
-        public static DynamicAtlasConfig CreatePlatformOptimized(
-            Func<string, Texture2D> loadFunc = null,
-            Action<string, Texture2D> unloadFunc = null)
-        {
-            return CreateForCurrentPlatform(loadFunc: loadFunc, unloadFunc: unloadFunc);
-        }
-
+        /// <summary>Checks bounds and cross-field invariants; returns false with a reason on violation.</summary>
         public bool Validate(out string errorMessage)
         {
             if (pageSize < MinimumPageSize || pageSize > MaximumPageSize || !Mathf.IsPowerOfTwo(pageSize))
@@ -258,6 +262,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 return false;
             }
 
+            if (maxMissesPerFrame < 0)
+            {
+                errorMessage = "Max misses per frame must be zero (disabled) or greater.";
+                return false;
+            }
+
             if (memoryBudgetBytes < TextureFormatHelper.EstimatePageBytes(pageSize, copyFallback))
             {
                 errorMessage = "Memory budget must be large enough for at least one atlas page.";
@@ -302,6 +312,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                    retentionPolicy == other.retentionPolicy &&
                    oversizePolicy == other.oversizePolicy &&
                    copyFallback == other.copyFallback &&
+                   maxMissesPerFrame == other.maxMissesPerFrame &&
                    Mathf.Approximately(defaultPixelsPerUnit, other.defaultPixelsPerUnit) &&
                    loadFunc == other.loadFunc &&
                    unloadFunc == other.unloadFunc;

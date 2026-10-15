@@ -19,6 +19,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
             Assert.That(config.maxEntriesPerPage, Is.EqualTo(384));
             Assert.That(config.memoryBudgetBytes, Is.EqualTo(16L * 1024L * 1024L));
             Assert.That(config.copyFallback, Is.EqualTo(DynamicAtlasCopyFallback.AllowCpuRawCopy));
+            Assert.That(config.maxMissesPerFrame, Is.EqualTo(8));
             Assert.That(config.Validate(out string error), Is.True, error);
         }
 
@@ -226,6 +227,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 retentionPolicy = DynamicAtlasRetentionPolicy.RetainUntilCapacityPressure,
                 oversizePolicy = DynamicAtlasOversizePolicy.Reject,
                 copyFallback = DynamicAtlasCopyFallback.AllowSynchronousReadback,
+                // Disable the per-frame miss budget so synchronous EditMode tests stay frame-independent.
+                maxMissesPerFrame = 0,
             };
         }
     }

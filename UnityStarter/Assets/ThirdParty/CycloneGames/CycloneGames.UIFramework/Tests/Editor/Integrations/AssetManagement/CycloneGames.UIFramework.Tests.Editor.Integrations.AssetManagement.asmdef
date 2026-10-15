@@ -1,0 +1,32 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.Editor.Integrations.AssetManagement",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.Editor",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Runtime.Integrations.AssetManagement",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.asset-management",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

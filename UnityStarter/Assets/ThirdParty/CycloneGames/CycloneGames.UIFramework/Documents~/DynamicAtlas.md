@@ -19,7 +19,9 @@ The Dynamic UI Atlas groups runtime UI sprites onto a bounded set of shared text
 ### Key Features
 
 - **Bounded pages**: explicit `pageSize`, `maxPages`, `maxEntries`, and `memoryBudgetBytes` limits.
-- **Explicit leases**: `DynamicAtlasSpriteLease` owns one reference per entry; disposal is idempotent.
+- **Explicit leases**: `DynamicAtlasSpriteLease` is a value-type handle that owns one reference per entry; disposal is idempotent and stale handles are no-ops.
+- **Zero-allocation cache hits**: pooled entries and lease records (capped at 256) make reacquisition of cached content allocation-free.
+- **Per-frame miss budget**: `maxMissesPerFrame` throttles cache-miss pixel work; excess misses return `Throttled` and resume automatically on the next frame.
 - **GPU-first copy**: `Graphics.CopyTexture` into GPU-only pages when formats match; readable CPU raw copy and explicit synchronous readback as opt-in fallbacks.
 - **Stable keys**: ordinal, case-sensitive, namespaced keys with a bounded length.
 - **Retention policies**: `RemoveWhenUnused` or `RetainUntilCapacityPressure` with `TrimUnused`.
@@ -68,8 +70,8 @@ public sealed class InventoryIcon : MonoBehaviour
     private void OnDisable()
     {
         image.sprite = null;
-        iconLease?.Dispose();
-        iconLease = null;
+        iconLease.Dispose();
+        iconLease = default;
     }
 
     private void OnDestroy()
@@ -88,7 +90,9 @@ One service normally serves a UI scope, scene group, or application lifetime. Do
 
 `DynamicAtlasService` owns generated `Sprite` and page `Texture2D` objects. It must be created, used, and disposed on the same Unity main thread. Source textures are caller-owned when passed directly; the service never destroys a caller-provided `Texture2D` or `Sprite`.
 
-`DynamicAtlasSpriteLease` owns one reference to an entry. Disposing the lease releases exactly one reference. Double disposal is safe, and disposal after `Clear()` or service disposal is also safe.
+`DynamicAtlasSpriteLease` is a read-only value-type handle over a pooled lease record. It owns one reference to an entry. Disposing the lease releases exactly one reference. Double disposal is safe, stale copies of a handle are no-ops, and disposal after `Clear()` or service disposal is also safe.
+
+Because the lease is a struct, test validity with `lease.IsValid` and clear a stored handle with `lease = default`. A lease has no finalizer: a lease that is never disposed keeps its entry alive permanently. Always dispose explicitly at the same boundary that would have released the sprite.
 
 ```mermaid
 flowchart LR
@@ -161,10 +165,43 @@ DynamicAtlasInsertStatus status = atlas.TryAcquireLocation(
 | `enableBleed` | Copies one edge pixel into padding for bilinear filtering |
 | `oversizePolicy` | Rejects or explicitly scales content larger than a page |
 | `copyFallback` | Selects GPU-only, readable CPU raw-copy, or explicit synchronous-readback permission |
+| `maxMissesPerFrame` | Per-frame cache-miss budget; excess misses return `Throttled`. `0` disables the budget |
 
 The serializable no-argument configuration is a bounded GPU-first baseline: 1024-pixel pages, at most two pages, 512 entries, and a 16 MiB worst-case page-texture budget. Choose a larger profile only after the target workload has a measured insertion-time and memory budget.
 
 `EstimatedTextureBytes` covers active atlas page texture copies and Play Mode pages waiting for Unity's delayed destruction. `PendingDestructionBytes` reports the delayed-destruction portion. Metadata, generated `Sprite` objects, source assets, and temporary texture allocations are controlled by separate bounds.
+
+### Per-frame miss budget
+
+A cache miss can trigger a synchronous pixel copy, so a burst of first-use icons in one frame can spike the frame time. `maxMissesPerFrame` (default 8) bounds how many misses may run pixel work per frame. Once the budget is exhausted, every `TryAcquire*` call that misses the cache returns `DynamicAtlasInsertStatus.Throttled` without copying pixels and without invoking the loader. The budget resets automatically on the next frame. Set it to `0` to disable throttling.
+
+`Throttled` is transient, unlike capacity failures. Callers should keep their placeholder and retry on a later frame.
+
+```csharp
+using Cysharp.Threading.Tasks;
+using CycloneGames.UIFramework.DynamicAtlas;
+
+public async UniTask AcquireIconAsync(string key, Sprite source, CancellationToken ct)
+{
+    while (true)
+    {
+        DynamicAtlasInsertStatus status = atlas.TryAcquireSprite(key, source, out iconLease);
+        if (status == DynamicAtlasInsertStatus.Success ||
+            status == DynamicAtlasInsertStatus.CacheHit)
+        {
+            image.sprite = iconLease.Sprite;
+            return;
+        }
+
+        if (status != DynamicAtlasInsertStatus.Throttled)
+        {
+            return; // Non-transient failure; keep the placeholder.
+        }
+
+        await UniTask.Yield(ct); // Retry once the per-frame budget resets.
+    }
+}
+```
 
 ### Batch insertion
 
@@ -218,7 +255,7 @@ Pages have one immutable copy mode so CPU uploads cannot overwrite content inser
 
 **CPU-backed page** -- `AllowCpuRawCopy` permits readable pages and row-copy from a readable source with the exact destination `GraphicsFormat`. `AllowSynchronousReadback` permits a temporary render texture and `ReadPixels`. Synchronous readback can stall the render thread; `DynamicAtlasStats.SynchronousReadbackCount` exposes its use.
 
-**Destination format** -- `RGBA32` is the supported runtime page destination. Runtime compressed block packing is not supported. Use build-time `SpriteAtlas` compression when compressed page storage is required.
+**Destination format: why RGBA32** -- atlas pages must accept efficient partial-region writes from both the CPU (`SetPixels`/`Apply`) and the GPU (`Graphics.CopyTexture`). GPU-compressed formats (ASTC, BC, ETC) do not support efficient partial updates, and writing compressed blocks directly from the CPU is impractical, so page textures are fixed to uncompressed `RGBA32`. The cost is 4 bytes per pixel, bounded by the three-level budget of `maxPages`, `pageSize`, and `memoryBudgetBytes`. Content known at build time should use a compressed build-time `SpriteAtlas` instead; runtime compressed block packing is not supported.
 
 ### ScaleDown
 
@@ -228,12 +265,12 @@ Pages have one immutable copy mode so CPU uploads cannot overwrite content inser
 
 `CreateForCurrentPlatform()` selects one of the bounded profiles below for recognized desktop, mobile, and WebGL targets. Unknown platform families receive the no-argument compatibility baseline.
 
-| Profile | Page | Pages | Entries | Estimated texture budget | Fallback |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `DesktopHighEnd` | 2048 | 4 | 4096 | 64 MiB | GPU only |
-| `MobileHighEnd` | 2048 | 2 | 2048 | 32 MiB | GPU only |
-| `MobileLowEnd` | 1024 | 2 | 768 | 16 MiB worst case | GPU first; readable CPU raw copy allowed |
-| `WebGL` | 1024 | 2 | 512 | 20 MiB | CPU raw copy allowed; synchronous readback rejected |
+| Profile | Page | Pages | Entries | Estimated texture budget | Misses per frame | Fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `DesktopHighEnd` | 2048 | 4 | 4096 | 64 MiB | 16 | GPU only |
+| `MobileHighEnd` | 2048 | 2 | 2048 | 32 MiB | 8 | GPU only |
+| `MobileLowEnd` | 1024 | 2 | 768 | 16 MiB worst case | 4 | GPU first; readable CPU raw copy allowed |
+| `WebGL` | 1024 | 2 | 512 | 20 MiB | 2 | CPU raw copy allowed; synchronous readback rejected |
 
 Service construction validates the page size and destination texture format on the active device. Source/destination `GraphicsFormat` equality and `CopyTexture` support are resolved when an insertion selects its copy path. For consoles and unlisted hardware tiers, construct an explicit configuration from measured target-device budgets.
 
@@ -263,7 +300,8 @@ The module does not write files, preferences, caches, or assets. All pages and m
 | `CopyUnsupported` | GPU copy unavailable and fallback disabled | Provide a matching source format or enable fallback |
 | `CopyFailed` | The graphics operation failed | Preserve a placeholder and record diagnostics |
 | `Disposed` | Service lifetime has ended | Stop the caller and correct lifecycle ordering |
+| `Throttled` | Per-frame miss budget exhausted | Keep the placeholder and retry on a later frame |
 | Borrowed sprite invalidated between frames | `TryGetSprite` result not protected by a lease | Use `TryAcquireCached` or another acquisition API |
 | Synchronous readback stalls the render thread | `AllowSynchronousReadback` path used on a hot path | Prepare matching uncompressed source variants |
 
-Do not retry capacity failures every frame. Apply backoff or wait until a release/trim boundary changes the state.
+Do not retry capacity failures every frame. Apply backoff or wait until a release/trim boundary changes the state. `Throttled` is the exception: it clears on the next frame, so a next-frame retry is the intended handling.

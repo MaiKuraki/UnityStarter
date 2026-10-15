@@ -30,6 +30,10 @@ namespace CycloneGames.UIFramework.Runtime
         /// removed root and, for <see cref="ChildClosePolicy.Cascade"/>, all removed descendants
         /// in stable depth-first parent-before-child order.
         /// </summary>
+        /// <returns>
+        /// False when the window is unknown; also false for an undefined
+        /// <paramref name="policy"/> value, in which case neither the buffer nor the graph is modified.
+        /// </returns>
         bool Unregister(
             string windowId,
             ChildClosePolicy policy,
