@@ -41,7 +41,23 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
         private void OnEnable()
         {
             SpriteAtlasCompatibilityCache.ScanCompleted += OnScanCompleted;
-            SpriteAtlasCompatibilityCache.ScanProjectNow();
+            if (ShouldRescanOnEnable(
+                    SpriteAtlasCompatibilityCache.AutoScanEnabled,
+                    SpriteAtlasCompatibilityCache.Count))
+            {
+                SpriteAtlasCompatibilityCache.ScanProjectNow();
+            }
+            else
+            {
+                // Reuse the cached results instead of forcing a full project scan on every open.
+                RefreshFromCache();
+            }
+        }
+
+        // A rescan is only needed when auto-scan is on or nothing has been scanned yet.
+        internal static bool ShouldRescanOnEnable(bool autoScanEnabled, int cachedCount)
+        {
+            return autoScanEnabled || cachedCount == 0;
         }
 
         private void OnDisable()

@@ -31,6 +31,25 @@ namespace CycloneGames.UIFramework.Tests.Editor
             throw new MissingFieldException(target.GetType().FullName, fieldName);
         }
 
+        public static object GetField(object target, string fieldName)
+        {
+            Type type = target.GetType();
+            while (type != null)
+            {
+                FieldInfo field = type.GetField(
+                    fieldName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (field != null)
+                {
+                    return field.GetValue(target);
+                }
+
+                type = type.BaseType;
+            }
+
+            throw new MissingFieldException(target.GetType().FullName, fieldName);
+        }
+
         public static object Invoke(object target, string methodName, params object[] arguments)
         {
             MethodInfo method = target.GetType().GetMethod(

@@ -107,7 +107,10 @@ namespace CycloneGames.UIFramework.Runtime
                 throw new ArgumentNullException(nameof(affectedWindowIds));
             }
 
-            if (!Enum.IsDefined(typeof(ChildClosePolicy), policy))
+            // Contiguous, ascending enum domain (Reparent=0, Cascade=1, Detach=2): an
+            // unsigned range check rejects undefined values without the boxing that
+            // Enum.IsDefined performs.
+            if ((uint)policy > (uint)ChildClosePolicy.Detach)
             {
                 // An undefined policy fails the Try-style call without touching the caller buffer or the graph.
                 return false;
