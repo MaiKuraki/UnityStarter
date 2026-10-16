@@ -15,6 +15,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         private readonly List<UIWindow> _windows =
             new List<UIWindow>(InitialWindowCapacity);
+        private readonly Dictionary<string, UIWindow> _windowById =
+            new Dictionary<string, UIWindow>(InitialWindowCapacity, StringComparer.Ordinal);
         private Canvas _canvas;
         private GraphicRaycaster _raycaster;
         private bool _initialized;
@@ -41,17 +43,12 @@ namespace CycloneGames.UIFramework.Runtime
 
         public bool TryGetWindow(string windowId, out UIWindow window)
         {
-            if (!string.IsNullOrEmpty(windowId))
+            if (!string.IsNullOrEmpty(windowId) &&
+                _windowById.TryGetValue(windowId, out UIWindow candidate) &&
+                candidate != null)
             {
-                for (int i = 0; i < _windows.Count; i++)
-                {
-                    UIWindow candidate = _windows[i];
-                    if (candidate != null && string.Equals(candidate.WindowId, windowId, StringComparison.Ordinal))
-                    {
-                        window = candidate;
-                        return true;
-                    }
-                }
+                window = candidate;
+                return true;
             }
 
             window = null;
@@ -90,6 +87,11 @@ namespace CycloneGames.UIFramework.Runtime
 
             window.transform.SetParent(transform, false);
             window.SetLayer(this);
+            if (!string.IsNullOrEmpty(window.WindowId))
+            {
+                _windowById[window.WindowId] = window;
+            }
+
             InsertSorted(window);
         }
 
@@ -107,6 +109,13 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             _windows.RemoveAt(index);
+            if (!string.IsNullOrEmpty(window.WindowId) &&
+                _windowById.TryGetValue(window.WindowId, out UIWindow tracked) &&
+                ReferenceEquals(tracked, window))
+            {
+                _windowById.Remove(window.WindowId);
+            }
+
             window.SetLayer(null);
             return true;
         }
@@ -120,13 +129,14 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             _windows.Insert(index, window);
-            for (int i = index; i < _windows.Count; i++)
+
+            // Invariant: this layer maintains the child transform order of its windows so it
+            // matches _windows. Unity shifts the siblings that follow the target index, so a
+            // single move reproduces the priority-sorted order instead of rewriting every
+            // sibling below the insertion point.
+            if (window.transform.parent == transform)
             {
-                UIWindow item = _windows[i];
-                if (item != null && item.transform.parent == transform)
-                {
-                    item.transform.SetSiblingIndex(i);
-                }
+                window.transform.SetSiblingIndex(index);
             }
         }
 
@@ -142,6 +152,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             _windows.Clear();
+            _windowById.Clear();
             _initialized = false;
         }
 

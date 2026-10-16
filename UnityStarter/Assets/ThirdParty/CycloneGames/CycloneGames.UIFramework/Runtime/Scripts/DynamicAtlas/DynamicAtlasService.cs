@@ -90,6 +90,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private const string FormatFixGuidance =
             "Use an uncompressed readable RGBA32 source or permit a CPU-copy fallback, or mark its import rule for runtime extraction.";
 
+        // Bounds the per-key dedup cache; when it fills it is cleared so a recurrence can warn
+        // again after a full cycle instead of being silenced forever.
+        private const int RejectionWarningKeyCapacity = 512;
+
         private readonly HashSet<string> _rejectionWarningKeys = new HashSet<string>(StringComparer.Ordinal);
 #endif
 
@@ -1254,11 +1258,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _rejectionWarningKeys.Clear();
 #endif
             _batchDepth = 0;
-            _batchEpoch++;
-            if (_batchEpoch == 0)
+            // Reset before the increment so the epoch never wraps to 0 (the value reserved to
+            // mean "no batch"); outstanding batches compare their captured epoch on EndBatch.
+            if (_batchEpoch == long.MaxValue)
             {
-                _batchEpoch = 1;
+                _batchEpoch = 0;
             }
+
+            _batchEpoch++;
         }
 
         private DynamicAtlasSpriteLease CreateLease(AtlasEntry entry)
@@ -1281,12 +1288,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private long NextRentalId()
         {
-            _nextRentalId++;
-            if (_nextRentalId == 0)
+            // Reset before the increment: a signed wrap would land on long.MinValue and could
+            // hand out a negative handle. Rental id 0 stays reserved for the default (invalid)
+            // lease, so the guard restarts the counter at a small positive value.
+            if (_nextRentalId == long.MaxValue)
             {
-                _nextRentalId = 1;
+                _nextRentalId = 0;
             }
 
+            _nextRentalId++;
             return _nextRentalId;
         }
 
@@ -1306,12 +1316,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private long NextEntryGeneration()
         {
-            _nextEntryGeneration++;
-            if (_nextEntryGeneration == 0)
+            // Reset before the increment (see NextRentalId): generation 0 is never produced, so
+            // a stale lease can never match a freshly created entry.
+            if (_nextEntryGeneration == long.MaxValue)
             {
-                _nextEntryGeneration = 1;
+                _nextEntryGeneration = 0;
             }
 
+            _nextEntryGeneration++;
             return _nextEntryGeneration;
         }
 
@@ -1473,12 +1485,25 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-        // Rejection paths are cold; the per-key set bounds console noise without touching hot paths.
+        // Rejection paths are cold; the per-(key, reason) set bounds console noise without
+        // touching hot paths.
         private void WarnRejectionOnce(string key, string reason, string guidance)
         {
-            if (string.IsNullOrEmpty(key) || !_rejectionWarningKeys.Add(key))
+            if (string.IsNullOrEmpty(key))
             {
                 return;
+            }
+
+            string dedupKey = key + '\u0001' + reason;
+            if (!_rejectionWarningKeys.Add(dedupKey))
+            {
+                return;
+            }
+
+            if (_rejectionWarningKeys.Count > RejectionWarningKeyCapacity)
+            {
+                _rejectionWarningKeys.Clear();
+                _rejectionWarningKeys.Add(dedupKey);
             }
 
             Log.Warning($"[DynamicAtlasService] Rejected sprite acquisition for '{key}': {reason}. {guidance}");

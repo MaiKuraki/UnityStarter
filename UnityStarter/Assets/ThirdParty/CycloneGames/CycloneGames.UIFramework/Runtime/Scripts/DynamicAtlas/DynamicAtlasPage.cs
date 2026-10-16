@@ -28,6 +28,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     {
         private static int _nextPageId;
 
+        // Zero-filled source buffers keyed by page size, shared across pages. Pages are created
+        // only on the owning service's main thread, so this cache never needs cross-thread
+        // coordination. SetPixels32 bulk-copies the buffer into the page texture, replacing a
+        // per-byte clear loop while preserving the all-zero page output.
+        private static readonly Dictionary<int, Color32[]> ZeroFillBuffers =
+            new Dictionary<int, Color32[]>(4);
+
         private readonly int _size;
         private readonly int _padding;
         private readonly int _maxEntries;
@@ -35,6 +42,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly bool _allowSynchronousReadback;
         private readonly int _bytesPerPixel;
         private readonly List<RectInt> _releasedSlots;
+
+        // Exact-size accelerator for TryReserveSlot: packs (width, height) to the indices of the
+        // released slots that currently hold that size. Invariant: every live slot index appears
+        // in exactly the bucket matching its current size; removing, consuming, merging, resizing
+        // or clearing a slot re-registers or removes its index. The buckets are an optimization
+        // only - TryReserveSlot still falls back to a linear best-fit scan when a size is absent.
+        private readonly Dictionary<long, List<int>> _releasedSlotBuckets;
 
         private int _cursorX;
         private int _cursorY;
@@ -72,6 +86,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _allowSynchronousReadback = allowSynchronousReadback;
             _bytesPerPixel = TextureFormatHelper.GetBytesPerPixel(format);
             _releasedSlots = new List<RectInt>(Mathf.Min(maxEntries, 128));
+            _releasedSlotBuckets = new Dictionary<long, List<int>>(16);
             Mode = mode;
             // Pages are created only on the owning service's main thread; the single-threaded
             // owner contract covers this unguarded static increment.
@@ -162,6 +177,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 _payloadPixelArea = 0;
                 _reservedPixelArea = 0;
                 _releasedSlots.Clear();
+                _releasedSlotBuckets.Clear();
                 return;
             }
 
@@ -200,6 +216,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             _disposed = true;
             _releasedSlots.Clear();
+            _releasedSlotBuckets.Clear();
 
             if (Texture != null)
             {
@@ -210,17 +227,26 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private void ClearAndInitializeTexture(bool releaseCpuCopy)
         {
-            var rawData = Texture.GetRawTextureData<byte>();
-            for (int i = 0; i < rawData.Length; i++)
+            // Raw texture memory is not guaranteed to be zero-initialized, so the page must be
+            // cleared explicitly. A cached zero Color32 buffer lets SetPixels32 bulk-write the
+            // whole page instead of clearing it byte by byte.
+            if (!ZeroFillBuffers.TryGetValue(_size, out Color32[] zeroFill))
             {
-                rawData[i] = 0;
+                zeroFill = new Color32[_size * _size];
+                ZeroFillBuffers.Add(_size, zeroFill);
             }
 
+            Texture.SetPixels32(zeroFill);
             Texture.Apply(updateMipmaps: false, makeNoLongerReadable: releaseCpuCopy);
         }
 
         private bool TryReserveSlot(int width, int height, out RectInt slotRect)
         {
+            if (TryTakeExactReleasedSlot(width, height, out slotRect))
+            {
+                return true;
+            }
+
             int bestIndex = -1;
             long bestWaste = long.MaxValue;
 
@@ -247,9 +273,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (bestIndex >= 0)
             {
                 slotRect = _releasedSlots[bestIndex];
-                int lastIndex = _releasedSlots.Count - 1;
-                _releasedSlots[bestIndex] = _releasedSlots[lastIndex];
-                _releasedSlots.RemoveAt(lastIndex);
+                RemoveReleasedSlotAt(bestIndex);
                 return true;
             }
 
@@ -286,14 +310,17 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
 
                 slotRect = combined;
-                int lastIndex = _releasedSlots.Count - 1;
-                _releasedSlots[i] = _releasedSlots[lastIndex];
-                _releasedSlots.RemoveAt(lastIndex);
+                RemoveReleasedSlotAt(i);
+                // Restart the scan from the tail: the combined rect grew (so a slot rejected
+                // earlier may now touch it), and the swap-remove moved an untested slot into
+                // 'i'. The for-loop update rewinds 'i' to the new last index.
+                i = _releasedSlots.Count;
             }
 
             if (_releasedSlots.Count < _maxEntries)
             {
                 _releasedSlots.Add(slotRect);
+                RegisterReleasedSlotIndex(_releasedSlots.Count - 1);
                 return;
             }
 
@@ -311,8 +338,112 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (GetArea(slotRect) > smallestArea)
             {
+                RectInt replaced = _releasedSlots[smallestIndex];
+                UnregisterReleasedSlotIndex(smallestIndex, replaced.width, replaced.height);
                 _releasedSlots[smallestIndex] = slotRect;
+                RegisterReleasedSlotIndex(smallestIndex);
             }
+        }
+
+        // Consumes a released slot that exactly matches the requested size in O(1). Buckets are
+        // an accelerator; a missing or inconsistent entry falls back to the linear scan in
+        // TryReserveSlot without affecting correctness.
+        private bool TryTakeExactReleasedSlot(int width, int height, out RectInt slotRect)
+        {
+            slotRect = default;
+            long key = PackSlotSize(width, height);
+            if (!_releasedSlotBuckets.TryGetValue(key, out List<int> bucket) || bucket.Count == 0)
+            {
+                return false;
+            }
+
+            int index = bucket[bucket.Count - 1];
+            if (index < 0 || index >= _releasedSlots.Count)
+            {
+                bucket.RemoveAt(bucket.Count - 1);
+                if (bucket.Count == 0)
+                {
+                    _releasedSlotBuckets.Remove(key);
+                }
+
+                return false;
+            }
+
+            RectInt candidate = _releasedSlots[index];
+            if (candidate.width != width || candidate.height != height)
+            {
+                bucket.RemoveAt(bucket.Count - 1);
+                if (bucket.Count == 0)
+                {
+                    _releasedSlotBuckets.Remove(key);
+                }
+
+                return false;
+            }
+
+            slotRect = candidate;
+            RemoveReleasedSlotAt(index);
+            return true;
+        }
+
+        // Removes the released slot at 'index' with a swap-remove and keeps the size buckets
+        // consistent by re-registering the tail element that is moved into 'index'.
+        private void RemoveReleasedSlotAt(int index)
+        {
+            RectInt removed = _releasedSlots[index];
+            UnregisterReleasedSlotIndex(index, removed.width, removed.height);
+
+            int lastIndex = _releasedSlots.Count - 1;
+            if (index != lastIndex)
+            {
+                RectInt tail = _releasedSlots[lastIndex];
+                _releasedSlots[index] = tail;
+                _releasedSlots.RemoveAt(lastIndex);
+                UnregisterReleasedSlotIndex(lastIndex, tail.width, tail.height);
+                RegisterReleasedSlotIndex(index);
+            }
+            else
+            {
+                _releasedSlots.RemoveAt(lastIndex);
+            }
+        }
+
+        private void RegisterReleasedSlotIndex(int index)
+        {
+            RectInt slot = _releasedSlots[index];
+            long key = PackSlotSize(slot.width, slot.height);
+            if (!_releasedSlotBuckets.TryGetValue(key, out List<int> bucket))
+            {
+                bucket = new List<int>(4);
+                _releasedSlotBuckets.Add(key, bucket);
+            }
+
+            bucket.Add(index);
+        }
+
+        private void UnregisterReleasedSlotIndex(int index, int width, int height)
+        {
+            long key = PackSlotSize(width, height);
+            if (!_releasedSlotBuckets.TryGetValue(key, out List<int> bucket))
+            {
+                return;
+            }
+
+            int position = bucket.IndexOf(index);
+            if (position >= 0)
+            {
+                bucket.RemoveAt(position);
+            }
+
+            if (bucket.Count == 0)
+            {
+                _releasedSlotBuckets.Remove(key);
+            }
+        }
+
+        private static long PackSlotSize(int width, int height)
+        {
+            return ((long)(uint)width << 32) | (uint)height;
         }
 
         private DynamicAtlasPageInsertResult TryCopyGpu(Texture2D source, RectInt sourceRect, RectInt destinationRect)
