@@ -188,6 +188,28 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
             Assert.Greater(rejected, 0, "The auditor must eventually reject a 27x-dilated stream.");
         }
 
+        [Test]
+        public void InputAuthority_Reset_ClearsDilationAuditState()
+        {
+            var history = new MovementNetworkInputHistory(capacity: 32);
+            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
+            var authority = new MovementNetworkInputAuthority(history, dilationAuditor: auditor);
+
+            var context = new MovementNetworkInputValidationContext(
+                sender: null,
+                serverTick: new NetworkTickId(1),
+                lastAcceptedClientTick: NetworkTickId.Invalid);
+
+            Assert.IsTrue(authority.TryAccept(CreateInput(clientTick: 1, sequence: 1), context, out _));
+            Assert.AreEqual(1, auditor.TrackedEntityCount);
+
+            authority.Reset();
+
+            Assert.AreEqual(0, auditor.TrackedEntityCount,
+                "Reset must clear dilation windows so an epoch change cannot carry stale audit state.");
+            Assert.AreEqual(0, authority.History.Count);
+        }
+
         private static MovementInputCommandMessage CreateInput(
             int clientTick,
             ushort sequence,

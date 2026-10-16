@@ -81,6 +81,59 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson.Tests.Editor
                 adapter.Serialize(source, buffer, 0, out _));
         }
 
+        [Test]
+        public void WritePath_IsNotDepthLimited_ButReadPath_RejectsTheSamePayload()
+        {
+            // Json.NET enforces MaxDepth on the READ path only. The trust model is
+            // asymmetric by design: outbound payloads come from our own trusted
+            // object graph, while inbound bytes are hostile. This test locks that
+            // contract: deep payloads must serialize, and the identical bytes must
+            // be rejected on deserialization.
+            var adapter = new NewtonsoftJsonSerializerAdapter();
+            object node = 1;
+            for (int i = 0; i < 100; i++)
+            {
+                node = new System.Collections.Generic.List<object> { node };
+            }
+
+            var source = new DeepNestingMessage { Payload = node };
+            var buffer = new byte[8192];
+
+            adapter.Serialize(source, buffer, 0, out int writtenBytes);
+            Assert.Greater(writtenBytes, 0, "Trusted outbound payloads are not depth-limited by design.");
+
+            Assert.Catch<JsonException>(() => adapter.Deserialize<DeepNestingMessage>(
+                new ReadOnlySpan<byte>(buffer, 0, writtenBytes)),
+                "The same bytes must be rejected on the trust-boundary side.");
+        }
+
+        [Test]
+        public void Deserialize_RejectsPayloadNestedBeyondMaxDepth()
+        {
+            var adapter = new NewtonsoftJsonSerializerAdapter();
+            var builder = new System.Text.StringBuilder("{\"Payload\":");
+            for (int i = 0; i < 100; i++)
+            {
+                builder.Append('[');
+            }
+
+            for (int i = 0; i < 100; i++)
+            {
+                builder.Append(']');
+            }
+
+            builder.Append('}');
+            byte[] payload = System.Text.Encoding.UTF8.GetBytes(builder.ToString());
+
+            Assert.Catch<JsonException>(() => adapter.Deserialize<DeepNestingMessage>(payload),
+                "Nested-bomb payloads must be rejected on the read path, not merely on write.");
+        }
+
+        private struct DeepNestingMessage
+        {
+            public object Payload;
+        }
+
         private struct TestMessage
         {
             public int Number;

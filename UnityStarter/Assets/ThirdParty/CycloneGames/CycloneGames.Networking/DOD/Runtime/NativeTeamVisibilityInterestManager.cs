@@ -424,8 +424,11 @@ namespace CycloneGames.Networking.DOD
             needed = math.max(needed, 16);
             if (map.Capacity < needed)
             {
+                // Doubling headroom: an exactly-sized capacity reallocates on the
+                // next added entry (native dispose + allocate churn).
+                int newCapacity = math.max(needed, map.Capacity * 2);
                 map.Dispose();
-                map = new NativeHashMap<TKey, TValue>(needed, Allocator.Persistent);
+                map = new NativeHashMap<TKey, TValue>(newCapacity, Allocator.Persistent);
             }
         }
 
@@ -434,8 +437,9 @@ namespace CycloneGames.Networking.DOD
             needed = math.max(needed, 16);
             if (set.Capacity < needed)
             {
+                int newCapacity = math.max(needed, set.Capacity * 2);
                 set.Dispose();
-                set = new NativeHashSet<uint>(needed, Allocator.Persistent);
+                set = new NativeHashSet<uint>(newCapacity, Allocator.Persistent);
             }
         }
 

@@ -377,6 +377,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private int[] modifierGroupIndices = System.Array.Empty<int>();
         private int modifierGroupCount;
         private bool modifierGroupingDirty = true;
+
+        // Lazily-resolved attribute references for live (non-snapshot) attribute-based modifier
+        // magnitudes. Cached per spec because Source/Target are fixed once the effect is applied;
+        // invalidated together with the modifier grouping whenever target attributes change.
+        private GameplayAttribute[] dependencySourceAttributes = System.Array.Empty<GameplayAttribute>();
+        private bool dependencySourceAttributesResolved;
         private GameplayTag[] replicatedStateTagScratch = System.Array.Empty<GameplayTag>();
         private long[] replicatedStateValueScratch = System.Array.Empty<long>();
         private string[] replicatedStateNameScratch = System.Array.Empty<string>();
@@ -601,6 +607,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             modifierMagnitudeRawValues = Array.Empty<long>();
             targetAttributes = Array.Empty<GameplayAttribute>();
             modifierGroupingDirty = true;
+            dependencySourceAttributesResolved = false;
             replicatedStateTagScratch = Array.Empty<GameplayTag>();
             replicatedStateValueScratch = Array.Empty<long>();
             replicatedStateNameScratch = Array.Empty<string>();
@@ -715,6 +722,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 targetAttributes[i] = null;
             }
             modifierGroupingDirty = true;
+            dependencySourceAttributesResolved = false;
         }
 
         private void EnsureCapacity(int count)
@@ -725,6 +733,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 System.Array.Resize(ref modifierMagnitudes, newSize);
                 System.Array.Resize(ref modifierMagnitudeRawValues, newSize);
                 System.Array.Resize(ref targetAttributes, newSize);
+                System.Array.Resize(ref dependencySourceAttributes, newSize);
             }
         }
 
@@ -752,6 +761,45 @@ namespace CycloneGames.GameplayAbilities.Runtime
             indices = null;
             start = 0;
             return 0;
+        }
+
+        /// <summary>
+        /// Returns the live-dependency source attribute resolved for the given modifier index
+        /// (non-snapshot attribute-based magnitudes only), or null for modifiers without one.
+        /// Resolved once per spec lease; used by the dependents scan as a reference comparison.
+        /// </summary>
+        internal GameplayAttribute GetDependencySourceAttribute(int modifierIndex)
+        {
+            if (!dependencySourceAttributesResolved)
+            {
+                ResolveDependencySourceAttributes();
+            }
+
+            return (uint)modifierIndex < (uint)modifierCount ? dependencySourceAttributes[modifierIndex] : null;
+        }
+
+        private void ResolveDependencySourceAttributes()
+        {
+            EnsureCapacity(modifierCount);
+            for (int i = 0; i < modifierCount; i++)
+            {
+                dependencySourceAttributes[i] = null;
+                ModifierInfo modifier = Def?.Modifiers?[i];
+                if (modifier == null ||
+                    modifier.MagnitudeCalculationType != EGameplayEffectMagnitudeCalculation.AttributeBased ||
+                    modifier.SnapshotPolicy != EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                {
+                    continue;
+                }
+
+                AbilitySystemComponent resolver =
+                    modifier.AttributeBasedMagnitude.CaptureSource == EGameplayEffectAttributeCaptureSource.Source
+                        ? Source
+                        : Target;
+                dependencySourceAttributes[i] = resolver?.GetAttribute(modifier.AttributeBasedMagnitude.AttributeName);
+            }
+
+            dependencySourceAttributesResolved = true;
         }
 
         private void RebuildModifierGrouping()
@@ -1596,6 +1644,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
             modifierGroupingDirty = true;
+            dependencySourceAttributesResolved = false;
 
             replicatedStateCount = 0;
             replicatedStateNameCount = 0;
@@ -1871,6 +1920,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
                 modifierGroupingDirty = true;
+                dependencySourceAttributesResolved = false;
 
                 RecalculateTargetDependentMagnitudes();
             }
@@ -1897,6 +1947,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
             modifierGroupingDirty = true;
+            dependencySourceAttributesResolved = false;
         }
 
         private void RecalculateTargetDependentMagnitudes()
