@@ -21,6 +21,7 @@ namespace CycloneGames.UIFramework.Runtime
         private bool _initialized;
         private bool _isSceneBound;
         private int _boundSceneHandle = -1;
+        private int _lifecycleCallbackDepth;
 
         public string WindowId => _windowId ?? string.Empty;
         public int Priority => _configuration != null ? _configuration.Priority : 0;
@@ -30,6 +31,12 @@ namespace CycloneGames.UIFramework.Runtime
         public bool IsSceneBound => _isSceneBound;
         public int BoundSceneHandle => _boundSceneHandle;
         public CanvasGroup CanvasGroup => _canvasGroup;
+
+        /// <summary>
+        /// True while one of this window's own lifecycle callbacks is executing synchronously.
+        /// UIService uses this to reject re-entrant open/close requests for the same window.
+        /// </summary>
+        internal bool IsDispatchingLifecycleCallback => _lifecycleCallbackDepth > 0;
 
         protected virtual void Awake()
         {
@@ -80,7 +87,7 @@ namespace CycloneGames.UIFramework.Runtime
             CancellationToken cancellationToken)
         {
             TransitionTo(UIWindowState.Opening);
-            OnOpening();
+            InvokeOpening();
 
             if (transitionDriver != null)
             {
@@ -90,7 +97,7 @@ namespace CycloneGames.UIFramework.Runtime
 
             cancellationToken.ThrowIfCancellationRequested();
             TransitionTo(UIWindowState.Open);
-            OnOpened();
+            InvokeOpened();
         }
 
         internal async UniTask RunCloseAsync(
@@ -103,7 +110,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             TransitionTo(UIWindowState.Closing);
-            OnClosing();
+            InvokeClosing();
 
             if (transitionDriver != null)
             {
@@ -113,7 +120,7 @@ namespace CycloneGames.UIFramework.Runtime
 
             cancellationToken.ThrowIfCancellationRequested();
             TransitionTo(UIWindowState.Closed);
-            OnClosed();
+            InvokeClosed();
         }
 
         internal void ForceClosed()
@@ -129,7 +136,7 @@ namespace CycloneGames.UIFramework.Runtime
                 _state = UIWindowState.Closing;
                 try
                 {
-                    OnClosing();
+                    InvokeClosing();
                 }
                 catch (Exception exception)
                 {
@@ -140,7 +147,7 @@ namespace CycloneGames.UIFramework.Runtime
             _state = UIWindowState.Closed;
             try
             {
-                OnClosed();
+                InvokeClosed();
             }
             catch (Exception exception)
             {
@@ -191,6 +198,61 @@ namespace CycloneGames.UIFramework.Runtime
         protected virtual void OnOpened() { }
         protected virtual void OnClosing() { }
         protected virtual void OnClosed() { }
+
+        // Lifecycle callbacks run synchronously; the depth counter lets UIService detect a
+        // re-entrant open/close requested from inside the callback without arming the guard
+        // across the (possibly long) transition awaits that follow.
+        private void InvokeOpening()
+        {
+            _lifecycleCallbackDepth++;
+            try
+            {
+                OnOpening();
+            }
+            finally
+            {
+                _lifecycleCallbackDepth--;
+            }
+        }
+
+        private void InvokeOpened()
+        {
+            _lifecycleCallbackDepth++;
+            try
+            {
+                OnOpened();
+            }
+            finally
+            {
+                _lifecycleCallbackDepth--;
+            }
+        }
+
+        private void InvokeClosing()
+        {
+            _lifecycleCallbackDepth++;
+            try
+            {
+                OnClosing();
+            }
+            finally
+            {
+                _lifecycleCallbackDepth--;
+            }
+        }
+
+        private void InvokeClosed()
+        {
+            _lifecycleCallbackDepth++;
+            try
+            {
+                OnClosed();
+            }
+            finally
+            {
+                _lifecycleCallbackDepth--;
+            }
+        }
 
         private void TransitionTo(UIWindowState next)
         {
