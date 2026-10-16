@@ -151,6 +151,20 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 Is.EqualTo(string.Empty));
         }
 
+        [TestCase(true, 0, true)]
+        [TestCase(true, 5, true)]
+        [TestCase(false, 0, true)]
+        [TestCase(false, 5, false)]
+        public void ShouldRescanOnEnable_RescansWhenAutoScanIsOnOrTheCacheIsEmpty(
+            bool autoScanEnabled,
+            int cachedCount,
+            bool expected)
+        {
+            Assert.That(
+                SpriteAtlasCompatibilityDashboard.ShouldRescanOnEnable(autoScanEnabled, cachedCount),
+                Is.EqualTo(expected));
+        }
+
         private static SpriteAtlasCompatibilityCache.Entry CreateEntry(
             string path,
             bool explicitRgba32 = true,

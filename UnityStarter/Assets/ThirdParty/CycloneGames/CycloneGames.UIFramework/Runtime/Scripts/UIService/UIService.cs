@@ -179,6 +179,12 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly List<IUIWindowBinder> _binders = new List<IUIWindowBinder>(4);
         private readonly List<string> _navigationScratch = new List<string>(8);
         private readonly List<UILayer> _layerScratch = new List<UILayer>(8);
+        private readonly List<string> _closeScratch = new List<string>(4);
+
+        // Window ids whose lifecycle callbacks are currently dispatching. Entry points query
+        // this stack to reject re-entrant open/close requests synchronously instead of
+        // deferring them into a self-referential state.
+        private readonly List<string> _lifecycleDispatchStack = new List<string>(4);
         private readonly CancellationTokenSource _lifetimeCancellation = new CancellationTokenSource();
         private readonly int _ownerThreadId;
         private readonly int _maxActiveWindows;
@@ -198,6 +204,7 @@ namespace CycloneGames.UIFramework.Runtime
         private bool _isShuttingDown;
         private bool _isNavigating;
         private bool _disposePhasesCompleted;
+        private bool _closeScratchInUse;
 
         public UIService(
             UIRoot root,
@@ -259,6 +266,7 @@ namespace CycloneGames.UIFramework.Runtime
                 throw new ArgumentException("Window id cannot be empty.", nameof(windowId));
             }
 
+            ThrowIfWindowInLifecycleDispatch(windowId);
             return StartOrJoinOpen(windowId, null, options, cancellationToken);
         }
 
@@ -278,6 +286,7 @@ namespace CycloneGames.UIFramework.Runtime
                 throw new ArgumentException("Window configuration requires a stable WindowId.", nameof(configuration));
             }
 
+            ThrowIfWindowInLifecycleDispatch(configuration.WindowId);
             return StartOrJoinOpen(configuration.WindowId, configuration, options, cancellationToken);
         }
 
@@ -292,6 +301,7 @@ namespace CycloneGames.UIFramework.Runtime
                 return UniTask.FromResult(false);
             }
 
+            ThrowIfWindowInLifecycleDispatch(windowId);
             UniTask<bool> operation = CloseWithPolicyAsync(windowId, childPolicy);
             return cancellationToken.CanBeCanceled
                 ? operation.AttachExternalCancellation(cancellationToken)
@@ -937,61 +947,86 @@ namespace CycloneGames.UIFramework.Runtime
 
         private async UniTask<bool> CloseWithPolicyAsync(string windowId, ChildClosePolicy childPolicy)
         {
-            List<string> affected = new List<string>(4);
-            List<Exception> errors = null;
-            bool navigationRemoved = false;
-            if (_navigationService != null)
+            // The close loop yields while awaiting each window, so the shared scratch buffer is
+            // only safe when no other close is in flight; otherwise allocate a local list.
+            bool ownsScratch = !_closeScratchInUse;
+            List<string> affected;
+            if (ownsScratch)
             {
-                try
-                {
-                    navigationRemoved = _navigationService.Unregister(
-                        windowId,
-                        childPolicy,
-                        affected);
-                }
-                catch (Exception exception)
-                {
-                    AddCleanupError(ref errors, exception);
-                    affected.Clear();
-                }
-            }
-
-            if (!navigationRemoved || affected.Count == 0)
-            {
-                affected.Add(windowId);
+                _closeScratchInUse = true;
+                affected = _closeScratch;
+                affected.Clear();
             }
             else
             {
-                for (int i = 0; i < affected.Count; i++)
+                affected = new List<string>(4);
+            }
+
+            try
+            {
+                List<Exception> errors = null;
+                bool navigationRemoved = false;
+                if (_navigationService != null)
                 {
-                    if (_sessions.TryGetValue(affected[i], out WindowSession affectedSession))
+                    try
                     {
-                        affectedSession.NavigationCommitted = false;
+                        navigationRemoved = _navigationService.Unregister(
+                            windowId,
+                            childPolicy,
+                            affected);
+                    }
+                    catch (Exception exception)
+                    {
+                        AddCleanupError(ref errors, exception);
+                        affected.Clear();
                     }
                 }
-            }
 
-            bool closedAny = false;
-            for (int i = affected.Count - 1; i >= 0; i--)
-            {
-                try
+                if (!navigationRemoved || affected.Count == 0)
                 {
-                    closedAny |= await CloseSingleAsync(affected[i]);
+                    affected.Add(windowId);
                 }
-                catch (Exception exception)
+                else
                 {
-                    AddCleanupError(ref errors, exception);
+                    for (int i = 0; i < affected.Count; i++)
+                    {
+                        if (_sessions.TryGetValue(affected[i], out WindowSession affectedSession))
+                        {
+                            affectedSession.NavigationCommitted = false;
+                        }
+                    }
+                }
+
+                bool closedAny = false;
+                for (int i = affected.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        closedAny |= await CloseSingleAsync(affected[i]);
+                    }
+                    catch (Exception exception)
+                    {
+                        AddCleanupError(ref errors, exception);
+                    }
+                }
+
+                if (errors != null)
+                {
+                    throw CreateCleanupException(
+                        $"Closing UI window '{windowId}' completed with failures.",
+                        errors);
+                }
+
+                return closedAny;
+            }
+            finally
+            {
+                if (ownsScratch)
+                {
+                    _closeScratch.Clear();
+                    _closeScratchInUse = false;
                 }
             }
-
-            if (errors != null)
-            {
-                throw CreateCleanupException(
-                    $"Closing UI window '{windowId}' completed with failures.",
-                    errors);
-            }
-
-            return closedAny;
         }
 
         private async UniTask<UIWindow> NavigateWithLinkedCancellationAsync(
@@ -1468,6 +1503,12 @@ namespace CycloneGames.UIFramework.Runtime
         {
             List<Exception> errors = null;
             session.LifecycleDispatchDepth++;
+            // Open-stage binding callbacks deliberately keep the deferred-close behaviour
+            // (CloseFromFinishedOpenBinding). Closing-stage callbacks must instead reject a
+            // re-entrant open/close of the same window synchronously, so the guard is armed
+            // only for the duration of each synchronous callback.
+            bool guardSelfDispatch = !IsOpeningCallback(callback);
+
             try
             {
                 for (int i = 0; ; i++)
@@ -1494,6 +1535,18 @@ namespace CycloneGames.UIFramework.Runtime
                                 callback,
                                 cancellationToken);
                             await UniTask.SwitchToMainThread();
+                        }
+                        else if (guardSelfDispatch)
+                        {
+                            PushLifecycleDispatch(session.WindowId);
+                            try
+                            {
+                                binding.OnWindowStateChanged(callback);
+                            }
+                            finally
+                            {
+                                PopLifecycleDispatch();
+                            }
                         }
                         else
                         {
@@ -1562,6 +1615,49 @@ namespace CycloneGames.UIFramework.Runtime
         {
             return callback == WindowStateCallbackType.OnStartOpen ||
                    callback == WindowStateCallbackType.OnFinishedOpen;
+        }
+
+        private void PushLifecycleDispatch(string windowId)
+        {
+            _lifecycleDispatchStack.Add(windowId);
+        }
+
+        private void PopLifecycleDispatch()
+        {
+            int lastIndex = _lifecycleDispatchStack.Count - 1;
+            if (lastIndex >= 0)
+            {
+                _lifecycleDispatchStack.RemoveAt(lastIndex);
+            }
+        }
+
+        private void ThrowIfWindowInLifecycleDispatch(string windowId)
+        {
+            if (IsWindowInLifecycleDispatch(windowId) || IsWindowDispatchingOwnCallbacks(windowId))
+            {
+                throw new InvalidOperationException(
+                    "Cannot open or close a window from within its own lifecycle callbacks.");
+            }
+        }
+
+        private bool IsWindowInLifecycleDispatch(string windowId)
+        {
+            for (int i = 0; i < _lifecycleDispatchStack.Count; i++)
+            {
+                if (string.Equals(_lifecycleDispatchStack[i], windowId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsWindowDispatchingOwnCallbacks(string windowId)
+        {
+            return _sessions.TryGetValue(windowId, out WindowSession session) &&
+                   session.Window != null &&
+                   session.Window.IsDispatchingLifecycleCallback;
         }
 
         private Exception CleanupSession(WindowSession session, bool windowAlreadyDestroyed)
