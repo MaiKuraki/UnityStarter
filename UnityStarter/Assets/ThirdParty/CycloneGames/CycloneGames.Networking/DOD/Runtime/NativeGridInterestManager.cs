@@ -223,8 +223,13 @@ namespace CycloneGames.Networking.DOD
             needed = math.max(needed, 64);
             if (map.Capacity < needed)
             {
+                // Grow with headroom: a capacity that exactly equals the current
+                // entity count forces a dispose+reallocate on the next added
+                // entity, i.e. repeated native reallocations while a session's
+                // entity count creeps upward frame by frame.
+                int newCapacity = math.max(needed, map.Capacity * 2);
                 map.Dispose();
-                map = new NativeHashMap<TKey, TValue>(needed, Allocator.Persistent);
+                map = new NativeHashMap<TKey, TValue>(newCapacity, Allocator.Persistent);
             }
         }
 

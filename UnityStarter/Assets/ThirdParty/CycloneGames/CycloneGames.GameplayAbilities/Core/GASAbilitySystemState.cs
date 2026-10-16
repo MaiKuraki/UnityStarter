@@ -78,6 +78,13 @@ namespace CycloneGames.GameplayAbilities.Core
         public int PredictedAttributeChangeCount => predictedAttributeChangeCount;
         public GASAbilitySystemLimits Limits { get; }
 
+        /// <summary>
+        /// How duration/infinite modifiers combine during aggregation. Default is
+        /// <see cref="GASModifierAggregationMode.MultiplicativeProduct"/>; switch to
+        /// <see cref="GASModifierAggregationMode.UnrealBiasSum"/> only to reproduce stock UE values.
+        /// </summary>
+        public GASModifierAggregationMode AggregationMode { get; set; } = GASModifierAggregationMode.MultiplicativeProduct;
+
         public GASAbilitySystemState(GASEntityId entity, GASAbilitySystemLimits limits)
             : this(entity, 16, 32, 32, 128, 32, limits)
         {
@@ -991,9 +998,12 @@ namespace CycloneGames.GameplayAbilities.Core
         {
             var add = FPInt64.Zero;
             var multiply = FPInt64.One;
+            var multiplicativeBias = FPInt64.One;
+            var divisionBias = FPInt64.One;
             var overrideValue = FPInt64.Zero;
             bool hasOverride = false;
             bool hasModifierInChannel = false;
+            bool unrealBiasSum = AggregationMode == GASModifierAggregationMode.UnrealBiasSum;
 
             for (int i = 0; i < activeEffectCount; i++)
             {
@@ -1022,17 +1032,32 @@ namespace CycloneGames.GameplayAbilities.Core
                             add += magnitude;
                             break;
                         case GASModifierOp.Multiply:
-                            for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
+                            if (unrealBiasSum)
                             {
-                                multiply *= factor;
+                                // UE stock: scaled magnitude enters a bias sum (1 + sum(M - 1)).
+                                multiplicativeBias += magnitude - FPInt64.One;
+                            }
+                            else
+                            {
+                                for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
+                                {
+                                    multiply *= factor;
+                                }
                             }
                             break;
                         case GASModifierOp.Division:
                             if (modifier.MagnitudeRaw != 0)
                             {
-                                for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
+                                if (unrealBiasSum)
                                 {
-                                    multiply /= factor;
+                                    divisionBias += magnitude - FPInt64.One;
+                                }
+                                else
+                                {
+                                    for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
+                                    {
+                                        multiply /= factor;
+                                    }
                                 }
                             }
                             break;
@@ -1050,7 +1075,18 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             var inputValue = FPInt64.FromRaw(inputValueRaw);
-            return (hasOverride ? overrideValue : (inputValue + add) * multiply).RawValue;
+            if (hasOverride)
+            {
+                return overrideValue.RawValue;
+            }
+
+            if (unrealBiasSum)
+            {
+                var product = (inputValue + add) * multiplicativeBias;
+                return divisionBias.RawValue != 0 ? (product / divisionBias).RawValue : product.RawValue;
+            }
+
+            return ((inputValue + add) * multiply).RawValue;
         }
 
         /// <summary>

@@ -724,6 +724,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     throw new ArgumentException($"Overflow GameplayEffect {i} is null.", nameof(overflowEffects));
                 }
+
+                // Duplicate entries multiply the overflow fan-out: each nested chain level re-applies
+                // every duplicate, so N duplicated levels produce 2^N applications. Reject duplicates
+                // at definition time; the intended behavior (the same effect firing once per stack
+                // overflow) is expressed by a single entry.
+                for (int j = 0; j < i; j++)
+                {
+                    if (ReferenceEquals(overflowEffects[i], overflowEffects[j]))
+                    {
+                        throw new ArgumentException(
+                            $"Overflow GameplayEffect {i} duplicates entry {j} ('{overflowEffects[i].Name}').",
+                            nameof(overflowEffects));
+                    }
+                }
             }
         }
 

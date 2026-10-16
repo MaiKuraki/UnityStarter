@@ -388,6 +388,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             public GASFixedValue Additive;
             public GASFixedValue Multiplier;
+            public GASFixedValue MultiplicativeBias;
+            public GASFixedValue DivisionBias;
             public GASFixedValue OverrideValue;
             public bool HasModifier;
             public bool HasOverride;
@@ -396,6 +398,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 Additive = GASFixedValue.Zero;
                 Multiplier = GASFixedValue.One;
+                MultiplicativeBias = GASFixedValue.One;
+                DivisionBias = GASFixedValue.One;
                 OverrideValue = GASFixedValue.Zero;
                 HasModifier = false;
                 HasOverride = false;
@@ -559,6 +563,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         public int RuntimeThreadId => runtimeThreadId;
         public long RuntimeThreadViolationCount => runtimeThreadViolationCount;
+
+        private GASModifierAggregationMode modifierAggregationMode = GASModifierAggregationMode.MultiplicativeProduct;
+
+        /// <summary>
+        /// How duration/infinite modifiers combine during attribute aggregation. Defaults to
+        /// <see cref="GASModifierAggregationMode.MultiplicativeProduct"/> (true products, magnitude^stackCount).
+        /// Switch to <see cref="GASModifierAggregationMode.UnrealBiasSum"/> only to reproduce stock UE GAS values
+        /// (1 + sum(Mi - 1), linear stack scaling). Instant effects are unaffected: they apply their modifiers
+        /// sequentially to the base value in both modes.
+        /// </summary>
+        public GASModifierAggregationMode ModifierAggregationMode
+        {
+            get
+            {
+                AssertRuntimeThread();
+                return modifierAggregationMode;
+            }
+            set
+            {
+                AssertRuntimeThread();
+                modifierAggregationMode = value;
+            }
+        }
         private readonly bool ownsRuntimeContext;
         private bool disposing;
         private bool disposed;
@@ -905,6 +932,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private int effectMutationTransactionDepth;
         private int activeEffectIterationDepth;
         private int abilityEndMutationBypassDepth;
+        private int overflowApplicationDepth;
         private uint lastAppliedDeltaSequence;
         private ulong lastAppliedDeltaVersion;
         private bool hasAppliedDeltaSequence;
@@ -5230,9 +5258,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Recalculates all dirty attributes using the channel-ordered aggregation formula.
-        /// Formula: ((BaseValue + Additive) * Multiplicative) / Division
-        /// Multiplicative uses bias-based summation: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
-        /// Division uses same bias formula: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
+        /// Per channel: ((BaseValue + Additive) * Multiplicative) / Division, applied in ascending
+        /// channel order; a channel Override replaces the evaluated value (last override wins).
+        /// Default MultiplicativeProduct mode composes Multiply/Division as true products
+        /// (two x2 modifiers yield x4; magnitude^stackCount). The opt-in UnrealBiasSum mode
+        /// reproduces stock UE GAS instead (1 + sum(Mi - 1); two x2 yield x3; linear stack
+        /// scaling) - see GASModifierAggregationMode.
         ///
         /// P0 Optimization: OngoingTagRequirements check is refreshed once per effect scan,
         /// then periodic-only effects are skipped before continuous modifier aggregation.
@@ -5242,6 +5273,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 #if UNITY_EDITOR
             GASAggregationProbe.OnRecalculateBegin(System.Diagnostics.Stopwatch.GetTimestamp());
 #endif
+            bool unrealBiasSum = modifierAggregationMode == GASModifierAggregationMode.UnrealBiasSum;
             for (int d = 0; d < dirtyAttributes.Count; d++)
             {
                 var attr = dirtyAttributes[d];
@@ -5306,17 +5338,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
                                 accumulator.Additive += factor * GASFixedValue.FromInt(stackCount);
                                 break;
                             case EAttributeModifierOperation.Multiply:
-                                for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
+                                if (unrealBiasSum)
                                 {
-                                    accumulator.Multiplier *= factor;
+                                    accumulator.MultiplicativeBias += factor * GASFixedValue.FromInt(stackCount) - GASFixedValue.One;
+                                }
+                                else
+                                {
+                                    for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
+                                    {
+                                        accumulator.Multiplier *= factor;
+                                    }
                                 }
                                 break;
                             case EAttributeModifierOperation.Division:
                                 if (factor.RawValue != 0)
                                 {
-                                    for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
+                                    if (unrealBiasSum)
                                     {
-                                        accumulator.Multiplier /= factor;
+                                        accumulator.DivisionBias += factor * GASFixedValue.FromInt(stackCount) - GASFixedValue.One;
+                                    }
+                                    else
+                                    {
+                                        for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
+                                        {
+                                            accumulator.Multiplier /= factor;
+                                        }
                                     }
                                 }
                                 break;
@@ -5332,9 +5378,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     ref ModifierChannelAccumulator accumulator = ref modifierChannelAccumulators[channelIndex];
                     if (!accumulator.HasModifier) continue;
-                    currentValue = accumulator.HasOverride
-                        ? accumulator.OverrideValue
-                        : (currentValue + accumulator.Additive) * accumulator.Multiplier;
+                    if (accumulator.HasOverride)
+                    {
+                        currentValue = accumulator.OverrideValue;
+                    }
+                    else if (unrealBiasSum)
+                    {
+                        var product = (currentValue + accumulator.Additive) * accumulator.MultiplicativeBias;
+                        currentValue = accumulator.DivisionBias.RawValue != 0
+                            ? product / accumulator.DivisionBias
+                            : product;
+                    }
+                    else
+                    {
+                        currentValue = (currentValue + accumulator.Additive) * accumulator.Multiplier;
+                    }
                 }
 
                 attr.OwningSet.PreAttributeChange(attr, ref currentValue);
@@ -6714,6 +6772,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             AvatarGameObject = null;
         }
 
+        private const int MaxOverflowApplicationDepth = 256;
+
         private bool HandleStacking(GameplayEffectSpec spec)
         {
             if (spec.Def.Stacking.Type == EGameplayEffectStackingType.None)
@@ -6735,10 +6795,40 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 // Apply overflow effects when the stack limit is reached.
                 if (spec.Def.OverflowEffects.Count > 0)
                 {
-                    for (int i = 0; i < spec.Def.OverflowEffects.Count; i++)
+#if UNITY_EDITOR
+                    GASOverflowProbe.Enter();
+#endif
+                    overflowApplicationDepth++;
+                    try
                     {
-                        var overflowSpec = GameplayEffectSpec.Create(spec.Def.OverflowEffects[i], spec.Source, spec.Level);
-                        ApplyGameplayEffectSpecWithinTransaction(overflowSpec);
+                        for (int i = 0; i < spec.Def.OverflowEffects.Count; i++)
+                        {
+                            if (overflowApplicationDepth >= MaxOverflowApplicationDepth)
+                            {
+#if UNITY_EDITOR
+                                GASOverflowProbe.CountRefusal();
+#endif
+                                Log.Warning(
+                                    spec.Def.Name,
+                                    static (effectName, sb) => sb.Append("Overflow application depth limit reached for effect '")
+                                        .Append(effectName)
+                                        .Append("'; further overflow entries were skipped."));
+                                break;
+                            }
+
+#if UNITY_EDITOR
+                            GASOverflowProbe.CountApplication();
+#endif
+                            var overflowSpec = GameplayEffectSpec.Create(spec.Def.OverflowEffects[i], spec.Source, spec.Level);
+                            ApplyGameplayEffectSpecWithinTransaction(overflowSpec);
+                        }
+                    }
+                    finally
+                    {
+                        overflowApplicationDepth--;
+#if UNITY_EDITOR
+                        GASOverflowProbe.Exit();
+#endif
                     }
                 }
 
@@ -6887,6 +6977,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 return false;
             }
+#if UNITY_EDITOR
+            long inhibitionTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+#endif
 
             bool isInhibited = !MeetsTagRequirements(def.OngoingRequiredTagsSnapshot, def.OngoingForbiddenTagsSnapshot);
             if (isInhibited != effect.IsInhibited)
@@ -6899,7 +6992,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 effect.NotifyInhibitionChanged(isInhibited);
             }
-
+#if UNITY_EDITOR
+            GASAggregationProbe.AddInhibitionRefreshTime(System.Diagnostics.Stopwatch.GetTimestamp() - inhibitionTimestamp);
+#endif
             return isInhibited;
         }
 
@@ -6909,34 +7004,37 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 return;
             }
+#if UNITY_EDITOR
+            long scanTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+#endif
 
             for (int i = 0; i < activeEffects.Count; i++)
             {
                 var effect = activeEffects[i];
-                var spec = effect?.Spec;
-                var modifiers = spec?.Def?.Modifiers;
-                if (modifiers == null)
+                // Per-effect cached live-dependency modifier indices: null for the vast majority of
+                // effects (no non-snapshot attribute-based modifiers), skipping them with one check.
+                int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
+                if (liveIndices == null)
                 {
                     continue;
                 }
 
-                for (int m = 0; m < modifiers.Count; m++)
+                var spec = effect.Spec;
+                for (int k = 0; k < liveIndices.Length; k++)
                 {
-                    var mod = modifiers[m];
-                    if (!mod.DependsOnLiveAttribute(changedAttribute, spec))
+                    int m = liveIndices[k];
+#if UNITY_EDITOR
+                    GASAggregationProbe.CountDependentsScanSlotVisit();
+#endif
+                    if (!ReferenceEquals(spec.GetDependencySourceAttribute(m), changedAttribute))
                     {
                         continue;
                     }
 
-                    GameplayAttribute targetAttribute = null;
-                    if (m < spec.TargetAttributes.Length)
-                    {
-                        targetAttribute = spec.TargetAttributes[m];
-                    }
-
+                    GameplayAttribute targetAttribute = m < spec.TargetAttributes.Length ? spec.TargetAttributes[m] : null;
                     if (targetAttribute == null)
                     {
-                        targetAttribute = GetAttribute(mod.AttributeName);
+                        targetAttribute = GetAttribute(spec.Def.Modifiers[m].AttributeName);
                     }
 
                     if (targetAttribute != null && !ReferenceEquals(targetAttribute, changedAttribute))
@@ -6945,6 +7043,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
             }
+#if UNITY_EDITOR
+            GASAggregationProbe.AddDependentsScanTime(System.Diagnostics.Stopwatch.GetTimestamp() - scanTimestamp);
+#endif
         }
 
         private ulong stateVersion { get => ReplicationStateBuilder.StateVersion; set => ReplicationStateBuilder.StateVersion = value; }

@@ -258,6 +258,8 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 The protocol ceiling allows up to 125 entries. Adding, removing, reordering, or changing a field requires a new wire contract.
 
+Snapshot payloads may exceed the shared `NetworkConstants.DefaultMTU` (1200): the declared ceiling is 4800 bytes. A payload larger than the transport MTU is only deliverable when the transport stack carries a fragmenting decorator (`FragmentationTransport`). Wire the transport with fragmentation enabled whenever `MaxSnapshotPayloadBytes` (or `MaxSnapshotEntries`) is configured above `1200 - header`; without it, oversized snapshots are rejected at the transport layer and perception silently stops converging.
+
 ### Canonical ordering and bounded selection
 
 `WriteDetectionEntries` maintains a sorted, bounded destination while scanning. A call accepts at most 4,096 detections. Larger input fails closed as `Partial`, reports every supplied item in `CapacityLimitedCount`, performs no resolver calls, and writes no entries. For accepted N and destination capacity K (protocol-bounded to 125), the algorithm uses `O(N log K + N * K)` worst-case work with no internal heap storage. Selection is deterministic under input reordering. Callers that can exceed the work ceiling must prefilter by gameplay priority or split work according to their explicit protocol policy; the bridge does not silently choose a batch.

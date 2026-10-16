@@ -811,17 +811,6 @@ namespace CycloneGames.Networking.Transports
             return channel;
         }
 
-        internal static bool TryRemoveChannel(string name)
-        {
-            if (s_channels.TryRemove(name, out LocalLoopChannel channel))
-            {
-                channel.Drain();
-                return true;
-            }
-
-            return false;
-        }
-
         internal static void ReleaseChannel(string name, LocalLoopChannel channel)
         {
             if (string.IsNullOrEmpty(name) || channel == null || channel.HasRegistrations)
