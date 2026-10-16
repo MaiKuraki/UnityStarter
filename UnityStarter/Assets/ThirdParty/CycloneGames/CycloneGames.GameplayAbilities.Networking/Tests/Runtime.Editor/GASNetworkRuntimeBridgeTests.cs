@@ -297,6 +297,116 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
         }
 
         [Test]
+        public void TwoAuthorities_IdenticalScript_ProduceIdenticalWireState_AndCaptureIsIdempotent()
+        {
+            GameplayAbility ability = CreateAbility(
+                "Bridge.DeterminismDual",
+                EAbilityExecutionPolicy.AuthorityOnly);
+            var effect = new GameplayEffect(
+                "Bridge.DeterminismDual.Effect",
+                EDurationPolicy.Infinite,
+                grantedAbilities: new List<GameplayAbility> { ability });
+            GASNetworkContentCatalog catalog = CreateCatalog(ability, effect, out _, out _);
+            var contentResolver = new GASNetworkRuntimeContentResolver(catalog);
+            GASNetworkRuntimeStateCapacity runtimeCapacity = SmallRuntimeCapacity();
+
+            var firstContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var secondContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var first = new AbilitySystemComponent(firstContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var second = new AbilitySystemComponent(secondContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            try
+            {
+                // Identical scripted input on two fully independent authorities.
+                ApplyDeterminismScript(first, effect);
+                ApplyDeterminismScript(second, effect);
+
+                GASNetworkStateBuffer firstWire = CaptureWire(first, contentResolver, runtimeCapacity);
+                GASNetworkStateBuffer firstWireAgain = CaptureWire(first, contentResolver, runtimeCapacity);
+                GASNetworkStateBuffer secondWire = CaptureWire(second, contentResolver, runtimeCapacity);
+
+                // Capture idempotency: re-capturing the same instance yields the same version,
+                // checksum, and records.
+                Assert.That(firstWireAgain.StateVersion, Is.EqualTo(firstWire.StateVersion));
+                Assert.That(firstWireAgain.StateChecksum, Is.EqualTo(firstWire.StateChecksum));
+                AssertWireEqual(firstWireAgain, firstWire);
+
+                // Dual-authority determinism: two independent authorities given the same scripted
+                // input must publish identical wire state (version, checksum, and every record).
+                Assert.That(secondWire.StateVersion, Is.EqualTo(firstWire.StateVersion));
+                Assert.That(secondWire.StateChecksum, Is.EqualTo(firstWire.StateChecksum));
+                AssertWireEqual(secondWire, firstWire);
+
+                UnityEngine.Debug.Log(
+                    $"[NetworkAudit][Determinism] PASS: dual-authority wire checksum=0x{firstWire.StateChecksum:X16}, " +
+                    $"capture idempotent, records identical (abilities={firstWire.AbilityCount}, effects={firstWire.EffectCount}).");
+            }
+            finally
+            {
+                second.Dispose();
+                first.Dispose();
+                secondContext.Dispose();
+                firstContext.Dispose();
+            }
+        }
+
+        private static void ApplyDeterminismScript(AbilitySystemComponent asc, GameplayEffect effect)
+        {
+            GameplayEffectApplicationResult application = asc.ApplyGameplayEffectSpecToSelf(
+                GameplayEffectSpec.Create(effect, asc));
+            Assert.That(application.Succeeded, Is.True);
+            for (int i = 0; i < 3; i++)
+            {
+                asc.Tick(1f / 60f, isServer: true);
+            }
+        }
+
+        private static GASNetworkStateBuffer CaptureWire(
+            AbilitySystemComponent asc,
+            GASNetworkRuntimeContentResolver contentResolver,
+            GASNetworkRuntimeStateCapacity runtimeCapacity)
+        {
+            var identities = new GASAuthorityIdentityMap(Entity, Epoch, 8, 8);
+            var resolver = new TestIdentityResolver(asc, Entity, identities);
+            var adapter = new GASNetworkAuthorityStateAdapter(
+                asc,
+                resolver,
+                resolver,
+                contentResolver,
+                identities,
+                new GASNetworkStateVersion(asc, Epoch),
+                runtimeCapacity);
+            Assert.That(adapter.TryCapture(0u, out IGASNetworkStateView view), Is.True);
+            return (GASNetworkStateBuffer)view;
+        }
+
+        private static void AssertWireEqual(GASNetworkStateBuffer expected, GASNetworkStateBuffer actual)
+        {
+            Assert.That(actual.AbilityCount, Is.EqualTo(expected.AbilityCount));
+            Assert.That(actual.AttributeCount, Is.EqualTo(expected.AttributeCount));
+            Assert.That(actual.EffectCount, Is.EqualTo(expected.EffectCount));
+            Assert.That(actual.EffectTagCount, Is.EqualTo(expected.EffectTagCount));
+            Assert.That(actual.EffectMagnitudeCount, Is.EqualTo(expected.EffectMagnitudeCount));
+            Assert.That(actual.LooseTagCount, Is.EqualTo(expected.LooseTagCount));
+
+            for (int i = 0; i < expected.AbilityCount; i++)
+            {
+                Assert.That(actual.Abilities[i].Equals(expected.Abilities[i]), Is.True, $"Ability record {i} diverged.");
+            }
+            for (int i = 0; i < expected.AttributeCount; i++)
+            {
+                Assert.That(actual.Attributes[i].Equals(expected.Attributes[i]), Is.True, $"Attribute record {i} diverged.");
+            }
+            for (int i = 0; i < expected.EffectCount; i++)
+            {
+                Assert.That(actual.Effects[i].Equals(expected.Effects[i]), Is.True, $"Effect record {i} diverged.");
+            }
+            for (int i = 0; i < expected.LooseTagCount; i++)
+            {
+                Assert.That(actual.LooseTags[i].Equals(expected.LooseTags[i]), Is.True, $"Loose tag record {i} diverged.");
+            }
+        }
+
+        [Test]
         public void ReplicaPreflightFailureRejectsPreparedStateWithoutMutatingAbilitySystem()
         {
             GameplayAbility ability = CreateAbility(

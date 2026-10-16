@@ -23,6 +23,11 @@ namespace CycloneGames.Networking.Editor.Diagnostics
         private static readonly Dictionary<string, Type> TypeLookupCache =
             new Dictionary<string, Type>(StringComparer.Ordinal);
 
+        // Editor-only diagnostic cache; bounded so an adversarial or accidental
+        // stream of distinct type names cannot grow it without limit. On overflow
+        // the cache is dropped and rebuilt from subsequent lookups.
+        private const int MAX_TYPE_LOOKUP_CACHE_ENTRIES = 2048;
+
         public static NetworkBootstrapReport Run(NetworkBootstrapPreset preset = null)
         {
             var context = new NetworkBootstrapContext(preset);
@@ -96,7 +101,7 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             Type type = Type.GetType(fullName, false);
             if (type != null)
             {
-                TypeLookupCache[fullName] = type;
+                StoreTypeLookup(fullName, type);
                 return type;
             }
 
@@ -106,13 +111,23 @@ namespace CycloneGames.Networking.Editor.Diagnostics
                 type = assemblies[i].GetType(fullName, false);
                 if (type != null)
                 {
-                    TypeLookupCache[fullName] = type;
+                    StoreTypeLookup(fullName, type);
                     return type;
                 }
             }
 
-            TypeLookupCache[fullName] = null;
+            StoreTypeLookup(fullName, null);
             return null;
+        }
+
+        private static void StoreTypeLookup(string fullName, Type type)
+        {
+            if (TypeLookupCache.Count >= MAX_TYPE_LOOKUP_CACHE_ENTRIES)
+            {
+                TypeLookupCache.Clear();
+            }
+
+            TypeLookupCache[fullName] = type;
         }
 
         internal static void FindSceneComponents(Type componentType, List<Component> results)

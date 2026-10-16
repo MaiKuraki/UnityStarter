@@ -258,6 +258,8 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 协议上限最多容纳 125 个 entry。新增、移除、重排或改变字段语义时需要新的 wire contract。
 
+快照 payload 可能超过共享的 `NetworkConstants.DefaultMTU`（1200）：声明的上限是 4800 字节。超过传输 MTU 的 payload 只有在传输栈带有分片装饰器（`FragmentationTransport`）时才可送达。当 `MaxSnapshotPayloadBytes`（或 `MaxSnapshotEntries`）配置高于 `1200 - header` 时，必须启用分片；否则超限快照会在传输层被拒绝，感知同步会静默停止收敛。
+
 ### Canonical ordering 与有界选择
 
 `WriteDetectionEntries` 扫描 detection 时维护有序、有界 destination。单次调用最多接收 4,096 个 detection。更大输入会 fail closed 为 `Partial`，把所有输入计入 `CapacityLimitedCount`，不调用 resolver，也不写 entry。对已准入的 N 个 detection 和容量 K（协议限 125），算法最坏需要 `O(N log K + N * K)` 工作，不使用内部 heap storage；输入重排后选择结果确定。可能超过工作上限的调用方必须按 Gameplay priority 预过滤，或依据显式协议策略拆分；bridge 不会静默替产品选择 batch。
