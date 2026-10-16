@@ -49,6 +49,49 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
         }
 
         [Test]
+        public void ProtocolFingerprint_MatchesFrozenIndependentlyComputedLiterals()
+        {
+            // Frozen contract: the literals below were computed with an independent
+            // FNV-1a64 implementation over the exact wire-schema descriptor strings
+            // and contract identifiers. Any accidental edit to a descriptor string
+            // (which is decoupled from GASNetworkWireCodec size constants) changes
+            // these values and fails this test instead of silently shipping a
+            // mismatched wire schema.
+            Assert.That(GameplayAbilitiesNetworkProtocol.WireSchemaFingerprint,
+                Is.EqualTo(0x00E3334A97D4D41BUL));
+
+            NetworkProtocolManifest manifest = GameplayAbilitiesNetworkProtocol.CreateProtocolManifest();
+            string[] contractIds =
+            {
+                "GASNetworkHandshake:v1",
+                "GASAbilityCommand:v1",
+                "GASCommandResult:v1",
+                "GASStateBatchChunk:v1",
+                "GASStateAcknowledgement:v1",
+                "GASResyncRequest:v1",
+                "GASCueExecuted:v1"
+            };
+            ulong[] frozenSchemaHashes =
+            {
+                0x006FBFAC5034FCBCUL,
+                0x736049941D192BCCUL,
+                0xD42854FE438208B9UL,
+                0x15F06B9AD216CA7DUL,
+                0x9761AEC625D1DBBCUL,
+                0x306DC85E81205EA4UL,
+                0xBCC380DCE90893AFUL
+            };
+
+            Assert.That(manifest.Messages.Count, Is.EqualTo(contractIds.Length));
+            for (int i = 0; i < contractIds.Length; i++)
+            {
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(contractIds[i]));
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(frozenSchemaHashes[i]),
+                    $"Contract {contractIds[i]} schema hash drifted from the frozen value.");
+            }
+        }
+
+        [Test]
         public void ProtocolRegistration_IsIdempotentAndClaimsOnlyItsRange()
         {
             var catalog = new NetworkMessageCatalog();

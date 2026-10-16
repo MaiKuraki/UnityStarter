@@ -64,9 +64,15 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             return true;
         }
 
+        /// <summary>
+        /// Clears all accumulated per-entity state (history and, when present,
+        /// the time-dilation audit windows) so a reset or epoch change cannot
+        /// leave stale rate/window state behind.
+        /// </summary>
         public void Reset()
         {
             _history.Clear();
+            _dilationAuditor?.Clear();
         }
     }
 }

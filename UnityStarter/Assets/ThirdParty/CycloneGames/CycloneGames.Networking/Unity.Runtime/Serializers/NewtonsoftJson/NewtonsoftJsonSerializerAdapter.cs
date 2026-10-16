@@ -68,7 +68,11 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
                 DefaultValueHandling = DefaultValueHandling.Ignore,
                 ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
                 // Type name handling disabled by default for security
-                TypeNameHandling = TypeNameHandling.None
+                TypeNameHandling = TypeNameHandling.None,
+                // Bound nesting depth so hostile payloads cannot drive
+                // unbounded-descent parsing; matches the Json.NET default of 64,
+                // made explicit here because the network boundary depends on it.
+                MaxDepth = 64
             };
         }
 

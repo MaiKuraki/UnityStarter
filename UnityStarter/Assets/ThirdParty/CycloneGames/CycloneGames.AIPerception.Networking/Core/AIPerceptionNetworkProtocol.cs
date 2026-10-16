@@ -18,6 +18,9 @@ namespace CycloneGames.AIPerception.Networking
         public const ushort MSG_FULL_STATE_REQUEST = MESSAGE_ID_BASE + 5;
 
         public const int DEFAULT_MAX_EVENT_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes;
+        // Exceeds the shared transport MTU: delivering snapshots at this ceiling
+        // requires a fragmenting transport decorator (FragmentationTransport).
+        // See README "Wire v1 contract" before raising or lowering this budget.
         public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 4;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes;
         public const int MAX_SNAPSHOT_ENTRIES =
