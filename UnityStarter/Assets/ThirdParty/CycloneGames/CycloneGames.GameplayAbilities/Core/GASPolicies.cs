@@ -28,6 +28,28 @@ namespace CycloneGames.GameplayAbilities.Core
     }
 
     /// <summary>
+    /// Selects how duration/infinite modifiers combine while aggregating an attribute.
+    /// Instant effects always apply their modifiers sequentially to the base value and are not
+    /// affected by this mode.
+    /// </summary>
+    public enum GASModifierAggregationMode : byte
+    {
+        /// <summary>
+        /// Default. Multiply/Division compose as true products: two x2 modifiers yield x4, and each
+        /// stack applies the factor once (magnitude^stackCount). Matches the common game convention
+        /// for independent damage/stat multipliers and the framework's established contract.
+        /// </summary>
+        MultiplicativeProduct,
+
+        /// <summary>
+        /// Opt-in stock Unreal Engine aggregator semantics: Multiply and Division bias-sum
+        /// (1 + sum(Mi - 1); two x2 modifiers yield x3) with linear stack scaling
+        /// (stacked magnitude = magnitude x stackCount). Use only when reproducing UE project values.
+        /// </summary>
+        UnrealBiasSum
+    }
+
+    /// <summary>
     /// Ordered modifier evaluation layers for attribute aggregators.
     /// Channel0 is the default path and is enough for most effects. Additional channels let advanced
     /// systems express "evaluate these modifiers after the previous layer" without hard-coded rules.

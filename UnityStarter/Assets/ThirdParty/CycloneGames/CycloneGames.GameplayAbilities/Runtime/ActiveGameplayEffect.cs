@@ -149,6 +149,62 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cachedPeriodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset;
             cachedStackPeriodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication;
             pendingImmediatePeriodicExecution = false;
+            liveDependencyModifierIndices = null;
+            liveDependencyIndicesResolved = false;
+        }
+
+        private int[] liveDependencyModifierIndices;
+        private bool liveDependencyIndicesResolved;
+
+        /// <summary>
+        /// The modifier indices of this effect whose magnitude reads a live (non-snapshot)
+        /// attribute. Cached lazily per active effect; null when the effect has none, which lets
+        /// the dependents scan skip the effect entirely with a single reference check.
+        /// </summary>
+        internal int[] GetLiveDependencyModifierIndices()
+        {
+            if (liveDependencyIndicesResolved)
+            {
+                return liveDependencyModifierIndices;
+            }
+
+            liveDependencyIndicesResolved = true;
+            IReadOnlyList<ModifierInfo> modifiers = Spec?.Def?.Modifiers;
+            if (modifiers == null)
+            {
+                return null;
+            }
+
+            int count = 0;
+            for (int i = 0; i < modifiers.Count; i++)
+            {
+                ModifierInfo modifier = modifiers[i];
+                if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased &&
+                    modifier.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                {
+                    count++;
+                }
+            }
+
+            if (count == 0)
+            {
+                return null;
+            }
+
+            var indices = new int[count];
+            int write = 0;
+            for (int i = 0; i < modifiers.Count; i++)
+            {
+                ModifierInfo modifier = modifiers[i];
+                if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased &&
+                    modifier.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                {
+                    indices[write++] = i;
+                }
+            }
+
+            liveDependencyModifierIndices = indices;
+            return indices;
         }
 
         internal void SetMemoryOwner(GASRuntimeMemory owner) => memoryOwner = owner;

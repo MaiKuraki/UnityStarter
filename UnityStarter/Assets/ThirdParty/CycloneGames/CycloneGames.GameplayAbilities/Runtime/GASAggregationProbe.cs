@@ -17,6 +17,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal static long ModifierVisits;
         internal static long ModifierHits;
         internal static long AggregationTimestampTicks;
+        internal static long DependentsScanTimestampTicks;
+        internal static long DependentsScanSlotVisits;
+        internal static long InhibitionRefreshTimestampTicks;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void OnRecalculateBegin(long timestamp)
@@ -53,6 +56,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void AddDependentsScanTime(long elapsedTicks)
+        {
+            DependentsScanTimestampTicks += elapsedTicks;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void CountDependentsScanSlotVisit(long count = 1)
+        {
+            DependentsScanSlotVisits += count;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void AddInhibitionRefreshTime(long elapsedTicks)
+        {
+            InhibitionRefreshTimestampTicks += elapsedTicks;
+        }
+
         internal static void Reset()
         {
             RecalculatePasses = 0;
@@ -61,6 +82,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ModifierVisits = 0;
             ModifierHits = 0;
             AggregationTimestampTicks = 0;
+            DependentsScanTimestampTicks = 0;
+            DependentsScanSlotVisits = 0;
+            InhibitionRefreshTimestampTicks = 0;
         }
     }
 }
