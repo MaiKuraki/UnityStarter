@@ -80,8 +80,7 @@ namespace CycloneGames.GameplayAbilities.Core
 
         /// <summary>
         /// How duration/infinite modifiers combine during aggregation. Default is
-        /// <see cref="GASModifierAggregationMode.MultiplicativeProduct"/>; switch to
-        /// <see cref="GASModifierAggregationMode.UnrealBiasSum"/> only to reproduce stock UE values.
+        /// <see cref="GASModifierAggregationMode.MultiplicativeProduct"/>.
         /// </summary>
         public GASModifierAggregationMode AggregationMode { get; set; } = GASModifierAggregationMode.MultiplicativeProduct;
 

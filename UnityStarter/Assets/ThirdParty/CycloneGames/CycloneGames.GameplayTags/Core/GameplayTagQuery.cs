@@ -42,20 +42,28 @@ namespace CycloneGames.GameplayTags.Core
       // The root expression of the query tree.
       public GameplayTagQueryExpression RootExpression;
 
-      [NonSerialized]
-      private int[] m_TokenStream;
+      // Published as one immutable object so a reader can never observe a token stream paired with
+      // tag indices from a different compilation.
+      private sealed class CompiledQuery
+      {
+         internal readonly int[] Tokens;
+         internal readonly int[] TagIndices;
+         internal readonly GameplayTagQueryExpression Root;
+         internal readonly int RegistryGeneration;
+         internal readonly int MaxStackDepth;
+
+         internal CompiledQuery(int[] tokens, int[] tagIndices, GameplayTagQueryExpression root, int registryGeneration, int maxStackDepth)
+         {
+            Tokens = tokens;
+            TagIndices = tagIndices;
+            Root = root;
+            RegistryGeneration = registryGeneration;
+            MaxStackDepth = maxStackDepth;
+         }
+      }
 
       [NonSerialized]
-      private int[] m_CompiledTagIndices;
-
-      [NonSerialized]
-      private GameplayTagQueryExpression m_CompiledRootExpression;
-
-      [NonSerialized]
-      private int m_CompiledRegistryGeneration;
-
-      [NonSerialized]
-      private int m_CompiledMaxStackDepth;
+      private volatile CompiledQuery m_Compiled;
 
       /// <summary>
       /// Evaluates this query against the given tag container.
@@ -130,9 +138,10 @@ namespace CycloneGames.GameplayTags.Core
       private void EnsureCompiled()
       {
          int registryGeneration = GameplayTagManager.Generation;
-         if (m_TokenStream != null &&
-            ReferenceEquals(m_CompiledRootExpression, RootExpression) &&
-            m_CompiledRegistryGeneration == registryGeneration)
+         CompiledQuery cached = m_Compiled;
+         if (cached != null &&
+            ReferenceEquals(cached.Root, RootExpression) &&
+            cached.RegistryGeneration == registryGeneration)
          {
             return;
          }
@@ -146,18 +155,12 @@ namespace CycloneGames.GameplayTags.Core
          CompileExpression(RootExpression, tokenStream, tagIndices, activeExpressions, 0, ref nodeCount, ref stackDepth, ref maxStackDepth);
 
          int[] compiledTokens = tokenStream.ToArray();
-         m_TokenStream = compiledTokens;
-         m_CompiledTagIndices = tagIndices.ToArray();
-         m_CompiledRootExpression = RootExpression;
-         m_CompiledRegistryGeneration = registryGeneration;
 
-         // The value-stack capacity comes from replaying the emitted token stream with the evaluator's
-         // own push/pop arithmetic, not from an estimate taken while walking the tree. The tree walk
-         // drifts out of step with the emitted sequence on wide nodes - a node with N children keeps N
-         // results live at once, which is a width, not a depth - and the drift let the evaluator pop
-         // below zero and index the stack negatively. Replaying the emitted stream cannot disagree with
-         // it, because it is the same sequence.
-         m_CompiledMaxStackDepth = SimulateStackDepth(compiledTokens);
+         // Replaying the emitted stream is the only way to size the value stack correctly: the tree walk
+         // measures depth, but a wide node keeps N child results live, which is width.
+         int compiledDepth = SimulateStackDepth(compiledTokens);
+
+         m_Compiled = new CompiledQuery(compiledTokens, tagIndices.ToArray(), RootExpression, registryGeneration, compiledDepth);
       }
 
       /// <summary>
@@ -166,10 +169,7 @@ namespace CycloneGames.GameplayTags.Core
       /// </summary>
       public void InvalidateCompiledCache()
       {
-         m_TokenStream = null;
-         m_CompiledTagIndices = null;
-         m_CompiledRootExpression = null;
-         m_CompiledRegistryGeneration = 0;
+         m_Compiled = null;
       }
 
       private static void CompileExpression(
@@ -343,29 +343,24 @@ namespace CycloneGames.GameplayTags.Core
 
       private bool Evaluate<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
-         if (m_CompiledMaxStackDepth <= BitmaskStackCapacity)
-            return EvaluateWithBitmaskStack(container);
+         CompiledQuery program = m_Compiled;
+         if (program == null)
+            return false;
 
-         // A query that keeps more than 64 results live at once is pathological, but it is legal, so it
-         // gets a span sized to the exact compiled depth rather than a fixed 1 KiB budget.
-         return EvaluateWithSpanStack(container, m_CompiledMaxStackDepth);
+         if (program.MaxStackDepth <= BitmaskStackCapacity)
+            return EvaluateWithBitmaskStack(container, program);
+
+         return EvaluateWithSpanStack(container, program);
       }
 
       /// <summary>
       /// Evaluation with the value stack packed into one <see cref="ulong"/>.
       /// </summary>
-      /// <remarks>
-      /// The previous implementation reserved and zeroed a 1 KiB <c>Span&lt;bool&gt;</c> on every call,
-      /// because .NET Standard 2.1 has no <see cref="System.Runtime.CompilerServices.SkipLocalsInitAttribute"/>
-      /// to suppress the init. On a per-entity, per-frame query that was a measurable, entirely
-      /// synthetic cost. Booleans pack into bits, so the whole stack fits in one word for every realistic
-      /// query shape and the evaluator becomes pure integer work.
-      /// </remarks>
-      private bool EvaluateWithBitmaskStack<T>(in T container) where T : IReadOnlyGameplayTagContainer
+      private bool EvaluateWithBitmaskStack<T>(in T container, CompiledQuery program) where T : IReadOnlyGameplayTagContainer
       {
          ulong stack = 0;
          int stackCount = 0;
-         int[] tokenStream = m_TokenStream;
+         int[] tokenStream = program.Tokens;
 
          for (int i = 0; i < tokenStream.Length;)
          {
@@ -386,7 +381,7 @@ namespace CycloneGames.GameplayTags.Core
                {
                   int tagStart = tokenStream[i++];
                   int tagCount = tokenStream[i++];
-                  bool result = EvaluateTags(container, opcode, tagStart, tagCount);
+                  bool result = EvaluateTags(container, opcode, tagStart, tagCount, program.TagIndices);
                   if (result)
                      stack |= 1UL << stackCount++;
                   else
@@ -428,11 +423,11 @@ namespace CycloneGames.GameplayTags.Core
          return stackCount > 0 && (stack >> (stackCount - 1) & 1UL) != 0UL;
       }
 
-      private bool EvaluateWithSpanStack<T>(in T container, int capacity) where T : IReadOnlyGameplayTagContainer
+      private bool EvaluateWithSpanStack<T>(in T container, CompiledQuery program) where T : IReadOnlyGameplayTagContainer
       {
-         Span<bool> stack = stackalloc bool[capacity];
+         Span<bool> stack = stackalloc bool[program.MaxStackDepth];
          int stackCount = 0;
-         int[] tokenStream = m_TokenStream;
+         int[] tokenStream = program.Tokens;
 
          for (int i = 0; i < tokenStream.Length;)
          {
@@ -453,7 +448,7 @@ namespace CycloneGames.GameplayTags.Core
                {
                   int tagStart = tokenStream[i++];
                   int tagCount = tokenStream[i++];
-                  stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount);
+                  stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount, program.TagIndices);
                   break;
                }
 
@@ -481,14 +476,14 @@ namespace CycloneGames.GameplayTags.Core
          return stackCount > 0 && stack[stackCount - 1];
       }
 
-      private bool EvaluateTags<T>(in T container, GameplayTagQueryOpcode opcode, int tagStart, int tagCount) where T : IReadOnlyGameplayTagContainer
+      private bool EvaluateTags<T>(in T container, GameplayTagQueryOpcode opcode, int tagStart, int tagCount, int[] tagIndices) where T : IReadOnlyGameplayTagContainer
       {
          switch (opcode)
          {
             case GameplayTagQueryOpcode.EvalAllTags:
                for (int i = 0; i < tagCount; i++)
                {
-                  if (!container.ContainsRuntimeIndex(m_CompiledTagIndices[tagStart + i], explicitOnly: false))
+                  if (!container.ContainsRuntimeIndex(tagIndices[tagStart + i], explicitOnly: false))
                   {
                      return false;
                   }
@@ -498,7 +493,7 @@ namespace CycloneGames.GameplayTags.Core
             case GameplayTagQueryOpcode.EvalAnyTags:
                for (int i = 0; i < tagCount; i++)
                {
-                  if (container.ContainsRuntimeIndex(m_CompiledTagIndices[tagStart + i], explicitOnly: false))
+                  if (container.ContainsRuntimeIndex(tagIndices[tagStart + i], explicitOnly: false))
                   {
                      return true;
                   }
@@ -508,7 +503,7 @@ namespace CycloneGames.GameplayTags.Core
             case GameplayTagQueryOpcode.EvalNoTags:
                for (int i = 0; i < tagCount; i++)
                {
-                  if (container.ContainsRuntimeIndex(m_CompiledTagIndices[tagStart + i], explicitOnly: false))
+                  if (container.ContainsRuntimeIndex(tagIndices[tagStart + i], explicitOnly: false))
                   {
                      return false;
                   }

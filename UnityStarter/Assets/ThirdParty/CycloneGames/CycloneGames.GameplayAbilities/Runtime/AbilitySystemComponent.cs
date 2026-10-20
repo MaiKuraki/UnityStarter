@@ -569,9 +569,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// How duration/infinite modifiers combine during attribute aggregation. Defaults to
         /// <see cref="GASModifierAggregationMode.MultiplicativeProduct"/> (true products, magnitude^stackCount).
-        /// Switch to <see cref="GASModifierAggregationMode.UnrealBiasSum"/> only to reproduce stock UE GAS values
-        /// (1 + sum(Mi - 1), linear stack scaling). Instant effects are unaffected: they apply their modifiers
-        /// sequentially to the base value in both modes.
+        /// Instant effects apply their modifiers sequentially to the base value in both modes.
         /// </summary>
         public GASModifierAggregationMode ModifierAggregationMode
         {
@@ -4641,7 +4639,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             AssertRuntimeThread();
             if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
             {
-                throw new InvalidOperationException("Active-effect removal cannot re-enter an effect mutation transaction.");
+                throw new GASReentrancyRejectedException(
+                    "Active-effect removal cannot re-enter an effect mutation transaction.");
             }
             RemoveActiveEffectsWithGrantedTags(tags, null);
         }
@@ -4919,7 +4918,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (instantEffectExecutionInProgress)
             {
-                throw new InvalidOperationException(
+                throw new GASReentrancyRejectedException(
                     "GameplayEffect execution cannot re-enter the same AbilitySystemComponent.");
             }
 
@@ -5077,10 +5076,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ThrowIfActiveEffectMutationLocked("AbilitySystemComponent.Tick");
             if (deltaTime < 0f || float.IsNaN(deltaTime) || float.IsInfinity(deltaTime))
             {
-                // The float is deliberately not passed as the exception's boxed value: Tick runs every
-                // frame and the analyzer correctly flags boxing inside it, even though this branch only
-                // executes once before the throw terminates the tick. The offending value is on the
-                // stack at the throw site.
 #pragma warning disable CG0045
                 throw new ArgumentOutOfRangeException(nameof(deltaTime), deltaTime, "Delta time must be finite and non-negative.");
 #pragma warning restore CG0045
@@ -5171,12 +5166,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             {
                                 expired = effect.Tick(deltaTime, this);
                             }
+                            catch (GASReentrancyRejectedException exception)
+                            {
+                                // A rejected nested mutation leaves this effect intact.
+#pragma warning disable CG0003
+                                Log.Error(exception, $"Periodic GameplayEffect '{effect.Spec?.Def?.Name}' attempted a reentrant mutation; the nested operation was rejected.");
+#pragma warning restore CG0003
+                                continue;
+                            }
                             catch (Exception exception)
                             {
-                                // Inside a catch: this runs once when an effect has already thrown, not
-                                // per frame in the steady state. The logging library has no public gate
-                                // for severity (IsEmittable is internal to it), so the interpolated
-                                // message is the honest cost of carrying the effect name.
 #pragma warning disable CG0003
                                 Log.Error(exception, $"Periodic GameplayEffect '{effect.Spec?.Def?.Name}' failed and was removed.");
 #pragma warning restore CG0003
@@ -5269,13 +5268,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Recalculates all dirty attributes using the channel-ordered aggregation formula.
         /// Per channel: ((BaseValue + Additive) * Multiplicative) / Division, applied in ascending
         /// channel order; a channel Override replaces the evaluated value (last override wins).
-        /// Default MultiplicativeProduct mode composes Multiply/Division as true products
-        /// (two x2 modifiers yield x4; magnitude^stackCount). The opt-in UnrealBiasSum mode
-        /// reproduces stock UE GAS instead (1 + sum(Mi - 1); two x2 yield x3; linear stack
-        /// scaling) - see GASModifierAggregationMode.
-        ///
-        /// P0 Optimization: OngoingTagRequirements check is refreshed once per effect scan,
-        /// then periodic-only effects are skipped before continuous modifier aggregation.
+        /// MultiplicativeProduct composes Multiply/Division as true products (two x2 yield x4;
+        /// magnitude^stackCount); UnrealBiasSum composes them as a bias sum (1 + sum(Mi - 1);
+        /// two x2 yield x3; linear stack scaling).
         /// </summary>
         private void RecalculateDirtyAttributes()
         {
@@ -7705,7 +7700,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
             {
-                throw new InvalidOperationException(
+                throw new GASReentrancyRejectedException(
                     $"{operation} cannot re-enter active-effect mutation or iteration. Queue the operation for a later owner-thread phase.");
             }
         }

@@ -172,7 +172,6 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void Update()
         {
-            // The Tick needs to be manually called for the AbilitySystemComponent.
             ascHolder?.Tick(Time.deltaTime);
         }
     }

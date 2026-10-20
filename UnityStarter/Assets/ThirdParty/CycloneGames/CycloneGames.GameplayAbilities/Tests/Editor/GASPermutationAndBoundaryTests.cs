@@ -320,8 +320,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     callbackInvocations++;
                     if (callbackInvocations == 1)
                     {
-                        // Attempt a mutation from inside the dispatch. The framework must absorb it
-                        // as a controlled outcome (accept or reject) without corrupting state.
+                        // Nested apply from inside the dispatch; the outcome must be deterministic.
                         observedResult = asc.ApplyGameplayEffectSpecToSelf(
                             GameplayEffectSpec.Create(instant, asc));
                     }
@@ -340,12 +339,13 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                 Assert.That(callbackInvocations, Is.GreaterThan(0), "Observer must have been invoked (harness sanity).");
 
+                Assert.That(observedResult.Code, Is.EqualTo(GameplayEffectApplicationResultCode.Executed),
+                    "An apply issued from an attribute observer runs outside the locked mutation scope.");
+
                 // The component must remain consistent and usable afterwards.
                 attributes.ValueOf(0).OnCurrentValueChanged -= observer;
                 Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(instant, asc)).Succeeded, Is.True);
                 asc.Tick(DeltaTime, isServer: true);
-                UnityEngine.Debug.Log(
-                    $"[Permutation][Reentrancy] PASS: in-callback apply yielded {observedResult.Code}; component remains consistent and usable.");
             }
             finally
             {
