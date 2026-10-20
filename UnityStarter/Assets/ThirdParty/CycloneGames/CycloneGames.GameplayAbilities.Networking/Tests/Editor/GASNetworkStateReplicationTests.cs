@@ -7,6 +7,10 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
     {
         private static readonly GASNetworkEntityId Entity = new GASNetworkEntityId(100UL);
 
+        // Fits the ability and attribute in the first chunk and forces the effect into the second.
+        private const int StackedEffectChunkBudgetBytes =
+            GASNetworkWireCodec.StateBatchHeaderBytes + GASNetworkWireCodec.EffectStateRecordBytes;
+
         [Test]
         public void Snapshot_IsInvisibleUntilEveryChunkIsPreparedAndCommitted()
         {
@@ -491,6 +495,83 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
         }
 
+        [Test]
+        public void EffectStackCount_SurvivesChunkedReplicationAndParticipatesInChecksum()
+        {
+            CatalogFixture content = CreateCatalog();
+            // Both states are identical except StackCount, so any checksum delta is attributable to it.
+            GASNetworkStateBuffer threeStacks = CreateStackedEffectState(content, stackCount: 3);
+            GASNetworkStateBuffer fourStacks = CreateStackedEffectState(content, stackCount: 4);
+
+            GASNetworkStateReceiver threeReceiver = ReplicateInChunks(
+                content, threeStacks, StackedEffectChunkBudgetBytes, out int chunkCount);
+            Assert.That(chunkCount, Is.GreaterThan(1), "The stacked effect must arrive in a later chunk.");
+            Assert.That(threeReceiver.CurrentState.GetEffect(0).StackCount, Is.EqualTo(3));
+            Assert.That(threeReceiver.CurrentState.StateChecksum, Is.EqualTo(threeStacks.StateChecksum));
+
+            GASNetworkStateReceiver fourReceiver = ReplicateInChunks(
+                content, fourStacks, StackedEffectChunkBudgetBytes, out _);
+            Assert.That(fourReceiver.CurrentState.GetEffect(0).StackCount, Is.EqualTo(4));
+            Assert.That(fourReceiver.CurrentState.StateChecksum, Is.EqualTo(fourStacks.StateChecksum));
+            Assert.That(fourReceiver.CurrentState.StateChecksum,
+                Is.Not.EqualTo(threeReceiver.CurrentState.StateChecksum),
+                "StackCount must feed the canonical checksum, not just the transported record.");
+        }
+
+        [Test]
+        public void EffectStackCount_RoundTripsAcrossChunkPlacements(
+            [Values(1, 2, 3, 4, 255, int.MaxValue)] int stackCount,
+            [Values(StackedEffectChunkBudgetBytes, GameplayAbilitiesNetworkProtocol.MaxStateBatchChunkPayloadBytes)]
+            int chunkBudgetBytes)
+        {
+            CatalogFixture content = CreateCatalog();
+            GASNetworkStateBuffer state = CreateStackedEffectState(content, stackCount);
+
+            GASNetworkStateReceiver receiver = ReplicateInChunks(content, state, chunkBudgetBytes, out int chunkCount);
+            int expectedChunks = chunkBudgetBytes == StackedEffectChunkBudgetBytes ? 2 : 1;
+            Assert.That(chunkCount, Is.EqualTo(expectedChunks), "The budget under test must produce the intended placement.");
+            Assert.That(receiver.CurrentState.GetEffect(0).StackCount, Is.EqualTo(stackCount));
+            Assert.That(receiver.CurrentState.StateChecksum, Is.EqualTo(state.StateChecksum));
+        }
+
+        [Test]
+        public void Delta_EffectStackCountUpdate_ReachesTheReplicaOverTheCommittedBaseline()
+        {
+            CatalogFixture content = CreateCatalog();
+            GASNetworkStateCapacity capacity = DefaultCapacity();
+            GASNetworkStateBuffer baseline = CreateStackedEffectState(content, 3, stateVersion: 1UL, lastCommand: 1u);
+            GASNetworkStateBuffer current = CreateStackedEffectState(content, 4, stateVersion: 2UL, lastCommand: 2u);
+            var delta = new GASNetworkStateDeltaBuffer(capacity);
+
+            Assert.That(delta.TryBuild(baseline, current), Is.True);
+            Assert.That(delta.EffectCount, Is.EqualTo(1), "Only the stack count changed, so the delta carries one effect upsert.");
+            Assert.That(delta.Effects[0].Operation, Is.EqualTo(GASStateRecordOperation.Upsert));
+            Assert.That(delta.Effects[0].StackCount, Is.EqualTo(4));
+
+            var receiver = CreateReceiver(content, capacity);
+            CommitSnapshot(receiver, baseline, 1u);
+            var header = new GASStateBatchChunk(
+                7u, 2u, Entity, GASStateBatchKind.Delta,
+                baseline.StateVersion, current.StateVersion, current.LastProcessedCommandSequence,
+                0, 1, 0, 0, 1, 0, 0, 0, current.StateChecksum);
+
+            GASStateReceiveResult result = ReceiveStateChunk(
+                receiver,
+                in header,
+                ReadOnlySpan<GASAbilityStateRecord>.Empty,
+                ReadOnlySpan<GASAttributeStateRecord>.Empty,
+                delta.Effects,
+                ReadOnlySpan<GASEffectTagStateRecord>.Empty,
+                ReadOnlySpan<GASEffectMagnitudeStateRecord>.Empty,
+                ReadOnlySpan<GASLooseTagStateRecord>.Empty);
+
+            Assert.That(result, Is.EqualTo(GASStateReceiveResult.Prepared));
+            Assert.That(receiver.PreparedState.GetEffect(0).StackCount, Is.EqualTo(4));
+            receiver.CommitPrepared();
+            Assert.That(receiver.CurrentState.GetEffect(0).StackCount, Is.EqualTo(4));
+            Assert.That(receiver.CurrentState.StateChecksum, Is.EqualTo(current.StateChecksum));
+        }
+
         private static GASNetworkStateReceiver CreateReceiver(
             CatalogFixture content,
             GASNetworkStateCapacity capacity)
@@ -547,6 +628,48 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 currentValueRaw);
             Assert.That(state.TrySetAbility(in ability), Is.True);
             Assert.That(state.TrySetAttribute(in attribute), Is.True);
+            Assert.That(state.TryCompleteWrite(), Is.True);
+            return state;
+        }
+
+        private static GASNetworkStateBuffer CreateStackedEffectState(
+            CatalogFixture content,
+            int stackCount,
+            ulong stateVersion = 1UL,
+            uint lastCommand = 1u)
+        {
+            var state = new GASNetworkStateBuffer(DefaultCapacity());
+            state.BeginWrite(Entity, stateVersion, lastCommand);
+            var ability = new GASAbilityStateRecord(
+                GASStateRecordOperation.Upsert,
+                new GASNetworkGrantId(10UL),
+                content.Ability,
+                default,
+                1,
+                GASAbilityStateFlags.None);
+            var attribute = new GASAttributeStateRecord(
+                GASStateRecordOperation.Upsert,
+                content.Attribute,
+                1_000L,
+                900L);
+            var effect = new GASEffectStateRecord(
+                GASStateRecordOperation.Upsert,
+                new GASNetworkEffectId(20UL),
+                content.Effect,
+                default,
+                0u,
+                default,
+                1,
+                stackCount,
+                1_000L,
+                900L,
+                0L,
+                1u,
+                GASEffectStateFlags.None);
+
+            Assert.That(state.TrySetAbility(in ability), Is.True);
+            Assert.That(state.TrySetAttribute(in attribute), Is.True);
+            Assert.That(state.TrySetEffect(in effect), Is.True);
             Assert.That(state.TryCompleteWrite(), Is.True);
             return state;
         }
@@ -691,6 +814,114 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             Assert.That(ReceiveFullState(receiver, in header, state), Is.EqualTo(GASStateReceiveResult.Prepared));
             GASStateAcknowledgement acknowledgement = receiver.CommitPrepared();
             Assert.That(acknowledgement.StateChecksum, Is.EqualTo(state.StateChecksum));
+        }
+
+        private static GASNetworkStateReceiver ReplicateInChunks(
+            CatalogFixture content,
+            GASNetworkStateBuffer state,
+            int chunkBudgetBytes,
+            out int chunkCount)
+        {
+            var receiver = CreateReceiver(content, DefaultCapacity());
+            var planner = new GASNetworkStateChunkPlanner(
+                chunkBudgetBytes,
+                state.AbilityCount,
+                state.AttributeCount,
+                state.EffectCount,
+                state.EffectTagCount,
+                state.EffectMagnitudeCount,
+                state.LooseTagCount);
+            chunkCount = planner.ChunkCount;
+
+            while (planner.TryGetNext(out GASNetworkStateChunkPlan plan))
+            {
+                var header = new GASStateBatchChunk(
+                    7u,
+                    1u,
+                    state.Entity,
+                    GASStateBatchKind.Snapshot,
+                    0UL,
+                    state.StateVersion,
+                    state.LastProcessedCommandSequence,
+                    plan.ChunkIndex,
+                    plan.ChunkCount,
+                    plan.AbilityCount,
+                    plan.AttributeCount,
+                    plan.EffectCount,
+                    plan.EffectTagCount,
+                    plan.EffectMagnitudeCount,
+                    plan.LooseTagCount,
+                    state.StateChecksum);
+
+                GASStateReceiveResult result = ReceiveStateChunk(
+                    receiver,
+                    in header,
+                    state.Abilities.Slice(plan.AbilityStart, plan.AbilityCount),
+                    state.Attributes.Slice(plan.AttributeStart, plan.AttributeCount),
+                    state.Effects.Slice(plan.EffectStart, plan.EffectCount),
+                    state.EffectTags.Slice(plan.EffectTagStart, plan.EffectTagCount),
+                    state.EffectMagnitudes.Slice(plan.EffectMagnitudeStart, plan.EffectMagnitudeCount),
+                    state.LooseTags.Slice(plan.LooseTagStart, plan.LooseTagCount));
+
+                bool isLastChunk = plan.ChunkIndex == plan.ChunkCount - 1;
+                Assert.That(result,
+                    Is.EqualTo(isLastChunk ? GASStateReceiveResult.Prepared : GASStateReceiveResult.Partial));
+            }
+
+            GASStateAcknowledgement acknowledgement = receiver.CommitPrepared();
+            Assert.That(acknowledgement.StateChecksum, Is.EqualTo(state.StateChecksum));
+            return receiver;
+        }
+
+        private static GASStateReceiveResult ReceiveStateChunk(
+            GASNetworkStateReceiver receiver,
+            in GASStateBatchChunk header,
+            ReadOnlySpan<GASAbilityStateRecord> abilities,
+            ReadOnlySpan<GASAttributeStateRecord> attributes,
+            ReadOnlySpan<GASEffectStateRecord> effects,
+            ReadOnlySpan<GASEffectTagStateRecord> effectTags,
+            ReadOnlySpan<GASEffectMagnitudeStateRecord> effectMagnitudes,
+            ReadOnlySpan<GASLooseTagStateRecord> looseTags)
+        {
+            // Mirrors the endpoint receive path: encode the chunk, decode it, then hand the records to the receiver.
+            var payload = new byte[GASNetworkWireCodec.GetStateBatchPayloadBytes(in header)];
+            Assert.That(GASNetworkWireCodec.TryWriteStateBatchChunk(
+                    in header,
+                    abilities,
+                    attributes,
+                    effects,
+                    effectTags,
+                    effectMagnitudes,
+                    looseTags,
+                    payload,
+                    out int bytesWritten),
+                Is.EqualTo(GASNetworkWireCodecResult.Success));
+
+            var decodedAbilities = new GASAbilityStateRecord[header.AbilityCount];
+            var decodedAttributes = new GASAttributeStateRecord[header.AttributeCount];
+            var decodedEffects = new GASEffectStateRecord[header.EffectCount];
+            var decodedEffectTags = new GASEffectTagStateRecord[header.EffectTagCount];
+            var decodedEffectMagnitudes = new GASEffectMagnitudeStateRecord[header.EffectMagnitudeCount];
+            var decodedLooseTags = new GASLooseTagStateRecord[header.LooseTagCount];
+            Assert.That(GASNetworkWireCodec.TryReadStateBatchChunk(
+                    new ReadOnlySpan<byte>(payload, 0, bytesWritten),
+                    decodedAbilities,
+                    decodedAttributes,
+                    decodedEffects,
+                    decodedEffectTags,
+                    decodedEffectMagnitudes,
+                    decodedLooseTags,
+                    out GASStateBatchChunk decodedHeader),
+                Is.EqualTo(GASNetworkWireCodecResult.Success));
+
+            return receiver.ReceiveChunk(
+                in decodedHeader,
+                new ReadOnlySpan<GASAbilityStateRecord>(decodedAbilities, 0, decodedHeader.AbilityCount),
+                new ReadOnlySpan<GASAttributeStateRecord>(decodedAttributes, 0, decodedHeader.AttributeCount),
+                new ReadOnlySpan<GASEffectStateRecord>(decodedEffects, 0, decodedHeader.EffectCount),
+                new ReadOnlySpan<GASEffectTagStateRecord>(decodedEffectTags, 0, decodedHeader.EffectTagCount),
+                new ReadOnlySpan<GASEffectMagnitudeStateRecord>(decodedEffectMagnitudes, 0, decodedHeader.EffectMagnitudeCount),
+                new ReadOnlySpan<GASLooseTagStateRecord>(decodedLooseTags, 0, decodedHeader.LooseTagCount));
         }
 
         private static GASStateReceiveResult ReceiveEmpty(
