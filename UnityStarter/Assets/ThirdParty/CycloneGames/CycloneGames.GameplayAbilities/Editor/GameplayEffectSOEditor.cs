@@ -27,10 +27,12 @@ namespace CycloneGames.GameplayAbilities.Editor
         private SerializedProperty executionProp;
         private SerializedProperty stackingProp;
         private SerializedProperty grantedAbilitiesProp;
+        private SerializedProperty grantedAbilityRemovalPoliciesProp;
 
         // Tags
         private SerializedProperty assetTagsProp;
         private SerializedProperty grantedTagsProp;
+        private SerializedProperty blockedAbilityTagsProp;
         private SerializedProperty appTagReqProp;
         private SerializedProperty ongoingTagReqProp;
         private SerializedProperty removeTagsProp;
@@ -72,6 +74,12 @@ namespace CycloneGames.GameplayAbilities.Editor
         private static readonly GUIContent s_GrantedAbilitiesContent = new GUIContent("Granted Abilities");
         private static readonly GUIContent s_AssetTagsContent = new GUIContent("Asset Tags (describe effect)");
         private static readonly GUIContent s_GrantedTagsContent = new GUIContent("Granted Tags (applied to target)");
+        private static readonly GUIContent s_BlockedAbilityTagsContent = new GUIContent(
+            "Blocked Ability Tags",
+            "Ability tags blocked while this effect contributes. Withdrawn while the effect is inhibited.");
+        private static readonly GUIContent s_GrantedAbilityPoliciesContent = new GUIContent(
+            "Granted Ability Removal Policies",
+            "Per-grant policy applied when the effect is removed or inhibited. Entries beyond the list default to CancelAbilityImmediately.");
         private static readonly GUIContent s_ApplicationRequirementsContent = new GUIContent("Application Requirements");
         private static readonly GUIContent s_OngoingRequirementsContent = new GUIContent("Ongoing Requirements");
         private static readonly GUIContent s_RemoveEffectsContent = new GUIContent("Remove Effects With Tags");
@@ -140,9 +148,11 @@ namespace CycloneGames.GameplayAbilities.Editor
             executionProp = serializedObject.FindProperty("ExecutionDefinition");
             stackingProp = serializedObject.FindProperty("Stacking");
             grantedAbilitiesProp = serializedObject.FindProperty("GrantedAbilities");
+            grantedAbilityRemovalPoliciesProp = serializedObject.FindProperty("GrantedAbilityRemovalPolicies");
 
             assetTagsProp = serializedObject.FindProperty("AssetTags");
             grantedTagsProp = serializedObject.FindProperty("GrantedTags");
+            blockedAbilityTagsProp = serializedObject.FindProperty("BlockedAbilityTags");
             appTagReqProp = serializedObject.FindProperty("ApplicationTagRequirements");
             ongoingTagReqProp = serializedObject.FindProperty("OngoingTagRequirements");
             removeTagsProp = serializedObject.FindProperty("RemoveGameplayEffectsWithTags");
@@ -285,6 +295,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
                 EditorGUILayout.PropertyField(executionProp, s_ExecutionContent);
                 EditorGUILayout.PropertyField(grantedAbilitiesProp, s_GrantedAbilitiesContent, true);
+                DrawGrantedAbilityPolicyList();
                 EditorGUI.indentLevel--;
             }
 
@@ -299,8 +310,10 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showTags)
             {
                 EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField("Tag Relationships", EditorStyles.boldLabel);
                 EditorGUILayout.PropertyField(assetTagsProp, s_AssetTagsContent);
                 EditorGUILayout.PropertyField(grantedTagsProp, s_GrantedTagsContent);
+                EditorGUILayout.PropertyField(blockedAbilityTagsProp, s_BlockedAbilityTagsContent);
                 EditorGUILayout.Space(4);
                 EditorGUILayout.PropertyField(appTagReqProp, s_ApplicationRequirementsContent);
                 EditorGUILayout.PropertyField(ongoingTagReqProp, s_OngoingRequirementsContent);
@@ -341,7 +354,19 @@ namespace CycloneGames.GameplayAbilities.Editor
                 if (mixedDurationPolicy || (policy != Runtime.EDurationPolicy.Instant && periodProp.floatValue > 0))
                 {
                     EditorGUILayout.PropertyField(executePeriodicOnAppProp, s_ExecuteOnApplicationContent);
-                    EditorGUILayout.PropertyField(periodicInhibitionPolicyProp, s_PeriodicInhibitionContent);
+
+                    bool hasOngoingRequirements = HasAnyOngoingRequirements();
+                    using (new EditorGUI.DisabledScope(!hasOngoingRequirements))
+                    {
+                        EditorGUILayout.PropertyField(periodicInhibitionPolicyProp, s_PeriodicInhibitionContent);
+                    }
+
+                    if (!hasOngoingRequirements)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Periodic inhibition policy only takes effect when Ongoing Requirements contain tags.",
+                            MessageType.None);
+                    }
                 }
 
                 EditorGUILayout.Space(4);
@@ -369,6 +394,82 @@ namespace CycloneGames.GameplayAbilities.Editor
             DrawDerivedClassFields();
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private bool HasAnyOngoingRequirements()
+        {
+            UnityEngine.Object[] selected = serializedObject.targetObjects;
+            for (int i = 0; i < selected.Length; i++)
+            {
+                if (selected[i] is Runtime.GameplayEffectSO effect &&
+                    effect.OngoingTagRequirements != null &&
+                    !effect.OngoingTagRequirements.IsEmpty)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void DrawGrantedAbilityPolicyList()
+        {
+            if (grantedAbilityRemovalPoliciesProp == null)
+            {
+                return;
+            }
+
+            int abilityCount = grantedAbilitiesProp?.arraySize ?? 0;
+            int policyCount = grantedAbilityRemovalPoliciesProp.arraySize;
+            if (abilityCount == 0)
+            {
+                if (policyCount == 0)
+                {
+                    return;
+                }
+
+                EditorGUILayout.HelpBox(
+                    "This effect grants no abilities, so removal policies have no effect.",
+                    MessageType.Info);
+                if (GUILayout.Button("Clear Policies", EditorStyles.miniButton, GUILayout.Width(120f)))
+                {
+                    grantedAbilityRemovalPoliciesProp.arraySize = 0;
+                }
+                return;
+            }
+
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField(s_GrantedAbilityPoliciesContent, EditorStyles.boldLabel);
+
+            for (int i = 0; i < policyCount; i++)
+            {
+                SerializedProperty entry = grantedAbilityRemovalPoliciesProp.GetArrayElementAtIndex(i);
+                EditorGUILayout.PropertyField(entry, new GUIContent(GetGrantedAbilityLabel(i, abilityCount)));
+            }
+
+            if (policyCount != abilityCount)
+            {
+                EditorGUILayout.HelpBox(
+                    "Policy count does not match Granted Abilities. Missing entries default to CancelAbilityImmediately.",
+                    MessageType.Warning);
+            }
+
+            if (GUILayout.Button("Match Granted Abilities", EditorStyles.miniButton, GUILayout.Width(170f)))
+            {
+                grantedAbilityRemovalPoliciesProp.arraySize = abilityCount;
+            }
+        }
+
+        private string GetGrantedAbilityLabel(int index, int abilityCount)
+        {
+            if (index >= abilityCount)
+            {
+                return $"Unmatched policy {index}";
+            }
+
+            SerializedProperty ability = grantedAbilitiesProp?.GetArrayElementAtIndex(index);
+            Object reference = ability?.objectReferenceValue;
+            return reference != null ? reference.name : $"Granted Ability {index} (unassigned)";
         }
 
         #region Summary

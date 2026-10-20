@@ -38,12 +38,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("A list of abilities to temporarily grant to the target while this effect is active. Only applicable for 'HasDuration' or 'Infinite' effects.")]
         public List<GameplayAbilitySO> GrantedAbilities;
 
-        [Header("Tag Relationships")]
+        [Tooltip("Per-grant removal policy, aligned by index with Granted Abilities. Entries beyond the list length default to CancelAbilityImmediately. Applied when the effect is removed or becomes inhibited.")]
+        public List<EGameplayEffectGrantedAbilityRemovePolicy> GrantedAbilityRemovalPolicies;
+
         [Tooltip("Tags that DESCRIBE the effect itself (e.g., 'Damage.Type.Fire'). These are NOT granted to the target but are used to identify the effect for removal or other gameplay logic.")]
         public SerializableGameplayTagContainer AssetTags;
 
         [Tooltip("Tags that are GRANTED to the target while this effect is active. This is the primary way to apply temporary states like 'State.Stunned', 'Debuff.Burning', or 'Cooldown.Skill.Fireball'.")]
         public SerializableGameplayTagContainer GrantedTags;
+
+        [Tooltip("Ability tags blocked while this effect contributes. Blocked tags gate ability activation and are withdrawn together with granted tags while the effect is inhibited.")]
+        public SerializableGameplayTagContainer BlockedAbilityTags;
 
         [Tooltip("The target MUST have all 'Required' tags and NONE of the 'Forbidden' tags for this effect to be successfully applied.")]
         public SerializableGameplayTagRequirements ApplicationTagRequirements;
@@ -54,14 +59,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("Upon successful application, this effect will remove any other active effects on the target that have one of the specified tags (checks both their AssetTags and GrantedTags). Useful for dispel mechanics.")]
         public SerializableGameplayTagContainer RemoveGameplayEffectsWithTags;
 
-        [Header("Cosmetics")]
         [Tooltip("A list of GameplayCue tags (e.g., 'GameplayCue.VFX.Fireball.Impact') to trigger for cosmetic effects like particles and sounds when the effect is applied, executed, or removed.")]
         public SerializableGameplayTagContainer GameplayCues;
 
         [Tooltip("If true, gameplay cues (VFX/SFX) are suppressed for this effect. Useful for silent/debug application.")]
         public bool SuppressGameplayCues;
 
-        [Header("Advanced")]
         [Tooltip("If true, this effect is automatically removed when the ability that applied it ends.")]
         public bool RemoveGameplayEffectsAfterAbilityEnds;
 

@@ -34,6 +34,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool IsInhibited { get; internal set; }
 
         /// <summary>
+        /// True while this effect's granted tags are present in the owner's tag containers. Inhibition
+        /// withdraws them, so removal paths must consult this flag before decrementing tag counts.
+        /// </summary>
+        internal bool GrantedTagsVisible { get; set; }
+
+        /// <summary>
         /// ASC-owned process-local reconciliation identifier.
         /// It is assigned monotonically for the effect lifetime and is never a stable wire identity.
         /// </summary>

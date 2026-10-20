@@ -800,6 +800,406 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void OngoingRequirements_PropagateThroughGrantedTagsOfInhibitedEffects()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Chain.Enabled", "Chain inhibition bootstrap tag");
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Chain.Locked", "Chain inhibition granted tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.Chain.Enabled");
+            GameplayTag lockedTag = GameplayTagManager.Request("Test.GAS.Inhibition.Chain.Locked");
+
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+            var lockedTags = new GameplayTagContainer();
+            lockedTags.AddTag(lockedTag);
+
+            var bootstrap = new GameplayEffect(
+                "Chain.Bootstrap",
+                EDurationPolicy.Infinite,
+                grantedTags: lockedTags,
+                ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), enabledTags));
+            var dependent = new GameplayEffect(
+                "Chain.Dependent",
+                EDurationPolicy.Infinite,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo("Health", EAttributeModifierOperation.Add, new ScalableFloat(10f))
+                },
+                ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), lockedTags));
+
+            asc.AddLooseGameplayTag(enabledTag);
+            GameplayEffectApplicationResult bootstrapResult =
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(bootstrap, asc));
+            GameplayEffectApplicationResult dependentResult =
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(dependent, asc));
+            Assert.That(bootstrapResult.Succeeded, Is.True);
+            Assert.That(dependentResult.Succeeded, Is.True);
+            asc.Tick(0f, true);
+
+            Assert.That(bootstrapResult.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(dependentResult.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(asc.HasMatchingGameplayTag(lockedTag), Is.True);
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            asc.RemoveLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(bootstrapResult.ActiveEffect.IsInhibited, Is.True);
+            Assert.That(
+                asc.HasMatchingGameplayTag(lockedTag),
+                Is.False,
+                "An inhibited effect must not keep granting its tags.");
+            Assert.That(
+                dependentResult.ActiveEffect.IsInhibited,
+                Is.True,
+                "The dependent effect must follow the tag removed by the inhibited effect.");
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.AddLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(bootstrapResult.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(
+                asc.HasMatchingGameplayTag(lockedTag),
+                Is.True,
+                "Restoring the requirement must republish the granted tag exactly once.");
+            Assert.That(dependentResult.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void BlockedAbilityTags_GateActivationAndFollowInhibition()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Block.Enabled", "Blocked ability gate tag");
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Block.Ability", "Blocked ability tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.Block.Enabled");
+            GameplayTag blockedTag = GameplayTagManager.Request("Test.GAS.Inhibition.Block.Ability");
+
+            var asc = CreateMagnitudeTestAsc(out _);
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+            var blockedTags = new GameplayTagContainer();
+            blockedTags.AddTag(blockedTag);
+
+            var effect = new GameplayEffect(
+                "BlockedAbilities",
+                EDurationPolicy.Infinite,
+                ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), enabledTags),
+                blockedAbilityTags: blockedTags);
+
+            asc.AddLooseGameplayTag(enabledTag);
+            GameplayEffectApplicationResult application =
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            Assert.That(application.Succeeded, Is.True);
+            asc.Tick(0f, true);
+
+            Assert.That(application.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(asc.AreAbilitiesBlockedByTag(blockedTags), Is.True);
+
+            asc.RemoveLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(application.ActiveEffect.IsInhibited, Is.True);
+            Assert.That(
+                asc.AreAbilitiesBlockedByTag(blockedTags),
+                Is.False,
+                "An inhibited effect must stop blocking ability tags.");
+
+            asc.AddLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(application.ActiveEffect.IsInhibited, Is.False);
+            Assert.That(asc.AreAbilitiesBlockedByTag(blockedTags), Is.True);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void InhibitionWithdrawsAndRestoresGameplayCues()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Cue.Enabled", "Cue inhibition gate tag");
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Cue.Cue", "Cue inhibition cue tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.Cue.Enabled");
+            GameplayTag cueTag = GameplayTagManager.Request("Test.GAS.Inhibition.Cue.Cue");
+
+            var asc = CreateMagnitudeTestAsc(out _);
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+            var cues = new GameplayTagContainer();
+            cues.AddTag(cueTag);
+
+            var effect = new GameplayEffect(
+                "CueInhibition",
+                EDurationPolicy.Infinite,
+                gameplayCues: cues,
+                ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), enabledTags));
+
+            var events = new List<EGameplayCueEvent>();
+            asc.OnGameplayCueCommitted += (in GameplayCueCommitted cue) => events.Add(cue.Event);
+
+            asc.AddLooseGameplayTag(enabledTag);
+            GameplayEffectApplicationResult application =
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            Assert.That(application.Succeeded, Is.True);
+            asc.Tick(0f, true);
+            Assert.That(events, Is.EqualTo(new[] { EGameplayCueEvent.OnActive }));
+
+            events.Clear();
+            asc.RemoveLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+            Assert.That(events, Is.EqualTo(new[] { EGameplayCueEvent.Removed }));
+
+            events.Clear();
+            asc.AddLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+            Assert.That(
+                events,
+                Is.EqualTo(new[] { EGameplayCueEvent.OnActive, EGameplayCueEvent.WhileActive }));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GrantedAbilities_FollowInhibitionRemovalPolicy()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Grant.Enabled", "Granted ability gate tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.Grant.Enabled");
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+            var requirements = new GameplayTagRequirements(new GameplayTagContainer(), enabledTags);
+
+            var asc = CreateMagnitudeTestAsc(out _);
+            var cancelAbility = new PolicyAbility("Policy.Cancel");
+            var keepAbility = new PolicyAbility("Policy.Keep");
+            var endAbility = new PolicyAbility("Policy.End");
+
+            var cancelEffect = new GameplayEffect(
+                "PolicyCancel",
+                EDurationPolicy.Infinite,
+                grantedAbilities: new List<GameplayAbility> { cancelAbility },
+                ongoingTagRequirements: requirements);
+            var keepEffect = new GameplayEffect(
+                "PolicyKeep",
+                EDurationPolicy.Infinite,
+                grantedAbilities: new List<GameplayAbility> { keepAbility },
+                ongoingTagRequirements: requirements,
+                grantedAbilityRemovalPolicies: new List<EGameplayEffectGrantedAbilityRemovePolicy>
+                {
+                    EGameplayEffectGrantedAbilityRemovePolicy.DoNothing
+                });
+            var endEffect = new GameplayEffect(
+                "PolicyEnd",
+                EDurationPolicy.Infinite,
+                grantedAbilities: new List<GameplayAbility> { endAbility },
+                ongoingTagRequirements: requirements,
+                grantedAbilityRemovalPolicies: new List<EGameplayEffectGrantedAbilityRemovePolicy>
+                {
+                    EGameplayEffectGrantedAbilityRemovePolicy.RemoveAbilityOnEnd
+                });
+
+            Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(cancelEffect, asc)).Succeeded, Is.True);
+            Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(keepEffect, asc)).Succeeded, Is.True);
+            Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(endEffect, asc)).Succeeded, Is.True);
+            asc.Tick(0f, true);
+
+            Assert.That(
+                asc.GetActivatableAbilities().Count,
+                Is.EqualTo(1),
+                "Only the DoNothing grant survives an effect that starts inhibited.");
+
+            asc.AddLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+            Assert.That(asc.GetActivatableAbilities().Count, Is.EqualTo(3));
+
+            GameplayAbilitySpec endSpec = null;
+            for (int i = 0; i < asc.GetActivatableAbilities().Count; i++)
+            {
+                GameplayAbilitySpec spec = asc.GetActivatableAbilities()[i];
+                if (ReferenceEquals(spec.Ability, endAbility))
+                {
+                    endSpec = spec;
+                }
+            }
+            Assert.That(endSpec, Is.Not.Null);
+            endSpec.IsActive = true;
+
+            asc.RemoveLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(
+                asc.GetActivatableAbilities().Count,
+                Is.EqualTo(2),
+                "Cancel removes immediately while RemoveOnEnd waits for the execution to finish.");
+
+            endSpec.IsActive = false;
+            asc.Tick(0f, true);
+            Assert.That(asc.GetActivatableAbilities().Count, Is.EqualTo(1));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GrantedAbilities_RemoveOnEndWaitsForExecution()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.End.Enabled", "Remove-on-end gate tag");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.End.Enabled");
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+
+            var asc = CreateMagnitudeTestAsc(out _);
+            var ability = new StickyAbility("Policy.Sticky");
+            var effect = new GameplayEffect(
+                "PolicyRemoveOnEnd",
+                EDurationPolicy.Infinite,
+                grantedAbilities: new List<GameplayAbility> { ability },
+                ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), enabledTags),
+                grantedAbilityRemovalPolicies: new List<EGameplayEffectGrantedAbilityRemovePolicy>
+                {
+                    EGameplayEffectGrantedAbilityRemovePolicy.RemoveAbilityOnEnd
+                });
+
+            asc.AddLooseGameplayTag(enabledTag);
+            GameplayEffectApplicationResult application =
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            Assert.That(application.Succeeded, Is.True);
+            asc.Tick(0f, true);
+            Assert.That(asc.GetActivatableAbilities().Count, Is.EqualTo(1));
+
+            GameplayAbilitySpec spec = asc.GetActivatableAbilities()[0];
+            Assert.That(asc.TryActivateAbility(spec), Is.True);
+            Assert.That(spec.IsActive, Is.True);
+
+            asc.RemoveLooseGameplayTag(enabledTag);
+            asc.Tick(0f, true);
+
+            Assert.That(application.ActiveEffect.IsInhibited, Is.True);
+            Assert.That(
+                asc.GetActivatableAbilities().Count,
+                Is.EqualTo(1),
+                "RemoveOnEnd must not clear an ability that is still executing.");
+
+            spec.GetPrimaryInstance().CancelAbility();
+            asc.Tick(0f, true);
+
+            Assert.That(
+                asc.GetActivatableAbilities().Count,
+                Is.Zero,
+                "The deferred removal must complete once the ability ends.");
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void InhibitionBurst_WithManyEffects_StaysConsistent()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Inhibition.Burst.Enabled", "Burst inhibition gate");
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag enabledTag = GameplayTagManager.Request("Test.GAS.Inhibition.Burst.Enabled");
+            var enabledTags = new GameplayTagContainer();
+            enabledTags.AddTag(enabledTag);
+            var requirements = new GameplayTagRequirements(new GameplayTagContainer(), enabledTags);
+
+            var asc = CreateMagnitudeTestAsc(out _);
+            const int effectCount = 64;
+            asc.AddLooseGameplayTag(enabledTag);
+            for (int i = 0; i < effectCount; i++)
+            {
+                var effect = new GameplayEffect(
+                    $"Burst.{i}",
+                    EDurationPolicy.Infinite,
+                    ongoingTagRequirements: requirements);
+                Assert.That(
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc)).Succeeded,
+                    Is.True);
+            }
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffects.Count, Is.EqualTo(effectCount));
+            AssertAllInhibited(asc, false);
+
+            for (int cycle = 0; cycle < 10; cycle++)
+            {
+                asc.RemoveLooseGameplayTag(enabledTag);
+                asc.Tick(0f, true);
+                AssertAllInhibited(asc, true);
+
+                asc.AddLooseGameplayTag(enabledTag);
+                asc.Tick(0f, true);
+                AssertAllInhibited(asc, false);
+            }
+
+            Assert.That(asc.ValidateRuntimeIndexes(), Is.True);
+            asc.Dispose();
+        }
+
+        private static void AssertAllInhibited(AbilitySystemComponent asc, bool inhibited)
+        {
+            for (int i = 0; i < asc.ActiveEffects.Count; i++)
+            {
+                Assert.That(
+                    asc.ActiveEffects[i].IsInhibited,
+                    Is.EqualTo(inhibited),
+                    $"effect {i} inhibition diverged");
+            }
+        }
+
+        private sealed class PolicyAbility : GameplayAbility
+        {
+            public PolicyAbility(string name)
+            {
+                Initialize(
+                    name,
+                    EGameplayAbilityInstancingPolicy.InstancedPerActor,
+                    EAbilityExecutionPolicy.LocalOnly,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+            }
+
+            public override GameplayAbility CreateRuntimeInstance() => new PolicyAbility(Name);
+        }
+
+        private sealed class StickyAbility : GameplayAbility
+        {
+            public StickyAbility(string name)
+            {
+                Initialize(
+                    name,
+                    EGameplayAbilityInstancingPolicy.InstancedPerActor,
+                    EAbilityExecutionPolicy.LocalOnly,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+            }
+
+            public override void ActivateAbility(
+                GameplayAbilityActorInfo actorInfo,
+                GameplayAbilitySpec spec,
+                GameplayAbilityActivationInfo activationInfo)
+            {
+            }
+
+            public override GameplayAbility CreateRuntimeInstance() => new StickyAbility(Name);
+        }
+
+        [Test]
         public void GameplayEffectOngoingRequirements_InhibitsPeriodicExecution()
         {
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.PeriodicEnabled", "Periodic inhibition test tag");

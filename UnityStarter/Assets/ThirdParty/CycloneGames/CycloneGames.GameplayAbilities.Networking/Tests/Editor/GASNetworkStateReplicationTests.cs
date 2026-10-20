@@ -572,6 +572,29 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             Assert.That(receiver.CurrentState.StateChecksum, Is.EqualTo(current.StateChecksum));
         }
 
+        [Test]
+        public void EffectInhibitedFlag_IsPartOfTheCanonicalChecksum()
+        {
+            CatalogFixture content = CreateCatalog();
+            GASNetworkStateBuffer active = CreateStackedEffectState(content, 3);
+            GASNetworkStateBuffer inhibited = CreateStackedEffectState(
+                content, 3, effectFlags: GASEffectStateFlags.Inhibited);
+
+            Assert.That(inhibited.Effects[0].StackCount, Is.EqualTo(active.Effects[0].StackCount));
+            Assert.That(inhibited.Effects[0].Level, Is.EqualTo(active.Effects[0].Level));
+            Assert.That(
+                inhibited.Effects[0].Flags & GASEffectStateFlags.Inhibited,
+                Is.EqualTo(GASEffectStateFlags.Inhibited));
+            TestContext.WriteLine(
+                $"[Inhibited][D] activeChecksum=0x{active.StateChecksum:X16} " +
+                $"inhibitedChecksum=0x{inhibited.StateChecksum:X16} " +
+                $"activeFlags={active.Effects[0].Flags} inhibitedFlags={inhibited.Effects[0].Flags}");
+            Assert.That(
+                active.StateChecksum,
+                Is.Not.EqualTo(inhibited.StateChecksum),
+                "The inhibited bit must change the canonical checksum.");
+        }
+
         private static GASNetworkStateReceiver CreateReceiver(
             CatalogFixture content,
             GASNetworkStateCapacity capacity)
@@ -636,7 +659,8 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             CatalogFixture content,
             int stackCount,
             ulong stateVersion = 1UL,
-            uint lastCommand = 1u)
+            uint lastCommand = 1u,
+            GASEffectStateFlags effectFlags = GASEffectStateFlags.None)
         {
             var state = new GASNetworkStateBuffer(DefaultCapacity());
             state.BeginWrite(Entity, stateVersion, lastCommand);
@@ -665,7 +689,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 900L,
                 0L,
                 1u,
-                GASEffectStateFlags.None);
+                effectFlags);
 
             Assert.That(state.TrySetAbility(in ability), Is.True);
             Assert.That(state.TrySetAttribute(in attribute), Is.True);

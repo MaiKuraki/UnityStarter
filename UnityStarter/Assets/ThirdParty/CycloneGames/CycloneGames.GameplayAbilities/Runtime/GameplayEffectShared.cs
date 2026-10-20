@@ -67,6 +67,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// What happens to abilities granted by an effect when that effect stops contributing, either
+    /// because it is removed or because it became inhibited.
+    /// </summary>
+    public enum EGameplayEffectGrantedAbilityRemovePolicy : byte
+    {
+        CancelAbilityImmediately,
+        RemoveAbilityOnEnd,
+        DoNothing
+    }
+
+    /// <summary>
     /// The type of operation a modifier performs on an attribute.
     /// </summary>
     public enum EAttributeModifierOperation

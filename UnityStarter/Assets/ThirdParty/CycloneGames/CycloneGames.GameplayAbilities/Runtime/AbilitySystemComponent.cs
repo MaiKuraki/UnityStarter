@@ -212,6 +212,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         private readonly GameplayTagCountContainer looseTags = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer fromEffectsTags = new GameplayTagCountContainer();
+        private readonly GameplayTagCountContainer blockedAbilityTags = new GameplayTagCountContainer();
         private const int DefaultGrantedAbilitySpecListCapacity = 2;
         private const int DefaultAbilityAppliedEffectListCapacity = 4;
         private const int DefaultReusableListPoolLimit = 32;
@@ -362,6 +363,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private readonly List<GameplayAttribute> dirtyAttributes;
         private bool dirtyOngoingEffectInhibition;
+        private bool pendingInhibitionTagUpdate;
+        private bool applyingInhibitionTagUpdate;
+        private readonly List<ActiveGameplayEffect> inhibitionTagUpdateScratch = new List<ActiveGameplayEffect>(16);
+        private readonly List<GameplayAbilitySpec> pendingRemoveOnEndAbilities = new List<GameplayAbilitySpec>(4);
+
+        // Bounded fixed point for tag-driven inhibition chains (A grants a tag that gates B).
+        private const int MaxInhibitionPropagationPasses = 4;
 
         private struct ModifierChannelAccumulator
         {
@@ -3564,6 +3572,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     existing.IsInhibited = state.IsInhibited;
                     existing.NotifyInhibitionChanged(state.IsInhibited);
+                    // Tag visibility follows the replicated flag on the next owner-thread pass.
+                    pendingInhibitionTagUpdate = true;
+                    MarkOngoingEffectInhibitionDirty();
                 }
             }
             catch
@@ -4542,10 +4553,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(combinedTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(combinedTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
+                HideEffectGrantedTagsForCleanup(effect, ref cleanupFailure);
 
                 try { UpdateGrantedTagIndex_Removed(effect); }
                 catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
@@ -5123,6 +5131,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     TickPredictionWindows(simulationFrame);
                 }
 
+                FlushRemoveOnEndAbilities();
+
                 // Recalculate dirty attributes and inhibition before ticking effects. Tag changes
                 // during ability tasks may have invalidated ongoing requirements.
                 if (dirtyOngoingEffectInhibition)
@@ -5462,26 +5472,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            // Maintain the internal query index before publishing post-commit notifications.
-            UpdateGrantedTagIndex_Applied(effect);
+            // Resolve inhibition before publishing tag edges so an inhibited effect never grants tags.
+            bool inhibited = !effect.Spec.Def.OngoingTagRequirements.IsEmpty &&
+                             RefreshInhibitionState(effect);
 
             // Publish tag edges only after every structural back-reference is committed. Tag callbacks
             // may synchronously query the ASC, so they must never observe a half-applied effect.
-            if (!effect.Spec.Def.GrantedTags.IsEmpty)
-            {
-                fromEffectsTags.AddTags(effect.Spec.Def.GrantedTags);
-                combinedTags.AddTags(effect.Spec.Def.GrantedTags);
-            }
-            if (!effect.Spec.DynamicGrantedTags.IsEmpty)
-            {
-                fromEffectsTags.AddTags(effect.Spec.DynamicGrantedTags);
-                combinedTags.AddTags(effect.Spec.DynamicGrantedTags);
-            }
-
-            if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty)
-            {
-                RefreshInhibitionState(effect);
-            }
+            ApplyGrantedTagVisibility(effect, !inhibited, dispatchCues: false, initialPublication: true);
 
             if (!SuppressLocalGameplayCueDispatch)
             {
@@ -5573,6 +5570,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 effects.RemoveAt(i);
                 return;
             }
+        }
+
+        private void HideEffectGrantedTagsForCleanup(
+            ActiveGameplayEffect effect,
+            ref Exception cleanupFailure)
+        {
+            if (effect == null || !effect.GrantedTagsVisible)
+            {
+                return;
+            }
+
+            effect.GrantedTagsVisible = false;
+            TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
+            TryRemoveTagsForCleanup(combinedTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
+            TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
+            TryRemoveTagsForCleanup(combinedTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
+            TryRemoveTagsForCleanup(blockedAbilityTags, effect.Spec.Def.BlockedAbilityTags, ref cleanupFailure);
         }
 
         private static void TryRemoveTagsForCleanup(
@@ -5669,10 +5683,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 // Publish removal edges only after indexes, modifiers, and effect-granted abilities no
                 // longer reference the effect. Synchronous tag callbacks therefore see committed state.
-                TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(combinedTags, effect.Spec.Def.GrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(fromEffectsTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
-                TryRemoveTagsForCleanup(combinedTags, effect.Spec.DynamicGrantedTags, ref cleanupFailure);
+                HideEffectGrantedTagsForCleanup(effect, ref cleanupFailure);
 
                 if (!SuppressLocalGameplayCueDispatch &&
                     !effect.Spec.Def.SuppressGameplayCues &&
@@ -5979,6 +5990,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool AreAbilitiesBlockedByTag(GameplayTagContainer abilityTags)
         {
             if (abilityTags == null || abilityTags.IsEmpty) return false;
+
+            if (blockedAbilityTags.HasAny(abilityTags))
+            {
+                return true;
+            }
 
             for (int i = 0; i < activatableAbilities.Count; i++)
             {
@@ -6766,6 +6782,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
             try { combinedTags.Clear(); }
             catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
+            try { blockedAbilityTags.Clear(); }
+            catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
+            pendingRemoveOnEndAbilities.Clear();
 
             try
             {
@@ -6883,6 +6902,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else
             {
                 // Dynamic granted tags are indexed by the ASC, so the entry is rebuilt around the swap.
+                // An inhibited effect publishes no tags, so there is nothing to rebuild for it.
                 ActiveEffectContainer.UntrackGrantedTags(existingEffect);
                 try
                 {
@@ -6891,7 +6911,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 finally
                 {
-                    ActiveEffectContainer.TrackGrantedTags(existingEffect);
+                    if (existingEffect.GrantedTagsVisible)
+                    {
+                        ActiveEffectContainer.TrackGrantedTags(existingEffect);
+                    }
                 }
             }
 
@@ -7024,19 +7047,43 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void RefreshDirtyOngoingEffectInhibition()
         {
             dirtyOngoingEffectInhibition = false;
-            activeEffectIterationDepth++;
-            try
+            SettleInhibitionChain();
+            if (pendingInhibitionTagUpdate)
             {
-                for (int i = 0; i < activeEffects.Count; i++)
+                dirtyOngoingEffectInhibition = true;
+            }
+        }
+
+        /// <summary>
+        /// Recomputes inhibition and granted-tag visibility until the chain stops changing. Required
+        /// after a full-state rebuild, where effects are applied before the loose tags they depend on.
+        /// </summary>
+        private void SettleInhibitionChain()
+        {
+            for (int pass = 0; pass < MaxInhibitionPropagationPasses; pass++)
+            {
+                activeEffectIterationDepth++;
+                try
                 {
-                    RefreshInhibitionState(activeEffects[i]);
+                    for (int i = 0; i < activeEffects.Count; i++)
+                    {
+                        RefreshInhibitionState(activeEffects[i]);
+                    }
+                }
+                finally
+                {
+                    activeEffectIterationDepth--;
+                    FlushDeferredTriggerActivations();
+                }
+
+                // Withdrawing a granted tag can gate further effects, so settle the chain before
+                // this frame aggregates attributes.
+                bool tagsChanged = FlushInhibitionGrantedTagVisibility();
+                if (!tagsChanged && !pendingInhibitionTagUpdate)
+                {
+                    return;
                 }
             }
-        finally
-        {
-            activeEffectIterationDepth--;
-            FlushDeferredTriggerActivations();
-        }
         }
 
         private bool RefreshInhibitionState(ActiveGameplayEffect effect)
@@ -7060,11 +7107,329 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
 
                 effect.NotifyInhibitionChanged(isInhibited);
+                pendingInhibitionTagUpdate = true;
+                if (activeEffectIterationDepth == 0)
+                {
+                    dirtyOngoingEffectInhibition = true;
+                }
             }
 #if UNITY_EDITOR
             GASAggregationProbe.AddInhibitionRefreshTime(System.Diagnostics.Stopwatch.GetTimestamp() - inhibitionTimestamp);
 #endif
             return isInhibited;
+        }
+
+        private bool FlushInhibitionGrantedTagVisibility()
+        {
+            if (!pendingInhibitionTagUpdate || applyingInhibitionTagUpdate)
+            {
+                return false;
+            }
+
+            pendingInhibitionTagUpdate = false;
+            applyingInhibitionTagUpdate = true;
+            bool changed = false;
+            try
+            {
+                inhibitionTagUpdateScratch.Clear();
+                for (int i = 0; i < activeEffects.Count; i++)
+                {
+                    inhibitionTagUpdateScratch.Add(activeEffects[i]);
+                }
+
+                for (int i = 0; i < inhibitionTagUpdateScratch.Count; i++)
+                {
+                    ActiveGameplayEffect effect = inhibitionTagUpdateScratch[i];
+                    if (effect == null || !TryFindActiveEffectIndex(effect, out _))
+                    {
+                        continue;
+                    }
+
+                    changed |= ApplyGrantedTagVisibility(effect, !effect.IsInhibited, dispatchCues: true);
+                }
+            }
+            finally
+            {
+                inhibitionTagUpdateScratch.Clear();
+                applyingInhibitionTagUpdate = false;
+            }
+
+            return changed;
+        }
+
+        /// <summary>
+        /// Publishes or withdraws an effect's granted tags. Callbacks fired by the tag containers may
+        /// re-enter the ASC, so callers must not hold an active-effect iterator.
+        /// </summary>
+        private bool ApplyGrantedTagVisibility(
+            ActiveGameplayEffect effect,
+            bool visible,
+            bool dispatchCues,
+            bool initialPublication = false)
+        {
+            var spec = effect?.Spec;
+            if (spec == null)
+            {
+                return false;
+            }
+
+            if (initialPublication)
+            {
+                // The effect just granted its abilities; only an effect that starts inhibited has to
+                // shed them right away. Regranting here would duplicate the initial grants.
+                if (!visible)
+                {
+                    ApplyGrantedAbilityInhibition(effect, inhibited: true);
+                }
+            }
+            else
+            {
+                if (effect.GrantedTagsVisible == visible)
+                {
+                    return false;
+                }
+
+                ApplyGrantedAbilityInhibition(effect, !visible);
+            }
+
+            bool wasVisible = effect.GrantedTagsVisible;
+            effect.GrantedTagsVisible = visible;
+            if (visible)
+            {
+                if (!spec.Def.GrantedTags.IsEmpty)
+                {
+                    fromEffectsTags.AddTags(spec.Def.GrantedTags);
+                    combinedTags.AddTags(spec.Def.GrantedTags);
+                }
+                if (!spec.DynamicGrantedTags.IsEmpty)
+                {
+                    fromEffectsTags.AddTags(spec.DynamicGrantedTags);
+                    combinedTags.AddTags(spec.DynamicGrantedTags);
+                }
+                if (!spec.Def.BlockedAbilityTags.IsEmpty)
+                {
+                    blockedAbilityTags.AddTags(spec.Def.BlockedAbilityTags);
+                }
+                UpdateGrantedTagIndex_Applied(effect);
+            }
+            else
+            {
+                // Nothing was published for an effect that starts inhibited, so its removal paths
+                // must not decrement counts that were never added.
+                if (wasVisible && !spec.Def.GrantedTags.IsEmpty)
+                {
+                    fromEffectsTags.RemoveTags(spec.Def.GrantedTags);
+                    combinedTags.RemoveTags(spec.Def.GrantedTags);
+                }
+                if (wasVisible && !spec.DynamicGrantedTags.IsEmpty)
+                {
+                    fromEffectsTags.RemoveTags(spec.DynamicGrantedTags);
+                    combinedTags.RemoveTags(spec.DynamicGrantedTags);
+                }
+                if (wasVisible && !spec.Def.BlockedAbilityTags.IsEmpty)
+                {
+                    blockedAbilityTags.RemoveTags(spec.Def.BlockedAbilityTags);
+                }
+                UpdateGrantedTagIndex_Removed(effect);
+            }
+
+            DispatchInhibitionCues(effect, visible, dispatchCues);
+            return true;
+        }
+
+        private void ApplyGrantedAbilityInhibition(ActiveGameplayEffect effect, bool inhibited)
+        {
+            if (inhibited)
+            {
+                RemoveEffectGrantedAbilities(effect);
+            }
+            else
+            {
+                RegrantEffectAbilities(effect);
+            }
+        }
+
+        private void RemoveEffectGrantedAbilities(ActiveGameplayEffect effect)
+        {
+            if (effect?.Spec?.Def == null ||
+                effect.Spec.Def.GrantedAbilities.Count == 0 ||
+                !AbilitySpecs.TryGetGrantedSpecs(effect, out List<GameplayAbilitySpec> grantedSpecs) ||
+                grantedSpecs == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<EGameplayEffectGrantedAbilityRemovePolicy> policies =
+                effect.Spec.Def.GrantedAbilityRemovalPolicies;
+            for (int i = grantedSpecs.Count - 1; i >= 0; i--)
+            {
+                GameplayAbilitySpec spec = grantedSpecs[i];
+                if (spec == null || !ReferenceEquals(spec.Owner, this))
+                {
+                    continue;
+                }
+
+                int definitionIndex = IndexOfGrantedAbility(effect.Spec.Def, spec.Ability);
+                EGameplayEffectGrantedAbilityRemovePolicy policy =
+                    definitionIndex >= 0 && definitionIndex < policies.Count
+                        ? policies[definitionIndex]
+                        : EGameplayEffectGrantedAbilityRemovePolicy.CancelAbilityImmediately;
+
+                switch (policy)
+                {
+                    case EGameplayEffectGrantedAbilityRemovePolicy.DoNothing:
+                        break;
+
+                    case EGameplayEffectGrantedAbilityRemovePolicy.RemoveAbilityOnEnd:
+                        if (spec.IsActive || spec.ActivationCallInProgress || spec.EndCallInProgress)
+                        {
+                            spec.RemoveOnEnd = true;
+                            if (!pendingRemoveOnEndAbilities.Contains(spec))
+                            {
+                                pendingRemoveOnEndAbilities.Add(spec);
+                            }
+                        }
+                        else
+                        {
+                            ClearAbilityInternal(spec);
+                        }
+                        break;
+
+                    default:
+                        if (spec.IsActive)
+                        {
+                            spec.GetPrimaryInstance()?.CancelAbility();
+                        }
+                        if (IsRegisteredSpec(spec))
+                        {
+                            ClearAbilityInternal(spec);
+                        }
+                        break;
+                }
+            }
+        }
+
+        private void RegrantEffectAbilities(ActiveGameplayEffect effect)
+        {
+            IReadOnlyList<GameplayAbility> definitions = effect?.Spec?.Def?.GrantedAbilities;
+            if (definitions == null || definitions.Count == 0)
+            {
+                return;
+            }
+
+            AbilitySpecs.TryGetGrantedSpecs(effect, out List<GameplayAbilitySpec> grantedSpecs);
+            for (int i = 0; i < definitions.Count; i++)
+            {
+                if (HasGrantedSpec(grantedSpecs, definitions[i]))
+                {
+                    continue;
+                }
+
+                GameplayAbilitySpec spec = GrantAbility(definitions[i], effect.Spec.Level);
+                if (spec != null)
+                {
+                    RegisterAbilityGrantedByEffect(effect, spec);
+                }
+            }
+        }
+
+        private void FlushRemoveOnEndAbilities()
+        {
+            for (int i = pendingRemoveOnEndAbilities.Count - 1; i >= 0; i--)
+            {
+                GameplayAbilitySpec spec = pendingRemoveOnEndAbilities[i];
+                if (spec == null || !spec.RemoveOnEnd || !IsRegisteredSpec(spec))
+                {
+                    pendingRemoveOnEndAbilities.RemoveAt(i);
+                    continue;
+                }
+
+                if (spec.IsActive || spec.ActivationCallInProgress || spec.EndCallInProgress)
+                {
+                    continue;
+                }
+
+                spec.RemoveOnEnd = false;
+                pendingRemoveOnEndAbilities.RemoveAt(i);
+                ClearAbilityInternal(spec);
+            }
+        }
+
+        private bool IsRegisteredSpec(GameplayAbilitySpec spec)
+        {
+            return spec != null &&
+                   AbilitySpecs.TryGetSpecByHandle(spec.Handle, out GameplayAbilitySpec registered) &&
+                   ReferenceEquals(registered, spec);
+        }
+
+        private static bool HasGrantedSpec(
+            List<GameplayAbilitySpec> grantedSpecs,
+            GameplayAbility definition)
+        {
+            if (grantedSpecs == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < grantedSpecs.Count; i++)
+            {
+                if (ReferenceEquals(grantedSpecs[i]?.Ability, definition))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int IndexOfGrantedAbility(GameplayEffect definition, GameplayAbility ability)
+        {
+            IReadOnlyList<GameplayAbility> granted = definition.GrantedAbilities;
+            for (int i = 0; i < granted.Count; i++)
+            {
+                if (ReferenceEquals(granted[i], ability))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void DispatchInhibitionCues(ActiveGameplayEffect effect, bool visible, bool dispatchCues)
+        {
+            if (!dispatchCues ||
+                SuppressLocalGameplayCueDispatch ||
+                effect.Spec.Def.SuppressGameplayCues ||
+                effect.Spec.Def.GameplayCues.IsEmpty)
+            {
+                return;
+            }
+
+            if (visible)
+            {
+                TryDispatchGameplayCues(
+                    effect.Spec,
+                    EGameplayCueEvent.OnActive,
+                    effect.ReconciliationId,
+                    effect.SourceAbilitySpecHandle,
+                    effect.SourceAbilityExecutionPolicy);
+                TryDispatchGameplayCues(
+                    effect.Spec,
+                    EGameplayCueEvent.WhileActive,
+                    effect.ReconciliationId,
+                    effect.SourceAbilitySpecHandle,
+                    effect.SourceAbilityExecutionPolicy);
+            }
+            else
+            {
+                TryDispatchGameplayCues(
+                    effect.Spec,
+                    EGameplayCueEvent.Removed,
+                    effect.ReconciliationId,
+                    effect.SourceAbilitySpecHandle,
+                    effect.SourceAbilityExecutionPolicy);
+            }
         }
 
         private void MarkLiveAttributeDependentsDirty(GameplayAttribute changedAttribute)

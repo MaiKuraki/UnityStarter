@@ -407,6 +407,326 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
         }
 
         [Test]
+        public void InhibitedReplication_SharedRequirementTag_KeepsBothEndsUninhibitedAndAggregating()
+        {
+            GameplayTag requiredTag = RegisterTag("Test.GAS.Networking.Inhibited.Shared");
+            using var harness = new InhibitedReplicationHarness(requiredTag);
+
+            harness.Authority.AddLooseGameplayTag(requiredTag);
+            ActiveGameplayEffect effect = harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+
+            TestContext.WriteLine(
+                $"[Inhibited][A][authority] inhibited={effect.IsInhibited} health={harness.AuthorityAttributes.Health.CurrentValue:F1}");
+            Assert.That(effect.IsInhibited, Is.False, "The authority holds the ongoing requirement tag.");
+            Assert.That(harness.AuthorityAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            GASNetworkStateBuffer wire = harness.Capture();
+            TestContext.WriteLine(
+                $"[Inhibited][A][wire] effects={wire.EffectCount} flags={wire.Effects[0].Flags} " +
+                $"attrRaw={wire.Attributes[0].CurrentValueRaw} checksum=0x{wire.StateChecksum:X16}");
+            Assert.That(wire.EffectCount, Is.EqualTo(1));
+            Assert.That(
+                wire.Effects[0].Flags & GASEffectStateFlags.Inhibited,
+                Is.EqualTo(GASEffectStateFlags.None));
+            Assert.That(wire.Attributes[0].CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            Assert.That(
+                harness.Push(wire, 1u, out GASStateAcknowledgement acknowledgement, out GASStateDeltaRejectionReason rejection),
+                Is.True,
+                rejection.ToString());
+            TestContext.WriteLine(
+                $"[Inhibited][A][replica] inhibited={harness.Replica.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1} ackChecksum=0x{acknowledgement.StateChecksum:X16}");
+            Assert.That(acknowledgement.StateChecksum, Is.EqualTo(wire.StateChecksum));
+            Assert.That(harness.Replica.ActiveEffects.Count, Is.EqualTo(1));
+            Assert.That(harness.Replica.ActiveEffects[0].IsInhibited, Is.False);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+        }
+
+        [Test]
+        public void InhibitedReplication_MissingRequirementTag_KeepsEffectPresentButExcludesItsModifier()
+        {
+            GameplayTag requiredTag = RegisterTag("Test.GAS.Networking.Inhibited.Missing");
+            using var harness = new InhibitedReplicationHarness(requiredTag);
+
+            ActiveGameplayEffect effect = harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+
+            TestContext.WriteLine(
+                $"[Inhibited][B][authority] inhibited={effect.IsInhibited} health={harness.AuthorityAttributes.Health.CurrentValue:F1}");
+            Assert.That(effect.IsInhibited, Is.True);
+            Assert.That(harness.AuthorityAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+
+            GASNetworkStateBuffer wire = harness.Capture();
+            TestContext.WriteLine(
+                $"[Inhibited][B][wire] effects={wire.EffectCount} flags={wire.Effects[0].Flags} " +
+                $"attrRaw={wire.Attributes[0].CurrentValueRaw} checksum=0x{wire.StateChecksum:X16}");
+            Assert.That(wire.EffectCount, Is.EqualTo(1), "An inhibited effect is still replicated.");
+            Assert.That(
+                wire.Effects[0].Flags & GASEffectStateFlags.Inhibited,
+                Is.EqualTo(GASEffectStateFlags.Inhibited));
+            Assert.That(wire.Attributes[0].CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            Assert.That(
+                harness.Push(wire, 1u, out GASStateAcknowledgement acknowledgement, out GASStateDeltaRejectionReason rejection),
+                Is.True,
+                rejection.ToString());
+            TestContext.WriteLine(
+                $"[Inhibited][B][replica] effects={harness.Replica.ActiveEffects.Count} " +
+                $"inhibited={harness.Replica.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1} " +
+                $"ackChecksum=0x{acknowledgement.StateChecksum:X16}");
+            Assert.That(acknowledgement.StateChecksum, Is.EqualTo(wire.StateChecksum));
+            Assert.That(harness.Replica.ActiveEffects.Count, Is.EqualTo(1));
+            Assert.That(harness.Replica.ActiveEffects[0].IsInhibited, Is.True);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+        }
+
+        [Test]
+        public void InhibitedReplication_ReplicaTagEdgesFlipInhibitionAndModifierAggregation()
+        {
+            GameplayTag requiredTag = RegisterTag("Test.GAS.Networking.Inhibited.ReplicaEdges");
+            using var harness = new InhibitedReplicationHarness(requiredTag);
+
+            harness.Authority.AddLooseGameplayTag(requiredTag);
+            harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+
+            Assert.That(
+                harness.Push(harness.Capture(), 1u, out _, out GASStateDeltaRejectionReason rejection),
+                Is.True,
+                rejection.ToString());
+            TestContext.WriteLine(
+                $"[Inhibited][C][after-snapshot] inhibited={harness.Replica.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1}");
+            Assert.That(harness.Replica.ActiveEffects[0].IsInhibited, Is.False);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            harness.Replica.RemoveLooseGameplayTag(requiredTag);
+            harness.Replica.Tick(0f, isServer: false);
+            TestContext.WriteLine(
+                $"[Inhibited][C][after-tag-removed] inhibited={harness.Replica.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1}");
+            Assert.That(harness.Replica.ActiveEffects[0].IsInhibited, Is.True);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+
+            harness.Replica.AddLooseGameplayTag(requiredTag);
+            harness.Replica.Tick(0f, isServer: false);
+            TestContext.WriteLine(
+                $"[Inhibited][C][after-tag-restored] inhibited={harness.Replica.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1}");
+            Assert.That(harness.Replica.ActiveEffects[0].IsInhibited, Is.False);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            TestContext.WriteLine(
+                $"[Inhibited][C][authority-unchanged] inhibited={harness.Authority.ActiveEffects[0].IsInhibited} " +
+                $"health={harness.AuthorityAttributes.Health.CurrentValue:F1}");
+            Assert.That(harness.Authority.ActiveEffects[0].IsInhibited, Is.False);
+            Assert.That(harness.AuthorityAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+        }
+
+        [Test]
+        public void InhibitedReplication_ChainedRequirement_TravelsThroughDelta()
+        {
+            GameplayTag enabledTag = RegisterTag("Test.GAS.Networking.Chain.Enabled");
+            GameplayTag lockedTag = RegisterTag("Test.GAS.Networking.Chain.Locked");
+            using var harness = new ChainedInhibitionHarness(enabledTag, lockedTag);
+
+            harness.Authority.AddLooseGameplayTag(enabledTag);
+            ChainedInhibitionHarness.ChainEffects effects = harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+
+            Assert.That(effects.Bootstrap.IsInhibited, Is.False);
+            Assert.That(effects.Dependent.IsInhibited, Is.False);
+            Assert.That(harness.AuthorityAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            GASNetworkStateBuffer baseline = ChainedInhibitionHarness.CloneState(
+                harness.Capture(), harness.StateCapacity);
+            Assert.That(
+                harness.Push(baseline, 1u, out _, out GASStateDeltaRejectionReason baselineRejection),
+                Is.True,
+                baselineRejection.ToString());
+            Assert.That(harness.Replica.ActiveEffects.Count, Is.EqualTo(2));
+            for (int i = 0; i < harness.Replica.ActiveEffects.Count; i++)
+            {
+                Assert.That(harness.Replica.ActiveEffects[i].IsInhibited, Is.False);
+            }
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            harness.Authority.RemoveLooseGameplayTag(enabledTag);
+            harness.Authority.Tick(0f, isServer: true);
+            Assert.That(effects.Bootstrap.IsInhibited, Is.True);
+            Assert.That(effects.Dependent.IsInhibited, Is.True);
+            Assert.That(harness.AuthorityAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+
+            GASNetworkStateBuffer current = harness.Capture();
+            var delta = new GASNetworkStateDeltaBuffer(harness.StateCapacity);
+            Assert.That(delta.TryBuild(baseline, current), Is.True);
+            var header = new GASStateBatchChunk(
+                Epoch,
+                2u,
+                Entity,
+                GASStateBatchKind.Delta,
+                baseline.StateVersion,
+                current.StateVersion,
+                current.LastProcessedCommandSequence,
+                0,
+                1,
+                checked((ushort)delta.AbilityCount),
+                checked((ushort)delta.AttributeCount),
+                checked((ushort)delta.EffectCount),
+                checked((ushort)delta.EffectTagCount),
+                checked((ushort)delta.EffectMagnitudeCount),
+                checked((ushort)delta.LooseTagCount),
+                current.StateChecksum);
+
+            Assert.That(
+                harness.PushDelta(in header, delta, out GASStateAcknowledgement acknowledgement,
+                    out GASStateDeltaRejectionReason rejection),
+                Is.True,
+                rejection.ToString());
+            TestContext.WriteLine(
+                $"[Inhibited][Chain] deltaEffects={delta.EffectCount} deltaLooseTags={delta.LooseTagCount} " +
+                $"replicaInhibited={CountInhibited(harness.Replica)} " +
+                $"health={harness.ReplicaAttributes.Health.CurrentValue:F1} " +
+                $"ackChecksum=0x{acknowledgement.StateChecksum:X16}");
+            Assert.That(acknowledgement.StateChecksum, Is.EqualTo(current.StateChecksum));
+            Assert.That(harness.Replica.ActiveEffects.Count, Is.EqualTo(2));
+            for (int i = 0; i < harness.Replica.ActiveEffects.Count; i++)
+            {
+                Assert.That(harness.Replica.ActiveEffects[i].IsInhibited, Is.True);
+            }
+            Assert.That(harness.Replica.HasMatchingGameplayTag(lockedTag), Is.False);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+        }
+
+        [Test]
+        public void InhibitedReplication_DivergentLocalTags_ConvergeToAuthoritativeState()
+        {
+            GameplayTag enabledTag = RegisterTag("Test.GAS.Networking.Chain.DivergentEnabled");
+            GameplayTag lockedTag = RegisterTag("Test.GAS.Networking.Chain.DivergentLocked");
+            using var harness = new ChainedInhibitionHarness(enabledTag, lockedTag);
+
+            harness.Authority.AddLooseGameplayTag(enabledTag);
+            harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+            GASNetworkStateBuffer baseline = ChainedInhibitionHarness.CloneState(
+                harness.Capture(), harness.StateCapacity);
+            Assert.That(
+                harness.Push(baseline, 1u, out _, out GASStateDeltaRejectionReason baselineRejection),
+                Is.True,
+                baselineRejection.ToString());
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(110f).Within(0.001f));
+
+            harness.Replica.RemoveLooseGameplayTag(enabledTag);
+            harness.Replica.Tick(0f, isServer: false);
+            Assert.That(CountInhibited(harness.Replica), Is.EqualTo(2));
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(100f).Within(0.001f));
+
+            harness.AuthorityAttributes.Health.SetBaseValue(101f);
+            harness.Authority.Tick(0f, isServer: true);
+            GASNetworkStateBuffer authoritative = harness.Capture();
+
+            bool applied = harness.Push(
+                authoritative,
+                2u,
+                out GASStateAcknowledgement acknowledgement,
+                out GASStateDeltaRejectionReason rejection);
+            TestContext.WriteLine(
+                $"[Inhibited][Converge] applied={applied} rejection={rejection} " +
+                $"replicaInhibited={CountInhibited(harness.Replica)} " +
+                $"hasEnabled={harness.Replica.HasMatchingGameplayTag(enabledTag)} " +
+                $"hasLocked={harness.Replica.HasMatchingGameplayTag(lockedTag)} " +
+                $"replicaHealth={harness.ReplicaAttributes.Health.CurrentValue:F1} " +
+                $"ackChecksum=0x{acknowledgement.StateChecksum:X16}");
+            Assert.That(applied, Is.True, rejection.ToString());
+            Assert.That(harness.Replica.HasMatchingGameplayTag(enabledTag), Is.True);
+            Assert.That(harness.Replica.HasMatchingGameplayTag(lockedTag), Is.True);
+            Assert.That(CountInhibited(harness.Replica), Is.Zero);
+            Assert.That(harness.ReplicaAttributes.Health.CurrentValue, Is.EqualTo(111f).Within(0.001f));
+            Assert.That(acknowledgement.StateChecksum, Is.EqualTo(authoritative.StateChecksum));
+        }
+
+        [Test]
+        public void InhibitedReplication_WithdrawsBlockedTagsAndCues()
+        {
+            GameplayTag enabledTag = RegisterTag("Test.GAS.Networking.Parity.Enabled");
+            GameplayTag blockedTag = RegisterTag("Test.GAS.Networking.Parity.Blocked");
+            GameplayTag cueTag = RegisterTag("Test.GAS.Networking.Parity.Cue");
+            using var harness = new BlockedCueReplicationHarness(enabledTag, blockedTag, cueTag);
+
+            var blockedTags = new GameplayTagContainer();
+            blockedTags.AddTag(blockedTag);
+
+            harness.Authority.AddLooseGameplayTag(enabledTag);
+            harness.ApplyOnAuthority();
+            harness.Authority.Tick(0f, isServer: true);
+
+            Assert.That(harness.Authority.AreAbilitiesBlockedByTag(blockedTags), Is.True);
+            Assert.That(
+                harness.AuthorityCueEvents,
+                Is.EqualTo(new[] { EGameplayCueEvent.OnActive }));
+
+            Assert.That(
+                harness.Push(harness.Capture(), 1u, out _, out GASStateDeltaRejectionReason baselineRejection),
+                Is.True,
+                baselineRejection.ToString());
+            Assert.That(harness.Replica.AreAbilitiesBlockedByTag(blockedTags), Is.True);
+            Assert.That(
+                harness.ReplicaCueEvents,
+                Is.Empty,
+                "Replica cue dispatch is suppressed during reconciliation; cues travel as explicit messages.");
+
+            harness.Authority.RemoveLooseGameplayTag(enabledTag);
+            harness.Authority.Tick(0f, isServer: true);
+            Assert.That(harness.Authority.AreAbilitiesBlockedByTag(blockedTags), Is.False);
+            Assert.That(
+                harness.AuthorityCueEvents,
+                Is.EqualTo(new[] { EGameplayCueEvent.OnActive, EGameplayCueEvent.Removed }));
+
+            Assert.That(
+                harness.Push(harness.Capture(), 2u, out _, out GASStateDeltaRejectionReason inhibitedRejection),
+                Is.True,
+                inhibitedRejection.ToString());
+            TestContext.WriteLine(
+                $"[Parity][inhibited] authorityBlocked={harness.Authority.AreAbilitiesBlockedByTag(blockedTags)} " +
+                $"replicaBlocked={harness.Replica.AreAbilitiesBlockedByTag(blockedTags)} " +
+                $"replicaCues={string.Join(",", harness.ReplicaCueEvents)}");
+            Assert.That(harness.Replica.AreAbilitiesBlockedByTag(blockedTags), Is.False);
+            Assert.That(harness.ReplicaCueEvents, Is.Empty);
+
+            harness.Authority.AddLooseGameplayTag(enabledTag);
+            harness.Authority.Tick(0f, isServer: true);
+            Assert.That(
+                harness.AuthorityCueEvents,
+                Is.EqualTo(new[]
+                {
+                    EGameplayCueEvent.OnActive,
+                    EGameplayCueEvent.Removed,
+                    EGameplayCueEvent.OnActive,
+                    EGameplayCueEvent.WhileActive
+                }));
+
+            Assert.That(
+                harness.Push(harness.Capture(), 3u, out _, out GASStateDeltaRejectionReason restoredRejection),
+                Is.True,
+                restoredRejection.ToString());
+            TestContext.WriteLine(
+                $"[Parity][restored] replicaBlocked={harness.Replica.AreAbilitiesBlockedByTag(blockedTags)} " +
+                $"replicaCues={string.Join(",", harness.ReplicaCueEvents)}");
+            Assert.That(harness.Replica.AreAbilitiesBlockedByTag(blockedTags), Is.True);
+            Assert.That(harness.ReplicaCueEvents, Is.Empty);
+        }
+
+        private static GameplayTag RegisterTag(string name)
+        {
+            GameplayTagManager.RegisterDynamicTag(name, "GAS network inhibition replication test tag.");
+            GameplayTagManager.InitializeIfNeeded();
+            return GameplayTagManager.Request(name);
+        }
+
+        [Test]
         public void ReplicaPreflightFailureRejectsPreparedStateWithoutMutatingAbilitySystem()
         {
             GameplayAbility ability = CreateAbility(
@@ -1973,6 +2293,485 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
                 }
                 abilitySpecHandle = 0;
                 return false;
+            }
+        }
+
+        private sealed class InhibitedReplicationHarness : IDisposable
+        {
+            private readonly GASRuntimeContext authorityContext;
+            private readonly GASRuntimeContext replicaContext;
+            private readonly GASNetworkAuthorityStateAdapter authorityAdapter;
+            private readonly GameplayEffect effect;
+
+            public InhibitedReplicationHarness(GameplayTag requiredTag)
+            {
+                var capacity = new GASNetworkRuntimeStateCapacity(
+                    new GASNetworkStateCapacity(
+                        abilities: 4,
+                        attributes: 1,
+                        effects: 4,
+                        effectTags: 0,
+                        effectMagnitudes: 0,
+                        looseTags: 4),
+                    maxSetByCallerTagsPerEffect: 0,
+                    maxSetByCallerNamesPerEffect: 0,
+                    maxDynamicGrantedTagsPerEffect: 0,
+                    maxDynamicAssetTagsPerEffect: 0);
+
+                var requiredTags = new GameplayTagContainer();
+                requiredTags.AddTag(requiredTag);
+                effect = new GameplayEffect(
+                    "Bridge.Inhibited.Effect",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("Health", EAttributeModifierOperation.Add, new ScalableFloat(10f))
+                    },
+                    ongoingTagRequirements: new GameplayTagRequirements(
+                        new GameplayTagContainer(),
+                        requiredTags));
+
+                var builder = new GASNetworkContentCatalogBuilder();
+                builder.Add(
+                    GASNetworkContentKind.EffectDefinition,
+                    "effect.bridge.inhibited",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("effect.bridge.inhibited:1"),
+                    effect);
+                builder.Add(
+                    GASNetworkContentKind.Attribute,
+                    "attribute.health",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("attribute.health:1"),
+                    "Health");
+                var catalog = builder.Build();
+                var contentResolver = new GASNetworkRuntimeContentResolver(catalog);
+
+                authorityContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+                replicaContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Replica);
+                Authority = new AbilitySystemComponent(authorityContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                Replica = new AbilitySystemComponent(replicaContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                AuthorityAttributes = new HealthAttributeSet();
+                ReplicaAttributes = new HealthAttributeSet();
+                AuthorityAttributes.Health.SetBaseValue(100f);
+                ReplicaAttributes.Health.SetBaseValue(100f);
+                Authority.AddAttributeSet(AuthorityAttributes);
+                Replica.AddAttributeSet(ReplicaAttributes);
+
+                var authorityIdentities = new GASAuthorityIdentityMap(Entity, Epoch, 4, 4);
+                var authorityResolver = new TestIdentityResolver(Authority, Entity, authorityIdentities);
+                authorityAdapter = new GASNetworkAuthorityStateAdapter(
+                    Authority,
+                    authorityResolver,
+                    authorityResolver,
+                    contentResolver,
+                    authorityIdentities,
+                    new GASNetworkStateVersion(Authority, Epoch),
+                    capacity);
+
+                Receiver = new GASNetworkStateReceiver(Epoch, Entity, catalog, capacity.State);
+                var replicaResolver = new TestIdentityResolver(Replica, Entity, null);
+                ReplicaAdapter = new GASNetworkReplicaStateAdapter(
+                    Replica,
+                    Entity,
+                    Epoch,
+                    replicaResolver,
+                    replicaResolver,
+                    contentResolver,
+                    capacity);
+            }
+
+            public AbilitySystemComponent Authority { get; }
+            public AbilitySystemComponent Replica { get; }
+            public HealthAttributeSet AuthorityAttributes { get; }
+            public HealthAttributeSet ReplicaAttributes { get; }
+            public GASNetworkStateReceiver Receiver { get; }
+            public GASNetworkReplicaStateAdapter ReplicaAdapter { get; }
+
+            public ActiveGameplayEffect ApplyOnAuthority()
+            {
+                GameplayEffectApplicationResult result = Authority.ApplyGameplayEffectSpecToSelf(
+                    GameplayEffectSpec.Create(effect, Authority));
+                Assert.That(result.Succeeded, Is.True);
+                return result.ActiveEffect;
+            }
+
+            public GASNetworkStateBuffer Capture()
+            {
+                Assert.That(authorityAdapter.TryCapture(0u, out IGASNetworkStateView view), Is.True);
+                return (GASNetworkStateBuffer)view;
+            }
+
+            public bool Push(
+                GASNetworkStateBuffer state,
+                uint batchSequence,
+                out GASStateAcknowledgement acknowledgement,
+                out GASStateDeltaRejectionReason rejection)
+            {
+                PrepareSnapshot(Receiver, state, batchSequence);
+                return ReplicaAdapter.TryApplyPrepared(Receiver, out acknowledgement, out rejection);
+            }
+
+            public void Dispose()
+            {
+                Replica.Dispose();
+                Authority.Dispose();
+                replicaContext.Dispose();
+                authorityContext.Dispose();
+            }
+        }
+
+        private sealed class HealthAttributeSet : AttributeSet
+        {
+            public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(Health);
+            }
+        }
+
+        private static int CountInhibited(AbilitySystemComponent abilitySystem)
+        {
+            int count = 0;
+            for (int i = 0; i < abilitySystem.ActiveEffects.Count; i++)
+            {
+                if (abilitySystem.ActiveEffects[i].IsInhibited)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private sealed class ChainedInhibitionHarness : IDisposable
+        {
+            private readonly GASRuntimeContext authorityContext;
+            private readonly GASRuntimeContext replicaContext;
+            private readonly GASNetworkAuthorityStateAdapter authorityAdapter;
+            private readonly GameplayEffect bootstrapEffect;
+            private readonly GameplayEffect dependentEffect;
+
+            public ChainedInhibitionHarness(GameplayTag requiredTag, GameplayTag grantedTag)
+            {
+                StateCapacity = new GASNetworkStateCapacity(
+                    abilities: 4,
+                    attributes: 1,
+                    effects: 4,
+                    effectTags: 0,
+                    effectMagnitudes: 0,
+                    looseTags: 4);
+                var capacity = new GASNetworkRuntimeStateCapacity(
+                    StateCapacity,
+                    maxSetByCallerTagsPerEffect: 0,
+                    maxSetByCallerNamesPerEffect: 0,
+                    maxDynamicGrantedTagsPerEffect: 0,
+                    maxDynamicAssetTagsPerEffect: 0);
+
+                var requiredTags = new GameplayTagContainer();
+                requiredTags.AddTag(requiredTag);
+                var grantedTags = new GameplayTagContainer();
+                grantedTags.AddTag(grantedTag);
+
+                bootstrapEffect = new GameplayEffect(
+                    "Chain.Bootstrap",
+                    EDurationPolicy.Infinite,
+                    grantedTags: grantedTags,
+                    ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), requiredTags));
+                dependentEffect = new GameplayEffect(
+                    "Chain.Dependent",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("Health", EAttributeModifierOperation.Add, new ScalableFloat(10f))
+                    },
+                    ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), grantedTags));
+
+                var builder = new GASNetworkContentCatalogBuilder();
+                builder.Add(
+                    GASNetworkContentKind.EffectDefinition,
+                    "effect.bridge.chain.bootstrap",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("effect.bridge.chain.bootstrap:1"),
+                    bootstrapEffect);
+                builder.Add(
+                    GASNetworkContentKind.EffectDefinition,
+                    "effect.bridge.chain.dependent",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("effect.bridge.chain.dependent:1"),
+                    dependentEffect);
+                builder.Add(
+                    GASNetworkContentKind.Attribute,
+                    "attribute.health",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("attribute.health:1"),
+                    "Health");
+                var catalog = builder.Build();
+                var contentResolver = new GASNetworkRuntimeContentResolver(catalog);
+
+                authorityContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+                replicaContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Replica);
+                Authority = new AbilitySystemComponent(authorityContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                Replica = new AbilitySystemComponent(replicaContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                AuthorityAttributes = new HealthAttributeSet();
+                ReplicaAttributes = new HealthAttributeSet();
+                AuthorityAttributes.Health.SetBaseValue(100f);
+                ReplicaAttributes.Health.SetBaseValue(100f);
+                Authority.AddAttributeSet(AuthorityAttributes);
+                Replica.AddAttributeSet(ReplicaAttributes);
+
+                var authorityIdentities = new GASAuthorityIdentityMap(Entity, Epoch, 4, 4);
+                var authorityResolver = new TestIdentityResolver(Authority, Entity, authorityIdentities);
+                authorityAdapter = new GASNetworkAuthorityStateAdapter(
+                    Authority,
+                    authorityResolver,
+                    authorityResolver,
+                    contentResolver,
+                    authorityIdentities,
+                    new GASNetworkStateVersion(Authority, Epoch),
+                    capacity);
+
+                Receiver = new GASNetworkStateReceiver(Epoch, Entity, catalog, StateCapacity);
+                var replicaResolver = new TestIdentityResolver(Replica, Entity, null);
+                ReplicaAdapter = new GASNetworkReplicaStateAdapter(
+                    Replica,
+                    Entity,
+                    Epoch,
+                    replicaResolver,
+                    replicaResolver,
+                    contentResolver,
+                    capacity);
+            }
+
+            public GASNetworkStateCapacity StateCapacity { get; }
+            public AbilitySystemComponent Authority { get; }
+            public AbilitySystemComponent Replica { get; }
+            public HealthAttributeSet AuthorityAttributes { get; }
+            public HealthAttributeSet ReplicaAttributes { get; }
+            public GASNetworkStateReceiver Receiver { get; }
+            public GASNetworkReplicaStateAdapter ReplicaAdapter { get; }
+
+            /// <summary>
+            /// Copies a published view into an independent buffer. The authority adapter recycles its
+            /// published buffer on the next capture, so a baseline must be cloned before capturing again.
+            /// </summary>
+            public static GASNetworkStateBuffer CloneState(
+                IGASNetworkStateView source,
+                GASNetworkStateCapacity capacity)
+            {
+                var clone = new GASNetworkStateBuffer(capacity);
+                clone.BeginWrite(source.Entity, source.StateVersion, source.LastProcessedCommandSequence);
+                for (int i = 0; i < source.AbilityCount; i++)
+                {
+                    GASAbilityStateRecord record = source.GetAbility(i);
+                    Assert.That(clone.TrySetAbility(in record), Is.True);
+                }
+                for (int i = 0; i < source.AttributeCount; i++)
+                {
+                    GASAttributeStateRecord record = source.GetAttribute(i);
+                    Assert.That(clone.TrySetAttribute(in record), Is.True);
+                }
+                for (int i = 0; i < source.EffectCount; i++)
+                {
+                    GASEffectStateRecord record = source.GetEffect(i);
+                    Assert.That(clone.TrySetEffect(in record), Is.True);
+                }
+                for (int i = 0; i < source.EffectTagCount; i++)
+                {
+                    GASEffectTagStateRecord record = source.GetEffectTag(i);
+                    Assert.That(clone.TrySetEffectTag(in record), Is.True);
+                }
+                for (int i = 0; i < source.EffectMagnitudeCount; i++)
+                {
+                    GASEffectMagnitudeStateRecord record = source.GetEffectMagnitude(i);
+                    Assert.That(clone.TrySetEffectMagnitude(in record), Is.True);
+                }
+                for (int i = 0; i < source.LooseTagCount; i++)
+                {
+                    GASLooseTagStateRecord record = source.GetLooseTag(i);
+                    Assert.That(clone.TrySetLooseTag(in record), Is.True);
+                }
+                Assert.That(clone.TryCompleteWrite(), Is.True);
+                Assert.That(clone.StateChecksum, Is.EqualTo(source.StateChecksum));
+                return clone;
+            }
+
+            public ChainEffects ApplyOnAuthority()
+            {
+                GameplayEffectApplicationResult first = Authority.ApplyGameplayEffectSpecToSelf(
+                    GameplayEffectSpec.Create(bootstrapEffect, Authority));                GameplayEffectApplicationResult second = Authority.ApplyGameplayEffectSpecToSelf(
+                    GameplayEffectSpec.Create(dependentEffect, Authority));
+                Assert.That(first.Succeeded, Is.True);
+                Assert.That(second.Succeeded, Is.True);
+                return new ChainEffects(first.ActiveEffect, second.ActiveEffect);
+            }
+
+            public GASNetworkStateBuffer Capture()
+            {
+                Assert.That(authorityAdapter.TryCapture(0u, out IGASNetworkStateView view), Is.True);
+                return (GASNetworkStateBuffer)view;
+            }
+
+            public bool Push(
+                GASNetworkStateBuffer state,
+                uint batchSequence,
+                out GASStateAcknowledgement acknowledgement,
+                out GASStateDeltaRejectionReason rejection)
+            {
+                PrepareSnapshot(Receiver, state, batchSequence);
+                return ReplicaAdapter.TryApplyPrepared(Receiver, out acknowledgement, out rejection);
+            }
+
+            public bool PushDelta(
+                in GASStateBatchChunk header,
+                GASNetworkStateDeltaBuffer delta,
+                out GASStateAcknowledgement acknowledgement,
+                out GASStateDeltaRejectionReason rejection)
+            {
+                Assert.That(
+                    Receiver.ReceiveChunk(
+                        in header,
+                        delta.Abilities,
+                        delta.Attributes,
+                        delta.Effects,
+                        delta.EffectTags,
+                        delta.EffectMagnitudes,
+                        delta.LooseTags),
+                    Is.EqualTo(GASStateReceiveResult.Prepared));
+                return ReplicaAdapter.TryApplyPrepared(Receiver, out acknowledgement, out rejection);
+            }
+
+            public void Dispose()
+            {
+                Replica.Dispose();
+                Authority.Dispose();
+                replicaContext.Dispose();
+                authorityContext.Dispose();
+            }
+
+            public readonly struct ChainEffects
+            {
+                public ChainEffects(ActiveGameplayEffect bootstrap, ActiveGameplayEffect dependent)
+                {
+                    Bootstrap = bootstrap;
+                    Dependent = dependent;
+                }
+
+                public ActiveGameplayEffect Bootstrap { get; }
+                public ActiveGameplayEffect Dependent { get; }
+            }
+        }
+
+        private sealed class BlockedCueReplicationHarness : IDisposable
+        {
+            private readonly GASRuntimeContext authorityContext;
+            private readonly GASRuntimeContext replicaContext;
+            private readonly GASNetworkAuthorityStateAdapter authorityAdapter;
+            private readonly GameplayEffect effect;
+
+            public BlockedCueReplicationHarness(
+                GameplayTag requiredTag,
+                GameplayTag blockedTag,
+                GameplayTag cueTag)
+            {
+                var requiredTags = new GameplayTagContainer();
+                requiredTags.AddTag(requiredTag);
+                var blockedTags = new GameplayTagContainer();
+                blockedTags.AddTag(blockedTag);
+                var cues = new GameplayTagContainer();
+                cues.AddTag(cueTag);
+
+                effect = new GameplayEffect(
+                    "Bridge.Parity.Effect",
+                    EDurationPolicy.Infinite,
+                    gameplayCues: cues,
+                    ongoingTagRequirements: new GameplayTagRequirements(new GameplayTagContainer(), requiredTags),
+                    blockedAbilityTags: blockedTags);
+
+                var stateCapacity = new GASNetworkStateCapacity(
+                    abilities: 0,
+                    attributes: 0,
+                    effects: 2,
+                    effectTags: 0,
+                    effectMagnitudes: 0,
+                    looseTags: 4);
+                var capacity = new GASNetworkRuntimeStateCapacity(
+                    stateCapacity,
+                    maxSetByCallerTagsPerEffect: 0,
+                    maxSetByCallerNamesPerEffect: 0,
+                    maxDynamicGrantedTagsPerEffect: 0,
+                    maxDynamicAssetTagsPerEffect: 0);
+
+                var builder = new GASNetworkContentCatalogBuilder();
+                builder.Add(
+                    GASNetworkContentKind.EffectDefinition,
+                    "effect.bridge.parity",
+                    GASNetworkContentCatalogBuilder.ComputeRevisionHash("effect.bridge.parity:1"),
+                    effect);
+                var catalog = builder.Build();
+                var contentResolver = new GASNetworkRuntimeContentResolver(catalog);
+
+                authorityContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+                replicaContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Replica);
+                Authority = new AbilitySystemComponent(authorityContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                Replica = new AbilitySystemComponent(replicaContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+                Authority.OnGameplayCueCommitted += (in GameplayCueCommitted cue) => AuthorityCueEvents.Add(cue.Event);
+                Replica.OnGameplayCueCommitted += (in GameplayCueCommitted cue) => ReplicaCueEvents.Add(cue.Event);
+
+                var authorityIdentities = new GASAuthorityIdentityMap(Entity, Epoch, 4, 4);
+                var authorityResolver = new TestIdentityResolver(Authority, Entity, authorityIdentities);
+                authorityAdapter = new GASNetworkAuthorityStateAdapter(
+                    Authority,
+                    authorityResolver,
+                    authorityResolver,
+                    contentResolver,
+                    authorityIdentities,
+                    new GASNetworkStateVersion(Authority, Epoch),
+                    capacity);
+
+                Receiver = new GASNetworkStateReceiver(Epoch, Entity, catalog, stateCapacity);
+                var replicaResolver = new TestIdentityResolver(Replica, Entity, null);
+                ReplicaAdapter = new GASNetworkReplicaStateAdapter(
+                    Replica,
+                    Entity,
+                    Epoch,
+                    replicaResolver,
+                    replicaResolver,
+                    contentResolver,
+                    capacity);
+            }
+
+            public AbilitySystemComponent Authority { get; }
+            public AbilitySystemComponent Replica { get; }
+            public GASNetworkStateReceiver Receiver { get; }
+            public GASNetworkReplicaStateAdapter ReplicaAdapter { get; }
+            public List<EGameplayCueEvent> AuthorityCueEvents { get; } = new List<EGameplayCueEvent>();
+            public List<EGameplayCueEvent> ReplicaCueEvents { get; } = new List<EGameplayCueEvent>();
+
+            public void ApplyOnAuthority()
+            {
+                GameplayEffectApplicationResult result = Authority.ApplyGameplayEffectSpecToSelf(
+                    GameplayEffectSpec.Create(effect, Authority));
+                Assert.That(result.Succeeded, Is.True);
+            }
+
+            public GASNetworkStateBuffer Capture()
+            {
+                Assert.That(authorityAdapter.TryCapture(0u, out IGASNetworkStateView view), Is.True);
+                return (GASNetworkStateBuffer)view;
+            }
+
+            public bool Push(
+                GASNetworkStateBuffer state,
+                uint batchSequence,
+                out GASStateAcknowledgement acknowledgement,
+                out GASStateDeltaRejectionReason rejection)
+            {
+                PrepareSnapshot(Receiver, state, batchSequence);
+                return ReplicaAdapter.TryApplyPrepared(Receiver, out acknowledgement, out rejection);
+            }
+
+            public void Dispose()
+            {
+                Replica.Dispose();
+                Authority.Dispose();
+                replicaContext.Dispose();
+                authorityContext.Dispose();
             }
         }
 
