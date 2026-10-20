@@ -594,6 +594,21 @@ var cooldownEffect = new GameplayEffect(
 
 The same source is authorable on `GameplayEffectSO` assets: enable **Duration Magnitude** in the Inspector (visible for `HasDuration` effects), pick the calculation type, and fill only the relevant fields. The Inspector summary shows `Duration: data-driven (<type>)`, and validation warns on rejected combinations (magnitude on non-`HasDuration` policies, SetByCaller without a key, `ExtendDuration` without `ClearEntireStack` expiration).
 
+### Attribute capture timing
+
+`AttributeBasedMagnitude` resolves captures at the following times:
+
+| Policy | Source capture | Target capture |
+| --- | --- | --- |
+| `Snapshot` | Spec creation | Effect application |
+| `NotSnapshot` | Every evaluation | Every evaluation |
+
+A periodic execution is an evaluation: a `NotSnapshot` periodic effect re-reads the attribute on each tick, while `Snapshot` retains the creation-time (source) or application-time (target) value. Live captures settle a dirty attribute before reading it, so a base value written earlier in the same frame is visible to an effect applied before the next tick.
+
+Periodic executions scale the evaluated magnitude by the stack count: two stacks of a 15-per-tick bleed deal 30 per tick. Multiply and Division compose once per stack, following the aggregation contract; Override is not scaled.
+
+`Samples/Scripts/CombatCaptureTimingSample.cs` prints per-tick timelines for live and snapshot ignite, %-current-health poison, stacked bleed, and heal-over-time.
+
 ### Magnitudes, aggregation, and execution
 
 Modifier operations are `Add`, `Multiply`, `Division`, and `Override`. Magnitudes can be:

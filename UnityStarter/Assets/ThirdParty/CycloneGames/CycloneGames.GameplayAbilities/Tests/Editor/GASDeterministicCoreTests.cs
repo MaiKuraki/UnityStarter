@@ -131,6 +131,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             var source = CreateMagnitudeTestAsc(context, out var sourceAttributes);
             var target = CreateMagnitudeTestAsc(context, out _);
             sourceAttributes.SetBaseValue(sourceAttributes.Power, GASFixedValue.FromInt(10));
+            // Settle the base write first, then apply the explicit current override so the fixture
+            // measures the formula rather than pending aggregation.
+            source.Tick(0f, true);
             sourceAttributes.SetCurrentValue(sourceAttributes.Power, GASFixedValue.FromInt(15));
 
             var modifiers = new List<ModifierInfo>
@@ -166,6 +169,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             var source = CreateMagnitudeTestAsc(context, out _);
             var target = CreateMagnitudeTestAsc(context, out var targetAttributes);
             targetAttributes.SetBaseValue(targetAttributes.Armor, GASFixedValue.FromInt(4));
+            target.Tick(0f, true);
             targetAttributes.SetCurrentValue(targetAttributes.Armor, GASFixedValue.FromInt(8));
 
             var modifiers = new List<ModifierInfo>
@@ -1051,10 +1055,12 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             asc.Tick(0f, true);
 
             Assert.That(asc.ActiveEffects[0].StackCount, Is.EqualTo(2));
-            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+            // UE periodic convention: each execution scales the evaluated magnitude by StackCount,
+            // so the 2-stack immediate execution applies 2 x -5 = -10.
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(85).RawValue));
 
             asc.Tick(0.5f, true);
-            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(85).RawValue));
 
             asc.Dispose();
         }
@@ -1086,7 +1092,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             asc.Tick(0.5f, true);
 
             Assert.That(asc.ActiveEffects[0].StackCount, Is.EqualTo(2));
-            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+            // UE periodic convention: the first due tick executes at 2 stacks (2 x -5 = -10).
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
 
             asc.Dispose();
         }

@@ -929,6 +929,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // --- Process-local reconciliation ---
         // The ASC owns monotonically assigned active-effect reconciliation IDs.
         private int reconciliationApplyScopeDepth;
+        private const int MaxAttributeSettleDepth = 32;
+        private int attributeSettleDepth;
+
         private int effectMutationTransactionDepth;
         private int activeEffectIterationDepth;
         private int abilityEndMutationBypassDepth;
@@ -4403,6 +4406,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.GrantedAbilityLimitReached);
             }
 
+            spec.RefreshSnapshotTargetMagnitudes();
+
             using (BeginReplicationMutationScope())
             {
                 if (spec.Def.DurationPolicy == EDurationPolicy.Instant)
@@ -4908,8 +4913,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return false;
         }
 
-        internal void ExecuteInstantEffect(GameplayEffectSpec spec)
+        internal void ExecuteInstantEffect(GameplayEffectSpec spec, int stackCount = 1)
         {
+            spec.RefreshLiveAttributeMagnitudes();
+
             if (instantEffectExecutionInProgress)
             {
                 throw new InvalidOperationException(
@@ -4966,7 +4973,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         attribute ??= GetAttribute(modifier.AttributeName);
                         if (attribute != null)
                         {
-                            ApplyModifier(spec, attribute, modifier, spec.GetCalculatedMagnitudeRaw(i), true);
+                            long magnitudeRaw = ScaleMagnitudeByStacks(
+                                spec.GetCalculatedMagnitudeRaw(i), modifier.Operation, stackCount);
+                            ApplyModifier(spec, attribute, modifier, magnitudeRaw, true);
                         }
                     }
                 }
@@ -5039,7 +5048,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     nameof(effect));
             }
 
-            ExecuteInstantEffect(effect.Spec);
+            ExecuteInstantEffect(effect.Spec, effect.StackCount);
             TryDispatchGameplayCues(
                 effect.Spec,
                 EGameplayCueEvent.Executed,
@@ -5273,16 +5282,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
 #if UNITY_EDITOR
             GASAggregationProbe.OnRecalculateBegin(System.Diagnostics.Stopwatch.GetTimestamp());
 #endif
-            bool unrealBiasSum = modifierAggregationMode == GASModifierAggregationMode.UnrealBiasSum;
             for (int d = 0; d < dirtyAttributes.Count; d++)
             {
-                var attr = dirtyAttributes[d];
-                attr.IsDirty = false;
+                GameplayAttribute candidate = dirtyAttributes[d];
+                if (!candidate.IsDirty)
+                {
+                    // Settled on demand earlier in this pass.
+                    continue;
+                }
+
+                RecalculateAttribute(candidate);
+            }
+
+            dirtyAttributes.Clear();
 #if UNITY_EDITOR
-                GASAggregationProbe.OnDirtyAttribute();
+            GASAggregationProbe.OnRecalculateEnd(System.Diagnostics.Stopwatch.GetTimestamp());
+#endif
+        }
+
+        /// <summary>
+        /// Recalculates one attribute from its base value and eligible continuous modifiers.
+        /// </summary>
+        private void RecalculateAttribute(GameplayAttribute attr)
+        {
+            bool unrealBiasSum = modifierAggregationMode == GASModifierAggregationMode.UnrealBiasSum;
+            attr.IsDirty = false;
+#if UNITY_EDITOR
+            GASAggregationProbe.OnDirtyAttribute();
 #endif
 
-                var currentValue = attr.OwningSet.GetBaseFixedValue(attr);
+            var currentValue = attr.OwningSet.GetBaseFixedValue(attr);
                 for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
                 {
                     modifierChannelAccumulators[channelIndex].Reset();
@@ -5395,17 +5424,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                attr.OwningSet.PreAttributeChange(attr, ref currentValue);
-                // CurrentValue is derived from a mutation that already dirtied this attribute and
-                // reserved its replication version. Do not open a second transaction on the later
-                // aggregation pass, especially when the original reservation consumed MaxValue.
-                attr.SetCurrentValueRawUnchecked(currentValue.RawValue);
+            attr.OwningSet.PreAttributeChange(attr, ref currentValue);
+            // CurrentValue is derived from a mutation that already dirtied this attribute and
+            // reserved its replication version. Do not open a second transaction on the later
+            // aggregation pass, especially when the original reservation consumed MaxValue.
+            attr.SetCurrentValueRawUnchecked(currentValue.RawValue);
+        }
+
+        /// <summary>
+        /// Recalculates a dirty attribute before a live capture reads it. Recursion is bounded by
+        /// <see cref="MaxAttributeSettleDepth"/>; past the cap the last settled value is returned.
+        /// </summary>
+        internal void SettleAttribute(GameplayAttribute attribute)
+        {
+            if (attribute == null || !attribute.IsDirty)
+            {
+                return;
             }
 
-            dirtyAttributes.Clear();
-#if UNITY_EDITOR
-            GASAggregationProbe.OnRecalculateEnd(System.Diagnostics.Stopwatch.GetTimestamp());
-#endif
+            if (attributeSettleDepth >= MaxAttributeSettleDepth)
+            {
+                return;
+            }
+
+            attributeSettleDepth++;
+            try
+            {
+                RecalculateAttribute(attribute);
+            }
+            finally
+            {
+                attributeSettleDepth--;
+            }
         }
 
         private void OnEffectApplied(ActiveGameplayEffect effect)
@@ -6896,6 +6946,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             return false;
         }
+        /// <summary>
+        /// Scales a resolved magnitude by the active stack count: Add linearly, Multiply and
+        /// Division per stack (factor^stackCount), Override unscaled. Instant executions pass 1.
+        /// </summary>
+        private static long ScaleMagnitudeByStacks(long magnitudeRaw, EAttributeModifierOperation operation, int stackCount)
+        {
+            if (stackCount <= 1 || magnitudeRaw == 0L)
+            {
+                return magnitudeRaw;
+            }
+
+            GASFixedValue factor = GASFixedValue.FromRaw(magnitudeRaw);
+            switch (operation)
+            {
+                case EAttributeModifierOperation.Add:
+                    return (factor * GASFixedValue.FromInt(stackCount)).RawValue;
+                case EAttributeModifierOperation.Multiply:
+                case EAttributeModifierOperation.Division:
+                    GASFixedValue composed = GASFixedValue.One;
+                    for (int i = 0; i < stackCount; i++)
+                    {
+                        composed *= factor;
+                    }
+                    return composed.RawValue;
+                default:
+                    return magnitudeRaw;
+            }
+        }
+
         private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, long magnitudeRaw, bool isFromExecution)
         {
             if (attribute == null)

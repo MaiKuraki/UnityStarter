@@ -605,6 +605,21 @@ var cooldownEffect = new GameplayEffect(
 
 同一能力也可以在 `GameplayEffectSO` 资产上配置：在 Inspector 中启用 **Duration Magnitude**（`HasDuration` 时可见），选择 Calculation Type 后只显示相关字段。Inspector 摘要会显示 `Duration: data-driven (<type>)`，并对被拒绝的组合给出警告（非 `HasDuration` 启用 Magnitude、SetByCaller 未配置键、`ExtendDuration` 未搭配 `ClearEntireStack`）。
 
+### 属性捕获时机
+
+`AttributeBasedMagnitude` 的捕获时机如下：
+
+| 策略 | Source 捕获 | Target 捕获 |
+| --- | --- | --- |
+| `Snapshot` | Spec 创建时 | Effect 应用时 |
+| `NotSnapshot` | 每次求值 | 每次求值 |
+
+周期执行属于一次求值：`NotSnapshot` 的周期效果每跳重新读取属性，`Snapshot` 保留创建时（Source）或应用时（Target）的取值。实时捕获在读取前结算脏属性，因此同一帧内先写入的 BaseValue 对下一次 Tick 前施加的效果可见。
+
+周期执行按层数缩放求值后的量值：每跳 15 的流血叠 2 层即每跳 30。Multiply/Division 按层数做幂组合，与聚合契约一致；Override 不缩放。
+
+`Samples/Scripts/CombatCaptureTimingSample.cs` 打印实时/快照燃烧、按当前生命百分比中毒、叠层流血与持续治疗的 Per-tick 时间线。
+
 ### Magnitude、聚合与 Execution
 
 Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magnitude 可以采用：

@@ -381,19 +381,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool TryGetAttribute(GameplayEffectSpec spec, out GameplayAttribute attribute)
         {
+            return TryGetAttribute(spec, out attribute, out _);
+        }
+
+        /// <summary>
+        /// Resolves the captured attribute together with the ASC that owns it.
+        /// </summary>
+        internal bool TryGetAttribute(
+            GameplayEffectSpec spec,
+            out GameplayAttribute attribute,
+            out AbilitySystemComponent resolver)
+        {
             attribute = null;
+            resolver = null;
             if (spec == null || string.IsNullOrEmpty(AttributeName))
             {
                 return false;
             }
 
-            var asc = CaptureSource == EGameplayEffectAttributeCaptureSource.Source ? spec.Source : spec.Target;
-            if (asc == null)
+            resolver = CaptureSource == EGameplayEffectAttributeCaptureSource.Source ? spec.Source : spec.Target;
+            if (resolver == null)
             {
                 return false;
             }
 
-            attribute = asc.GetAttribute(AttributeName);
+            attribute = resolver.GetAttribute(AttributeName);
             return attribute != null;
         }
 
@@ -409,10 +421,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
         {
-            if (!TryGetAttribute(spec, out var attribute))
+            if (!TryGetAttribute(spec, out var attribute, out AbilitySystemComponent resolver))
             {
                 return 0L;
             }
+
+            // Settle first: a base write in the same frame is not in CurrentFixedValue yet.
+            resolver.SettleAttribute(attribute);
 
             GASFixedValue attributeValue;
             switch (CalculationType)
