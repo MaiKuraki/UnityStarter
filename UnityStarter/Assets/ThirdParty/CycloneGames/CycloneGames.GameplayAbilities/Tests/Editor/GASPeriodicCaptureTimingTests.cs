@@ -293,7 +293,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 }
                 long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
                 UnityEngine.Debug.Log($"[CaptureTiming][Alloc] 2000 periodic live-capture ticks: {allocated} bytes");
-                Assert.Zero(allocated, "Live magnitude refresh on periodic ticks must stay allocation-free.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocated, "Live magnitude refresh on periodic ticks must stay allocation-free.");
             }
             finally
             {

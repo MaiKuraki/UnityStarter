@@ -632,7 +632,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.That(checksum, Is.GreaterThan(0));
-            Assert.That(allocated, Is.Zero);
+            NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
         }
 
         private static int ExerciseFixedCodec(

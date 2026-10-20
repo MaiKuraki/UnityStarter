@@ -396,7 +396,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                         Assert.That(GASAggregationProbe.ModifierHits, Is.EqualTo(expectedHits),
                             $"Hit accounting mismatch at effects={effectCount} dirty={dirtyCount}.");
-                        Assert.Zero(allocated, $"Steady-state sweep must not allocate (effects={effectCount} dirty={dirtyCount}).");
+                        GASAllocationProbe.AssertNoMeasuredAllocation(allocated, $"Steady-state sweep must not allocate (effects={effectCount} dirty={dirtyCount}).");
                     }
                     finally
                     {

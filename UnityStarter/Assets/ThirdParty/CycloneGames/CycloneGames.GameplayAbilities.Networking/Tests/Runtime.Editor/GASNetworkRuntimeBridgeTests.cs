@@ -834,7 +834,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
                 for (int i = 0; i < 256; i++)
                     processor.Process(in command, ReadOnlySpan<GASNetworkEntityId>.Empty, out _);
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-                Assert.That(allocated, Is.Zero);
+                NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
 
                 Exception offThreadFailure = null;
                 var worker = new Thread(() =>

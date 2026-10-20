@@ -291,7 +291,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         internal void OnStackApplied()
         {
-            OnStackApplied(Spec.DurationRaw);
+            OnStackApplied(Spec.DurationRaw, null);
         }
 
         /// <summary>
@@ -303,9 +303,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <param name="applicationDurationRaw">
         /// The raw duration of the incoming application spec, read before its lease is released.
         /// </param>
-        internal void OnStackApplied(long applicationDurationRaw)
+        internal void OnStackApplied(long applicationDurationRaw, GameplayEffectSpec applicationSpec)
         {
             StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.Limit);
+
+            if (applicationSpec != null && !ReferenceEquals(applicationSpec, Spec))
+            {
+                // The newest application carries the payload: level, SetByCaller values, dynamic tags
+                // and snapshotted magnitudes. Granted abilities are tracked per effect, not per spec.
+                GameplayEffectSpec previous = Spec;
+                applicationSpec.TransferToActiveEffect();
+                Spec = applicationSpec;
+                previous?.ReleaseRuntimeLease();
+            }
 
             ApplyStackDurationPolicy(applicationDurationRaw);
 

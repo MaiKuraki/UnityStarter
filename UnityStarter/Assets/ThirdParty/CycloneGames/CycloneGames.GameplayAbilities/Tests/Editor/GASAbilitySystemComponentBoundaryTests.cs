@@ -66,7 +66,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.That(checksum, Is.GreaterThan(0));
-            Assert.That(allocated, Is.Zero);
+            GASAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
 
             asc.TryRemoveActiveEffect(effectResult.ActiveEffect);
             asc.ClearAbility(abilitySpec);
@@ -196,7 +196,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.That(allocated, Is.Zero);
+            GASAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
 
             asc.ClearAbility(spec);
             asc.Dispose();
@@ -439,7 +439,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.That(allocated, Is.Zero);
+            GASAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
             attributes.Resource.OnCurrentValueChanged -= laterObserver;
             asc.Dispose();
         }

@@ -9,13 +9,6 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
-    public enum EReplicationMode
-    {
-        Full,
-        Mixed,
-        Minimal
-    }
-
     public enum GASRuntimeThreadPolicy : byte
     {
         Disabled,
@@ -202,20 +195,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public object AvatarActor { get; private set; }
         public UnityEngine.Object OwnerUnityObject { get; private set; }
         public GameObject AvatarGameObject { get; private set; }
-        private EReplicationMode replicationMode = EReplicationMode.Full;
-        public EReplicationMode ReplicationMode
-        {
-            get
-            {
-                AssertRuntimeThread();
-                return replicationMode;
-            }
-            set
-            {
-                AssertRuntimeThread();
-                replicationMode = value;
-            }
-        }
         public GASRuntimeContext RuntimeContext { get; }
         public GASRuntimeLimits Limits { get; }
         public bool IsDisposed => disposed;
@@ -4433,9 +4412,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
 
                 bool stacked;
+                bool specConsumed = false;
                 try
                 {
-                    stacked = HandleStacking(spec);
+                    stacked = HandleStacking(spec, out specConsumed);
                 }
                 catch (Exception exception)
                 {
@@ -4447,7 +4427,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (stacked)
                 {
                     RemoveEffectsWithTags(spec.Def.RemoveGameplayEffectsWithTags);
-                    spec.ReleaseRuntimeLease();
+                    if (!specConsumed)
+                    {
+                        spec.ReleaseRuntimeLease();
+                    }
                     return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.Stacked);
                 }
 
@@ -6819,8 +6802,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private const int MaxOverflowApplicationDepth = 256;
 
-        private bool HandleStacking(GameplayEffectSpec spec)
+        private bool HandleStacking(GameplayEffectSpec spec, out bool specConsumed)
         {
+            specConsumed = false;
+
             if (spec.Def.Stacking.Type == EGameplayEffectStackingType.None)
             {
                 return false;
@@ -6897,7 +6882,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else
             {
-                existingEffect.OnStackApplied(spec.DurationRaw);
+                // Dynamic granted tags are indexed by the ASC, so the entry is rebuilt around the swap.
+                ActiveEffectContainer.UntrackGrantedTags(existingEffect);
+                try
+                {
+                    existingEffect.OnStackApplied(spec.DurationRaw, spec);
+                    specConsumed = true;
+                }
+                finally
+                {
+                    ActiveEffectContainer.TrackGrantedTags(existingEffect);
+                }
             }
 
             MarkActiveEffectsDirty();
@@ -8403,6 +8398,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             stateDeltaResyncRequired = true;
             DispatchStateDeltaResyncObservers(reason);
+        }
+
+        /// <summary>
+        /// Enters the delta-resync state without a transport. Tests use it to exercise the tick
+        /// freeze and resume contract.
+        /// </summary>
+        internal void RequireStateDeltaResyncForTests(GASStateDeltaRejectionReason reason)
+        {
+            AssertRuntimeThread();
+            RequireStateDeltaResync(reason);
         }
 
         private void RemoveActiveEffectByReconciliationId(int reconciliationId)
