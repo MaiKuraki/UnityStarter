@@ -225,7 +225,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
 
                 UnityEngine.Debug.Log($"[InstantResolution Benchmark] Steady-state allocation over {AllocationProbeIterations} instant applications: {allocatedBytes} bytes");
-                Assert.Zero(allocatedBytes, "The instant application path must not allocate managed memory in steady state.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, "The instant application path must not allocate managed memory in steady state.");
             }
             finally
             {

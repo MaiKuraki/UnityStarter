@@ -259,7 +259,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 }
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
                 UnityEngine.Debug.Log($"[ModeCompat][Bias] steady-state allocation over 2000 ticks: {allocated} bytes");
-                Assert.Zero(allocated, "Bias mode must keep the zero-allocation steady-state contract.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocated, "Bias mode must keep the zero-allocation steady-state contract.");
             }
             finally
             {

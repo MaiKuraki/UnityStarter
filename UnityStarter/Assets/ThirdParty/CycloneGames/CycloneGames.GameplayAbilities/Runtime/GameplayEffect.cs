@@ -253,6 +253,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public IReadOnlyList<GameplayAbility> GrantedAbilities { get; }
 
         /// <summary>
+        /// Per-grant removal policy aligned with <see cref="GrantedAbilities"/> by index. Empty means every
+        /// grant uses <see cref="EGameplayEffectGrantedAbilityRemovePolicy.CancelAbilityImmediately"/>.
+        /// </summary>
+        public IReadOnlyList<EGameplayEffectGrantedAbilityRemovePolicy> GrantedAbilityRemovalPolicies { get; }
+
+        /// <summary>
         /// A list of GameplayCue tags to trigger when this effect is applied, removed, or executed.
         /// </summary>
         public GameplayDefinitionTagSet GameplayCues { get; }
@@ -266,6 +272,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Tags that are temporarily granted to the target's AbilitySystemComponent for the duration of this effect.
         /// </summary>
         public GameplayDefinitionTagSet GrantedTags { get; }
+
+        /// <summary>
+        /// Ability tags blocked while this effect contributes. Blocked tags gate ability activation and are
+        /// withdrawn together with granted tags when the effect is inhibited.
+        /// </summary>
+        public GameplayDefinitionTagSet BlockedAbilityTags { get; }
 
         /// <summary>
         /// Defines the tag requirements on a target for this effect to be successfully applied.
@@ -323,6 +335,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal ReadOnlyGameplayTagContainer GameplayCuesSnapshot { get; }
         internal ReadOnlyGameplayTagContainer AssetTagsSnapshot { get; }
         internal ReadOnlyGameplayTagContainer GrantedTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer BlockedAbilityTagsSnapshot { get; }
         internal ReadOnlyGameplayTagContainer RemoveGameplayEffectsWithTagsSnapshot { get; }
         internal ReadOnlyGameplayTagContainer ApplicationRequiredTagsSnapshot { get; }
         internal ReadOnlyGameplayTagContainer ApplicationForbiddenTagsSnapshot { get; }
@@ -351,7 +364,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             List<GameplayEffect> overflowEffects = null,
             bool denyOverflowApplication = false,
             EGameplayEffectPeriodInhibitionRemovedPolicy periodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset,
-            DurationMagnitudeInfo durationMagnitude = null)
+            DurationMagnitudeInfo durationMagnitude = null,
+            IReadOnlyGameplayTagContainer blockedAbilityTags = null,
+            List<EGameplayEffectGrantedAbilityRemovePolicy> grantedAbilityRemovalPolicies = null)
         {
             ValidateBoundedString(name, MaxNameLength, nameof(name), allowWhitespace: false);
             ValidateDuration(durationPolicy, duration, period, durationMagnitude);
@@ -363,12 +378,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ValidateCollectionCount(overflowEffects, MaxOverflowEffectCount, nameof(overflowEffects));
             ValidateModifiers(modifiers);
             ValidateGrantedAbilities(durationPolicy, grantedAbilities);
+            ValidateGrantedAbilityRemovalPolicies(grantedAbilities, grantedAbilityRemovalPolicies);
             ValidateRequirements(customApplicationRequirements);
             ValidateOverflowEffects(overflowEffects);
 
             int aggregateTagCount = 0;
             AssetTags = CreateTagSet(assetTags, nameof(assetTags), ref aggregateTagCount);
             GrantedTags = CreateTagSet(grantedTags, nameof(grantedTags), ref aggregateTagCount);
+            BlockedAbilityTags = CreateTagSet(
+                blockedAbilityTags,
+                nameof(blockedAbilityTags),
+                ref aggregateTagCount);
             ApplicationTagRequirements = CreateRequirements(
                 applicationTagRequirements,
                 nameof(applicationTagRequirements),
@@ -392,6 +412,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Execution = execution;
             Stacking = stacking;
             GrantedAbilities = Freeze(grantedAbilities);
+            GrantedAbilityRemovalPolicies = Freeze(grantedAbilityRemovalPolicies);
             SuppressGameplayCues = suppressGameplayCues;
             RemoveGameplayEffectsAfterAbilityEnds = removeGameplayEffectsAfterAbilityEnds;
             CustomApplicationRequirements = Freeze(customApplicationRequirements);
@@ -403,6 +424,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GameplayCuesSnapshot = GameplayCues.Snapshot;
             AssetTagsSnapshot = AssetTags.Snapshot;
             GrantedTagsSnapshot = GrantedTags.Snapshot;
+            BlockedAbilityTagsSnapshot = BlockedAbilityTags.Snapshot;
             RemoveGameplayEffectsWithTagsSnapshot = RemoveGameplayEffectsWithTags.Snapshot;
             ApplicationRequiredTagsSnapshot = ApplicationTagRequirements.RequiredTags.Snapshot;
             ApplicationForbiddenTagsSnapshot = ApplicationTagRequirements.ForbiddenTags.Snapshot;
@@ -672,8 +694,33 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        private static void ValidateGrantedAbilities(EDurationPolicy durationPolicy, List<GameplayAbility> grantedAbilities)
+        private static void ValidateGrantedAbilityRemovalPolicies(
+            List<GameplayAbility> grantedAbilities,
+            List<EGameplayEffectGrantedAbilityRemovePolicy> policies)
         {
+            if (policies == null) return;
+
+            int grantedCount = grantedAbilities?.Count ?? 0;
+            if (policies.Count != grantedCount)
+            {
+                throw new ArgumentException(
+                    "Granted ability removal policies must match the granted ability count.",
+                    nameof(policies));
+            }
+
+            for (int i = 0; i < policies.Count; i++)
+            {
+                if (policies[i] < EGameplayEffectGrantedAbilityRemovePolicy.CancelAbilityImmediately ||
+                    policies[i] > EGameplayEffectGrantedAbilityRemovePolicy.DoNothing)
+                {
+                    throw new ArgumentException(
+                        $"Granted ability removal policy {i} is invalid.",
+                        nameof(policies));
+                }
+            }
+        }
+
+        private static void ValidateGrantedAbilities(EDurationPolicy durationPolicy, List<GameplayAbility> grantedAbilities)        {
             if (grantedAbilities == null) return;
             if (durationPolicy == EDurationPolicy.Instant && grantedAbilities.Count > 0)
             {

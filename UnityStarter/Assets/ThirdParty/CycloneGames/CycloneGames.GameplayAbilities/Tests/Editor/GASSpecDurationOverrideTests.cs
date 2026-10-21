@@ -141,9 +141,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(asc.ActiveEffects.Count, Is.EqualTo(1), "Stacking must aggregate into a single active effect.");
             Assert.That(asc.ActiveEffects[0].TimeRemaining, Is.EqualTo(3f),
                 "Duration refresh on stacking must use the new spec's overridden duration.");
-            Assert.That(asc.ActiveEffects[0].Spec.Duration, Is.EqualTo(8f),
-                "The active effect deliberately retains the first application's spec lease; " +
-                "only the duration is adopted from the incoming spec.");
+            Assert.That(asc.ActiveEffects[0].Spec.Duration, Is.EqualTo(3f),
+                "The newest application replaces the active spec; only granted abilities stay with the first.");
 
             asc.Dispose();
         }

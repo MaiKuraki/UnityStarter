@@ -53,6 +53,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal bool EndCallInProgress { get; set; }
 
         /// <summary>
+        /// Set when the granting effect was inhibited with <see cref="EGameplayEffectGrantedAbilityRemovePolicy.RemoveAbilityOnEnd"/>.
+        /// The spec is cleared once it stops executing.
+        /// </summary>
+        internal bool RemoveOnEnd { get; set; }
+
+        /// <summary>
         /// Reference to the owning ASC.
         /// </summary>
         public AbilitySystemComponent Owner { get; private set; }

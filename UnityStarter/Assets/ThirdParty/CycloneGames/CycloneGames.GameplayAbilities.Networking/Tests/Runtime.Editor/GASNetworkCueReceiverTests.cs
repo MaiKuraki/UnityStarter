@@ -262,7 +262,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
                 Assert.That(result, Is.EqualTo(GASNetworkCueReceiveResult.Consumed));
                 Assert.That(tracked, Is.True);
                 Assert.That(removed, Is.EqualTo(1));
-                Assert.That(allocated, Is.Zero);
+                NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
 
                 Exception offThreadFailure = null;
                 var worker = new Thread(() =>

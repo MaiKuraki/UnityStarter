@@ -4,11 +4,14 @@ using CycloneGames.GameplayAbilities.Runtime;
 namespace CycloneGames.GameplayAbilities.Sample
 {
     /// <summary>
-    /// A MonoBehaviour wrapper to host the pure C# AbilitySystemComponent.
-    /// This component should be attached to any GameObject that needs to use the ability system.
+    /// Hosts a pure C# AbilitySystemComponent on a GameObject and drives it from the Unity loop.
     /// </summary>
     public class AbilitySystemComponentHolder : MonoBehaviour
     {
+        [SerializeField]
+        [Tooltip("True when this peer owns authoritative simulation for the component.")]
+        private bool runsServerSimulation = true;
+
         public AbilitySystemComponent AbilitySystemComponent { get; private set; }
 
         public void Initialize(GASRuntimeContext runtimeContext)
@@ -26,14 +29,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             AbilitySystemComponent = new AbilitySystemComponent(runtimeContext);
         }
 
-        // It's good practice to provide a Tick method that can be called by a central manager
-        // or by another component on this GameObject (like the Character class).
         public void Tick(float deltaTime)
         {
-            AbilitySystemComponent?.Tick(deltaTime, true); // Assuming server/single-player context.
+            AbilitySystemComponent?.Tick(deltaTime, runsServerSimulation);
         }
 
-        // Ensure the pure C# class is disposed of when the MonoBehaviour is destroyed.
         private void OnDestroy()
         {
             Shutdown();

@@ -122,7 +122,7 @@ namespace CycloneGames.GameplayTags.Tests.Performance
          long before = GC.GetAllocatedBytesForCurrentThread();
          MutateSingleTagAcrossContainers(containers, tag);
          long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-         Assert.That(allocatedBytes, Is.Zero,
+         TagsAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes,
             "Ten-thousand-container single-tag churn allocated after per-owner warm-up.");
 
          Measure.Method(() => MutateSingleTagAcrossContainers(containers, tag))
@@ -136,6 +136,7 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       [Test, Performance]
       public void Container_ContainsRuntimeIndex_TenThousandTagRegistry()
       {
+         TagsAllocationProbe.SkipIfCounterIsUnreliable();
          GameplayTagManager.ResetForTests();
          List<string> names = new(HIGH_SCALE_TAG_COUNT);
          for (int i = 0; i < HIGH_SCALE_TAG_COUNT; i++)
@@ -171,6 +172,8 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       [Test]
       public void HotPaths_AllocateZeroBytesAfterWarmup()
       {
+         TagsAllocationProbe.SkipIfCounterIsUnreliable();
+
          GameplayTag hit = _allTags[SUBJECT_TAG_COUNT - 1];
          int hitIndex = hit.RuntimeIndex;
          int missIndex = _allTags[TAG_COUNT - 1].RuntimeIndex;

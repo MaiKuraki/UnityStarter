@@ -1,5 +1,7 @@
+using System;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -8,11 +10,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public sealed class GameplayCueDispatcher
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         private readonly GASRuntimeContext runtimeContext;
 
         public GameplayCueDispatcher(GASRuntimeContext runtimeContext)
         {
-            this.runtimeContext = runtimeContext ?? throw new System.ArgumentNullException(nameof(runtimeContext));
+            this.runtimeContext = runtimeContext ?? throw new ArgumentNullException(nameof(runtimeContext));
         }
 
         public void DispatchGameplayCues(GameplayEffectSpec spec, EGameplayCueEvent eventType)
@@ -32,7 +36,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // cue entries are dispatch events; GameplayCueManager owns hierarchical lookup.
             foreach (var cueTag in spec.Def.GameplayCues.GetExplicitTags())
             {
-                DispatchCueTag(spec, cueTag, eventType, parameters);
+                // One failing handler must not drop the remaining cues of the same effect.
+                try
+                {
+                    DispatchCueTag(spec, cueTag, eventType, parameters);
+                }
+                catch (Exception exception)
+                {
+                    Log.Error(exception, $"Gameplay cue '{cueTag.Name}' failed during {eventType} dispatch.");
+                }
             }
         }
 

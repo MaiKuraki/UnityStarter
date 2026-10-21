@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.GameplayAbilities.Runtime",
         "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime",
         "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
