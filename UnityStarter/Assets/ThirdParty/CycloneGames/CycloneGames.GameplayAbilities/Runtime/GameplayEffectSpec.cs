@@ -727,12 +727,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void EnsureCapacity(int count)
         {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            // Arrays are checked independently: a pooled backing can supply a longer magnitude
+            // array than this spec's own arrays, so a single gate can leave one array short.
+            int newSize = System.Math.Max(
+                count,
+                modifierMagnitudes.Length == 0 ? 8 : modifierMagnitudes.Length * 2);
+
             if (modifierMagnitudes.Length < count)
             {
-                int newSize = System.Math.Max(count, modifierMagnitudes.Length == 0 ? 8 : modifierMagnitudes.Length * 2);
                 System.Array.Resize(ref modifierMagnitudes, newSize);
+            }
+            if (modifierMagnitudeRawValues.Length < count)
+            {
                 System.Array.Resize(ref modifierMagnitudeRawValues, newSize);
+            }
+            if (targetAttributes.Length < count)
+            {
                 System.Array.Resize(ref targetAttributes, newSize);
+            }
+            if (dependencySourceAttributes.Length < count)
+            {
                 System.Array.Resize(ref dependencySourceAttributes, newSize);
             }
         }
@@ -783,6 +802,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureCapacity(modifierCount);
             for (int i = 0; i < modifierCount; i++)
             {
+                if (i >= dependencySourceAttributes.Length)
+                {
+                    throw new System.InvalidOperationException(
+                        $"GAS spec dependency array under-sized: modifierCount={modifierCount}, " +
+                        $"dependencySourceAttributes={dependencySourceAttributes.Length}, " +
+                        $"modifierMagnitudes={modifierMagnitudes.Length}, " +
+                        $"def={(Def == null ? "<null>" : Def.Name)}, defModifiers={(Def == null || Def.Modifiers == null ? -1 : Def.Modifiers.Count)}");
+                }
+
                 dependencySourceAttributes[i] = null;
                 ModifierInfo modifier = Def?.Modifiers?[i];
                 if (modifier == null ||
@@ -1868,6 +1896,53 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             StoreCalculatedMagnitudeRaw(index, magnitudeRaw);
+        }
+
+        /// <summary>
+        /// Re-evaluates NotSnapshot attribute-based magnitudes. Periodic effects bypass continuous
+        /// aggregation, so each execution refreshes them here.
+        /// </summary>
+        internal void RefreshLiveAttributeMagnitudes()
+        {
+            IReadOnlyList<ModifierInfo> modifiers = Def?.Modifiers;
+            if (modifiers == null)
+            {
+                return;
+            }
+
+            int count = Math.Min(modifierCount, modifiers.Count);
+            for (int i = 0; i < count; i++)
+            {
+                if (modifiers[i].ShouldRecalculateLiveMagnitude)
+                {
+                    RecalculateCalculatedMagnitude(i);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Re-captures Snapshot+Target magnitudes at application time: the target is unknown when
+        /// the spec is created, while Snapshot+Source stays frozen at creation.
+        /// </summary>
+        internal void RefreshSnapshotTargetMagnitudes()
+        {
+            IReadOnlyList<ModifierInfo> modifiers = Def?.Modifiers;
+            if (modifiers == null)
+            {
+                return;
+            }
+
+            int count = Math.Min(modifierCount, modifiers.Count);
+            for (int i = 0; i < count; i++)
+            {
+                ModifierInfo modifier = modifiers[i];
+                if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased &&
+                    modifier.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.Snapshot &&
+                    modifier.AttributeBasedMagnitude.CaptureSource == EGameplayEffectAttributeCaptureSource.Target)
+                {
+                    RecalculateCalculatedMagnitude(i);
+                }
+            }
         }
 
         internal void RecalculateCalculatedMagnitude(int index)

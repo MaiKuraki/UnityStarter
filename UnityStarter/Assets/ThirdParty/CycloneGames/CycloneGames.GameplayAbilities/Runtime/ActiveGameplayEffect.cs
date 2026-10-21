@@ -34,6 +34,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool IsInhibited { get; internal set; }
 
         /// <summary>
+        /// True while this effect's granted tags are present in the owner's tag containers. Inhibition
+        /// withdraws them, so removal paths must consult this flag before decrementing tag counts.
+        /// </summary>
+        internal bool GrantedTagsVisible { get; set; }
+
+        /// <summary>
         /// ASC-owned process-local reconciliation identifier.
         /// It is assigned monotonically for the effect lifetime and is never a stable wire identity.
         /// </summary>
@@ -291,7 +297,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         internal void OnStackApplied()
         {
-            OnStackApplied(Spec.DurationRaw);
+            OnStackApplied(Spec.DurationRaw, null);
         }
 
         /// <summary>
@@ -303,9 +309,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <param name="applicationDurationRaw">
         /// The raw duration of the incoming application spec, read before its lease is released.
         /// </param>
-        internal void OnStackApplied(long applicationDurationRaw)
+        internal void OnStackApplied(long applicationDurationRaw, GameplayEffectSpec applicationSpec)
         {
             StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.Limit);
+
+            if (applicationSpec != null && !ReferenceEquals(applicationSpec, Spec))
+            {
+                // The newest application carries the payload: level, SetByCaller values, dynamic tags
+                // and snapshotted magnitudes. Granted abilities are tracked per effect, not per spec.
+                GameplayEffectSpec previous = Spec;
+                applicationSpec.TransferToActiveEffect();
+                Spec = applicationSpec;
+                previous?.ReleaseRuntimeLease();
+            }
 
             ApplyStackDurationPolicy(applicationDurationRaw);
 

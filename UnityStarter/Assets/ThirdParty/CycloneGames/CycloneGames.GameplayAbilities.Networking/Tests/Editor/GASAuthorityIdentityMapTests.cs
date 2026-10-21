@@ -188,7 +188,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             }
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.That(allocated, Is.Zero);
+            NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
         }
 
         [Test]

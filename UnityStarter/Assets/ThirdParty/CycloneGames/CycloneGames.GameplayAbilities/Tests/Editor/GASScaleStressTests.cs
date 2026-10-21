@@ -48,7 +48,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 Assert.That(GASAggregationProbe.ModifierHits, Is.EqualTo(expectedHits),
                     "Every dirty attribute (periodic subset + live-dependency targets) must aggregate exactly its three matching modifiers per tick.");
                 Assert.That(GASAggregationProbe.ModifierVisits, Is.EqualTo(GASAggregationProbe.ModifierHits));
-                Assert.Zero(allocatedBytes, "Steady-state open-world ticking must not allocate managed memory.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, "Steady-state open-world ticking must not allocate managed memory.");
             }
             finally
             {
@@ -102,7 +102,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     $"hits={GASAggregationProbe.ModifierHits} allocatedBytes={allocatedBytes}");
 
                 Assert.Zero(GASAggregationProbe.ModifierHits, "Idle entities (nothing dirtied) must not aggregate.");
-                Assert.Zero(allocatedBytes, "Idle steady state must not allocate managed memory.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, "Idle steady state must not allocate managed memory.");
             }
             finally
             {
@@ -136,7 +136,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                 Assert.That(GASAggregationProbe.ModifierHits, Is.EqualTo(expectedHits),
                     "Mixed duty must aggregate exactly the combat entities' dirty attributes.");
-                Assert.Zero(allocatedBytes, "Mixed duty steady state must not allocate managed memory.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, "Mixed duty steady state must not allocate managed memory.");
             }
             finally
             {
@@ -186,7 +186,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                     Assert.That(GASAggregationProbe.ModifierHits, Is.EqualTo(expectedHits),
                         $"Hit accounting mismatch at {effectCount} active effects per entity.");
-                    Assert.Zero(allocatedBytes, $"Steady state must not allocate at {effectCount} active effects per entity.");
+                    GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, $"Steady state must not allocate at {effectCount} active effects per entity.");
                 }
                 finally
                 {
@@ -268,7 +268,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     $"dirtyAttrs={GASAggregationProbe.DirtyAttributesProcessed} " +
                     $"dependentsScanSlots={GASAggregationProbe.DependentsScanSlotVisits}");
 
-                Assert.Zero(tickAllocatedBytes, "The burst absorption tick must not allocate managed memory.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(tickAllocatedBytes, "The burst absorption tick must not allocate managed memory.");
                 Assert.That(GASAggregationProbe.RecalculatePasses, Is.LessThanOrEqualTo(2),
                     "A burst frame must coalesce into at most the two standard aggregation passes, not one per effect.");
 

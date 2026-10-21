@@ -42,9 +42,8 @@ namespace CycloneGames.GameplayAbilities.Core
         MultiplicativeProduct,
 
         /// <summary>
-        /// Opt-in stock Unreal Engine aggregator semantics: Multiply and Division bias-sum
-        /// (1 + sum(Mi - 1); two x2 modifiers yield x3) with linear stack scaling
-        /// (stacked magnitude = magnitude x stackCount). Use only when reproducing UE project values.
+        /// Multiply and Division form a bias sum (1 + sum(Mi - 1); two x2 modifiers yield x3) and
+        /// stacked magnitude scales linearly (magnitude x stackCount).
         /// </summary>
         UnrealBiasSum
     }
