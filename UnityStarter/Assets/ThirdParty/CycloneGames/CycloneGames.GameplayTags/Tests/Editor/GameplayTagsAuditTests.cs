@@ -291,7 +291,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
             _ = sink;
             UnityEngine.Debug.Log($"[TagsAudit][Alloc] steady-state 20000 x (2 lookups + count churn + query): {allocated} bytes");
-            Assert.Zero(allocated, "Warm tag hot paths must not allocate managed memory.");
+            TagsAllocationProbe.AssertNoMeasuredAllocation(allocated, "Warm tag hot paths must not allocate managed memory.");
         }
 
         [Test]

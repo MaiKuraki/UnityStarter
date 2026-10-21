@@ -190,7 +190,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 }
                 long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
 
-                Assert.Zero(allocatedBytes);
+                GASAllocationProbe.AssertNoMeasuredAllocation(allocatedBytes, "Steady state must not allocate managed memory.");
             }
             finally
             {

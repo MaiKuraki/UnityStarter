@@ -179,9 +179,10 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 UnityEngine.Debug.Log(
                     $"[DesignAudit][Allocation] tick x{probeIterations} on 50 characters: {tickBytes} bytes; " +
                     $"checksum x{probeIterations}: {checksumBytes} bytes");
-                Assert.Zero(tickBytes, "Steady-state tick must not allocate managed memory.");
-                Assert.Zero(checksumBytes, "Steady-state checksum computation must not allocate managed memory.");
-            }
+                GASAllocationProbe.AssertNoMeasuredAllocation(tickBytes,
+                    "Steady-state tick must not allocate managed memory.");
+                GASAllocationProbe.AssertNoMeasuredAllocation(checksumBytes,
+                    "Steady-state checksum computation must not allocate managed memory.");            }
             finally
             {
                 DisposeAll(characters);

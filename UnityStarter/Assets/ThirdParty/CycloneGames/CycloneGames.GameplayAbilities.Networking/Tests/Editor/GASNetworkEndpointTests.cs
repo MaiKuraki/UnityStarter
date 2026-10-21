@@ -713,7 +713,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
 
             Assert.That(sink.CommandCount, Is.EqualTo(101_000));
             Assert.That(failures.Count, Is.Zero);
-            Assert.That(allocated, Is.Zero);
+            NetAllocationProbe.AssertNoMeasuredAllocation(allocated, "Steady state must not allocate managed memory.");
         }
 
         private static void EstablishClient(

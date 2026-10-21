@@ -55,7 +55,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     pool.Return(lease);
                 }
 
-                Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
+                GASAllocationProbe.AssertNoMeasuredAllocation(GC.GetAllocatedBytesForCurrentThread() - before, "Steady state must not allocate managed memory.");
                 Assert.That(pool.OutstandingCount, Is.Zero);
                 Assert.That(pool.PeakOutstandingCount, Is.EqualTo(1));
             }
@@ -762,6 +762,36 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(attributes.Secondary.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(200).RawValue));
             Assert.That(asc.ActiveEffects, Is.Empty);
             Assert.That(asc.RuntimeContext.GetMemoryStatistics().OutstandingLeases, Is.EqualTo(0));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void InstantEffect_MultipleAttributesApply_WhenNoHookThrows()
+        {
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new DualResourceAttributeSet();
+            SetAttributeValues(attributes.Primary, 100f);
+            SetAttributeValues(attributes.Secondary, 200f);
+            asc.AddAttributeSet(attributes);
+            var effect = new GameplayEffect(
+                "TransactionalInstantControl",
+                EDurationPolicy.Instant,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo("Primary", EAttributeModifierOperation.Add, new ScalableFloat(-10f)),
+                    new ModifierInfo("Secondary", EAttributeModifierOperation.Add, new ScalableFloat(-20f))
+                });
+
+            GameplayEffectApplicationResult result = asc.ApplyGameplayEffectSpecToSelf(
+                GameplayEffectSpec.Create(effect, asc));
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(attributes.Primary.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+            Assert.That(attributes.Primary.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(90).RawValue));
+            Assert.That(attributes.Secondary.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(180).RawValue));
+            Assert.That(attributes.Secondary.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(180).RawValue));
+            Assert.That(asc.ActiveEffects, Is.Empty);
 
             asc.Dispose();
         }

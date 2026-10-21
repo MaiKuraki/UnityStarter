@@ -208,16 +208,14 @@ namespace CycloneGames.GameplayTags.Core
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       /// <summary>
-      /// Read members fail fast while a mutation is in flight. A notification callback may have put the
-      /// container into a transient state (and may even have swapped the registry underneath it), so any
-      /// read served mid-mutation would observe half-applied counts. Callbacks queue work and apply it
-      /// after <see cref="Clear"/> completes; the same rule protects reads.
+      /// Reads fail fast while a mutation is in flight, because a notification callback may leave the
+      /// container in a transient state. A rejected read does not poison the container: the caller can
+      /// read again once the mutation completes.
       /// </summary>
       private void ThrowIfMutationInProgress()
       {
          if (m_MutationDepth > 0)
          {
-            m_Poisoned = true;
             throw new InvalidOperationException(
                "This gameplay tag count container is mid-mutation (a notification callback is running). " +
                "Queue the read and retry after the current operation completes.");

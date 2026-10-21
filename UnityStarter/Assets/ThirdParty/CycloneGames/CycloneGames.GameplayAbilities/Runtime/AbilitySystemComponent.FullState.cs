@@ -97,6 +97,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
 
                     ApplyFullLooseTagState(snapshot.LooseTags, snapshot.LooseTagCount);
+                    SettleInhibitionChain();
                     ApplyGrantedAbilityReplacement(snapshot.GrantedAbilities, snapshot.GrantedAbilityCount);
 
                     if (dirtyAttributes.Count > 0)

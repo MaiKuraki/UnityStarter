@@ -19,11 +19,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         protected override GameplayEffect CreateGameplayEffect()
         {
             var grantedAbilities = new List<GameplayAbility>();
+            var grantedAbilityPolicies = new List<EGameplayEffectGrantedAbilityRemovePolicy>();
             if (GrantedAbilities != null)
             {
-                foreach (var abilitySO in GrantedAbilities)
+                for (int i = 0; i < GrantedAbilities.Count; i++)
                 {
-                    if (abilitySO != null) grantedAbilities.Add(abilitySO.GetGameplayAbility());
+                    var abilitySO = GrantedAbilities[i];
+                    if (abilitySO == null) continue;
+
+                    grantedAbilities.Add(abilitySO.GetGameplayAbility());
+                    grantedAbilityPolicies.Add(
+                        GrantedAbilityRemovalPolicies != null && i < GrantedAbilityRemovalPolicies.Count
+                            ? GrantedAbilityRemovalPolicies[i]
+                            : EGameplayEffectGrantedAbilityRemovePolicy.CancelAbilityImmediately);
                 }
             }
 
@@ -74,7 +82,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 overflowEffects: runtimeOverflowEffects,
                 denyOverflowApplication: DenyOverflowApplication,
                 periodicInhibitionPolicy: PeriodicInhibitionPolicy,
-                durationMagnitude: DurationMagnitude?.ToRuntimeInfo()
+                durationMagnitude: DurationMagnitude?.ToRuntimeInfo(),
+                blockedAbilityTags: BlockedAbilityTags,
+                grantedAbilityRemovalPolicies: grantedAbilityPolicies
             );
         }
 
