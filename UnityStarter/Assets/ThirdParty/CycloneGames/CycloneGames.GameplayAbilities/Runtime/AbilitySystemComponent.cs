@@ -193,8 +193,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public object OwnerActor { get; private set; }
         public object AvatarActor { get; private set; }
-        public UnityEngine.Object OwnerUnityObject { get; private set; }
-        public GameObject AvatarGameObject { get; private set; }
+
+        private UnityEngine.Object ownerUnityObject;
+        private GameObject avatarGameObject;
+
+        /// <summary>Owner component; reads as null once the underlying Unity object is destroyed.</summary>
+        public UnityEngine.Object OwnerUnityObject => ownerUnityObject == null ? null : ownerUnityObject;
+
+        /// <summary>Avatar GameObject; reads as null once it is destroyed.</summary>
+        public GameObject AvatarGameObject => avatarGameObject == null ? null : avatarGameObject;
         public GASRuntimeContext RuntimeContext { get; }
         public GASRuntimeLimits Limits { get; }
         public bool IsDisposed => disposed;
@@ -1417,8 +1424,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             AssertRuntimeThread();
             OwnerActor = owner;
             AvatarActor = avatar;
-            OwnerUnityObject = owner as UnityEngine.Object;
-            AvatarGameObject = ResolveActorGameObject(avatar);
+            UnityEngine.Object ownerUnity = owner as UnityEngine.Object;
+            ownerUnityObject = ownerUnity == null ? null : ownerUnity;
+            avatarGameObject = ResolveActorGameObject(avatar);
             cachedActorInfo = new GameplayAbilityActorInfo(owner, avatar);
         }
 
@@ -1514,12 +1522,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private static GameObject ResolveActorGameObject(object actor)
         {
-            if (actor is GameObject gameObject)
+            if (actor is GameObject gameObject && gameObject != null)
             {
                 return gameObject;
             }
 
-            if (actor is Component component)
+            if (actor is Component component && component != null)
             {
                 return component.gameObject;
             }
@@ -2669,7 +2677,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var attributeAccumulator = new UnorderedHashAccumulator();
             for (int i = 0; i < attributeSets.Count; i++)
             {
-                foreach (var attribute in attributeSets[i].GetAttributes())
+                foreach (var attribute in attributeSets[i].AttributeValues)
                 {
                     ulong entryHash = Fnv1a64.OffsetBasis;
                     entryHash = HashString(entryHash, attribute.Name);
@@ -6957,8 +6965,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             stateDeltaResyncObservers.Clear();
             OwnerActor = null;
             AvatarActor = null;
-            OwnerUnityObject = null;
-            AvatarGameObject = null;
+            ownerUnityObject = null;
+            avatarGameObject = null;
         }
 
         private const int MaxOverflowApplicationDepth = 256;
@@ -7974,7 +7982,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             int index = 0;
             for (int setIndex = 0; setIndex < attributeSets.Count; setIndex++)
             {
-                foreach (var attr in attributeSets[setIndex].GetAttributes())
+                foreach (var attr in attributeSets[setIndex].AttributeValues)
                 {
                     entries[index++] = GASAttributeStateData.FromRaw(attr.Name, attr.BaseValueRaw, attr.CurrentValueRaw);
                 }

@@ -181,8 +181,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EffectDefinition = parameters.EffectDefinition as GameplayEffect;
             Source = parameters.Source as AbilitySystemComponent;
             Target = parameters.Target as AbilitySystemComponent;
-            SourceObject = parameters.SourceObject as GameObject ?? Source?.AvatarGameObject;
-            TargetObject = parameters.TargetObject as GameObject ?? Target?.AvatarGameObject;
+            GameObject sourceObject = parameters.SourceObject as GameObject;
+            if (sourceObject == null && Source != null)
+            {
+                sourceObject = Source.AvatarGameObject;
+            }
+
+            GameObject targetObject = parameters.TargetObject as GameObject;
+            if (targetObject == null && Target != null)
+            {
+                targetObject = Target.AvatarGameObject;
+            }
+
+            SourceObject = sourceObject == null ? null : sourceObject;
+            TargetObject = targetObject == null ? null : targetObject;
             EffectLevel = parameters.EffectLevel;
             EffectDurationRaw = parameters.EffectDurationRaw;
             PredictionKey = parameters.PredictionKey;

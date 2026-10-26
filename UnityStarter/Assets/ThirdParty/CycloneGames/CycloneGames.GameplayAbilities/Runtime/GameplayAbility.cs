@@ -66,30 +66,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// This actor is responsible for the lifetime of the ASC.
         /// </summary>
         public readonly object OwnerActor;
-        public readonly UnityEngine.Object OwnerUnityObject;
         /// <summary>
         /// The physical representation of the owner in the game world, typically a Character or Pawn.
         /// This is the actor that performs animations, has a transform, etc.
         /// </summary>
         public readonly object AvatarActor;
-        public readonly GameObject AvatarGameObject;
+
+        private readonly UnityEngine.Object ownerUnityObject;
+        private readonly GameObject avatarGameObject;
+
+        /// <summary>Owner component; reads as null once the underlying Unity object is destroyed.</summary>
+        public UnityEngine.Object OwnerUnityObject => ownerUnityObject == null ? null : ownerUnityObject;
+
+        /// <summary>Avatar GameObject; reads as null once it is destroyed.</summary>
+        public GameObject AvatarGameObject => avatarGameObject == null ? null : avatarGameObject;
 
         public GameplayAbilityActorInfo(object owner, object avatar)
         {
             OwnerActor = owner;
-            OwnerUnityObject = owner as UnityEngine.Object;
             AvatarActor = avatar;
-            AvatarGameObject = ResolveAvatarGameObject(avatar);
+            UnityEngine.Object ownerUnity = owner as UnityEngine.Object;
+            ownerUnityObject = ownerUnity == null ? null : ownerUnity;
+            avatarGameObject = ResolveAvatarGameObject(avatar);
         }
 
         private static GameObject ResolveAvatarGameObject(object avatar)
         {
-            if (avatar is GameObject gameObject)
+            if (avatar is GameObject gameObject && gameObject != null)
             {
                 return gameObject;
             }
 
-            if (avatar is Component component)
+            if (avatar is Component component && component != null)
             {
                 return component.gameObject;
             }

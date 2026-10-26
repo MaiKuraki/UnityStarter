@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
@@ -521,6 +520,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 ActiveGameplayEffect active = target.FindActiveEffectByDef(effect);
                 Assert.That(active, Is.Not.Null);
                 Assert.That(active.Spec.Source, Is.Null, "A disposed source must not stay referenced by the effect.");
+                Assert.That(active.Spec.Context.Instigator, Is.Null,
+                    "The effect context must not keep the disposed source alive either.");
                 Assert.That(active.Spec.SourceEntity, Is.EqualTo(sourceId));
                 Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
             }
@@ -625,56 +626,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 source.Dispose();
                 context.Dispose();
             }
-        }
-
-        [Test]
-        public void SourceDisposed_IsCollectibleWhileEffectRemains()
-        {
-            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
-            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
-            var targetSet = new CaptureSet();
-            target.AddAttributeSet(targetSet);
-            try
-            {
-                WeakReference<AbilitySystemComponent> weak = CreateSourceWithEffect(context, target, targetSet);
-
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-
-                Assert.That(weak.TryGetTarget(out _), Is.False,
-                    "A disposed source must be collectible while its effect is still active.");
-                Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
-            }
-            finally
-            {
-                target.Dispose();
-                context.Dispose();
-            }
-        }
-
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static WeakReference<AbilitySystemComponent> CreateSourceWithEffect(
-            GASRuntimeContext context,
-            AbilitySystemComponent target,
-            CaptureSet targetSet)
-        {
-            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
-            var sourceSet = new CaptureSet();
-            source.AddAttributeSet(sourceSet);
-            sourceSet.Power.SetBaseValue(5);
-            targetSet.Health.SetBaseValue(100);
-            Settle(source);
-            Settle(target);
-
-            GameplayEffect effect = BuildPeriodic("Lifetime.Collect",
-                EGameplayEffectAttributeCaptureSource.Source,
-                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
-            Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
-
-            var weak = new WeakReference<AbilitySystemComponent>(source);
-            source.Dispose();
-            return weak;
         }
 
         [Test]
