@@ -352,8 +352,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
-    /// Base class for custom magnitude calculations that can read from the GameplayEffectSpec.
-    /// This allows for dynamic, context-aware calculations (e.g., based on target's attributes).
+    /// Stateless runtime strategy for a custom modifier magnitude. Read attributes through
+    /// <see cref="GameplayEffectSpec.TryGetCapturedAttribute"/> after declaring them in
+    /// <see cref="GetAttributeCaptureDefinitions"/>.
     /// </summary>
     public abstract class GameplayModMagnitudeCalculation
     {
