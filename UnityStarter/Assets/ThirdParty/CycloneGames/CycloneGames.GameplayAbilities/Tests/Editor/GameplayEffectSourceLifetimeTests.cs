@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
@@ -483,6 +484,230 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     Is.EqualTo(GASFixedValue.FromInt(100 + firstDelta + secondDelta).RawValue),
                     $"Unexpected custom magnitude for {captureSide}/{snapshotPolicy}/disposed={disposeSource}.");
                 Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void SourceDisposed_DetachesLiveReferenceButKeepsIdentity()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(5);
+                targetSet.Health.SetBaseValue(100);
+                Settle(source);
+                Settle(target);
+
+                GameplayEffect effect = BuildPeriodic("Lifetime.Detach",
+                    EGameplayEffectAttributeCaptureSource.Source,
+                    EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
+
+                GASEntityId sourceId = source.CoreEntity;
+                source.Dispose();
+
+                ActiveGameplayEffect active = target.FindActiveEffectByDef(effect);
+                Assert.That(active, Is.Not.Null);
+                Assert.That(active.Spec.Source, Is.Null, "A disposed source must not stay referenced by the effect.");
+                Assert.That(active.Spec.SourceEntity, Is.EqualTo(sourceId));
+                Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void RemoveActiveEffectsBySource_WorksAfterSourceDisposed()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var sourceA = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceB = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var setA = new CaptureSet();
+            var setB = new CaptureSet();
+            var targetSet = new CaptureSet();
+            sourceA.AddAttributeSet(setA);
+            sourceB.AddAttributeSet(setB);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                setA.Power.SetBaseValue(3);
+                setB.Power.SetBaseValue(4);
+                targetSet.Health.SetBaseValue(100);
+                Settle(sourceA);
+                Settle(sourceB);
+                Settle(target);
+
+                GameplayEffect effectA = BuildPeriodic("Lifetime.SourceA",
+                    EGameplayEffectAttributeCaptureSource.Source,
+                    EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
+                GameplayEffect effectB = BuildPeriodic("Lifetime.SourceB",
+                    EGameplayEffectAttributeCaptureSource.Source,
+                    EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effectA, sourceA)).Succeeded, Is.True);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effectB, sourceB)).Succeeded, Is.True);
+
+                GASEntityId sourceAId = sourceA.CoreEntity;
+                sourceA.Dispose();
+
+                Assert.That(target.RemoveActiveEffectsBySource(sourceAId), Is.EqualTo(1));
+                Assert.That(target.FindActiveEffectByDef(effectA), Is.Null);
+                Assert.That(target.FindActiveEffectByDef(effectB), Is.Not.Null);
+            }
+            finally
+            {
+                target.Dispose();
+                sourceA.Dispose();
+                sourceB.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void SourceDisposed_StackedEffectRemovalStillUnindexes()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(2);
+                targetSet.Health.SetBaseValue(0);
+                Settle(source);
+                Settle(target);
+
+                var effect = new GameplayEffect(
+                    "Lifetime.StackedRemoval",
+                    EDurationPolicy.Infinite,
+                    period: Period,
+                    modifiers: new List<ModifierInfo> { AddFromPower(
+                        EGameplayEffectAttributeCaptureSource.Source,
+                        EGameplayEffectAttributeCaptureSnapshot.NotSnapshot) },
+                    stacking: new GameplayEffectStacking(EGameplayEffectStackingType.AggregateBySource, 5,
+                        EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication),
+                    executePeriodicEffectOnApplication: false);
+
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
+                Assert.That(target.GetCurrentStackCount(effect), Is.EqualTo(2));
+
+                source.Dispose();
+
+                ActiveGameplayEffect active = target.FindActiveEffectByDef(effect);
+                Assert.That(active, Is.Not.Null);
+                Assert.That(target.TryRemoveActiveEffect(active), Is.True);
+                Assert.That(target.GetCurrentStackCount(effect), Is.EqualTo(0),
+                    "Removal must still find the stack entry after the source reference is detached.");
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void SourceDisposed_IsCollectibleWhileEffectRemains()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var targetSet = new CaptureSet();
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                WeakReference<AbilitySystemComponent> weak = CreateSourceWithEffect(context, target, targetSet);
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+
+                Assert.That(weak.TryGetTarget(out _), Is.False,
+                    "A disposed source must be collectible while its effect is still active.");
+                Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
+            }
+            finally
+            {
+                target.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static WeakReference<AbilitySystemComponent> CreateSourceWithEffect(
+            GASRuntimeContext context,
+            AbilitySystemComponent target,
+            CaptureSet targetSet)
+        {
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            sourceSet.Power.SetBaseValue(5);
+            targetSet.Health.SetBaseValue(100);
+            Settle(source);
+            Settle(target);
+
+            GameplayEffect effect = BuildPeriodic("Lifetime.Collect",
+                EGameplayEffectAttributeCaptureSource.Source,
+                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
+            Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
+
+            var weak = new WeakReference<AbilitySystemComponent>(source);
+            source.Dispose();
+            return weak;
+        }
+
+        [Test]
+        public void EntityId_FormatsForDiagnostics()
+        {
+            Assert.That(new GASEntityId(3).ToString(), Is.EqualTo("Entity#3"));
+            Assert.That(default(GASEntityId).ToString(), Is.EqualTo("Entity#None"));
+        }
+
+        [Test]
+        public void RemoveActiveEffectsBySource_AcceptsSourceComponent()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(3);
+                targetSet.Health.SetBaseValue(100);
+                Settle(source);
+                Settle(target);
+
+                GameplayEffect effect = BuildPeriodic("Lifetime.RemoveByComponent",
+                    EGameplayEffectAttributeCaptureSource.Source,
+                    EGameplayEffectAttributeCaptureSnapshot.NotSnapshot);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, source)).Succeeded, Is.True);
+
+                Assert.That(target.RemoveActiveEffectsBySource(source), Is.EqualTo(1));
+                Assert.That(target.ActiveEffects.Count, Is.EqualTo(0));
             }
             finally
             {

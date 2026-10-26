@@ -254,6 +254,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
+        /// Stable identity of the source, kept after the source component detaches or is disposed.
+        /// </summary>
+        public GASEntityId SourceEntity { get; private set; }
+
+        /// <summary>Drops the live source reference; captures and <see cref="SourceEntity"/> stay valid.</summary>
+        internal void DetachSource()
+        {
+            source = null;
+            context?.DetachInstigator();
+        }
+
+        /// <summary>
         /// The AbilitySystemComponent that this effect is applied to.
         /// </summary>
         public AbilitySystemComponent Target
@@ -501,6 +513,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         void IGASLeasedObject.OnLeaseReleased()
         {
             ownership = SpecOwnership.None;
+            source?.UnregisterOutboundSpec(this);
             try
             {
                 if (ownsContext)
@@ -513,6 +526,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ownsContext = false;
                 Def = null;
                 Source = null;
+                SourceEntity = default;
                 Target = null;
                 Context = null;
                 Level = 0;
@@ -688,6 +702,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             Def = def;
             Source = source;
+            SourceEntity = source != null ? source.CoreEntity : default;
             Level = level;
             // A configured DurationMagnitude wins over the static def.Duration. Evaluation reuses
             // the fixed-point magnitude pipeline and travels through the same replicated

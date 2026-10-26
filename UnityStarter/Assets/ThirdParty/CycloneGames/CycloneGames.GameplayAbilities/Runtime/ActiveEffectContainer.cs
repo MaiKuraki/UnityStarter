@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -12,7 +13,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<ActiveGameplayEffect, int> _indexByEffect;
         private readonly Dictionary<int, ActiveGameplayEffect> _effectByReconciliationId;
         private readonly Dictionary<GameplayEffect, ActiveGameplayEffect> _stackingByTarget;
-        private readonly Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> _stackingBySource;
+        private readonly Dictionary<(GameplayEffect, GASEntityId), ActiveGameplayEffect> _stackingBySource;
         private readonly Dictionary<int, List<ActiveGameplayEffect>> _effectsByGrantedTagIndex;
         private readonly Dictionary<GameplayAbility, List<ActiveGameplayEffect>> _effectsByAbility;
         private readonly List<ActiveGameplayEffect> _abilityEffectRemovalScratch;
@@ -30,7 +31,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             _indexByEffect = new Dictionary<ActiveGameplayEffect, int>(activeEffectCapacity);
             _effectByReconciliationId = new Dictionary<int, ActiveGameplayEffect>(activeEffectCapacity);
             _stackingByTarget = new Dictionary<GameplayEffect, ActiveGameplayEffect>(stackingCapacity);
-            _stackingBySource = new Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect>(stackingCapacity);
+            _stackingBySource = new Dictionary<(GameplayEffect, GASEntityId), ActiveGameplayEffect>(stackingCapacity);
             _effectsByGrantedTagIndex = new Dictionary<int, List<ActiveGameplayEffect>>(grantedTagCapacity);
             _effectsByAbility = new Dictionary<GameplayAbility, List<ActiveGameplayEffect>>(abilityEffectCapacity);
             _abilityEffectRemovalScratch = new List<ActiveGameplayEffect>(abilityEffectCapacity);
@@ -50,7 +51,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal Dictionary<ActiveGameplayEffect, int> MutableIndexByEffect => _indexByEffect;
         internal Dictionary<int, ActiveGameplayEffect> MutableEffectByReconciliationId => _effectByReconciliationId;
         internal Dictionary<GameplayEffect, ActiveGameplayEffect> MutableStackingByTarget => _stackingByTarget;
-        internal Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> MutableStackingBySource => _stackingBySource;
+        internal Dictionary<(GameplayEffect, GASEntityId), ActiveGameplayEffect> MutableStackingBySource => _stackingBySource;
         internal Dictionary<int, List<ActiveGameplayEffect>> MutableEffectsByGrantedTagIndex => _effectsByGrantedTagIndex;
         internal Dictionary<GameplayAbility, List<ActiveGameplayEffect>> MutableEffectsByAbility => _effectsByAbility;
         internal List<ActiveGameplayEffect> MutableAbilityEffectRemovalScratch => _abilityEffectRemovalScratch;
@@ -220,7 +221,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
             {
-                _stackingBySource.TryGetValue((spec.Def, spec.Source), out effect);
+                _stackingBySource.TryGetValue((spec.Def, spec.SourceEntity), out effect);
             }
 
             if (effect == null)
@@ -254,7 +255,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
             {
-                _stackingBySource[(def, effect.Spec.Source)] = effect;
+                _stackingBySource[(def, effect.Spec.SourceEntity)] = effect;
                 return true;
             }
 
@@ -279,7 +280,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else if (def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
             {
-                var key = (def, effect.Spec.Source);
+                var key = (def, effect.Spec.SourceEntity);
                 if (_stackingBySource.TryGetValue(key, out var indexed) && ReferenceEquals(indexed, effect))
                 {
                     _stackingBySource.Remove(key);

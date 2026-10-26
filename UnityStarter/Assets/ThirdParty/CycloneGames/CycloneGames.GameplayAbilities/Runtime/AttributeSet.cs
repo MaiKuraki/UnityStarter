@@ -276,6 +276,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASFixedValue EvaluatedMagnitudeFixed => GASFixedValue.FromRaw(EvaluatedMagnitudeRaw);
         public AbilitySystemComponent Target { get; }
         public AbilitySystemComponent Source => EffectSpec.Source;
+        public GASEntityId SourceEntity => EffectSpec.SourceEntity;
 
         /// <summary>
         /// The attribute resolved by the AbilitySystemComponent when dispatching this modifier.

@@ -161,6 +161,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public readonly long EffectDurationRaw;
         public GASFixedValue EffectDuration => GASFixedValue.FromRaw(EffectDurationRaw);
         public readonly GASPredictionKey PredictionKey;
+        public readonly GASEntityId SourceEntity;
 
         public GameplayCueParameters(GameplayEffectSpec spec)
         {
@@ -172,6 +173,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EffectLevel = spec?.Level ?? 0;
             EffectDurationRaw = spec?.DurationRaw ?? 0L;
             PredictionKey = spec?.Context?.PredictionKey ?? default;
+            SourceEntity = spec?.SourceEntity ?? default;
         }
 
         public GameplayCueParameters(GameplayCueEventParams parameters)
@@ -184,6 +186,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EffectLevel = parameters.EffectLevel;
             EffectDurationRaw = parameters.EffectDurationRaw;
             PredictionKey = parameters.PredictionKey;
+            SourceEntity = Source != null ? Source.CoreEntity : default;
         }
     }
 

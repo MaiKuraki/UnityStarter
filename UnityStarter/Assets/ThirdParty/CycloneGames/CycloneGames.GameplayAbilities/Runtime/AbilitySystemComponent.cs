@@ -273,13 +273,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         //  O(1) stacking index --avoids linear search per ApplyGameplayEffectSpecToSelf
         // Key: GameplayEffect def ->first matching ActiveGameplayEffect (for AggregateByTarget)
         private readonly Dictionary<GameplayEffect, ActiveGameplayEffect> stackingIndexByTarget;
-        // Key: (GameplayEffect def, source ASC) ->ActiveGameplayEffect (for AggregateBySource)
-        private readonly Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> stackingIndexBySource;
+        // Key: (GameplayEffect def, source entity) ->ActiveGameplayEffect (for AggregateBySource)
+        private readonly Dictionary<(GameplayEffect, GASEntityId), ActiveGameplayEffect> stackingIndexBySource;
 
         // Explicit-GrantedTag runtime-index -> ActiveGameplayEffects for O(1) tag lookup,
         // while preserving all contributors for correct multi-effect semantics.
         // Maintained in OnEffectApplied / OnEffectRemoved.
         private readonly Dictionary<int, List<ActiveGameplayEffect>> grantedTagIndexToEffects;
+
+        // Cross-ASC effects this component applied elsewhere; detached when this component is disposed.
+        private readonly List<GameplayEffectSpec> outboundEffectSpecs;
 
         private readonly List<GameplayAbilitySpec> activatableAbilities;
         private readonly Dictionary<int, GameplayAbilitySpec> abilitySpecByHandle;
@@ -1368,6 +1371,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             abilityAppliedEffectRemovalScratch = ActiveEffectContainer.MutableAbilityEffectRemovalScratch;
             abilityAppliedEffectListPool = ActiveEffectContainer.MutableAbilityEffectListPool;
 
+            outboundEffectSpecs = new List<GameplayEffectSpec>(8);
+
             activatableAbilities = AbilitySpecs.MutableActivatableAbilities;
             activatableAbilitiesView = new GASReadOnlyListView<GameplayAbilitySpec>(activatableAbilities, assertRuntimeAccess);
             abilitySpecByHandle = AbilitySpecs.MutableSpecByHandle;
@@ -1548,6 +1553,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void UnregisterAbilityGrantedByEffect(GameplayAbilitySpec spec)
         {
             AbilitySpecs.UnregisterGrantedByEffect(spec, ReturnGrantedAbilitySpecList);
+        }
+
+        internal void RegisterOutboundSpec(GameplayEffectSpec spec)
+        {
+            if (spec == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < outboundEffectSpecs.Count; i++)
+            {
+                if (ReferenceEquals(outboundEffectSpecs[i], spec))
+                {
+                    return;
+                }
+            }
+
+            outboundEffectSpecs.Add(spec);
+        }
+
+        internal void UnregisterOutboundSpec(GameplayEffectSpec spec)
+        {
+            if (spec == null)
+            {
+                return;
+            }
+
+            for (int i = outboundEffectSpecs.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(outboundEffectSpecs[i], spec))
+                {
+                    outboundEffectSpecs.RemoveAt(i);
+                    return;
+                }
+            }
         }
 
         private List<GameplayAbilitySpec> RentGrantedAbilitySpecList()
@@ -4479,6 +4519,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.DurationCommitFailed);
                 }
 
+                AbilitySystemComponent specSource = spec.Source;
+                if (specSource != null && !ReferenceEquals(specSource, this))
+                {
+                    specSource.RegisterOutboundSpec(spec);
+                }
+
                 RemoveEffectsWithTags(spec.Def.RemoveGameplayEffectsWithTags, newActiveEffect);
 
                 if (isLocallyPredictedEffect)
@@ -4634,6 +4680,73 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     "Active-effect removal cannot re-enter an effect mutation transaction.");
             }
             RemoveActiveEffectsWithGrantedTags(tags, null);
+        }
+
+        /// <summary>
+        /// Removes every active effect applied by <paramref name="sourceEntity"/>. Matching uses the
+        /// stable identity, so it still works after that source component has been disposed.
+        /// Get the value from <see cref="CoreEntity"/>; it is assigned by the runtime context.
+        /// </summary>
+        public int RemoveActiveEffectsBySource(GASEntityId sourceEntity)
+        {
+            AssertRuntimeThread();
+            if (!sourceEntity.IsValid)
+            {
+                return 0;
+            }
+            if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
+            {
+                throw new GASReentrancyRejectedException(
+                    "Active-effect removal cannot re-enter an effect mutation transaction.");
+            }
+
+            List<ActiveGameplayEffect> removedEffects = RentAbilityAppliedEffectList();
+            try
+            {
+                for (int i = activeEffects.Count - 1; i >= 0; i--)
+                {
+                    ActiveGameplayEffect effect = activeEffects[i];
+                    if (effect.Spec != null && effect.Spec.SourceEntity == sourceEntity)
+                    {
+                        removedEffects.Add(effect);
+                    }
+                }
+
+                if (removedEffects.Count == 0)
+                {
+                    return 0;
+                }
+
+                using (BeginReplicationMutationScope())
+                {
+                    for (int i = 0; i < removedEffects.Count; i++)
+                    {
+                        ActiveGameplayEffect effect = removedEffects[i];
+                        if (TryFindActiveEffectIndex(effect, out int index))
+                        {
+                            RemoveActiveEffectAtIndex(index);
+                            RemoveFromStackingIndex(effect);
+                        }
+                    }
+
+                    for (int i = 0; i < removedEffects.Count; i++)
+                    {
+                        OnEffectRemoved(removedEffects[i], true);
+                    }
+                }
+
+                return removedEffects.Count;
+            }
+            finally
+            {
+                ReturnAbilityAppliedEffectList(removedEffects);
+            }
+        }
+
+        /// <summary>Removes every active effect applied by <paramref name="source"/>.</summary>
+        public int RemoveActiveEffectsBySource(AbilitySystemComponent source)
+        {
+            return source != null ? RemoveActiveEffectsBySource(source.CoreEntity) : 0;
         }
 
         private void RemoveActiveEffectsWithGrantedTags(
@@ -6748,6 +6861,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void FinalizeDisposedState(ref Exception cleanupFailure)
         {
+            try
+            {
+                for (int i = 0; i < outboundEffectSpecs.Count; i++)
+                {
+                    outboundEffectSpecs[i].DetachSource();
+                }
+
+                outboundEffectSpecs.Clear();
+            }
+            catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
+
             try
             {
                 activeEffects.Clear();
