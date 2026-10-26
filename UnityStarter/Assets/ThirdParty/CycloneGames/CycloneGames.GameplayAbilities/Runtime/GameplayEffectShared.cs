@@ -162,6 +162,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
         NotSnapshot
     }
 
+    /// <summary>Declares an attribute an execution calculation reads beyond the modifier list.</summary>
+    public readonly struct GameplayAttributeCaptureDefinition
+    {
+        public readonly string AttributeName;
+        public readonly EGameplayEffectAttributeCaptureSource CaptureSource;
+
+        public GameplayAttributeCaptureDefinition(
+            string attributeName,
+            EGameplayEffectAttributeCaptureSource captureSource)
+        {
+            if (string.IsNullOrEmpty(attributeName))
+            {
+                throw new System.ArgumentException("Capture definitions require an attribute name.", nameof(attributeName));
+            }
+            if ((int)captureSource < 0 || (int)captureSource > (int)EGameplayEffectAttributeCaptureSource.Target)
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(captureSource), captureSource, "Unknown capture source.");
+            }
+
+            AttributeName = attributeName;
+            CaptureSource = captureSource;
+        }
+    }
+
     /// <summary>
     /// Defines how a modifier magnitude is calculated.
     /// </summary>
@@ -432,13 +456,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
         {
-            if (!TryGetAttribute(spec, out var attribute, out AbilitySystemComponent resolver))
-            {
-                return 0L;
-            }
+            return CalculateMagnitudeRaw(spec, level, null);
+        }
 
-            // Settle first: a base write in the same frame is not in CurrentFixedValue yet.
-            resolver.SettleAttribute(attribute);
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level, GameplayAttribute capturedAttribute)
+        {
+            GameplayAttribute attribute = capturedAttribute;
+            if (attribute == null)
+            {
+                if (!TryGetAttribute(spec, out attribute, out AbilitySystemComponent resolver) || attribute == null)
+                {
+                    return 0L;
+                }
+
+                resolver.SettleAttribute(attribute);
+            }
+            else
+            {
+                attribute.OwningSet?.OwningAbilitySystemComponent?.SettleAttribute(attribute);
+            }
 
             GASFixedValue attributeValue;
             switch (CalculationType)
@@ -751,10 +787,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
         {
+            return CalculateMagnitudeRaw(spec, level, null);
+        }
+
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level, GameplayAttribute capturedAttribute)
+        {
             switch (MagnitudeCalculationType)
             {
                 case EGameplayEffectMagnitudeCalculation.AttributeBased:
-                    return AttributeBasedMagnitude.CalculateMagnitudeRaw(spec, level);
+                    return AttributeBasedMagnitude.CalculateMagnitudeRaw(spec, level, capturedAttribute);
                 case EGameplayEffectMagnitudeCalculation.CustomCalculation:
                     return GASFixedValue.FromFloat(CustomCalculation != null ? CustomCalculation.CalculateMagnitude(spec) : 0f).RawValue;
                 case EGameplayEffectMagnitudeCalculation.SetByCaller:

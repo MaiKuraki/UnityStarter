@@ -4950,10 +4950,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         ModifierInfo modifier = executionOutput[i];
                         GameplayAttribute attribute = GetAttribute(modifier.AttributeName);
-                        if (attribute != null)
+                        if (attribute == null)
                         {
-                            ApplyModifier(spec, attribute, modifier, modifier.CalculateMagnitudeRaw(spec, spec.Level), true);
+                            continue;
                         }
+
+                        long magnitudeRaw = 0L;
+                        if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased)
+                        {
+                            if (spec.TryGetCapturedAttribute(
+                                modifier.AttributeBasedMagnitude.CaptureSource,
+                                modifier.AttributeBasedMagnitude.AttributeName,
+                                out GameplayAttribute captured))
+                            {
+                                magnitudeRaw = modifier.CalculateMagnitudeRaw(spec, spec.Level, captured);
+                            }
+                        }
+                        else
+                        {
+                            magnitudeRaw = modifier.CalculateMagnitudeRaw(spec, spec.Level);
+                        }
+
+                        ApplyModifier(spec, attribute, modifier, magnitudeRaw, true);
                     }
 
                     for (int i = 0; i < modifiers.Count; i++)

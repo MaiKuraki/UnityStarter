@@ -49,6 +49,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public abstract class GameplayEffectExecutionCalculation
     {
         /// <summary>
+        /// Declares attributes this calculation reads beyond the effect's modifiers. Undeclared
+        /// attribute-based output contributes zero.
+        /// </summary>
+        public virtual void GetAttributeCaptureDefinitions(List<GameplayAttributeCaptureDefinition> definitions)
+        {
+        }
+
+        /// <summary>
         /// Performs the execution logic.
         /// </summary>
         /// <param name="spec">The spec of the gameplay effect being executed.</param>

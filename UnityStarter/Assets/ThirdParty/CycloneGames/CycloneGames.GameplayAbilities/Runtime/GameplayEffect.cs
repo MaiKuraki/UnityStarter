@@ -196,6 +196,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public const int MaxDefinitionStringLength = 256;
         public const int MaxCustomApplicationRequirementCount = 64;
         public const int MaxOverflowEffectCount = 64;
+        public const int MaxExecutionCaptureCount = 32;
         public static readonly int MaxModifierCount = GASRuntimeLimits.Default.MaxModifiersPerEffect;
         public static readonly int MaxGrantedAbilityCount = Math.Min(GASRuntimeLimits.Default.MaxGrantedAbilities, 256);
         public static readonly int MaxAggregateTagCount = Math.Min(GASRuntimeLimits.Default.MaxTagChangesPerDelta, 256);
@@ -240,6 +241,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Implementations are shared strategy objects and must remain stateless after definition construction.
         /// </summary>
         public GameplayEffectExecutionCalculation Execution { get; }
+
+        /// <summary>Attributes the execution calculation declared beyond the modifier list.</summary>
+        public IReadOnlyList<GameplayAttributeCaptureDefinition> ExecutionCaptures { get; }
 
         /// <summary>
         /// Defines how this effect interacts with other instances of the same effect on a target.
@@ -410,6 +414,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Period = period;
             Modifiers = FreezeModifiers(modifiers);
             Execution = execution;
+            ExecutionCaptures = CollectExecutionCaptures(execution);
             Stacking = stacking;
             GrantedAbilities = Freeze(grantedAbilities);
             GrantedAbilityRemovalPolicies = Freeze(grantedAbilityRemovalPolicies);
@@ -604,6 +609,45 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         modifier.Magnitude,
                         modifier.EvaluationChannel);
             }
+        }
+
+        private static IReadOnlyList<GameplayAttributeCaptureDefinition> CollectExecutionCaptures(
+            GameplayEffectExecutionCalculation execution)
+        {
+            if (execution == null)
+            {
+                return EmptyReadOnlyList<GameplayAttributeCaptureDefinition>.Value;
+            }
+
+            var captures = new List<GameplayAttributeCaptureDefinition>(4);
+            execution.GetAttributeCaptureDefinitions(captures);
+            if (captures.Count == 0)
+            {
+                return EmptyReadOnlyList<GameplayAttributeCaptureDefinition>.Value;
+            }
+            if (captures.Count > MaxExecutionCaptureCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(execution),
+                    captures.Count,
+                    $"Execution calculations may declare at most {MaxExecutionCaptureCount} attribute captures.");
+            }
+
+            for (int i = 0; i < captures.Count; i++)
+            {
+                for (int j = i + 1; j < captures.Count; j++)
+                {
+                    if (captures[i].CaptureSource == captures[j].CaptureSource &&
+                        string.Equals(captures[i].AttributeName, captures[j].AttributeName, StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException(
+                            $"Execution capture '{captures[i].AttributeName}' is declared more than once.",
+                            nameof(execution));
+                    }
+                }
+            }
+
+            return Freeze(captures);
         }
 
         private static IReadOnlyList<T> Freeze<T>(List<T> source)
