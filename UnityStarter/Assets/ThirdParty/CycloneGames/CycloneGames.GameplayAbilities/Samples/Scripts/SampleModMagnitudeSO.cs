@@ -9,7 +9,7 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// the nested calculation is created when the effect definition is built.
     /// </summary>
     [CreateAssetMenu(
-        menuName = "CycloneGames/GameplayAbilities/Sample Attack Magnitude",
+        menuName = "CycloneGames/GameplayAbilities/Samples/Magnitude/Sample Attack Magnitude",
         fileName = "CALC_SampleAttackMagnitude")]
     public sealed class SampleModMagnitudeSO : GameplayModMagnitudeCalculationSO
     {
