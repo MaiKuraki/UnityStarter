@@ -11,7 +11,8 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// </summary>
     [CreateAssetMenu(
         fileName = "GASNetworkContentCatalog",
-        menuName = "CycloneGames/Gameplay Abilities/Networking Content Catalog")]
+        menuName = "CycloneGames/GameplayAbilities/Definitions/Networking Content Catalog",
+        order = 10)]
     public sealed class GASNetworkContentCatalogAsset : ScriptableObject
     {
         private const int MaximumRevisionLength = 512;

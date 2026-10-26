@@ -86,9 +86,17 @@ namespace CycloneGames.Choreography.GameplayAbilities
                 return;
             }
 
-            OnChoreographyEvent?.Invoke(invocation);
+            try
+            {
+                OnChoreographyEvent?.Invoke(invocation);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "A choreography event callback failed.");
+            }
 
-            if (_eventTagResolver == null)
+            // A listener may end the ability; a finished task must not forward its event.
+            if (!IsActive || _eventTagResolver == null)
             {
                 return;
             }
@@ -99,15 +107,27 @@ namespace CycloneGames.Choreography.GameplayAbilities
                 return;
             }
 
-            AbilitySystemComponent asc = Ability.AbilitySystemComponent;
-            asc.HandleGameplayEvent(new GameplayEventData
+            AbilitySystemComponent asc = Ability?.AbilitySystemComponent;
+            if (asc == null)
             {
-                EventTag = tag,
-                Instigator = asc,
-                Target = asc,
-                EventMagnitude = invocation.Event.Magnitude,
-                OptionalObject = invocation.Event.StringPayload
-            });
+                return;
+            }
+
+            try
+            {
+                asc.HandleGameplayEvent(new GameplayEventData
+                {
+                    EventTag = tag,
+                    Instigator = asc,
+                    Target = asc,
+                    EventMagnitude = invocation.Event.Magnitude,
+                    OptionalObject = invocation.Event.StringPayload
+                });
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "Forwarding a choreography event to the ability system failed.");
+            }
         }
 
         private void HandleInstanceEnded(int instanceId)

@@ -93,6 +93,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ResetCustomState();
         }
 
+        internal void DetachInstigator()
+        {
+            Instigator = null;
+            AbilityInstance = null;
+        }
+
         /// <summary>
         /// Resets data introduced by a derived context when the lease is acquired or released.
         /// </summary>

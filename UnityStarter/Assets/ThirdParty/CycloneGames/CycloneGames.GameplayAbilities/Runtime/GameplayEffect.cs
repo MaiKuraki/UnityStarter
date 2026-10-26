@@ -196,6 +196,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public const int MaxDefinitionStringLength = 256;
         public const int MaxCustomApplicationRequirementCount = 64;
         public const int MaxOverflowEffectCount = 64;
+        public const int MaxExecutionCaptureCount = 32;
         public static readonly int MaxModifierCount = GASRuntimeLimits.Default.MaxModifiersPerEffect;
         public static readonly int MaxGrantedAbilityCount = Math.Min(GASRuntimeLimits.Default.MaxGrantedAbilities, 256);
         public static readonly int MaxAggregateTagCount = Math.Min(GASRuntimeLimits.Default.MaxTagChangesPerDelta, 256);
@@ -240,6 +241,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Implementations are shared strategy objects and must remain stateless after definition construction.
         /// </summary>
         public GameplayEffectExecutionCalculation Execution { get; }
+
+        /// <summary>Attributes the execution calculation declared beyond the modifier list.</summary>
+        public IReadOnlyList<GameplayAttributeCaptureDefinition> DeclaredCaptures { get; }
 
         /// <summary>
         /// Defines how this effect interacts with other instances of the same effect on a target.
@@ -410,6 +414,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Period = period;
             Modifiers = FreezeModifiers(modifiers);
             Execution = execution;
+            DeclaredCaptures = CollectDeclaredCaptures(execution, modifiers);
             Stacking = stacking;
             GrantedAbilities = Freeze(grantedAbilities);
             GrantedAbilityRemovalPolicies = Freeze(grantedAbilityRemovalPolicies);
@@ -604,6 +609,56 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         modifier.Magnitude,
                         modifier.EvaluationChannel);
             }
+        }
+
+        private static IReadOnlyList<GameplayAttributeCaptureDefinition> CollectDeclaredCaptures(
+            GameplayEffectExecutionCalculation execution,
+            List<ModifierInfo> modifiers)
+        {
+            var captures = new List<GameplayAttributeCaptureDefinition>(4);
+            execution?.GetAttributeCaptureDefinitions(captures);
+
+            if (modifiers != null)
+            {
+                for (int i = 0; i < modifiers.Count; i++)
+                {
+                    ModifierInfo modifier = modifiers[i];
+                    if (modifier != null &&
+                        modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.CustomCalculation &&
+                        modifier.CustomCalculation != null)
+                    {
+                        modifier.CustomCalculation.GetAttributeCaptureDefinitions(captures);
+                    }
+                }
+            }
+
+            if (captures.Count == 0)
+            {
+                return EmptyReadOnlyList<GameplayAttributeCaptureDefinition>.Value;
+            }
+            if (captures.Count > MaxExecutionCaptureCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(execution),
+                    captures.Count,
+                    $"Execution calculations may declare at most {MaxExecutionCaptureCount} attribute captures.");
+            }
+
+            // The same attribute can be declared by several modifiers or by the execution calculation.
+            for (int i = captures.Count - 1; i >= 0; i--)
+            {
+                for (int j = 0; j < i; j++)
+                {
+                    if (captures[i].CaptureSource == captures[j].CaptureSource &&
+                        string.Equals(captures[i].AttributeName, captures[j].AttributeName, StringComparison.Ordinal))
+                    {
+                        captures.RemoveAt(i);
+                        break;
+                    }
+                }
+            }
+
+            return Freeze(captures);
         }
 
         private static IReadOnlyList<T> Freeze<T>(List<T> source)

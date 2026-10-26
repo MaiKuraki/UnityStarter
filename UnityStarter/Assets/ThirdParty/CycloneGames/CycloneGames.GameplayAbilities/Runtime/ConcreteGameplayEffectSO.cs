@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// A concrete, creatable ScriptableObject definition for a GameplayEffect.
     /// Use this to create new Gameplay Effect assets in the editor via 'Assets/Create/...'.
     /// </summary>
-    [CreateAssetMenu(fileName = "GE_", menuName = GameplayAbilitiesAssetMenuPaths.GameplayEffectDefinition)]
+    [CreateAssetMenu(fileName = "GE_", menuName = GameplayAbilitiesAssetMenuPaths.GameplayEffectDefinition, order = 0)]
     public class ConcreteGameplayEffectSO : GameplayEffectSO
     {
         private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
@@ -120,9 +120,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
                                 serializableMod.WarnIfSetByCallerMissing),
                         serializableMod.EvaluationChannel);
                 case EGameplayEffectMagnitudeCalculation.CustomCalculation:
-                    Log.Warning(serializableMod.AttributeName, static (attributeName, sb) => sb.Append("Modifier on effect asset uses CustomCalculation magnitude, ")
-                        .Append("but ScriptableObject modifiers cannot serialize custom calculation instances. ")
-                        .Append("Falling back to ScalableFloat for attribute '")
+                    if (serializableMod.CustomCalculation != null)
+                    {
+                        return new ModifierInfo(
+                            serializableMod.AttributeName,
+                            serializableMod.Operation,
+                            serializableMod.CustomCalculation.CreateCalculation(),
+                            serializableMod.AttributeSnapshotPolicy,
+                            serializableMod.EvaluationChannel);
+                    }
+
+                    Log.Warning(serializableMod.AttributeName, static (attributeName, sb) => sb.Append("Modifier on effect asset uses CustomCalculation magnitude ")
+                        .Append("without a calculation asset. Falling back to ScalableFloat for attribute '")
                         .Append(attributeName).Append("'."));
                     break;
             }

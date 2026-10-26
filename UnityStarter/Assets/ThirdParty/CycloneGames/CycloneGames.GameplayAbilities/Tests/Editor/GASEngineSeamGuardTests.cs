@@ -31,6 +31,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             "GameplayCueSO.cs",
             "GameplayEffectExecutionCalculationSO.cs",
             "GameplayEffectSO.cs",
+            "GameplayModMagnitudeCalculationSO.cs",
             "GASDebugOverlay.cs",
             "GASOverlayConfig.cs",
             "GASTrace.cs",

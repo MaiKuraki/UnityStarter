@@ -36,6 +36,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("How this modifier magnitude is calculated.")]
         public EGameplayEffectMagnitudeCalculation MagnitudeCalculationType;
 
+        /// <summary>Calculation factory used when <see cref="MagnitudeCalculationType"/> is CustomCalculation.</summary>
+        public GameplayModMagnitudeCalculationSO CustomCalculation;
+
         [Tooltip("The magnitude of the modification. Can be a fixed value or scale with level.")]
         public ScalableFloat Magnitude;
 
