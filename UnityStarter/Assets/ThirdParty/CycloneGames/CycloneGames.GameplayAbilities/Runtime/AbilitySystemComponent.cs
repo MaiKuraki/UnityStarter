@@ -193,8 +193,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public object OwnerActor { get; private set; }
         public object AvatarActor { get; private set; }
-        public UnityEngine.Object OwnerUnityObject { get; private set; }
-        public GameObject AvatarGameObject { get; private set; }
+
+        private UnityEngine.Object ownerUnityObject;
+        private GameObject avatarGameObject;
+
+        /// <summary>Owner component; reads as null once the underlying Unity object is destroyed.</summary>
+        public UnityEngine.Object OwnerUnityObject => ownerUnityObject == null ? null : ownerUnityObject;
+
+        /// <summary>Avatar GameObject; reads as null once it is destroyed.</summary>
+        public GameObject AvatarGameObject => avatarGameObject == null ? null : avatarGameObject;
         public GASRuntimeContext RuntimeContext { get; }
         public GASRuntimeLimits Limits { get; }
         public bool IsDisposed => disposed;
@@ -273,13 +280,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         //  O(1) stacking index --avoids linear search per ApplyGameplayEffectSpecToSelf
         // Key: GameplayEffect def ->first matching ActiveGameplayEffect (for AggregateByTarget)
         private readonly Dictionary<GameplayEffect, ActiveGameplayEffect> stackingIndexByTarget;
-        // Key: (GameplayEffect def, source ASC) ->ActiveGameplayEffect (for AggregateBySource)
-        private readonly Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> stackingIndexBySource;
+        // Key: (GameplayEffect def, source entity) ->ActiveGameplayEffect (for AggregateBySource)
+        private readonly Dictionary<(GameplayEffect, GASEntityId), ActiveGameplayEffect> stackingIndexBySource;
 
         // Explicit-GrantedTag runtime-index -> ActiveGameplayEffects for O(1) tag lookup,
         // while preserving all contributors for correct multi-effect semantics.
         // Maintained in OnEffectApplied / OnEffectRemoved.
         private readonly Dictionary<int, List<ActiveGameplayEffect>> grantedTagIndexToEffects;
+
+        // Cross-ASC effects this component applied elsewhere; detached when this component is disposed.
+        private readonly List<GameplayEffectSpec> outboundEffectSpecs;
 
         private readonly List<GameplayAbilitySpec> activatableAbilities;
         private readonly Dictionary<int, GameplayAbilitySpec> abilitySpecByHandle;
@@ -1368,6 +1378,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             abilityAppliedEffectRemovalScratch = ActiveEffectContainer.MutableAbilityEffectRemovalScratch;
             abilityAppliedEffectListPool = ActiveEffectContainer.MutableAbilityEffectListPool;
 
+            outboundEffectSpecs = new List<GameplayEffectSpec>(8);
+
             activatableAbilities = AbilitySpecs.MutableActivatableAbilities;
             activatableAbilitiesView = new GASReadOnlyListView<GameplayAbilitySpec>(activatableAbilities, assertRuntimeAccess);
             abilitySpecByHandle = AbilitySpecs.MutableSpecByHandle;
@@ -1412,8 +1424,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             AssertRuntimeThread();
             OwnerActor = owner;
             AvatarActor = avatar;
-            OwnerUnityObject = owner as UnityEngine.Object;
-            AvatarGameObject = ResolveActorGameObject(avatar);
+            UnityEngine.Object ownerUnity = owner as UnityEngine.Object;
+            ownerUnityObject = ownerUnity == null ? null : ownerUnity;
+            avatarGameObject = ResolveActorGameObject(avatar);
             cachedActorInfo = new GameplayAbilityActorInfo(owner, avatar);
         }
 
@@ -1509,12 +1522,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private static GameObject ResolveActorGameObject(object actor)
         {
-            if (actor is GameObject gameObject)
+            if (actor is GameObject gameObject && gameObject != null)
             {
                 return gameObject;
             }
 
-            if (actor is Component component)
+            if (actor is Component component && component != null)
             {
                 return component.gameObject;
             }
@@ -1548,6 +1561,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void UnregisterAbilityGrantedByEffect(GameplayAbilitySpec spec)
         {
             AbilitySpecs.UnregisterGrantedByEffect(spec, ReturnGrantedAbilitySpecList);
+        }
+
+        internal void RegisterOutboundSpec(GameplayEffectSpec spec)
+        {
+            if (spec == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < outboundEffectSpecs.Count; i++)
+            {
+                if (ReferenceEquals(outboundEffectSpecs[i], spec))
+                {
+                    return;
+                }
+            }
+
+            outboundEffectSpecs.Add(spec);
+        }
+
+        internal void UnregisterOutboundSpec(GameplayEffectSpec spec)
+        {
+            if (spec == null)
+            {
+                return;
+            }
+
+            for (int i = outboundEffectSpecs.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(outboundEffectSpecs[i], spec))
+                {
+                    outboundEffectSpecs.RemoveAt(i);
+                    return;
+                }
+            }
         }
 
         private List<GameplayAbilitySpec> RentGrantedAbilitySpecList()
@@ -2629,7 +2677,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var attributeAccumulator = new UnorderedHashAccumulator();
             for (int i = 0; i < attributeSets.Count; i++)
             {
-                foreach (var attribute in attributeSets[i].GetAttributes())
+                foreach (var attribute in attributeSets[i].AttributeValues)
                 {
                     ulong entryHash = Fnv1a64.OffsetBasis;
                     entryHash = HashString(entryHash, attribute.Name);
@@ -4479,6 +4527,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.DurationCommitFailed);
                 }
 
+                AbilitySystemComponent specSource = spec.Source;
+                if (specSource != null && !ReferenceEquals(specSource, this))
+                {
+                    specSource.RegisterOutboundSpec(spec);
+                }
+
                 RemoveEffectsWithTags(spec.Def.RemoveGameplayEffectsWithTags, newActiveEffect);
 
                 if (isLocallyPredictedEffect)
@@ -4634,6 +4688,73 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     "Active-effect removal cannot re-enter an effect mutation transaction.");
             }
             RemoveActiveEffectsWithGrantedTags(tags, null);
+        }
+
+        /// <summary>
+        /// Removes every active effect applied by <paramref name="sourceEntity"/>. Matching uses the
+        /// stable identity, so it still works after that source component has been disposed.
+        /// Get the value from <see cref="CoreEntity"/>; it is assigned by the runtime context.
+        /// </summary>
+        public int RemoveActiveEffectsBySource(GASEntityId sourceEntity)
+        {
+            AssertRuntimeThread();
+            if (!sourceEntity.IsValid)
+            {
+                return 0;
+            }
+            if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
+            {
+                throw new GASReentrancyRejectedException(
+                    "Active-effect removal cannot re-enter an effect mutation transaction.");
+            }
+
+            List<ActiveGameplayEffect> removedEffects = RentAbilityAppliedEffectList();
+            try
+            {
+                for (int i = activeEffects.Count - 1; i >= 0; i--)
+                {
+                    ActiveGameplayEffect effect = activeEffects[i];
+                    if (effect.Spec != null && effect.Spec.SourceEntity == sourceEntity)
+                    {
+                        removedEffects.Add(effect);
+                    }
+                }
+
+                if (removedEffects.Count == 0)
+                {
+                    return 0;
+                }
+
+                using (BeginReplicationMutationScope())
+                {
+                    for (int i = 0; i < removedEffects.Count; i++)
+                    {
+                        ActiveGameplayEffect effect = removedEffects[i];
+                        if (TryFindActiveEffectIndex(effect, out int index))
+                        {
+                            RemoveActiveEffectAtIndex(index);
+                            RemoveFromStackingIndex(effect);
+                        }
+                    }
+
+                    for (int i = 0; i < removedEffects.Count; i++)
+                    {
+                        OnEffectRemoved(removedEffects[i], true);
+                    }
+                }
+
+                return removedEffects.Count;
+            }
+            finally
+            {
+                ReturnAbilityAppliedEffectList(removedEffects);
+            }
+        }
+
+        /// <summary>Removes every active effect applied by <paramref name="source"/>.</summary>
+        public int RemoveActiveEffectsBySource(AbilitySystemComponent source)
+        {
+            return source != null ? RemoveActiveEffectsBySource(source.CoreEntity) : 0;
         }
 
         private void RemoveActiveEffectsWithGrantedTags(
@@ -4950,10 +5071,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         ModifierInfo modifier = executionOutput[i];
                         GameplayAttribute attribute = GetAttribute(modifier.AttributeName);
-                        if (attribute != null)
+                        if (attribute == null)
                         {
-                            ApplyModifier(spec, attribute, modifier, modifier.CalculateMagnitudeRaw(spec, spec.Level), true);
+                            continue;
                         }
+
+                        long magnitudeRaw = 0L;
+                        if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased)
+                        {
+                            if (spec.TryGetCapturedAttribute(
+                                modifier.AttributeBasedMagnitude.CaptureSource,
+                                modifier.AttributeBasedMagnitude.AttributeName,
+                                out GameplayAttribute captured))
+                            {
+                                magnitudeRaw = modifier.CalculateMagnitudeRaw(spec, spec.Level, captured);
+                            }
+                        }
+                        else
+                        {
+                            magnitudeRaw = modifier.CalculateMagnitudeRaw(spec, spec.Level);
+                        }
+
+                        ApplyModifier(spec, attribute, modifier, magnitudeRaw, true);
                     }
 
                     for (int i = 0; i < modifiers.Count; i++)
@@ -6732,6 +6871,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             try
             {
+                for (int i = 0; i < outboundEffectSpecs.Count; i++)
+                {
+                    outboundEffectSpecs[i].DetachSource();
+                }
+
+                outboundEffectSpecs.Clear();
+            }
+            catch (Exception exception) { CaptureCleanupFailure(ref cleanupFailure, exception); }
+
+            try
+            {
                 activeEffects.Clear();
                 activeEffectIndexByEffect.Clear();
                 activeEffectByReconciliationId.Clear();
@@ -6815,8 +6965,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             stateDeltaResyncObservers.Clear();
             OwnerActor = null;
             AvatarActor = null;
-            OwnerUnityObject = null;
-            AvatarGameObject = null;
+            ownerUnityObject = null;
+            avatarGameObject = null;
         }
 
         private const int MaxOverflowApplicationDepth = 256;
@@ -7832,7 +7982,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             int index = 0;
             for (int setIndex = 0; setIndex < attributeSets.Count; setIndex++)
             {
-                foreach (var attr in attributeSets[setIndex].GetAttributes())
+                foreach (var attr in attributeSets[setIndex].AttributeValues)
                 {
                     entries[index++] = GASAttributeStateData.FromRaw(attr.Name, attr.BaseValueRaw, attr.CurrentValueRaw);
                 }

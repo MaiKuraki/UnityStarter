@@ -7,6 +7,8 @@ namespace CycloneGames.GameplayAbilities.Core
     /// The value is unique only within one GASRuntimeContext lifetime. It is not a wire,
     /// save, or content identity and must be mapped to an authority-issued stable ID before
     /// crossing a process boundary. Value 0 means invalid/null.
+    /// The context assigns it when the component is constructed and never reuses a value,
+    /// so callers never supply one for normal component creation.
     /// </summary>
     public readonly struct GASEntityId : IEquatable<GASEntityId>
     {
@@ -17,6 +19,8 @@ namespace CycloneGames.GameplayAbilities.Core
         {
             Value = value;
         }
+
+        public override string ToString() => IsValid ? $"Entity#{Value}" : "Entity#None";
 
         public bool Equals(GASEntityId other) => Value == other.Value;
         public override bool Equals(object obj) => obj is GASEntityId other && Equals(other);
