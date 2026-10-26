@@ -279,6 +279,219 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
         }
 
+        [Test]
+        public void CustomMagnitude_UsesDeclaredCaptureAfterSourceDisposed()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(6);
+                targetSet.Health.SetBaseValue(0);
+                Settle(source);
+                Settle(target);
+
+                var effect = new GameplayEffect(
+                    "Lifetime.CustomMagnitude",
+                    EDurationPolicy.Infinite,
+                    period: Period,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "Health",
+                            EAttributeModifierOperation.Add,
+                            new SourcePowerMagnitude(declareCapture: true),
+                            EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                    },
+                    executePeriodicEffectOnApplication: false);
+
+                GameplayEffectSpec spec = GameplayEffectSpec.Create(effect, source);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(spec).Succeeded, Is.True);
+
+                target.Tick(Period, isServer: true);
+                Assert.That(targetSet.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(6).RawValue));
+
+                sourceSet.Power.SetBaseValue(9);
+                Settle(source);
+                source.Dispose();
+                target.Tick(Period, isServer: true);
+
+                Assert.That(targetSet.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(15).RawValue),
+                    "A custom magnitude calculation must read its declared capture frozen at the last settled value.");
+                Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void CustomMagnitude_UndeclaredCapture_ContributesZero()
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(6);
+                targetSet.Health.SetBaseValue(0);
+                Settle(source);
+                Settle(target);
+
+                var effect = new GameplayEffect(
+                    "Lifetime.CustomMagnitudeUndeclared",
+                    EDurationPolicy.Infinite,
+                    period: Period,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "Health",
+                            EAttributeModifierOperation.Add,
+                            new SourcePowerMagnitude(declareCapture: false),
+                            EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                    },
+                    executePeriodicEffectOnApplication: false);
+
+                GameplayEffectSpec spec = GameplayEffectSpec.Create(effect, source);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(spec).Succeeded, Is.True);
+
+                target.Tick(Period, isServer: true);
+
+                Assert.That(targetSet.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(0).RawValue),
+                    "Reading an undeclared attribute is not captured and contributes zero.");
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
+        [Test]
+        public void DuplicateDeclaredCaptures_AcrossModifiers_AreCollapsed()
+        {
+            var effect = new GameplayEffect(
+                "Lifetime.DuplicateCapture",
+                EDurationPolicy.Infinite,
+                period: Period,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo("Health", EAttributeModifierOperation.Add,
+                        new SourcePowerMagnitude(declareCapture: true),
+                        EGameplayEffectAttributeCaptureSnapshot.NotSnapshot),
+                    new ModifierInfo("Health", EAttributeModifierOperation.Add,
+                        new SourcePowerMagnitude(declareCapture: true),
+                        EGameplayEffectAttributeCaptureSnapshot.NotSnapshot)
+                },
+                executePeriodicEffectOnApplication: false);
+
+            Assert.That(effect.DeclaredCaptures.Count, Is.EqualTo(1));
+        }
+
+        [TestCase(EGameplayEffectAttributeCaptureSource.Source, EGameplayEffectAttributeCaptureSnapshot.NotSnapshot, true)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Source, EGameplayEffectAttributeCaptureSnapshot.NotSnapshot, false)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Source, EGameplayEffectAttributeCaptureSnapshot.Snapshot, true)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Source, EGameplayEffectAttributeCaptureSnapshot.Snapshot, false)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Target, EGameplayEffectAttributeCaptureSnapshot.NotSnapshot, true)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Target, EGameplayEffectAttributeCaptureSnapshot.NotSnapshot, false)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Target, EGameplayEffectAttributeCaptureSnapshot.Snapshot, true)]
+        [TestCase(EGameplayEffectAttributeCaptureSource.Target, EGameplayEffectAttributeCaptureSnapshot.Snapshot, false)]
+        public void CustomMagnitude_CaptureMatrix_MatchExpectedMagnitude(
+            EGameplayEffectAttributeCaptureSource captureSide,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            bool disposeSource)
+        {
+            AssertCustomMagnitudeCapture(captureSide, snapshotPolicy, disposeSource);
+        }
+
+        private static void AssertCustomMagnitudeCapture(
+            EGameplayEffectAttributeCaptureSource captureSide,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            bool disposeSource)
+        {
+            var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceSet = new CaptureSet();
+            var targetSet = new CaptureSet();
+            source.AddAttributeSet(sourceSet);
+            target.AddAttributeSet(targetSet);
+            try
+            {
+                sourceSet.Power.SetBaseValue(5);
+                targetSet.Power.SetBaseValue(3);
+                targetSet.Health.SetBaseValue(100);
+                Settle(source);
+                Settle(target);
+
+                var effect = new GameplayEffect(
+                    $"Lifetime.Custom.{captureSide}.{snapshotPolicy}.{disposeSource}",
+                    EDurationPolicy.Infinite,
+                    period: Period,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "Health",
+                            EAttributeModifierOperation.Add,
+                            new SourcePowerMagnitude(declareCapture: true, captureSide),
+                            snapshotPolicy)
+                    },
+                    executePeriodicEffectOnApplication: false);
+
+                GameplayEffectSpec spec = GameplayEffectSpec.Create(effect, source);
+                Assert.That(target.ApplyGameplayEffectSpecToSelf(spec).Succeeded, Is.True);
+
+                target.Tick(Period, isServer: true);
+                int firstDelta = captureSide == EGameplayEffectAttributeCaptureSource.Source ? 5 : 3;
+                Assert.That(targetSet.Health.CurrentValueRaw,
+                    Is.EqualTo(GASFixedValue.FromInt(100 + firstDelta).RawValue));
+
+                sourceSet.Power.SetBaseValue(7);
+                targetSet.Power.SetBaseValue(4);
+                Settle(source);
+                Settle(target);
+                if (disposeSource)
+                {
+                    source.Dispose();
+                }
+
+                target.Tick(Period, isServer: true);
+                int secondDelta;
+                if (captureSide == EGameplayEffectAttributeCaptureSource.Source)
+                {
+                    secondDelta = snapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot ? 7 : 5;
+                }
+                else
+                {
+                    secondDelta = snapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot ? 4 : 3;
+                }
+
+                Assert.That(targetSet.Health.CurrentValueRaw,
+                    Is.EqualTo(GASFixedValue.FromInt(100 + firstDelta + secondDelta).RawValue),
+                    $"Unexpected custom magnitude for {captureSide}/{snapshotPolicy}/disposed={disposeSource}.");
+                Assert.That(target.ActiveEffects.Count, Is.EqualTo(1));
+            }
+            finally
+            {
+                target.Dispose();
+                source.Dispose();
+                context.Dispose();
+            }
+        }
+
         private static void AssertPeriodicCapture(
             EGameplayEffectAttributeCaptureSource captureSide,
             EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
@@ -417,6 +630,36 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 executionOutput.Add(AddFromPower(
                     EGameplayEffectAttributeCaptureSource.Source,
                     EGameplayEffectAttributeCaptureSnapshot.NotSnapshot));
+            }
+        }
+
+        private sealed class SourcePowerMagnitude : GameplayModMagnitudeCalculation
+        {
+            private readonly bool declareCapture;
+            private readonly EGameplayEffectAttributeCaptureSource captureSide;
+
+            public SourcePowerMagnitude(
+                bool declareCapture,
+                EGameplayEffectAttributeCaptureSource captureSide = EGameplayEffectAttributeCaptureSource.Source)
+            {
+                this.declareCapture = declareCapture;
+                this.captureSide = captureSide;
+            }
+
+            public override void GetAttributeCaptureDefinitions(
+                List<GameplayAttributeCaptureDefinition> definitions)
+            {
+                if (declareCapture)
+                {
+                    definitions.Add(new GameplayAttributeCaptureDefinition("Power", captureSide));
+                }
+            }
+
+            public override float CalculateMagnitude(GameplayEffectSpec spec)
+            {
+                return spec.TryGetCapturedAttribute(captureSide, "Power", out GameplayAttribute attribute)
+                    ? attribute.CurrentValue
+                    : 0f;
             }
         }
     }

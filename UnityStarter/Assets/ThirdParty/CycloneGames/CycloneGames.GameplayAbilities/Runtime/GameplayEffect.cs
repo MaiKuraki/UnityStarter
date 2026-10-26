@@ -243,7 +243,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayEffectExecutionCalculation Execution { get; }
 
         /// <summary>Attributes the execution calculation declared beyond the modifier list.</summary>
-        public IReadOnlyList<GameplayAttributeCaptureDefinition> ExecutionCaptures { get; }
+        public IReadOnlyList<GameplayAttributeCaptureDefinition> DeclaredCaptures { get; }
 
         /// <summary>
         /// Defines how this effect interacts with other instances of the same effect on a target.
@@ -414,7 +414,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Period = period;
             Modifiers = FreezeModifiers(modifiers);
             Execution = execution;
-            ExecutionCaptures = CollectExecutionCaptures(execution);
+            DeclaredCaptures = CollectDeclaredCaptures(execution, modifiers);
             Stacking = stacking;
             GrantedAbilities = Freeze(grantedAbilities);
             GrantedAbilityRemovalPolicies = Freeze(grantedAbilityRemovalPolicies);
@@ -611,16 +611,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        private static IReadOnlyList<GameplayAttributeCaptureDefinition> CollectExecutionCaptures(
-            GameplayEffectExecutionCalculation execution)
+        private static IReadOnlyList<GameplayAttributeCaptureDefinition> CollectDeclaredCaptures(
+            GameplayEffectExecutionCalculation execution,
+            List<ModifierInfo> modifiers)
         {
-            if (execution == null)
+            var captures = new List<GameplayAttributeCaptureDefinition>(4);
+            execution?.GetAttributeCaptureDefinitions(captures);
+
+            if (modifiers != null)
             {
-                return EmptyReadOnlyList<GameplayAttributeCaptureDefinition>.Value;
+                for (int i = 0; i < modifiers.Count; i++)
+                {
+                    ModifierInfo modifier = modifiers[i];
+                    if (modifier != null &&
+                        modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.CustomCalculation &&
+                        modifier.CustomCalculation != null)
+                    {
+                        modifier.CustomCalculation.GetAttributeCaptureDefinitions(captures);
+                    }
+                }
             }
 
-            var captures = new List<GameplayAttributeCaptureDefinition>(4);
-            execution.GetAttributeCaptureDefinitions(captures);
             if (captures.Count == 0)
             {
                 return EmptyReadOnlyList<GameplayAttributeCaptureDefinition>.Value;
@@ -633,16 +644,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     $"Execution calculations may declare at most {MaxExecutionCaptureCount} attribute captures.");
             }
 
-            for (int i = 0; i < captures.Count; i++)
+            // The same attribute can be declared by several modifiers or by the execution calculation.
+            for (int i = captures.Count - 1; i >= 0; i--)
             {
-                for (int j = i + 1; j < captures.Count; j++)
+                for (int j = 0; j < i; j++)
                 {
                     if (captures[i].CaptureSource == captures[j].CaptureSource &&
                         string.Equals(captures[i].AttributeName, captures[j].AttributeName, StringComparison.Ordinal))
                     {
-                        throw new ArgumentException(
-                            $"Execution capture '{captures[i].AttributeName}' is declared more than once.",
-                            nameof(execution));
+                        captures.RemoveAt(i);
+                        break;
                     }
                 }
             }

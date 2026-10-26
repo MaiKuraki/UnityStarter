@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Runtime;
@@ -356,6 +357,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public abstract class GameplayModMagnitudeCalculation
     {
+        /// <summary>
+        /// Declares attributes this calculation reads beyond the effect's modifiers. Undeclared
+        /// attribute-based reads are not captured and resolve to zero.
+        /// </summary>
+        public virtual void GetAttributeCaptureDefinitions(List<GameplayAttributeCaptureDefinition> definitions)
+        {
+        }
+
         /// <summary>
         /// Calculates the magnitude for a modifier.
         /// </summary>

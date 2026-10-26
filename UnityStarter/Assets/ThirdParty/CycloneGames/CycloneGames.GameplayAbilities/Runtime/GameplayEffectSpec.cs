@@ -153,7 +153,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal long[] ModifierMagnitudeRawValues = Array.Empty<long>();
         internal GameplayAttribute[] TargetAttributes = Array.Empty<GameplayAttribute>();
         internal GameplayAttribute[] CapturedAttributes = Array.Empty<GameplayAttribute>();
-        internal GameplayAttribute[] CapturedExecutionAttributes = Array.Empty<GameplayAttribute>();
+        internal GameplayAttribute[] CapturedDeclaredAttributes = Array.Empty<GameplayAttribute>();
         internal GameplayTag[] ReplicatedStateTagScratch = Array.Empty<GameplayTag>();
         internal long[] ReplicatedStateValueScratch = Array.Empty<long>();
         internal string[] ReplicatedStateNameScratch = Array.Empty<string>();
@@ -175,7 +175,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Clear(ModifierMagnitudeRawValues);
             Clear(TargetAttributes);
             Clear(CapturedAttributes);
-            Clear(CapturedExecutionAttributes);
+            Clear(CapturedDeclaredAttributes);
             Clear(ReplicatedStateTagScratch);
             Clear(ReplicatedStateValueScratch);
             Clear(ReplicatedStateNameScratch);
@@ -369,7 +369,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private long[] modifierMagnitudeRawValues = System.Array.Empty<long>();
         private GameplayAttribute[] targetAttributes = System.Array.Empty<GameplayAttribute>();
         private GameplayAttribute[] capturedAttributes = System.Array.Empty<GameplayAttribute>();
-        private GameplayAttribute[] capturedExecutionAttributes = System.Array.Empty<GameplayAttribute>();
+        private GameplayAttribute[] capturedDeclaredAttributes = System.Array.Empty<GameplayAttribute>();
 
         // Lazily-built grouping of modifier indices by resolved target attribute. The aggregation
         // path (AbilitySystemComponent.RecalculateDirtyAttributes) uses it to iterate only the
@@ -547,7 +547,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             modifierMagnitudeRawValues = value.ModifierMagnitudeRawValues;
             targetAttributes = value.TargetAttributes;
             capturedAttributes = value.CapturedAttributes;
-            capturedExecutionAttributes = value.CapturedExecutionAttributes;
+            capturedDeclaredAttributes = value.CapturedDeclaredAttributes;
             replicatedStateTagScratch = value.ReplicatedStateTagScratch;
             replicatedStateValueScratch = value.ReplicatedStateValueScratch;
             replicatedStateNameScratch = value.ReplicatedStateNameScratch;
@@ -584,7 +584,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             released.ModifierMagnitudeRawValues = modifierMagnitudeRawValues;
             released.TargetAttributes = targetAttributes;
             released.CapturedAttributes = capturedAttributes;
-            released.CapturedExecutionAttributes = capturedExecutionAttributes;
+            released.CapturedDeclaredAttributes = capturedDeclaredAttributes;
             released.ReplicatedStateTagScratch = replicatedStateTagScratch;
             released.ReplicatedStateValueScratch = replicatedStateValueScratch;
             released.ReplicatedStateNameScratch = replicatedStateNameScratch;
@@ -617,7 +617,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             modifierMagnitudeRawValues = Array.Empty<long>();
             targetAttributes = Array.Empty<GameplayAttribute>();
             capturedAttributes = Array.Empty<GameplayAttribute>();
-            capturedExecutionAttributes = Array.Empty<GameplayAttribute>();
+            capturedDeclaredAttributes = Array.Empty<GameplayAttribute>();
             modifierGroupingDirty = true;
             dependencySourceAttributesResolved = false;
             replicatedStateTagScratch = Array.Empty<GameplayTag>();
@@ -726,15 +726,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             modifierCount = modCount;
             EnsureCapacity(modCount);
-            EnsureExecutionCaptureCapacity(def.ExecutionCaptures.Count);
+            EnsureDeclaredCaptureCapacity(def.DeclaredCaptures.Count);
 
             for (int i = modCount; i < capturedAttributes.Length; i++)
             {
                 capturedAttributes[i] = null;
             }
-            for (int i = 0; i < capturedExecutionAttributes.Length; i++)
+            for (int i = 0; i < capturedDeclaredAttributes.Length; i++)
             {
-                capturedExecutionAttributes[i] = null;
+                capturedDeclaredAttributes[i] = null;
             }
             CaptureAttributeSources(EGameplayEffectAttributeCaptureSource.Source);
 
@@ -811,7 +811,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     : null;
             }
 
-            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.ExecutionCaptures;
+            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.DeclaredCaptures;
             for (int i = 0; i < executionCaptures.Count; i++)
             {
                 if (executionCaptures[i].CaptureSource != captureSide)
@@ -819,13 +819,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     continue;
                 }
 
-                capturedExecutionAttributes[i] = resolver != null
+                capturedDeclaredAttributes[i] = resolver != null
                     ? resolver.GetAttribute(executionCaptures[i].AttributeName)
                     : null;
             }
         }
 
-        internal bool TryGetCapturedAttribute(
+        /// <summary>Reads a binding declared by the effect definition; undeclared attributes return false.</summary>
+        public bool TryGetCapturedAttribute(
             EGameplayEffectAttributeCaptureSource captureSource,
             string attributeName,
             out GameplayAttribute attribute)
@@ -843,13 +844,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.ExecutionCaptures;
+            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.DeclaredCaptures;
             for (int i = 0; i < executionCaptures.Count; i++)
             {
                 if (executionCaptures[i].CaptureSource == captureSource &&
                     string.Equals(executionCaptures[i].AttributeName, attributeName, System.StringComparison.Ordinal))
                 {
-                    attribute = capturedExecutionAttributes[i];
+                    attribute = capturedDeclaredAttributes[i];
                     return attribute != null;
                 }
             }
@@ -858,11 +859,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return false;
         }
 
-        private void EnsureExecutionCaptureCapacity(int count)
+        private void EnsureDeclaredCaptureCapacity(int count)
         {
-            if (capturedExecutionAttributes.Length < count)
+            if (capturedDeclaredAttributes.Length < count)
             {
-                System.Array.Resize(ref capturedExecutionAttributes, count);
+                System.Array.Resize(ref capturedDeclaredAttributes, count);
             }
         }
 
@@ -2105,7 +2106,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 modifierGroupingDirty = true;
                 dependencySourceAttributesResolved = false;
 
-                EnsureExecutionCaptureCapacity(Def.ExecutionCaptures.Count);
+                EnsureDeclaredCaptureCapacity(Def.DeclaredCaptures.Count);
                 CaptureAttributeSources(EGameplayEffectAttributeCaptureSource.Target);
                 RecalculateTargetDependentMagnitudes();
             }
