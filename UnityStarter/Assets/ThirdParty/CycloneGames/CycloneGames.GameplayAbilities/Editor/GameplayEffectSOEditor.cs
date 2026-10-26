@@ -293,6 +293,8 @@ namespace CycloneGames.GameplayAbilities.Editor
                 if (modifiersProp != null)
                     EditorGUILayout.PropertyField(modifiersProp, s_ModifiersContent, true);
 
+                DrawCustomCalculationSummary();
+
                 EditorGUILayout.PropertyField(executionProp, s_ExecutionContent);
                 EditorGUILayout.PropertyField(grantedAbilitiesProp, s_GrantedAbilitiesContent, true);
                 DrawGrantedAbilityPolicyList();
@@ -394,6 +396,41 @@ namespace CycloneGames.GameplayAbilities.Editor
             DrawDerivedClassFields();
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawCustomCalculationSummary()
+        {
+            if (serializedObject == null)
+            {
+                return;
+            }
+
+            SerializedProperty modifiers = serializedObject.FindProperty("SerializableModifiers");
+            if (modifiers == null || !modifiers.isArray)
+            {
+                return;
+            }
+
+            int missingAssetCount = 0;
+            for (int i = 0; i < modifiers.arraySize; i++)
+            {
+                SerializedProperty element = modifiers.GetArrayElementAtIndex(i);
+                SerializedProperty type = element.FindPropertyRelative("MagnitudeCalculationType");
+                SerializedProperty calculation = element.FindPropertyRelative("CustomCalculation");
+                if (type != null && calculation != null &&
+                    type.enumValueIndex == (int)Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation &&
+                    calculation.objectReferenceValue == null)
+                {
+                    missingAssetCount++;
+                }
+            }
+
+            if (missingAssetCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{missingAssetCount} modifier(s) use Custom Calculation without an asset; they use Fallback Magnitude.",
+                    MessageType.Warning);
+            }
         }
 
         private bool HasAnyOngoingRequirements()
@@ -793,6 +830,8 @@ namespace CycloneGames.GameplayAbilities.Editor
         private static readonly GUIContent s_DefaultValue = new GUIContent("Default Value");
         private static readonly GUIContent s_WarnIfMissing = new GUIContent("Warn If Missing");
         private static readonly GUIContent s_Magnitude = new GUIContent("Magnitude");
+        private static readonly GUIContent s_CustomCalculation = new GUIContent("Calculation Asset");
+        private static readonly GUIContent s_FallbackMagnitude = new GUIContent("Fallback Magnitude");
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
@@ -836,12 +875,18 @@ namespace CycloneGames.GameplayAbilities.Editor
                     DrawRelativeProperty(ref line, property, "WarnIfSetByCallerMissing", s_WarnIfMissing);
                     break;
                 case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
-                    line.height = EditorGUIUtility.singleLineHeight * 2.2f;
-                    EditorGUI.HelpBox(
-                        line,
-                        "ScriptableObject modifiers cannot serialize custom calculation instances. Use ScalableFloat, AttributeBased, SetByCaller, or C# runtime construction.",
-                        MessageType.Warning);
-                    Advance(ref line);
+                    DrawRelativeProperty(ref line, property, "CustomCalculation", s_CustomCalculation);
+                    if (property.FindPropertyRelative("CustomCalculation").objectReferenceValue == null)
+                    {
+                        line.height = EditorGUIUtility.singleLineHeight * 2.2f;
+                        EditorGUI.HelpBox(
+                            line,
+                            "No calculation asset assigned; this modifier uses Fallback Magnitude.",
+                            MessageType.Warning);
+                        Advance(ref line);
+                    }
+                    DrawRelativeProperty(ref line, property, "Magnitude", s_FallbackMagnitude, true);
+                    DrawRelativeProperty(ref line, property, "AttributeSnapshotPolicy", s_CaptureTiming);
                     break;
                 default:
                     DrawRelativeProperty(ref line, property, "Magnitude", s_Magnitude, true);
@@ -882,7 +927,13 @@ namespace CycloneGames.GameplayAbilities.Editor
                         AddRelativePropertyHeight(ref height, property, "WarnIfSetByCallerMissing");
                         break;
                     case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
-                        height += VERTICAL_SPACING + (EditorGUIUtility.singleLineHeight * 2.2f);
+                        AddRelativePropertyHeight(ref height, property, "CustomCalculation");
+                        if (property.FindPropertyRelative("CustomCalculation").objectReferenceValue == null)
+                        {
+                            height += VERTICAL_SPACING + (EditorGUIUtility.singleLineHeight * 2.2f);
+                        }
+                        AddRelativePropertyHeight(ref height, property, "Magnitude", true);
+                        AddRelativePropertyHeight(ref height, property, "AttributeSnapshotPolicy");
                         break;
                     default:
                         AddRelativePropertyHeight(ref height, property, "Magnitude", true);

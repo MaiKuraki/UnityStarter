@@ -152,6 +152,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         internal float[] ModifierMagnitudes = Array.Empty<float>();
         internal long[] ModifierMagnitudeRawValues = Array.Empty<long>();
         internal GameplayAttribute[] TargetAttributes = Array.Empty<GameplayAttribute>();
+        internal GameplayAttribute[] CapturedAttributes = Array.Empty<GameplayAttribute>();
+        internal GameplayAttribute[] CapturedDeclaredAttributes = Array.Empty<GameplayAttribute>();
         internal GameplayTag[] ReplicatedStateTagScratch = Array.Empty<GameplayTag>();
         internal long[] ReplicatedStateValueScratch = Array.Empty<long>();
         internal string[] ReplicatedStateNameScratch = Array.Empty<string>();
@@ -172,6 +174,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Clear(ModifierMagnitudes);
             Clear(ModifierMagnitudeRawValues);
             Clear(TargetAttributes);
+            Clear(CapturedAttributes);
+            Clear(CapturedDeclaredAttributes);
             Clear(ReplicatedStateTagScratch);
             Clear(ReplicatedStateValueScratch);
             Clear(ReplicatedStateNameScratch);
@@ -247,6 +251,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             get { EnsurePublicReadAllowed(); return source; }
             private set { source = value; }
+        }
+
+        /// <summary>
+        /// Stable identity of the source, kept after the source component detaches or is disposed.
+        /// </summary>
+        public GASEntityId SourceEntity { get; private set; }
+
+        /// <summary>Drops the live source reference; captures and <see cref="SourceEntity"/> stay valid.</summary>
+        internal void DetachSource()
+        {
+            source = null;
+            context?.DetachInstigator();
         }
 
         /// <summary>
@@ -364,6 +380,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private float[] modifierMagnitudes = System.Array.Empty<float>();
         private long[] modifierMagnitudeRawValues = System.Array.Empty<long>();
         private GameplayAttribute[] targetAttributes = System.Array.Empty<GameplayAttribute>();
+        private GameplayAttribute[] capturedAttributes = System.Array.Empty<GameplayAttribute>();
+        private GameplayAttribute[] capturedDeclaredAttributes = System.Array.Empty<GameplayAttribute>();
 
         // Lazily-built grouping of modifier indices by resolved target attribute. The aggregation
         // path (AbilitySystemComponent.RecalculateDirtyAttributes) uses it to iterate only the
@@ -495,6 +513,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         void IGASLeasedObject.OnLeaseReleased()
         {
             ownership = SpecOwnership.None;
+            source?.UnregisterOutboundSpec(this);
             try
             {
                 if (ownsContext)
@@ -507,6 +526,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ownsContext = false;
                 Def = null;
                 Source = null;
+                SourceEntity = default;
                 Target = null;
                 Context = null;
                 Level = 0;
@@ -540,6 +560,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             modifierMagnitudes = value.ModifierMagnitudes;
             modifierMagnitudeRawValues = value.ModifierMagnitudeRawValues;
             targetAttributes = value.TargetAttributes;
+            capturedAttributes = value.CapturedAttributes;
+            capturedDeclaredAttributes = value.CapturedDeclaredAttributes;
             replicatedStateTagScratch = value.ReplicatedStateTagScratch;
             replicatedStateValueScratch = value.ReplicatedStateValueScratch;
             replicatedStateNameScratch = value.ReplicatedStateNameScratch;
@@ -575,6 +597,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             released.ModifierMagnitudes = modifierMagnitudes;
             released.ModifierMagnitudeRawValues = modifierMagnitudeRawValues;
             released.TargetAttributes = targetAttributes;
+            released.CapturedAttributes = capturedAttributes;
+            released.CapturedDeclaredAttributes = capturedDeclaredAttributes;
             released.ReplicatedStateTagScratch = replicatedStateTagScratch;
             released.ReplicatedStateValueScratch = replicatedStateValueScratch;
             released.ReplicatedStateNameScratch = replicatedStateNameScratch;
@@ -606,6 +630,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             modifierMagnitudes = Array.Empty<float>();
             modifierMagnitudeRawValues = Array.Empty<long>();
             targetAttributes = Array.Empty<GameplayAttribute>();
+            capturedAttributes = Array.Empty<GameplayAttribute>();
+            capturedDeclaredAttributes = Array.Empty<GameplayAttribute>();
             modifierGroupingDirty = true;
             dependencySourceAttributesResolved = false;
             replicatedStateTagScratch = Array.Empty<GameplayTag>();
@@ -676,6 +702,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             Def = def;
             Source = source;
+            SourceEntity = source != null ? source.CoreEntity : default;
             Level = level;
             // A configured DurationMagnitude wins over the static def.Duration. Evaluation reuses
             // the fixed-point magnitude pipeline and travels through the same replicated
@@ -714,11 +741,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             modifierCount = modCount;
             EnsureCapacity(modCount);
+            EnsureDeclaredCaptureCapacity(def.DeclaredCaptures.Count);
+
+            for (int i = modCount; i < capturedAttributes.Length; i++)
+            {
+                capturedAttributes[i] = null;
+            }
+            for (int i = 0; i < capturedDeclaredAttributes.Length; i++)
+            {
+                capturedDeclaredAttributes[i] = null;
+            }
+            CaptureAttributeSources(EGameplayEffectAttributeCaptureSource.Source);
 
             for (int i = 0; i < modCount; i++)
             {
                 var mod = def.Modifiers[i];
-                StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, level));
+                StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, level, i));
                 targetAttributes[i] = null;
             }
             modifierGroupingDirty = true;
@@ -750,9 +788,97 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 System.Array.Resize(ref targetAttributes, newSize);
             }
+            if (capturedAttributes.Length < count)
+            {
+                System.Array.Resize(ref capturedAttributes, newSize);
+            }
             if (dependencySourceAttributes.Length < count)
             {
                 System.Array.Resize(ref dependencySourceAttributes, newSize);
+            }
+        }
+
+        /// <summary>
+        /// Binds one capture side at creation or application; later evaluation only reads attributes.
+        /// </summary>
+        private void CaptureAttributeSources(EGameplayEffectAttributeCaptureSource captureSide)
+        {
+            if (Def?.Modifiers == null)
+            {
+                return;
+            }
+
+            AbilitySystemComponent resolver = captureSide == EGameplayEffectAttributeCaptureSource.Source
+                ? Source
+                : Target;
+            int count = System.Math.Min(modifierCount, Def.Modifiers.Count);
+            for (int i = 0; i < count; i++)
+            {
+                ModifierInfo modifier = Def.Modifiers[i];
+                if (modifier.MagnitudeCalculationType != EGameplayEffectMagnitudeCalculation.AttributeBased ||
+                    modifier.AttributeBasedMagnitude.CaptureSource != captureSide)
+                {
+                    continue;
+                }
+
+                capturedAttributes[i] = resolver != null
+                    ? resolver.GetAttribute(modifier.AttributeBasedMagnitude.AttributeName)
+                    : null;
+            }
+
+            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.DeclaredCaptures;
+            for (int i = 0; i < executionCaptures.Count; i++)
+            {
+                if (executionCaptures[i].CaptureSource != captureSide)
+                {
+                    continue;
+                }
+
+                capturedDeclaredAttributes[i] = resolver != null
+                    ? resolver.GetAttribute(executionCaptures[i].AttributeName)
+                    : null;
+            }
+        }
+
+        /// <summary>Reads a binding declared by the effect definition; undeclared attributes return false.</summary>
+        public bool TryGetCapturedAttribute(
+            EGameplayEffectAttributeCaptureSource captureSource,
+            string attributeName,
+            out GameplayAttribute attribute)
+        {
+            int count = System.Math.Min(modifierCount, Def.Modifiers.Count);
+            for (int i = 0; i < count; i++)
+            {
+                ModifierInfo modifier = Def.Modifiers[i];
+                if (modifier.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased &&
+                    modifier.AttributeBasedMagnitude.CaptureSource == captureSource &&
+                    string.Equals(modifier.AttributeBasedMagnitude.AttributeName, attributeName, System.StringComparison.Ordinal))
+                {
+                    attribute = capturedAttributes[i];
+                    return attribute != null;
+                }
+            }
+
+            IReadOnlyList<GameplayAttributeCaptureDefinition> executionCaptures = Def.DeclaredCaptures;
+            for (int i = 0; i < executionCaptures.Count; i++)
+            {
+                if (executionCaptures[i].CaptureSource == captureSource &&
+                    string.Equals(executionCaptures[i].AttributeName, attributeName, System.StringComparison.Ordinal))
+                {
+                    attribute = capturedDeclaredAttributes[i];
+                    return attribute != null;
+                }
+            }
+
+            attribute = null;
+            return false;
+        }
+
+        private void EnsureDeclaredCaptureCapacity(int count)
+        {
+            if (capturedDeclaredAttributes.Length < count)
+            {
+                System.Array.Resize(ref capturedDeclaredAttributes, count);
             }
         }
 
@@ -820,11 +946,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     continue;
                 }
 
-                AbilitySystemComponent resolver =
-                    modifier.AttributeBasedMagnitude.CaptureSource == EGameplayEffectAttributeCaptureSource.Source
-                        ? Source
-                        : Target;
-                dependencySourceAttributes[i] = resolver?.GetAttribute(modifier.AttributeBasedMagnitude.AttributeName);
+                dependencySourceAttributes[i] = capturedAttributes[i];
             }
 
             dependencySourceAttributesResolved = true;
@@ -1047,7 +1169,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        private long CalculateMagnitudeRawGuarded(ModifierInfo modifier, int level)
+        private long CalculateMagnitudeRawGuarded(ModifierInfo modifier, int level, int modifierIndex)
         {
             BeginExternalEvaluation();
             setByCallerWarningSuppressionDepth++;
@@ -1058,7 +1180,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return CalculateSetByCallerMagnitudeRawWithoutWarning(modifier.SetByCallerMagnitude);
                 }
 
-                return modifier.CalculateMagnitudeRaw(this, level);
+                GameplayAttribute capturedAttribute =
+                    (uint)modifierIndex < (uint)capturedAttributes.Length ? capturedAttributes[modifierIndex] : null;
+                return modifier.CalculateMagnitudeRaw(this, level, capturedAttribute);
             }
             finally
             {
@@ -1625,7 +1749,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 DurationRaw = durationRaw;
                 for (int i = 0; i < modifierCount; i++)
                 {
-                    replicatedModifierMagnitudeScratch[i] = CalculateMagnitudeRawGuarded(Def.Modifiers[i], level);
+                    replicatedModifierMagnitudeScratch[i] = CalculateMagnitudeRawGuarded(Def.Modifiers[i], level, i);
                 }
             }
             catch
@@ -1952,7 +2076,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            StoreCalculatedMagnitudeRaw(index, CalculateMagnitudeRawGuarded(Def.Modifiers[index], Level));
+            StoreCalculatedMagnitudeRaw(index, CalculateMagnitudeRawGuarded(Def.Modifiers[index], Level, index));
         }
 
         private void StoreCalculatedMagnitudeRaw(int index, long magnitudeRaw)
@@ -1997,6 +2121,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 modifierGroupingDirty = true;
                 dependencySourceAttributesResolved = false;
 
+                EnsureDeclaredCaptureCapacity(Def.DeclaredCaptures.Count);
+                CaptureAttributeSources(EGameplayEffectAttributeCaptureSource.Target);
                 RecalculateTargetDependentMagnitudes();
             }
         }
@@ -2014,7 +2140,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < modCount; i++)
             {
                 var mod = Def.Modifiers[i];
-                StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level));
+                StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level, i));
 
                 if (Target != null)
                 {
@@ -2040,7 +2166,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var mod = Def.Modifiers[i];
                 if (mod.ShouldRecalculateWhenTargetAssigned)
                 {
-                    StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level));
+                    StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level, i));
                 }
             }
         }
@@ -2068,7 +2194,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var mod = Def.Modifiers[i];
                 if (mod.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.SetByCaller)
                 {
-                    StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level));
+                    StoreCalculatedMagnitudeRaw(i, CalculateMagnitudeRawGuarded(mod, Level, i));
                 }
             }
         }

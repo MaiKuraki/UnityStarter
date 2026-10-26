@@ -89,6 +89,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return registeredAttributes.Values;
         }
 
+        // Concrete collection so hot loops use the struct enumerator instead of boxing the interface one.
+        internal Dictionary<string, GameplayAttribute>.ValueCollection AttributeValues
+        {
+            get
+            {
+                EnsureAttributesRegistered();
+                return registeredAttributes.Values;
+            }
+        }
+
         public float GetBaseValue(GameplayAttribute attribute) => attribute.BaseValue;
         public float GetCurrentValue(GameplayAttribute attribute) => attribute.CurrentValue;
         public long GetBaseValueRaw(GameplayAttribute attribute) => attribute.BaseValueRaw;
@@ -276,6 +286,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASFixedValue EvaluatedMagnitudeFixed => GASFixedValue.FromRaw(EvaluatedMagnitudeRaw);
         public AbilitySystemComponent Target { get; }
         public AbilitySystemComponent Source => EffectSpec.Source;
+        public GASEntityId SourceEntity => EffectSpec.SourceEntity;
 
         /// <summary>
         /// The attribute resolved by the AbilitySystemComponent when dispatching this modifier.

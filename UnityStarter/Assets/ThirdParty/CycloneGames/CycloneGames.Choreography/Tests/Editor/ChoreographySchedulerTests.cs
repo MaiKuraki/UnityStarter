@@ -191,5 +191,64 @@ namespace CycloneGames.Choreography.Tests
             Assert.AreEqual(ChoreographyClockKind.FixedTick, provider.LastClockKind["a"]);
             Assert.AreEqual(1d / 120d, provider.LastTimelineTime["a"], 0.000000001d);
         }
+
+        [Test]
+        public void Tick_ThrowingEventSubscriber_DoesNotEscapeDispatch()
+        {
+            RecordingProvider provider = new RecordingProvider();
+            var diagnostics = new ErrorRecorder();
+            ChoreographyScheduler scheduler = new ChoreographyScheduler(
+                new RecordingProviderSet(provider), diagnostics);
+
+            ChoreographySection section = TestFactory.Section(
+                "s0", 2f,
+                new[] { TestFactory.Track(ChoreographyTrackKind.Animation, TestFactory.Clip("a", 0f, 2f)) },
+                new[] { new ChoreographyEvent("hit", 0.5f), new ChoreographyEvent("late", 1.5f) });
+            var asset = new TestChoreographyAsset("throwing", section);
+
+            int calls = 0;
+            scheduler.EventRaised += _ =>
+            {
+                calls++;
+                throw new System.InvalidOperationException("subscriber failed");
+            };
+
+            scheduler.Play(asset, new ChoreographyPlayRequest(0, 0, ChoreographyPlaybackMode.Override));
+
+            Assert.DoesNotThrow(() => scheduler.Tick(0.6f));
+            Assert.AreEqual(1, calls);
+            Assert.GreaterOrEqual(diagnostics.ExceptionCount, 1);
+            Assert.DoesNotThrow(() => scheduler.Tick(1.0f));
+            Assert.AreEqual(2, calls, "A failed event must not stop later events from dispatching.");
+        }
+
+        private sealed class ErrorRecorder : IChoreographyDiagnostics
+        {
+            public int ExceptionCount { get; private set; }
+
+            public bool IsEnabled(ChoreographyDiagnosticLevel level, string category) => true;
+
+            public void Write(
+                ChoreographyDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+            }
+
+            public void WriteException(
+                ChoreographyDiagnosticLevel level,
+                string category,
+                System.Exception exception,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                ExceptionCount++;
+            }
+        }
     }
 }

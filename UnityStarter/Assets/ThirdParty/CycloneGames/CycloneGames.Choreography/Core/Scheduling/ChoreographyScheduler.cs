@@ -668,13 +668,34 @@ namespace CycloneGames.Choreography.Core
 
         void IChoreographyPlaybackSink.OnClipStopped(in ChoreographyClipStop stop) => ProviderDispatch.End(_providers, in stop);
 
-        void IChoreographyPlaybackSink.OnEvent(in ChoreographyEventInvocation invocation) => EventRaised?.Invoke(invocation);
+        void IChoreographyPlaybackSink.OnEvent(in ChoreographyEventInvocation invocation)
+            => DispatchSafely(EventRaised, invocation);
 
-        void IChoreographyPlaybackSink.OnEventStateBegin(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
+        void IChoreographyPlaybackSink.OnEventStateBegin(in ChoreographyEventStateSignal signal)
+            => DispatchSafely(EventStateRaised, signal);
 
-        void IChoreographyPlaybackSink.OnEventStateUpdate(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
+        void IChoreographyPlaybackSink.OnEventStateUpdate(in ChoreographyEventStateSignal signal)
+            => DispatchSafely(EventStateRaised, signal);
 
-        void IChoreographyPlaybackSink.OnEventStateEnd(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
+        void IChoreographyPlaybackSink.OnEventStateEnd(in ChoreographyEventStateSignal signal)
+            => DispatchSafely(EventStateRaised, signal);
+
+        private void DispatchSafely<T>(Action<T> handlers, T payload)
+        {
+            try
+            {
+                handlers?.Invoke(payload);
+            }
+            catch (Exception exception) when (!(exception is OutOfMemoryException))
+            {
+                ChoreographyDiagnosticsGuard.WriteException(
+                    _diagnostics,
+                    ChoreographyDiagnosticLevel.Error,
+                    ChoreographyDiagnosticCategories.Root,
+                    exception,
+                    "A choreography event subscriber failed.");
+            }
+        }
 
         void IChoreographyPlaybackSink.OnPlaybackCompleted(int instanceId)
         {

@@ -6,6 +6,7 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// <summary>
     /// Hosts a pure C# AbilitySystemComponent on a GameObject and drives it from the Unity loop.
     /// </summary>
+    [AddComponentMenu("CycloneGames/GameplayAbilities/Ability System Holder")]
     public class AbilitySystemComponentHolder : MonoBehaviour
     {
         [SerializeField]
