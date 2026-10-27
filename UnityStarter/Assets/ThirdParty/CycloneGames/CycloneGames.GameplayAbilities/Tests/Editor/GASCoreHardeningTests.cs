@@ -317,12 +317,195 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 unrealBiasSum: false);
 
             long folded = GASModifierAggregation.Fold(
-                in accumulator,
+                ref accumulator,
                 GASFixedValue.FromInt(10).RawValue,
                 unrealBiasSum: false);
 
             // (10 + 5) * 2
             Assert.That(folded, Is.EqualTo(GASFixedValue.FromInt(30).RawValue));
+        }
+
+        [Test]
+        public void Accumulator_FlagsOverflowWithoutThrowing()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var large = GASFixedValue.FromInt(100000);
+
+            for (int i = 0; i < 3; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Multiply,
+                    large.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: false);
+            }
+
+            Assert.That(accumulator.Overflowed, Is.True,
+                "1e5 cubed exceeds the Q32.32 range and must be flagged.");
+
+            long folded = GASModifierAggregation.Fold(
+                ref accumulator, GASFixedValue.FromInt(100).RawValue, unrealBiasSum: false);
+            Assert.That(folded, Is.Not.Zero);
+        }
+
+        [Test]
+        public void Accumulator_FlagsAddOverflow()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var large = GASFixedValue.FromDouble(1.6e9);
+
+            // 1.6e9 twice sums past the Q32.32 integer limit (2.147e9).
+            for (int i = 0; i < 2; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Add,
+                    large.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: false);
+            }
+
+            Assert.That(accumulator.Overflowed, Is.True);
+        }
+
+        [Test]
+        public void Accumulator_FlagsDivideOverflow()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Multiply,
+                GASFixedValue.FromDouble(1e8).RawValue,
+                1,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+            Assert.That(accumulator.Overflowed, Is.False);
+
+            // 1e8 / 1e-4 = 1e12, past the range.
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Division,
+                GASFixedValue.FromDouble(1e-4).RawValue,
+                1,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+
+            Assert.That(accumulator.Overflowed, Is.True);
+        }
+
+        [Test]
+        public void Accumulator_FlagsStackScaledOverflow()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+
+            // Add scales by stack count before accumulating: 1e9 * 3 = 3e9, past the range.
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Add,
+                GASFixedValue.FromDouble(1e9).RawValue,
+                3,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+
+            Assert.That(accumulator.Overflowed, Is.True);
+        }
+
+        [Test]
+        public void Accumulator_FlagsBiasOverflowInUnrealBiasSum()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var large = GASFixedValue.FromDouble(1.6e9);
+
+            // Bias mode accumulates (M - 1) per modifier: two of these sum past the range.
+            for (int i = 0; i < 2; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Multiply,
+                    large.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: true);
+            }
+
+            Assert.That(accumulator.Overflowed, Is.True);
+        }
+
+        [Test]
+        public void Accumulator_UnrealBiasSumComposesAsAdditiveBias()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var oneAndHalf = GASFixedValue.FromFloat(1.5f);
+
+            for (int i = 0; i < 10; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Multiply,
+                    oneAndHalf.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: true);
+            }
+
+            long folded = GASModifierAggregation.Fold(
+                ref accumulator, GASFixedValue.FromInt(100).RawValue, unrealBiasSum: true);
+
+            Assert.That(accumulator.Overflowed, Is.False);
+            // Ten x1.5 become a +5 bias, so 100 becomes 600 rather than 100 * 1.5^10.
+            Assert.That(folded, Is.EqualTo(GASFixedValue.FromInt(600).RawValue));
+        }
+
+        [Test]
+        public void Accumulator_DoesNotFlagValuesInsideRange()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var oneAndHalf = GASFixedValue.FromFloat(1.5f);
+
+            for (int i = 0; i < 10; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Multiply,
+                    oneAndHalf.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: false);
+            }
+
+            long folded = GASModifierAggregation.Fold(
+                ref accumulator, GASFixedValue.FromInt(100).RawValue, unrealBiasSum: false);
+
+            Assert.That(accumulator.Overflowed, Is.False);
+            // 100 * 1.5^10 = 5766.50390625
+            Assert.That(folded, Is.EqualTo(GASFixedValue.FromDouble(5766.50390625).RawValue));
+        }
+
+        [Test]
+        public void State_CountsOnlyOverflowingEvaluations()
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var attributeId = new GASAttributeId(1);
+            state.SetAttributeBase(attributeId, GASFixedValue.FromInt(100));
+            var modifiers = new[]
+            {
+                new GASModifierData(attributeId, GASModifierOp.Multiply,
+                    GASFixedValue.FromFloat(1.5f), GASModifierEvaluationChannel.Channel0)
+            };
+
+            for (int i = 0; i < 41; i++)
+            {
+                AddInfiniteEffect(state, i + 1, modifiers, 1);
+            }
+            Assert.That(state.OverflowCount, Is.Zero,
+                "41 multiplicative steps stay inside the Q32.32 range.");
+
+            AddInfiniteEffect(state, 42, modifiers, 1);
+            Assert.That(state.OverflowCount, Is.EqualTo(1L),
+                "The 42nd step exceeds the range and must be counted.");
         }
 
         [Test]

@@ -20,6 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly GASCallbackList<Action<float, float>> currentValueObservers = new GASCallbackList<Action<float, float>>(2);
         private readonly GASCallbackList<Action<float, float>> baseValueObservers = new GASCallbackList<Action<float, float>>(2);
         internal bool IsDirty;
+        internal bool OverflowReported;
         internal readonly List<ActiveGameplayEffect> AffectingEffects = new List<ActiveGameplayEffect>(8);
         // Effects whose magnitude reads this attribute live (NotSnapshot). Allocated on first
         // dependent only, so attributes nobody reads live pay nothing.

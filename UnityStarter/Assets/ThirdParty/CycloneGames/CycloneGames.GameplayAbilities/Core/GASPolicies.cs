@@ -126,6 +126,9 @@ namespace CycloneGames.GameplayAbilities.Core
             public FPInt64 OverrideValue;
             public bool HasOverride;
             public bool HasModifier;
+            // Set when any step of the aggregation exceeded the Q32.32 range. Values are left
+            // wrapping, matching unchecked fixed-point semantics; this flag only makes it visible.
+            public bool Overflowed;
 
             /// <summary>Returns an accumulator in its reset state.</summary>
             public static Accumulator Create()
@@ -144,6 +147,7 @@ namespace CycloneGames.GameplayAbilities.Core
                 OverrideValue = FPInt64.Zero;
                 HasOverride = false;
                 HasModifier = false;
+                Overflowed = false;
             }
         }
 
@@ -171,8 +175,16 @@ namespace CycloneGames.GameplayAbilities.Core
             switch (op)
             {
                 case GASModifierOp.Add:
-                    accumulator.Add += magnitude * FPInt64.FromInt(stackCount);
+                {
+                    if (!FPInt64.TryMultiply(magnitude, FPInt64.FromInt(stackCount), out FPInt64 scaled))
+                    {
+                        accumulator.Overflowed = true;
+                        scaled = magnitude * FPInt64.FromInt(stackCount);
+                    }
+
+                    accumulator.Add = TryAddOrWrap(accumulator.Add, scaled, ref accumulator.Overflowed);
                     break;
+                }
                 case GASModifierOp.Multiply:
                 {
                     var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
@@ -181,11 +193,14 @@ namespace CycloneGames.GameplayAbilities.Core
                         stackMagnitudePolicy));
                     if (unrealBiasSum)
                     {
-                        accumulator.MultiplicativeBias += stacked - FPInt64.One;
+                        accumulator.MultiplicativeBias = TryAddOrWrap(
+                            accumulator.MultiplicativeBias,
+                            stacked - FPInt64.One,
+                            ref accumulator.Overflowed);
                     }
                     else
                     {
-                        accumulator.Multiply *= stacked;
+                        accumulator.Multiply = TryMultiplyOrWrap(accumulator.Multiply, stacked, ref accumulator.Overflowed);
                     }
 
                     break;
@@ -210,11 +225,17 @@ namespace CycloneGames.GameplayAbilities.Core
 
                     if (unrealBiasSum)
                     {
-                        accumulator.DivisionBias += stackedDivisor - FPInt64.One;
+                        accumulator.DivisionBias = TryAddOrWrap(
+                            accumulator.DivisionBias,
+                            stackedDivisor - FPInt64.One,
+                            ref accumulator.Overflowed);
                     }
                     else
                     {
-                        accumulator.Multiply /= stackedDivisor;
+                        accumulator.Multiply = TryDivideOrWrap(
+                            accumulator.Multiply,
+                            stackedDivisor,
+                            ref accumulator.Overflowed);
                     }
 
                     break;
@@ -230,7 +251,7 @@ namespace CycloneGames.GameplayAbilities.Core
         /// Folds one channel into the running value. A channel without modifiers returns the input
         /// unchanged; an override channel replaces it.
         /// </summary>
-        public static long Fold(in Accumulator accumulator, long inputValueRaw, bool unrealBiasSum)
+        public static long Fold(ref Accumulator accumulator, long inputValueRaw, bool unrealBiasSum)
         {
             if (!accumulator.HasModifier)
             {
@@ -243,15 +264,56 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             var inputValue = FPInt64.FromRaw(inputValueRaw);
-            if (unrealBiasSum)
+            var biased = TryAddOrWrap(inputValue, accumulator.Add, ref accumulator.Overflowed);
+            var product = TryMultiplyOrWrap(
+                biased,
+                unrealBiasSum ? accumulator.MultiplicativeBias : accumulator.Multiply,
+                ref accumulator.Overflowed);
+
+            if (unrealBiasSum && accumulator.DivisionBias.RawValue != 0)
             {
-                var product = (inputValue + accumulator.Add) * accumulator.MultiplicativeBias;
-                return accumulator.DivisionBias.RawValue != 0
-                    ? (product / accumulator.DivisionBias).RawValue
-                    : product.RawValue;
+                product = TryDivideOrWrap(product, accumulator.DivisionBias, ref accumulator.Overflowed);
             }
 
-            return ((inputValue + accumulator.Add) * accumulator.Multiply).RawValue;
+            return product.RawValue;
+        }
+
+        private static FPInt64 TryAddOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        {
+            if (FPInt64.TryAdd(left, right, out FPInt64 sum))
+            {
+                return sum;
+            }
+
+            overflowed = true;
+            return left + right;
+        }
+
+        private static FPInt64 TryMultiplyOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        {
+            if (FPInt64.TryMultiply(left, right, out FPInt64 product))
+            {
+                return product;
+            }
+
+            overflowed = true;
+            return left * right;
+        }
+
+        private static FPInt64 TryDivideOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        {
+            if (right.RawValue == 0)
+            {
+                return left;
+            }
+
+            if (FPInt64.TryDivide(left, right, out FPInt64 quotient))
+            {
+                return quotient;
+            }
+
+            overflowed = true;
+            return left / right;
         }
     }
 

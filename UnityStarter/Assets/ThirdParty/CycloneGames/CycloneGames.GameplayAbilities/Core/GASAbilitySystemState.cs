@@ -90,6 +90,11 @@ namespace CycloneGames.GameplayAbilities.Core
         public int ActiveEffectCount => activeEffectCount;
         public int ModifierCount => modifierCount;
         public int PredictedAttributeChangeCount => predictedAttributeChangeCount;
+        /// <summary>
+        /// Number of attribute evaluations whose aggregation exceeded the Q32.32 range. Values are
+        /// still produced with unchecked wrapping; this counter is the only signal that they did.
+        /// </summary>
+        public long OverflowCount { get; private set; }
         public GASAbilitySystemLimits Limits { get; }
 
         /// <summary>
@@ -1136,9 +1141,16 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             long valueRaw = baseValueRaw;
+            bool overflowed = false;
             for (int c = 0; c < accumulators.Length; c++)
             {
-                valueRaw = GASModifierAggregation.Fold(in accumulators[c], valueRaw, unrealBiasSum);
+                valueRaw = GASModifierAggregation.Fold(ref accumulators[c], valueRaw, unrealBiasSum);
+                overflowed |= accumulators[c].Overflowed;
+            }
+
+            if (overflowed)
+            {
+                OverflowCount++;
             }
 
             return valueRaw;

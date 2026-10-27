@@ -5477,19 +5477,45 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
+            bool overflowed = false;
             for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
             {
                 currentValue = GASFixedValue.FromRaw(GASModifierAggregation.Fold(
-                    in modifierChannelAccumulators[channelIndex],
+                    ref modifierChannelAccumulators[channelIndex],
                     currentValue.RawValue,
                     unrealBiasSum));
+                overflowed |= modifierChannelAccumulators[channelIndex].Overflowed;
             }
+
+            ReportAggregationOverflow(attr, overflowed, currentValue);
 
             attr.OwningSet.PreAttributeChange(attr, ref currentValue);
             // CurrentValue is derived from a mutation that already dirtied this attribute and
             // reserved its replication version. Do not open a second transaction on the later
             // aggregation pass, especially when the original reservation consumed MaxValue.
             attr.SetCurrentValueRawUnchecked(currentValue.RawValue);
+        }
+
+        /// <summary>
+        /// Warns once per attribute while its aggregation keeps exceeding Q32.32, and re-arms
+        /// after a clean recalculation so a later overflow is reported again.
+        /// </summary>
+        private void ReportAggregationOverflow(GameplayAttribute attribute, bool overflowed, GASFixedValue value)
+        {
+            if (overflowed)
+            {
+                if (!attribute.OverflowReported)
+                {
+                    attribute.OverflowReported = true;
+                    Log.Warning(
+                        $"Attribute '{attribute.Name}' aggregation exceeded the fixed-point range; " +
+                        $"the stored value ({value.ToDouble():F2}) is the wrapped result of an overflow.");
+                }
+            }
+            else if (attribute.OverflowReported)
+            {
+                attribute.OverflowReported = false;
+            }
         }
 
         /// <summary>

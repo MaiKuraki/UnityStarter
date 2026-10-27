@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Logging;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
 using NUnit.Framework;
@@ -1599,6 +1601,130 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(modifier.EvaluationChannel, Is.EqualTo(GASModifierEvaluationChannel.Channel0),
                 "Out-of-range channels normalize to Channel0 at the authoring boundary.");
+        }
+
+        [Test]
+        public void RuntimeAggregation_WarnsOncePerOverflowEpisode()
+        {
+            var writer = new CapturingLogWriter();
+            ILogWriter previous = LogRuntime.Writer;
+            bool installed = LogRuntime.HasWriter
+                ? LogRuntime.TryReplaceWriter(previous, writer)
+                : LogRuntime.TryInstallWriter(writer);
+            Assert.That(installed, Is.True);
+
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new ChainAttributeSet(1);
+            var handles = new List<ActiveGameplayEffect>(42);
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.ValueOf(0), 100f);
+
+                for (int i = 0; i < 42; i++)
+                {
+                    var definition = new GameplayEffect(
+                        $"OverflowProbe.{i}",
+                        EDurationPolicy.Infinite,
+                        modifiers: new List<ModifierInfo>
+                        {
+                            new ModifierInfo("ChainAttr0", EAttributeModifierOperation.Multiply,
+                                new ScalableFloat(1.5f), GASModifierEvaluationChannel.Channel0)
+                        });
+                    handles.Add(asc.ApplyGameplayEffectSpecToSelf(
+                        GameplayEffectSpec.Create(definition, asc)).ActiveEffect);
+                }
+
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(CountOverflowWarnings(writer), Is.EqualTo(1),
+                    "The first overflowing settlement must warn once.");
+
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(CountOverflowWarnings(writer), Is.EqualTo(1),
+                    "Staying in overflow must not repeat the warning.");
+
+                for (int i = handles.Count - 1; i >= 0; i--)
+                {
+                    asc.TryRemoveActiveEffect(handles[i]);
+                }
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(CountOverflowWarnings(writer), Is.EqualTo(1));
+
+                for (int i = 0; i < 42; i++)
+                {
+                    var definition = new GameplayEffect(
+                        $"OverflowProbe.B.{i}",
+                        EDurationPolicy.Infinite,
+                        modifiers: new List<ModifierInfo>
+                        {
+                            new ModifierInfo("ChainAttr0", EAttributeModifierOperation.Multiply,
+                                new ScalableFloat(1.5f), GASModifierEvaluationChannel.Channel0)
+                        });
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc));
+                }
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(CountOverflowWarnings(writer), Is.EqualTo(2),
+                    "After recovering, a new overflow episode must warn again.");
+            }
+            finally
+            {
+                asc.Dispose();
+                LogRuntime.TryResetWriter(writer);
+                if (!ReferenceEquals(previous, NullLogWriter.Instance))
+                {
+                    LogRuntime.TryInstallWriter(previous);
+                }
+            }
+        }
+
+        private static int CountOverflowWarnings(CapturingLogWriter writer)
+        {
+            int count = 0;
+            for (int i = 0; i < writer.Messages.Count; i++)
+            {
+                if (writer.Messages[i].Contains("exceeded the fixed-point range"))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private sealed class CapturingLogWriter : ILogWriter
+        {
+            public readonly List<string> Messages = new List<string>();
+
+            public bool IsEnabled(LogSeverity severity, string category) => severity >= LogSeverity.Warning;
+
+            public void Write(LogSeverity severity, string category, string message,
+                string filePath = "", int lineNumber = 0, string memberName = "")
+            {
+                Messages.Add(message);
+            }
+
+            public void Write(LogSeverity severity, string category, Action<StringBuilder> messageBuilder,
+                string filePath = "", int lineNumber = 0, string memberName = "")
+            {
+                var builder = new StringBuilder();
+                messageBuilder(builder);
+                Messages.Add(builder.ToString());
+            }
+
+            public void Write<TState>(LogSeverity severity, string category, TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "", int lineNumber = 0, string memberName = "")
+            {
+                var builder = new StringBuilder();
+                messageBuilder(state, builder);
+                Messages.Add(builder.ToString());
+            }
+
+            public void WriteException(LogSeverity severity, string category, Exception exception,
+                string message = null, string filePath = "", int lineNumber = 0, string memberName = "")
+            {
+                Messages.Add(message ?? exception.Message);
+            }
         }
 
         private sealed class ChainAttributeSet : AttributeSet
