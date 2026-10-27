@@ -1288,6 +1288,264 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             attribute.SetCurrentValue(value);
         }
 
+        [Test]
+        public void LiveDependency_MarksOnlyTargetsOfLiveEdges()
+        {
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new LiveDependencyAttributeSet();
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.Source, 10f);
+                SetAttributeValues(attributes.LiveTarget, 10f);
+                SetAttributeValues(attributes.SnapshotSource, 10f);
+                SetAttributeValues(attributes.SnapshotTarget, 10f);
+
+                var liveDefinition = new GameplayEffect(
+                    "LiveEdge",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "LiveTarget",
+                            EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude(
+                                "Source",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    });
+                GameplayEffectApplicationResult liveApplication =
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(liveDefinition, asc));
+                Assert.That(liveApplication.Succeeded, Is.True);
+
+                var snapshotDefinition = new GameplayEffect(
+                    "SnapshotEdge",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "SnapshotTarget",
+                            EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude(
+                                "SnapshotSource",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.Snapshot))
+                    });
+                Assert.That(
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(snapshotDefinition, asc)).Succeeded,
+                    Is.True);
+
+                asc.Tick(1f / 60f, isServer: true);
+
+                asc.MarkAttributeDirty(attributes.Source);
+                Assert.That(attributes.LiveTarget.IsDirty, Is.True,
+                    "A live (NotSnapshot) edge must mark its target when the source changes.");
+                Assert.That(attributes.SnapshotTarget.IsDirty, Is.False,
+                    "A snapshot edge captures once and must never behave like a live edge.");
+
+                asc.Tick(1f / 60f, isServer: true);
+                asc.MarkAttributeDirty(attributes.SnapshotSource);
+                Assert.That(attributes.SnapshotTarget.IsDirty, Is.False);
+                Assert.That(attributes.LiveTarget.IsDirty, Is.False);
+
+                Assert.That(asc.TryRemoveActiveEffect(liveApplication.ActiveEffect), Is.True);
+                asc.Tick(1f / 60f, isServer: true);
+                asc.MarkAttributeDirty(attributes.Source);
+                Assert.That(attributes.LiveTarget.IsDirty, Is.False,
+                    "Removing the producer must drop its dependency edge.");
+            }
+            finally
+            {
+                asc.Dispose();
+            }
+        }
+
+        [Test]
+        public void LiveDependency_DirtySetMatchesReferenceWalk()
+        {
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new LiveDependencyAttributeSet();
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.Source, 10f);
+                SetAttributeValues(attributes.LiveTarget, 10f);
+                SetAttributeValues(attributes.SnapshotSource, 10f);
+                SetAttributeValues(attributes.SnapshotTarget, 10f);
+
+                Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(
+                    new GameplayEffect("Live", EDurationPolicy.Infinite, modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("LiveTarget", EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude("Source",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    }), asc)).Succeeded, Is.True);
+
+                Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(
+                    new GameplayEffect("Snapshot", EDurationPolicy.Infinite, modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("SnapshotTarget", EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude("SnapshotSource",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.Snapshot))
+                    }), asc)).Succeeded, Is.True);
+
+                GameplayAttribute[] all = { attributes.Source, attributes.LiveTarget, attributes.SnapshotSource, attributes.SnapshotTarget };
+                var expected = new HashSet<GameplayAttribute>();
+                int mismatches = 0;
+
+                for (int changedIndex = 0; changedIndex < all.Length; changedIndex++)
+                {
+                    GameplayAttribute changed = all[changedIndex];
+                    asc.Tick(1f / 60f, isServer: true);
+
+                    expected.Clear();
+                    expected.Add(changed);
+                    for (int e = 0; e < asc.ActiveEffects.Count; e++)
+                    {
+                        ActiveGameplayEffect effect = asc.ActiveEffects[e];
+                        int[] liveIndices = effect.GetLiveDependencyModifierIndices();
+                        if (liveIndices == null)
+                        {
+                            continue;
+                        }
+
+                        var spec = effect.Spec;
+                        for (int k = 0; k < liveIndices.Length; k++)
+                        {
+                            int modifierIndex = liveIndices[k];
+                            if (!ReferenceEquals(spec.GetDependencySourceAttribute(modifierIndex), changed))
+                            {
+                                continue;
+                            }
+
+                            GameplayAttribute target = modifierIndex < spec.TargetAttributes.Length
+                                ? spec.TargetAttributes[modifierIndex]
+                                : null;
+                            if (target == null)
+                            {
+                                target = asc.GetAttribute(spec.Def.Modifiers[modifierIndex].AttributeName);
+                            }
+                            if (target != null && !ReferenceEquals(target, changed))
+                            {
+                                expected.Add(target);
+                            }
+                        }
+                    }
+
+                    asc.MarkAttributeDirty(changed);
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        if (all[i].IsDirty != expected.Contains(all[i]))
+                        {
+                            mismatches++;
+                        }
+                    }
+                }
+
+                Assert.That(mismatches, Is.Zero,
+                    "The dependency index must mark exactly the attributes a reference walk marks.");
+            }
+            finally
+            {
+                asc.Dispose();
+            }
+        }
+
+        [Test]
+        public void LiveDependency_PropagatesAlongChain()
+        {
+            const int chainLength = 8;
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new ChainAttributeSet(chainLength);
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                for (int i = 0; i < chainLength; i++)
+                {
+                    SetAttributeValues(attributes.ValueOf(i), 1f);
+                }
+
+                for (int i = 0; i < chainLength - 1; i++)
+                {
+                    var definition = new GameplayEffect(
+                        $"Chain.{i}",
+                        EDurationPolicy.Infinite,
+                        modifiers: new List<ModifierInfo>
+                        {
+                            new ModifierInfo(
+                                $"ChainAttr{i + 1}",
+                                EAttributeModifierOperation.Add,
+                                new AttributeBasedMagnitude(
+                                    $"ChainAttr{i}",
+                                    EGameplayEffectAttributeCaptureSource.Target,
+                                    EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                    EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                        });
+                    Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc)).Succeeded,
+                        Is.True);
+                }
+
+                asc.Tick(1f / 60f, isServer: true);
+                asc.MarkAttributeDirty(attributes.ValueOf(0));
+
+                for (int i = 0; i < chainLength; i++)
+                {
+                    Assert.That(attributes.ValueOf(i).IsDirty, Is.True,
+                        $"The change must propagate to link {i} of the chain.");
+                }
+            }
+            finally
+            {
+                asc.Dispose();
+            }
+        }
+
+        private sealed class ChainAttributeSet : AttributeSet
+        {
+            private readonly GameplayAttribute[] _attributes;
+
+            public ChainAttributeSet(int count)
+            {
+                _attributes = new GameplayAttribute[count];
+                for (int i = 0; i < count; i++)
+                {
+                    _attributes[i] = new GameplayAttribute($"ChainAttr{i}");
+                }
+            }
+
+            public GameplayAttribute ValueOf(int index) => _attributes[index];
+
+            protected override void RegisterAttributes()
+            {
+                for (int i = 0; i < _attributes.Length; i++)
+                {
+                    RegisterAttribute(_attributes[i]);
+                }
+            }
+        }
+
+        private sealed class LiveDependencyAttributeSet : AttributeSet
+        {
+            public GameplayAttribute Source { get; } = new GameplayAttribute("Source");
+            public GameplayAttribute LiveTarget { get; } = new GameplayAttribute("LiveTarget");
+            public GameplayAttribute SnapshotSource { get; } = new GameplayAttribute("SnapshotSource");
+            public GameplayAttribute SnapshotTarget { get; } = new GameplayAttribute("SnapshotTarget");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(Source);
+                RegisterAttribute(LiveTarget);
+                RegisterAttribute(SnapshotSource);
+                RegisterAttribute(SnapshotTarget);
+            }
+        }
+
         private sealed class ResourceAttributeSet : AttributeSet
         {
             public ResourceAttributeSet(string name)

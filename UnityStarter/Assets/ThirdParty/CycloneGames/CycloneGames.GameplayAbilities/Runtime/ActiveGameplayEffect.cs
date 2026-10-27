@@ -156,10 +156,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cachedStackPeriodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication;
             pendingImmediatePeriodicExecution = false;
             liveDependencyModifierIndices = null;
+            liveDependencySourceAttributes = null;
             liveDependencyIndicesResolved = false;
         }
 
         private int[] liveDependencyModifierIndices;
+        // Parallel to liveDependencyModifierIndices: the attribute each live read resolved to when
+        // the effect was indexed. Recorded so unlinking never has to re-resolve captures.
+        private GameplayAttribute[] liveDependencySourceAttributes;
         private bool liveDependencyIndicesResolved;
 
         /// <summary>
@@ -210,7 +214,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             liveDependencyModifierIndices = indices;
+            liveDependencySourceAttributes = new GameplayAttribute[count];
             return indices;
+        }
+
+        /// <summary>
+        /// The attributes the live reads of this effect resolved to, parallel to
+        /// <see cref="GetLiveDependencyModifierIndices"/>. Null entries mean the capture was not
+        /// resolvable and the read is not indexed.
+        /// </summary>
+        internal GameplayAttribute[] GetLiveDependencySourceAttributes()
+        {
+            GetLiveDependencyModifierIndices();
+            return liveDependencySourceAttributes;
+        }
+
+        internal void SetLiveDependencySourceAttribute(int ordinal, GameplayAttribute attribute)
+        {
+            if (liveDependencySourceAttributes != null &&
+                (uint)ordinal < (uint)liveDependencySourceAttributes.Length)
+            {
+                liveDependencySourceAttributes[ordinal] = attribute;
+            }
         }
 
         internal void SetMemoryOwner(GASRuntimeMemory owner) => memoryOwner = owner;
