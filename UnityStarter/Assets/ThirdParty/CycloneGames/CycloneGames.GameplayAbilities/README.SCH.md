@@ -637,6 +637,19 @@ Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magni
 
 `GameplayEffectStacking` 可以选择不堆叠、按 Source 聚合或按 Target 聚合，同时定义 Stack Limit、Duration Refresh 和 Expiration 行为。Overflow Effect 与 Deny Policy 处理达到上限后的应用。
 
+`Stack Limit Mode` 可以是 `Limited`（层数停在 `Limit`，校验范围 `[1, MaxStackCount]`）或 `Unlimited`（不设玩法上限）。`Unlimited` 解析为 `ushort.MaxValue`，因为 Core 镜像用 `ushort` 存储层数，这样可以饱和而不是回绕。两种模式的解析集中在 `GameplayEffectStacking.ResolveStackLimit()`，所有钳制点与复制校验都读取该函数，将来新增模式只需改这一处。
+
+`Magnitude Policy` 决定该效果的层数如何缩放 `Multiply` 与 `Division` 的幅值，与 `GASModifierAggregationMode` 正交——后者只决定同一通道内多个修饰符如何合并。
+
+| 策略 | 公式 | ×1.1 叠 5 层 | 适用场景 |
+| --- | --- | --- | --- |
+| `LinearBias`（默认） | `(M - 1) * stack + 1` | ×1.5 | ARPG/MMORPG 主流约定：每层加同样的差值。与 UE 的叠层幅值数值一致。 |
+| `Exponential` | `M ^ stack` | ×1.61 | 刻意设计的"每层翻倍"。资产校验会拒绝最坏乘积超出 Q32.32 范围的上限。 |
+
+`Add` 修饰符始终按 `magnitude * stackCount` 线性缩放，`Override` 完全忽略层数，因此没有乘除修饰符时该策略不产生任何效果。此时效果 Inspector 会隐藏该行；若存在非默认值则显示为锁定状态。
+
+> 迁移说明：在该字段出现之前，叠层上限大于 1 且带 `Multiply`/`Division` 的效果按层复合。现在这类效果默认使用 `LinearBias`，除非显式选择 `Exponential`。需要保留原数值的效果请把 `Magnitude Policy` 设为 `Exponential`，并重新核对平衡数值。
+
 支持三种 Stacking Duration 策略（对标 UE5 `EGameplayEffectStackingDurationPolicy`）。`RefreshOnSuccessfulApplication` 将剩余时间重置为新一次应用的 Duration（包括 `SetDuration` 覆写）；Active Effect 保留原 Spec 的 Lease，仅采用新应用的 Duration。`NeverRefresh` 保持原计时。`ExtendDuration` 将新应用的 Duration 累加到剩余时间（定点数饱和加法），必须搭配 `ClearEntireStack` Expiration（Definition 校验强制）。预测应用若会堆叠到已有 Effect 上，会在任何变更前以 `PredictionUnsupported` 失败关闭，因此预测路径不会扰动权威 Duration Timer。
 
 Application Requirement 在插入前执行。Ongoing Requirement 决定 Active Effect 在 Tag 变化后是否继续贡献。Removal Tag 支持 Dispel。Duration 与 Infinite Effect 可以在 Active Lifetime 内授予 Tag 和 Ability。
@@ -964,6 +977,8 @@ API 会对 Dispose 后的使用抛出异常或返回拒绝结果。开发阶段�
 `Assets > Create > CycloneGames > GameplayAbilities > Definitions > Gameplay Effect`
 
 Effect Inspector 按 Duration、Modifier、Stacking、Tag、Granted Ability、Cue 与 Advanced Policy 分组。`GameplayEffectSO` 在 Unity Main Thread 延迟创建可复用 Runtime Definition。Validation 与 Deserialization 会清除 Cache；显式 Authoring Tool 可以调用 `ClearCache()`。Gameplay 期间不得修改 Cached Definition。
+
+Stacking 下的各行会跟随当前配置：`Stack Limit Mode = Unlimited` 时不再询问 Stack Limit；Magnitude Policy 只在效果含 `Multiply`/`Division` 修饰符时出现；已经失效但仍持有非默认值的行会以锁定状态显示而非隐藏，避免休眠值在切换后静默生效。
 
 `GameplayAbilitySO.GetGameplayAbility()` 会按当前已加载的 Asset Revision 延迟创建并复用一份不可变 Definition。自定义 Asset 实现 `CreateGameplayAbility()`，只使用 Derived Immutable Input 构造 Derived Ability，然后恰好调用一次 `InitializeAbility(ability)`，以统一校验并转移全部 Base Tag、Trigger、Cost、Cooldown 和 Policy。Validation 与 Deserialization 会清除 Definition Cache。`CreateRuntimeInstance()` 只重建 Activation State Input；Runtime 会从缓存的 Definition 复制已封存的 Base Configuration，不能再次调用 `InitializeAbility`。
 

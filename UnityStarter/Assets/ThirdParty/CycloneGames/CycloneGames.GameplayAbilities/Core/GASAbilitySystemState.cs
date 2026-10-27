@@ -60,6 +60,8 @@ namespace CycloneGames.GameplayAbilities.Core
         private GASActiveEffectData[] activeEffects;
         private GASModifierData[] modifiers;
         private GASPredictedAttributeChange[] predictedAttributeChanges;
+        // Reused between removals so a narrowed recompute stays allocation-free.
+        private GASAttributeId[] removedAttributeIds = Array.Empty<GASAttributeId>();
 
         private int abilitySpecCount;
         private int attributeCount;
@@ -456,7 +458,8 @@ namespace CycloneGames.GameplayAbilities.Core
             int durationTicks,
             GASModifierData[] effectModifiers,
             int effectModifierStart,
-            int effectModifierCount)
+            int effectModifierCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             if (!ValidateActiveEffectInput(
                     effectDefinitionId,
@@ -498,7 +501,8 @@ namespace CycloneGames.GameplayAbilities.Core
                 startTick,
                 durationTicks,
                 (uint)modifierStart,
-                (ushort)effectModifierCount);
+                (ushort)effectModifierCount,
+                stackMagnitudePolicy);
 
             RecalculateModifiedAttributes(modifierStart, effectModifierCount);
             Version++;
@@ -550,7 +554,8 @@ namespace CycloneGames.GameplayAbilities.Core
                 spec.DurationTicks,
                 spec.Modifiers,
                 spec.ModifierStart,
-                spec.ModifierCount);
+                spec.ModifierCount,
+                spec.StackMagnitudePolicy);
             return handle.IsValid;
         }
 
@@ -562,6 +567,69 @@ namespace CycloneGames.GameplayAbilities.Core
                 return false;
             }
 
+            int touchedCount = CollectTouchedAttributes(activeEffects[index], 0);
+            RemoveActiveEffectAtIndex(index);
+            RecalculateTouchedAttributes(touchedCount);
+            return true;
+        }
+
+        public int RemoveExpiredEffects(long currentTick)
+        {
+            int expiredCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                if (IsExpiredAt(activeEffects[i], currentTick))
+                {
+                    expiredCount++;
+                }
+            }
+
+            if (expiredCount == 0)
+            {
+                return 0;
+            }
+
+            // Collect before any removal: modifier indices are only valid against the current pool.
+            int touchedCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                var effect = activeEffects[i];
+                if (!IsExpiredAt(effect, currentTick))
+                {
+                    continue;
+                }
+
+                touchedCount = CollectTouchedAttributes(effect, touchedCount);
+                if (touchedCount < 0)
+                {
+                    break;
+                }
+            }
+
+            int removedCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                if (!IsExpiredAt(activeEffects[i], currentTick))
+                {
+                    continue;
+                }
+
+                RemoveActiveEffectAtIndex(i);
+                removedCount++;
+            }
+
+            RecalculateTouchedAttributes(touchedCount);
+            return removedCount;
+        }
+
+        private bool IsExpiredAt(in GASActiveEffectData effect, long currentTick)
+        {
+            return effect.DurationPolicy == GASEffectDurationPolicy.Duration &&
+                   currentTick - effect.StartTick >= effect.DurationTicks;
+        }
+
+        private void RemoveActiveEffectAtIndex(int index)
+        {
             var removed = activeEffects[index];
             RemoveModifierRange((int)removed.ModifierStartIndex, removed.ModifierCount);
             int lastIndex = activeEffectCount - 1;
@@ -572,30 +640,67 @@ namespace CycloneGames.GameplayAbilities.Core
 
             activeEffects[lastIndex] = default;
             activeEffectCount--;
-            RecalculateAllAttributes();
             Version++;
-            return true;
         }
 
-        public int RemoveExpiredEffects(long currentTick)
+        /// <summary>
+        /// Appends the distinct attribute ids targeted by an effect's modifiers to
+        /// <see cref="removedAttributeIds"/>. Returns the new count, or -1 when the scratch buffer
+        /// cannot grow, in which case the caller falls back to a full recompute.
+        /// </summary>
+        private int CollectTouchedAttributes(in GASActiveEffectData effect, int scratchCount)
         {
-            int removedCount = 0;
-            for (int i = activeEffectCount - 1; i >= 0; i--)
+            int effectModifierCount = effect.ModifierCount;
+            if (effectModifierCount <= 0)
             {
-                var effect = activeEffects[i];
-                if (effect.DurationPolicy != GASEffectDurationPolicy.Duration)
+                return scratchCount;
+            }
+
+            if (!EnsureArrayCapacity(
+                    ref removedAttributeIds,
+                    scratchCount + effectModifierCount,
+                    Limits.MaxModifiers))
+            {
+                return -1;
+            }
+
+            int end = (int)effect.ModifierStartIndex + effectModifierCount;
+            for (int i = (int)effect.ModifierStartIndex; i < end; i++)
+            {
+                var attributeId = modifiers[i].AttributeId;
+                bool alreadyCollected = false;
+                for (int existing = 0; existing < scratchCount; existing++)
+                {
+                    if (removedAttributeIds[existing] == attributeId)
+                    {
+                        alreadyCollected = true;
+                        break;
+                    }
+                }
+
+                if (alreadyCollected)
                 {
                     continue;
                 }
 
-                if (currentTick - effect.StartTick >= effect.DurationTicks)
-                {
-                    RemoveActiveEffect(effect.Handle);
-                    removedCount++;
-                }
+                removedAttributeIds[scratchCount++] = attributeId;
             }
 
-            return removedCount;
+            return scratchCount;
+        }
+
+        private void RecalculateTouchedAttributes(int touchedCount)
+        {
+            if (touchedCount < 0)
+            {
+                RecalculateAllAttributes();
+                return;
+            }
+
+            for (int i = 0; i < touchedCount; i++)
+            {
+                RecalculateAttribute(removedAttributeIds[i]);
+            }
         }
 
         public void CommitPrediction(GASPredictionKey predictionKey)
@@ -1024,42 +1129,57 @@ namespace CycloneGames.GameplayAbilities.Core
 
                     hasModifierInChannel = true;
                     var factor = FPInt64.FromRaw(modifier.MagnitudeRaw);
-                    var magnitude = factor * FPInt64.FromInt(effect.StackCount);
                     switch (modifier.Op)
                     {
                         case GASModifierOp.Add:
-                            add += magnitude;
+                            add += factor * FPInt64.FromInt(effect.StackCount);
                             break;
                         case GASModifierOp.Multiply:
+                        {
+                            var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                modifier.MagnitudeRaw,
+                                effect.StackCount,
+                                effect.StackMagnitudePolicy));
                             if (unrealBiasSum)
                             {
-                                // UE stock: scaled magnitude enters a bias sum (1 + sum(M - 1)).
-                                multiplicativeBias += magnitude - FPInt64.One;
+                                multiplicativeBias += stacked - FPInt64.One;
                             }
                             else
                             {
-                                for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
-                                {
-                                    multiply *= factor;
-                                }
+                                multiply *= stacked;
                             }
+
                             break;
+                        }
                         case GASModifierOp.Division:
-                            if (modifier.MagnitudeRaw != 0)
+                        {
+                            if (modifier.MagnitudeRaw == 0)
                             {
-                                if (unrealBiasSum)
-                                {
-                                    divisionBias += magnitude - FPInt64.One;
-                                }
-                                else
-                                {
-                                    for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
-                                    {
-                                        multiply /= factor;
-                                    }
-                                }
+                                break;
                             }
+
+                            var stackedDivisor = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                modifier.MagnitudeRaw,
+                                effect.StackCount,
+                                effect.StackMagnitudePolicy));
+                            // LinearBias scaling of a sub-1 magnitude can reach exactly zero
+                            // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
+                            if (stackedDivisor.RawValue == 0)
+                            {
+                                break;
+                            }
+
+                            if (unrealBiasSum)
+                            {
+                                divisionBias += stackedDivisor - FPInt64.One;
+                            }
+                            else
+                            {
+                                multiply /= stackedDivisor;
+                            }
+
                             break;
+                        }
                         case GASModifierOp.Override:
                             hasOverride = true;
                             overrideValue = FPInt64.FromRaw(modifier.MagnitudeRaw);
@@ -1194,7 +1314,8 @@ namespace CycloneGames.GameplayAbilities.Core
                         effect.StartTick,
                         effect.DurationTicks,
                         effect.ModifierStartIndex - (uint)length,
-                        effect.ModifierCount);
+                        effect.ModifierCount,
+                        effect.StackMagnitudePolicy);
                 }
             }
         }
