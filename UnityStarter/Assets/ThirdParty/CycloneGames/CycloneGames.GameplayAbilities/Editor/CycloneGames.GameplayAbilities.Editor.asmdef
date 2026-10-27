@@ -2,6 +2,7 @@
     "name": "CycloneGames.GameplayAbilities.Editor",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayTags.Unity.Runtime",

@@ -103,6 +103,8 @@ namespace CycloneGames.GameplayAbilities.Editor
         private readonly List<SerializedProperty> derivedProperties = new List<SerializedProperty>(8);
         private SerializedProperty stackingTypeProp;
         private SerializedProperty stackingLimitProp;
+        private SerializedProperty limitModeProp;
+        private SerializedProperty magnitudePolicyProp;
         private string derivedFieldsLabel;
         private string modifiersFoldoutLabel;
         private int modifiersFoldoutCount = -1;
@@ -167,6 +169,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             denyOverflowProp = serializedObject.FindProperty("DenyOverflowApplication");
             stackingTypeProp = stackingProp?.FindPropertyRelative("Type");
             stackingLimitProp = stackingProp?.FindPropertyRelative("Limit");
+            limitModeProp = stackingProp?.FindPropertyRelative("LimitMode");
+            magnitudePolicyProp = stackingProp?.FindPropertyRelative("MagnitudePolicy");
         }
 
         private void CacheDerivedProperties()
@@ -569,7 +573,23 @@ namespace CycloneGames.GameplayAbilities.Editor
                     _ => "?"
                 };
                 sb.Append("  \u2022  Stacking: ").Append(stackingLabel);
-                if (stackingLimitProp != null) sb.Append(" (max ").Append(stackingLimitProp.intValue).Append(')');
+                if (limitModeProp != null &&
+                    limitModeProp.enumValueIndex == (int)Runtime.EGameplayEffectStackLimitMode.Unlimited)
+                {
+                    sb.Append(" (unlimited)");
+                }
+                else if (stackingLimitProp != null)
+                {
+                    sb.Append(stackingLimitProp.intValue > 0
+                        ? " (max " + stackingLimitProp.intValue + ")"
+                        : " (invalid limit)");
+                }
+                if (magnitudePolicyProp != null)
+                {
+                    sb.Append(magnitudePolicyProp.enumValueIndex == (int)Core.GASStackMagnitudePolicy.Exponential
+                        ? ", exponential"
+                        : ", linear");
+                }
             }
 
             EditorGUILayout.LabelField(sb.ToString(), s_SummaryStyle);
@@ -653,12 +673,50 @@ namespace CycloneGames.GameplayAbilities.Editor
                 hasWarnings = true;
             }
 
-            // Stacking limit of 0 or negative
+            // Stacking limit validation
             if (stackingTypeProp != null && stackingTypeProp.enumValueIndex != 0)
             {
-                if (stackingLimitProp != null && stackingLimitProp.intValue <= 0)
+                bool unlimited = limitModeProp != null &&
+                    limitModeProp.enumValueIndex == (int)Runtime.EGameplayEffectStackLimitMode.Unlimited;
+
+                if (!unlimited && stackingLimitProp != null && stackingLimitProp.intValue <= 0)
                 {
-                    DrawWarningBox("Stacking limit is \u2264 0. This may cause unexpected behavior.");
+                    EditorGUILayout.HelpBox(
+                        "Stack Limit must be at least 1 when the limit mode is Limited. Building this " +
+                        "effect's runtime definition throws ArgumentOutOfRangeException until it is fixed.",
+                        MessageType.Error);
+                    if (GUILayout.Button("Set Stack Limit to 1"))
+                    {
+                        // Flushed by the ApplyModifiedProperties() at the end of OnInspectorGUI.
+                        stackingLimitProp.intValue = 1;
+                    }
+
+                    hasWarnings = true;
+                }
+                else if (!unlimited && stackingLimitProp != null &&
+                         stackingLimitProp.intValue > Runtime.GameplayEffect.MaxStackCount)
+                {
+                    DrawWarningBox(
+                        $"Stack Limit exceeds {Runtime.GameplayEffect.MaxStackCount}. The runtime definition " +
+                        "rejects it; use Stack Limit Mode = Unlimited instead of a huge number.");
+                    hasWarnings = true;
+                }
+
+                int stackLimit = unlimited
+                    ? ushort.MaxValue
+                    : (stackingLimitProp != null ? stackingLimitProp.intValue : 0);
+
+                // Mirrors GameplayEffect.ValidateStackMagnitudeRange so the asset fails here instead
+                // of throwing when the runtime definition is built.
+                if (magnitudePolicyProp != null &&
+                    magnitudePolicyProp.enumValueIndex == (int)Core.GASStackMagnitudePolicy.Exponential &&
+                    stackLimit > 1 &&
+                    TryGetExponentialOverflow(stackLimit, out int maxSafeStacks))
+                {
+                    DrawWarningBox(
+                        $"Exponential stacking overflows the Q32.32 range (2.1e9) before the Stack Limit. " +
+                        $"With this effect's magnitudes the highest safe limit is {maxSafeStacks} stack(s). " +
+                        "Lower the Stack Limit or switch to LinearBias; the runtime definition rejects this asset.");
                     hasWarnings = true;
                 }
             }
@@ -719,6 +777,84 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             SerializedProperty names = container.FindPropertyRelative("explicitTagNames");
             return names != null ? names.arraySize : 0;
+        }
+
+        /// <summary>
+        /// <summary>
+        /// Detects whether exponential stacking leaves the Q32.32 range before reaching the stack
+        /// limit, and reports the highest limit that still fits. AttributeBased, SetByCaller and
+        /// CustomCalculation magnitudes are not statically known and are skipped, so the answer is a
+        /// lower bound of the real worst case.
+        /// </summary>
+        private bool TryGetExponentialOverflow(int stackLimit, out int maxSafeStacks)
+        {
+            const double MaxRepresentable = 2147483647.0;
+            maxSafeStacks = int.MaxValue;
+
+            if (modifiersProp == null)
+            {
+                return false;
+            }
+
+            double combinedFactor = 1.0;
+            for (int i = 0; i < modifiersProp.arraySize; i++)
+            {
+                SerializedProperty modifier = modifiersProp.GetArrayElementAtIndex(i);
+                SerializedProperty operation = modifier.FindPropertyRelative("Operation");
+                SerializedProperty calculation = modifier.FindPropertyRelative("MagnitudeCalculationType");
+                if (operation == null || calculation == null)
+                {
+                    continue;
+                }
+
+                var op = (Runtime.EAttributeModifierOperation)operation.enumValueIndex;
+                if (op != Runtime.EAttributeModifierOperation.Multiply &&
+                    op != Runtime.EAttributeModifierOperation.Division)
+                {
+                    continue;
+                }
+
+                if ((Runtime.EGameplayEffectMagnitudeCalculation)calculation.enumValueIndex !=
+                    Runtime.EGameplayEffectMagnitudeCalculation.ScalableFloat)
+                {
+                    continue;
+                }
+
+                SerializedProperty magnitude = modifier.FindPropertyRelative("Magnitude");
+                if (magnitude == null)
+                {
+                    continue;
+                }
+
+                SerializedProperty baseValue = magnitude.FindPropertyRelative("BaseValue");
+                SerializedProperty perLevel = magnitude.FindPropertyRelative("ScalingFactorPerLevel");
+                double value = System.Math.Abs(baseValue != null ? baseValue.floatValue : 0f);
+                if (perLevel != null)
+                {
+                    value += System.Math.Abs(perLevel.floatValue) * (Core.GASRuntimeDataContract.MaxGameplayLevel - 1);
+                }
+
+                if (value > 1.0)
+                {
+                    combinedFactor *= value;
+                }
+            }
+
+            if (combinedFactor <= 1.0)
+            {
+                return false;
+            }
+
+            // Compare in log space so a huge factor never renders as "Infinity" in the message.
+            double logWorstCase = System.Math.Log(combinedFactor) * stackLimit;
+            if (logWorstCase <= System.Math.Log(MaxRepresentable))
+            {
+                return false;
+            }
+
+            double safe = System.Math.Floor(System.Math.Log(MaxRepresentable) / System.Math.Log(combinedFactor));
+            maxSafeStacks = safe < 1.0 ? 1 : (int)safe;
+            return true;
         }
 
         private static void DrawWarningBox(string message)

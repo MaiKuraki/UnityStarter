@@ -2923,7 +2923,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ConvertDurationToTicks(spec.Duration),
                 modifiers,
                 0,
-                modifierCount);
+                modifierCount,
+                def.Stacking.MagnitudePolicy);
         }
 
         private GASModifierData[] BuildCoreModifiers(GameplayEffectSpec spec, out int modifierCount)
@@ -3639,11 +3640,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 throw;
             }
 
-            if (dirtyAttributes.Count > 0)
-            {
-                RecalculateDirtyAttributes();
-            }
-
+            // Dirty attributes settle once per batch in both callers. Settling here would add one
+            // aggregation pass per applied effect.
             return true;
         }
 
@@ -5461,6 +5459,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                     var modifiers = def.Modifiers;
                     int stackCount = effect.StackCount;
+                    GASStackMagnitudePolicy stackPolicy = def.Stacking.MagnitudePolicy;
                     // Iterate only the modifiers targeting this dirty attribute; the spec's
                     // per-attribute grouping yields indices in ascending modifier order.
                     int matchCount = effect.Spec.GetModifierIndicesForAttribute(attr, out int[] modifierIndices, out int modifierStart);
@@ -5494,34 +5493,47 @@ namespace CycloneGames.GameplayAbilities.Runtime
                                 accumulator.Additive += factor * GASFixedValue.FromInt(stackCount);
                                 break;
                             case EAttributeModifierOperation.Multiply:
+                            {
+                                var stacked = GASFixedValue.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                    baseMagnitudeRaw, stackCount, stackPolicy));
                                 if (unrealBiasSum)
                                 {
-                                    accumulator.MultiplicativeBias += factor * GASFixedValue.FromInt(stackCount) - GASFixedValue.One;
+                                    accumulator.MultiplicativeBias += stacked - GASFixedValue.One;
                                 }
                                 else
                                 {
-                                    for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
-                                    {
-                                        accumulator.Multiplier *= factor;
-                                    }
+                                    accumulator.Multiplier *= stacked;
                                 }
+
                                 break;
+                            }
                             case EAttributeModifierOperation.Division:
-                                if (factor.RawValue != 0)
+                            {
+                                if (baseMagnitudeRaw == 0)
                                 {
-                                    if (unrealBiasSum)
-                                    {
-                                        accumulator.DivisionBias += factor * GASFixedValue.FromInt(stackCount) - GASFixedValue.One;
-                                    }
-                                    else
-                                    {
-                                        for (int stackIndex = 0; stackIndex < stackCount; stackIndex++)
-                                        {
-                                            accumulator.Multiplier /= factor;
-                                        }
-                                    }
+                                    break;
                                 }
+
+                                var stackedDivisor = GASFixedValue.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                    baseMagnitudeRaw, stackCount, stackPolicy));
+                                // LinearBias scaling of a sub-1 magnitude can reach exactly zero
+                                // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
+                                if (stackedDivisor.RawValue == 0)
+                                {
+                                    break;
+                                }
+
+                                if (unrealBiasSum)
+                                {
+                                    accumulator.DivisionBias += stackedDivisor - GASFixedValue.One;
+                                }
+                                else
+                                {
+                                    accumulator.Multiplier /= stackedDivisor;
+                                }
+
                                 break;
+                            }
                             case EAttributeModifierOperation.Override:
                                 accumulator.OverrideValue = factor;
                                 accumulator.HasOverride = true;
@@ -6989,7 +7001,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Predicted applications that would stack onto an existing effect are rejected
             // (PredictionUnsupported) before reaching this point, so every stacking duration
             // mutation here is authoritative.
-            if (existingEffect.StackCount >= spec.Def.Stacking.Limit)
+            if (existingEffect.StackCount >= spec.Def.Stacking.ResolveStackLimit())
             {
                 // Apply overflow effects when the stack limit is reached.
                 if (spec.Def.OverflowEffects.Count > 0)
@@ -8598,7 +8610,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     effect.Level <= 0 ||
                     effect.Level > GASRuntimeDataContract.MaxGameplayLevel ||
                     effect.StackCount <= 0 ||
-                    effect.StackCount > (definition.Stacking.Type == EGameplayEffectStackingType.None ? 1 : definition.Stacking.Limit) ||
+                    effect.StackCount > (definition.Stacking.Type == EGameplayEffectStackingType.None ? 1 : definition.Stacking.ResolveStackLimit()) ||
                     (definition.DurationPolicy == EDurationPolicy.HasDuration && effect.DurationRaw <= 0L) ||
                     effect.DurationRaw < 0L ||
                     effect.TimeRemainingRaw < 0L ||

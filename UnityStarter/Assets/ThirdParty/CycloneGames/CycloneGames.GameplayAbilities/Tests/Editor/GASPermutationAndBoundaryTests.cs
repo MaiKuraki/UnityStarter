@@ -108,11 +108,21 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                         expected += GASFixedValue.FromInt(factor) * GASFixedValue.FromInt(stackCount);
                         break;
                     case EAttributeModifierOperation.Multiply:
-                        for (int i = 0; i < stackCount; i++) expected *= GASFixedValue.FromInt(factor);
+                    {
+                        var scaled = (GASFixedValue.FromInt(factor) - GASFixedValue.One) *
+                                     GASFixedValue.FromInt(stackCount) + GASFixedValue.One;
+                        expected *= scaled;
                         break;
+                    }
                     case EAttributeModifierOperation.Division:
-                        for (int i = 0; i < stackCount; i++) expected /= GASFixedValue.FromInt(factor);
+                    {
+                        var scaledDivisor = (GASFixedValue.FromInt(factor) - GASFixedValue.One) *
+                                            GASFixedValue.FromInt(stackCount) + GASFixedValue.One;
+                        // Mirror the implementation's evaluation order: the channel accrues a
+                        // reciprocal multiplier, then the base value is multiplied once.
+                        expected *= GASFixedValue.One / scaledDivisor;
                         break;
+                    }
                     case EAttributeModifierOperation.Override:
                         expected = GASFixedValue.FromInt(factor);
                         break;

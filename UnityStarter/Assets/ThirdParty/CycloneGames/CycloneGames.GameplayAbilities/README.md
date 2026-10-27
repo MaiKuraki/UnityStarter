@@ -626,6 +626,19 @@ Evaluation channels provide ordered aggregation when effects need independent mo
 
 `GameplayEffectStacking` selects no stacking, aggregation by source, or aggregation by target; it also defines stack limit, duration refresh, and expiration behavior. Overflow effects and denial policy handle applications at the limit.
 
+`Stack Limit Mode` is either `Limited` (the stack count stops at `Limit`, validated into `[1, MaxStackCount]`) or `Unlimited` (no gameplay cap). `Unlimited` resolves to `ushort.MaxValue` because the Core mirror stores the stack count as a `ushort`, so the value saturates instead of wrapping. `GameplayEffectStacking.ResolveStackLimit()` is the only place that resolves the two; every clamp and replication check reads it, so a future limit mode only has to be taught to one function.
+
+`Magnitude Policy` decides how this effect's stack count scales its `Multiply` and `Division` magnitudes. It is orthogonal to `GASModifierAggregationMode`, which only decides how several modifiers of the same channel combine.
+
+| Policy | Formula | x1.1 at 5 stacks | Intended for |
+| --- | --- | --- | --- |
+| `LinearBias` (default) | `(M - 1) * stack + 1` | x1.5 | The ARPG/MMORPG convention: every stack adds the same delta. Numerically identical to UE's stacked magnitude. |
+| `Exponential` | `M ^ stack` | x1.61 | Deliberate "double per stack" designs. Authoring rejects any limit whose worst-case product leaves the Q32.32 range. |
+
+`Add` modifiers always scale as `magnitude * stackCount`, and `Override` ignores the stack count, so the policy is inert for effects without a multiplicative modifier. The effect inspector hides the row in that case, and shows it locked when a non-default policy is dormant.
+
+> Migration note: before this field existed, an effect with a stack limit above 1 and a `Multiply` or `Division` modifier compounded per stack. Such effects now use `LinearBias` unless `Exponential` is selected explicitly. Select `Magnitude Policy = Exponential` on any effect that must keep the previous numbers, and re-verify its balance values.
+
 Three stacking duration policies are supported (UE5: `EGameplayEffectStackingDurationPolicy`). `RefreshOnSuccessfulApplication` resets the remaining time to the new application's duration, including `SetDuration` overrides; the active effect keeps its original spec lease and adopts only the incoming duration. `NeverRefresh` keeps the original timer. `ExtendDuration` sums the new application's duration onto the remaining time with saturating fixed-point arithmetic and must be paired with `ClearEntireStack` expiration, which the definition validator enforces. Predicted applications that would stack onto an existing effect fail closed with `PredictionUnsupported` before any mutation, so predicted paths cannot perturb an authoritative duration timer.
 
 Application requirements run before insertion. Ongoing requirements control whether an active effect contributes while tags change. Removal tags support dispel behavior. Duration and infinite effects may grant tags and abilities for their active lifetime.
@@ -953,6 +966,8 @@ Create an effect through:
 `Assets > Create > CycloneGames > GameplayAbilities > Definitions > Gameplay Effect`
 
 The effect inspector groups duration, modifiers, stacking, tags, granted abilities, cues, and advanced policies. A `GameplayEffectSO` lazily creates a reusable runtime definition on the Unity main thread. Validation and deserialization clear the cache; `ClearCache()` is available to explicit authoring tools. Do not mutate the cached definition during gameplay.
+
+The stacking rows follow the configuration: `Stack Limit Mode = Unlimited` stops asking for a limit, the magnitude policy row only appears when the effect owns a `Multiply` or `Division` modifier, and a row that became irrelevant while still holding a non-default value is shown locked instead of hidden so a dormant value never reapplies unnoticed.
 
 `GameplayAbilitySO.GetGameplayAbility()` lazily creates and returns one reusable immutable definition per loaded asset revision. Custom assets implement `CreateGameplayAbility()`, construct the derived ability with only its derived immutable inputs, then call `InitializeAbility(ability)` exactly once so every base tag, trigger, cost, cooldown, and policy is validated and transferred consistently. Validation and deserialization clear the definition cache. `CreateRuntimeInstance()` reconstructs only activation-state inputs; Runtime copies the sealed base configuration from the cached definition and must not invoke `InitializeAbility` again.
 

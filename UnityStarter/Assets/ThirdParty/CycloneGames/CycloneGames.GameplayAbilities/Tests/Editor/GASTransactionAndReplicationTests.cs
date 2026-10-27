@@ -1147,6 +1147,65 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void StateDelta_SettlesAllReplicatedEffectsInSingleAggregationPass()
+        {
+            var authorityContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
+            var replicaContext = new GASRuntimeContext(GASRuntimeAuthorityMode.Replica);
+            var authority = new AbilitySystemComponent(authorityContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var replica = new AbilitySystemComponent(replicaContext, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var authorityAttributes = new TestAttributeSet();
+            var replicaAttributes = new TestAttributeSet();
+
+            try
+            {
+                authority.AddAttributeSet(authorityAttributes);
+                replica.AddAttributeSet(replicaAttributes);
+                authorityAttributes.Health.SetBaseValue(100f);
+                replicaAttributes.Health.SetBaseValue(100f);
+
+                const int effectCount = 8;
+                var modifiers = new List<ModifierInfo>
+                {
+                    new ModifierInfo("Health", EAttributeModifierOperation.Add, new ScalableFloat(1f))
+                };
+                for (int e = 0; e < effectCount; e++)
+                {
+                    var definition = new GameplayEffect($"BatchedDelta.{e}", EDurationPolicy.Infinite, modifiers: modifiers);
+                    authority.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, null));
+                }
+                authority.Tick(0f, true);
+
+                var delta = new GASAbilitySystemStateDeltaBuffer();
+                authority.CapturePendingStateDeltaNonAlloc(delta);
+                delta.Sequence = 1u;
+                delta.StateChecksum = authority.ComputeReplicatedStateChecksum();
+
+                GASAggregationProbe.Reset();
+                Assert.That(
+                    replica.TryApplyStateDelta(delta, out GASStateDeltaRejectionReason reason),
+                    Is.True,
+                    reason.ToString());
+
+                Assert.That(replica.ActiveEffectContainer.Count, Is.EqualTo(effectCount));
+                Assert.That(
+                    GASAggregationProbe.RecalculatePasses,
+                    Is.EqualTo(1L),
+                    "A replicated delta must settle every affected attribute in one aggregation pass.");
+                Assert.That(
+                    replicaAttributes.Health.CurrentValueRaw,
+                    Is.EqualTo(authorityAttributes.Health.CurrentValueRaw),
+                    "The single pass must land on the authoritative value.");
+            }
+            finally
+            {
+                authority.Dispose();
+                replica.Dispose();
+                authorityContext.Dispose();
+                replicaContext.Dispose();
+            }
+        }
+
+        [Test]
         public void EffectSpecOwnership_RejectsContextAliasAndPostSubmissionMutation()
         {
             GameplayTag dynamicTag = RegisterTag("Test.GAS.Transaction.OwnedDynamicTag");

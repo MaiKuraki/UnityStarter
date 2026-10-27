@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -381,6 +382,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ValidateCollectionCount(customApplicationRequirements, MaxCustomApplicationRequirementCount, nameof(customApplicationRequirements));
             ValidateCollectionCount(overflowEffects, MaxOverflowEffectCount, nameof(overflowEffects));
             ValidateModifiers(modifiers);
+            ValidateStackMagnitudeRange(stacking, modifiers);
             ValidateGrantedAbilities(durationPolicy, grantedAbilities);
             ValidateGrantedAbilityRemovalPolicies(grantedAbilities, grantedAbilityRemovalPolicies);
             ValidateRequirements(customApplicationRequirements);
@@ -483,13 +485,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 throw new ArgumentOutOfRangeException(nameof(stacking), stacking.Type, "Unknown stacking type.");
             }
 
+            if ((int)stacking.LimitMode < (int)EGameplayEffectStackLimitMode.Limited ||
+                (int)stacking.LimitMode > (int)EGameplayEffectStackLimitMode.Unlimited)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stacking), stacking.LimitMode, "Unknown stack limit mode.");
+            }
+
             if (stacking.Type != EGameplayEffectStackingType.None &&
+                stacking.LimitMode == EGameplayEffectStackLimitMode.Limited &&
                 (stacking.Limit <= 0 || stacking.Limit > MaxStackCount))
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(stacking),
                     stacking.Limit,
-                    $"Stack limits must be between 1 and {MaxStackCount}.");
+                    $"Stack limits must be between 1 and {MaxStackCount} when the limit mode is Limited.");
             }
 
             if (stacking.Type != EGameplayEffectStackingType.None &&
@@ -511,6 +521,62 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 throw new ArgumentException(
                     "ExtendDuration stacking requires ClearEntireStack expiration; per-stack expiry timers are not tracked.",
                     nameof(stacking));
+            }
+
+            if ((int)stacking.MagnitudePolicy < (int)GASStackMagnitudePolicy.LinearBias ||
+                (int)stacking.MagnitudePolicy > (int)GASStackMagnitudePolicy.Exponential)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stacking), stacking.MagnitudePolicy, "Unknown stack magnitude policy.");
+            }
+        }
+
+        /// <summary>
+        /// Exponential stacking compounds the magnitude per stack, and Q32.32 saturates its integer
+        /// part near 2.1e9. Rejecting the asset here keeps the overflow out of the runtime hot loop.
+        /// </summary>
+        private static void ValidateStackMagnitudeRange(
+            GameplayEffectStacking stacking,
+            List<ModifierInfo> modifiers)
+        {
+            int stackLimit = stacking.ResolveStackLimit();
+            if (stacking.Type == EGameplayEffectStackingType.None ||
+                stacking.MagnitudePolicy != GASStackMagnitudePolicy.Exponential ||
+                stackLimit <= 1 ||
+                modifiers == null)
+            {
+                return;
+            }
+
+            const double MaxRepresentable = 2147483647.0;
+            double worstCase = 1.0;
+            for (int i = 0; i < modifiers.Count; i++)
+            {
+                ModifierInfo modifier = modifiers[i];
+                if (modifier.Operation != EAttributeModifierOperation.Multiply &&
+                    modifier.Operation != EAttributeModifierOperation.Division)
+                {
+                    continue;
+                }
+
+                // Levels scale the magnitude, so take the worst level into account.
+                double magnitude = Math.Abs(modifier.Magnitude.BaseValue) +
+                                   Math.Abs(modifier.Magnitude.ScalingFactorPerLevel) *
+                                   (GASRuntimeDataContract.MaxGameplayLevel - 1);
+                if (magnitude <= 1.0)
+                {
+                    continue;
+                }
+
+                worstCase *= Math.Pow(magnitude, stackLimit);
+                if (worstCase > MaxRepresentable)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stacking),
+                        stackLimit,
+                        $"Exponential stacking reaches {worstCase:F3e0} at the stack limit, beyond the " +
+                        "Q32.32 range (2.1e9). Lower the limit or use LinearBias.");
+                }
             }
         }
 
