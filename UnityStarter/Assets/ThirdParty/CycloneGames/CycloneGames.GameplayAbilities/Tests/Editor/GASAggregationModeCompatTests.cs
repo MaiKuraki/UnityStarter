@@ -12,7 +12,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
     /// (<see cref="GASModifierAggregationMode"/>):
     /// 1. Default mode is MultiplicativeProduct and its behavior is unchanged (regression guard).
     /// 2. UnrealBiasSum reproduces stock UE aggregator values: bias-sum multiplication/division
-    ///    (two x2 yield x3) with linear stack scaling (magnitude x stackCount).
+    ///    (two x2 yield x3). Per-stack scaling is a separate axis (GASStackMagnitudePolicy) and is
+    ///    covered by GASStackMagnitudePolicyTests.
     /// 3. The switch is honored identically by the Runtime ASC and the Unity-free Core state.
     /// 4. Both modes keep the steady-state zero-allocation contract.
     /// Every expected value is derived independently from the documented formula of its mode.
@@ -68,7 +69,10 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void UnrealBiasSum_StackScaling_IsLinearInStackCount()
         {
-            GameplayEffect effect = BuildStackingMultiplierEffect("Mode.Bias.Stack", 2f, stackLimit: 10);
+            GameplayEffect exponentialEffect = BuildStackingMultiplierEffect(
+                "Mode.Bias.Stack.Exp", 2f, stackLimit: 10, magnitudePolicy: GASStackMagnitudePolicy.Exponential);
+            GameplayEffect linearEffect = BuildStackingMultiplierEffect(
+                "Mode.Bias.Stack.Lin", 2f, stackLimit: 10, magnitudePolicy: GASStackMagnitudePolicy.LinearBias);
 
             var productAsc = CreateAsc(out PermutationAttributeSet productAttributes);
             var biasAsc = CreateAsc(out PermutationAttributeSet biasAttributes);
@@ -80,17 +84,18 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                 for (int i = 0; i < 3; i++)
                 {
-                    ApplyInfinite(productAsc, effect);
-                    ApplyInfinite(biasAsc, effect);
+                    ApplyInfinite(productAsc, exponentialEffect);
+                    ApplyInfinite(biasAsc, linearEffect);
                 }
                 productAsc.Tick(DeltaTime, isServer: true);
                 biasAsc.Tick(DeltaTime, isServer: true);
 
-                // Product: 100 * 2^3 = 800. UE bias: 100 * (1 + (2*3 - 1)) = 600.
+                // Exponential + product: 100 * 2^3 = 800.
+                // LinearBias + bias sum: 100 * (1 + (2-1)*3) = 400, matching UE ComputeStackedModifierMagnitude.
                 Assert.That(productAttributes.ValueOf(0).CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(800).RawValue),
-                    "Product mode must keep magnitude^stackCount stacking.");
-                Assert.That(biasAttributes.ValueOf(0).CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(600).RawValue),
-                    "Bias mode must scale the magnitude linearly by stack count.");
+                    "Exponential stacking must keep magnitude^stackCount.");
+                Assert.That(biasAttributes.ValueOf(0).CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(400).RawValue),
+                    "LinearBias stacking must add the per-stack delta: (2-1)*3 + 1 = 4.");
                 UnityEngine.Debug.Log("[ModeCompat][Bias] PASS: stack scaling product=800 vs bias=600 at 3 stacks; cross-mode split verified.");
             }
             finally
@@ -218,9 +223,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             };
 
             long stacked = EvaluateCoreState(GASModifierAggregationMode.UnrealBiasSum, attributeId, modifiers, stackCount: 3);
-            // UE: 100 * (1 + (2*3 - 1)) = 600.
-            Assert.That(stacked, Is.EqualTo(GASFixedValue.FromInt(600).RawValue));
-            UnityEngine.Debug.Log("[ModeCompat][Core] PASS: bias stacked single modifier = 600 (linear stack scaling).");
+            // UE ComputeStackedModifierMagnitude: (2-1)*3 + 1 = 4 -> 100 * 4 = 400.
+            Assert.That(stacked, Is.EqualTo(GASFixedValue.FromInt(400).RawValue));
+            UnityEngine.Debug.Log("[ModeCompat][Core] PASS: bias stacked single modifier = 400 ((M-1)*stack+1).");
         }
 
         [Test]
@@ -283,7 +288,11 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 });
         }
 
-        private static GameplayEffect BuildStackingMultiplierEffect(string name, float factor, int stackLimit)
+        private static GameplayEffect BuildStackingMultiplierEffect(
+            string name,
+            float factor,
+            int stackLimit,
+            GASStackMagnitudePolicy magnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             return new GameplayEffect(
                 name,
@@ -295,7 +304,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 stacking: new GameplayEffectStacking(
                     EGameplayEffectStackingType.AggregateByTarget,
                     stackLimit,
-                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication,
+                    magnitudePolicy: magnitudePolicy));
         }
 
         private static GameplayEffect BuildMixedEffect(string name)
