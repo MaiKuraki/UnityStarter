@@ -381,7 +381,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             return definition.Stacking.Type == EGameplayEffectStackingType.None
                 ? 1
-                : definition.Stacking.Limit;
+                : definition.Stacking.ResolveStackLimit();
         }
 
         private void ApplyFullLooseTagState(GASTagCountStateData[] entries, int count)

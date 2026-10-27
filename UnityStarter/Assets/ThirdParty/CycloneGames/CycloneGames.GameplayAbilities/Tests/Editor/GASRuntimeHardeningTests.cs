@@ -1209,7 +1209,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 stacking: new GameplayEffectStacking(
                     EGameplayEffectStackingType.AggregateByTarget,
                     3,
-                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication,
+                    magnitudePolicy: GASStackMagnitudePolicy.Exponential));
 
             for (int i = 0; i < 3; i++)
             {

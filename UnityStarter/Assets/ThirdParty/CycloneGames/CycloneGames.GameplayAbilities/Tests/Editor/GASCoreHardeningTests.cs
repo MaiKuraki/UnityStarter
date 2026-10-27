@@ -93,7 +93,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 multiplyState,
                 1,
                 new[] { new GASModifierData(attributeId, GASModifierOp.Multiply, GASFixedValue.FromInt(2)) },
-                3);
+                3,
+                GASStackMagnitudePolicy.Exponential);
 
             Assert.That(multiplyState.TryGetAttribute(attributeId, out var multiplied), Is.True);
             Assert.That(multiplied.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(80).RawValue));
@@ -104,7 +105,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 divisionState,
                 2,
                 new[] { new GASModifierData(attributeId, GASModifierOp.Division, GASFixedValue.FromInt(2)) },
-                3);
+                3,
+                GASStackMagnitudePolicy.Exponential);
 
             Assert.That(divisionState.TryGetAttribute(attributeId, out var divided), Is.True);
             Assert.That(divided.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(10).RawValue));
@@ -238,7 +240,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             GASAbilitySystemState state,
             int definitionId,
             GASModifierData[] modifiers,
-            ushort stackCount)
+            ushort stackCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             return state.AddActiveEffect(
                 new GASDefinitionId(definitionId),
@@ -251,7 +254,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 0,
                 modifiers,
                 0,
-                modifiers?.Length ?? 0);
+                modifiers?.Length ?? 0,
+                stackMagnitudePolicy);
         }
 
         private static int GetArrayLength(GASAbilitySystemState state, string fieldName)

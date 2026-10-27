@@ -35,17 +35,40 @@ namespace CycloneGames.GameplayAbilities.Core
     public enum GASModifierAggregationMode : byte
     {
         /// <summary>
-        /// Default. Multiply/Division compose as true products: two x2 modifiers yield x4, and each
-        /// stack applies the factor once (magnitude^stackCount). Matches the common game convention
-        /// for independent damage/stat multipliers and the framework's established contract.
+        /// Default. Multiply/Division compose as true products: two x2 modifiers yield x4.
+        /// Per-stack scaling is a separate axis; see <see cref="GASStackMagnitudePolicy"/>.
         /// </summary>
         MultiplicativeProduct,
 
         /// <summary>
-        /// Multiply and Division form a bias sum (1 + sum(Mi - 1); two x2 modifiers yield x3) and
-        /// stacked magnitude scales linearly (magnitude x stackCount).
+        /// Multiply and Division form a bias sum: 1 + sum(Mi - 1); two x2 modifiers yield x3.
+        /// This is the additive-bucket convention shared by Unreal Engine and most ARPG stat systems.
+        /// Per-stack scaling is a separate axis; see <see cref="GASStackMagnitudePolicy"/>.
         /// </summary>
         UnrealBiasSum
+    }
+
+    /// <summary>
+    /// Selects how one effect's stack count scales its Multiply/Division modifier magnitude.
+    /// Additive modifiers always scale linearly (magnitude * stackCount) and Override ignores the
+    /// stack count entirely, matching Unreal Engine's ComputeStackedModifierMagnitude.
+    /// Orthogonal to <see cref="GASModifierAggregationMode"/>, which only decides how several
+    /// modifiers of the same channel combine.
+    /// </summary>
+    public enum GASStackMagnitudePolicy : byte
+    {
+        /// <summary>
+        /// Default. (magnitude - 1) * stackCount + 1: every stack adds the same delta, so a x1.1 buff
+        /// at 5 stacks is x1.5. Prevalent ARPG/MMORPG convention and numerically identical to UE.
+        /// </summary>
+        LinearBias,
+
+        /// <summary>
+        /// magnitude ^ stackCount: every stack compounds, so a x1.1 buff at 5 stacks is x1.61.
+        /// Intended for deliberate "double per stack" designs. Q32.32 exhausts its integer range
+        /// near 2.1e9, so authoring rejects limits whose worst-case product cannot be represented.
+        /// </summary>
+        Exponential
     }
 
     /// <summary>

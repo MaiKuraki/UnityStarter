@@ -456,7 +456,8 @@ namespace CycloneGames.GameplayAbilities.Core
             int durationTicks,
             GASModifierData[] effectModifiers,
             int effectModifierStart,
-            int effectModifierCount)
+            int effectModifierCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             if (!ValidateActiveEffectInput(
                     effectDefinitionId,
@@ -498,7 +499,8 @@ namespace CycloneGames.GameplayAbilities.Core
                 startTick,
                 durationTicks,
                 (uint)modifierStart,
-                (ushort)effectModifierCount);
+                (ushort)effectModifierCount,
+                stackMagnitudePolicy);
 
             RecalculateModifiedAttributes(modifierStart, effectModifierCount);
             Version++;
@@ -550,7 +552,8 @@ namespace CycloneGames.GameplayAbilities.Core
                 spec.DurationTicks,
                 spec.Modifiers,
                 spec.ModifierStart,
-                spec.ModifierCount);
+                spec.ModifierCount,
+                spec.StackMagnitudePolicy);
             return handle.IsValid;
         }
 
@@ -1024,42 +1027,57 @@ namespace CycloneGames.GameplayAbilities.Core
 
                     hasModifierInChannel = true;
                     var factor = FPInt64.FromRaw(modifier.MagnitudeRaw);
-                    var magnitude = factor * FPInt64.FromInt(effect.StackCount);
                     switch (modifier.Op)
                     {
                         case GASModifierOp.Add:
-                            add += magnitude;
+                            add += factor * FPInt64.FromInt(effect.StackCount);
                             break;
                         case GASModifierOp.Multiply:
+                        {
+                            var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                modifier.MagnitudeRaw,
+                                effect.StackCount,
+                                effect.StackMagnitudePolicy));
                             if (unrealBiasSum)
                             {
-                                // UE stock: scaled magnitude enters a bias sum (1 + sum(M - 1)).
-                                multiplicativeBias += magnitude - FPInt64.One;
+                                multiplicativeBias += stacked - FPInt64.One;
                             }
                             else
                             {
-                                for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
-                                {
-                                    multiply *= factor;
-                                }
+                                multiply *= stacked;
                             }
+
                             break;
+                        }
                         case GASModifierOp.Division:
-                            if (modifier.MagnitudeRaw != 0)
+                        {
+                            if (modifier.MagnitudeRaw == 0)
                             {
-                                if (unrealBiasSum)
-                                {
-                                    divisionBias += magnitude - FPInt64.One;
-                                }
-                                else
-                                {
-                                    for (int stackIndex = 0; stackIndex < effect.StackCount; stackIndex++)
-                                    {
-                                        multiply /= factor;
-                                    }
-                                }
+                                break;
                             }
+
+                            var stackedDivisor = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                                modifier.MagnitudeRaw,
+                                effect.StackCount,
+                                effect.StackMagnitudePolicy));
+                            // LinearBias scaling of a sub-1 magnitude can reach exactly zero
+                            // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
+                            if (stackedDivisor.RawValue == 0)
+                            {
+                                break;
+                            }
+
+                            if (unrealBiasSum)
+                            {
+                                divisionBias += stackedDivisor - FPInt64.One;
+                            }
+                            else
+                            {
+                                multiply /= stackedDivisor;
+                            }
+
                             break;
+                        }
                         case GASModifierOp.Override:
                             hasOverride = true;
                             overrideValue = FPInt64.FromRaw(modifier.MagnitudeRaw);
@@ -1194,7 +1212,8 @@ namespace CycloneGames.GameplayAbilities.Core
                         effect.StartTick,
                         effect.DurationTicks,
                         effect.ModifierStartIndex - (uint)length,
-                        effect.ModifierCount);
+                        effect.ModifierCount,
+                        effect.StackMagnitudePolicy);
                 }
             }
         }

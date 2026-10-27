@@ -311,7 +311,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </param>
         internal void OnStackApplied(long applicationDurationRaw, GameplayEffectSpec applicationSpec)
         {
-            StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.Limit);
+            StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.ResolveStackLimit());
 
             if (applicationSpec != null && !ReferenceEquals(applicationSpec, Spec))
             {
@@ -478,8 +478,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void ValidateReplicatedStackCount(int newStackCount)
         {
-            int limit = Spec?.Def?.Stacking.Limit ?? 0;
-            int effectiveLimit = limit > 0 ? limit : 1;
+            GameplayEffect definition = Spec?.Def;
+            int effectiveLimit = definition != null ? definition.Stacking.ResolveStackLimit() : 1;
+            if (effectiveLimit <= 0)
+            {
+                effectiveLimit = 1;
+            }
+
             if (newStackCount <= 0 || newStackCount > effectiveLimit)
             {
                 throw new ArgumentOutOfRangeException(nameof(newStackCount), newStackCount, $"Stack count must be between 1 and {effectiveLimit}.");

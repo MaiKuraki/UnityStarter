@@ -299,26 +299,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Whether a stacking effect stops at <see cref="GameplayEffectStacking.Limit"/> or keeps
+    /// accepting stacks indefinitely.
+    /// </summary>
+    public enum EGameplayEffectStackLimitMode
+    {
+        /// <summary>Default. Stack count is clamped to a configured limit in [1, MaxStackCount].</summary>
+        Limited,
+
+        /// <summary>
+        /// No gameplay limit. Resolves to <see cref="ushort.MaxValue"/> because the Core mirror stores
+        /// the stack count as a ushort, so the value still saturates instead of wrapping.
+        /// </summary>
+        Unlimited
+    }
+
+    /// <summary>
     /// A complete definition of an effect's stacking behavior.
     /// </summary>
     [System.Serializable]
     public struct GameplayEffectStacking
     {
         public EGameplayEffectStackingType Type;
+        public EGameplayEffectStackLimitMode LimitMode;
         public int Limit;
         public EGameplayEffectStackingDurationPolicy DurationPolicy;
         public EGameplayEffectStackingExpirationPolicy ExpirationPolicy;
         public EGameplayEffectStackingPeriodPolicy PeriodResetPolicy;
 
+        /// <summary>
+        /// How this effect's stack count scales its Multiply/Division magnitudes. Independent of the
+        /// ASC-wide aggregation mode, which only decides how several modifiers combine.
+        /// </summary>
+        public GASStackMagnitudePolicy MagnitudePolicy;
+
         public GameplayEffectStacking(EGameplayEffectStackingType type, int limit, EGameplayEffectStackingDurationPolicy durationPolicy,
             EGameplayEffectStackingExpirationPolicy expirationPolicy = EGameplayEffectStackingExpirationPolicy.ClearEntireStack,
-            EGameplayEffectStackingPeriodPolicy periodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication)
+            EGameplayEffectStackingPeriodPolicy periodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication,
+            GASStackMagnitudePolicy magnitudePolicy = GASStackMagnitudePolicy.LinearBias,
+            EGameplayEffectStackLimitMode limitMode = EGameplayEffectStackLimitMode.Limited)
         {
             Type = type;
+            LimitMode = limitMode;
             Limit = limit;
             DurationPolicy = durationPolicy;
             ExpirationPolicy = expirationPolicy;
             PeriodResetPolicy = periodResetPolicy;
+            MagnitudePolicy = magnitudePolicy;
+        }
+
+        /// <summary>
+        /// The effective cap every clamp and validation site must use. Keeping the resolution in one
+        /// place is what lets <see cref="EGameplayEffectStackLimitMode.Unlimited"/> stay a single
+        /// switch instead of a sentinel that every call site has to remember.
+        /// </summary>
+        public int ResolveStackLimit()
+        {
+            return LimitMode == EGameplayEffectStackLimitMode.Unlimited ? ushort.MaxValue : Limit;
         }
     }
 

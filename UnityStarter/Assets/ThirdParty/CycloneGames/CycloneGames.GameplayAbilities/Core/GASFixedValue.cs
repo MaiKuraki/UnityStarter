@@ -119,6 +119,37 @@ namespace CycloneGames.GameplayAbilities.Core
             return FromRaw((left.ToFPInt64() / right.ToFPInt64()).RawValue);
         }
 
+        /// <summary>
+        /// Resolves the effective magnitude of one Multiply/Division modifier for a stack count.
+        /// Stack count 1 returns the magnitude unchanged so single-stack behaviour stays bit-identical.
+        /// Additive and Override modifiers do not use this path.
+        /// </summary>
+        public static long ResolveStackScaledMagnitudeRaw(
+            long magnitudeRaw,
+            int stackCount,
+            GASStackMagnitudePolicy policy)
+        {
+            if (stackCount <= 1)
+            {
+                return magnitudeRaw;
+            }
+
+            var magnitude = FPInt64.FromRaw(magnitudeRaw);
+            if (policy == GASStackMagnitudePolicy.Exponential)
+            {
+                var product = FPInt64.One;
+                for (int i = 0; i < stackCount; i++)
+                {
+                    product *= magnitude;
+                }
+
+                return product.RawValue;
+            }
+
+            // LinearBias: (M - 1) * stackCount + 1, so every stack contributes the same delta.
+            return ((magnitude - FPInt64.One) * FPInt64.FromInt(stackCount) + FPInt64.One).RawValue;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool operator ==(GASFixedValue left, GASFixedValue right)
         {

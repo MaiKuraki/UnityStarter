@@ -116,6 +116,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASEffectDurationPolicy DurationPolicy;
         public readonly ushort Level;
         public readonly ushort StackCount;
+        public readonly GASStackMagnitudePolicy StackMagnitudePolicy;
         public readonly long StartTick;
         public readonly int DurationTicks;
         public readonly GASModifierData[] Modifiers;
@@ -133,7 +134,8 @@ namespace CycloneGames.GameplayAbilities.Core
             int durationTicks,
             GASModifierData[] modifiers,
             int modifierStart,
-            int modifierCount)
+            int modifierCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             EffectDefinitionId = effectDefinitionId;
             Source = source;
@@ -141,6 +143,7 @@ namespace CycloneGames.GameplayAbilities.Core
             DurationPolicy = durationPolicy;
             Level = level;
             StackCount = stackCount;
+            StackMagnitudePolicy = stackMagnitudePolicy;
             StartTick = startTick;
             DurationTicks = durationTicks;
             Modifiers = modifiers;
@@ -174,6 +177,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASEffectDurationPolicy DurationPolicy;
         public readonly ushort Level;
         public readonly ushort StackCount;
+        public readonly GASStackMagnitudePolicy StackMagnitudePolicy;
         public readonly long StartTick;
         public readonly int DurationTicks;
         public readonly uint ModifierStartIndex;
@@ -191,7 +195,8 @@ namespace CycloneGames.GameplayAbilities.Core
             long startTick,
             int durationTicks,
             uint modifierStartIndex,
-            ushort modifierCount)
+            ushort modifierCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy = GASStackMagnitudePolicy.LinearBias)
         {
             Handle = handle;
             EffectDefinitionId = effectDefinitionId;
@@ -201,6 +206,7 @@ namespace CycloneGames.GameplayAbilities.Core
             DurationPolicy = durationPolicy;
             Level = level;
             StackCount = stackCount;
+            StackMagnitudePolicy = stackMagnitudePolicy;
             StartTick = startTick;
             DurationTicks = durationTicks;
             ModifierStartIndex = modifierStartIndex;
