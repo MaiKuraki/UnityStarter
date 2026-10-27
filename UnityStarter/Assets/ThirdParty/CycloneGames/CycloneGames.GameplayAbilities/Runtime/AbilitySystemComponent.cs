@@ -3640,11 +3640,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 throw;
             }
 
-            if (dirtyAttributes.Count > 0)
-            {
-                RecalculateDirtyAttributes();
-            }
-
+            // Dirty attributes settle once per batch in both callers. Settling here would add one
+            // aggregation pass per applied effect.
             return true;
         }
 
