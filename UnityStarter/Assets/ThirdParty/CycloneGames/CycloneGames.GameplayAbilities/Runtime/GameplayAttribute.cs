@@ -21,6 +21,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly GASCallbackList<Action<float, float>> baseValueObservers = new GASCallbackList<Action<float, float>>(2);
         internal bool IsDirty;
         internal readonly List<ActiveGameplayEffect> AffectingEffects = new List<ActiveGameplayEffect>(8);
+        // Effects whose magnitude reads this attribute live (NotSnapshot). Allocated on first
+        // dependent only, so attributes nobody reads live pay nothing.
+        internal List<LiveDependencySlot> LiveDependents;
         public int ActiveModifierSourceCount => AffectingEffects.Count;
 
         public long BaseValueRaw => baseValueRaw;
@@ -190,6 +193,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 owner.AssertRuntimeSubscriptionAccess();
             }
+        }
+    }
+
+    /// <summary>
+    /// One live attribute read: the effect and the modifier that reads
+    /// <see cref="GameplayAttribute.LiveDependents"/>'s owner.
+    /// </summary>
+    internal readonly struct LiveDependencySlot
+    {
+        internal readonly ActiveGameplayEffect Effect;
+        internal readonly int ModifierIndex;
+
+        internal LiveDependencySlot(ActiveGameplayEffect effect, int modifierIndex)
+        {
+            Effect = effect;
+            ModifierIndex = modifierIndex;
         }
     }
 }

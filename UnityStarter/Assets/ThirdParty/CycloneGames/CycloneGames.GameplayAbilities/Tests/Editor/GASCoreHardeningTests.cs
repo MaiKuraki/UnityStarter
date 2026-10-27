@@ -237,6 +237,64 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void ChannelComposition_FoldsInAscendingChannelOrder()
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var attributeId = new GASAttributeId(1);
+            state.SetAttributeBase(attributeId, GASFixedValue.FromInt(100));
+
+            var modifiers = new[]
+            {
+                new GASModifierData(attributeId, GASModifierOp.Add, GASFixedValue.FromInt(10),
+                    GASModifierEvaluationChannel.Channel0),
+                new GASModifierData(attributeId, GASModifierOp.Multiply, GASFixedValue.FromInt(2),
+                    GASModifierEvaluationChannel.Channel1),
+                new GASModifierData(attributeId, GASModifierOp.Override, GASFixedValue.FromInt(7),
+                    GASModifierEvaluationChannel.Channel2),
+                new GASModifierData(attributeId, GASModifierOp.Multiply, GASFixedValue.FromInt(3),
+                    GASModifierEvaluationChannel.Channel3)
+            };
+            AddInfiniteEffect(state, 1, modifiers, 1);
+
+            // 100 --Add 10--> 110 --Multiply 2--> 220 --Override 7--> 7 --Multiply 3--> 21
+            state.TryGetAttributeByIndex(0, out GASAttributeValueData attribute);
+            Assert.That(attribute.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(21).RawValue));
+        }
+
+        [Test]
+        public void ChannelComposition_LastOverrideInChannelWins()
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var attributeId = new GASAttributeId(1);
+            state.SetAttributeBase(attributeId, GASFixedValue.FromInt(100));
+
+            var modifiers = new[]
+            {
+                new GASModifierData(attributeId, GASModifierOp.Override, GASFixedValue.FromInt(5),
+                    GASModifierEvaluationChannel.Channel1),
+                new GASModifierData(attributeId, GASModifierOp.Override, GASFixedValue.FromInt(9),
+                    GASModifierEvaluationChannel.Channel1)
+            };
+            AddInfiniteEffect(state, 1, modifiers, 1);
+
+            state.TryGetAttributeByIndex(0, out GASAttributeValueData attribute);
+            Assert.That(attribute.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(9).RawValue));
+        }
+
+        [Test]
+        public void DefaultLimits_AreStable()
+        {
+            // The defaults are part of the contract: every consumer that does not pass explicit
+            // limits inherits them, and MaxAttributes also bounds dependency propagation depth.
+            GASAbilitySystemLimits limits = GASAbilitySystemLimits.Default;
+            Assert.That(limits.MaxAbilities, Is.EqualTo(256));
+            Assert.That(limits.MaxAttributes, Is.EqualTo(512));
+            Assert.That(limits.MaxActiveEffects, Is.EqualTo(1024));
+            Assert.That(limits.MaxModifiers, Is.EqualTo(16384));
+            Assert.That(limits.MaxPredictedAttributeChanges, Is.EqualTo(4096));
+        }
+
+        [Test]
         public void RemoveActiveEffect_RecomputesOnlyTouchedAttributes()
         {
             const int attributeCount = 32;

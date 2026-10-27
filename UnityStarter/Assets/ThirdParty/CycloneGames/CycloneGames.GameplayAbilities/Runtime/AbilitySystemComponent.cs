@@ -6895,6 +6895,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             try
             {
                 activeEffects.Clear();
+                foreach (GameplayAttribute attribute in attributes.Values)
+                {
+                    attribute?.LiveDependents?.Clear();
+                }
                 activeEffectIndexByEffect.Clear();
                 activeEffectByReconciliationId.Clear();
                 stackingIndexByTarget.Clear();
@@ -7603,40 +7607,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
 #if UNITY_EDITOR
             long scanTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 #endif
-
-            for (int i = 0; i < activeEffects.Count; i++)
+            // Each attribute owns its dependents, so the scan is a field read plus the dependent
+            // list. Unreal keeps the same relation in FAggregator::Dependents.
+            List<LiveDependencySlot> slots = changedAttribute.LiveDependents;
+            int slotCount = slots?.Count ?? 0;
+            for (int i = 0; i < slotCount; i++)
             {
-                var effect = activeEffects[i];
-                // Per-effect cached live-dependency modifier indices: null for the vast majority of
-                // effects (no non-snapshot attribute-based modifiers), skipping them with one check.
-                int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
-                if (liveIndices == null)
+                LiveDependencySlot slot = slots[i];
+                var spec = slot.Effect.Spec;
+                int modifierIndex = slot.ModifierIndex;
+#if UNITY_EDITOR
+                GASAggregationProbe.CountDependentsScanSlotVisit();
+#endif
+                GameplayAttribute targetAttribute = modifierIndex < spec.TargetAttributes.Length
+                    ? spec.TargetAttributes[modifierIndex]
+                    : null;
+                if (targetAttribute == null)
                 {
-                    continue;
+                    targetAttribute = GetAttribute(spec.Def.Modifiers[modifierIndex].AttributeName);
                 }
 
-                var spec = effect.Spec;
-                for (int k = 0; k < liveIndices.Length; k++)
+                if (targetAttribute != null && !ReferenceEquals(targetAttribute, changedAttribute))
                 {
-                    int m = liveIndices[k];
-#if UNITY_EDITOR
-                    GASAggregationProbe.CountDependentsScanSlotVisit();
-#endif
-                    if (!ReferenceEquals(spec.GetDependencySourceAttribute(m), changedAttribute))
-                    {
-                        continue;
-                    }
-
-                    GameplayAttribute targetAttribute = m < spec.TargetAttributes.Length ? spec.TargetAttributes[m] : null;
-                    if (targetAttribute == null)
-                    {
-                        targetAttribute = GetAttribute(spec.Def.Modifiers[m].AttributeName);
-                    }
-
-                    if (targetAttribute != null && !ReferenceEquals(targetAttribute, changedAttribute))
-                    {
-                        MarkAttributeDirty(targetAttribute);
-                    }
+                    MarkAttributeDirty(targetAttribute);
                 }
             }
 #if UNITY_EDITOR
