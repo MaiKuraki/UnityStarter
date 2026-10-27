@@ -121,6 +121,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             TrackStackingEffect(effect);
+            IndexLiveDependencies(effect);
             return true;
         }
 
@@ -132,6 +133,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             var removedEffect = _activeEffects[index];
+            UnindexLiveDependencies(removedEffect);
             if (removedEffect.ReconciliationId != 0 &&
                 _effectByReconciliationId.TryGetValue(removedEffect.ReconciliationId, out var indexed) &&
                 ReferenceEquals(indexed, removedEffect))
@@ -146,6 +148,81 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 _indexByEffect[_activeEffects[movedIndex]] = movedIndex;
             }
             return removedEffect;
+        }
+
+        /// <summary>
+        /// Registers the live (non-snapshotted) attribute reads of an effect on the attributes they
+        /// read. The attribute list is the same ownership shape as <c>AffectingEffects</c>: the
+        /// attribute owns the dependents, so nothing has to be reaped when the list empties.
+        /// </summary>
+        private void IndexLiveDependencies(ActiveGameplayEffect effect)
+        {
+            int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
+            if (liveIndices == null)
+            {
+                return;
+            }
+
+            GameplayAttribute[] sources = effect.GetLiveDependencySourceAttributes();
+            var spec = effect.Spec;
+            for (int k = 0; k < liveIndices.Length; k++)
+            {
+                int modifierIndex = liveIndices[k];
+                GameplayAttribute source = spec.GetDependencySourceAttribute(modifierIndex);
+                if (source == null)
+                {
+                    continue;
+                }
+
+                if (sources != null)
+                {
+                    sources[k] = source;
+                }
+
+                if (source.LiveDependents == null)
+                {
+                    // Starting capacity only; List grows geometrically for hot attributes.
+                    source.LiveDependents = new List<LiveDependencySlot>(4);
+                }
+
+                source.LiveDependents.Add(new LiveDependencySlot(effect, modifierIndex));
+            }
+        }
+
+        private void UnindexLiveDependencies(ActiveGameplayEffect effect)
+        {
+            int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
+            if (liveIndices == null)
+            {
+                return;
+            }
+
+            GameplayAttribute[] sources = effect.GetLiveDependencySourceAttributes();
+            if (sources == null)
+            {
+                return;
+            }
+
+            for (int k = 0; k < liveIndices.Length; k++)
+            {
+                GameplayAttribute source = sources[k];
+                sources[k] = null;
+                if (source?.LiveDependents == null)
+                {
+                    continue;
+                }
+
+                List<LiveDependencySlot> slots = source.LiveDependents;
+                int modifierIndex = liveIndices[k];
+                for (int i = slots.Count - 1; i >= 0; i--)
+                {
+                    if (ReferenceEquals(slots[i].Effect, effect) && slots[i].ModifierIndex == modifierIndex)
+                    {
+                        slots.RemoveAt(i);
+                        break;
+                    }
+                }
+            }
         }
 
         public void RebuildReconciliationIdIndex()
