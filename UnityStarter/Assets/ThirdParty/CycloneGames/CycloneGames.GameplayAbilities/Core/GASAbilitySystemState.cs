@@ -60,6 +60,8 @@ namespace CycloneGames.GameplayAbilities.Core
         private GASActiveEffectData[] activeEffects;
         private GASModifierData[] modifiers;
         private GASPredictedAttributeChange[] predictedAttributeChanges;
+        // Reused between removals so a narrowed recompute stays allocation-free.
+        private GASAttributeId[] removedAttributeIds = Array.Empty<GASAttributeId>();
 
         private int abilitySpecCount;
         private int attributeCount;
@@ -565,6 +567,69 @@ namespace CycloneGames.GameplayAbilities.Core
                 return false;
             }
 
+            int touchedCount = CollectTouchedAttributes(activeEffects[index], 0);
+            RemoveActiveEffectAtIndex(index);
+            RecalculateTouchedAttributes(touchedCount);
+            return true;
+        }
+
+        public int RemoveExpiredEffects(long currentTick)
+        {
+            int expiredCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                if (IsExpiredAt(activeEffects[i], currentTick))
+                {
+                    expiredCount++;
+                }
+            }
+
+            if (expiredCount == 0)
+            {
+                return 0;
+            }
+
+            // Collect before any removal: modifier indices are only valid against the current pool.
+            int touchedCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                var effect = activeEffects[i];
+                if (!IsExpiredAt(effect, currentTick))
+                {
+                    continue;
+                }
+
+                touchedCount = CollectTouchedAttributes(effect, touchedCount);
+                if (touchedCount < 0)
+                {
+                    break;
+                }
+            }
+
+            int removedCount = 0;
+            for (int i = activeEffectCount - 1; i >= 0; i--)
+            {
+                if (!IsExpiredAt(activeEffects[i], currentTick))
+                {
+                    continue;
+                }
+
+                RemoveActiveEffectAtIndex(i);
+                removedCount++;
+            }
+
+            RecalculateTouchedAttributes(touchedCount);
+            return removedCount;
+        }
+
+        private bool IsExpiredAt(in GASActiveEffectData effect, long currentTick)
+        {
+            return effect.DurationPolicy == GASEffectDurationPolicy.Duration &&
+                   currentTick - effect.StartTick >= effect.DurationTicks;
+        }
+
+        private void RemoveActiveEffectAtIndex(int index)
+        {
             var removed = activeEffects[index];
             RemoveModifierRange((int)removed.ModifierStartIndex, removed.ModifierCount);
             int lastIndex = activeEffectCount - 1;
@@ -575,30 +640,67 @@ namespace CycloneGames.GameplayAbilities.Core
 
             activeEffects[lastIndex] = default;
             activeEffectCount--;
-            RecalculateAllAttributes();
             Version++;
-            return true;
         }
 
-        public int RemoveExpiredEffects(long currentTick)
+        /// <summary>
+        /// Appends the distinct attribute ids targeted by an effect's modifiers to
+        /// <see cref="removedAttributeIds"/>. Returns the new count, or -1 when the scratch buffer
+        /// cannot grow, in which case the caller falls back to a full recompute.
+        /// </summary>
+        private int CollectTouchedAttributes(in GASActiveEffectData effect, int scratchCount)
         {
-            int removedCount = 0;
-            for (int i = activeEffectCount - 1; i >= 0; i--)
+            int effectModifierCount = effect.ModifierCount;
+            if (effectModifierCount <= 0)
             {
-                var effect = activeEffects[i];
-                if (effect.DurationPolicy != GASEffectDurationPolicy.Duration)
+                return scratchCount;
+            }
+
+            if (!EnsureArrayCapacity(
+                    ref removedAttributeIds,
+                    scratchCount + effectModifierCount,
+                    Limits.MaxModifiers))
+            {
+                return -1;
+            }
+
+            int end = (int)effect.ModifierStartIndex + effectModifierCount;
+            for (int i = (int)effect.ModifierStartIndex; i < end; i++)
+            {
+                var attributeId = modifiers[i].AttributeId;
+                bool alreadyCollected = false;
+                for (int existing = 0; existing < scratchCount; existing++)
+                {
+                    if (removedAttributeIds[existing] == attributeId)
+                    {
+                        alreadyCollected = true;
+                        break;
+                    }
+                }
+
+                if (alreadyCollected)
                 {
                     continue;
                 }
 
-                if (currentTick - effect.StartTick >= effect.DurationTicks)
-                {
-                    RemoveActiveEffect(effect.Handle);
-                    removedCount++;
-                }
+                removedAttributeIds[scratchCount++] = attributeId;
             }
 
-            return removedCount;
+            return scratchCount;
+        }
+
+        private void RecalculateTouchedAttributes(int touchedCount)
+        {
+            if (touchedCount < 0)
+            {
+                RecalculateAllAttributes();
+                return;
+            }
+
+            for (int i = 0; i < touchedCount; i++)
+            {
+                RecalculateAttribute(removedAttributeIds[i]);
+            }
         }
 
         public void CommitPrediction(GASPredictionKey predictionKey)

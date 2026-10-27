@@ -236,6 +236,176 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(firstAttributeRegistry.TryGetAttributeId("Mana", out _), Is.False);
         }
 
+        [Test]
+        public void RemoveActiveEffect_RecomputesOnlyTouchedAttributes()
+        {
+            const int attributeCount = 32;
+            var state = CreateAttributeState(attributeCount, out GASAttributeId[] attributeIds);
+
+            var residentModifiers = new[]
+            {
+                new GASModifierData(attributeIds[0], GASModifierOp.Multiply, GASFixedValue.FromFloat(1.1f)),
+                new GASModifierData(attributeIds[1], GASModifierOp.Multiply, GASFixedValue.FromFloat(1.1f))
+            };
+            for (int e = 0; e < 8; e++)
+            {
+                AddInfiniteEffect(state, e + 1, residentModifiers, 1);
+            }
+
+            var singleModifiers = new[]
+            {
+                new GASModifierData(attributeIds[0], GASModifierOp.Multiply, GASFixedValue.FromFloat(1.5f))
+            };
+            GASActiveEffectHandle handle = AddInfiniteEffect(state, 100, singleModifiers, 1);
+            var versions = SnapshotAggregatorVersions(state, attributeCount);
+
+            Assert.That(state.RemoveActiveEffect(handle), Is.True);
+
+            Assert.That(
+                SumAggregatorVersionDelta(state, attributeCount, versions),
+                Is.EqualTo(1L),
+                "Removal must recompute only the attributes the removed effect targeted.");
+
+            var reference = CreateAttributeState(attributeCount, out _);
+            for (int e = 0; e < 8; e++)
+            {
+                AddInfiniteEffect(reference, e + 1, residentModifiers, 1);
+            }
+
+            AssertAttributeValuesEqual(state, reference, attributeCount);
+        }
+
+        [Test]
+        public void RemoveExpiredEffects_RecomputesEachTouchedAttributeOnce()
+        {
+            const int attributeCount = 32;
+            const int expiredCount = 64;
+
+            var batch = CreateAttributeState(attributeCount, out GASAttributeId[] attributeIds);
+            var reference = CreateAttributeState(attributeCount, out _);
+
+            var expiredModifiers = new[]
+            {
+                new GASModifierData(attributeIds[0], GASModifierOp.Multiply, GASFixedValue.FromFloat(1.25f)),
+                new GASModifierData(attributeIds[1], GASModifierOp.Add, GASFixedValue.FromInt(3))
+            };
+            var survivorModifiers = new[]
+            {
+                new GASModifierData(attributeIds[1], GASModifierOp.Multiply, GASFixedValue.FromFloat(1.05f))
+            };
+
+            // Interleave a survivor so the batch has to compact around effects it keeps.
+            for (int e = 0; e < expiredCount; e++)
+            {
+                if (e == 8)
+                {
+                    AddInfiniteEffect(batch, 1000, survivorModifiers, 1);
+                    AddInfiniteEffect(reference, 1000, survivorModifiers, 1);
+                }
+
+                AddDurationEffect(batch, e + 1, expiredModifiers, startTick: 0, durationTicks: 1);
+            }
+
+            AddInfiniteEffect(batch, 1001, survivorModifiers, 1);
+            AddInfiniteEffect(reference, 1001, survivorModifiers, 1);
+
+            var versions = SnapshotAggregatorVersions(batch, attributeCount);
+
+            Assert.That(batch.RemoveExpiredEffects(1L), Is.EqualTo(expiredCount));
+
+            Assert.That(
+                SumAggregatorVersionDelta(batch, attributeCount, versions),
+                Is.EqualTo(2L),
+                "Batch expiry must recompute each touched attribute exactly once for the whole batch.");
+
+            AssertAttributeValuesEqual(batch, reference, attributeCount);
+
+            Assert.That(batch.ActiveEffectCount, Is.EqualTo(2));
+            Assert.That(batch.TryGetActiveEffectByIndex(0, out GASActiveEffectData first), Is.True);
+            Assert.That(batch.TryGetActiveEffectByIndex(1, out GASActiveEffectData second), Is.True);
+            Assert.That(first.EffectDefinitionId, Is.EqualTo(new GASDefinitionId(1000)));
+            Assert.That(second.EffectDefinitionId, Is.EqualTo(new GASDefinitionId(1001)));
+        }
+
+        private static GASAbilitySystemState CreateAttributeState(
+            int attributeCount,
+            out GASAttributeId[] attributeIds)
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            attributeIds = new GASAttributeId[attributeCount];
+            for (int i = 0; i < attributeCount; i++)
+            {
+                attributeIds[i] = new GASAttributeId(i + 1);
+                state.SetAttributeBase(attributeIds[i], GASFixedValue.FromInt(100));
+            }
+
+            return state;
+        }
+
+        private static GASActiveEffectHandle AddDurationEffect(
+            GASAbilitySystemState state,
+            int definitionId,
+            GASModifierData[] modifiers,
+            long startTick,
+            int durationTicks)
+        {
+            return state.AddActiveEffect(
+                new GASDefinitionId(definitionId),
+                default,
+                default,
+                GASEffectDurationPolicy.Duration,
+                1,
+                1,
+                startTick,
+                durationTicks,
+                modifiers,
+                0,
+                modifiers.Length);
+        }
+
+        private static uint[] SnapshotAggregatorVersions(GASAbilitySystemState state, int attributeCount)
+        {
+            var versions = new uint[attributeCount];
+            for (int i = 0; i < attributeCount; i++)
+            {
+                state.TryGetAttributeByIndex(i, out GASAttributeValueData attribute);
+                versions[i] = attribute.AggregatorVersion;
+            }
+
+            return versions;
+        }
+
+        private static long SumAggregatorVersionDelta(
+            GASAbilitySystemState state,
+            int attributeCount,
+            uint[] versions)
+        {
+            long total = 0L;
+            for (int i = 0; i < attributeCount; i++)
+            {
+                state.TryGetAttributeByIndex(i, out GASAttributeValueData attribute);
+                total += attribute.AggregatorVersion - versions[i];
+            }
+
+            return total;
+        }
+
+        private static void AssertAttributeValuesEqual(
+            GASAbilitySystemState actual,
+            GASAbilitySystemState expected,
+            int attributeCount)
+        {
+            for (int i = 0; i < attributeCount; i++)
+            {
+                actual.TryGetAttributeByIndex(i, out GASAttributeValueData actualAttribute);
+                expected.TryGetAttributeByIndex(i, out GASAttributeValueData expectedAttribute);
+                Assert.That(
+                    actualAttribute.CurrentValueRaw,
+                    Is.EqualTo(expectedAttribute.CurrentValueRaw),
+                    $"Attribute {i} diverged from the state built without the removed effects.");
+            }
+        }
+
         private static GASActiveEffectHandle AddInfiniteEffect(
             GASAbilitySystemState state,
             int definitionId,
