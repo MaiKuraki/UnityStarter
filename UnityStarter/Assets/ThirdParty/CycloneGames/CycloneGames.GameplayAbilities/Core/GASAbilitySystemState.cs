@@ -10,11 +10,11 @@ namespace CycloneGames.GameplayAbilities.Core
     public sealed class GASAbilitySystemLimits
     {
         /// <summary>
-        /// The defaults used when a caller does not pass limits. <see cref="MaxAttributes"/> is the
-        /// one to think about before raising: a dirty attribute propagates through live dependents
-        /// recursively, so the deepest possible chain equals the attribute count. 512 is the value
-        /// this repository measures (a 508-hop chain completes without stack exhaustion); larger
-        /// budgets are untested and a deep enough chain ends in an uncatchable StackOverflow.
+        /// The defaults used when a caller does not pass limits. <see cref="MaxAttributes"/> also
+        /// bounds dependency propagation depth: a dirty attribute walks live dependents recursively,
+        /// so the deepest possible chain equals the attribute count. 512 is covered by tests up to a
+        /// 508-hop chain; larger budgets are not, and a deep enough chain ends in an uncatchable
+        /// <see cref="System.StackOverflowException"/>.
         /// </summary>
         public static GASAbilitySystemLimits Default { get; } = new GASAbilitySystemLimits(
             maxAbilities: 256,
@@ -1091,12 +1091,12 @@ namespace CycloneGames.GameplayAbilities.Core
         /// </summary>
         private long EvaluateCurrentValueRaw(GASAttributeId attributeId, long baseValueRaw)
         {
-#if UNITY_EDITOR
+#if DEBUG
             GASCoreEvaluationProbe.Evaluations++;
             GASCoreEvaluationProbe.ChannelPasses++;
 #endif
-            Span<ChannelAccumulator> accumulators =
-                stackalloc ChannelAccumulator[GASModifierEvaluationChannels.MAX_CHANNEL_COUNT];
+            Span<GASModifierAggregation.Accumulator> accumulators =
+                stackalloc GASModifierAggregation.Accumulator[GASModifierEvaluationChannels.MAX_CHANNEL_COUNT];
             for (int c = 0; c < accumulators.Length; c++)
             {
                 accumulators[c].Reset();
@@ -1111,7 +1111,7 @@ namespace CycloneGames.GameplayAbilities.Core
                 for (int m = start; m < end; m++)
                 {
                     var modifier = modifiers[m];
-#if UNITY_EDITOR
+#if DEBUG
                     GASCoreEvaluationProbe.ModifierVisits++;
 #endif
                     if (modifier.AttributeId != attributeId)
@@ -1125,133 +1125,23 @@ namespace CycloneGames.GameplayAbilities.Core
                         continue;
                     }
 
-                    AccumulateModifier(ref accumulators[channelIndex], in modifier, in effect, unrealBiasSum);
+                    GASModifierAggregation.Accumulate(
+                        ref accumulators[channelIndex],
+                        modifier.Op,
+                        modifier.MagnitudeRaw,
+                        effect.StackCount,
+                        effect.StackMagnitudePolicy,
+                        unrealBiasSum);
                 }
             }
 
             long valueRaw = baseValueRaw;
             for (int c = 0; c < accumulators.Length; c++)
             {
-                valueRaw = FoldChannel(in accumulators[c], valueRaw, unrealBiasSum);
+                valueRaw = GASModifierAggregation.Fold(in accumulators[c], valueRaw, unrealBiasSum);
             }
 
             return valueRaw;
-        }
-
-        /// <summary>
-        /// Adds one modifier into its channel accumulator. Channels are folded afterwards, in
-        /// ascending channel order, so later channels receive the value produced by earlier ones.
-        /// </summary>
-        private static void AccumulateModifier(
-            ref ChannelAccumulator accumulator,
-            in GASModifierData modifier,
-            in GASActiveEffectData effect,
-            bool unrealBiasSum)
-        {
-            accumulator.HasModifier = true;
-            var factor = FPInt64.FromRaw(modifier.MagnitudeRaw);
-            switch (modifier.Op)
-            {
-                case GASModifierOp.Add:
-                    accumulator.Add += factor * FPInt64.FromInt(effect.StackCount);
-                    break;
-                case GASModifierOp.Multiply:
-                {
-                    var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
-                        modifier.MagnitudeRaw,
-                        effect.StackCount,
-                        effect.StackMagnitudePolicy));
-                    if (unrealBiasSum)
-                    {
-                        accumulator.MultiplicativeBias += stacked - FPInt64.One;
-                    }
-                    else
-                    {
-                        accumulator.Multiply *= stacked;
-                    }
-
-                    break;
-                }
-                case GASModifierOp.Division:
-                {
-                    if (modifier.MagnitudeRaw == 0)
-                    {
-                        break;
-                    }
-
-                    var stackedDivisor = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
-                        modifier.MagnitudeRaw,
-                        effect.StackCount,
-                        effect.StackMagnitudePolicy));
-                    // LinearBias scaling of a sub-1 magnitude can reach exactly zero
-                    // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
-                    if (stackedDivisor.RawValue == 0)
-                    {
-                        break;
-                    }
-
-                    if (unrealBiasSum)
-                    {
-                        accumulator.DivisionBias += stackedDivisor - FPInt64.One;
-                    }
-                    else
-                    {
-                        accumulator.Multiply /= stackedDivisor;
-                    }
-
-                    break;
-                }
-                case GASModifierOp.Override:
-                    accumulator.HasOverride = true;
-                    accumulator.OverrideValue = FPInt64.FromRaw(modifier.MagnitudeRaw);
-                    break;
-            }
-        }
-
-        private static long FoldChannel(in ChannelAccumulator accumulator, long inputValueRaw, bool unrealBiasSum)
-        {
-            if (!accumulator.HasModifier)
-            {
-                return inputValueRaw;
-            }
-
-            if (accumulator.HasOverride)
-            {
-                return accumulator.OverrideValue.RawValue;
-            }
-
-            var inputValue = FPInt64.FromRaw(inputValueRaw);
-            if (unrealBiasSum)
-            {
-                var product = (inputValue + accumulator.Add) * accumulator.MultiplicativeBias;
-                return accumulator.DivisionBias.RawValue != 0
-                    ? (product / accumulator.DivisionBias).RawValue
-                    : product.RawValue;
-            }
-
-            return ((inputValue + accumulator.Add) * accumulator.Multiply).RawValue;
-        }
-
-        private struct ChannelAccumulator
-        {
-            public FPInt64 Add;
-            public FPInt64 Multiply;
-            public FPInt64 MultiplicativeBias;
-            public FPInt64 DivisionBias;
-            public FPInt64 OverrideValue;
-            public bool HasOverride;
-            public bool HasModifier;
-
-            public void Reset()
-            {
-                Add = FPInt64.Zero;
-                Multiply = FPInt64.One;
-                MultiplicativeBias = FPInt64.One;
-                DivisionBias = FPInt64.One;
-                OverrideValue = FPInt64.Zero;
-                HasOverride = false;
-                HasModifier = false;
-            }
         }
 
         /// <summary>
@@ -1521,7 +1411,7 @@ namespace CycloneGames.GameplayAbilities.Core
         }
     }
 
-#if UNITY_EDITOR
+#if DEBUG
     /// <summary>
     /// Editor-only counters for the performance harness. Compiled out of player builds.
     /// </summary>

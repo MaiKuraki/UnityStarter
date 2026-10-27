@@ -1,3 +1,5 @@
+using CycloneGames.DeterministicMath;
+
 namespace CycloneGames.GameplayAbilities.Core
 {
     /// <summary>
@@ -102,6 +104,154 @@ namespace CycloneGames.GameplayAbilities.Core
         public static GASModifierEvaluationChannel Normalize(GASModifierEvaluationChannel channel)
         {
             return IsValid(channel) ? channel : GASModifierEvaluationChannel.Channel0;
+        }
+    }
+
+    /// <summary>
+    /// Channel aggregation contract. Hosts that keep their own attribute view must route
+    /// modifiers through these methods so every view produces identical values.
+    /// </summary>
+    public static class GASModifierAggregation
+    {
+        /// <summary>
+        /// Mutable per-channel state. Reset before each evaluation pass and fold afterwards in
+        /// ascending channel order.
+        /// </summary>
+        public struct Accumulator
+        {
+            public FPInt64 Add;
+            public FPInt64 Multiply;
+            public FPInt64 MultiplicativeBias;
+            public FPInt64 DivisionBias;
+            public FPInt64 OverrideValue;
+            public bool HasOverride;
+            public bool HasModifier;
+
+            /// <summary>Returns an accumulator in its reset state.</summary>
+            public static Accumulator Create()
+            {
+                var accumulator = default(Accumulator);
+                accumulator.Reset();
+                return accumulator;
+            }
+
+            public void Reset()
+            {
+                Add = FPInt64.Zero;
+                Multiply = FPInt64.One;
+                MultiplicativeBias = FPInt64.One;
+                DivisionBias = FPInt64.One;
+                OverrideValue = FPInt64.Zero;
+                HasOverride = false;
+                HasModifier = false;
+            }
+        }
+
+        /// <summary>
+        /// Adds one modifier to its channel accumulator. <paramref name="magnitudeRaw"/> is the
+        /// resolved magnitude before stack scaling; stacking and the aggregation mode are applied here.
+        /// </summary>
+        public static void Accumulate(
+            ref Accumulator accumulator,
+            GASModifierOp op,
+            long magnitudeRaw,
+            int stackCount,
+            GASStackMagnitudePolicy stackMagnitudePolicy,
+            bool unrealBiasSum)
+        {
+#if DEBUG
+            if (!accumulator.HasModifier && accumulator.MultiplicativeBias.RawValue == 0)
+            {
+                throw new System.InvalidOperationException(
+                    "Accumulator was used without Reset() or Create(); an uninitialised Multiply is zero.");
+            }
+#endif
+            accumulator.HasModifier = true;
+            var magnitude = FPInt64.FromRaw(magnitudeRaw);
+            switch (op)
+            {
+                case GASModifierOp.Add:
+                    accumulator.Add += magnitude * FPInt64.FromInt(stackCount);
+                    break;
+                case GASModifierOp.Multiply:
+                {
+                    var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                        magnitudeRaw,
+                        stackCount,
+                        stackMagnitudePolicy));
+                    if (unrealBiasSum)
+                    {
+                        accumulator.MultiplicativeBias += stacked - FPInt64.One;
+                    }
+                    else
+                    {
+                        accumulator.Multiply *= stacked;
+                    }
+
+                    break;
+                }
+                case GASModifierOp.Division:
+                {
+                    if (magnitudeRaw == 0)
+                    {
+                        break;
+                    }
+
+                    var stackedDivisor = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                        magnitudeRaw,
+                        stackCount,
+                        stackMagnitudePolicy));
+                    // LinearBias scaling of a sub-1 magnitude can reach exactly zero
+                    // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
+                    if (stackedDivisor.RawValue == 0)
+                    {
+                        break;
+                    }
+
+                    if (unrealBiasSum)
+                    {
+                        accumulator.DivisionBias += stackedDivisor - FPInt64.One;
+                    }
+                    else
+                    {
+                        accumulator.Multiply /= stackedDivisor;
+                    }
+
+                    break;
+                }
+                case GASModifierOp.Override:
+                    accumulator.HasOverride = true;
+                    accumulator.OverrideValue = magnitude;
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Folds one channel into the running value. A channel without modifiers returns the input
+        /// unchanged; an override channel replaces it.
+        /// </summary>
+        public static long Fold(in Accumulator accumulator, long inputValueRaw, bool unrealBiasSum)
+        {
+            if (!accumulator.HasModifier)
+            {
+                return inputValueRaw;
+            }
+
+            if (accumulator.HasOverride)
+            {
+                return accumulator.OverrideValue.RawValue;
+            }
+
+            var inputValue = FPInt64.FromRaw(inputValueRaw);
+            if (unrealBiasSum)
+            {
+                var product = (inputValue + accumulator.Add) * accumulator.MultiplicativeBias;
+                return accumulator.DivisionBias.RawValue != 0
+                    ? (product / accumulator.DivisionBias).RawValue
+                    : product.RawValue;
+            }
+
+            return ((inputValue + accumulator.Add) * accumulator.Multiply).RawValue;
         }
     }
 

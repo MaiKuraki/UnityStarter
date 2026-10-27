@@ -282,6 +282,50 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void Accumulator_UninitializedUseFailsInEditor()
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                var accumulator = default(GASModifierAggregation.Accumulator);
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Add,
+                    GASFixedValue.FromInt(1).RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: false);
+            });
+        }
+
+        [Test]
+        public void Accumulator_CreateProducesUsableState()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Multiply,
+                GASFixedValue.FromInt(2).RawValue,
+                1,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Add,
+                GASFixedValue.FromInt(5).RawValue,
+                1,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+
+            long folded = GASModifierAggregation.Fold(
+                in accumulator,
+                GASFixedValue.FromInt(10).RawValue,
+                unrealBiasSum: false);
+
+            // (10 + 5) * 2
+            Assert.That(folded, Is.EqualTo(GASFixedValue.FromInt(30).RawValue));
+        }
+
+        [Test]
         public void DefaultLimits_AreStable()
         {
             // The defaults are part of the contract: every consumer that does not pass explicit

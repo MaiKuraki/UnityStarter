@@ -1506,6 +1506,101 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
         }
 
+        [Test]
+        public void RuntimeAndCoreAggregation_ProduceIdenticalValues()
+        {
+            const int attributeCount = 4;
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.MirrorRuntime);
+            var attributes = new ChainAttributeSet(attributeCount);
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                for (int i = 0; i < attributeCount; i++)
+                {
+                    SetAttributeValues(attributes.ValueOf(i), 100f);
+                }
+
+                var mixed = new GameplayEffect(
+                    "MixedChannels",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("ChainAttr0", EAttributeModifierOperation.Add,
+                            new ScalableFloat(10f), GASModifierEvaluationChannel.Channel0),
+                        new ModifierInfo("ChainAttr1", EAttributeModifierOperation.Multiply,
+                            new ScalableFloat(2f), GASModifierEvaluationChannel.Channel1),
+                        new ModifierInfo("ChainAttr3", EAttributeModifierOperation.Division,
+                            new ScalableFloat(2f), GASModifierEvaluationChannel.Channel1),
+                        new ModifierInfo("ChainAttr3", EAttributeModifierOperation.Override,
+                            new ScalableFloat(42f), GASModifierEvaluationChannel.Channel3),
+                        new ModifierInfo("ChainAttr2", EAttributeModifierOperation.Add,
+                            new ScalableFloat(5f), GASModifierEvaluationChannel.Channel0)
+                    });
+                Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(mixed, asc)).Succeeded,
+                    Is.True);
+
+                var second = new GameplayEffect(
+                    "SecondEffect",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("ChainAttr1", EAttributeModifierOperation.Multiply,
+                            new ScalableFloat(1.5f), GASModifierEvaluationChannel.Channel2)
+                    });
+                Assert.That(asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(second, asc)).Succeeded,
+                    Is.True);
+
+                asc.Tick(1f / 60f, isServer: true);
+
+                GASAbilitySystemState coreState = asc.CoreState;
+                Assert.That(coreState.AttributeCount, Is.EqualTo(attributeCount));
+
+                int mismatches = 0;
+                for (int i = 0; i < attributeCount; i++)
+                {
+                    Assert.That(coreState.TryGetAttributeByIndex(i, out GASAttributeValueData coreAttribute), Is.True);
+                    Assert.That(coreAttribute.AttributeId.Value, Is.EqualTo(i + 1),
+                        "Core attribute ids are assigned in registration order.");
+
+                    GameplayAttribute runtimeAttribute = attributes.ValueOf(i);
+                    if (runtimeAttribute.CurrentValueRaw != coreAttribute.CurrentValueRaw)
+                    {
+                        mismatches++;
+                    }
+                }
+
+                // One hand-checked anchor so the comparison cannot pass while both sides are wrong.
+                Assert.That(attributes.ValueOf(3).CurrentValueRaw,
+                    Is.EqualTo(GASFixedValue.FromInt(42).RawValue),
+                    "Channel3 Override must replace the value evaluated by earlier channels.");
+
+                UnityEngine.Debug.Log(
+                    $"[Audit][RuntimeCoreParity] attributes={attributeCount} mismatches={mismatches} " +
+                    $"values={attributes.ValueOf(0).CurrentValueRaw},{attributes.ValueOf(1).CurrentValueRaw}," +
+                    $"{attributes.ValueOf(2).CurrentValueRaw},{attributes.ValueOf(3).CurrentValueRaw}");
+
+                Assert.That(mismatches, Is.Zero,
+                    "The runtime attribute path and the core mirror must aggregate to the same values.");
+            }
+            finally
+            {
+                asc.Dispose();
+            }
+        }
+
+        [Test]
+        public void ModifierInfo_NormalizesOutOfRangeChannel()
+        {
+            var modifier = new ModifierInfo(
+                "ChainAttr0",
+                EAttributeModifierOperation.Add,
+                new ScalableFloat(1f),
+                (GASModifierEvaluationChannel)10);
+
+            Assert.That(modifier.EvaluationChannel, Is.EqualTo(GASModifierEvaluationChannel.Channel0),
+                "Out-of-range channels normalize to Channel0 at the authoring boundary.");
+        }
+
         private sealed class ChainAttributeSet : AttributeSet
         {
             private readonly GameplayAttribute[] _attributes;
