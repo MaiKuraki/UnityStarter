@@ -381,29 +381,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // Bounded fixed point for tag-driven inhibition chains (A grants a tag that gates B).
         private const int MaxInhibitionPropagationPasses = 4;
 
-        private struct ModifierChannelAccumulator
-        {
-            public GASFixedValue Additive;
-            public GASFixedValue Multiplier;
-            public GASFixedValue MultiplicativeBias;
-            public GASFixedValue DivisionBias;
-            public GASFixedValue OverrideValue;
-            public bool HasModifier;
-            public bool HasOverride;
-
-            public void Reset()
-            {
-                Additive = GASFixedValue.Zero;
-                Multiplier = GASFixedValue.One;
-                MultiplicativeBias = GASFixedValue.One;
-                DivisionBias = GASFixedValue.One;
-                OverrideValue = GASFixedValue.Zero;
-                HasModifier = false;
-                HasOverride = false;
-            }
-        }
-
-        private readonly ModifierChannelAccumulator[] modifierChannelAccumulators;
+        private readonly GASModifierAggregation.Accumulator[] modifierChannelAccumulators;
         private List<ModifierInfo> instantExecutionOutputScratch;
         private List<InstantAttributeSnapshot> instantRollbackSnapshotScratch;
         private bool instantEffectExecutionInProgress;
@@ -1365,7 +1343,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             attributeSetsView = new GASReadOnlyListView<AttributeSet>(attributeSets, assertRuntimeAccess);
             attributes = AttributeAggregator.MutableAttributes;
             dirtyAttributes = AttributeAggregator.MutableDirtyAttributes;
-            modifierChannelAccumulators = new ModifierChannelAccumulator[GASModifierEvaluationChannels.MAX_CHANNEL_COUNT];
+            modifierChannelAccumulators = new GASModifierAggregation.Accumulator[GASModifierEvaluationChannels.MAX_CHANNEL_COUNT];
 
             activeEffects = ActiveEffectContainer.MutableActiveEffects;
             activeEffectsView = new GASReadOnlyListView<ActiveGameplayEffect>(activeEffects, assertRuntimeAccess);
@@ -5437,137 +5415,107 @@ namespace CycloneGames.GameplayAbilities.Runtime
 #endif
 
             var currentValue = attr.OwningSet.GetBaseFixedValue(attr);
-                for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
+            for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
+            {
+                modifierChannelAccumulators[channelIndex].Reset();
+            }
+
+            var affectingEffects = attr.AffectingEffects;
+            for (int i = 0; i < affectingEffects.Count; i++)
+            {
+                var effect = affectingEffects[i];
+                var def = effect.Spec.Def;
+
+                bool isInhibited = RefreshInhibitionState(effect);
+                if (def.Period > 0 || isInhibited)
                 {
-                    modifierChannelAccumulators[channelIndex].Reset();
+#if UNITY_EDITOR
+                    GASAggregationProbe.OnEffectSkipped();
+#endif
+                    continue;
                 }
 
-                var affectingEffects = attr.AffectingEffects;
-                for (int i = 0; i < affectingEffects.Count; i++)
+                var modifiers = def.Modifiers;
+                int stackCount = effect.StackCount;
+                GASStackMagnitudePolicy stackPolicy = def.Stacking.MagnitudePolicy;
+                // Iterate only the modifiers targeting this dirty attribute; the spec's
+                // per-attribute grouping yields indices in ascending modifier order.
+                int matchCount = effect.Spec.GetModifierIndicesForAttribute(attr, out int[] modifierIndices, out int modifierStart);
+                for (int k = 0; k < matchCount; k++)
                 {
-                    var effect = affectingEffects[i];
-                    var def = effect.Spec.Def;
-
-                    bool isInhibited = RefreshInhibitionState(effect);
-                    if (def.Period > 0 || isInhibited)
-                    {
+                    int m = modifierIndices[modifierStart + k];
 #if UNITY_EDITOR
-                        GASAggregationProbe.OnEffectSkipped();
-#endif
-                        continue;
-                    }
-
-                    var modifiers = def.Modifiers;
-                    int stackCount = effect.StackCount;
-                    GASStackMagnitudePolicy stackPolicy = def.Stacking.MagnitudePolicy;
-                    // Iterate only the modifiers targeting this dirty attribute; the spec's
-                    // per-attribute grouping yields indices in ascending modifier order.
-                    int matchCount = effect.Spec.GetModifierIndicesForAttribute(attr, out int[] modifierIndices, out int modifierStart);
-                    for (int k = 0; k < matchCount; k++)
-                    {
-                        int m = modifierIndices[modifierStart + k];
-#if UNITY_EDITOR
-                        GASAggregationProbe.OnModifierVisit(true);
+                    GASAggregationProbe.OnModifierVisit(true);
 #endif
 
-                        // For non-snapshotted dynamic magnitudes, recalculate live.
-                        long baseMagnitudeRaw;
-                        var mod = modifiers[m];
-                        if (mod.ShouldRecalculateLiveMagnitude)
-                        {
-                            effect.Spec.RecalculateCalculatedMagnitude(m);
-                            baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
-                        }
-                        else
-                        {
-                            baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
-                        }
-
-                        var factor = GASFixedValue.FromRaw(baseMagnitudeRaw);
-                        int channelIndex = (int)mod.EvaluationChannel;
-                        ref ModifierChannelAccumulator accumulator = ref modifierChannelAccumulators[channelIndex];
-                        accumulator.HasModifier = true;
-                        switch (mod.Operation)
-                        {
-                            case EAttributeModifierOperation.Add:
-                                accumulator.Additive += factor * GASFixedValue.FromInt(stackCount);
-                                break;
-                            case EAttributeModifierOperation.Multiply:
-                            {
-                                var stacked = GASFixedValue.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
-                                    baseMagnitudeRaw, stackCount, stackPolicy));
-                                if (unrealBiasSum)
-                                {
-                                    accumulator.MultiplicativeBias += stacked - GASFixedValue.One;
-                                }
-                                else
-                                {
-                                    accumulator.Multiplier *= stacked;
-                                }
-
-                                break;
-                            }
-                            case EAttributeModifierOperation.Division:
-                            {
-                                if (baseMagnitudeRaw == 0)
-                                {
-                                    break;
-                                }
-
-                                var stackedDivisor = GASFixedValue.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
-                                    baseMagnitudeRaw, stackCount, stackPolicy));
-                                // LinearBias scaling of a sub-1 magnitude can reach exactly zero
-                                // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
-                                if (stackedDivisor.RawValue == 0)
-                                {
-                                    break;
-                                }
-
-                                if (unrealBiasSum)
-                                {
-                                    accumulator.DivisionBias += stackedDivisor - GASFixedValue.One;
-                                }
-                                else
-                                {
-                                    accumulator.Multiplier /= stackedDivisor;
-                                }
-
-                                break;
-                            }
-                            case EAttributeModifierOperation.Override:
-                                accumulator.OverrideValue = factor;
-                                accumulator.HasOverride = true;
-                                break;
-                        }
-                    }
-                }
-
-                for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
-                {
-                    ref ModifierChannelAccumulator accumulator = ref modifierChannelAccumulators[channelIndex];
-                    if (!accumulator.HasModifier) continue;
-                    if (accumulator.HasOverride)
+                    // For non-snapshotted dynamic magnitudes, recalculate live.
+                    long baseMagnitudeRaw;
+                    var mod = modifiers[m];
+                    if (mod.ShouldRecalculateLiveMagnitude)
                     {
-                        currentValue = accumulator.OverrideValue;
-                    }
-                    else if (unrealBiasSum)
-                    {
-                        var product = (currentValue + accumulator.Additive) * accumulator.MultiplicativeBias;
-                        currentValue = accumulator.DivisionBias.RawValue != 0
-                            ? product / accumulator.DivisionBias
-                            : product;
+                        effect.Spec.RecalculateCalculatedMagnitude(m);
+                        baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
                     }
                     else
                     {
-                        currentValue = (currentValue + accumulator.Additive) * accumulator.Multiplier;
+                        baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
                     }
+
+                    int channelIndex = (int)mod.EvaluationChannel;
+                    if ((uint)channelIndex >= (uint)modifierChannelAccumulators.Length)
+                    {
+                        continue;
+                    }
+
+                    GASModifierAggregation.Accumulate(
+                        ref modifierChannelAccumulators[channelIndex],
+                        ConvertModifierOp(mod.Operation),
+                        baseMagnitudeRaw,
+                        stackCount,
+                        stackPolicy,
+                        unrealBiasSum);
                 }
+            }
+
+            bool overflowed = false;
+            for (int channelIndex = 0; channelIndex < modifierChannelAccumulators.Length; channelIndex++)
+            {
+                currentValue = GASFixedValue.FromRaw(GASModifierAggregation.Fold(
+                    ref modifierChannelAccumulators[channelIndex],
+                    currentValue.RawValue,
+                    unrealBiasSum));
+                overflowed |= modifierChannelAccumulators[channelIndex].Overflowed;
+            }
+
+            ReportAggregationOverflow(attr, overflowed, currentValue);
 
             attr.OwningSet.PreAttributeChange(attr, ref currentValue);
             // CurrentValue is derived from a mutation that already dirtied this attribute and
             // reserved its replication version. Do not open a second transaction on the later
             // aggregation pass, especially when the original reservation consumed MaxValue.
             attr.SetCurrentValueRawUnchecked(currentValue.RawValue);
+        }
+
+        /// <summary>
+        /// Warns once per attribute while its aggregation keeps exceeding Q32.32, and re-arms
+        /// after a clean recalculation so a later overflow is reported again.
+        /// </summary>
+        private void ReportAggregationOverflow(GameplayAttribute attribute, bool overflowed, GASFixedValue value)
+        {
+            if (overflowed)
+            {
+                if (!attribute.OverflowReported)
+                {
+                    attribute.OverflowReported = true;
+                    Log.Warning(
+                        $"Attribute '{attribute.Name}' aggregation exceeded the fixed-point range; " +
+                        $"the stored value ({value.ToDouble():F2}) is the wrapped result of an overflow.");
+                }
+            }
+            else if (attribute.OverflowReported)
+            {
+                attribute.OverflowReported = false;
+            }
         }
 
         /// <summary>
