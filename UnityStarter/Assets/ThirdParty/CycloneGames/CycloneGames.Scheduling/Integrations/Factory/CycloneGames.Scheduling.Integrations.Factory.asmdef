@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Scheduling.Integrations.Factory",
+    "rootNamespace": "CycloneGames.Scheduling.Integrations.Factory",
+    "references": [
+        "CycloneGames.Scheduling.Core",
+        "CycloneGames.Factory.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

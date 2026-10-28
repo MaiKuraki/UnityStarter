@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Scheduling.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.Scheduling.Tests.PlayMode",
+    "references": [
+        "CycloneGames.Scheduling.Core",
+        "CycloneGames.Scheduling.Runtime",
+        "CycloneGames.Scheduling.Integrations.Factory",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime",
+        "UnityEngine.TestRunner"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.Scheduling.Tests.Editor",
+    "rootNamespace": "CycloneGames.Scheduling.Tests.Editor",
+    "references": [
+        "CycloneGames.Scheduling.Core",
+        "CycloneGames.Scheduling.Runtime",
+        "CycloneGames.Scheduling.Integrations.Factory",
+        "CycloneGames.Factory.Runtime",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
