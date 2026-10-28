@@ -16,13 +16,18 @@ namespace CycloneGames.Scheduling.Runtime
 
         [SerializeField]
         [Min(0)]
-        [Tooltip("Maximum Step or shutdown termination calls per Update. Zero pauses execution and draining.")]
+        [Tooltip("Maximum Step or shutdown termination calls per Update. Zero pauses normal work; shutdown still advances one item per Update.")]
         private int maxStepsPerFrame = 64;
 
         [SerializeField]
         [Min(0)]
         [Tooltip("Soft time budget in milliseconds. A running Step cannot be preempted. Zero pauses execution.")]
         private double softBudgetMilliseconds = 2.0;
+
+        [SerializeField]
+        [Min(0)]
+        [Tooltip("Hard ceiling applied to the soft budget. Bounds the worst-case single-frame cost even when the soft budget is set to infinity.")]
+        private double maxBudgetMilliseconds = 4.0;
 
         private WorkScheduler scheduler;
         private bool ownsScheduler;
@@ -45,7 +50,15 @@ namespace CycloneGames.Scheduling.Runtime
         }
 
         public bool OwnsScheduler => scheduler != null && ownsScheduler;
+
+        /// <summary>True while the driver is terminating queued work in batches instead of stepping it.</summary>
         public bool IsShuttingDown => isShuttingDown;
+
+        /// <summary>
+        /// True when a zero step budget forces the shutdown drain to advance one item per Update
+        /// instead of standing still. Exposed so a host or debug overlay can surface the override.
+        /// </summary>
+        public bool IsShutdownDrainForced => isShuttingDown && maxStepsPerFrame == 0;
 
         public int MaxStepsPerFrame
         {
@@ -59,9 +72,16 @@ namespace CycloneGames.Scheduling.Runtime
             set => softBudgetMilliseconds = IsValidBudget(value) ? value : 0;
         }
 
+        public double MaxBudgetMilliseconds
+        {
+            get => maxBudgetMilliseconds;
+            set => maxBudgetMilliseconds = IsValidBudget(value) ? value : 0;
+        }
+
         /// <summary>
-        /// Binds an externally owned scheduler before this driver accepts work. The external owner retains
-        /// all shutdown responsibility. Binding after this driver has accepted work is rejected.
+        /// Binds an externally owned scheduler before this driver holds outstanding work. The
+        /// external owner retains all shutdown responsibility. Binding while this driver still
+        /// has queued work is rejected.
         /// </summary>
         public void Bind(WorkScheduler externalScheduler)
         {
@@ -89,15 +109,15 @@ namespace CycloneGames.Scheduling.Runtime
                         "The driver already owns this scheduler instance. External ownership must use a distinct instance.");
                 }
 
-                if (scheduler.GetSnapshot().AcceptedCount != 0)
+                if (scheduler.OutstandingCount != 0)
                 {
                     throw new System.InvalidOperationException(
-                        "Cannot replace a scheduler after it has accepted work.");
+                        "Cannot replace a scheduler that still has outstanding work.");
                 }
 
                 if (ownsScheduler)
                 {
-                    scheduler.Shutdown();
+                    scheduler.Dispose();
                 }
             }
 
@@ -107,8 +127,9 @@ namespace CycloneGames.Scheduling.Runtime
         }
 
         /// <summary>
-        /// Begins a bounded shutdown of the self-created scheduler. Update terminates queued work in batches
-        /// instead of executing further Steps. External schedulers are shut down by their composition root.
+        /// Begins a bounded shutdown of the self-created scheduler. Update terminates queued work in
+        /// batches instead of executing further Steps. External schedulers are shut down by their
+        /// composition root.
         /// </summary>
         public void BeginShutdown()
         {
@@ -134,8 +155,9 @@ namespace CycloneGames.Scheduling.Runtime
         }
 
         /// <summary>
-        /// Stops this host immediately. A self-created scheduler is synchronously shut down; an externally
-        /// owned scheduler is detached without cancellation and remains the external owner's responsibility.
+        /// Stops this host immediately. A self-created scheduler is synchronously shut down; an
+        /// externally owned scheduler is detached without cancellation and remains the external
+        /// owner's responsibility.
         /// </summary>
         public void Shutdown()
         {
@@ -179,7 +201,10 @@ namespace CycloneGames.Scheduling.Runtime
 
             if (isShuttingDown)
             {
-                scheduler.ShutdownStep(maxStepsPerFrame);
+                // A zero step budget pauses normal work, but shutdown must still advance,
+                // otherwise the drain never completes and no OnTerminated callback is issued.
+                int drainBudget = maxStepsPerFrame > 0 ? maxStepsPerFrame : 1;
+                scheduler.ShutdownStep(drainBudget);
                 if (scheduler.OutstandingCount == 0)
                 {
                     scheduler = null;
@@ -191,7 +216,18 @@ namespace CycloneGames.Scheduling.Runtime
                 return;
             }
 
-            scheduler.Tick(maxStepsPerFrame, softBudgetMilliseconds);
+            scheduler.Tick(maxStepsPerFrame, EffectiveBudgetMilliseconds());
+        }
+
+        private double EffectiveBudgetMilliseconds()
+        {
+            double budget = softBudgetMilliseconds;
+            if (double.IsPositiveInfinity(budget) || budget > maxBudgetMilliseconds)
+            {
+                budget = maxBudgetMilliseconds;
+            }
+
+            return budget;
         }
 
         private void OnValidate()
@@ -201,6 +237,11 @@ namespace CycloneGames.Scheduling.Runtime
             if (!IsValidBudget(softBudgetMilliseconds))
             {
                 softBudgetMilliseconds = 0;
+            }
+
+            if (!IsValidBudget(maxBudgetMilliseconds))
+            {
+                maxBudgetMilliseconds = 4.0;
             }
         }
 

@@ -217,7 +217,8 @@ namespace CycloneGames.Scheduling.Tests.Editor
             Assert.That(second.Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
             Assert.That(scheduler.Tick(1, 1), Is.Zero);
             Assert.That(scheduler.TrySchedule(new TestWorkItem(), out _), Is.False);
-            Assert.That(scheduler.GetSnapshot().CancelledCount, Is.EqualTo(2));
+            Assert.That(scheduler.GetSnapshot().CancelledCount, Is.Zero);
+            Assert.That(scheduler.GetSnapshot().ShutdownCount, Is.EqualTo(2));
             AssertInvariant(scheduler);
         }
 
@@ -312,7 +313,6 @@ namespace CycloneGames.Scheduling.Tests.Editor
         [TestCase(TestReentrantOperation.Cancel)]
         [TestCase(TestReentrantOperation.Tick)]
         [TestCase(TestReentrantOperation.Shutdown)]
-        [TestCase(TestReentrantOperation.Snapshot)]
         public void ReentrantStepOperationFaultsRegistration(TestReentrantOperation operation)
         {
             var scheduler = new WorkScheduler(1);
@@ -332,10 +332,30 @@ namespace CycloneGames.Scheduling.Tests.Editor
             var scheduler = new WorkScheduler(1);
             var item = new TestWorkItem();
             item.ReentrantScheduler = scheduler;
+            item.ReentrantOperation = TestReentrantOperation.Cancel;
+            item.ReenterOnStep = false;
             item.ReenterFromTermination = true;
             scheduler.TrySchedule(item, out _);
 
             Assert.Throws<InvalidOperationException>(() => scheduler.Tick(1, 1));
+            Assert.That(item.TerminationCount, Is.EqualTo(1));
+            Assert.That(scheduler.OutstandingCount, Is.Zero);
+            AssertInvariant(scheduler);
+        }
+
+        [Test]
+        public void SnapshotFromTerminationCallbackIsAllowed()
+        {
+            var scheduler = new WorkScheduler(1);
+            var item = new TestWorkItem();
+            item.ReentrantScheduler = scheduler;
+            item.ReentrantOperation = TestReentrantOperation.Snapshot;
+            item.ReenterOnStep = false;
+            item.ReenterFromTermination = true;
+            scheduler.TrySchedule(item, out _);
+
+            Assert.DoesNotThrow(() => scheduler.Tick(1, 1));
+            Assert.That(item.Reason, Is.EqualTo(WorkTerminationReason.Completed));
             Assert.That(item.TerminationCount, Is.EqualTo(1));
             Assert.That(scheduler.OutstandingCount, Is.Zero);
             AssertInvariant(scheduler);
@@ -399,6 +419,7 @@ namespace CycloneGames.Scheduling.Tests.Editor
             SchedulerSnapshot snapshot = scheduler.GetSnapshot();
             long terminalAndOutstanding = snapshot.CompletedCount
                 + snapshot.CancelledCount
+                + snapshot.ShutdownCount
                 + snapshot.FaultedCount
                 + snapshot.OutstandingCount;
             Assert.That(snapshot.AcceptedCount, Is.EqualTo(terminalAndOutstanding));

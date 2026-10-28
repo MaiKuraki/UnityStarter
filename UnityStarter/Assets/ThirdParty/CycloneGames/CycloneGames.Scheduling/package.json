@@ -1,8 +1,8 @@
 {
   "name": "com.cyclone-games.scheduling",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "displayName": "CycloneGames.Scheduling",
-  "description": "Bounded cooperative work scheduling for Unity and pure C# hosts, with FIFO fairness, soft frame budgets, explicit cancellation, deterministic shutdown, and optional Factory maintenance adapters.",
+  "description": "Bounded cooperative work scheduling for Unity and pure C# hosts, with lane priority, a bounded starvation window, soft frame budgets, fault isolation and deterministic shutdown.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},
