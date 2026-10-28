@@ -30,6 +30,7 @@ namespace CycloneGames.Scheduling.Tests.Editor
         public double StepCostMilliseconds { get; set; }
         public WorkScheduler ReentrantScheduler { get; set; }
         public TestReentrantOperation ReentrantOperation { get; set; }
+        public bool ReenterOnStep { get; set; } = true;
         public bool ReenterFromTermination { get; set; }
 
         public TestWorkItem(int stepsUntilCompleted = 1)
@@ -43,7 +44,7 @@ namespace CycloneGames.Scheduling.Tests.Editor
             ExecutionOrder?.Add(Id);
             Clock?.Advance(StepCostMilliseconds);
 
-            if (ReentrantScheduler != null)
+            if (ReentrantScheduler != null && ReenterOnStep)
             {
                 ExecuteReentrantOperation();
             }
@@ -67,7 +68,7 @@ namespace CycloneGames.Scheduling.Tests.Editor
             Reason = reason;
             if (ReenterFromTermination)
             {
-                ReentrantScheduler.GetSnapshot();
+                ExecuteReentrantOperation();
             }
 
             if (TerminationFailure != null)

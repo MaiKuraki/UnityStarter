@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Scheduling splits deferred work across frames. You give it items that make progress in small steps; it runs a bounded number of steps each update and leaves the rest queued.
+CycloneGames.Scheduling spreads deferred work across frames. You hand it items that make progress in small steps; it runs a bounded number of steps per update and leaves the rest queued.
 
 It is not a general job system. It runs on one thread, keeps a fixed-size queue, and cannot interrupt a Step that has already started.
 
@@ -10,16 +10,18 @@ It is not a general job system. It runs on one thread, keeps a fixed-size queue,
 
 - [What it does](#what-it-does)
 - [Quick start](#quick-start)
+- [Lanes and starvation](#lanes-and-starvation)
 - [The work item contract](#the-work-item-contract)
-- [Budgets and fairness](#budgets-and-fairness)
+- [Budgets](#budgets)
+- [Diagnostics](#diagnostics)
 - [A full queue](#a-full-queue)
-- [Cancellation and termination](#cancellation-and-termination)
+- [Cancellation and handles](#cancellation-and-handles)
+- [Faults](#faults)
 - [Shutdown](#shutdown)
 - [Unity host](#unity-host)
 - [DI and ownership](#di-and-ownership)
 - [Factory integration](#factory-integration)
-- [Storage and allocation](#storage-and-allocation)
-- [Thread and I/O boundaries](#thread-and-io-boundaries)
+- [Storage, allocation and threading](#storage-allocation-and-threading)
 - [Common mistakes](#common-mistakes)
 - [Tests](#tests)
 
@@ -31,31 +33,32 @@ Do not use it for input, physics, deterministic simulation, network lockstep, au
 
 The scheduler moves cost around. It does not reduce total work, and it cannot preempt a long synchronous call inside one Step.
 
-It is not a fix for every frame spike. A spike from one long Step stays unless that Step is split; spikes from rendering, GPU submission, or GC are outside this module.
-
 ## Quick start
 
 ```csharp
-using System;
 using CycloneGames.Scheduling.Core;
 
-public sealed class BatchWorkItem : IWorkItem
+var scheduler = new WorkScheduler(capacity: 128);
+var work = new BatchWorkItem(new int[1000], batchSize: 4);
+
+scheduler.TrySchedule(work, WorkLane.Normal, out WorkItemHandle handle);
+scheduler.Tick(maxSteps: 8, softBudgetMs: 2.0);
+```
+
+`Tick` runs at most `maxSteps` items. Call it once per update. Call `TrySchedule`, `Cancel`, `ShutdownStep`, `Shutdown`, and `GetSnapshot` from the same thread.
+
+The item used above:
+
+```csharp
+sealed class BatchWorkItem : IWorkItem
 {
     private readonly int[] data;
     private readonly int batchSize;
     private int index;
 
-    public int ProcessedCount => index;
-    public WorkTerminationReason? TerminationReason { get; private set; }
-
-    public BatchWorkItem(int[] data, int batchSize = 4)
+    public BatchWorkItem(int[] data, int batchSize)
     {
-        this.data = data ?? throw new ArgumentNullException(nameof(data));
-        if (batchSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(batchSize));
-        }
-
+        this.data = data;
         this.batchSize = batchSize;
     }
 
@@ -73,26 +76,29 @@ public sealed class BatchWorkItem : IWorkItem
 
     public void OnTerminated(WorkTerminationReason reason)
     {
-        TerminationReason = reason;
     }
 }
 ```
 
-Drive it on the thread that created the scheduler:
+## Lanes and starvation
+
+Four lanes, drained from `Immediate` to `Background`:
+
+| Lane | Use for |
+| --- | --- |
+| `Immediate` | Must make progress this frame. Bypasses lower lanes. |
+| `High` | Time sensitive, tolerant of a frame or two. |
+| `Normal` | Default. |
+| `Background` | Idle-time maintenance: cache sweeps, pool trimming, index rebuilds. |
+
+The highest non-empty lane is drained first. A lane that never empties cannot lock out lower lanes: any non-empty lane is guaranteed a step at least every `StarvationLimitTicks` ticks (default 4).
 
 ```csharp
-var scheduler = new WorkScheduler(capacity: 128);
-var work = new BatchWorkItem(new int[1000], batchSize: 4);
-
-if (scheduler.TrySchedule(work, out WorkItemHandle handle))
-{
-    // The scheduler owns the registration from here.
-}
-
-scheduler.Tick(maxSteps: 8, softBudgetMs: 2.0);
+scheduler.TrySchedule(criticalWork, WorkLane.Immediate, out _);
+scheduler.TrySchedule(cacheSweep, WorkLane.Background, out _);
 ```
 
-`Tick` runs at most `maxSteps` items. Call it once per update. Call `TrySchedule`, `Cancel`, `ShutdownStep`, `Shutdown`, and `GetSnapshot` from the same thread.
+Within one lane the order is FIFO and running items go to that lane's tail, so no item runs twice in one Tick.
 
 ## The work item contract
 
@@ -111,27 +117,23 @@ Every accepted registration ends in exactly one `OnTerminated` call:
 | Reason | Meaning |
 | --- | --- |
 | `Completed` | `Step` returned `Completed`. |
-| `Cancelled` | `Cancel` stopped the item first. |
-| `Faulted` | `Step` threw or returned an invalid value. |
+| `Cancelled` | `Cancel` stopped the item. |
+| `Faulted` | `Step` threw or returned an undefined value. |
 | `Shutdown` | Shutdown stopped the remaining work. |
 
 If `TrySchedule` returns `false`, the registration was never accepted and `OnTerminated` is not called. The caller still owns the item.
 
-One instance cannot be queued twice at once.
+One instance cannot be queued twice at once. In Editor and Development builds a duplicate registration throws immediately; Release Player builds omit the check and leave the contract to the caller.
 
-## Budgets and fairness
-
-```csharp
-scheduler.Tick(maxSteps: 8, softBudgetMs: double.PositiveInfinity);
-```
-
-`maxSteps` caps the number of `Step` calls per Tick. It says nothing about how long one Step takes.
-
-`softBudgetMs` caps admission by time. The scheduler checks the clock before starting later Steps, but it cannot stop a running Step, so a Tick can exceed the budget.
+## Budgets
 
 ```csharp
 scheduler.Tick(maxSteps: 64, softBudgetMs: 2.0);
 ```
+
+`maxSteps` caps the number of `Step` calls per Tick. `softBudgetMs` caps admission by time. The scheduler checks the clock before starting later Steps, but it cannot stop a running Step, so the budget bounds admission rather than elapsed time.
+
+A positive infinity budget disables clock-based admission and keeps only the step limit.
 
 Read the counters instead of assuming the budget held:
 
@@ -141,32 +143,36 @@ long overBudgetTicks = snapshot.OverBudgetTickCount;
 double lastTickMs = snapshot.LastTickMilliseconds;
 ```
 
-Running items go to the back of the queue. With items `A`, `B`, `C` and a Step budget of two:
+## Diagnostics
 
-| Tick | Runs | Queue after |
-| --- | --- | --- |
-| 1 | `A`, `B` | `C`, `A`, `B` |
-| 2 | `C`, `A` | `B`, `C`, `A` |
-| 3 | `B`, `C` | `A`, `B`, `C` |
+`SchedulerSnapshot` separates the four termination reasons, so an operator can tell "the caller cancelled this" from "shutdown drained it":
 
-No item runs twice in one Tick.
+```csharp
+long cancelled = snapshot.CancelledCount;   // explicit Cancel
+long drained   = snapshot.ShutdownCount;    // Shutdown / ShutdownStep
+long faulted   = snapshot.FaultedCount;     // Step threw
+```
+
+Per-step attribution is opt-in, because it costs a second clock conversion on every step:
+
+```csharp
+scheduler.TrackStepTiming = true;   // enable while diagnosing, then turn it off
+
+double worst = snapshot.SlowestStepMilliseconds;
+WorkItemHandle culprit = snapshot.SlowestStep;   // diagnostic; resolves only while the slot is occupied
+```
+
+Both stay zero while TrackStepTiming is off.
+
+`GetSnapshot` is safe to call from inside a Step. A work item can report its own progress without tearing scheduler state.
 
 ## A full queue
 
 Capacity is fixed at construction. When the queue is full, `TrySchedule` returns `false` and a default handle, and increments `RejectedCount`. Accepted items are never dropped silently.
 
-Keep the same instance and retry later:
+If the queue is full often, reduce production, split across lanes, or merge items. A bigger capacity just adds memory and queue latency.
 
-```csharp
-if (!scheduler.TrySchedule(work, out handle))
-{
-    // Retry on a later update with the same instance.
-}
-```
-
-If the queue is full often, reduce production or merge items. A bigger capacity just adds memory and queue latency.
-
-## Cancellation and termination
+## Cancellation and handles
 
 ```csharp
 if (scheduler.Cancel(handle))
@@ -175,29 +181,25 @@ if (scheduler.Cancel(handle))
 }
 ```
 
-`Cancel` is O(1). The scheduler drops its reference before calling `OnTerminated(Cancelled)`. A default, stale, or released handle returns `false`.
+`Cancel` is O(1). The scheduler drops its reference before calling `OnTerminated(Cancelled)`.
 
-`GetSnapshot` reports the counters. They follow:
+A handle carries the slot, a generation and the issuing scheduler identity. A default, stale, released, or foreign handle returns `false` — using a handle from another scheduler can no longer cancel an unrelated item.
 
-```text
-AcceptedCount == CompletedCount + FaultedCount + CancelledCount + OutstandingCount
-```
+## Faults
 
-`RejectedCount` is separate because rejected work was never accepted.
+A Step that throws terminates only that registration as `Faulted`. The rest of the queue still gets its step in the same Tick, then the failures are rethrown once the tick completes: the original exception when exactly one item failed, an `AggregateException` otherwise.
 
-When `Step` throws, the item becomes `Faulted`, the exception propagates, and the other items stay queued. A `Step` or `OnTerminated` callback that throws does not leave a half-released registration.
+That keeps one broken item from stealing every other item's frame budget.
 
-Do not call `TrySchedule`, `Cancel`, `Tick`, `ShutdownStep`, `Shutdown`, or `GetSnapshot` from inside `Step` or `OnTerminated`.
+Do not call `TrySchedule`, `Cancel`, `Tick`, `ShutdownStep`, `Shutdown`, or `Dispose` from inside `Step` or `OnTerminated`.
 
 ## Shutdown
-
-Final cleanup:
 
 ```csharp
 scheduler.Shutdown();
 ```
 
-This stops admission and terminates every remaining item synchronously. It attempts all callbacks before throwing an aggregate failure, and it is safe to call twice.
+This stops admission and terminates every remaining item synchronously, attempting all callbacks before throwing an aggregate failure. It is safe to call twice.
 
 For a large queue, drain it in batches instead:
 
@@ -206,7 +208,7 @@ scheduler.ShutdownStep(0);  // Stop admission, cancel nothing yet.
 scheduler.ShutdownStep(32); // Terminate up to 32 items, no Steps.
 ```
 
-`IsShutdown` turns true when admission stops. `IsShutdownCompleted` turns true only when the queue is empty. Callback failures are collected per batch, and later `ShutdownStep` calls continue the drain. The count budget does not bound one callback's cost.
+`Dispose` drains the same way but does not throw on callback failures; misuse such as a wrong thread or a call from inside a Step still throws.
 
 ## Unity host
 
@@ -215,128 +217,64 @@ Add `SchedulingDriver` to a GameObject yourself. The package never creates runti
 | Setting | Meaning |
 | --- | --- |
 | `Capacity` | Fixed registration capacity. Recreate the host to change it. |
-| `Max Steps Per Frame` | Steps or shutdown terminations per Update. Zero pauses both. |
+| `Max Steps Per Frame` | Steps or shutdown terminations per Update. Zero pauses normal work. |
 | `Soft Budget Milliseconds` | Soft time budget. Zero pauses normal work. |
+| `Max Budget Milliseconds` | Hard ceiling on the soft budget, so an infinite soft budget still cannot stall a frame. |
 
-Register work:
-
-```csharp
-using CycloneGames.Scheduling.Core;
-using CycloneGames.Scheduling.Runtime;
-
-public static class SchedulingExample
-{
-    public static void Configure(SchedulingDriver driver, IWorkItem work)
-    {
-        driver.Scheduler.TrySchedule(work, out _);
-    }
-}
-```
-
-`Update` drives normal work or a bounded shutdown. Disabling the component pauses the queue without cancelling it. `OnApplicationQuit` and `OnDestroy` finish whatever is left immediately.
-
-For a scheduler the host created, `driver.BeginShutdown()` switches Update from Steps to bounded termination. If the host is destroyed mid-drain, the rest is still cleaned up.
-
-A destroyed driver is fake-null in Unity. Accessing `driver.Scheduler` after destruction throws rather than creating a new scheduler. Unity may destroy objects after the Step that requested the destroy, so fake-null checks and main-thread ownership stay in the Unity integration code.
+`Update` drives normal work or a bounded shutdown. Disabling the component pauses the queue without cancelling it. A zero step budget does not stall shutdown: the drain advances at least one item per Update, and `IsShutdownDrainForced` reports when that override is active.
 
 ## DI and ownership
 
-Create the scheduler directly for non-DI use:
-
-```csharp
-var scheduler = new WorkScheduler(capacity: 256);
-// Drive Tick from an owner you control.
-```
-
-For DI, let the container own the scheduler and bind it to the host:
+Create the scheduler directly for non-DI use, or let the container own it and bind it to the host:
 
 ```csharp
 var scheduler = new WorkScheduler(capacity: 256);
 driver.Bind(scheduler);
 ```
 
-Binding is allowed after `Awake` only while the driver's own scheduler has accepted no work. An external scheduler may already hold work from the composition root.
+`Bind` is rejected while the driver still owns outstanding work; a drained scheduler can be replaced.
 
 | Operation | Host-owned scheduler | Bound scheduler |
 | --- | --- | --- |
 | Driver Update | Runs work | Runs work |
 | `driver.BeginShutdown()` | Starts bounded shutdown | Rejected |
 | `driver.Shutdown()` / `OnDestroy` | Shuts down | Detaches, cancels nothing |
-| Final owner | Driver | Composition root |
-
-`OwnsScheduler` tells you which case you are in. The external owner must drain before destroying resources its items reference.
 
 ## Factory integration
 
-The Factory integration adapts existing bounded pool-maintenance calls.
+The Factory integration adapts existing bounded pool-maintenance calls and compiles only when `com.cyclone-games.factory` is installed. The warmup adapter clamps the count reported by a pool to the requested range, so a pool cannot drive a negative request or overshoot the requested count.
 
-This integration compiles only when `com.cyclone-games.factory` is installed as a UPM package. The Factory package defines `CYCLONEGAMES_HAS_FACTORY` through `versionDefines`, and the integration assembly and its tests compile only when that symbol is present. Without Factory, the rest of the package still compiles.
+## Storage, allocation and threading
 
-```csharp
-using CycloneGames.Scheduling.Integrations.Factory;
+The scheduler allocates its slot array and four lane arrays once at construction. Per registration:
 
-var warmup = new PoolWarmupWorkItem(pool, count: 100, batchSize: 4);
-scheduler.TrySchedule(warmup, out _);
+- 24 bytes per slot, plus no separate free-slot array.
 
-var trim = new PoolTrimInactiveWorkItem(pool, targetInactiveCount: 16, batchSize: 4);
-scheduler.TrySchedule(trim, out _);
+`TrySchedule`, `Cancel`, and requeue are O(1). Shutdown is O(terminated items); use `ShutdownStep` to spread it.
 
-var despawn = new PoolDespawnWorkItem(pool, batchSize: 4);
-scheduler.TrySchedule(despawn, out _);
-```
-
-`batchSize` limits pool operations per adapter Step. `maxSteps` limits adapter calls per Tick. They are separate budgets.
-
-`TargetReached` tells you whether the requested target was met or the pool just made no progress. Cancelling stops later pool calls without undoing earlier ones and without disposing the pool. The pool owner keeps the pool alive and avoids conflicting structural changes.
-
-## Storage and allocation
-
-The scheduler allocates `Slot[]` and a free-slot `int[]` once at construction.
-
-- `TrySchedule`, `Cancel`, and requeue are O(1).
-- Shutdown is O(terminated items). Use `ShutdownStep` to spread it.
-- `WorkItemHandle` holds a slot index and a generation. It only works with the scheduler that issued it.
-- Generation zero is the default handle. Handles that wrap the full generation range can alias, so do not keep them forever.
-
-Normal scheduling, cancellation, requeue, and bounded shutdown do not allocate managed memory after construction. Exception paths may allocate. The hot path avoids LINQ, captured lambdas, resizing, temporary collections, and per-item strings.
-
-Work item allocation and payload memory are the caller's. Pool work items only when a measured high-churn load needs it and reset ownership is clear.
-
-## Thread and I/O boundaries
+Normal scheduling, cancellation, requeue, and bounded shutdown do not allocate managed memory after construction. Exception paths allocate.
 
 The scheduler is owner-thread confined. It is not thread-safe, it does not marshal work from worker threads, and it does not make Unity APIs callable off the main thread. Cross-thread producers need a separate bounded adapter with its own synchronization design.
-
-A Step must not hide unbounded synchronous I/O. File reads, hashes, decompression, async loads, and buffer ownership need bounded domain adapters. A large file must be processed incrementally inside the operation; one file per Step is not enough.
-
-Performance numbers depend on device, Unity version, backend, build type, workload, and stripping settings. Editor tests do not establish target Player performance.
 
 ## Common mistakes
 
 | Mistake | Fix |
 | --- | --- |
 | One long synchronous operation in a Step | Split it into bounded steps. |
-| A new work item after every rejection | Keep one instance and retry later. |
-| The same instance queued twice | Use separate registrations or wait for termination. |
-| Scheduler calls from `Step` or `OnTerminated` | Return and act from the next owner update. |
-| Assuming `maxSteps` bounds pool objects or callback cost | Budget each domain separately. |
-| Host and container both shutting down a bound scheduler | Let the composition root own it. |
+| The same instance queued twice | Wait for termination, or use a distinct instance. |
+| Everything on `Immediate` | Reserve it for work that must land this frame; the starvation window covers the rest. |
+| Scheduler calls from `Step` or `OnTerminated` | Return and act from the next owner update; `GetSnapshot` is the exception. |
+| Assuming `maxSteps` bounds callback cost | Budget each domain separately. |
 | Destroying a pool before its maintenance work stops | Stop and drain first. |
-| Treating Editor tests as Player performance data | Measure the target Player. |
 
 ## Tests
 
-EditMode:
+EditMode and PlayMode suites cover lane priority, starvation bound, fault isolation, handle identity, budget edges, reentrancy, termination callbacks, shutdown accounting, Factory adapters, Unity Update and destruction, and external ownership.
+
+EditMode also carries deterministic performance gates: steady-state allocation over 100 000 operations, footprint per registration, a 300 000-operation soak, and a reflection-based public API surface check. They assert allocation and layout, not wall-clock time.
 
 ```bash
 <unity-exe> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -testFilter CycloneGames.Scheduling -testResults <output.xml> -logFile <output.log>
 ```
 
-PlayMode:
-
-```bash
-<unity-exe> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform PlayMode -testFilter CycloneGames.Scheduling.Tests.PlayMode -testResults <output.xml> -logFile <output.log>
-```
-
-The suites cover FIFO order, budgets, rejection, cancellation, terminal callbacks, exceptions, immediate and bounded shutdown, handle reuse, Factory maintenance, Unity Update and destruction, fake-null handling, and external ownership.
-
-Measure allocation and performance outside the Editor or in the target Player. Target Player, IL2CPP, AOT, stripping, and device-specific behavior need their own runs.
+Performance numbers depend on device, Unity version, backend, build type, workload, and stripping settings. Editor tests do not establish target Player performance.

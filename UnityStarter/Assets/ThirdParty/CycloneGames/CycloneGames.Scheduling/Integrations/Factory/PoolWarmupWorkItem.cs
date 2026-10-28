@@ -47,6 +47,20 @@ namespace CycloneGames.Scheduling.Integrations.Factory
 
             int requested = remainingCount < batchSize ? remainingCount : batchSize;
             int created = pool.WarmupStep(requested);
+
+            // A pool is free to report more or fewer entries than requested. Clamp so
+            // remainingCount can never go negative and CreatedCount can never exceed
+            // RequestedCount, both of which would otherwise leak into the next Step as a
+            // negative argument or silently break the caller's memory budget.
+            if (created > requested)
+            {
+                created = requested;
+            }
+            else if (created < 0)
+            {
+                created = 0;
+            }
+
             CreatedCount += created;
             remainingCount -= created;
 
