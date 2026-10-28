@@ -53,6 +53,17 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             AssertNoUnityEngineReference(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayAbilities", "Core"));
         }
 
+        /// <summary>
+        /// Core must not branch on host-specific compilation symbols. asmdef noEngineReferences blocks
+        /// type references only, so the symbol rule needs its own guard.
+        /// </summary>
+        [Test]
+        public void CoreAssemblies_UseNoHostSpecificCompilationSymbols()
+        {
+            AssertNoHostSymbols(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayTags", "Core"));
+            AssertNoHostSymbols(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayAbilities", "Core"));
+        }
+
         [Test]
         public void GameplayAbilitiesRuntime_UnityReferencesStayWhitelisted()
         {
@@ -77,6 +88,59 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(offenders, Is.EqualTo(expected),
                 "Runtime UnityEngine references must stay confined to the reviewed adapter whitelist. " +
                 "New Unity-dependent runtime code belongs in the Editor/Integrations layer, not the simulation.");
+        }
+
+        private static readonly string[] HostSymbolMarkers =
+        {
+            "UNITY_",
+            "DEVELOPMENT_BUILD",
+            "GODOT",
+            "UNREAL",
+            "UE_"
+        };
+
+        private static void AssertNoHostSymbols(string relativeDirectory)
+        {
+            string absolute = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), relativeDirectory);
+            Assert.That(System.IO.Directory.Exists(absolute), Is.True, $"Expected directory missing: {relativeDirectory}");
+
+            // Only conditional-compilation lines are checked, so prose may name these symbols.
+            var offenders = new List<string>();
+            foreach (string file in System.IO.Directory.GetFiles(absolute, "*.cs", System.IO.SearchOption.AllDirectories))
+            {
+                string relative = System.IO.Path.GetRelativePath(absolute, file).Replace('\\', '/');
+                foreach (string line in System.IO.File.ReadLines(file))
+                {
+                    string directive = line.TrimStart();
+                    if (!directive.StartsWith("#if", StringComparison.Ordinal) &&
+                        !directive.StartsWith("#elif", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    foreach (string marker in HostSymbolMarkers)
+                    {
+                        if (!directive.Contains(marker))
+                        {
+                            continue;
+                        }
+
+                        // Reviewed exception: GameplayTagManager gates InternalsVisibleTo only; nothing
+                        // reaches a player build.
+                        if (directive.Contains("UNITY_INCLUDE_TESTS"))
+                        {
+                            break;
+                        }
+
+                        offenders.Add($"{relative} ({marker})");
+                        break;
+                    }
+                }
+            }
+
+            Assert.That(offenders, Is.Empty,
+                $"Core assembly '{relativeDirectory}' must not branch on host-specific compilation symbols; " +
+                $"use DEBUG or a CycloneGames-owned switch instead. Offenders: {string.Join(", ", offenders)}");
         }
 
         private static void AssertNoUnityEngineReference(string relativeDirectory)

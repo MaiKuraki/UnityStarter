@@ -126,8 +126,7 @@ namespace CycloneGames.GameplayAbilities.Core
             public FPInt64 OverrideValue;
             public bool HasOverride;
             public bool HasModifier;
-            // Set when any step of the aggregation exceeded the Q32.32 range. Values are left
-            // wrapping, matching unchecked fixed-point semantics; this flag only makes it visible.
+            // Set when any step of the aggregation exceeded the Q32.32 range; the result saturates.
             public bool Overflowed;
 
             /// <summary>Returns an accumulator in its reset state.</summary>
@@ -163,6 +162,8 @@ namespace CycloneGames.GameplayAbilities.Core
             GASStackMagnitudePolicy stackMagnitudePolicy,
             bool unrealBiasSum)
         {
+            // Debug-only. Release callers must Reset() before Accumulate(). Core stays engine-agnostic,
+            // so only DEBUG is tested here, never a host-specific symbol.
 #if DEBUG
             if (!accumulator.HasModifier && accumulator.MultiplicativeBias.RawValue == 0)
             {
@@ -182,7 +183,7 @@ namespace CycloneGames.GameplayAbilities.Core
                         scaled = magnitude * FPInt64.FromInt(stackCount);
                     }
 
-                    accumulator.Add = TryAddOrWrap(accumulator.Add, scaled, ref accumulator.Overflowed);
+                    accumulator.Add = TryAddOrSaturate(accumulator.Add, scaled, ref accumulator.Overflowed);
                     break;
                 }
                 case GASModifierOp.Multiply:
@@ -190,17 +191,19 @@ namespace CycloneGames.GameplayAbilities.Core
                     var stacked = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
                         magnitudeRaw,
                         stackCount,
-                        stackMagnitudePolicy));
+                        stackMagnitudePolicy,
+                        out bool multiplyScaleOverflowed));
+                    accumulator.Overflowed |= multiplyScaleOverflowed;
                     if (unrealBiasSum)
                     {
-                        accumulator.MultiplicativeBias = TryAddOrWrap(
+                        accumulator.MultiplicativeBias = TryAddOrSaturate(
                             accumulator.MultiplicativeBias,
                             stacked - FPInt64.One,
                             ref accumulator.Overflowed);
                     }
                     else
                     {
-                        accumulator.Multiply = TryMultiplyOrWrap(accumulator.Multiply, stacked, ref accumulator.Overflowed);
+                        accumulator.Multiply = TryMultiplyOrSaturate(accumulator.Multiply, stacked, ref accumulator.Overflowed);
                     }
 
                     break;
@@ -215,7 +218,9 @@ namespace CycloneGames.GameplayAbilities.Core
                     var stackedDivisor = FPInt64.FromRaw(GASFixedValue.ResolveStackScaledMagnitudeRaw(
                         magnitudeRaw,
                         stackCount,
-                        stackMagnitudePolicy));
+                        stackMagnitudePolicy,
+                        out bool divisorScaleOverflowed));
+                    accumulator.Overflowed |= divisorScaleOverflowed;
                     // LinearBias scaling of a sub-1 magnitude can reach exactly zero
                     // ((M-1)*stack+1 == 0); treat it as a no-op divisor instead of dividing by zero.
                     if (stackedDivisor.RawValue == 0)
@@ -225,14 +230,14 @@ namespace CycloneGames.GameplayAbilities.Core
 
                     if (unrealBiasSum)
                     {
-                        accumulator.DivisionBias = TryAddOrWrap(
+                        accumulator.DivisionBias = TryAddOrSaturate(
                             accumulator.DivisionBias,
                             stackedDivisor - FPInt64.One,
                             ref accumulator.Overflowed);
                     }
                     else
                     {
-                        accumulator.Multiply = TryDivideOrWrap(
+                        accumulator.Multiply = TryDivideOrSaturate(
                             accumulator.Multiply,
                             stackedDivisor,
                             ref accumulator.Overflowed);
@@ -264,21 +269,21 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             var inputValue = FPInt64.FromRaw(inputValueRaw);
-            var biased = TryAddOrWrap(inputValue, accumulator.Add, ref accumulator.Overflowed);
-            var product = TryMultiplyOrWrap(
+            var biased = TryAddOrSaturate(inputValue, accumulator.Add, ref accumulator.Overflowed);
+            var product = TryMultiplyOrSaturate(
                 biased,
                 unrealBiasSum ? accumulator.MultiplicativeBias : accumulator.Multiply,
                 ref accumulator.Overflowed);
 
             if (unrealBiasSum && accumulator.DivisionBias.RawValue != 0)
             {
-                product = TryDivideOrWrap(product, accumulator.DivisionBias, ref accumulator.Overflowed);
+                product = TryDivideOrSaturate(product, accumulator.DivisionBias, ref accumulator.Overflowed);
             }
 
             return product.RawValue;
         }
 
-        private static FPInt64 TryAddOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        private static FPInt64 TryAddOrSaturate(FPInt64 left, FPInt64 right, ref bool overflowed)
         {
             if (FPInt64.TryAdd(left, right, out FPInt64 sum))
             {
@@ -286,10 +291,10 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             overflowed = true;
-            return left + right;
+            return GASFixedValue.SaturateForSign(left, right);
         }
 
-        private static FPInt64 TryMultiplyOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        private static FPInt64 TryMultiplyOrSaturate(FPInt64 left, FPInt64 right, ref bool overflowed)
         {
             if (FPInt64.TryMultiply(left, right, out FPInt64 product))
             {
@@ -297,10 +302,10 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             overflowed = true;
-            return left * right;
+            return GASFixedValue.SaturateForSign(left, right);
         }
 
-        private static FPInt64 TryDivideOrWrap(FPInt64 left, FPInt64 right, ref bool overflowed)
+        private static FPInt64 TryDivideOrSaturate(FPInt64 left, FPInt64 right, ref bool overflowed)
         {
             if (right.RawValue == 0)
             {
@@ -313,7 +318,7 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             overflowed = true;
-            return left / right;
+            return GASFixedValue.SaturateForSign(left, right);
         }
     }
 

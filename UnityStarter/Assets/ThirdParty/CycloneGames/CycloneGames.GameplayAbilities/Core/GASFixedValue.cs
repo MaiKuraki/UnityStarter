@@ -129,6 +129,21 @@ namespace CycloneGames.GameplayAbilities.Core
             int stackCount,
             GASStackMagnitudePolicy policy)
         {
+            return ResolveStackScaledMagnitudeRaw(magnitudeRaw, stackCount, policy, out _);
+        }
+
+        /// <summary>
+        /// Resolves the effective magnitude of one Multiply/Division modifier for a stack count and
+        /// reports whether the Q32.32 range was exceeded. An out-of-range result saturates to the
+        /// representable limit in the direction of growth; <paramref name="overflowed"/> reports it.
+        /// </summary>
+        public static long ResolveStackScaledMagnitudeRaw(
+            long magnitudeRaw,
+            int stackCount,
+            GASStackMagnitudePolicy policy,
+            out bool overflowed)
+        {
+            overflowed = false;
             if (stackCount <= 1)
             {
                 return magnitudeRaw;
@@ -140,14 +155,45 @@ namespace CycloneGames.GameplayAbilities.Core
                 var product = FPInt64.One;
                 for (int i = 0; i < stackCount; i++)
                 {
-                    product *= magnitude;
+                    if (!FPInt64.TryMultiply(product, magnitude, out FPInt64 next))
+                    {
+                        overflowed = true;
+                        // Sign follows the magnitude's sign and the stack parity, not the failing step.
+                        bool negativeResult = magnitude.RawValue < 0 && (stackCount & 1) != 0;
+                        return negativeResult ? FPInt64.MinValue.RawValue : FPInt64.MaxValue.RawValue;
+                    }
+
+                    product = next;
                 }
 
                 return product.RawValue;
             }
 
             // LinearBias: (M - 1) * stackCount + 1, so every stack contributes the same delta.
-            return ((magnitude - FPInt64.One) * FPInt64.FromInt(stackCount) + FPInt64.One).RawValue;
+            var delta = magnitude - FPInt64.One;
+            var stackMultiplier = FPInt64.FromInt(stackCount);
+            if (!FPInt64.TryMultiply(delta, stackMultiplier, out FPInt64 scaled))
+            {
+                overflowed = true;
+                return SaturateForSign(delta, stackMultiplier).RawValue;
+            }
+
+            if (!FPInt64.TryAdd(scaled, FPInt64.One, out FPInt64 biased))
+            {
+                overflowed = true;
+                return SaturateForSign(scaled, FPInt64.One).RawValue;
+            }
+
+            return biased.RawValue;
+        }
+
+        /// <summary>
+        /// Returns the limit a product of the two operands exceeds.
+        /// </summary>
+        internal static FPInt64 SaturateForSign(FPInt64 left, FPInt64 right)
+        {
+            bool negative = (left.RawValue ^ right.RawValue) < 0;
+            return negative ? FPInt64.MinValue : FPInt64.MaxValue;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -612,6 +612,198 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(second.EffectDefinitionId, Is.EqualTo(new GASDefinitionId(1001)));
         }
 
+        /// <summary>
+        /// Exponential stacking must stay positive and monotonic across the whole stack range.
+        /// </summary>
+        [Test]
+        public void ExponentialStacking_StaysPositiveAndMonotonicAcrossFullStackRange()
+        {
+            var factors = new[] { 1.1, 1.2, 1.5, 2.0, 3.0 };
+            for (int f = 0; f < factors.Length; f++)
+            {
+                long magnitudeRaw = GASFixedValue.FromDouble(factors[f]).RawValue;
+                long previous = long.MinValue;
+                for (int stack = 1; stack <= 320; stack++)
+                {
+                    long raw = GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                        magnitudeRaw, stack, GASStackMagnitudePolicy.Exponential);
+
+                    Assert.That(raw, Is.GreaterThan(0L),
+                        $"factor {factors[f]} at {stack} stacks must stay positive; got {raw}.");
+                    Assert.That(raw, Is.GreaterThanOrEqualTo(previous),
+                        $"factor {factors[f]} at {stack} stacks must not decrease; {raw} < {previous}.");
+                    previous = raw;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The overflow flag and saturation must agree, and a saturated value must never fall back.
+        /// </summary>
+        [Test]
+        public void ExponentialStacking_SaturationIsReportedAndNeverFallsBack()
+        {
+            var factors = new[] { 1.1, 1.5, 2.0, 3.0 };
+            for (int f = 0; f < factors.Length; f++)
+            {
+                long magnitudeRaw = GASFixedValue.FromDouble(factors[f]).RawValue;
+                bool saturated = false;
+                int firstSaturatedStack = -1;
+                for (int stack = 1; stack <= 320; stack++)
+                {
+                    long raw = GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                        magnitudeRaw, stack, GASStackMagnitudePolicy.Exponential, out bool overflowed);
+
+                    if (overflowed)
+                    {
+                        if (!saturated)
+                        {
+                            saturated = true;
+                            firstSaturatedStack = stack;
+                        }
+
+                        Assert.That(raw, Is.EqualTo(long.MaxValue),
+                            $"factor {factors[f]} at {stack} stacks must saturate to the representable limit; got {raw}.");
+                    }
+                    else
+                    {
+                        Assert.That(saturated, Is.False,
+                            $"factor {factors[f]} at {stack} stacks fell below the limit after saturating at {firstSaturatedStack}.");
+                    }
+                }
+
+                Assert.That(saturated, Is.True,
+                    $"factor {factors[f]} must exceed the Q32.32 range within 320 stacks.");
+            }
+        }
+
+        /// <summary>
+        /// A saturated attribute must stay positive and must always be counted as an overflow.
+        /// </summary>
+        [Test]
+        public void ExponentialStacking_NeverProducesZeroOrNegativeAttributeWithoutFlag()
+        {
+            var factors = new[] { 1.5, 2.0 };
+            for (int f = 0; f < factors.Length; f++)
+            {
+                for (int stack = 1; stack <= 80; stack++)
+                {
+                    var state = CreateAttributeState(1, out GASAttributeId[] attributeIds);
+                    var modifiers = new[]
+                    {
+                        new GASModifierData(attributeIds[0], GASModifierOp.Multiply,
+                            GASFixedValue.FromDouble(factors[f]))
+                    };
+                    AddInfiniteEffect(state, 1, modifiers, (ushort)stack,
+                        GASStackMagnitudePolicy.Exponential);
+
+                    Assert.That(state.TryGetAttribute(attributeIds[0], out GASAttributeValueData attribute), Is.True);
+                    Assert.That(attribute.CurrentValueRaw, Is.GreaterThan(0L),
+                        $"factor {factors[f]} at {stack} stacks produced a non-positive attribute value {attribute.CurrentValueRaw}.");
+                    if (attribute.CurrentValueRaw == long.MaxValue)
+                    {
+                        Assert.That(state.OverflowCount, Is.GreaterThan(0L),
+                            $"factor {factors[f]} at {stack} stacks saturated without reporting overflow.");
+                    }
+                }
+            }
+        }
+
+        [Test]
+        public void ExponentialStacking_SaturatesAtRepresentableLimitAndCountsOneOverflow()
+        {
+            var state = CreateAttributeState(1, out GASAttributeId[] attributeIds);
+            var modifiers = new[]
+            {
+                new GASModifierData(attributeIds[0], GASModifierOp.Multiply, GASFixedValue.FromDouble(2.0))
+            };
+            AddInfiniteEffect(state, 1, modifiers, 32, GASStackMagnitudePolicy.Exponential);
+
+            Assert.That(state.TryGetAttribute(attributeIds[0], out GASAttributeValueData attribute), Is.True);
+            Assert.That(attribute.CurrentValueRaw, Is.EqualTo(long.MaxValue),
+                "2x at 32 stacks exceeds Q32.32 and must saturate instead of wrapping to zero.");
+            Assert.That(state.OverflowCount, Is.EqualTo(1L),
+                "A saturating evaluation must be counted as exactly one overflow.");
+        }
+
+        /// <summary>
+        /// LinearBias must stay monotonic across the whole stack range.
+        /// </summary>
+        [Test]
+        public void LinearBiasStacking_StaysMonotonicAcrossFullStackRange()
+        {
+            var factors = new[] { 1.1, 1.5, 2.0, 10.0 };
+            for (int f = 0; f < factors.Length; f++)
+            {
+                long magnitudeRaw = GASFixedValue.FromDouble(factors[f]).RawValue;
+                long previous = long.MinValue;
+                for (int stack = 1; stack <= 1000; stack++)
+                {
+                    long raw = GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                        magnitudeRaw, stack, GASStackMagnitudePolicy.LinearBias, out bool overflowed);
+
+                    Assert.That(raw, Is.GreaterThanOrEqualTo(previous),
+                        $"factor {factors[f]} at {stack} LinearBias stacks must not decrease; {raw} < {previous}.");
+                    if (!overflowed)
+                    {
+                        Assert.That(raw, Is.LessThan(long.MaxValue),
+                            $"factor {factors[f]} at {stack} stacks reported no overflow but sits at the limit.");
+                    }
+
+                    previous = raw;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Every accepted cell must stay positive once the effect is stacked to its limit.
+        /// </summary>
+        [TestCase(0.9, 5)]
+        [TestCase(0.99, 50)]
+        [TestCase(1.0, 100)]
+        [TestCase(1.1, 100)]
+        [TestCase(1.5, 20)]
+        public void LinearBiasStacking_KeepsAttributePositiveAtTheAcceptedLimit(double factor, int stackLimit)
+        {
+            var state = CreateAttributeState(1, out GASAttributeId[] attributeIds);
+            var modifiers = new[]
+            {
+                new GASModifierData(attributeIds[0], GASModifierOp.Multiply, GASFixedValue.FromDouble(factor))
+            };
+            AddInfiniteEffect(state, 1, modifiers, (ushort)stackLimit, GASStackMagnitudePolicy.LinearBias);
+
+            Assert.That(state.TryGetAttribute(attributeIds[0], out GASAttributeValueData attribute), Is.True);
+            Assert.That(attribute.CurrentValueRaw, Is.GreaterThan(0L),
+                $"factor {factor} at {stackLimit} stacks is accepted by the guard, so the attribute must stay positive.");
+        }
+
+        /// <summary>
+        /// A negative magnitude must saturate on the side implied by the stack parity.
+        /// </summary>
+        [Test]
+        public void ExponentialStacking_AlternatesSaturationSideForNegativeMagnitude()
+        {
+            long magnitudeRaw = GASFixedValue.FromDouble(-1.5).RawValue;
+            bool sawOverflow = false;
+            for (int stack = 1; stack <= 80; stack++)
+            {
+                long raw = GASFixedValue.ResolveStackScaledMagnitudeRaw(
+                    magnitudeRaw, stack, GASStackMagnitudePolicy.Exponential, out bool overflowed);
+
+                if (!overflowed)
+                {
+                    continue;
+                }
+
+                sawOverflow = true;
+                bool expectedNegative = (stack & 1) != 0;
+                Assert.That(raw, Is.EqualTo(expectedNegative ? long.MinValue : long.MaxValue),
+                    $"stack {stack} must saturate on the {(expectedNegative ? "negative" : "positive")} side.");
+            }
+
+            Assert.That(sawOverflow, Is.True, "A -1.5 magnitude must exceed the Q32.32 range within 80 stacks.");
+        }
+
         private static GASAbilitySystemState CreateAttributeState(
             int attributeCount,
             out GASAttributeId[] attributeIds)

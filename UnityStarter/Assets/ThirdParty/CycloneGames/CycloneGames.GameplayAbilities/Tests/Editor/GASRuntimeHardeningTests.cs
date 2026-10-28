@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 
 using CycloneGames.GameplayAbilities.Core;
@@ -1364,6 +1365,218 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
         }
 
+        /// <summary>
+        /// Decision table: a stacked multiplier that reaches zero or negative at the limit is rejected.
+        /// </summary>
+        [TestCase(0.5f, 1, true)]     // limit 1 never stacks, multiplier stays 0.5
+        [TestCase(0.5f, 2, false)]    // (0.5-1)*2+1 == 0
+        [TestCase(0.5f, 3, false)]    // -0.5
+        [TestCase(0.5f, 10, false)]
+        [TestCase(0.9f, 5, true)]     // 0.5
+        [TestCase(0.9f, 11, false)]   // -0.1
+        [TestCase(0.99f, 50, true)]   // 0.5
+        [TestCase(0.99f, 101, false)] // -0.01
+        [TestCase(1.0f, 100, true)]
+        [TestCase(1.1f, 100, true)]
+        [TestCase(1.5f, 100, true)]
+        [TestCase(2.0f, 100, true)]
+        [TestCase(10.0f, 5, true)]
+        [TestCase(0.0f, 2, false)]
+        [TestCase(-0.5f, 2, false)]
+        [TestCase(-1.5f, 3, false)]
+        public void StackingMultiplier_MustStayPositiveUpToTheStackLimit(float magnitude, int stackLimit, bool allowed)
+        {
+            GameplayEffect Build()
+            {
+                return new GameplayEffect(
+                    "StackSignProbe",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "LiveTarget",
+                            EAttributeModifierOperation.Multiply,
+                            new ScalableFloat(magnitude))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        limit: stackLimit,
+                        durationPolicy: EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+            }
+
+            if (allowed)
+            {
+                Assert.DoesNotThrow(() => Build(),
+                    $"magnitude {magnitude} at limit {stackLimit} keeps a positive multiplier and must be accepted.");
+                return;
+            }
+
+            // Throws<T> matches the exact type, so the derived exception must be named.
+            Assert.Throws<ArgumentOutOfRangeException>(() => Build(),
+                $"magnitude {magnitude} at limit {stackLimit} reaches a non-positive multiplier and must be rejected.");
+        }
+
+        /// <summary>
+        /// A stacked dynamic magnitude that resolves non-positive is reported once and not clamped.
+        /// </summary>
+        [Test]
+        public void StackedDynamicMagnitude_WarnsOnceWhenItResolvesNonPositive()
+        {
+            var writer = new CapturingLogWriter();
+            ILogWriter previous = LogRuntime.Writer;
+            bool installed = LogRuntime.HasWriter
+                ? LogRuntime.TryReplaceWriter(previous, writer)
+                : LogRuntime.TryInstallWriter(writer);
+            Assert.That(installed, Is.True);
+
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new ChainAttributeSet(2);
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.ValueOf(0), 0.5f);
+                SetAttributeValues(attributes.ValueOf(1), 100f);
+
+                var definition = new GameplayEffect(
+                    "DynamicStackSign",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "ChainAttr1",
+                            EAttributeModifierOperation.Multiply,
+                            new AttributeBasedMagnitude(
+                                "ChainAttr0",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        limit: 5,
+                        durationPolicy: EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+
+                for (int i = 0; i < 3; i++)
+                {
+                    Assert.That(asc.ApplyGameplayEffectSpecToSelf(
+                        GameplayEffectSpec.Create(definition, asc)).Succeeded, Is.True);
+                }
+
+                asc.Tick(1f / 60f, isServer: true);
+
+                Assert.That(CountWarningsContaining(writer, "non-positive stacked magnitude"), Is.EqualTo(1),
+                    "A dynamic stacked multiplier that resolves non-positive must be reported exactly once.");
+                Assert.That(attributes.ValueOf(1).CurrentValue, Is.LessThan(0f),
+                    "The value is reported, not clamped, so the authored result is preserved.");
+
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(CountWarningsContaining(writer, "non-positive stacked magnitude"), Is.EqualTo(1),
+                    "Staying in the same configuration must not repeat the warning.");
+            }
+            finally
+            {
+                asc.Dispose();
+                LogRuntime.TryResetWriter(writer);
+                if (!ReferenceEquals(previous, NullLogWriter.Instance))
+                {
+                    LogRuntime.TryInstallWriter(previous);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The static sign guard must skip dynamic magnitudes, which carry no authoring-time value.
+        /// </summary>
+        [Test]
+        public void StackingWithDynamicMagnitude_IsNotRejectedByTheStaticSignGuard()
+        {
+            Assert.DoesNotThrow(() =>
+            {
+                var definition = new GameplayEffect(
+                    "DynamicMagnitudeStacking",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "LiveTarget",
+                            EAttributeModifierOperation.Multiply,
+                            new AttributeBasedMagnitude(
+                                "Source",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        limit: 5,
+                        durationPolicy: EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+
+                Assert.That(definition, Is.Not.Null);
+            }, "A stacked AttributeBased modifier resolves at runtime and must not be rejected at authoring time.");
+        }
+
+        /// <summary>
+        /// A stacking spec swap must reindex the live dependency edges; removal must drop them.
+        /// </summary>
+        [Test]
+        public void StackingSpecSwap_RebuildsLiveDependencyEdges()
+        {
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new LiveDependencyAttributeSet();
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.Source, 10f);
+                SetAttributeValues(attributes.LiveTarget, 10f);
+
+                var definition = new GameplayEffect(
+                    "SwapEdge",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "LiveTarget",
+                            EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude(
+                                "Source",
+                                EGameplayEffectAttributeCaptureSource.Target,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        limit: 5,
+                        durationPolicy: EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+
+                GameplayEffectApplicationResult first =
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc));
+                Assert.That(first.Succeeded, Is.True);
+                asc.Tick(1f / 60f, isServer: true);
+
+                GameplayEffectApplicationResult second =
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc));
+                Assert.That(second.Succeeded, Is.True, "The second application must stack onto the first.");
+
+                // The indices are identical for a same-definition swap, so this asserts the observable
+                // contract rather than the cache flag.
+                asc.Tick(1f / 60f, isServer: true);
+                asc.MarkAttributeDirty(attributes.Source);
+                Assert.That(attributes.LiveTarget.IsDirty, Is.True,
+                    "The rebuilt edge must still propagate a source change.");
+
+                asc.Tick(1f / 60f, isServer: true);
+                Assert.That(asc.TryRemoveActiveEffect(first.ActiveEffect), Is.True);
+                asc.Tick(1f / 60f, isServer: true);
+                asc.MarkAttributeDirty(attributes.Source);
+                Assert.That(attributes.LiveTarget.IsDirty, Is.False,
+                    "Removing the effect must drop the rebuilt edge.");
+            }
+            finally
+            {
+                asc.Dispose();
+            }
+        }
+
         [Test]
         public void LiveDependency_DirtySetMatchesReferenceWalk()
         {
@@ -1675,6 +1888,20 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     LogRuntime.TryInstallWriter(previous);
                 }
             }
+        }
+
+        private static int CountWarningsContaining(CapturingLogWriter writer, string marker)
+        {
+            int count = 0;
+            for (int i = 0; i < writer.Messages.Count; i++)
+            {
+                if (writer.Messages[i].Contains(marker))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         private static int CountOverflowWarnings(CapturingLogWriter writer)
