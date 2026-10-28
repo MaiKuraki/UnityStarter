@@ -1904,6 +1904,73 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             return count;
         }
 
+        [Test]
+        public void UnlimitedStacking_ReportsCapacityOnce()
+        {
+            var writer = new CapturingLogWriter();
+            ILogWriter previous = LogRuntime.Writer;
+            bool installed = LogRuntime.HasWriter
+                ? LogRuntime.TryReplaceWriter(previous, writer)
+                : LogRuntime.TryInstallWriter(writer);
+            Assert.That(installed, Is.True);
+
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var attributes = new ChainAttributeSet(1);
+            try
+            {
+                asc.AddAttributeSet(attributes);
+                SetAttributeValues(attributes.ValueOf(0), 10f);
+
+                var definition = new GameplayEffect(
+                    "OverflowProbe.UnlimitedCap",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("ChainAttr0", EAttributeModifierOperation.Add, new ScalableFloat(1f))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        0,
+                        EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication,
+                        limitMode: EGameplayEffectStackLimitMode.Unlimited));
+
+                ActiveGameplayEffect active =
+                    asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc)).ActiveEffect;
+                active.SetReplicatedStackCount(GameplayEffectStacking.UnlimitedStackLimit);
+
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc));
+                Assert.That(CountCapacityWarnings(writer), Is.EqualTo(1),
+                    "Reaching the Unlimited capacity must warn once.");
+
+                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, asc));
+                Assert.That(CountCapacityWarnings(writer), Is.EqualTo(1),
+                    "Further applications at the capacity must not repeat the warning.");
+            }
+            finally
+            {
+                asc.Dispose();
+                LogRuntime.TryResetWriter(writer);
+                if (!ReferenceEquals(previous, NullLogWriter.Instance))
+                {
+                    LogRuntime.TryInstallWriter(previous);
+                }
+            }
+        }
+
+        private static int CountCapacityWarnings(CapturingLogWriter writer)
+        {
+            int count = 0;
+            for (int i = 0; i < writer.Messages.Count; i++)
+            {
+                if (writer.Messages[i].Contains("Unlimited stacking capacity"))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
         private static int CountOverflowWarnings(CapturingLogWriter writer)
         {
             int count = 0;

@@ -653,14 +653,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 if (multiplier <= 0.0)
                 {
+                    double nonPositiveAtStack = FirstNonPositiveStack(worstMagnitude, stacking.MagnitudePolicy);
                     throw new ArgumentOutOfRangeException(
                         nameof(stacking),
                         stackLimit,
-                        $"Stacked multiplier for '{modifier.AttributeName}' reaches {multiplier:F4} at the " +
-                        "stack limit, so the attribute would be driven to zero or negative. Raise the " +
-                        "magnitude, lower the stack limit, or use a different magnitude policy.");
+                        $"Stacked multiplier for '{modifier.AttributeName}' stops being positive at stack " +
+                        $"{nonPositiveAtStack:F0} (stack limit {stackLimit}, magnitude {worstMagnitude:F4}). " +
+                        "Raise the magnitude, lower the stack limit, or change the magnitude policy.");
                 }
             }
+        }
+
+        /// <summary>
+        /// First stack count where the running multiplier stops being positive, for magnitudes below 1.
+        /// </summary>
+        private static double FirstNonPositiveStack(double magnitude, GASStackMagnitudePolicy policy)
+        {
+            if (policy == GASStackMagnitudePolicy.Exponential)
+            {
+                // Below 1 the product reaches the Q32.32 epsilon (2^-32) and then underflows to zero.
+                return Math.Ceiling(-32.0 * Math.Log(2.0) / Math.Log(magnitude));
+            }
+
+            return Math.Ceiling(1.0 / (1.0 - magnitude));
         }
 
         private static GameplayEffectTagRequirements CreateRequirements(

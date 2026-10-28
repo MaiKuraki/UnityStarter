@@ -274,6 +274,25 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void StackMagnitudeSign_ReportsFirstNonPositiveStack()
+        {
+            var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => new GameplayEffect(
+                "Policy.Linear.SubOne",
+                EDurationPolicy.Infinite,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo("Attr0", EAttributeModifierOperation.Multiply, new ScalableFloat(0.5f))
+                },
+                stacking: new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    4,
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)));
+
+            // LinearBias (M - 1) * n + 1 reaches zero at 1 / (1 - 0.5) = 2 stacks.
+            Assert.That(exception.Message, Does.Contain("stack 2"));
+        }
+
+        [Test]
         public void Unlimited_StacksPastTheLimitedCap()
         {
             var asc = CreateAsc(out PolicyAttributeSet attributes);
