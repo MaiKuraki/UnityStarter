@@ -383,6 +383,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ValidateCollectionCount(overflowEffects, MaxOverflowEffectCount, nameof(overflowEffects));
             ValidateModifiers(modifiers);
             ValidateStackMagnitudeRange(stacking, modifiers);
+            ValidateStackMagnitudeSign(stacking, modifiers);
             ValidateGrantedAbilities(durationPolicy, grantedAbilities);
             ValidateGrantedAbilityRemovalPolicies(grantedAbilities, grantedAbilityRemovalPolicies);
             ValidateRequirements(customApplicationRequirements);
@@ -576,6 +577,88 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         stackLimit,
                         $"Exponential stacking reaches {worstCase:F3e0} at the stack limit, beyond the " +
                         "Q32.32 range (2.1e9). Lower the limit or use LinearBias.");
+                }
+            }
+        }
+
+        private bool stackSignWarningIssued;
+
+        /// <summary>
+        /// Claims the single non-positive stacked magnitude warning for this definition; later
+        /// observations are dropped.
+        /// </summary>
+        internal bool TryClaimStackSignWarning()
+        {
+            if (stackSignWarningIssued)
+            {
+                return false;
+            }
+
+            stackSignWarningIssued = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Rejects a stacked Multiply/Division magnitude whose multiplier reaches zero or negative at the
+        /// stack limit. LinearBias subtracts (1 - M) per stack; a negative Exponential magnitude flips sign.
+        /// </summary>
+        private static void ValidateStackMagnitudeSign(
+            GameplayEffectStacking stacking,
+            List<ModifierInfo> modifiers)
+        {
+            int stackLimit = stacking.ResolveStackLimit();
+            if (stacking.Type == EGameplayEffectStackingType.None ||
+                stackLimit <= 1 ||
+                modifiers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < modifiers.Count; i++)
+            {
+                ModifierInfo modifier = modifiers[i];
+                if (modifier.Operation != EAttributeModifierOperation.Multiply &&
+                    modifier.Operation != EAttributeModifierOperation.Division)
+                {
+                    continue;
+                }
+
+                // Dynamic magnitudes resolve at runtime and leave Magnitude at its default, so only a
+                // static ScalableFloat can be judged here.
+                if (modifier.MagnitudeCalculationType != EGameplayEffectMagnitudeCalculation.ScalableFloat)
+                {
+                    continue;
+                }
+
+                // The extreme level is the worst case: it moves the magnitude furthest from 1.0.
+                float baseMagnitude = modifier.Magnitude.BaseValue;
+                float scaledMagnitude = baseMagnitude +
+                                        modifier.Magnitude.ScalingFactorPerLevel *
+                                        (GASRuntimeDataContract.MaxGameplayLevel - 1);
+                double worstMagnitude = Math.Min(baseMagnitude, scaledMagnitude);
+
+                if (worstMagnitude <= 0.0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stacking),
+                        stackLimit,
+                        $"Stacking modifier on '{modifier.AttributeName}' uses a non-positive magnitude " +
+                        $"({worstMagnitude:F4}) at level {GASRuntimeDataContract.MaxGameplayLevel}. A stacked " +
+                        "Multiply/Division magnitude must stay positive.");
+                }
+
+                double multiplier = stacking.MagnitudePolicy == GASStackMagnitudePolicy.Exponential
+                    ? Math.Pow(worstMagnitude, stackLimit)
+                    : (worstMagnitude - 1.0) * stackLimit + 1.0;
+
+                if (multiplier <= 0.0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(stacking),
+                        stackLimit,
+                        $"Stacked multiplier for '{modifier.AttributeName}' reaches {multiplier:F4} at the " +
+                        "stack limit, so the attribute would be driven to zero or negative. Raise the " +
+                        "magnitude, lower the stack limit, or use a different magnitude policy.");
                 }
             }
         }

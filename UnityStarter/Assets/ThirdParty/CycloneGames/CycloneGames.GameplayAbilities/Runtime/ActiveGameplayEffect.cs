@@ -167,6 +167,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private bool liveDependencyIndicesResolved;
 
         /// <summary>
+        /// Drops the cached live-dependency resolution. Call after replacing <see cref="Spec"/>, and only
+        /// after unlinking, which still reads the recorded source attributes.
+        /// </summary>
+        internal void InvalidateLiveDependencyIndex()
+        {
+            liveDependencyModifierIndices = null;
+            liveDependencySourceAttributes = null;
+            liveDependencyIndicesResolved = false;
+        }
+
+        /// <summary>
         /// The modifier indices of this effect whose magnitude reads a live (non-snapshot)
         /// attribute. Cached lazily per active effect; null when the effect has none, which lets
         /// the dependents scan skip the effect entirely with a single reference check.
@@ -345,6 +356,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 GameplayEffectSpec previous = Spec;
                 applicationSpec.TransferToActiveEffect();
                 Spec = applicationSpec;
+                // The swap replaces the captures the dependency edge was built from.
+                InvalidateLiveDependencyIndex();
                 previous?.ReleaseRuntimeLease();
             }
 

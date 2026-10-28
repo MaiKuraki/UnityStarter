@@ -155,7 +155,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// read. The attribute list is the same ownership shape as <c>AffectingEffects</c>: the
         /// attribute owns the dependents, so nothing has to be reaped when the list empties.
         /// </summary>
-        private void IndexLiveDependencies(ActiveGameplayEffect effect)
+        internal void IndexLiveDependencies(ActiveGameplayEffect effect)
         {
             int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
             if (liveIndices == null)
@@ -189,7 +189,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        private void UnindexLiveDependencies(ActiveGameplayEffect effect)
+        internal void UnindexLiveDependencies(ActiveGameplayEffect effect)
         {
             int[] liveIndices = effect?.GetLiveDependencyModifierIndices();
             if (liveIndices == null)

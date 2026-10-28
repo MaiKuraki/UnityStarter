@@ -2083,6 +2083,43 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             modifierMagnitudeRawValues[index] = magnitudeRaw;
             modifierMagnitudes[index] = GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
+
+            // Dynamic magnitudes are only known here. Reports a non-positive stacked multiplier once per
+            // definition and leaves the resolved value untouched.
+            if (magnitudeRaw <= 0L)
+            {
+                ReportNonPositiveStackedMagnitude(index, magnitudeRaw);
+            }
+        }
+
+        private void ReportNonPositiveStackedMagnitude(int modifierIndex, long magnitudeRaw)
+        {
+            GameplayEffectStacking stacking = Def.Stacking;
+            if (stacking.Type == EGameplayEffectStackingType.None || stacking.ResolveStackLimit() <= 1)
+            {
+                return;
+            }
+
+            ModifierInfo modifier = Def.Modifiers[modifierIndex];
+            if (modifier.Operation != EAttributeModifierOperation.Multiply &&
+                modifier.Operation != EAttributeModifierOperation.Division)
+            {
+                return;
+            }
+
+            if (!Def.TryClaimStackSignWarning())
+            {
+                return;
+            }
+
+            Log.Warning(
+                (Name: Def.Name, Attribute: modifier.AttributeName, Magnitude: magnitudeRaw),
+                static (state, sb) => sb.Append("GameplayEffect '")
+                    .Append(state.Name)
+                    .Append("' resolved a non-positive stacked magnitude for '")
+                    .Append(state.Attribute)
+                    .Append("' (raw ").Append(state.Magnitude)
+                    .Append("). Stacking can drive the attribute to zero or negative; verify the dynamic magnitude source."));
         }
 
         #endregion

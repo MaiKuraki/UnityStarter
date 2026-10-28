@@ -7015,11 +7015,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else
             {
-                // Dynamic granted tags are indexed by the ASC, so the entry is rebuilt around the swap.
-                // An inhibited effect publishes no tags, so there is nothing to rebuild for it.
+                // Granted tags and live dependencies are ASC-owned indexes, rebuilt around the spec swap.
+                // An inhibited effect publishes no tags, so only the dependency edge is rebuilt for it.
                 ActiveEffectContainer.UntrackGrantedTags(existingEffect);
                 try
                 {
+                    // Unlink before the swap replaces the outgoing captures.
+                    ActiveEffectContainer.UnindexLiveDependencies(existingEffect);
                     existingEffect.OnStackApplied(spec.DurationRaw, spec);
                     specConsumed = true;
                 }
@@ -7029,6 +7031,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         ActiveEffectContainer.TrackGrantedTags(existingEffect);
                     }
+
+                    // Reindex against the incoming spec, or the unchanged one if the swap threw.
+                    ActiveEffectContainer.IndexLiveDependencies(existingEffect);
                 }
             }
 
@@ -7562,14 +7567,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < slotCount; i++)
             {
                 LiveDependencySlot slot = slots[i];
-                var spec = slot.Effect.Spec;
+                // A missed unlink or a reused pooled effect leaves a stale slot; validate each hop.
+                GameplayEffectSpec spec = slot.Effect?.Spec;
+                if (spec?.Def?.Modifiers == null || spec.TargetAttributes == null)
+                {
+                    continue;
+                }
+
                 int modifierIndex = slot.ModifierIndex;
+                if ((uint)modifierIndex >= (uint)spec.Def.Modifiers.Count ||
+                    (uint)modifierIndex >= (uint)spec.TargetAttributes.Length)
+                {
+                    continue;
+                }
 #if UNITY_EDITOR
                 GASAggregationProbe.CountDependentsScanSlotVisit();
 #endif
-                GameplayAttribute targetAttribute = modifierIndex < spec.TargetAttributes.Length
-                    ? spec.TargetAttributes[modifierIndex]
-                    : null;
+                GameplayAttribute targetAttribute = spec.TargetAttributes[modifierIndex];
                 if (targetAttribute == null)
                 {
                     targetAttribute = GetAttribute(spec.Def.Modifiers[modifierIndex].AttributeName);
