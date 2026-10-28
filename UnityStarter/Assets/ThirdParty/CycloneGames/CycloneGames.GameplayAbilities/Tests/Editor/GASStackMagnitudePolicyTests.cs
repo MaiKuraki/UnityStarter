@@ -292,6 +292,75 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(exception.Message, Does.Contain("stack 2"));
         }
 
+        /// <summary>
+        /// The reported stack must match where the engine actually crosses zero. The closed form assumes
+        /// exact arithmetic, so it is compared against the fixed-point path the runtime evaluates.
+        /// </summary>
+        [TestCase(0.5f, GASStackMagnitudePolicy.LinearBias)]
+        [TestCase(0.9f, GASStackMagnitudePolicy.LinearBias)]
+        [TestCase(0.99f, GASStackMagnitudePolicy.LinearBias)]
+        [TestCase(0.5f, GASStackMagnitudePolicy.Exponential)]
+        [TestCase(0.9f, GASStackMagnitudePolicy.Exponential)]
+        [TestCase(0.99f, GASStackMagnitudePolicy.Exponential)]
+        public void StackMagnitudeSign_ReportedStackMatchesTheEngine(float magnitude, GASStackMagnitudePolicy policy)
+        {
+            var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() =>
+            {
+                new GameplayEffect(
+                    "Policy.ReportedStack",
+                    EDurationPolicy.Infinite,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo("Attr0", EAttributeModifierOperation.Multiply, new ScalableFloat(magnitude))
+                    },
+                    stacking: new GameplayEffectStacking(
+                        EGameplayEffectStackingType.AggregateByTarget,
+                        limit: GameplayEffectStacking.UnlimitedStackLimit,
+                        durationPolicy: EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication,
+                        magnitudePolicy: policy,
+                        limitMode: EGameplayEffectStackLimitMode.Unlimited));
+            });
+
+            int reported = ParseReportedStack(exception.Message);
+            int actual = ScanFirstNonPositiveStack(magnitude, policy);
+
+            Assert.That(reported, Is.EqualTo(actual),
+                $"Message points at stack {reported}; the engine crosses zero at {actual}.");
+        }
+
+        private static int ParseReportedStack(string message)
+        {
+            const string marker = "stops being positive at stack ";
+            int start = message.IndexOf(marker, System.StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0), $"Unexpected message: {message}");
+
+            start += marker.Length;
+            int end = start;
+            while (end < message.Length && (char.IsDigit(message[end]) || message[end] == '-'))
+            {
+                end++;
+            }
+
+            Assert.That(end, Is.GreaterThan(start), $"No stack number after '{marker}' in: {message}");
+            return int.Parse(
+                message.Substring(start, end - start),
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static int ScanFirstNonPositiveStack(float magnitude, GASStackMagnitudePolicy policy)
+        {
+            long magnitudeRaw = GASFixedValue.FromFloat(magnitude).RawValue;
+            for (int stack = 1; stack <= GameplayEffectStacking.UnlimitedStackLimit; stack++)
+            {
+                if (GASFixedValue.ResolveStackScaledMagnitudeRaw(magnitudeRaw, stack, policy) <= 0L)
+                {
+                    return stack;
+                }
+            }
+
+            return -1;
+        }
+
         [Test]
         public void Unlimited_StacksPastTheLimitedCap()
         {

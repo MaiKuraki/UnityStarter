@@ -647,35 +647,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         "Multiply/Division magnitude must stay positive.");
                 }
 
-                double multiplier = stacking.MagnitudePolicy == GASStackMagnitudePolicy.Exponential
-                    ? Math.Pow(worstMagnitude, stackLimit)
-                    : (worstMagnitude - 1.0) * stackLimit + 1.0;
-
-                if (multiplier <= 0.0)
+                if (worstMagnitude >= 1.0)
                 {
-                    double nonPositiveAtStack = FirstNonPositiveStack(worstMagnitude, stacking.MagnitudePolicy);
+                    // A multiplier of 1 or more never reaches zero, so no scan is needed.
+                    continue;
+                }
+
+                // Judge on the fixed-point path: truncation makes a sub-1 multiplier reach zero well
+                // before the closed form does, so a double-only test would let such a config through.
+                long magnitudeRaw = GASFixedValue.FromDouble(worstMagnitude).RawValue;
+                int nonPositiveAtStack = GASFixedValue.FindFirstNonPositiveStack(
+                    magnitudeRaw,
+                    stackLimit,
+                    stacking.MagnitudePolicy);
+                if (nonPositiveAtStack > 0)
+                {
                     throw new ArgumentOutOfRangeException(
                         nameof(stacking),
                         stackLimit,
                         $"Stacked multiplier for '{modifier.AttributeName}' stops being positive at stack " +
-                        $"{nonPositiveAtStack:F0} (stack limit {stackLimit}, magnitude {worstMagnitude:F4}). " +
+                        $"{nonPositiveAtStack} (stack limit {stackLimit}, magnitude {worstMagnitude:F4}). " +
                         "Raise the magnitude, lower the stack limit, or change the magnitude policy.");
                 }
             }
-        }
-
-        /// <summary>
-        /// First stack count where the running multiplier stops being positive, for magnitudes below 1.
-        /// </summary>
-        private static double FirstNonPositiveStack(double magnitude, GASStackMagnitudePolicy policy)
-        {
-            if (policy == GASStackMagnitudePolicy.Exponential)
-            {
-                // Below 1 the product reaches the Q32.32 epsilon (2^-32) and then underflows to zero.
-                return Math.Ceiling(-32.0 * Math.Log(2.0) / Math.Log(magnitude));
-            }
-
-            return Math.Ceiling(1.0 / (1.0 - magnitude));
         }
 
         private static GameplayEffectTagRequirements CreateRequirements(
