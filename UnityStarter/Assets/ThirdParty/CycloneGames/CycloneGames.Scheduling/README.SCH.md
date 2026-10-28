@@ -270,6 +270,8 @@ driver.Bind(scheduler);
 
 Factory integration 适配已有的有界 pool 维护调用。
 
+这个 integration 只有在 `com.cyclone-games.factory` 作为 UPM 包安装时才会编译。Factory 包通过 `versionDefines` 定义 `CYCLONEGAMES_HAS_FACTORY`，integration 程序集和它的测试只在这个符号存在时编译。没有 Factory 时，包的其他部分仍能编译。
+
 ```csharp
 using CycloneGames.Scheduling.Integrations.Factory;
 

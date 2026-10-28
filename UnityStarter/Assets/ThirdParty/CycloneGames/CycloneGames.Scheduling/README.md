@@ -270,6 +270,8 @@ Binding is allowed after `Awake` only while the driver's own scheduler has accep
 
 The Factory integration adapts existing bounded pool-maintenance calls.
 
+This integration compiles only when `com.cyclone-games.factory` is installed as a UPM package. The Factory package defines `CYCLONEGAMES_HAS_FACTORY` through `versionDefines`, and the integration assembly and its tests compile only when that symbol is present. Without Factory, the rest of the package still compiles.
+
 ```csharp
 using CycloneGames.Scheduling.Integrations.Factory;
 

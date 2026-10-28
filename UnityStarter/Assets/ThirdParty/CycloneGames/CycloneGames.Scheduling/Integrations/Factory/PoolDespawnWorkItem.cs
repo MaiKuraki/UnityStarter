@@ -1,3 +1,4 @@
+#if CYCLONEGAMES_HAS_FACTORY
 using System;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.Scheduling.Core;
@@ -61,3 +62,4 @@ namespace CycloneGames.Scheduling.Integrations.Factory
         }
     }
 }
+#endif
