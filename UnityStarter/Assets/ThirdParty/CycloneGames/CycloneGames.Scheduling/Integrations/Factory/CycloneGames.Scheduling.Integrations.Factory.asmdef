@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Scheduling.Integrations.Factory",
+    "rootNamespace": "CycloneGames.Scheduling.Integrations.Factory",
+    "references": [
+        "CycloneGames.Scheduling.Core",
+        "CycloneGames.Factory.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_FACTORY"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.factory",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_FACTORY"
+        }
+    ],
+    "noEngineReferences": true
+}
