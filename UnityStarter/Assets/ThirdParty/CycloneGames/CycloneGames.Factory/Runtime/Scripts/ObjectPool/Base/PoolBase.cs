@@ -550,9 +550,12 @@ namespace CycloneGames.Factory.Runtime
                 if (validationFailure != null)
                 {
                     _callbackFailures++;
-                    Exception destroyFailure = TryDestroyOwnedItem(item);
-                    ThrowCombined(validationFailure, destroyFailure);
                 }
+
+                // The item has left the logical collection, but the pool still owns its cleanup.
+                // Always use the same destruction path so ownership tracking matches disposal.
+                Exception destroyFailure = TryDestroyOwnedItem(item);
+                ThrowCombined(validationFailure, destroyFailure);
             }
 
             if (_capacitySettings.HardCapacity > 0 && CountAll >= _capacitySettings.HardCapacity)
@@ -710,6 +713,7 @@ namespace CycloneGames.Factory.Runtime
                 {
                     _invalidatedInactiveItems++;
                     AddFailure(ref failures, validationFailure);
+                    AddFailure(ref failures, TryDestroyOwnedItem(item));
                     continue;
                 }
 
@@ -743,6 +747,7 @@ namespace CycloneGames.Factory.Runtime
                 {
                     _invalidatedInactiveItems++;
                     AddFailure(ref failures, validationFailure);
+                    AddFailure(ref failures, TryDestroyOwnedItem(item));
                     continue;
                 }
 

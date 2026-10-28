@@ -266,6 +266,7 @@ The callback may despawn the current item but may not mutate other active items.
 | Spawn callback fails, reset succeeds | The borrow is rolled back; the item may return inactive. |
 | Spawn callback and reset both fail | The item is quarantined and permanently cleaned up; never reused. |
 | Despawn callback or validation fails | Active ownership is removed, the item is quarantined, cleanup is attempted, and the error propagates. |
+| An inactive item becomes invalid or is externally destroyed | Cleanup is attempted through the same owned-destruction path. Ownership tracking is released when cleanup succeeds; validation or cleanup failures propagate. |
 | One item fails during `Clear` or `Dispose` | Remaining owned items are still processed; failures are reported as `AggregateException`. |
 | Hard capacity is exhausted | `TrySpawn` returns `false`; `Spawn` follows `OverflowPolicy`. |
 
