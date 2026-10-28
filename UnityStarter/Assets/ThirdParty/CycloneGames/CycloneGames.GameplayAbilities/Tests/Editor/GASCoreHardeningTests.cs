@@ -455,8 +455,49 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 ref accumulator, GASFixedValue.FromInt(100).RawValue, unrealBiasSum: true);
 
             Assert.That(accumulator.Overflowed, Is.False);
-            // Ten x1.5 become a +5 bias, so 100 becomes 600 rather than 100 * 1.5^10.
+            // Ten x1.5 become a +5 bias, so 100 becomes 600.
             Assert.That(folded, Is.EqualTo(GASFixedValue.FromInt(600).RawValue));
+        }
+
+        [Test]
+        public void Accumulator_SaturatesNegativeSumOnTheNegativeSide()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+            var large = GASFixedValue.FromDouble(-1.6e9);
+
+            for (int i = 0; i < 2; i++)
+            {
+                GASModifierAggregation.Accumulate(
+                    ref accumulator,
+                    GASModifierOp.Add,
+                    large.RawValue,
+                    1,
+                    GASStackMagnitudePolicy.LinearBias,
+                    unrealBiasSum: false);
+            }
+
+            Assert.That(accumulator.Overflowed, Is.True);
+            Assert.That(accumulator.Add.RawValue, Is.EqualTo(long.MinValue),
+                "Adding two negatives must saturate towards negative infinity.");
+        }
+
+        [Test]
+        public void Accumulator_SaturatesNegativeStackScaledAdd()
+        {
+            var accumulator = GASModifierAggregation.Accumulator.Create();
+
+            // -1e9 scaled by three stacks leaves the range in the scaling step itself.
+            GASModifierAggregation.Accumulate(
+                ref accumulator,
+                GASModifierOp.Add,
+                GASFixedValue.FromDouble(-1e9).RawValue,
+                3,
+                GASStackMagnitudePolicy.LinearBias,
+                unrealBiasSum: false);
+
+            Assert.That(accumulator.Overflowed, Is.True);
+            Assert.That(accumulator.Add.RawValue, Is.EqualTo(long.MinValue),
+                "The stack-scaled magnitude must saturate.");
         }
 
         [Test]

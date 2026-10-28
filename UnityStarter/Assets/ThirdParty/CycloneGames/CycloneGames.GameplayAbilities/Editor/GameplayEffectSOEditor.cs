@@ -703,7 +703,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                 }
 
                 int stackLimit = unlimited
-                    ? ushort.MaxValue
+                    ? Runtime.GameplayEffectStacking.UnlimitedStackLimit
                     : (stackingLimitProp != null ? stackingLimitProp.intValue : 0);
 
                 // Mirrors GameplayEffect.ValidateStackMagnitudeRange so the asset fails here instead

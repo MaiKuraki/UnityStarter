@@ -7010,8 +7010,26 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             break;
                     }
                 }
-                Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Stacking limit for ")
-                    .Append(effectName).Append(" reached."));
+                if (spec.Def.Stacking.LimitMode == EGameplayEffectStackLimitMode.Unlimited)
+                {
+                    // The cap here is the stack-count storage capacity, not a designed limit.
+                    if (!existingEffect.UnlimitedStackCapReported)
+                    {
+                        existingEffect.MarkUnlimitedStackCapReported();
+                        Log.Warning(
+                            spec.Def.Name,
+                            static (effectName, sb) => sb.Append("Effect '")
+                                .Append(effectName)
+                                .Append("' reached the Unlimited stacking capacity (")
+                                .Append(GameplayEffectStacking.UnlimitedStackLimit)
+                                .Append(") and stopped growing; use a configured limit if this is unintended."));
+                    }
+                }
+                else
+                {
+                    Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Stacking limit for ")
+                        .Append(effectName).Append(" reached."));
+                }
             }
             else
             {
