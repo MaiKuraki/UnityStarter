@@ -308,8 +308,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Limited,
 
         /// <summary>
-        /// No gameplay limit. Resolves to <see cref="ushort.MaxValue"/> because the Core mirror stores
-        /// the stack count as a ushort, so the value still saturates instead of wrapping.
+        /// No configured gameplay limit. Resolves to
+        /// <see cref="GameplayEffectStacking.UnlimitedStackLimit"/> (65535), the capacity of the Core
+        /// mirror's stack count.
         /// </summary>
         Unlimited
     }
@@ -349,13 +350,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
+        /// Stack count that <see cref="EGameplayEffectStackLimitMode.Unlimited"/> resolves to. The Core
+        /// mirror stores the stack count as a <see cref="ushort"/>, so "unlimited" is bounded by that
+        /// capacity.
+        /// </summary>
+        public const int UnlimitedStackLimit = ushort.MaxValue;
+
+        /// <summary>
         /// The effective cap every clamp and validation site must use. Keeping the resolution in one
         /// place is what lets <see cref="EGameplayEffectStackLimitMode.Unlimited"/> stay a single
         /// switch instead of a sentinel that every call site has to remember.
         /// </summary>
         public int ResolveStackLimit()
         {
-            return LimitMode == EGameplayEffectStackLimitMode.Unlimited ? ushort.MaxValue : Limit;
+            return LimitMode == EGameplayEffectStackLimitMode.Unlimited ? UnlimitedStackLimit : Limit;
         }
     }
 

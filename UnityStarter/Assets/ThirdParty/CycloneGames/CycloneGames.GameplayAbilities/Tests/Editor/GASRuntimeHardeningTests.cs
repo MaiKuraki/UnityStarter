@@ -1784,7 +1784,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     }
                 }
 
-                // One hand-checked anchor so the comparison cannot pass while both sides are wrong.
+                // Independent hand-computed anchor.
                 Assert.That(attributes.ValueOf(3).CurrentValueRaw,
                     Is.EqualTo(GASFixedValue.FromInt(42).RawValue),
                     "Channel3 Override must replace the value evaluated by earlier channels.");

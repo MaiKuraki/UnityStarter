@@ -181,19 +181,28 @@ namespace CycloneGames.GameplayAbilities.Core
             if (!FPInt64.TryAdd(scaled, FPInt64.One, out FPInt64 biased))
             {
                 overflowed = true;
-                return SaturateForSign(scaled, FPInt64.One).RawValue;
+                return SaturateForSum(scaled).RawValue;
             }
 
             return biased.RawValue;
         }
 
         /// <summary>
-        /// Returns the limit a product of the two operands exceeds.
+        /// Returns the limit a product or quotient of the two operands exceeds.
         /// </summary>
         internal static FPInt64 SaturateForSign(FPInt64 left, FPInt64 right)
         {
             bool negative = (left.RawValue ^ right.RawValue) < 0;
             return negative ? FPInt64.MinValue : FPInt64.MaxValue;
+        }
+
+        /// <summary>
+        /// Returns the limit a sum exceeds. Addition only overflows when both operands share a sign,
+        /// so the operand's own sign is the sign of the result.
+        /// </summary>
+        internal static FPInt64 SaturateForSum(FPInt64 operand)
+        {
+            return operand.RawValue < 0 ? FPInt64.MinValue : FPInt64.MaxValue;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
