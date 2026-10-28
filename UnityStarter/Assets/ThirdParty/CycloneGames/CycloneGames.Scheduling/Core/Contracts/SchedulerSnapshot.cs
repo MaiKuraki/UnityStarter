@@ -16,6 +16,7 @@ namespace CycloneGames.Scheduling.Core
         public double LastTickMilliseconds { get; }
         public double MaxTickMilliseconds { get; }
         public bool IsShutdown { get; }
+        public bool IsShutdownCompleted { get; }
 
         internal SchedulerSnapshot(
             int capacity,
@@ -30,7 +31,8 @@ namespace CycloneGames.Scheduling.Core
             long overBudgetTickCount,
             double lastTickMilliseconds,
             double maxTickMilliseconds,
-            bool isShutdown)
+            bool isShutdown,
+            bool isShutdownCompleted)
         {
             Capacity = capacity;
             OutstandingCount = outstandingCount;
@@ -45,6 +47,7 @@ namespace CycloneGames.Scheduling.Core
             LastTickMilliseconds = lastTickMilliseconds;
             MaxTickMilliseconds = maxTickMilliseconds;
             IsShutdown = isShutdown;
+            IsShutdownCompleted = isShutdownCompleted;
         }
     }
 }

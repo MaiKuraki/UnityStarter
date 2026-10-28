@@ -8,6 +8,23 @@ namespace CycloneGames.Scheduling.Tests.Editor
     public sealed class SchedulingDriverTests
     {
         [Test]
+        public void Bind_AfterAcceptedWorkIsRejectedWithoutReplacingScheduler()
+        {
+            var host = new GameObject("SchedulingDriverTests");
+            var driver = host.AddComponent<SchedulingDriver>();
+            WorkScheduler original = driver.Scheduler;
+            var item = new TestWorkItem(int.MaxValue);
+            original.TrySchedule(item, out _);
+
+            Assert.Throws<System.InvalidOperationException>(() => driver.Bind(new WorkScheduler(1)));
+            Assert.That(driver.Scheduler, Is.SameAs(original));
+
+            driver.Shutdown();
+            Assert.That(item.Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            Object.DestroyImmediate(host);
+        }
+
+        [Test]
         public void Shutdown_TerminatesOutstandingWorkAndIsIdempotent()
         {
             var host = new GameObject("SchedulingDriverTests");

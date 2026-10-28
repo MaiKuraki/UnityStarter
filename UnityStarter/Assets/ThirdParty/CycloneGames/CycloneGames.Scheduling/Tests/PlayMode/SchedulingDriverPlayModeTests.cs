@@ -95,6 +95,104 @@ namespace CycloneGames.Scheduling.Tests.PlayMode
         }
 
         [UnityTest]
+        public IEnumerator BeginShutdown_DrainsInBatchesWithoutExecutingSteps()
+        {
+            CreateDriver();
+            var items = new[]
+            {
+                new UnityTestWorkItem(int.MaxValue),
+                new UnityTestWorkItem(int.MaxValue),
+                new UnityTestWorkItem(int.MaxValue),
+            };
+            for (int index = 0; index < items.Length; index++)
+            {
+                driver.Scheduler.TrySchedule(items[index], out _);
+            }
+
+            driver.BeginShutdown();
+            Assert.That(driver.IsShuttingDown, Is.True);
+            yield return null;
+            Assert.That(items[0].Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            Assert.That(items[1].TerminationCount, Is.Zero);
+            Assert.That(driver.Scheduler.OutstandingCount, Is.EqualTo(2));
+
+            yield return null;
+            Assert.That(driver.Scheduler.OutstandingCount, Is.EqualTo(1));
+            yield return null;
+
+            for (int index = 0; index < items.Length; index++)
+            {
+                Assert.That(items[index].StepCount, Is.Zero);
+                Assert.That(items[index].TerminationCount, Is.EqualTo(1));
+                Assert.That(items[index].Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            }
+
+            Assert.That(driver.IsShuttingDown, Is.False);
+            Assert.Throws<System.InvalidOperationException>(() => _ = driver.Scheduler);
+        }
+
+        [UnityTest]
+        public IEnumerator DestroyDuringShutdownDrain_CompletesCleanupImmediately()
+        {
+            CreateDriver();
+            var items = new[]
+            {
+                new UnityTestWorkItem(int.MaxValue),
+                new UnityTestWorkItem(int.MaxValue),
+                new UnityTestWorkItem(int.MaxValue),
+            };
+            for (int index = 0; index < items.Length; index++)
+            {
+                driver.Scheduler.TrySchedule(items[index], out _);
+            }
+
+            driver.BeginShutdown();
+            yield return null;
+            Assert.That(items[0].TerminationCount, Is.EqualTo(1));
+            Assert.That(items[1].TerminationCount, Is.Zero);
+
+            Object.Destroy(host);
+            yield return null;
+
+            for (int index = 0; index < items.Length; index++)
+            {
+                Assert.That(items[index].StepCount, Is.Zero);
+                Assert.That(items[index].TerminationCount, Is.EqualTo(1));
+                Assert.That(items[index].Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator BoundScheduler_RemainsOwnedByCompositionRootAfterHostDestroy()
+        {
+            CreateDriver();
+            var external = new WorkScheduler(2);
+            try
+            {
+                driver.Bind(external);
+                Assert.That(driver.OwnsScheduler, Is.False);
+                var item = new UnityTestWorkItem(int.MaxValue);
+                external.TrySchedule(item, out _);
+                Assert.Throws<System.InvalidOperationException>(() => driver.BeginShutdown());
+
+                Object.Destroy(host);
+                yield return null;
+
+                Assert.That(driver == null, Is.True);
+                Assert.That(external.IsShutdown, Is.False);
+                Assert.That(item.TerminationCount, Is.Zero);
+
+                external.Shutdown();
+                Assert.That(item.TerminationCount, Is.EqualTo(1));
+                Assert.That(item.Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            }
+            finally
+            {
+                external.Shutdown();
+            }
+        }
+
+        [UnityTest]
         public IEnumerator TrimAdapter_ExternallyDestroyedInactive_ReleasesOwnership()
         {
             CreateDriver();

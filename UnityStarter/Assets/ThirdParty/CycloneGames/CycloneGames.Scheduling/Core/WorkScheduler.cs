@@ -72,6 +72,7 @@ namespace CycloneGames.Scheduling.Core
         public int Capacity => _slots.Length;
         public int OutstandingCount => _outstandingCount;
         public bool IsShutdown => _isShutdown;
+        public bool IsShutdownCompleted => _isShutdown && _outstandingCount == 0;
 
         /// <summary>
         /// Accepts ownership of one work registration. On rejection, ownership remains with the caller
@@ -225,23 +226,40 @@ namespace CycloneGames.Scheduling.Core
         }
 
         /// <summary>
-        /// Stops admission, cancels every outstanding registration without further Step calls, and releases
-        /// all internal references. All callbacks are attempted before an aggregate failure is thrown.
+        /// Stops admission and cancels every outstanding registration without further Step calls.
+        /// All callbacks are attempted before an aggregate failure is thrown.
         /// </summary>
         public void Shutdown()
         {
             EnsurePublicAccess();
-            if (_isShutdown)
+            ShutdownCore(int.MaxValue);
+        }
+
+        /// <summary>
+        /// Stops admission and terminates at most maxItems registrations. Returns the number terminated.
+        /// A zero budget begins shutdown without cancelling an item. Later calls continue the same drain.
+        /// </summary>
+        public int ShutdownStep(int maxItems)
+        {
+            EnsurePublicAccess();
+            if (maxItems < 0)
             {
-                return;
+                throw new ArgumentOutOfRangeException(nameof(maxItems));
             }
 
+            return ShutdownCore(maxItems);
+        }
+
+        private int ShutdownCore(int maxItems)
+        {
             _isShutdown = true;
+            int processed = 0;
             List<Exception> failures = null;
-            while (_head >= 0)
+            while (processed < maxItems && _head >= 0)
             {
                 int slot = PopHead();
                 Exception failure = Terminate(slot, WorkTerminationReason.Shutdown);
+                processed++;
                 if (failure != null)
                 {
                     if (failures == null)
@@ -257,6 +275,8 @@ namespace CycloneGames.Scheduling.Core
             {
                 throw new AggregateException("One or more work items failed during scheduler shutdown.", failures);
             }
+
+            return processed;
         }
 
         public void Dispose()
@@ -280,7 +300,8 @@ namespace CycloneGames.Scheduling.Core
                 _overBudgetTickCount,
                 _lastTickMilliseconds,
                 _maxTickMilliseconds,
-                _isShutdown);
+                _isShutdown,
+                _isShutdown && _outstandingCount == 0);
         }
 
         private bool TryGetOccupiedSlot(WorkItemHandle handle, out int slot)

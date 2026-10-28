@@ -4,8 +4,8 @@ using UnityEngine;
 namespace CycloneGames.Scheduling.Runtime
 {
     /// <summary>
-    /// Explicit Unity host for one WorkScheduler. Disabling the component pauses execution;
-    /// destroying it cancels all outstanding work through WorkScheduler.Shutdown.
+    /// Explicit Unity host for one WorkScheduler. Self-created schedulers are owned by the driver;
+    /// bound schedulers remain owned by their external composition root.
     /// </summary>
     [AddComponentMenu("CycloneGames/Scheduling Driver")]
     public sealed class SchedulingDriver : MonoBehaviour
@@ -16,7 +16,7 @@ namespace CycloneGames.Scheduling.Runtime
 
         [SerializeField]
         [Min(0)]
-        [Tooltip("Maximum Step calls per Update. Zero pauses execution.")]
+        [Tooltip("Maximum Step or shutdown termination calls per Update. Zero pauses execution and draining.")]
         private int maxStepsPerFrame = 64;
 
         [SerializeField]
@@ -25,6 +25,9 @@ namespace CycloneGames.Scheduling.Runtime
         private double softBudgetMilliseconds = 2.0;
 
         private WorkScheduler scheduler;
+        private bool ownsScheduler;
+        private bool hasExternalScheduler;
+        private bool isShuttingDown;
         private bool isDestroyed;
 
         public WorkScheduler Scheduler
@@ -37,9 +40,12 @@ namespace CycloneGames.Scheduling.Runtime
                         "SchedulingDriver is fake-null, shut down, or destroyed and cannot provide a scheduler.");
                 }
 
-                return scheduler ?? (scheduler = new WorkScheduler(capacity < 1 ? 1 : capacity));
+                return scheduler ?? CreateOwnedScheduler();
             }
         }
+
+        public bool OwnsScheduler => scheduler != null && ownsScheduler;
+        public bool IsShuttingDown => isShuttingDown;
 
         public int MaxStepsPerFrame
         {
@@ -53,6 +59,112 @@ namespace CycloneGames.Scheduling.Runtime
             set => softBudgetMilliseconds = IsValidBudget(value) ? value : 0;
         }
 
+        /// <summary>
+        /// Binds an externally owned scheduler before this driver accepts work. The external owner retains
+        /// all shutdown responsibility. Binding after this driver has accepted work is rejected.
+        /// </summary>
+        public void Bind(WorkScheduler externalScheduler)
+        {
+            if (this == null || isDestroyed)
+            {
+                throw new System.InvalidOperationException("A destroyed SchedulingDriver cannot bind a scheduler.");
+            }
+
+            if (externalScheduler == null)
+            {
+                throw new System.ArgumentNullException(nameof(externalScheduler));
+            }
+
+            if (isShuttingDown || hasExternalScheduler)
+            {
+                throw new System.InvalidOperationException(
+                    "A scheduler can only be bound once and before shutdown begins.");
+            }
+
+            if (scheduler != null)
+            {
+                if (ReferenceEquals(scheduler, externalScheduler))
+                {
+                    throw new System.InvalidOperationException(
+                        "The driver already owns this scheduler instance. External ownership must use a distinct instance.");
+                }
+
+                if (scheduler.GetSnapshot().AcceptedCount != 0)
+                {
+                    throw new System.InvalidOperationException(
+                        "Cannot replace a scheduler after it has accepted work.");
+                }
+
+                if (ownsScheduler)
+                {
+                    scheduler.Shutdown();
+                }
+            }
+
+            scheduler = externalScheduler;
+            ownsScheduler = false;
+            hasExternalScheduler = true;
+        }
+
+        /// <summary>
+        /// Begins a bounded shutdown of the self-created scheduler. Update terminates queued work in batches
+        /// instead of executing further Steps. External schedulers are shut down by their composition root.
+        /// </summary>
+        public void BeginShutdown()
+        {
+            if (this == null || isDestroyed || isShuttingDown)
+            {
+                return;
+            }
+
+            if (scheduler == null)
+            {
+                isDestroyed = true;
+                return;
+            }
+
+            if (!ownsScheduler)
+            {
+                throw new System.InvalidOperationException(
+                    "An externally owned scheduler must be shut down by its composition root.");
+            }
+
+            isShuttingDown = true;
+            scheduler.ShutdownStep(0);
+        }
+
+        /// <summary>
+        /// Stops this host immediately. A self-created scheduler is synchronously shut down; an externally
+        /// owned scheduler is detached without cancellation and remains the external owner's responsibility.
+        /// </summary>
+        public void Shutdown()
+        {
+            if (isDestroyed)
+            {
+                return;
+            }
+
+            isDestroyed = true;
+            isShuttingDown = false;
+            if (scheduler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (ownsScheduler)
+                {
+                    scheduler.Shutdown();
+                }
+            }
+            finally
+            {
+                scheduler = null;
+                ownsScheduler = false;
+            }
+        }
+
         private void Awake()
         {
             _ = Scheduler;
@@ -60,10 +172,26 @@ namespace CycloneGames.Scheduling.Runtime
 
         private void Update()
         {
-            if (scheduler != null)
+            if (scheduler == null || isDestroyed)
             {
-                scheduler.Tick(maxStepsPerFrame, softBudgetMilliseconds);
+                return;
             }
+
+            if (isShuttingDown)
+            {
+                scheduler.ShutdownStep(maxStepsPerFrame);
+                if (scheduler.OutstandingCount == 0)
+                {
+                    scheduler = null;
+                    ownsScheduler = false;
+                    isShuttingDown = false;
+                    isDestroyed = true;
+                }
+
+                return;
+            }
+
+            scheduler.Tick(maxStepsPerFrame, softBudgetMilliseconds);
         }
 
         private void OnValidate()
@@ -76,29 +204,6 @@ namespace CycloneGames.Scheduling.Runtime
             }
         }
 
-        public void Shutdown()
-        {
-            if (isDestroyed)
-            {
-                return;
-            }
-
-            isDestroyed = true;
-            if (scheduler == null)
-            {
-                return;
-            }
-
-            try
-            {
-                scheduler.Shutdown();
-            }
-            finally
-            {
-                scheduler = null;
-            }
-        }
-
         private void OnApplicationQuit()
         {
             Shutdown();
@@ -107,6 +212,13 @@ namespace CycloneGames.Scheduling.Runtime
         private void OnDestroy()
         {
             Shutdown();
+        }
+
+        private WorkScheduler CreateOwnedScheduler()
+        {
+            scheduler = new WorkScheduler(capacity < 1 ? 1 : capacity);
+            ownsScheduler = true;
+            return scheduler;
         }
 
         private static bool IsValidBudget(double value)

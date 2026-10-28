@@ -2,60 +2,99 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Scheduling 是一个面向有限协作任务的有界、单属主线程调度器。它通过 FIFO 公平轮转、Step 数量上限和软时间预算，把工作分散到多个 Tick。模块适用于允许延迟的维护和批处理，不适用于确定性模拟或对帧内顺序有关键要求的玩法逻辑。
+CycloneGames.Scheduling 把允许延迟的工作分散到多个帧。你提交能按小步推进的项，调度器每次更新只执行有限步数，其余继续排队。
+
+它不是通用任务系统。它运行在单线程上，使用固定大小的队列，也不能打断已经开始执行的 Step。
 
 ## 目录
 
-- [适用场景](#适用场景)
-- [架构](#架构)
-- [核心概念](#核心概念)
+- [用途](#用途)
 - [快速开始](#快速开始)
+- [工作项契约](#工作项契约)
+- [预算与公平性](#预算与公平性)
+- [队列已满](#队列已满)
+- [取消与终止](#取消与终止)
+- [关闭](#关闭)
 - [Unity Host](#unity-host)
+- [DI 与所有权](#di-与所有权)
 - [Factory 集成](#factory-集成)
-- [生命周期与失败语义](#生命周期与失败语义)
-- [预算、容量与背压](#预算容量与背压)
-- [性能与平台说明](#性能与平台说明)
-- [验证](#验证)
+- [存储与分配](#存储与分配)
+- [线程与 IO 边界](#线程与-io-边界)
+- [常见错误](#常见错误)
+- [测试](#测试)
 
-## 适用场景
+## 用途
 
-适合接入的工作项应满足以下条件：
+适合批量处理、pool 维护、内容校验、缓存维护，以及任何允许晚一帧完成的工作。
 
-- 能通过短小、有界的 `Step` 调用持续推进；
-- 允许在后续帧完成，不会因延迟完成而改变正确性；
-- 自己持有进度与部分结果，并定义取消行为；
-- 队列和资源驻留可以设置上限；
-- 不要求所有工作项在同一帧内原子提交。
+不要用它处理输入、物理、确定性模拟、网络 lockstep、音频 DSP，也不要替代已有的 Job 依赖图。
 
-调度器不会减少总工作量。它以完成延迟换取帧时间分布和明确的过载行为。已经开始运行的 `Step` 不可抢占。
+调度器只是把成本从一帧挪到多帧。它不减少总工作量，也不能中断一个 Step 里长时间执行的同步调用。
 
-不要用本模块替代输入采样、物理、确定性模拟、网络 lockstep、音频 DSP 或领域专用 Job 依赖图。
+它不是用来消除所有帧尖峰的。单个 Step 过长造成的尖峰只有拆开 Step 才能解决；渲染、GPU 提交或 GC 造成的尖峰不在本模块范围内。
 
-## 架构
+## 快速开始
 
-| 程序集 | 路径 | 职责 |
-| --- | --- | --- |
-| `CycloneGames.Scheduling.Core` | `Core/` | 固定容量 FIFO、句柄、取消、关闭、预算和诊断，不引用 `UnityEngine`。 |
-| `CycloneGames.Scheduling.Runtime` | `Runtime/` | 显式挂载的 `MonoBehaviour` Update Host。 |
-| `CycloneGames.Scheduling.Integrations.Factory` | `Integrations/Factory/` | 对接 Factory 现有 pool 维护 Step API 的可选适配器。 |
-| `CycloneGames.Scheduling.Tests.Editor` | `Tests/Editor/` | Core 契约、失败路径、Factory 适配器和 Unity Host 生命周期测试。 |
+```csharp
+using System;
+using CycloneGames.Scheduling.Core;
 
-```mermaid
-flowchart LR
-    Caller[显式调用方] -->|TrySchedule| Queue[固定 Slot 数组 + FIFO]
-    Driver[手动 Tick 或 SchedulingDriver] -->|Tick| Scheduler[WorkScheduler]
-    Queue --> Scheduler
-    Scheduler -->|Step| Work[IWorkItem]
-    Work -->|Running| Queue
-    Work -->|Completed / Faulted| Terminal[OnTerminated]
-    Caller -->|Cancel / Shutdown| Terminal
+public sealed class BatchWorkItem : IWorkItem
+{
+    private readonly int[] data;
+    private readonly int batchSize;
+    private int index;
+
+    public int ProcessedCount => index;
+    public WorkTerminationReason? TerminationReason { get; private set; }
+
+    public BatchWorkItem(int[] data, int batchSize = 4)
+    {
+        this.data = data ?? throw new ArgumentNullException(nameof(data));
+        if (batchSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        }
+
+        this.batchSize = batchSize;
+    }
+
+    public WorkStepResult Step()
+    {
+        int end = Math.Min(data.Length, index + batchSize);
+        while (index < end)
+        {
+            data[index]++;
+            index++;
+        }
+
+        return index == data.Length ? WorkStepResult.Completed : WorkStepResult.Running;
+    }
+
+    public void OnTerminated(WorkTerminationReason reason)
+    {
+        TerminationReason = reason;
+    }
+}
 ```
 
-`Scheduling.Core` 只依赖 BCL。`Factory.Runtime` 与 `Scheduling.Core` 不互相引用；可选 integration 同时引用双方。
+在创建 scheduler 的线程上驱动它：
 
-## 核心概念
+```csharp
+var scheduler = new WorkScheduler(capacity: 128);
+var work = new BatchWorkItem(new int[1000], batchSize: 4);
 
-### 工作项
+if (scheduler.TrySchedule(work, out WorkItemHandle handle))
+{
+    // 从这里开始由 scheduler 持有该注册。
+}
+
+scheduler.Tick(maxSteps: 8, softBudgetMs: 2.0);
+```
+
+`Tick` 一次最多执行 `maxSteps` 项。每次更新调用一次。`TrySchedule`、`Cancel`、`ShutdownStep`、`Shutdown`、`GetSnapshot` 都要在同一个线程上调用。
+
+## 工作项契约
 
 ```csharp
 public interface IWorkItem
@@ -65,91 +104,80 @@ public interface IWorkItem
 }
 ```
 
-- `Running` 表示允许在后续 Tick 再次调用。
-- `Completed` 表示正常完成。
-- 工作项自己拥有游标、部分结果和领域清理逻辑。
-- 工作项实现使用 class，避免进度和身份被复制或装箱。
-- 同一个工作项实例不得在一个 scheduler 中同时持有多个未结束注册。
+还有工作要做时 `Step` 返回 `Running`，完成时返回 `Completed`。进度和部分结果由工作项自己保存。
 
-### 句柄
+每个被接受的注册，最终只会调用一次 `OnTerminated`：
 
-`WorkItemHandle` 包含 32 位槽位索引和 32 位 generation，只能用于创建它的 scheduler。取消会拒绝 default、失效和已释放句柄。generation 0 保留给 default handle；完整回绕后，极早期句柄可能重新匹配，因此不得无限期保存句柄。
+| 原因 | 含义 |
+| --- | --- |
+| `Completed` | `Step` 返回了 `Completed`。 |
+| `Cancelled` | `Cancel` 先停止了工作项。 |
+| `Faulted` | `Step` 抛异常或返回了非法值。 |
+| `Shutdown` | Shutdown 停止了剩余工作。 |
 
-### 存储
+`TrySchedule` 返回 `false` 时，注册没有被接受，也不会调用 `OnTerminated`，工作项仍归调用方。
 
-所有队列槽位和空闲索引都在构造时分配。入队、取消和重新排队均为 O(1) 数组索引操作。scheduler 不保存已终止工作项、异常历史或无界诊断记录。
+同一个实例不能同时排队两次。
 
-## 快速开始
-
-在同一个 owner 线程中直接构造并驱动 Core：
+## 预算与公平性
 
 ```csharp
-using CycloneGames.Scheduling.Core;
+scheduler.Tick(maxSteps: 8, softBudgetMs: double.PositiveInfinity);
+```
 
-var scheduler = new WorkScheduler(capacity: 128);
-if (scheduler.TrySchedule(workItem, out WorkItemHandle handle))
+`maxSteps` 限制每次 Tick 的 `Step` 调用次数。它不限制单个 Step 执行多久。
+
+`softBudgetMs` 按时间限制准入。调度器在启动后续 Step 前检查时钟，但无法停止正在运行的 Step，所以一次 Tick 仍可能超预算。
+
+```csharp
+scheduler.Tick(maxSteps: 64, softBudgetMs: 2.0);
+```
+
+不要假设预算一定被满足，直接读计数器：
+
+```csharp
+SchedulerSnapshot snapshot = scheduler.GetSnapshot();
+long overBudgetTicks = snapshot.OverBudgetTickCount;
+double lastTickMs = snapshot.LastTickMilliseconds;
+```
+
+返回 `Running` 的项回到队尾。以 `A`、`B`、`C` 三项、Step 预算为 2 为例：
+
+| Tick | 执行 | 之后队列 |
+| --- | --- | --- |
+| 1 | `A`、`B` | `C`、`A`、`B` |
+| 2 | `C`、`A` | `B`、`C`、`A` |
+| 3 | `B`、`C` | `A`、`B`、`C` |
+
+一个工作项不会在一次 Tick 里执行两次。
+
+## 队列已满
+
+容量在构造时固定。队列满时 `TrySchedule` 返回 `false` 和 default handle，并增加 `RejectedCount`。已接受的工作不会被静默丢弃。
+
+保留同一个实例，稍后重试：
+
+```csharp
+if (!scheduler.TrySchedule(work, out handle))
 {
-    // scheduler 已接受该注册，并保证恰好一次终止回调。
+    // 用同一个实例在之后的 update 中重试。
 }
-
-// 通常在每帧由同一 owner 线程调用一次。
-scheduler.Tick(maxSteps: 8, softBudgetMs: 2.0);
-
-// 可选：在完成前取消。
-scheduler.Cancel(handle);
-
-// 停止接收并取消所有剩余注册。
-scheduler.Shutdown();
 ```
 
-被拒绝的注册返回 `false` 和 default handle，不调用 `OnTerminated`；工作项仍由调用方拥有。
+如果经常满队列，就减少生产或合并工作项。加大容量只会增加内存和排队延迟。
 
-## Unity Host
-
-由用户把 `SchedulingDriver` 显式添加到 GameObject。包不会自动创建运行时对象。
-
-| 设置 | 含义 |
-| --- | --- |
-| `Capacity` | 未结束注册的固定容量，修改后需要重建 Host。 |
-| `Max Steps Per Frame` | 每次 Update 的最大 `Step` 调用数，0 表示暂停。 |
-| `Soft Budget Milliseconds` | 决定是否允许启动后续 Step 的软时间预算，0 表示暂停。 |
-
-在 `Awake` 后通过 `driver.Scheduler` 注册工作。禁用组件会停止 Update 并保留队列。`OnApplicationQuit` 和 `OnDestroy` 会调用 `Shutdown` 并取消所有剩余注册。也可以直接调用 `driver.Shutdown()` 显式关闭；该操作幂等。fake-null、已关闭或已销毁的 driver 会被 `driver.Scheduler` 拒绝，不会静默重建 scheduler。
-
-Host 只拥有自己的 scheduler，不拥有工作项引用的 pool 或其他资源。组合销毁顺序时，必须保证这些 owner 在 scheduler Shutdown 期间仍然有效。
-
-## Factory 集成
-
-可选 Factory integration 提供：
-
-- `PoolWarmupWorkItem`：按有界批次创建请求的额外项数量。
-- `PoolTrimInactiveWorkItem`：把 inactive 数量修剪到绝对目标值。
-- `PoolDespawnWorkItem`：按有界批次把 active 项归还 pool。
+## 取消与终止
 
 ```csharp
-using CycloneGames.Scheduling.Integrations.Factory;
-
-var warmup = new PoolWarmupWorkItem(pool, count: 100, batchSize: 4);
-scheduler.TrySchedule(warmup, out _);
+if (scheduler.Cancel(handle))
+{
+    // 该工作项不会再收到 Step 调用。
+}
 ```
 
-Scheduler 的 Step 预算限制的是适配器调用次数，不是创建或归还的 pool 项数量。`TargetReached` 用于区分“目标达成”和“底层无进展而结束”。取消会停止后续 pool 操作，不回滚已发生的操作，也不会 Dispose pool。
+`Cancel` 是 O(1)。调度器先释放自己的引用，再调用 `OnTerminated(Cancelled)`。default、失效或已释放的句柄返回 `false`。
 
-## 生命周期与失败语义
-
-| 路径 | 行为 |
-| --- | --- |
-| 已接受 | 每个注册保证恰好一次 `OnTerminated`。 |
-| 已拒绝 | 不调用回调，所有权仍属于调用方。 |
-| 完成 | 先释放句柄与内部引用，再调用 `OnTerminated(Completed)`。 |
-| 取消 | 不再执行 `Step`，调用 `OnTerminated(Cancelled)`。 |
-| Step 异常 | 调用 `OnTerminated(Faulted)` 并传播异常，其他项保留排队。 |
-| 关闭 | 不再执行 `Step`，所有剩余项收到 `OnTerminated(Shutdown)`。 |
-| 终止回调异常 | 内部状态保持已释放，传播异常但不重复回调。 |
-
-`Shutdown` 会尝试所有剩余回调后再抛出聚合异常，并且幂等。不得在 `Step` 或 `OnTerminated` 内重入 scheduler 公共操作。
-
-已接受工作项满足：
+`GetSnapshot` 报告计数器，满足：
 
 ```text
 AcceptedCount == CompletedCount + FaultedCount + CancelledCount + OutstandingCount
@@ -157,51 +185,156 @@ AcceptedCount == CompletedCount + FaultedCount + CancelledCount + OutstandingCou
 
 `RejectedCount` 单独统计，因为被拒绝的工作从未被接受。
 
-## 预算、容量与背压
+`Step` 抛异常时，工作项变为 `Faulted`，异常向上传播，其余工作项继续排队。`Step` 或 `OnTerminated` 抛异常不会留下半释放的注册。
 
-每次 Tick 开始都会固定本轮 eligible 数量。每个 eligible 项最多执行一次，返回 `Running` 的项重新进入队尾。回调内不能重入提交新工作。
+不要在 `Step` 或 `OnTerminated` 里调用 `TrySchedule`、`Cancel`、`Tick`、`ShutdownStep`、`Shutdown` 或 `GetSnapshot`。
 
-时间预算是软预算：
+## 关闭
 
-- 每次启动后续 Step 前检查单调时钟；
-- 已运行的 Step 可以超过预算；
-- `OverBudgetTickCount`、`LastTickMilliseconds` 和 `MaxTickMilliseconds` 暴露观测到的超支；
-- `double.PositiveInfinity` 可关闭时间准入，同时保留 Step 数量限制。
+最终清理：
 
-容量固定。队列满时拒绝新注册，不丢弃已接受工作，也不扩容内存。生产者必须处理 `false`：稍后重试、降低生产速度，或执行自己的领域策略。
+```csharp
+scheduler.Shutdown();
+```
 
-## 性能与平台说明
+它停止接收并同步终止所有剩余工作项。即使个别回调失败，也会先尝试全部回调，再抛出聚合异常。重复调用是安全的。
 
-- 正常入队、取消和重新排队在构造后没有显式托管分配；异常路径允许分配聚合诊断。
-- 热路径不使用 LINQ、捕获 Lambda、动态扩容、临时集合或逐项字符串。
-- Slot 使用连续数组；没有实测前，不默认采用 cache-line padding、SoA、unsafe 或 lock-free。
-- Core 仅支持 owner-thread confinement，不是通用跨线程调度器，也不会让 Unity API 获得工作线程调用能力。
-- 磁盘 IO、异步加载和大文件处理需要有界领域 adapter；Step 不得隐藏无界同步 IO。
-- Unity 对象可能在适配器 Step 请求销毁后才完成实际清理。`Object.Destroy` 的时序、fake-null 检查、场景退出和主线程所有权必须在 Unity integration 中保持显式。
-- 绝对吞吐和耗时取决于目标设备、backend、构建类型、workload 和 stripping 配置。
+队列较大时，分批 drain：
 
-| 能力 | 状态 |
+```csharp
+scheduler.ShutdownStep(0);  // 停止接收，先不取消任何项。
+scheduler.ShutdownStep(32); // 最多终止 32 项，不执行 Step。
+```
+
+停止接收后 `IsShutdown` 立即为 true；队列清空后 `IsShutdownCompleted` 才为 true。回调异常按批收集，后续 `ShutdownStep` 继续 drain。数量预算不限制单个回调的耗时。
+
+## Unity Host
+
+自己把 `SchedulingDriver` 加到 GameObject 上。包不会自动创建运行时对象。
+
+| 设置 | 含义 |
 | --- | --- |
-| 纯 C# owner-thread Core | 在目标宿主验证矩阵完成前为 Experimental |
-| Unity Update Host | 已覆盖 EditMode/PlayMode 生命周期测试；目标 Player 仍未验证 |
-| Factory 维护适配器 | 已覆盖 EditMode/PlayMode 契约与 fake-null 清理；目标 Player 仍未验证 |
-| MPSC、PlayerLoop 注入、Jobs、UniTask adapter | 当前版本不提供 |
-| WebGL 等受限线程平台 | Core 不依赖线程，平台行为仍需验证 |
+| `Capacity` | 固定注册容量，修改后需要重建 Host。 |
+| `Max Steps Per Frame` | 每次 Update 的 Step 或关闭终止次数，0 同时暂停两者。 |
+| `Soft Budget Milliseconds` | 软时间预算，0 暂停正常工作。 |
 
-## 验证
+注册工作：
 
-使用当前 Unity 可执行文件运行聚焦 EditMode 套件：
+```csharp
+using CycloneGames.Scheduling.Core;
+using CycloneGames.Scheduling.Runtime;
+
+public static class SchedulingExample
+{
+    public static void Configure(SchedulingDriver driver, IWorkItem work)
+    {
+        driver.Scheduler.TrySchedule(work, out _);
+    }
+}
+```
+
+`Update` 驱动正常工作或分批关闭。禁用组件会暂停队列但不取消。`OnApplicationQuit` 和 `OnDestroy` 会立即处理剩余工作。
+
+对 Host 自己创建的 scheduler，`driver.BeginShutdown()` 会把 Update 从执行 Step 切换到分批终止。drain 期间销毁 Host，剩余部分仍会立即清理。
+
+销毁后的 driver 在 Unity 中是 fake-null。销毁后访问 `driver.Scheduler` 会抛异常，不会重新创建 scheduler。Unity 可能在请求销毁的 Step 之后才真正销毁对象，所以 fake-null 检查和主线程所有权要留在 Unity integration 代码里。
+
+## DI 与所有权
+
+非 DI 环境直接创建：
+
+```csharp
+var scheduler = new WorkScheduler(capacity: 256);
+// 由你控制的 owner 驱动 Tick。
+```
+
+DI 环境让 container 持有 scheduler，再绑定到 Host：
+
+```csharp
+var scheduler = new WorkScheduler(capacity: 256);
+driver.Bind(scheduler);
+```
+
+只有 driver 自己的 scheduler 还没接受过工作时，才允许在 `Awake` 后绑定。外部 scheduler 可以已经持有 composition root 注册的工作。
+
+| 操作 | Host 持有 | 外部绑定 |
+| --- | --- | --- |
+| Driver Update | 执行工作 | 执行工作 |
+| `driver.BeginShutdown()` | 开始分批关闭 | 被拒绝 |
+| `driver.Shutdown()` / `OnDestroy` | 立即关闭 | 只解绑，不取消 |
+| 最终 owner | Driver | Composition root |
+
+`OwnsScheduler` 能告诉你当前是哪种情况。外部 owner 必须先 drain，再销毁工作项引用的资源。
+
+## Factory 集成
+
+Factory integration 适配已有的有界 pool 维护调用。
+
+```csharp
+using CycloneGames.Scheduling.Integrations.Factory;
+
+var warmup = new PoolWarmupWorkItem(pool, count: 100, batchSize: 4);
+scheduler.TrySchedule(warmup, out _);
+
+var trim = new PoolTrimInactiveWorkItem(pool, targetInactiveCount: 16, batchSize: 4);
+scheduler.TrySchedule(trim, out _);
+
+var despawn = new PoolDespawnWorkItem(pool, batchSize: 4);
+scheduler.TrySchedule(despawn, out _);
+```
+
+`batchSize` 限制适配器每次 Step 的 pool 操作量，`maxSteps` 限制每次 Tick 的适配器调用次数，两者不同。
+
+`TargetReached` 告诉你到底达到了请求目标，还是 pool 没有进展而结束。取消会停止后续 pool 调用，不撤销已发生的操作，也不会 Dispose pool。pool owner 负责保持 pool 存活，并避免冲突的结构变更。
+
+## 存储与分配
+
+调度器在构造时一次性分配 `Slot[]` 和空闲槽位 `int[]`。
+
+- `TrySchedule`、`Cancel` 和重新排队都是 O(1)。
+- Shutdown 是 O(终止项数)，用 `ShutdownStep` 分摊。
+- `WorkItemHandle` 保存槽位索引和 generation，只能在发出它的 scheduler 上使用。
+- generation 0 是 default handle。generation 完整回绕后句柄可能别名，不要永久保存。
+
+正常注册、取消、重新排队和分批关闭在构造后不分配托管内存。异常路径可能分配。热路径避免 LINQ、捕获 Lambda、扩容、临时集合和逐项字符串。
+
+工作项分配和 payload 内存属于调用方。只有实测证明高频 churn 有收益且 reset 所有权清晰时，才池化工作项。
+
+## 线程与 IO 边界
+
+调度器只属于创建它的线程。它不是线程安全的，不会把工作从 worker 线程搬到主线程，也不会让 Unity API 获得跨线程调用能力。跨线程生产者需要单独的有界 adapter 和同步设计。
+
+Step 不能隐藏无界同步 IO。文件读取、hash、解压、异步加载和 buffer 所有权都需要有界领域 adapter。大文件必须在操作内部增量处理，一个文件一个 Step 不够。
+
+性能数据取决于设备、Unity 版本、backend、构建类型、workload 和 stripping 设置。Editor 测试不能代表目标 Player 性能。
+
+## 常见错误
+
+| 错误 | 修正 |
+| --- | --- |
+| 一个 Step 里放长时间同步操作 | 拆成有界 Step。 |
+| 每次拒绝都新建工作项 | 保留一个实例，稍后重试。 |
+| 同一个实例排队两次 | 用不同注册，或等待终止。 |
+| 在 `Step` 或 `OnTerminated` 里调调度器 API | 先返回，下一次 owner update 再处理。 |
+| 以为 `maxSteps` 能限制 pool 对象数或回调成本 | 各领域分别预算。 |
+| Host 和 container 都关闭绑定 scheduler | 让 composition root 负责。 |
+| 维护工作没停就销毁 pool | 先停止并 drain。 |
+| 把 Editor 测试当 Player 性能数据 | 测目标 Player。 |
+
+## 测试
+
+EditMode：
 
 ```bash
 <unity-exe> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -testFilter CycloneGames.Scheduling -testResults <output.xml> -logFile <output.log>
 ```
 
-单独运行 PlayMode 生命周期套件：
+PlayMode：
 
 ```bash
 <unity-exe> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform PlayMode -testFilter CycloneGames.Scheduling.Tests.PlayMode -testResults <output.xml> -logFile <output.log>
 ```
 
-套件覆盖 FIFO 公平性、数量与时间预算、容量拒绝、取消、终止回调、异常、重入、Shutdown、句柄复用、Factory 维护、真实 Update 驱动、disable/enable、Host 销毁、fake-null 拒绝和外部销毁的 Unity pool 项。
+套件覆盖 FIFO 顺序、预算、拒绝、取消、终止回调、异常、立即与分批关闭、句柄复用、Factory 维护、Unity Update 与销毁、fake-null 和外部所有权。
 
-性能与分配结论需要单独的 Editor 外或目标 Player 证据。Editor 编译和测试不能证明 IL2CPP、AOT、stripping、目标设备性能或 Unity 对象销毁行为。
+分配和性能测量要在 Editor 之外或目标 Player 中进行。目标 Player、IL2CPP、AOT、stripping 和设备特定行为需要单独验证。

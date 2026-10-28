@@ -222,6 +222,76 @@ namespace CycloneGames.Scheduling.Tests.Editor
         }
 
         [Test]
+        public void ShutdownStep_StopsAdmissionAndDrainsInBatchesWithoutExecutingWork()
+        {
+            var scheduler = new WorkScheduler(3);
+            var first = new TestWorkItem(int.MaxValue);
+            var second = new TestWorkItem(int.MaxValue);
+            var third = new TestWorkItem(int.MaxValue);
+            scheduler.TrySchedule(first, out _);
+            scheduler.TrySchedule(second, out _);
+            scheduler.TrySchedule(third, out _);
+
+            Assert.That(scheduler.ShutdownStep(0), Is.Zero);
+            Assert.That(scheduler.IsShutdown, Is.True);
+            Assert.That(scheduler.IsShutdownCompleted, Is.False);
+            Assert.That(scheduler.TrySchedule(new TestWorkItem(), out _), Is.False);
+            Assert.That(scheduler.Tick(3, 1), Is.Zero);
+
+            Assert.That(scheduler.ShutdownStep(2), Is.EqualTo(2));
+            Assert.That(first.TerminationCount, Is.EqualTo(1));
+            Assert.That(second.TerminationCount, Is.EqualTo(1));
+            Assert.That(third.TerminationCount, Is.Zero);
+            Assert.That(scheduler.OutstandingCount, Is.EqualTo(1));
+
+            Assert.That(scheduler.ShutdownStep(2), Is.EqualTo(1));
+            Assert.That(scheduler.IsShutdownCompleted, Is.True);
+            Assert.That(third.Reason, Is.EqualTo(WorkTerminationReason.Shutdown));
+            Assert.That(first.StepCount + second.StepCount + third.StepCount, Is.Zero);
+            AssertInvariant(scheduler);
+        }
+
+        [Test]
+        public void ShutdownStep_CallbackFailuresDoNotBlockLaterDrain()
+        {
+            var scheduler = new WorkScheduler(3);
+            scheduler.TrySchedule(
+                new TestWorkItem(int.MaxValue) { TerminationFailure = new InvalidOperationException("First") },
+                out _);
+            scheduler.TrySchedule(
+                new TestWorkItem(int.MaxValue) { TerminationFailure = new InvalidOperationException("Second") },
+                out _);
+            scheduler.TrySchedule(new TestWorkItem(int.MaxValue), out _);
+
+            var failure = Assert.Throws<AggregateException>(() => scheduler.ShutdownStep(2));
+            Assert.That(failure.InnerExceptions.Count, Is.EqualTo(2));
+            Assert.That(scheduler.OutstandingCount, Is.EqualTo(1));
+            Assert.That(scheduler.IsShutdownCompleted, Is.False);
+
+            Assert.That(scheduler.ShutdownStep(2), Is.EqualTo(1));
+            Assert.That(scheduler.IsShutdownCompleted, Is.True);
+            AssertInvariant(scheduler);
+        }
+
+        [Test]
+        public void Shutdown_AfterPartialDrainCompletesImmediately()
+        {
+            var scheduler = new WorkScheduler(2);
+            var first = new TestWorkItem(int.MaxValue);
+            var second = new TestWorkItem(int.MaxValue);
+            scheduler.TrySchedule(first, out _);
+            scheduler.TrySchedule(second, out _);
+            scheduler.ShutdownStep(1);
+
+            scheduler.Shutdown();
+
+            Assert.That(first.TerminationCount, Is.EqualTo(1));
+            Assert.That(second.TerminationCount, Is.EqualTo(1));
+            Assert.That(scheduler.IsShutdownCompleted, Is.True);
+            AssertInvariant(scheduler);
+        }
+
+        [Test]
         public void ShutdownAttemptsAllCallbacksBeforeThrowing()
         {
             var scheduler = new WorkScheduler(2);
