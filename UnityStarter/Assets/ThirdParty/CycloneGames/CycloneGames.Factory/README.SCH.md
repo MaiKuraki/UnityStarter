@@ -266,6 +266,7 @@ Callback 可以归还当前 item，但不能修改其他 active item。Pool 检�
 | Spawn callback 失败但 reset 成功 | borrow 回滚，item 可以回到 inactive |
 | Spawn callback 与 reset 均失败 | item 进入 quarantine 并永久清理，绝不再次借出 |
 | Despawn callback 或 validation 失败 | 移除 active ownership、隔离 item、尝试清理并传播错误 |
+| Inactive item 失效或被外部销毁 | 通过统一的 owned-destruction 路径尝试清理；清理成功后释放 ownership tracking，validation 或清理失败会传播 |
 | `Clear`/`Dispose` 中一个 item 失败 | 继续处理其余 owned item，最终以 `AggregateException` 报告 |
 | Hard capacity 耗尽 | `TrySpawn` 返回 `false`；`Spawn` 遵循 `OverflowPolicy` |
 

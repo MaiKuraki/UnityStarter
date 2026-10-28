@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Scheduling.Runtime",
+    "rootNamespace": "CycloneGames.Scheduling.Runtime",
+    "references": [
+        "CycloneGames.Scheduling.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
