@@ -177,10 +177,11 @@ namespace CycloneGames.GameplayAbilities.Core
             {
                 case GASModifierOp.Add:
                 {
-                    if (!FPInt64.TryMultiply(magnitude, FPInt64.FromInt(stackCount), out FPInt64 scaled))
+                    var stackMultiplier = FPInt64.FromInt(stackCount);
+                    if (!FPInt64.TryMultiply(magnitude, stackMultiplier, out FPInt64 scaled))
                     {
                         accumulator.Overflowed = true;
-                        scaled = magnitude * FPInt64.FromInt(stackCount);
+                        scaled = GASFixedValue.SaturateForSign(magnitude, stackMultiplier);
                     }
 
                     accumulator.Add = TryAddOrSaturate(accumulator.Add, scaled, ref accumulator.Overflowed);
@@ -291,7 +292,7 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             overflowed = true;
-            return GASFixedValue.SaturateForSign(left, right);
+            return GASFixedValue.SaturateForSum(left);
         }
 
         private static FPInt64 TryMultiplyOrSaturate(FPInt64 left, FPInt64 right, ref bool overflowed)

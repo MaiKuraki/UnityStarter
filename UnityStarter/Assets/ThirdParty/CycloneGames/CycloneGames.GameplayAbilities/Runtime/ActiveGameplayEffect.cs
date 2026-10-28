@@ -155,6 +155,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cachedPeriodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy.NeverReset;
             cachedStackPeriodResetPolicy = EGameplayEffectStackingPeriodPolicy.ResetOnSuccessfulApplication;
             pendingImmediatePeriodicExecution = false;
+            unlimitedStackCapReported = false;
             liveDependencyModifierIndices = null;
             liveDependencySourceAttributes = null;
             liveDependencyIndicesResolved = false;
@@ -327,6 +328,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         #endregion
 
         #region Stacking
+
+        private bool unlimitedStackCapReported;
+
+        /// <summary>
+        /// True once this effect has reported that Unlimited stacking reached its storage capacity.
+        /// </summary>
+        internal bool UnlimitedStackCapReported => unlimitedStackCapReported;
+
+        internal void MarkUnlimitedStackCapReported()
+        {
+            unlimitedStackCapReported = true;
+        }
 
         /// <summary>
         /// Called when a new stack is successfully applied.

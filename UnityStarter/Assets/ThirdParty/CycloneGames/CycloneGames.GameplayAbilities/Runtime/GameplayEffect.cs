@@ -647,18 +647,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         "Multiply/Division magnitude must stay positive.");
                 }
 
-                double multiplier = stacking.MagnitudePolicy == GASStackMagnitudePolicy.Exponential
-                    ? Math.Pow(worstMagnitude, stackLimit)
-                    : (worstMagnitude - 1.0) * stackLimit + 1.0;
+                if (worstMagnitude >= 1.0)
+                {
+                    // A multiplier of 1 or more never reaches zero, so no scan is needed.
+                    continue;
+                }
 
-                if (multiplier <= 0.0)
+                // Judge on the fixed-point path: truncation makes a sub-1 multiplier reach zero well
+                // before the closed form does, so a double-only test would let such a config through.
+                long magnitudeRaw = GASFixedValue.FromDouble(worstMagnitude).RawValue;
+                int nonPositiveAtStack = GASFixedValue.FindFirstNonPositiveStack(
+                    magnitudeRaw,
+                    stackLimit,
+                    stacking.MagnitudePolicy);
+                if (nonPositiveAtStack > 0)
                 {
                     throw new ArgumentOutOfRangeException(
                         nameof(stacking),
                         stackLimit,
-                        $"Stacked multiplier for '{modifier.AttributeName}' reaches {multiplier:F4} at the " +
-                        "stack limit, so the attribute would be driven to zero or negative. Raise the " +
-                        "magnitude, lower the stack limit, or use a different magnitude policy.");
+                        $"Stacked multiplier for '{modifier.AttributeName}' stops being positive at stack " +
+                        $"{nonPositiveAtStack} (stack limit {stackLimit}, magnitude {worstMagnitude:F4}). " +
+                        "Raise the magnitude, lower the stack limit, or change the magnitude policy.");
                 }
             }
         }
