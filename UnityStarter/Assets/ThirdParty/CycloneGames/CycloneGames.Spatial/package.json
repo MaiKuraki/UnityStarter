@@ -1,0 +1,21 @@
+{
+  "name": "com.cyclone-games.spatial",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Spatial",
+  "description": "Pure C# uniform spatial hash grid for broad-phase proximity and range queries, with handle-based lifetime, flat structure-of-arrays storage, zero steady-state allocation, tombstone-reclaimed cell buckets and an explicitly single-writer thread model.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "Spatial",
+    "Broadphase",
+    "SpatialHash",
+    "Query"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}
