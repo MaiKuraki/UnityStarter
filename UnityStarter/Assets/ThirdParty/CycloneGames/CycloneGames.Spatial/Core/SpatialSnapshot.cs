@@ -34,6 +34,11 @@ namespace CycloneGames.Spatial.Core
         private long[] _cellKeys;
         private int[] _order;
 
+        /// <summary>Open-addressed cell lookup: 0 means empty, otherwise run start index + 1.</summary>
+        private int[] _cellLookup;
+
+        private int _cellLookupMask;
+
         private int _count;
         private int _capacity;
         private long _buildCount;
@@ -127,7 +132,7 @@ namespace CycloneGames.Spatial.Core
             int count = entries.Length;
 
             // Validate first: a partially applied build would leave _cellKeys unsorted while _count still describes the
-            // previous contents, and every later query would binary search it.
+            // previous contents, and every later query would look up stale runs.
             for (int i = 0; i < count; i++)
             {
                 SpatialEntry<TItem> entry = entries[i];
@@ -169,6 +174,8 @@ namespace CycloneGames.Spatial.Core
             {
                 Array.Sort(_cellKeys, _order, 0, count);
             }
+
+            BuildCellLookup(count);
 
             if (count > 0)
             {
@@ -446,6 +453,8 @@ namespace CycloneGames.Spatial.Core
             _layers = null;
             _cellKeys = null;
             _order = null;
+            _cellLookup = null;
+            _cellLookupMask = 0;
             _count = 0;
             _capacity = 0;
         }
@@ -552,42 +561,110 @@ namespace CycloneGames.Spatial.Core
         }
 
         /// <summary>
-        /// Finds the contiguous run of entries whose packed cell key equals <paramref name="key"/>.
+        /// Builds the cell lookup from the sorted key array.
         /// </summary>
-        /// <remarks>Complexity: O(log n) for the lower bound plus O(run length) to find the end.</remarks>
-        private bool TryFindRange(long key, out int start, out int end)
+        /// <remarks>
+        /// Load factor is kept at or below 50 percent, which guarantees the probe loop always meets an empty slot.
+        /// The table maps a packed key to the start index of its run; the run end is found by scanning forward.
+        /// </remarks>
+        private void BuildCellLookup(int count)
         {
-            int low = 0;
-            int high = _count;
-            while (low < high)
+            if (count == 0)
             {
-                int middle = low + ((high - low) >> 1);
-                if (_cellKeys[middle] < key)
+                _cellLookup = null;
+                _cellLookupMask = 0;
+                return;
+            }
+
+            int distinct = 1;
+            for (int i = 1; i < count; i++)
+            {
+                if (_cellKeys[i] != _cellKeys[i - 1])
                 {
-                    low = middle + 1;
-                }
-                else
-                {
-                    high = middle;
+                    distinct++;
                 }
             }
 
-            if (low >= _count || _cellKeys[low] != key)
+            int size = 16;
+            while (size < distinct * 2)
+            {
+                size <<= 1;
+            }
+
+            if (_cellLookup == null || _cellLookup.Length != size)
+            {
+                _cellLookup = new int[size];
+            }
+            else
+            {
+                Array.Clear(_cellLookup, 0, size);
+            }
+
+            _cellLookupMask = size - 1;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0 && _cellKeys[i] == _cellKeys[i - 1])
+                {
+                    continue;
+                }
+
+                int slot = HashKey(_cellKeys[i]) & _cellLookupMask;
+                while (_cellLookup[slot] != 0)
+                {
+                    slot = (slot + 1) & _cellLookupMask;
+                }
+
+                _cellLookup[slot] = i + 1;
+            }
+        }
+
+        private static int HashKey(long key)
+        {
+            long mixed = unchecked(key * (long)0x9E3779B97F4A7C15UL);
+            return (int)(mixed >> 32);
+        }
+
+        /// <summary>
+        /// Finds the contiguous run of entries whose packed cell key equals <paramref name="key"/>.
+        /// </summary>
+        /// <remarks>Complexity: O(1) expected for the lookup, plus O(run length) to find the end.</remarks>
+        private bool TryFindRange(long key, out int start, out int end)
+        {
+            if (_cellLookup == null)
             {
                 start = 0;
                 end = 0;
                 return false;
             }
 
-            int upper = low + 1;
-            while (upper < _count && _cellKeys[upper] == key)
+            int slot = HashKey(key) & _cellLookupMask;
+            while (true)
             {
-                upper++;
-            }
+                int entry = _cellLookup[slot];
+                if (entry == 0)
+                {
+                    start = 0;
+                    end = 0;
+                    return false;
+                }
 
-            start = low;
-            end = upper;
-            return true;
+                int index = entry - 1;
+                if (_cellKeys[index] == key)
+                {
+                    int upper = index + 1;
+                    while (upper < _count && _cellKeys[upper] == key)
+                    {
+                        upper++;
+                    }
+
+                    start = index;
+                    end = upper;
+                    return true;
+                }
+
+                slot = (slot + 1) & _cellLookupMask;
+            }
         }
 
         private bool IsInsideBox(int index, float minX, float minY, float minZ, float maxX, float maxY, float maxZ)

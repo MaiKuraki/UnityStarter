@@ -291,6 +291,10 @@ bucketBytes = BucketCapacity * 17
 Capacities round up to powers of two, so budget for up to twice the slot count and about three and a half times the
 bucket count relative to the element count. 100 000 reference-typed elements in distinct cells land near 11.9 MB.
 
+`SpatialSnapshot` holds the same per-element arrays plus two more for the sorted key order. Its cell lookup is an
+open-addressed table of `int` sized to the next power of two at or above twice the occupied cell count, so it costs
+about 8 bytes per occupied cell plus padding to that power of two.
+
 ### Complexity
 
 | Operation | Amortized | Worst |
