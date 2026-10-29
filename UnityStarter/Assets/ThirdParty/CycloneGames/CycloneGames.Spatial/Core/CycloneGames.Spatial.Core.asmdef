@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Spatial.Core",
+    "rootNamespace": "CycloneGames.Spatial.Core",
+    "references": [
+        "CycloneGames.Hash.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
