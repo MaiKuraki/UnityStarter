@@ -374,6 +374,71 @@ namespace CycloneGames.Spatial.Tests.Editor
         }
 
         [Test]
+        public void CellsSharingOneBucket_StillReturnTheirOwnElements()
+        {
+            // A hash collision means "one more probe", never "two cells are the same cell". This test forces six
+            // different cells into a single bucket and requires each lookup to return its own element, so a future
+            // change that compares hashes instead of full keys fails here instead of silently returning neighbours.
+            using (var grid = new SpatialHashGrid<int>(new GridSettings(10f), 16))
+            {
+                grid.TryInsert(-1, 5000f, 5000f, 5000f, out _);
+
+                int capacity = grid.BucketCapacity;
+                int mask = capacity - 1;
+
+                var byBucket = new Dictionary<int, List<CellCoordinate>>();
+                List<CellCoordinate> chosen = null;
+                for (int x = 0; x < 400 && chosen == null; x++)
+                {
+                    for (int z = 0; z < 400; z++)
+                    {
+                        var cell = new CellCoordinate(x, 0, z);
+                        int bucket = (int)(cell.ComputeHash() & (uint)mask);
+                        if (!byBucket.TryGetValue(bucket, out List<CellCoordinate> list))
+                        {
+                            list = new List<CellCoordinate>(8);
+                            byBucket[bucket] = list;
+                        }
+
+                        list.Add(cell);
+                        if (list.Count == 6)
+                        {
+                            chosen = list;
+                            break;
+                        }
+                    }
+                }
+
+                Assert.That(chosen, Is.Not.Null, "No bucket received six cells; the test setup is wrong.");
+
+                for (int i = 0; i < chosen.Count; i++)
+                {
+                    CellCoordinate cell = chosen[i];
+                    Assert.That(
+                        grid.TryInsert(i, (cell.X + 0.5f) * 10f, 5f, (cell.Z + 0.5f) * 10f, out _),
+                        Is.True);
+                }
+
+                Assert.That(grid.BucketCapacity, Is.EqualTo(capacity),
+                    "The bucket table grew, so the chosen cells may no longer share a bucket.");
+
+                var buffer = new int[8];
+                for (int i = 0; i < chosen.Count; i++)
+                {
+                    CellCoordinate cell = chosen[i];
+                    float centerX = (cell.X + 0.5f) * 10f;
+                    float centerZ = (cell.Z + 0.5f) * 10f;
+
+                    int count = grid.QuerySphere(centerX, 5f, centerZ, 0f, buffer, buffer.Length);
+                    Assert.That(count, Is.EqualTo(1), "Cell " + cell + " returned " + count + " elements.");
+                    Assert.That(buffer[0], Is.EqualTo(i), "Cell " + cell + " returned its bucket neighbour.");
+                }
+
+                Assert.That(grid.ValidateStructure(), Is.True);
+            }
+        }
+
+        [Test]
         public void ZeroRadius_ReturnsOnlyTheExactCenter()
         {
             using (var grid = new SpatialHashGrid<int>(new GridSettings(1f), 8))
