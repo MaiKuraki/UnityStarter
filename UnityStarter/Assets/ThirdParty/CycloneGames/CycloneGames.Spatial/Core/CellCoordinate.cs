@@ -48,11 +48,17 @@ namespace CycloneGames.Spatial.Core
         /// </remarks>
         public uint ComputeHash()
         {
-            uint hash = Fnv1a32.OffsetBasis;
-            hash = Fnv1a32.CombineUInt32LittleEndian(hash, unchecked((uint)X));
-            hash = Fnv1a32.CombineUInt32LittleEndian(hash, unchecked((uint)Y));
-            hash = Fnv1a32.CombineUInt32LittleEndian(hash, unchecked((uint)Z));
-            return hash;
+            unchecked
+            {
+                uint hash = Fnv1a32.OffsetBasis;
+                hash = (hash ^ (uint)X) * 16777619u;
+                hash = (hash ^ (uint)Y) * 16777619u;
+                hash = (hash ^ (uint)Z) * 16777619u;
+
+                // The bucket index is taken from the low bits, which the final multiply leaves correlated with the
+                // input. Folding the high half down costs one shift and one xor.
+                return hash ^ (hash >> 16);
+            }
         }
 
         public bool Equals(CellCoordinate other)
