@@ -1518,6 +1518,75 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         /// <summary>
         /// A stacking spec swap must reindex the live dependency edges; removal must drop them.
         /// </summary>
+        /// <summary>
+        /// A periodic AttributeBased(Source, NotSnapshot) effect keeps reading the source ASC's attribute
+        /// every cycle. Disposing the source mid-life must not make the target's tick throw or silently
+        /// remove the effect.
+        /// </summary>
+        [Test]
+        public void PeriodicAttributeBasedFromDisposedSource_TargetTickSurvives()
+        {
+            var context = new GASRuntimeContext();
+            var source = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var target = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var sourceAttributes = new LiveDependencyAttributeSet();
+            var targetAttributes = new LiveDependencyAttributeSet();
+            bool sourceDisposed = false;
+            try
+            {
+                source.AddAttributeSet(sourceAttributes);
+                target.AddAttributeSet(targetAttributes);
+                SetAttributeValues(sourceAttributes.Source, 10f);
+                SetAttributeValues(targetAttributes.LiveTarget, 100f);
+
+                var definition = new GameplayEffect(
+                    "PeriodicSourceNotSnapshot",
+                    EDurationPolicy.Infinite,
+                    period: 0.25f,
+                    modifiers: new List<ModifierInfo>
+                    {
+                        new ModifierInfo(
+                            "LiveTarget",
+                            EAttributeModifierOperation.Add,
+                            new AttributeBasedMagnitude(
+                                "Source",
+                                EGameplayEffectAttributeCaptureSource.Source,
+                                EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                                EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+                    });
+
+                GameplayEffectApplicationResult application =
+                    target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, source));
+                Assert.That(application.Succeeded, Is.True);
+
+                target.Tick(0.25f, isServer: true);
+                target.Tick(0.25f, isServer: true);
+
+                sourceDisposed = true;
+                source.Dispose();
+
+                Assert.DoesNotThrow(() => target.Tick(0.25f, isServer: true),
+                    "The first target tick after the source was disposed must not throw.");
+                Assert.DoesNotThrow(() => target.Tick(0.25f, isServer: true),
+                    "Subsequent target ticks must keep working.");
+
+                GameplayEffectApplicationResult probe =
+                    target.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(definition, target));
+                Assert.That(probe.Succeeded, Is.True,
+                    "The target ASC must remain usable after ticking with a disposed source.");
+                Assert.That(target.TryRemoveActiveEffect(probe.ActiveEffect), Is.True);
+            }
+            finally
+            {
+                if (!sourceDisposed)
+                {
+                    source.Dispose();
+                }
+
+                target.Dispose();
+            }
+        }
+
         [Test]
         public void StackingSpecSwap_RebuildsLiveDependencyEdges()
         {
