@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -1103,12 +1103,18 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             TagDataSnapshot snapshot = registry.Snapshot;
             Assert.That(snapshot.TagCount, Is.GreaterThanOrEqualTo(13));
 
-            Run("AddTags", (target, throwing) => target.AddTags(throwing));
-            Run("AddUnion", (target, throwing) => target.AddUnion(throwing, target));
-            Run("AddIntersection", (target, throwing) => target.AddIntersection(throwing, target));
-            Run("Copy", (target, throwing) => GameplayTagContainer.Copy(target, throwing));
+            int[] absent = { 10, 11, 12 };
+            int[] present = { 2, 3, 4 };
 
-            void Run(string label, Action<GameplayTagContainer, IReadOnlyGameplayTagContainer> operation)
+            Run("AddTags", absent, (target, throwing) => target.AddTags(throwing));
+            Run("AddUnion", absent, (target, throwing) => target.AddUnion(throwing, target));
+            Run("AddIntersection", absent, (target, throwing) => target.AddIntersection(throwing, target));
+            Run("Copy", absent, (target, throwing) => GameplayTagContainer.Copy(target, throwing));
+
+            // Removal only leaves a partial result when the source overlaps the target.
+            Run("RemoveTags", present, (target, throwing) => target.RemoveTags(throwing));
+
+            void Run(string label, int[] sourceIndices, Action<GameplayTagContainer, IReadOnlyGameplayTagContainer> operation)
             {
                 var target = new GameplayTagContainer(registry);
                 for (int index = 1; index <= 8; index++)
@@ -1116,7 +1122,6 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
                 HashSet<int> before = ReadExplicit(target);
                 // Validation reads the source once; one extra read lets the mutation start before it fails.
-                int[] sourceIndices = { 10, 11, 12 };
                 var throwing = new ThrowingContainer(sourceIndices, registry.RuntimeIndexEpoch,
                     readBudget: sourceIndices.Length + 1);
 
@@ -1134,8 +1139,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 int diverged = -1;
                 for (int index = 1; index < snapshot.TotalTagCount && diverged < 0; index++)
                 {
-                    if (target.ContainsRuntimeIndex(index, explicitOnly: true) != after.Contains(index))
+                    if (target.ContainsRuntimeIndex(index, explicitOnly: true) != after.Contains(index) ||
+                        target.ContainsRuntimeIndex(index, explicitOnly: false) != expanded.Contains(index))
+                    {
                         diverged = index;
+                    }
                 }
 
                 Assert.That(diverged, Is.EqualTo(-1), $"{label}: membership diverged at index {diverged}");

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -580,18 +580,28 @@ namespace CycloneGames.GameplayTags.Core
 
          bool changed = false;
          int sourceCount = container.ExplicitTagCount;
-         for (int i = 0; i < sourceCount; i++)
+         try
          {
-            int runtimeIndex = sourceIsSelf ? selfIndices[i] : container.GetExplicitTag(i).RuntimeIndex;
-            if (runtimeIndex <= 0)
+            for (int i = 0; i < sourceCount; i++)
             {
-               if (!sourceIsSelf)
-                  GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(container.GetExplicitTag(i));
+               int runtimeIndex = sourceIsSelf ? selfIndices[i] : container.GetExplicitTag(i).RuntimeIndex;
+               if (runtimeIndex <= 0)
+               {
+                  if (!sourceIsSelf)
+                     GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(container.GetExplicitTag(i));
 
-               continue;
+                  continue;
+               }
+
+               changed |= RemoveSorted(m_Explicit, ref m_ExplicitCount, runtimeIndex);
             }
-
-            changed |= RemoveSorted(m_Explicit, ref m_ExplicitCount, runtimeIndex);
+         }
+         catch
+         {
+            // Same contract as the additive paths: a source that fails mid-loop must not leave the
+            // explicit set ahead of the derived sets.
+            Clear();
+            throw;
          }
 
          if (changed)
