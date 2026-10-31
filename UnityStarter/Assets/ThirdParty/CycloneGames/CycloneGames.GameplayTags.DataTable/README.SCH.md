@@ -96,12 +96,12 @@ var source = new GameplayTagDataTableSource<GameplayTagRow>(
     static row => row.Flags,
     static row => row.Enabled);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+GameplayTagHost.RegisterProjectTagSource(source);
 
 // 4. 初始化并查询
 GameplayTagManager.InitializeIfNeeded();
 
-GameplayTag fireball = GameplayTagManager.RequestTag("Ability.Fireball");
+GameplayTag fireball = GameplayTagManager.Request("Ability.Fireball");
 ```
 
 所有启动 source 必须在首次调用 `InitializeIfNeeded()` 前注册。
@@ -113,7 +113,7 @@ GameplayTag fireball = GameplayTagManager.RequestTag("Ability.Fireball");
 | `DataTable<TKey, TRow>` | 结构不可变的 row sequence 与 key index |
 | `GameplayTagDataTableSource<TRow>` | 将一条定义 row 映射为一条权威 tag registration |
 | `GameplayTagDataTableReferenceSource<TRow>` | 枚举每条玩法 row 中一个或多个字段引用的 tag name |
-| `GameplayTagRuntimePlatform` | 向 GameplayTags 注册具名 project source |
+| `GameplayTagHost` | 向 GameplayTags 注册具名 project source |
 | `DataTableCatalog` | 将一组强类型 table 组成一个不可变 catalog |
 | `DataTableStore` / `DataTableReader` | 可选地发布带版本的 Catalog generation，并把 consumer 固定到一个 snapshot |
 
@@ -170,7 +170,7 @@ internal static class GameplayTagDataTableComposition
             static row => ParseFlags(row.Flags, row.Name),
             static row => row.Enabled);
 
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+        GameplayTagHost.RegisterProjectTagSource(source);
     }
 
     private static GameplayTagFlags ParseFlags(string value, string tagName)
@@ -201,7 +201,7 @@ var abilityReferences = new GameplayTagDataTableReferenceSource<AbilityRow>(
     static row => row.RequiredTags,
     static row => row.BlockedTags);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(abilityReferences);
+GameplayTagHost.RegisterProjectTagSource(abilityReferences);
 ```
 
 Null row 和被 `isEnabled` 拒绝的 row 会被跳过。Null accessor 或 null collection 会被跳过。每个非 null name 都会提交；重复名称解析为同一条 definition 但仍消耗 registration attempt。
@@ -275,7 +275,7 @@ Source 按 ordinal name 顺序处理。使用数字前缀：
 3. 构建全部 candidate table 与 candidate catalog。
 4. 基于 candidate table 创建 definition source 与 reference source。
 5. 使用被替换 source 的稳定名称注册每个 candidate source。
-6. 调用 `GameplayTagManager.ReloadTags()`。
+6. 调用 `GameplayTagManager.Reload()`。
 7. 使用 candidate 工作开始前捕获的 DataTable generation 调用 `TryPublish`。
 8. 发布被拒绝时，恢复上一组 tag source 并再次 reload tags；DataTable candidate 仍归调用方。
 9. 发布提交成功时，在协调后的安全点刷新每个 DataTable reader。
@@ -292,17 +292,17 @@ using var tableCandidate = new DataTableCandidate(
     trustedRevision,
     candidateResourceOwner);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(nextDefinitionSource);
+GameplayTagHost.RegisterProjectTagSource(nextDefinitionSource);
 try
 {
-    GameplayTagManager.ReloadTags();
+    GameplayTagManager.Reload();
 }
 catch
 {
     if (previousDefinitionSource != null)
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+        GameplayTagHost.RegisterProjectTagSource(previousDefinitionSource);
     else
-        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+        GameplayTagHost.UnregisterProjectTagSource(nextDefinitionSource.Name);
     throw;
 }
 
@@ -312,11 +312,11 @@ DataTablePublishResult publish = _dataTableStore.TryPublish(
 if (!publish.IsCommitted)
 {
     if (previousDefinitionSource != null)
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+        GameplayTagHost.RegisterProjectTagSource(previousDefinitionSource);
     else
-        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+        GameplayTagHost.UnregisterProjectTagSource(nextDefinitionSource.Name);
 
-    GameplayTagManager.ReloadTags();
+    GameplayTagManager.Reload();
     HandleRejectedTableCandidate(publish);
     return;
 }
@@ -325,7 +325,7 @@ RequestDataTableReaderRefreshAtSafePoint();
 _activeDefinitionSource = nextDefinitionSource;
 ```
 
-`GameplayTagManager.ReloadTags()` 与 `DataTableStore.TryPublish()` 仍是两个独立 publication seam，双方都无法让另一方原子化。Consumer 不能观察到不同 generation 的 tag 与 table 时，应在两个状态转换期间暂停 dependent consumer。把 `Superseded` 与 `NonMonotonicRevision` 当作正常拒绝状态，并在恢复 consumer 前还原上一组 tag source。`OutOfMemoryException` 等进程级 fatal exception 属于 fail-stop 条件，不是普通 rollback 分支。
+`GameplayTagManager.Reload()` 与 `DataTableStore.TryPublish()` 仍是两个独立 publication seam，双方都无法让另一方原子化。Consumer 不能观察到不同 generation 的 tag 与 table 时，应在两个状态转换期间暂停 dependent consumer。把 `Superseded` 与 `NonMonotonicRevision` 当作正常拒绝状态，并在恢复 consumer 前还原上一组 tag source。`OutOfMemoryException` 等进程级 fatal exception 属于 fail-stop 条件，不是普通 rollback 分支。
 
 ### 所有权与生命周期
 

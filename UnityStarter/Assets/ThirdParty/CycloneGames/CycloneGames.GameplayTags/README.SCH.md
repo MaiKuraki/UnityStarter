@@ -305,6 +305,39 @@ Runtime index 是 cache-local identifier，不是持久化 identity。Container 
 
 Redirect 以 immutable snapshot 发布。`AddRedirects` 在 registry lock 外 materialize 和校验至多 4,096 个输入项，然后在锁内原子合并。
 
+#### 非保留式 Reload 之后的陈旧 Container
+
+`Reload(preserveRuntimeIndices: false)` 会重新分配全部 index。此前建立的 container 仍持有旧编号，
+而这些编号此时已指向别的标签。读路径无法发现这件事——每次读都校验 epoch 会让所有查询付出代价——
+因此校验放在写路径上：作为 `AddTags`、`RemoveTags`、`Copy`、`AddUnion`、`AddIntersection` **来源**的
+container 必须属于当前 epoch，否则在改动目标之前抛出 `ArgumentException`。
+
+名字才是持久化 identity，因此恢复方式是从名字重建：
+
+```csharp
+if (!ownedTags.TryToPersisted(out string[] names))
+{
+    names = durableNamesFromSave;   // container 陈旧时 TryToPersisted 会拒绝
+}
+
+var rebuilt = new GameplayTagContainer(registry);
+rebuilt.LoadPersisted(names);
+```
+
+`SerializableGameplayTagContainer` 保存名字并对当前 snapshot 重新解析，因此跨 reload 无需手工重建。
+
+模块之外实现的 container 通过声明 epoch 加入同一套校验：
+
+```csharp
+public sealed class ReplicatedTagView : IReadOnlyGameplayTagContainer, IGameplayTagEpochProvider
+{
+    // 尚未持有 index 时为 0；持有后为当前 epoch。
+    public int RuntimeIndexEpoch { get; }
+}
+```
+
+未声明 epoch 的 container 无法被校验，其 index 会被原样复制。
+
 ### 不可变快照与线程
 
 ```csharp
@@ -322,6 +355,24 @@ if (snapshot.IsCompatibleWithCurrentRegistry)
 - Mutable container、count container 和 query construction 仍为 owner-thread 操作。
 - Unity object 与 Unity API 保持 Unity main thread affinity。
 - 这些 managed snapshot 不是 Burst job data。
+
+#### Owner-Thread 诊断
+
+可变 container 会记录首次访问它的 managed thread。开启
+`GameplayTagsDiagnostics.ThreadAffinityChecksEnabled` 时，来自其他线程的变更会抛出，而不是静默破坏状态。
+Unity bootstrap 在 Editor 与 Development 构建中开启该校验；做性能采样、或由宿主自行保证归属时关闭：
+
+```csharp
+GameplayTagsDiagnostics.ThreadAffinityChecksEnabled = false;
+```
+
+`Clear()` 会把 container 恢复到首次写入前的状态，包括释放已记录的线程。它本身不做线程校验，因此调用方
+必须保证清空期间没有其他线程在读该 container。对象池必须在把 container 交给其他线程之前清空它：
+
+```csharp
+pooledTags.Clear();
+pool.Return(pooledTags);
+```
 
 ### GameplayAbilities 与 GameplayFramework 集成
 
@@ -381,6 +432,33 @@ GameplayTagQuery playerContentQuery = new()
 | Redirect catalog | 4,096 entries |
 | JSON source file / count | 8 MiB / 256 |
 
+#### 规模与成本
+
+成本有两个驱动因素，容易混淆。解析名字与注册表里有多少标签无关；变更容器与注册表无关，但与这个容器持有
+多少标签有关；注册标签则两者都相关。
+
+| 操作 | 成本驱动 | 实践规则 |
+| --- | --- | --- |
+| `Request` / `TryRequest` | 一次字典查找，与注册表规模无关 | 解析一次，把 `GameplayTag` 留着 |
+| 容器 add / remove | 该容器持有的标签数 | 容器保持在数百量级 |
+| `RegisterDynamicTags` | 注册表中的全部标签，因为它要重新发布 | 在加载期批量调用，不要按帧 |
+
+持有上千标签的容器，一次变更的大部分时间花在重建展开集和 bitset 上。在桌面编辑器中约几百微秒一次，注册表
+规模不出现在这个数字里。真正要避免的形态是「很大的集合放进一个容器并反复变更」；这种情况改用快照，在快照
+上做成员判断。
+
+一万标签规模下一次动态注册要几十毫秒，因为它要重建并重新发布整个注册表。每个生成对象调一次会累积成几秒
+卡顿；加载遮挡期间调一次则不会。
+
+这两条性质由 `GameplayTagsScaleAndSoakTests` 覆盖。断言比较的是两次运行之间的比值与常驻内存，因此换机器
+依然有意义。要跑五分钟稳态检查：
+
+```bash
+CYCLONEGAMES_TAGS_SOAK_SECONDS=300 "$UNITY_EDITOR" -batchmode -nographics \
+  -projectPath "$REPO_ROOT/UnityStarter" -runTests -testPlatform EditMode \
+  -assemblyNames "CycloneGames.GameplayTags.Tests.Performance"
+```
+
 ### 热路径指引
 
 - 缓存已请求的 `GameplayTag` value；不在每帧通过字符串请求标签。
@@ -396,6 +474,7 @@ GameplayTagQuery playerContentQuery = new()
 - Compiled query data 由所属 `GameplayTagQuery` 持有。Mutation 后调用 `InvalidateCompiledCache()`。
 - Compiled query match 的值栈是单个 `ulong`；每次调用零分配、零栈清零。
 - 单标签 count mutation 使用栈缓冲区；多标签 mutation 使用 container 独占的懒创建临时存储。
+- `Clear()` 保留 explicit/implicit capacity 供 steady-state 复用；在冷路径调用 `ClearAndReleaseMemory()` 可释放全部 backing arrays。
 
 `GameplayTagManager.GetMemorySnapshot()` 以 allocation-free、O(1) 方式返回 registry count、limit、generation、epoch、manifest hash、redirect 与 query limit 的聚合值，并且不暴露 registry storage。
 
@@ -438,6 +517,8 @@ Native tag（`NativeGameplayTag`）是代码车道的常量句柄形式。
 | --- | --- | --- |
 | `Request` 找不到标签 | 注册表未初始化或标签未注册 | 在请求前调用 `InitializeIfNeeded()`；检查标签是否存在于来源定义中 |
 | Container 操作抛出 index mismatch | Reload 后 RuntimeIndexEpoch 变化 | 捕获新的 container，或在非保留式 reload 后 `Clear()` |
+| 复制 tag container 抛出 `ArgumentException` 并提到 registry epoch | 源 container 建立于非保留式 reload 之前 | 用持久化的名字重建源（`LoadPersisted`） |
+| 原本可用的线程上发生变更却抛出 | Container 仍记录首次变更它的线程 | 池化 container 交给其他线程前调用 `Clear()`，或在该宿主关闭 `ThreadAffinityChecksEnabled` |
 | 修改 query graph 后始终返回 false | Compiled cache 过期 | 修改 expression graph 后调用 `InvalidateCompiledCache()` |
 | Player build 启动时注册表为空 | Build data 缺失或损坏 | 检查隔离生成路径下的 `GameplayTags.bytes` 是否被打入 Player 且 content hash 通过校验 |
 | Player build 因 GameplayTags 需要恢复而拒绝启动 | 上次构建中断或清理证据存在歧义 | 检查 `.buildpipeline/transactions/gameplay-tags/`，再运行 Build workspace recovery 命令或 `BuildTags.Recover(projectRoot)`；不要盲目删除被修改或未知的文件 |

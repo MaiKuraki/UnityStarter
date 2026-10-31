@@ -82,8 +82,20 @@ namespace CycloneGames.GameplayTags.Core
       /// <summary>Registered tags, excluding <see cref="GameplayTag.None"/>.</summary>
       public static int TagCount => Current.TagCount;
 
-      /// <summary>An order-independent hash of the ambient tag manifest.</summary>
-      public static ulong ManifestHash => Current.ManifestHash;
+      /// <summary>An order-independent hash of the ambient tag manifest and its active redirects.</summary>
+      public static ulong ManifestHash
+      {
+         get
+         {
+            ulong registryHash = Current.ManifestHash;
+            if (GameplayTagRedirector.CurrentCount == 0)
+               return registryHash;
+
+            return GameplayTagUtility.CombineStableHash(
+               registryHash,
+               GameplayTagRedirector.CurrentManifestHash);
+         }
+      }
 
       /// <summary>
       /// Installs the ambient registry.
