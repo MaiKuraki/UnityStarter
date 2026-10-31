@@ -114,6 +114,12 @@ namespace CycloneGames.GameplayTags.Core
             return false;
          }
 
+         if ((flags & ~GameplayTagFlags.HideInEditor) != 0)
+         {
+            AddRegistrationError($"Gameplay tag '{name}' has unsupported flags '{flags}'.", source, name);
+            return false;
+         }
+
          if (m_SlotByName.TryGetValue(name, out int slot))
          {
             if (string.IsNullOrEmpty(m_Descriptions[slot]) && !string.IsNullOrEmpty(description))

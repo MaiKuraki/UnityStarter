@@ -396,6 +396,7 @@ GameplayTagQuery playerContentQuery = new()
 - Compiled query data belongs to its `GameplayTagQuery`. Call `InvalidateCompiledCache()` after mutation.
 - Compiled query matching keeps its value stack in one `ulong`; no allocation and no stack zeroing per call.
 - Single-tag count mutation uses a stack buffer; multi-tag mutation uses lazily-created scratch owned by the container.
+- `Clear()` retains explicit/implicit capacity for steady-state reuse. Call `ClearAndReleaseMemory()` on a cold path to release every backing array.
 
 `GameplayTagManager.GetMemorySnapshot()` returns an allocation-free O(1) aggregate of registry counts, limits, generation, epoch, manifest hash, redirects, and query limits without exposing registry storage.
 

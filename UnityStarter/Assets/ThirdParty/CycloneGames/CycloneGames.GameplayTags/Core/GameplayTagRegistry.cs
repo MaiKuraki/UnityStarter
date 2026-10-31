@@ -62,7 +62,7 @@ namespace CycloneGames.GameplayTags.Core
       /// RepublishDefaultRegistry creates a fresh instance whose epoch restarts at 1, which a bare epoch
       /// comparison would misread as unchanged.
       /// </summary>
-      internal int InstanceId { get; } = ++s_InstanceIdCounter;
+      internal int InstanceId { get; } = Interlocked.Increment(ref s_InstanceIdCounter);
       private readonly object m_BroadcastGate = new();
       private readonly int m_MaxRegisteredTagCount;
 
@@ -195,8 +195,9 @@ namespace CycloneGames.GameplayTags.Core
             return false;
          }
 
+         string resolvedName = GameplayTagRedirector.Resolve(name);
          TagDataSnapshot snapshot = Snapshot;
-         if (snapshot.TryGetIndex(name, out int runtimeIndex))
+         if (snapshot.TryGetIndex(resolvedName, out int runtimeIndex))
          {
             tag = new GameplayTag(runtimeIndex);
             return true;
@@ -364,16 +365,50 @@ namespace CycloneGames.GameplayTags.Core
          if (names == null)
             return;
 
+         TagDataSnapshot current;
+         HashSet<string> pendingNames;
+         int reservedCount = 0;
+         lock (m_Gate)
+         {
+            current = Volatile.Read(ref m_Snapshot);
+            pendingNames = new HashSet<string>(m_PendingDynamicNames, StringComparer.Ordinal);
+            reservedCount = current?.TagCount ?? 0;
+            foreach (string pendingName in pendingNames)
+            {
+               if (current == null || !current.TryGetIndex(pendingName, out _))
+                  reservedCount++;
+            }
+         }
+
          List<PendingRegistration> additions = null;
          HashSet<string> seen = null;
+         int attemptCount = 0;
          foreach (string name in names)
          {
+            if (++attemptCount > GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount)
+            {
+               throw new InvalidOperationException(
+                  $"Dynamic gameplay tag input cannot exceed {GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount} registration attempts.");
+            }
+
             if (string.IsNullOrEmpty(name))
                continue;
 
             seen ??= new HashSet<string>(StringComparer.Ordinal);
             if (!seen.Add(name))
                continue;
+
+            bool alreadyKnown = pendingNames.Contains(name) || (current != null && current.TryGetIndex(name, out _));
+            if (!alreadyKnown)
+            {
+               if (reservedCount >= m_MaxRegisteredTagCount)
+               {
+                  throw new InvalidOperationException(
+                     $"Dynamic gameplay tag count cannot exceed {m_MaxRegisteredTagCount}; candidate '{name}' was rejected.");
+               }
+
+               reservedCount++;
+            }
 
             additions ??= new List<PendingRegistration>();
             additions.Add(new PendingRegistration(name, description, flags));
@@ -586,17 +621,25 @@ namespace CycloneGames.GameplayTags.Core
 
       private void QueuePendingLocked(List<PendingRegistration> additions)
       {
+         int prospectiveCount = m_PendingDynamic.Count;
+         for (int i = 0; i < additions.Count; i++)
+         {
+            PendingRegistration addition = additions[i];
+            if (!string.IsNullOrEmpty(addition.Name) && !m_PendingDynamicNames.Contains(addition.Name))
+               prospectiveCount++;
+         }
+
+         if (prospectiveCount > m_MaxRegisteredTagCount)
+         {
+            throw new InvalidOperationException(
+               $"Pending dynamic gameplay tag count cannot exceed {m_MaxRegisteredTagCount}.");
+         }
+
          for (int i = 0; i < additions.Count; i++)
          {
             PendingRegistration addition = additions[i];
             if (string.IsNullOrEmpty(addition.Name) || !m_PendingDynamicNames.Add(addition.Name))
                continue;
-
-            if (m_PendingDynamic.Count >= m_MaxRegisteredTagCount)
-            {
-               throw new InvalidOperationException(
-                  $"Pending dynamic gameplay tag count cannot exceed {m_MaxRegisteredTagCount}.");
-            }
 
             m_PendingDynamic.Add(addition);
          }

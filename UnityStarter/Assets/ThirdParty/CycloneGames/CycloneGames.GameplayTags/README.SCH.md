@@ -396,6 +396,7 @@ GameplayTagQuery playerContentQuery = new()
 - Compiled query data 由所属 `GameplayTagQuery` 持有。Mutation 后调用 `InvalidateCompiledCache()`。
 - Compiled query match 的值栈是单个 `ulong`；每次调用零分配、零栈清零。
 - 单标签 count mutation 使用栈缓冲区；多标签 mutation 使用 container 独占的懒创建临时存储。
+- `Clear()` 保留 explicit/implicit capacity 供 steady-state 复用；在冷路径调用 `ClearAndReleaseMemory()` 可释放全部 backing arrays。
 
 `GameplayTagManager.GetMemorySnapshot()` 以 allocation-free、O(1) 方式返回 registry count、limit、generation、epoch、manifest hash、redirect 与 query limit 的聚合值，并且不暴露 registry storage。
 

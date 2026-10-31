@@ -16,7 +16,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
       }
 
       [SerializeField]
-      private GameplayTagContainer m_PersistentTags;
+      private SerializableGameplayTagContainer m_PersistentTags = new();
 
       private GameplayTagCountContainer m_GameplayTagContainer;
 

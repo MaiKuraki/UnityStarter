@@ -24,13 +24,16 @@ namespace CycloneGames.GameplayTags.Core
    /// ancestors - matching <see cref="GameplayTagContainer"/> semantics.
    /// </para>
    /// </remarks>
-   public sealed class ReadOnlyGameplayTagContainer : IReadOnlyGameplayTagContainer, IEnumerable<GameplayTag>
+   public sealed class ReadOnlyGameplayTagContainer : IReadOnlyGameplayTagContainer, IEnumerable<GameplayTag>, IGameplayTagRegistryProvider
    {
+      GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
+
       private readonly int[] m_Explicit;
       private readonly int[] m_Implicit;
       private readonly int[] m_Bitset;
       private readonly int m_RuntimeIndexEpoch;
       private readonly TagDataSnapshot m_Snapshot;
+      private readonly GameplayTagRegistry m_Registry;
 
       /// <summary>Builds a frozen view of another container's current tag set.</summary>
       public ReadOnlyGameplayTagContainer(IReadOnlyGameplayTagContainer source)
@@ -50,7 +53,8 @@ namespace CycloneGames.GameplayTags.Core
          for (int i = 0; i < implicitCount; i++)
             m_Implicit[i] = source.GetTag(i).RuntimeIndex;
 
-         m_Snapshot = GameplayTagManager.Snapshot;
+         m_Registry = (source as IGameplayTagRegistryProvider)?.Registry;
+         m_Snapshot = m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
          m_RuntimeIndexEpoch = m_Snapshot.RuntimeIndexEpoch;
          m_Bitset = BuildBitset(m_Explicit, m_Implicit, m_Snapshot.TagCount);
       }
@@ -70,7 +74,7 @@ namespace CycloneGames.GameplayTags.Core
 
       /// <summary>True when the registry epoch this view was built against is still current.</summary>
       public bool IsCompatibleWithCurrentRegistry
-         => m_RuntimeIndexEpoch == GameplayTagManager.Snapshot.RuntimeIndexEpoch;
+         => m_RuntimeIndexEpoch == (m_Registry ?? GameplayTagManager.Current).Snapshot.RuntimeIndexEpoch;
 
       /// <summary>The registry epoch this view is bound to.</summary>
       public int RuntimeIndexEpoch => m_RuntimeIndexEpoch;
