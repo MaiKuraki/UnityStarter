@@ -437,6 +437,37 @@ GameplayTagQuery playerContentQuery = new()
 | Redirect catalog | 4,096 entries |
 | JSON source file / count | 8 MiB / 256 |
 
+#### Scale and Cost
+
+Cost has two drivers, and they are easy to confuse. Resolving a name does not depend on how many tags
+the registry holds. Mutating a container does not depend on the registry either, but it does depend on
+how many tags that container holds. Registering a tag depends on both.
+
+| Operation | Cost driver | Practical rule |
+| --- | --- | --- |
+| `Request` / `TryRequest` | One dictionary lookup, independent of registry size | Resolve once, keep the `GameplayTag` |
+| Container add / remove | Tags held by that container | Keep containers in the hundreds |
+| `RegisterDynamicTags` | Every tag in the registry, because it republishes | Batch at load time, never per frame |
+
+A container holding a thousand tags spends most of a mutation rebuilding its expanded set and bitset.
+On a desktop Editor that is a few hundred microseconds per change, and the registry size never enters
+the number. The shape to avoid is a very large set held in one container and mutated repeatedly; take a
+snapshot and test membership against that instead.
+
+A dynamic registration at ten thousand tags takes tens of milliseconds, because the whole registry is
+rebuilt and republished. One call per spawned object adds up to seconds of stall; one call per batch
+during a loading screen does not.
+
+Both properties are covered by `GameplayTagsScaleAndSoakTests`. Its assertions compare ratios and
+retained memory between runs, so they stay meaningful on other machines. To run the steady-state check
+for five minutes:
+
+```bash
+CYCLONEGAMES_TAGS_SOAK_SECONDS=300 "$UNITY_EDITOR" -batchmode -nographics \
+  -projectPath "$REPO_ROOT/UnityStarter" -runTests -testPlatform EditMode \
+  -assemblyNames "CycloneGames.GameplayTags.Tests.Performance"
+```
+
 ### Hot Path Guidance
 
 - Cache requested `GameplayTag` values; do not request strings every frame.

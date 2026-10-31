@@ -432,6 +432,33 @@ GameplayTagQuery playerContentQuery = new()
 | Redirect catalog | 4,096 entries |
 | JSON source file / count | 8 MiB / 256 |
 
+#### 规模与成本
+
+成本有两个驱动因素，容易混淆。解析名字与注册表里有多少标签无关；变更容器与注册表无关，但与这个容器持有
+多少标签有关；注册标签则两者都相关。
+
+| 操作 | 成本驱动 | 实践规则 |
+| --- | --- | --- |
+| `Request` / `TryRequest` | 一次字典查找，与注册表规模无关 | 解析一次，把 `GameplayTag` 留着 |
+| 容器 add / remove | 该容器持有的标签数 | 容器保持在数百量级 |
+| `RegisterDynamicTags` | 注册表中的全部标签，因为它要重新发布 | 在加载期批量调用，不要按帧 |
+
+持有上千标签的容器，一次变更的大部分时间花在重建展开集和 bitset 上。在桌面编辑器中约几百微秒一次，注册表
+规模不出现在这个数字里。真正要避免的形态是「很大的集合放进一个容器并反复变更」；这种情况改用快照，在快照
+上做成员判断。
+
+一万标签规模下一次动态注册要几十毫秒，因为它要重建并重新发布整个注册表。每个生成对象调一次会累积成几秒
+卡顿；加载遮挡期间调一次则不会。
+
+这两条性质由 `GameplayTagsScaleAndSoakTests` 覆盖。断言比较的是两次运行之间的比值与常驻内存，因此换机器
+依然有意义。要跑五分钟稳态检查：
+
+```bash
+CYCLONEGAMES_TAGS_SOAK_SECONDS=300 "$UNITY_EDITOR" -batchmode -nographics \
+  -projectPath "$REPO_ROOT/UnityStarter" -runTests -testPlatform EditMode \
+  -assemblyNames "CycloneGames.GameplayTags.Tests.Performance"
+```
+
 ### 热路径指引
 
 - 缓存已请求的 `GameplayTag` value；不在每帧通过字符串请求标签。
