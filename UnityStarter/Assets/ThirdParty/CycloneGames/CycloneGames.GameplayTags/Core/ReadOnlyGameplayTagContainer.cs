@@ -28,6 +28,8 @@ namespace CycloneGames.GameplayTags.Core
    {
       GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
 
+      int IGameplayTagEpochProvider.RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
       private readonly int[] m_Explicit;
       private readonly int[] m_Implicit;
       private readonly int[] m_Bitset;

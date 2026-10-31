@@ -221,6 +221,35 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 released.CopySetByCallerNameStateData(new GASSetByCallerNameStateData[1]));
         }
 
+        /// <summary>
+        /// A spec tag view reports the epoch of its dynamic container, so copying it after a reassigning
+        /// rebuild is refused instead of carrying indices that now name other tags.
+        /// </summary>
+        [Test]
+        public void SpecTagView_AfterReassigningReload_IsRejectedAsACopySource()
+        {
+            GameplayTag seedTag = RegisterTag("Zz.EpochSeed");
+            var context = new GASRuntimeContext(cacheProfile: new GASRuntimeCacheProfile(effectSpecBackingCapacity: 1));
+            var asc = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var effect = new GameplayEffect("EpochReload", EDurationPolicy.Instant);
+            GameplayEffectSpec spec = GameplayEffectSpec.Create(effect, asc);
+            GameplayEffectSpecTagView view = spec.DynamicGrantedTags;
+            view.AddTag(seedTag);
+
+            int epochBefore = GameplayTagManager.RuntimeIndexEpoch;
+
+            // A name sorting before every registered one forces the rebuild to reassign every index.
+            GameplayTagManager.RegisterDynamicTag("Aa.EpochFirst");
+            GameplayTagManager.Reload(preserveRuntimeIndices: false);
+
+            Assert.That(GameplayTagManager.RuntimeIndexEpoch, Is.Not.EqualTo(epochBefore),
+                "fixture: the reload must advance the runtime index epoch");
+
+            var target = new GameplayTagContainer();
+            Assert.That(() => target.AddTags(view), Throws.TypeOf<ArgumentException>(),
+                "a spec tag view from the previous epoch must be refused as a copy source");
+        }
+
         private static GameplayTag RegisterTag(string name)
         {
             GameplayTagManager.RegisterDynamicTag(name, "GameplayAbilities backing-cache safety test tag");

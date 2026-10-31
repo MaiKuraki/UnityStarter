@@ -71,6 +71,8 @@ namespace CycloneGames.GameplayTags.Core
    {
       GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
 
+      int IGameplayTagEpochProvider.RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
       private int[] m_ExplicitIndices = Array.Empty<int>();
       private int[] m_ExplicitCounts = Array.Empty<int>();
       private int[] m_ImplicitIndices = Array.Empty<int>();
@@ -419,6 +421,9 @@ namespace CycloneGames.GameplayTags.Core
          m_BatchExplicitDeltas = Array.Empty<int>();
          m_BatchTotalDeltas = Array.Empty<int>();
          m_RuntimeIndexEpoch = 0;
+
+         // The recorded owner thread is part of the state that returns to its initial value.
+         Volatile.Write(ref m_OwningThreadId, 0);
       }
 
       /// <summary>Clears all counts and releases every backing array on this cold path.</summary>
@@ -453,6 +458,7 @@ namespace CycloneGames.GameplayTags.Core
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
          GameplayTagRegistryBinding.Validate(m_Registry, container, nameof(container));
+         GameplayTagRegistryBinding.ValidateSourceEpoch(snapshot, container, nameof(container));
 
          int explicitCount = container.ExplicitTagCount;
          Span<int> indices = stackalloc int[StackBatchCapacity];

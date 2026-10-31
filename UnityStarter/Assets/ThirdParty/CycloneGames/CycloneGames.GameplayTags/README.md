@@ -305,6 +305,41 @@ Runtime indices are cache-local identifiers, not persistence identities. Contain
 
 Redirects are published as immutable snapshots. `AddRedirects` materializes and validates at most 4,096 entries outside the registry lock, then merges atomically under the lock.
 
+#### Stale Containers After a Reassigning Reload
+
+`Reload(preserveRuntimeIndices: false)` reassigns every index. A container built before that reload
+still holds the old numbers, and those numbers now name different tags. Reads cannot detect this — a
+per-read epoch check would tax every query — so the check sits on the write path: a container used as
+the **source** of `AddTags`, `RemoveTags`, `Copy`, `AddUnion`, or `AddIntersection` must belong to the
+current epoch, or the call throws `ArgumentException` before touching the destination.
+
+Names are the durable identity, so recovery is a rebuild from names:
+
+```csharp
+if (!ownedTags.TryToPersisted(out string[] names))
+{
+    names = durableNamesFromSave;   // TryToPersisted refuses while the container is stale
+}
+
+var rebuilt = new GameplayTagContainer(registry);
+rebuilt.LoadPersisted(names);
+```
+
+`SerializableGameplayTagContainer` stores names and re-resolves against the current snapshot, so it
+stays usable across a reload without manual rebuilding.
+
+A container implemented outside this module joins the same check by declaring its epoch:
+
+```csharp
+public sealed class ReplicatedTagView : IReadOnlyGameplayTagContainer, IGameplayTagEpochProvider
+{
+    // 0 while the view holds no indices; the current epoch once it does.
+    public int RuntimeIndexEpoch { get; }
+}
+```
+
+A container that does not declare an epoch cannot be checked, and its indices are copied as-is.
+
 ### Immutable Snapshots and Threading
 
 ```csharp
@@ -322,6 +357,25 @@ Threading contract:
 - Mutable containers, count containers, and query construction remain owner-thread operations.
 - Unity objects and Unity APIs remain on the Unity main thread.
 - These managed snapshots are not Burst job data.
+
+#### Owner-Thread Diagnostics
+
+A mutable container records the managed thread that first touched it. While
+`GameplayTagsDiagnostics.ThreadAffinityChecksEnabled` is set, a mutation from any other thread throws
+instead of corrupting state silently. The Unity bootstrap enables the check for the Editor and
+Development builds; turn it off for a profiling session, or for a host that enforces ownership itself:
+
+```csharp
+GameplayTagsDiagnostics.ThreadAffinityChecksEnabled = false;
+```
+
+`Clear()` returns a container to its pre-first-write state, including releasing the recorded thread.
+A pool must therefore clear a container before handing it to another thread:
+
+```csharp
+pooledTags.Clear();
+pool.Return(pooledTags);
+```
 
 ### GameplayAbilities and GameplayFramework Integration
 
@@ -439,6 +493,8 @@ Native tags (`NativeGameplayTag`) are the constant-handle form of the code lane.
 | --- | --- | --- |
 | Tag not found after `Request` | Registry not initialized or tag not registered | Call `InitializeIfNeeded()` before requesting; verify the tag exists in source definitions |
 | Container operations throw on index mismatch | Runtime index epoch changed after reload | Capture a fresh container or `Clear()` after a non-preserving reload |
+| Copying a tag container throws `ArgumentException` naming registry epochs | The source was built before a non-preserving reload | Rebuild the source from its persisted names with `LoadPersisted` |
+| A mutation throws on a thread that previously succeeded | The container still records the thread that first mutated it | `Clear()` a pooled container before handing it to another thread, or disable `ThreadAffinityChecksEnabled` for that host |
 | Query always returns false after graph change | Compiled cache stale | Call `InvalidateCompiledCache()` after modifying the expression graph |
 | Player build starts with empty tag registry | Build data missing or corrupted | Verify the isolated generated `GameplayTags.bytes` asset was included and passes content hash validation |
 | Player build refuses to start because GameplayTags recovery is required | A previous build was interrupted or cleanup evidence is ambiguous | Inspect `.buildpipeline/transactions/gameplay-tags/`, then run the build workspace recovery command or `BuildTags.Recover(projectRoot)`; do not delete modified/unknown files blindly |

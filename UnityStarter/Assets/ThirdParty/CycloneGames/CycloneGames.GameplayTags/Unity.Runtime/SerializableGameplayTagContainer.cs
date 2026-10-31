@@ -89,6 +89,9 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
 
+        // Reads through the resolving accessor: a re-resolve after a rebuild must report the new epoch.
+        int IGameplayTagEpochProvider.RuntimeIndexEpoch => Container.RuntimeIndexEpoch;
+
         /// <summary>Replaces the container's contents with <paramref name="names"/>.</summary>
         public void LoadPersisted(string[] names)
         {
