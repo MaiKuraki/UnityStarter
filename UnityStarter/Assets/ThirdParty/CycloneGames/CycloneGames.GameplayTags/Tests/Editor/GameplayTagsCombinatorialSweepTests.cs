@@ -858,6 +858,149 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(leaked, Is.EqualTo(-1), $"index {leaked} is still answered after it was removed");
         }
 
+        private static int[] ReadPrivateIntArray(GameplayTagContainer container, string fieldName)
+        {
+            System.Reflection.FieldInfo field = typeof(GameplayTagContainer).GetField(
+                fieldName,
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.That(field, Is.Not.Null, $"field {fieldName} was not found");
+            return (int[])field.GetValue(container);
+        }
+
+        /// <summary>
+        /// A container that loses every tag releases the bitset, and re-crossing the activation threshold
+        /// rebuilds it. Membership must be correct on each side of every transition.
+        /// </summary>
+        [Test]
+        public void Container_BitsetReactivation_AcrossClearAndThreshold_StaysCorrect()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out _, HierarchyNames(6, 4, 3));
+            TagDataSnapshot snapshot = registry.Snapshot;
+            var container = new GameplayTagContainer(registry);
+            var model = new HashSet<int>();
+
+            void AssertMembership(string stage)
+            {
+                HashSet<int> expanded = Expand(snapshot, model);
+                Assert.That(container.ExplicitTagCount, Is.EqualTo(model.Count), $"{stage}: explicit count");
+                Assert.That(container.TagCount, Is.EqualTo(expanded.Count), $"{stage}: expanded count");
+
+                int diverged = -1;
+                for (int index = 1; index < snapshot.TotalTagCount && diverged < 0; index++)
+                {
+                    if (container.ContainsRuntimeIndex(index, explicitOnly: true) != model.Contains(index) ||
+                        container.ContainsRuntimeIndex(index, explicitOnly: false) != expanded.Contains(index))
+                    {
+                        diverged = index;
+                    }
+                }
+
+                Assert.That(diverged, Is.EqualTo(-1), $"{stage}: index {diverged} diverged");
+            }
+
+            void AddRange(int from, int to)
+            {
+                for (int index = from; index <= to; index++)
+                {
+                    container.AddTag(new GameplayTag(index));
+                    model.Add(index);
+                }
+            }
+
+            void RemoveRange(int from, int to)
+            {
+                for (int index = from; index <= to; index++)
+                {
+                    container.RemoveTag(new GameplayTag(index));
+                    model.Remove(index);
+                }
+            }
+
+            AddRange(1, 100);
+            Assert.That(container.UsesBitset, Is.True, "fixture: 100 tags must activate the bitset");
+            AssertMembership("after first fill");
+
+            RemoveRange(1, 100);
+            Assert.That(container.UsesBitset, Is.False, "an empty container must release the bitset");
+            AssertMembership("after draining");
+
+            AddRange(1, 100);
+            Assert.That(container.UsesBitset, Is.True, "refilling must reactivate the bitset");
+            AssertMembership("after refill");
+
+            RemoveRange(21, 100);
+            Assert.That(container.UsesBitset, Is.False, "falling below the activation threshold must release the bitset");
+            AssertMembership("below threshold");
+
+            AddRange(21, 100);
+            Assert.That(container.UsesBitset, Is.True, "crossing the threshold again must reactivate the bitset");
+            AssertMembership("after re-crossing");
+
+            container.Clear();
+            model.Clear();
+            Assert.That(container.UsesBitset, Is.False, "Clear must release the bitset");
+            AssertMembership("after Clear");
+        }
+
+        /// <summary>
+        /// While the bitset stays active its backing array is reused rather than reallocated, which is what
+        /// keeps a grant/drop pair from allocating.
+        /// </summary>
+        [Test]
+        public void Container_BitsetCapacity_IsReusedWhileActive()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out _, HierarchyNames(6, 4, 3));
+            TagDataSnapshot snapshot = registry.Snapshot;
+            var container = new GameplayTagContainer(registry);
+
+            for (int index = 1; index <= 100; index++)
+                container.AddTag(new GameplayTag(index));
+
+            Assert.That(container.UsesBitset, Is.True, "fixture: 100 tags must activate the bitset");
+            int[] active = ReadPrivateIntArray(container, "m_Bitset");
+            Assert.That(active.Length, Is.GreaterThan(0));
+
+            for (int index = 90; index <= 100; index++)
+                container.RemoveTag(new GameplayTag(index));
+
+            Assert.That(container.UsesBitset, Is.True, "fixture: the bitset must stay active after this shrink");
+            Assert.That(ReadPrivateIntArray(container, "m_Bitset"), Is.SameAs(active),
+                "the bitset backing array was reallocated while the bitset stayed active");
+            _ = snapshot;
+        }
+
+        /// <summary>
+        /// Clear releases every backing array, including the self-reference snapshot, so a pooled container
+        /// does not carry the peak of an operation it no longer performs.
+        /// </summary>
+        [Test]
+        public void Container_Clear_ReleasesSelfReferenceScratch()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out _, HierarchyNames(2, 3, 2));
+            var container = new GameplayTagContainer(registry);
+            var donor = new GameplayTagContainer(registry);
+
+            for (int index = 1; index <= 20; index++)
+                container.AddTag(new GameplayTag(index));
+            for (int index = 10; index <= 20; index++)
+                donor.AddTag(new GameplayTag(index));
+
+            container.AddUnion(container, donor);
+            Assert.That(ReadPrivateIntArray(container, "m_SourceScratch").Length, Is.GreaterThanOrEqualTo(20),
+                "fixture: a self-referencing union must materialize the snapshot");
+
+            container.Clear();
+            Assert.That(ReadPrivateIntArray(container, "m_SourceScratch").Length, Is.Zero,
+                "Clear must release the self-reference scratch");
+            Assert.That(ReadPrivateIntArray(container, "m_Explicit").Length, Is.Zero,
+                "Clear must release the explicit array");
+
+            container.AddTags(donor);
+            container.AddUnion(container, donor);
+            Assert.That(container.ExplicitTagCount, Is.EqualTo(donor.ExplicitTagCount),
+                "a self-referencing union must still work after Clear released the scratch");
+        }
+
         // ------------------------------------------------------------------ seed sweep
 
         [Test]

@@ -477,6 +477,7 @@ namespace CycloneGames.GameplayTags.Core
          m_Explicit = Array.Empty<int>();
          m_Implicit = Array.Empty<int>();
          m_Scratch = Array.Empty<int>();
+         m_SourceScratch = Array.Empty<int>();
          m_Bitset = Array.Empty<int>();
          m_RuntimeIndexEpoch = 0;
 
@@ -617,20 +618,24 @@ namespace CycloneGames.GameplayTags.Core
             ValidateSourceIndices(snapshot, second, skipNonPositive: true, nameof(second));
          }
 
-         // A container may name itself as an operand, and Clear below destroys the array the merge reads.
+         // A container may name itself as an operand, so the merge reads a snapshot taken before any write.
          bool firstIsSelf = ReferenceEquals(first, this);
          bool secondIsSelf = ReferenceEquals(second, this);
          int[] selfIndices = firstIsSelf || secondIsSelf ? SnapshotSelfExplicit(out _) : null;
 
-         Clear();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          if (combinedCount == 0)
+         {
+            Clear();
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
             return;
+         }
 
          if (m_Explicit.Length < combinedCount)
             m_Explicit = new int[Math.Max(4, combinedCount)];
 
+         // Written in place: the result is a superset of the previous contents only when this container is
+         // one of the operands, and that case reads from the snapshot above.
+         int written = 0;
          int i = 0;
          int j = 0;
          while (i < firstCount || j < secondCount)
@@ -668,9 +673,12 @@ namespace CycloneGames.GameplayTags.Core
             if (next <= 0)
                continue;
 
-            m_Explicit[m_ExplicitCount++] = next;
+            m_Explicit[written++] = next;
          }
 
+         m_ExplicitCount = written;
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          RebuildImplicit();
          RebuildBitset();
       }
@@ -700,15 +708,19 @@ namespace CycloneGames.GameplayTags.Core
          bool secondIsSelf = ReferenceEquals(second, this);
          int[] selfIndices = firstIsSelf || secondIsSelf ? SnapshotSelfExplicit(out _) : null;
 
-         Clear();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
-         if (firstCount > 0 && secondCount > 0)
+         if (firstCount == 0 || secondCount == 0)
          {
-            // Clear leaves the explicit array empty; the intersection can never exceed the smaller side.
-            m_Explicit = new int[Math.Min(firstCount, secondCount)];
+            Clear();
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+            return;
          }
 
+         // The intersection can never exceed the smaller side, and the result is written in place.
+         int capacity = Math.Min(firstCount, secondCount);
+         if (m_Explicit.Length < capacity)
+            m_Explicit = new int[Math.Max(4, capacity)];
+
+         int written = 0;
          int i = 0;
          int j = 0;
          while (i < firstCount && j < secondCount)
@@ -718,7 +730,7 @@ namespace CycloneGames.GameplayTags.Core
             if (a == b)
             {
                if (a > 0)
-                  m_Explicit[m_ExplicitCount++] = a;
+                  m_Explicit[written++] = a;
 
                i++;
                j++;
@@ -733,6 +745,9 @@ namespace CycloneGames.GameplayTags.Core
             }
          }
 
+         m_ExplicitCount = written;
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          RebuildImplicit();
          RebuildBitset();
       }
@@ -937,9 +952,10 @@ namespace CycloneGames.GameplayTags.Core
             return;
          }
 
-         // Grow-only capacity: the word count follows the highest held index, so reallocating on shrink
-         // makes a grant/drop pair allocate. Clearing the whole retained array keeps stale high words from
-         // answering membership tests for indices no longer held.
+         // Capacity is reused while the bitset stays active: the word count follows the highest held index,
+         // so a grant/drop pair above the threshold would otherwise reallocate. Dropping to zero, falling
+         // below the activation threshold, or becoming too sparse releases the array. Clearing the whole
+         // retained array keeps stale high words from answering membership tests for indices no longer held.
          if (m_Bitset.Length < wordCount)
             m_Bitset = new int[wordCount];
          else

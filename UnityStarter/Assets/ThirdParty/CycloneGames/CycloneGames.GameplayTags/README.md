@@ -370,7 +370,9 @@ GameplayTagsDiagnostics.ThreadAffinityChecksEnabled = false;
 ```
 
 `Clear()` returns a container to its pre-first-write state, including releasing the recorded thread.
-A pool must therefore clear a container before handing it to another thread:
+It performs no thread check of its own, so the caller must guarantee that no other thread is reading
+the container while it is cleared. A pool must therefore clear a container before handing it to
+another thread:
 
 ```csharp
 pooledTags.Clear();

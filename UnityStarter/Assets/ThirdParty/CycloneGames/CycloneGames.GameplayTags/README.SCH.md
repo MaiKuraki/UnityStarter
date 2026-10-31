@@ -366,8 +366,8 @@ Unity bootstrap 在 Editor 与 Development 构建中开启该校验；做性能�
 GameplayTagsDiagnostics.ThreadAffinityChecksEnabled = false;
 ```
 
-`Clear()` 会把 container 恢复到首次写入前的状态，包括释放已记录的线程。因此对象池必须在把 container
-交给其他线程之前清空它：
+`Clear()` 会把 container 恢复到首次写入前的状态，包括释放已记录的线程。它本身不做线程校验，因此调用方
+必须保证清空期间没有其他线程在读该 container。对象池必须在把 container 交给其他线程之前清空它：
 
 ```csharp
 pooledTags.Clear();

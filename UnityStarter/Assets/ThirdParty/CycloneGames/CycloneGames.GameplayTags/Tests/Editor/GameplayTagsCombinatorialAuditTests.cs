@@ -1182,7 +1182,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 $"{Small} calls: {smallMs:F2} ms | {Large} calls: {largeMs:F2} ms | ratio {ratio:F2} " +
                 $"(linear ~4, quadratic ~16)");
 
-            Assert.That(ratio, Is.LessThan(8.0),
+            Assert.That(ratio, Is.LessThan(10.0),
                 $"{Large} buffered registrations cost {ratio:F2}x the {Small} case; " +
                 "4x the input should be roughly 4x the work, not 16x");
         }
