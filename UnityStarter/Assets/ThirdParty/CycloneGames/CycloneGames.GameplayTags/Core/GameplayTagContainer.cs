@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -517,13 +517,23 @@ namespace CycloneGames.GameplayTags.Core
 
          bool changed = false;
          int sourceCount = container.ExplicitTagCount;
-         for (int i = 0; i < sourceCount; i++)
+         try
          {
-            int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
-            if (runtimeIndex <= 0)
-               continue;
+            for (int i = 0; i < sourceCount; i++)
+            {
+               int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
+               if (runtimeIndex <= 0)
+                  continue;
 
-            changed |= InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex);
+               changed |= InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex);
+            }
+         }
+         catch
+         {
+            // A source that fails mid-copy leaves the explicit array ahead of the derived sets. Drop
+            // everything rather than keep a container that answers with stale membership.
+            Clear();
+            throw;
          }
 
          if (changed)
@@ -638,42 +648,52 @@ namespace CycloneGames.GameplayTags.Core
          int written = 0;
          int i = 0;
          int j = 0;
-         while (i < firstCount || j < secondCount)
+         try
          {
-            int next;
-            if (i >= firstCount)
+            while (i < firstCount || j < secondCount)
             {
-               next = ExplicitIndexAt(second, secondIsSelf, selfIndices, j++);
-            }
-            else if (j >= secondCount)
-            {
-               next = ExplicitIndexAt(first, firstIsSelf, selfIndices, i++);
-            }
-            else
-            {
-               int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
-               int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
-               if (a == b)
+               int next;
+               if (i >= firstCount)
                {
-                  i++;
-                  j++;
+                  next = ExplicitIndexAt(second, secondIsSelf, selfIndices, j++);
                }
-               else if (a < b)
+               else if (j >= secondCount)
                {
-                  i++;
+                  next = ExplicitIndexAt(first, firstIsSelf, selfIndices, i++);
                }
                else
                {
-                  j++;
+                  int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+                  int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
+                  if (a == b)
+                  {
+                     i++;
+                     j++;
+                  }
+                  else if (a < b)
+                  {
+                     i++;
+                  }
+                  else
+                  {
+                     j++;
+                  }
+
+                  next = Math.Min(a, b);
                }
 
-               next = Math.Min(a, b);
+               if (next <= 0)
+                  continue;
+
+               m_Explicit[written++] = next;
             }
-
-            if (next <= 0)
-               continue;
-
-            m_Explicit[written++] = next;
+         }
+         catch
+         {
+            // A source that fails mid-merge would leave the explicit array half written. Drop everything
+            // rather than keep a container whose count no longer describes its contents.
+            Clear();
+            throw;
          }
 
          m_ExplicitCount = written;
@@ -723,26 +743,34 @@ namespace CycloneGames.GameplayTags.Core
          int written = 0;
          int i = 0;
          int j = 0;
-         while (i < firstCount && j < secondCount)
+         try
          {
-            int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
-            int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
-            if (a == b)
+            while (i < firstCount && j < secondCount)
             {
-               if (a > 0)
-                  m_Explicit[written++] = a;
+               int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+               int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
+               if (a == b)
+               {
+                  if (a > 0)
+                     m_Explicit[written++] = a;
 
-               i++;
-               j++;
+                  i++;
+                  j++;
+               }
+               else if (a < b)
+               {
+                  i++;
+               }
+               else
+               {
+                  j++;
+               }
             }
-            else if (a < b)
-            {
-               i++;
-            }
-            else
-            {
-               j++;
-            }
+         }
+         catch
+         {
+            Clear();
+            throw;
          }
 
          m_ExplicitCount = written;

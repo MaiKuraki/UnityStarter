@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -38,10 +38,35 @@ namespace CycloneGames.GameplayTags.Core
       private readonly GameplayTagRegistry m_Registry;
 
       /// <summary>Builds a frozen view of another container's current tag set.</summary>
+      /// <exception cref="ArgumentException">
+      /// The source holds indices from a registry epoch other than the current one. A view copies indices,
+      /// so freezing a stale source would stamp old numbers with the current epoch and pass every later
+      /// write-path check.
+      /// </exception>
       public ReadOnlyGameplayTagContainer(IReadOnlyGameplayTagContainer source)
       {
          if (source == null)
             throw new ArgumentNullException(nameof(source));
+
+         m_Registry = (source as IGameplayTagRegistryProvider)?.Registry;
+         m_Snapshot = m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
+
+         int sourceEpoch = (source as IGameplayTagEpochProvider)?.RuntimeIndexEpoch ?? 0;
+
+         // A source bound to a registry is checked right here, where the mistake is. A source that only
+         // declares an epoch names no registry, so comparing it against the ambient one would reject valid
+         // indices in a dependency-injected setup; it keeps its epoch and the write path rejects it later.
+         if (m_Registry != null && sourceEpoch != 0 && sourceEpoch != m_Snapshot.RuntimeIndexEpoch)
+         {
+            throw new ArgumentException(
+               "Cannot freeze a tag container whose indices belong to a different registry epoch. " +
+               "Rebuild it from persisted names first.",
+               nameof(source));
+         }
+
+         // 0 means "not declared": the view never claims an epoch it cannot attribute, and the write path
+         // treats it as unbound instead of comparing it against a registry the source never named.
+         m_RuntimeIndexEpoch = sourceEpoch;
 
          // Read by index: GetTags/GetExplicitTags return a struct, and reading them through this
          // interface would box it twice per snapshot.
@@ -55,28 +80,13 @@ namespace CycloneGames.GameplayTags.Core
          for (int i = 0; i < implicitCount; i++)
             m_Implicit[i] = source.GetTag(i).RuntimeIndex;
 
-         m_Registry = (source as IGameplayTagRegistryProvider)?.Registry;
-         m_Snapshot = m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
-         m_RuntimeIndexEpoch = m_Snapshot.RuntimeIndexEpoch;
          m_Bitset = BuildBitset(m_Explicit, m_Implicit, m_Snapshot.TagCount);
-      }
-
-      private ReadOnlyGameplayTagContainer(
-         int[] explicitIndices,
-         int[] implicitIndices,
-         int[] bitset,
-         TagDataSnapshot snapshot)
-      {
-         m_Explicit = explicitIndices;
-         m_Implicit = implicitIndices;
-         m_Bitset = bitset;
-         m_Snapshot = snapshot;
-         m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
       }
 
       /// <summary>True when the registry epoch this view was built against is still current.</summary>
       public bool IsCompatibleWithCurrentRegistry
-         => m_RuntimeIndexEpoch == (m_Registry ?? GameplayTagManager.Current).Snapshot.RuntimeIndexEpoch;
+         => m_RuntimeIndexEpoch == 0
+            || m_RuntimeIndexEpoch == (m_Registry ?? GameplayTagManager.Current).Snapshot.RuntimeIndexEpoch;
 
       /// <summary>The registry epoch this view is bound to.</summary>
       public int RuntimeIndexEpoch => m_RuntimeIndexEpoch;

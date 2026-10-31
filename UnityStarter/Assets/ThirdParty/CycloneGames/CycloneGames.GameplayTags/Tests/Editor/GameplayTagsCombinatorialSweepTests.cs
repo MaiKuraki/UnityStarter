@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -806,6 +806,389 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             {
                 Assert.That(second.Snapshot.GetName(index), Is.EqualTo(first.Snapshot.GetName(index)),
                     $"index {index} was assigned differently for a different declaration order");
+            }
+        }
+
+        // ------------------------------------------- freezing a stale source into a read-only view
+
+        /// <summary>
+        /// A read-only view copies indices, so a source from the previous epoch must not be accepted:
+        /// stamping the current epoch on stale indices hides the mismatch from the write-path check.
+        /// </summary>
+        [Test]
+        public void ReadOnlyView_FromSourceAfterNonPreservingReload_IsRejected()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out SweepSource source, "Freeze.A", "Freeze.B");
+            GameplayTag a = registry.Request("Freeze.A", false);
+            Assert.That(a.IsNone, Is.False, "fixture tag must resolve");
+
+            var stale = new GameplayTagContainer(registry);
+            stale.AddTag(a);
+            int staleIndex = stale.GetExplicitTag(0).RuntimeIndex;
+            string originalName = registry.GetName(a);
+
+            source.Add("Freeze.0First");
+            registry.Reload(preserveRuntimeIndices: false);
+            Assert.That(registry.GetName(new GameplayTag(staleIndex)), Is.Not.EqualTo(originalName),
+                "fixture: the reload must reassign the stale index");
+
+            ReadOnlyGameplayTagContainer frozen;
+            try
+            {
+                frozen = new ReadOnlyGameplayTagContainer(stale);
+            }
+            catch (ArgumentException)
+            {
+                return; // refused at construction.
+            }
+
+            var target = new GameplayTagContainer(registry);
+            try
+            {
+                target.AddTags(frozen);
+            }
+            catch (ArgumentException)
+            {
+                return; // refused at copy time.
+            }
+
+            Assert.That(target.ExplicitTagCount, Is.EqualTo(1), "AddTags copied the frozen view without refusing it");
+            string copied = registry.GetName(target.GetExplicitTag(0));
+            TestContext.WriteLine($"frozen after reload: '{originalName}' -> '{copied}'");
+            Assert.That(copied, Is.EqualTo(originalName),
+                $"a view frozen after the reload remapped '{originalName}' to '{copied}'");
+        }
+
+        [Test]
+        public void ReadOnlyView_FromStaleSourceOfAnyKind_IsRejected()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out SweepSource source, "Freeze.A", "Freeze.B");
+            GameplayTag a = registry.Request("Freeze.A", false);
+            Assert.That(a.IsNone, Is.False, "fixture tag must resolve");
+
+            var plain = new GameplayTagContainer(registry);
+            plain.AddTag(a);
+
+            var counted = new GameplayTagCountContainer(registry);
+            counted.AddTag(a);
+
+            var preReloadView = new ReadOnlyGameplayTagContainer(plain);
+
+            SerializableGameplayTagContainer bridge = new SerializableGameplayTagContainer().Bind(registry);
+            bridge.LoadPersisted(new[] { "Freeze.A" });
+
+            IReadOnlyGameplayTagContainer[] indexBackedSources = { plain, counted, preReloadView };
+
+            source.Add("Freeze.0First");
+            registry.Reload(preserveRuntimeIndices: false);
+
+            foreach (IReadOnlyGameplayTagContainer stale in indexBackedSources)
+            {
+                string kind = stale.GetType().Name;
+                Assert.That(() => new ReadOnlyGameplayTagContainer(stale), Throws.TypeOf<ArgumentException>(),
+                    $"{kind}: freezing a source from the previous epoch must be refused");
+            }
+
+            // The bridge stores names, so it re-resolves into the current epoch and stays freezable.
+            ReadOnlyGameplayTagContainer fromBridge = new(bridge);
+            Assert.That(registry.GetName(fromBridge.GetExplicitTag(0)), Is.EqualTo("Freeze.A"),
+                "a name-backed bridge must freeze the tag the name still points at");
+        }
+
+        /// <summary>
+        /// Every source kind against both reload kinds. A preserving reload keeps every index, so freezing
+        /// must stay possible; a reassigning reload invalidates index-backed sources but not name-backed
+        /// ones, and not containers that never declare an epoch.
+        /// </summary>
+        [Test]
+        public void EpochGuard_Matrix_SourceKindByReloadKind()
+        {
+            string[] kinds = { "container", "countContainer", "preBuiltView", "bridge", "foreignWithEpoch", "foreignWithoutEpoch" };
+            bool[] reloadKinds = { true, false };
+            int cells = 0;
+
+            foreach (bool preserve in reloadKinds)
+            {
+                foreach (string kind in kinds)
+                {
+                    string cell = $"{(preserve ? "preserving" : "reassigning")}/{kind}";
+                    GameplayTagRegistry registry = BuildRegistry(out SweepSource source, HierarchyNames(2, 2, 2));
+                    GameplayTag tag = registry.Request("Swp.R0.C0.G1", false);
+                    Assert.That(tag.IsNone, Is.False, $"{cell}: fixture tag must resolve");
+
+                    int epochBefore = registry.RuntimeIndexEpoch;
+                    int staleIndex = tag.RuntimeIndex;
+
+                    var plain = new GameplayTagContainer(registry);
+                    plain.AddTag(tag);
+                    var counted = new GameplayTagCountContainer(registry);
+                    counted.AddTag(tag);
+                    ReadOnlyGameplayTagContainer preBuiltView = new(plain);
+                    SerializableGameplayTagContainer bridge = new SerializableGameplayTagContainer().Bind(registry);
+                    bridge.LoadPersisted(new[] { "Swp.R0.C0.G1" });
+
+                    IReadOnlyGameplayTagContainer subject = kind switch
+                    {
+                        "container" => plain,
+                        "countContainer" => counted,
+                        "preBuiltView" => preBuiltView,
+                        "bridge" => bridge,
+                        "foreignWithEpoch" => new ForeignContainer(new[] { staleIndex }, new[] { staleIndex }, epochBefore),
+                        _ => new EpochlessContainer(new ForeignContainer(new[] { staleIndex }, new[] { staleIndex }))
+                    };
+
+                    source.Add("Swp.0First");
+                    registry.Reload(preserveRuntimeIndices: preserve);
+
+                    if (preserve)
+                    {
+                        Assert.That(registry.RuntimeIndexEpoch, Is.EqualTo(epochBefore),
+                            $"{cell}: fixture: a preserving reload must keep the epoch");
+                    }
+                    else
+                    {
+                        Assert.That(registry.RuntimeIndexEpoch, Is.Not.EqualTo(epochBefore),
+                            $"{cell}: fixture: a reassigning reload must advance the epoch");
+                    }
+
+                    // A source that names no registry cannot pass the registry-identity check against a
+                    // dependency-injected target, so these cells only assert the epoch the view records.
+                    if (kind == "foreignWithEpoch" || kind == "foreignWithoutEpoch")
+                    {
+                        ReadOnlyGameplayTagContainer foreignView = new(subject);
+                        int expectedStamp = kind == "foreignWithEpoch" ? epochBefore : 0;
+                        Assert.That(foreignView.RuntimeIndexEpoch, Is.EqualTo(expectedStamp),
+                            $"{cell}: the view records the declared epoch, or 0 when none was declared");
+                        cells++;
+                        continue;
+                    }
+
+                    bool expectsRefusal = !preserve && kind != "bridge";
+
+                    ReadOnlyGameplayTagContainer view = null;
+                    try
+                    {
+                        view = new ReadOnlyGameplayTagContainer(subject);
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        Assert.That(expectsRefusal, Is.True, $"{cell}: a valid source was refused at freeze time");
+                        Assert.That(exception.Message, Does.Contain("epoch"),
+                            $"{cell}: the refusal must be about the epoch, not another check");
+                        cells++;
+                        continue;
+                    }
+
+                    var destination = new GameplayTagContainer(registry);
+                    try
+                    {
+                        destination.AddTags(view);
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        Assert.That(expectsRefusal, Is.True, $"{cell}: a valid source was refused at copy time");
+                        Assert.That(exception.Message, Does.Contain("epoch"),
+                            $"{cell}: the refusal must be about the epoch, not another check");
+                        Assert.That(destination.ExplicitTagCount, Is.Zero,
+                            $"{cell}: a refused copy must not write anything");
+                        cells++;
+                        continue;
+                    }
+
+                    Assert.That(expectsRefusal, Is.False, $"{cell}: a stale source was copied without a refusal");
+                    Assert.That(destination.ExplicitTagCount, Is.EqualTo(1), $"{cell}: one tag expected");
+
+                    Assert.That(registry.GetName(destination.GetExplicitTag(0)), Is.EqualTo("Swp.R0.C0.G1"),
+                        $"{cell}: the frozen view must keep the tag identity");
+
+                    cells++;
+                }
+            }
+
+            TestContext.WriteLine($"epoch matrix: {cells} cells checked");
+        }
+
+        [Test]
+        public void EpochGuard_HeldTagAtAnyHierarchyDepth_IsRefusedAfterReassigningReload([Values(1, 2, 3)] int depth)
+        {
+            GameplayTagRegistry registry = BuildRegistry(out SweepSource source, HierarchyNames(2, 2, 2));
+            string name = depth switch
+            {
+                1 => "Swp.R0",
+                2 => "Swp.R0.C0",
+                _ => "Swp.R0.C0.G0"
+            };
+
+            GameplayTag tag = registry.Request(name, false);
+            Assert.That(tag.IsNone, Is.False, $"fixture: '{name}' must resolve");
+
+            var stale = new GameplayTagContainer(registry);
+            stale.AddTag(tag);
+
+            source.Add("Swp.0First");
+            registry.Reload(preserveRuntimeIndices: false);
+
+            Assert.That(() => new ReadOnlyGameplayTagContainer(stale), Throws.TypeOf<ArgumentException>(),
+                $"a container holding a depth-{depth} tag must not freeze after the reload");
+
+            var recovered = new GameplayTagContainer(registry);
+            recovered.LoadPersisted(new[] { name });
+            Assert.That(registry.GetName(recovered.GetExplicitTag(0)), Is.EqualTo(name),
+                $"a depth-{depth} tag must survive a rebuild through its persisted name");
+        }
+
+        [Test]
+        public void EpochGuard_RecoveredFromNames_CarriesTheCurrentEpoch()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out SweepSource source, HierarchyNames(2, 2, 2));
+            GameplayTag tag = registry.Request("Swp.R0.C0.G1", false);
+            Assert.That(tag.IsNone, Is.False, "fixture tag must resolve");
+
+            var stale = new GameplayTagContainer(registry);
+            stale.AddTag(tag);
+            Assert.That(stale.TryToPersisted(out string[] names), Is.True);
+
+            source.Add("Swp.0First");
+            registry.Reload(preserveRuntimeIndices: false);
+
+            var recovered = new GameplayTagContainer(registry);
+            recovered.LoadPersisted(names);
+
+            // Without this the recovery path would "pass" only because epoch 0 is exempt.
+            Assert.That(recovered.RuntimeIndexEpoch, Is.EqualTo(registry.RuntimeIndexEpoch),
+                "a container rebuilt from names must belong to the current epoch");
+            Assert.That(recovered.RuntimeIndexEpoch, Is.Not.Zero);
+
+            ReadOnlyGameplayTagContainer view = new(recovered);
+            Assert.That(view.RuntimeIndexEpoch, Is.EqualTo(registry.RuntimeIndexEpoch));
+
+            var destination = new GameplayTagContainer(registry);
+            Assert.That(() => destination.AddTags(view), Throws.Nothing);
+            Assert.That(registry.GetName(destination.GetExplicitTag(0)), Is.EqualTo("Swp.R0.C0.G1"));
+        }
+
+        [Test]
+        public void EpochGuard_AfterRepeatedReassigningReloads_StillRefuses()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out SweepSource source, HierarchyNames(2, 2, 2));
+            GameplayTag tag = registry.Request("Swp.R1.C1.G1", false);
+            Assert.That(tag.IsNone, Is.False, "fixture tag must resolve");
+
+            var stale = new GameplayTagContainer(registry);
+            stale.AddTag(tag);
+
+            for (int round = 0; round < 3; round++)
+            {
+                source.Add($"Swp.{round}0First");
+                registry.Reload(preserveRuntimeIndices: false);
+            }
+
+            Assert.That(() => new ReadOnlyGameplayTagContainer(stale), Throws.TypeOf<ArgumentException>(),
+                "a source that is three generations behind must still be refused");
+
+            string[] persisted = { "Swp.R1.C1.G1" };
+            var recovered = new GameplayTagContainer(registry);
+            recovered.LoadPersisted(persisted);
+            Assert.That(() => new ReadOnlyGameplayTagContainer(recovered), Throws.Nothing,
+                "a container rebuilt from names must be freezable again");
+            Assert.That(registry.GetName(recovered.GetExplicitTag(0)), Is.EqualTo("Swp.R1.C1.G1"));
+        }
+
+        // --------------------------------------------- mutation with a source that fails mid-operation
+
+        [Test]
+        public void Container_MutationWithThrowingSource_LeavesNoPartialState()
+        {
+            GameplayTagRegistry registry = BuildRegistry(out _, HierarchyNames(2, 2, 2));
+            TagDataSnapshot snapshot = registry.Snapshot;
+            Assert.That(snapshot.TagCount, Is.GreaterThanOrEqualTo(13));
+
+            Run("AddTags", (target, throwing) => target.AddTags(throwing));
+            Run("AddUnion", (target, throwing) => target.AddUnion(throwing, target));
+            Run("AddIntersection", (target, throwing) => target.AddIntersection(throwing, target));
+            Run("Copy", (target, throwing) => GameplayTagContainer.Copy(target, throwing));
+
+            void Run(string label, Action<GameplayTagContainer, IReadOnlyGameplayTagContainer> operation)
+            {
+                var target = new GameplayTagContainer(registry);
+                for (int index = 1; index <= 8; index++)
+                    target.AddTag(new GameplayTag(index));
+
+                HashSet<int> before = ReadExplicit(target);
+                // Validation reads the source once; one extra read lets the mutation start before it fails.
+                int[] sourceIndices = { 10, 11, 12 };
+                var throwing = new ThrowingContainer(sourceIndices, registry.RuntimeIndexEpoch,
+                    readBudget: sourceIndices.Length + 1);
+
+                Assert.That(() => operation(target, throwing), Throws.TypeOf<InvalidOperationException>(),
+                    $"{label}: fixture expected the source to fail mid-operation");
+
+                HashSet<int> after = ReadExplicit(target);
+                Assert.That(target.ExplicitTagCount, Is.EqualTo(after.Count),
+                    $"{label}: explicit count {target.ExplicitTagCount} disagrees with the enumerated set {after.Count}");
+
+                HashSet<int> expanded = Expand(snapshot, after);
+                Assert.That(target.TagCount, Is.EqualTo(expanded.Count),
+                    $"{label}: expanded count {target.TagCount} disagrees with the explicit set {expanded.Count}");
+
+                int diverged = -1;
+                for (int index = 1; index < snapshot.TotalTagCount && diverged < 0; index++)
+                {
+                    if (target.ContainsRuntimeIndex(index, explicitOnly: true) != after.Contains(index))
+                        diverged = index;
+                }
+
+                Assert.That(diverged, Is.EqualTo(-1), $"{label}: membership diverged at index {diverged}");
+                Assert.That(after.SetEquals(before) || after.Count == 0, Is.True,
+                    $"{label}: the container is neither its previous state nor empty");
+            }
+        }
+
+        /// <summary>A source that stops answering after a fixed number of reads.</summary>
+        private sealed class ThrowingContainer : IReadOnlyGameplayTagContainer, IGameplayTagEpochProvider
+        {
+            private readonly int[] m_Indices;
+            private readonly int m_ReadBudget;
+            private int m_Reads;
+
+            internal ThrowingContainer(IEnumerable<int> indices, int epoch, int readBudget)
+            {
+                m_Indices = new List<int>(indices).ToArray();
+                Array.Sort(m_Indices);
+                RuntimeIndexEpoch = epoch;
+                m_ReadBudget = readBudget;
+            }
+
+            public int RuntimeIndexEpoch { get; }
+
+            public bool IsEmpty => m_Indices.Length == 0;
+            public int ExplicitTagCount => m_Indices.Length;
+            public int TagCount => m_Indices.Length;
+
+            public GameplayTag GetTag(int index) => Read(index);
+            public GameplayTag GetExplicitTag(int index) => Read(index);
+
+            public GameplayTagEnumerator GetTags() => new(m_Indices, m_Indices.Length);
+            public GameplayTagEnumerator GetExplicitTags() => new(m_Indices, m_Indices.Length);
+
+            public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags) { }
+            public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags) { }
+            public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags) { }
+            public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags) { }
+
+            public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
+                => Array.BinarySearch(m_Indices, runtimeIndex) >= 0;
+
+            public GameplayTagEnumerator GetEnumerator() => GetTags();
+            IEnumerator<GameplayTag> IEnumerable<GameplayTag>.GetEnumerator() => GetTags();
+            IEnumerator IEnumerable.GetEnumerator() => GetTags();
+
+            private GameplayTag Read(int index)
+            {
+                if (++m_Reads > m_ReadBudget)
+                    throw new InvalidOperationException("the source stopped answering mid-operation");
+
+                return new GameplayTag(m_Indices[index]);
             }
         }
 
