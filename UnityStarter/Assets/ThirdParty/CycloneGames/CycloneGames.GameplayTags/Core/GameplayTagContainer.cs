@@ -421,6 +421,10 @@ namespace CycloneGames.GameplayTags.Core
       }
 
       /// <summary>Copies the explicit and expanded sets of another container into this one.</summary>
+      /// <remarks>
+      /// The destination is cleared before the copy starts, so a source that throws leaves it empty rather
+      /// than half filled.
+      /// </remarks>
       public static void Copy<T>(GameplayTagContainer destination, in T source)
          where T : IReadOnlyGameplayTagContainer
       {
@@ -503,6 +507,10 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
+      /// <remarks>
+      /// If the source throws while being read, the container is cleared before the exception propagates;
+      /// it never keeps a partially applied set.
+      /// </remarks>
       public void AddTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          if (container == null || container.IsEmpty)
@@ -517,13 +525,23 @@ namespace CycloneGames.GameplayTags.Core
 
          bool changed = false;
          int sourceCount = container.ExplicitTagCount;
-         for (int i = 0; i < sourceCount; i++)
+         try
          {
-            int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
-            if (runtimeIndex <= 0)
-               continue;
+            for (int i = 0; i < sourceCount; i++)
+            {
+               int runtimeIndex = container.GetExplicitTag(i).RuntimeIndex;
+               if (runtimeIndex <= 0)
+                  continue;
 
-            changed |= InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex);
+               changed |= InsertSortedUnique(ref m_Explicit, ref m_ExplicitCount, runtimeIndex);
+            }
+         }
+         catch
+         {
+            // A source that fails mid-copy leaves the explicit array ahead of the derived sets. Drop
+            // everything rather than keep a container that answers with stale membership.
+            Clear();
+            throw;
          }
 
          if (changed)
@@ -554,6 +572,10 @@ namespace CycloneGames.GameplayTags.Core
          RebuildBitset();
       }
 
+      /// <remarks>
+      /// If the source throws while being read, the container is cleared before the exception propagates;
+      /// it never keeps a partially applied set.
+      /// </remarks>
       public void RemoveTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          AssertMutationThreadAffinity();
@@ -570,18 +592,28 @@ namespace CycloneGames.GameplayTags.Core
 
          bool changed = false;
          int sourceCount = container.ExplicitTagCount;
-         for (int i = 0; i < sourceCount; i++)
+         try
          {
-            int runtimeIndex = sourceIsSelf ? selfIndices[i] : container.GetExplicitTag(i).RuntimeIndex;
-            if (runtimeIndex <= 0)
+            for (int i = 0; i < sourceCount; i++)
             {
-               if (!sourceIsSelf)
-                  GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(container.GetExplicitTag(i));
+               int runtimeIndex = sourceIsSelf ? selfIndices[i] : container.GetExplicitTag(i).RuntimeIndex;
+               if (runtimeIndex <= 0)
+               {
+                  if (!sourceIsSelf)
+                     GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(container.GetExplicitTag(i));
 
-               continue;
+                  continue;
+               }
+
+               changed |= RemoveSorted(m_Explicit, ref m_ExplicitCount, runtimeIndex);
             }
-
-            changed |= RemoveSorted(m_Explicit, ref m_ExplicitCount, runtimeIndex);
+         }
+         catch
+         {
+            // Same contract as the additive paths: a source that fails mid-loop must not leave the
+            // explicit set ahead of the derived sets.
+            Clear();
+            throw;
          }
 
          if (changed)
@@ -598,6 +630,10 @@ namespace CycloneGames.GameplayTags.Core
       /// Both sides are drained by index, so nothing boxes regardless of the concrete container types.
       /// The merge is a two-pointer walk over two sorted arrays, which produces a sorted deduplicated
       /// result directly.
+      /// </remarks>
+      /// <remarks>
+      /// If an operand throws while being read, the container is cleared before the exception propagates;
+      /// the previous contents are overwritten in place and cannot be restored.
       /// </remarks>
       public void AddUnion<T, U>(in T first, in U second)
          where T : IReadOnlyGameplayTagContainer
@@ -638,42 +674,52 @@ namespace CycloneGames.GameplayTags.Core
          int written = 0;
          int i = 0;
          int j = 0;
-         while (i < firstCount || j < secondCount)
+         try
          {
-            int next;
-            if (i >= firstCount)
+            while (i < firstCount || j < secondCount)
             {
-               next = ExplicitIndexAt(second, secondIsSelf, selfIndices, j++);
-            }
-            else if (j >= secondCount)
-            {
-               next = ExplicitIndexAt(first, firstIsSelf, selfIndices, i++);
-            }
-            else
-            {
-               int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
-               int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
-               if (a == b)
+               int next;
+               if (i >= firstCount)
                {
-                  i++;
-                  j++;
+                  next = ExplicitIndexAt(second, secondIsSelf, selfIndices, j++);
                }
-               else if (a < b)
+               else if (j >= secondCount)
                {
-                  i++;
+                  next = ExplicitIndexAt(first, firstIsSelf, selfIndices, i++);
                }
                else
                {
-                  j++;
+                  int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+                  int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
+                  if (a == b)
+                  {
+                     i++;
+                     j++;
+                  }
+                  else if (a < b)
+                  {
+                     i++;
+                  }
+                  else
+                  {
+                     j++;
+                  }
+
+                  next = Math.Min(a, b);
                }
 
-               next = Math.Min(a, b);
+               if (next <= 0)
+                  continue;
+
+               m_Explicit[written++] = next;
             }
-
-            if (next <= 0)
-               continue;
-
-            m_Explicit[written++] = next;
+         }
+         catch
+         {
+            // A source that fails mid-merge would leave the explicit array half written. Drop everything
+            // rather than keep a container whose count no longer describes its contents.
+            Clear();
+            throw;
          }
 
          m_ExplicitCount = written;
@@ -686,6 +732,10 @@ namespace CycloneGames.GameplayTags.Core
       /// <summary>
       /// Replaces this container's explicit set with the tags both containers hold explicitly.
       /// </summary>
+      /// <remarks>
+      /// If an operand throws while being read, the container is cleared before the exception propagates;
+      /// the previous contents are overwritten in place and cannot be restored.
+      /// </remarks>
       public void AddIntersection<T, U>(in T first, in U second)
          where T : IReadOnlyGameplayTagContainer
          where U : IReadOnlyGameplayTagContainer
@@ -723,26 +773,34 @@ namespace CycloneGames.GameplayTags.Core
          int written = 0;
          int i = 0;
          int j = 0;
-         while (i < firstCount && j < secondCount)
+         try
          {
-            int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
-            int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
-            if (a == b)
+            while (i < firstCount && j < secondCount)
             {
-               if (a > 0)
-                  m_Explicit[written++] = a;
+               int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+               int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
+               if (a == b)
+               {
+                  if (a > 0)
+                     m_Explicit[written++] = a;
 
-               i++;
-               j++;
+                  i++;
+                  j++;
+               }
+               else if (a < b)
+               {
+                  i++;
+               }
+               else
+               {
+                  j++;
+               }
             }
-            else if (a < b)
-            {
-               i++;
-            }
-            else
-            {
-               j++;
-            }
+         }
+         catch
+         {
+            Clear();
+            throw;
          }
 
          m_ExplicitCount = written;
