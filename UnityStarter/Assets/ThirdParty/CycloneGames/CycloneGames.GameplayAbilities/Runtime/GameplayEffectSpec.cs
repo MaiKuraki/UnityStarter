@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// A generation-stamped view over one dynamic tag set owned by an active GameplayEffectSpec lease.
     /// The view never owns storage and rejects every operation after its originating spec is released.
     /// </summary>
-    public readonly struct GameplayEffectSpecTagView : IGameplayTagContainer
+    public readonly struct GameplayEffectSpecTagView : IGameplayTagContainer, IGameplayTagEpochProvider
     {
         private readonly GameplayEffectSpec owner;
         private readonly ulong leaseGeneration;
@@ -26,6 +26,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.leaseGeneration = leaseGeneration;
             this.grantedTags = grantedTags;
         }
+
+        /// <summary>The epoch of the spec's dynamic tag container, so a copy can reject this view when stale.</summary>
+        int IGameplayTagEpochProvider.RuntimeIndexEpoch => GetReadContainer().RuntimeIndexEpoch;
 
         public bool IsEmpty => GetReadContainer().IsEmpty;
         public int ExplicitTagCount => GetReadContainer().ExplicitTagCount;

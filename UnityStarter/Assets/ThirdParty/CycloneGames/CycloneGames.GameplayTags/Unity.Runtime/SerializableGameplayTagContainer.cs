@@ -37,13 +37,16 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
     /// </para>
     /// </remarks>
     [Serializable]
-    public class SerializableGameplayTagContainer : IReadOnlyGameplayTagContainer, ISerializationCallbackReceiver
+    public class SerializableGameplayTagContainer : IReadOnlyGameplayTagContainer, ISerializationCallbackReceiver, IGameplayTagRegistryProvider
     {
         [SerializeField]
         private string[] explicitTagNames = Array.Empty<string>();
 
         [NonSerialized]
         private GameplayTagContainer container = new();
+
+        [NonSerialized]
+        private GameplayTagRegistry m_Registry;
 
         // What the last deserialize handed the container. When the serialized array still matches this,
         // the inspector has not touched it since, so a runtime mutation of the container is the newer
@@ -77,10 +80,17 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         /// </summary>
         public SerializableGameplayTagContainer Bind(GameplayTagRegistry registry)
         {
-            container = new GameplayTagContainer(registry ?? throw new ArgumentNullException(nameof(registry)));
-            container.LoadPersisted(explicitTagNames);
+            m_Registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            container = new GameplayTagContainer(m_Registry);
+            m_ResolvedSnapshot = null;
+            ResolveFromNames();
             return this;
         }
+
+        GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
+
+        // Reads through the resolving accessor: a re-resolve after a rebuild must report the new epoch.
+        int IGameplayTagEpochProvider.RuntimeIndexEpoch => Container.RuntimeIndexEpoch;
 
         /// <summary>Replaces the container's contents with <paramref name="names"/>.</summary>
         public void LoadPersisted(string[] names)
@@ -125,6 +135,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         /// <summary>The expanded tag at <paramref name="index"/>, in ascending index order.</summary>
         public GameplayTag GetTag(int index)
         {
+            EnsureResolved();
             if ((uint)index >= (uint)container.TagCount)
                 throw new ArgumentOutOfRangeException(nameof(index));
 
@@ -134,6 +145,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         /// <summary>The explicit tag at <paramref name="index"/>, in ascending index order.</summary>
         public GameplayTag GetExplicitTag(int index)
         {
+            EnsureResolved();
             if ((uint)index >= (uint)container.ExplicitTagCount)
                 throw new ArgumentOutOfRangeException(nameof(index));
 
@@ -142,16 +154,27 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         /// <summary>True when the container holds <paramref name="runtimeIndex"/>.</summary>
         public bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly)
-            => container.ContainsRuntimeIndex(runtimeIndex, explicitOnly);
+        {
+            EnsureResolved();
+            return container.ContainsRuntimeIndex(runtimeIndex, explicitOnly);
+        }
 
         /// <summary>Enumerates the expanded tag set.</summary>
-        public GameplayTagEnumerator GetTags() => container.GetTags();
+        public GameplayTagEnumerator GetTags()
+        {
+            EnsureResolved();
+            return container.GetTags();
+        }
 
         /// <summary>Enumerates the expanded tag set.</summary>
-        public GameplayTagEnumerator GetEnumerator() => container.GetTags();
+        public GameplayTagEnumerator GetEnumerator() => GetTags();
 
         /// <summary>Enumerates the explicitly held tags.</summary>
-        public GameplayTagEnumerator GetExplicitTags() => container.GetExplicitTags();
+        public GameplayTagEnumerator GetExplicitTags()
+        {
+            EnsureResolved();
+            return container.GetExplicitTags();
+        }
 
         /// <inheritdoc />
         public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
@@ -260,12 +283,15 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             // One volatile read and one reference compare. The snapshot is a single published object, so
             // it is the whole cache key: any rebuild - with or without an epoch change - publishes a new
             // one, and an unchanged reference means the indices below are still the ones on disk.
-            TagDataSnapshot current = GameplayTagManager.Snapshot;
+            TagDataSnapshot current = GetCurrentSnapshot();
             if (ReferenceEquals(m_ResolvedSnapshot, current))
                 return;
 
             ResolveFromNames(current);
         }
+
+        private TagDataSnapshot GetCurrentSnapshot()
+            => m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
 
         private void ResolveFromNames(TagDataSnapshot snapshot)
         {
@@ -274,7 +300,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         }
 
         private void ResolveFromNames()
-            => ResolveFromNames(GameplayTagManager.Snapshot);
+            => ResolveFromNames(GetCurrentSnapshot());
 
         private bool SerializedArraysUntouched()
         {
@@ -424,6 +450,9 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         private GameplayTagCountContainer container = new();
 
         [NonSerialized]
+        private GameplayTagRegistry m_Registry;
+
+        [NonSerialized]
         private string[] m_LastDeserializedNames = Array.Empty<string>();
 
         // The registry instance and epoch the cached indices were resolved against. Names are the durable
@@ -436,15 +465,24 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         private int[] m_LastDeserializedCounts = Array.Empty<int>();
 
         /// <summary>The live count container. Mutate this; serialization handles the rest.</summary>
-        public GameplayTagCountContainer Container => container;
+        public GameplayTagCountContainer Container
+        {
+            get
+            {
+                EnsureResolved();
+                return container;
+            }
+        }
 
         public string[] ExplicitTagNames => explicitTagNames;
         public int[] ExplicitTagCounts => explicitTagCounts;
 
         public SerializableGameplayTagCountContainer Bind(GameplayTagRegistry registry)
         {
-            container = new GameplayTagCountContainer(registry ?? throw new ArgumentNullException(nameof(registry)));
-            LoadFromArrays();
+            m_Registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            container = new GameplayTagCountContainer(m_Registry);
+            m_ResolvedSnapshot = null;
+            ResolveFromNames();
             return this;
         }
 
@@ -453,15 +491,30 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         {
             explicitTagNames = names ?? Array.Empty<string>();
             explicitTagCounts = counts ?? Array.Empty<int>();
-            LoadFromArrays();
+            ResolveFromNames();
         }
 
         public bool IsStale => container.IsStale;
-        public int ExplicitTagCount => container.ExplicitTagCount;
-        public int TagCount => container.TagCount;
+        public int ExplicitTagCount
+        {
+            get
+            {
+                EnsureResolved();
+                return container.ExplicitTagCount;
+            }
+        }
+        public int TagCount
+        {
+            get
+            {
+                EnsureResolved();
+                return container.TagCount;
+            }
+        }
 
         void ISerializationCallbackReceiver.OnBeforeSerialize()
         {
+            EnsureResolved();
             if (!CountArraysUntouched())
             {
                 container.Clear();
@@ -471,7 +524,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
                     if (string.IsNullOrEmpty(explicitTagNames[i]) || explicitTagCounts[i] <= 0)
                         continue;
 
-                    if (GameplayTagManager.TryRequest(explicitTagNames[i], out GameplayTag tag))
+                    if (TryRequest(explicitTagNames[i], out GameplayTag tag))
                         container.AddTag(tag, explicitTagCounts[i]);
                 }
 
@@ -488,7 +541,9 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             for (int i = 0; i < count; i++)
             {
                 GameplayTag tag = container.GetExplicitTag(i);
-                names[i] = GameplayTagManager.GetName(tag.RuntimeIndex);
+                names[i] = m_Registry != null
+                    ? m_Registry.GetName(tag)
+                    : GameplayTagManager.GetName(tag.RuntimeIndex);
                 counts[i] = container.GetExplicitTagCount(tag);
             }
 
@@ -498,7 +553,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         void ISerializationCallbackReceiver.OnAfterDeserialize()
         {
-            LoadFromArrays();
+            ResolveFromNames();
             m_LastDeserializedNames = (string[])explicitTagNames.Clone();
             m_LastDeserializedCounts = (int[])explicitTagCounts.Clone();
         }
@@ -526,6 +581,27 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             return true;
         }
 
+        private void EnsureResolved()
+        {
+            TagDataSnapshot current = m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot;
+            if (!ReferenceEquals(m_ResolvedSnapshot, current))
+                ResolveFromNames(current);
+        }
+
+        private void ResolveFromNames()
+            => ResolveFromNames(m_Registry != null ? m_Registry.Snapshot : GameplayTagManager.Snapshot);
+
+        private void ResolveFromNames(TagDataSnapshot snapshot)
+        {
+            LoadFromArrays();
+            m_ResolvedSnapshot = snapshot;
+        }
+
+        private bool TryRequest(string name, out GameplayTag tag)
+            => m_Registry != null
+                ? m_Registry.TryRequest(name, out tag)
+                : GameplayTagManager.TryRequest(name, out tag);
+
         private void LoadFromArrays()
         {
             container.Clear();
@@ -538,7 +614,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
                 if (string.IsNullOrEmpty(name) || repeats <= 0)
                     continue;
 
-                if (GameplayTagManager.TryRequest(name, out GameplayTag tag))
+                if (TryRequest(name, out GameplayTag tag))
                     container.AddTag(tag, repeats);
             }
         }

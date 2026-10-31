@@ -67,8 +67,12 @@ namespace CycloneGames.GameplayTags.Core
    /// </remarks>
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagCountContainer : IGameplayTagCountContainer, IEnumerable<GameplayTag>
+   public class GameplayTagCountContainer : IGameplayTagCountContainer, IEnumerable<GameplayTag>, IGameplayTagRegistryProvider
    {
+      GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
+
+      int IGameplayTagEpochProvider.RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
       private int[] m_ExplicitIndices = Array.Empty<int>();
       private int[] m_ExplicitCounts = Array.Empty<int>();
       private int[] m_ImplicitIndices = Array.Empty<int>();
@@ -372,8 +376,6 @@ namespace CycloneGames.GameplayTags.Core
 
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
          Mutate(snapshot, stackalloc int[] { tag.RuntimeIndex }, count);
       }
@@ -390,8 +392,6 @@ namespace CycloneGames.GameplayTags.Core
 
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
          Mutate(snapshot, stackalloc int[] { tag.RuntimeIndex }, -count);
       }
@@ -421,6 +421,19 @@ namespace CycloneGames.GameplayTags.Core
          m_BatchExplicitDeltas = Array.Empty<int>();
          m_BatchTotalDeltas = Array.Empty<int>();
          m_RuntimeIndexEpoch = 0;
+
+         // The recorded owner thread is part of the state that returns to its initial value.
+         Volatile.Write(ref m_OwningThreadId, 0);
+      }
+
+      /// <summary>Clears all counts and releases every backing array on this cold path.</summary>
+      public void ClearAndReleaseMemory()
+      {
+         Clear();
+         m_ExplicitIndices = Array.Empty<int>();
+         m_ExplicitCounts = Array.Empty<int>();
+         m_ImplicitIndices = Array.Empty<int>();
+         m_ImplicitCounts = Array.Empty<int>();
       }
 
       /// <summary>
@@ -444,8 +457,8 @@ namespace CycloneGames.GameplayTags.Core
 
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+         GameplayTagRegistryBinding.Validate(m_Registry, container, nameof(container));
+         GameplayTagRegistryBinding.ValidateSourceEpoch(snapshot, container, nameof(container));
 
          int explicitCount = container.ExplicitTagCount;
          Span<int> indices = stackalloc int[StackBatchCapacity];
@@ -482,27 +495,12 @@ namespace CycloneGames.GameplayTags.Core
          m_MutationDepth++;
          try
          {
-            // Pass 1: validate every delta before applying any of them, so a rejected mutation leaves the
-            // container exactly as it was.
+            // Pass 1: reject foreign indices before touching container state.
             for (int i = 0; i < explicitRuntimeIndices.Length; i++)
             {
                int runtimeIndex = explicitRuntimeIndices[i];
                if ((uint)runtimeIndex >= (uint)snapshot.TotalTagCount)
                   throw new ArgumentException($"Runtime index {runtimeIndex} is not registered.", nameof(explicitRuntimeIndices));
-
-               int explicitPosition = Find(m_ExplicitIndices, m_ExplicitCount, runtimeIndex);
-               if (explicitPosition < 0 && delta < 0)
-                  WarnAndRejectNegative(snapshot, runtimeIndex, delta, explicitSet: true);
-
-               int start = snapshot.HierarchyOffsets[runtimeIndex];
-               int end = snapshot.HierarchyOffsets[runtimeIndex + 1];
-               for (int k = start; k < end; k++)
-               {
-                  int ancestor = snapshot.HierarchyPool[k];
-                  int position = Find(m_ImplicitIndices, m_ImplicitCount, ancestor);
-                  if (position < 0 && delta < 0)
-                     WarnAndRejectNegative(snapshot, ancestor, delta, explicitSet: false);
-               }
             }
 
             // Pass 2: accumulate into the batch buffers.
@@ -519,8 +517,34 @@ namespace CycloneGames.GameplayTags.Core
             if (m_BatchCount == 0)
                return;
 
-            if (m_BatchCount > 1)
-               Array.Sort(m_BatchIndices, 0, m_BatchCount);
+            // Shared ancestors can have a larger final delta than any explicit tag. Check every final
+            // count before applying the batch so overflow and underflow cannot partially mutate it.
+            for (int i = 0; i < m_BatchCount; i++)
+            {
+               int runtimeIndex = m_BatchIndices[i];
+               int explicitDelta = m_BatchExplicitDeltas[i];
+               int totalDelta = m_BatchTotalDeltas[i];
+               long finalExplicit = (long)CountOf(
+                  m_ExplicitIndices,
+                  m_ExplicitCounts,
+                  m_ExplicitCount,
+                  runtimeIndex) + explicitDelta;
+               long finalTotal = (long)CountOf(
+                  m_ImplicitIndices,
+                  m_ImplicitCounts,
+                  m_ImplicitCount,
+                  runtimeIndex) + totalDelta;
+
+               if (finalExplicit > int.MaxValue || finalTotal > int.MaxValue)
+                  throw new OverflowException($"Gameplay tag count for '{snapshot.GetName(runtimeIndex)}' exceeds {int.MaxValue}.");
+               if (finalExplicit < 0)
+                  WarnAndRejectNegative(snapshot, runtimeIndex, explicitDelta, explicitSet: true);
+               if (finalTotal < 0)
+                  WarnAndRejectNegative(snapshot, runtimeIndex, totalDelta, explicitSet: false);
+            }
+
+            if (m_RuntimeIndexEpoch == 0)
+               m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
             // Pass 3: apply.
             for (int i = 0; i < m_BatchCount; i++)
@@ -579,9 +603,9 @@ namespace CycloneGames.GameplayTags.Core
          if (position >= 0)
          {
             if (explicitSet)
-               m_BatchExplicitDeltas[position] += delta;
+               m_BatchExplicitDeltas[position] = checked(m_BatchExplicitDeltas[position] + delta);
             else
-               m_BatchTotalDeltas[position] += delta;
+               m_BatchTotalDeltas[position] = checked(m_BatchTotalDeltas[position] + delta);
             return;
          }
 

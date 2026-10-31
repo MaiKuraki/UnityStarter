@@ -96,12 +96,12 @@ var source = new GameplayTagDataTableSource<GameplayTagRow>(
     static row => row.Flags,
     static row => row.Enabled);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+GameplayTagHost.RegisterProjectTagSource(source);
 
 // 4. Initialize and query
 GameplayTagManager.InitializeIfNeeded();
 
-GameplayTag fireball = GameplayTagManager.RequestTag("Ability.Fireball");
+GameplayTag fireball = GameplayTagManager.Request("Ability.Fireball");
 ```
 
 Register every startup source before the first call to `InitializeIfNeeded()`.
@@ -113,7 +113,7 @@ Register every startup source before the first call to `InitializeIfNeeded()`.
 | `DataTable<TKey, TRow>` | Structurally immutable row sequence with key index |
 | `GameplayTagDataTableSource<TRow>` | Maps one definition row to one authoritative tag registration |
 | `GameplayTagDataTableReferenceSource<TRow>` | Enumerates tag names referenced by fields in each gameplay row |
-| `GameplayTagRuntimePlatform` | Registers named project sources with GameplayTags |
+| `GameplayTagHost` | Registers named project sources with GameplayTags |
 | `DataTableCatalog` | Groups typed tables into one immutable catalog |
 | `DataTableStore` / `DataTableReader` | Optionally publish versioned Catalog generations and pin a consumer to one snapshot |
 
@@ -170,7 +170,7 @@ internal static class GameplayTagDataTableComposition
             static row => ParseFlags(row.Flags, row.Name),
             static row => row.Enabled);
 
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(source);
+        GameplayTagHost.RegisterProjectTagSource(source);
     }
 
     private static GameplayTagFlags ParseFlags(string value, string tagName)
@@ -201,7 +201,7 @@ var abilityReferences = new GameplayTagDataTableReferenceSource<AbilityRow>(
     static row => row.RequiredTags,
     static row => row.BlockedTags);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(abilityReferences);
+GameplayTagHost.RegisterProjectTagSource(abilityReferences);
 ```
 
 Null rows and rows rejected by `isEnabled` are skipped. Null accessors or null collections are skipped. Every non-null name is submitted; duplicate names resolve to one definition but still consume registration attempts.
@@ -275,7 +275,7 @@ Build and validate a complete candidate before modifying active sources:
 3. Build all candidate tables and the candidate catalog.
 4. Create definition and reference sources over the candidate tables.
 5. Register each candidate source with the stable name of the source it replaces.
-6. Call `GameplayTagManager.ReloadTags()`.
+6. Call `GameplayTagManager.Reload()`.
 7. Call `TryPublish` with the DataTable generation captured before candidate work began.
 8. If publication is rejected, restore the previous tag sources and reload tags again; the DataTable candidate remains caller-owned.
 9. If publication commits, refresh each DataTable reader at a coordinated safe point.
@@ -292,17 +292,17 @@ using var tableCandidate = new DataTableCandidate(
     trustedRevision,
     candidateResourceOwner);
 
-GameplayTagRuntimePlatform.RegisterProjectTagSource(nextDefinitionSource);
+GameplayTagHost.RegisterProjectTagSource(nextDefinitionSource);
 try
 {
-    GameplayTagManager.ReloadTags();
+    GameplayTagManager.Reload();
 }
 catch
 {
     if (previousDefinitionSource != null)
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+        GameplayTagHost.RegisterProjectTagSource(previousDefinitionSource);
     else
-        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+        GameplayTagHost.UnregisterProjectTagSource(nextDefinitionSource.Name);
     throw;
 }
 
@@ -312,11 +312,11 @@ DataTablePublishResult publish = _dataTableStore.TryPublish(
 if (!publish.IsCommitted)
 {
     if (previousDefinitionSource != null)
-        GameplayTagRuntimePlatform.RegisterProjectTagSource(previousDefinitionSource);
+        GameplayTagHost.RegisterProjectTagSource(previousDefinitionSource);
     else
-        GameplayTagRuntimePlatform.UnregisterProjectTagSource(nextDefinitionSource.Name);
+        GameplayTagHost.UnregisterProjectTagSource(nextDefinitionSource.Name);
 
-    GameplayTagManager.ReloadTags();
+    GameplayTagManager.Reload();
     HandleRejectedTableCandidate(publish);
     return;
 }
@@ -325,7 +325,7 @@ RequestDataTableReaderRefreshAtSafePoint();
 _activeDefinitionSource = nextDefinitionSource;
 ```
 
-`GameplayTagManager.ReloadTags()` and `DataTableStore.TryPublish()` remain two separate publication seams; neither can make the other atomic. Pause dependent consumers around both transitions when they must never observe tags and tables from different generations. Treat `Superseded` and `NonMonotonicRevision` as expected rejection statuses and restore the previous tag source before resuming. Process-fatal exceptions such as `OutOfMemoryException` are fail-stop conditions, not a normal rollback branch.
+`GameplayTagManager.Reload()` and `DataTableStore.TryPublish()` remain two separate publication seams; neither can make the other atomic. Pause dependent consumers around both transitions when they must never observe tags and tables from different generations. Treat `Superseded` and `NonMonotonicRevision` as expected rejection statuses and restore the previous tag source before resuming. Process-fatal exceptions such as `OutOfMemoryException` are fail-stop conditions, not a normal rollback branch.
 
 ### Ownership and Lifetime
 
