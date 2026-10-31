@@ -421,6 +421,10 @@ namespace CycloneGames.GameplayTags.Core
       }
 
       /// <summary>Copies the explicit and expanded sets of another container into this one.</summary>
+      /// <remarks>
+      /// The destination is cleared before the copy starts, so a source that throws leaves it empty rather
+      /// than half filled.
+      /// </remarks>
       public static void Copy<T>(GameplayTagContainer destination, in T source)
          where T : IReadOnlyGameplayTagContainer
       {
@@ -503,6 +507,10 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
+      /// <remarks>
+      /// If the source throws while being read, the container is cleared before the exception propagates;
+      /// it never keeps a partially applied set.
+      /// </remarks>
       public void AddTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          if (container == null || container.IsEmpty)
@@ -564,6 +572,10 @@ namespace CycloneGames.GameplayTags.Core
          RebuildBitset();
       }
 
+      /// <remarks>
+      /// If the source throws while being read, the container is cleared before the exception propagates;
+      /// it never keeps a partially applied set.
+      /// </remarks>
       public void RemoveTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          AssertMutationThreadAffinity();
@@ -618,6 +630,10 @@ namespace CycloneGames.GameplayTags.Core
       /// Both sides are drained by index, so nothing boxes regardless of the concrete container types.
       /// The merge is a two-pointer walk over two sorted arrays, which produces a sorted deduplicated
       /// result directly.
+      /// </remarks>
+      /// <remarks>
+      /// If an operand throws while being read, the container is cleared before the exception propagates;
+      /// the previous contents are overwritten in place and cannot be restored.
       /// </remarks>
       public void AddUnion<T, U>(in T first, in U second)
          where T : IReadOnlyGameplayTagContainer
@@ -716,6 +732,10 @@ namespace CycloneGames.GameplayTags.Core
       /// <summary>
       /// Replaces this container's explicit set with the tags both containers hold explicitly.
       /// </summary>
+      /// <remarks>
+      /// If an operand throws while being read, the container is cleared before the exception propagates;
+      /// the previous contents are overwritten in place and cannot be restored.
+      /// </remarks>
       public void AddIntersection<T, U>(in T first, in U second)
          where T : IReadOnlyGameplayTagContainer
          where U : IReadOnlyGameplayTagContainer
