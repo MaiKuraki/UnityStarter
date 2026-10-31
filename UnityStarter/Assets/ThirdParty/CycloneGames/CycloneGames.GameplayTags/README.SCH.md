@@ -524,6 +524,7 @@ Native tag（`NativeGameplayTag`）是代码车道的常量句柄形式。
 | Player build 因 GameplayTags 需要恢复而拒绝启动 | 上次构建中断或清理证据存在歧义 | 检查 `.buildpipeline/transactions/gameplay-tags/`，再运行 Build workspace recovery 命令或 `BuildTags.Recover(projectRoot)`；不要盲目删除被修改或未知的文件 |
 | JSON 文件编辑未被识别 | 外部编辑导致 conflict | 检查 `ProjectSettings/GameplayTags/` 下是否有 `.tmp`/`.bak` recovery 文件 |
 | Count callback 未触发 | 从 1 递增到 2 不会触发 `NewOrRemoved` | `NewOrRemoved` 仅在 0↔1 转换时触发；所有变化请使用 `AnyCountChange` |
+| 抛异常后容器变成空的 | 源在中途停止响应，集合操作会清空目标而不是保留半应用的结果 | 把 `AddTags`、`RemoveTags`、`Copy`、`AddUnion`、`AddIntersection` 抛出的异常一律视为"目标已被清空"，改用读取期间稳定的源重试 |
 
 ## 验证
 

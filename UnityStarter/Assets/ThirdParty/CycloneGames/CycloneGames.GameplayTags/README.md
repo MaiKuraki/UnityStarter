@@ -533,6 +533,7 @@ Native tags (`NativeGameplayTag`) are the constant-handle form of the code lane.
 | Player build refuses to start because GameplayTags recovery is required | A previous build was interrupted or cleanup evidence is ambiguous | Inspect `.buildpipeline/transactions/gameplay-tags/`, then run the build workspace recovery command or `BuildTags.Recover(projectRoot)`; do not delete modified/unknown files blindly |
 | JSON file edits silently ignored | External edit conflict detected | Check for `.tmp`/`.bak` recovery files in `ProjectSettings/GameplayTags/` |
 | Count callback not firing | Increment from 1 to 2 does not trigger `NewOrRemoved` | `NewOrRemoved` fires only on 0↔1 transitions; use `AnyCountChange` for all changes |
+| A container is empty after an exception | A source stopped answering mid-copy; the set operations clear the target instead of keeping a half-applied set | Treat any exception from `AddTags`, `RemoveTags`, `Copy`, `AddUnion`, or `AddIntersection` as "the target is now empty", and retry from a source that stays stable while read |
 
 ## Validation
 
