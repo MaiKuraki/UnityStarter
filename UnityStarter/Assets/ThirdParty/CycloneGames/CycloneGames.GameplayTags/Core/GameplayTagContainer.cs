@@ -76,7 +76,7 @@ namespace CycloneGames.GameplayTags.Core
       void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags);
 
       /// <summary>
-      /// Appends the descendants of <paramref name="tag"/> that this container holds, nearest first.
+      /// Appends the direct children of <paramref name="tag"/> that this container holds, in ascending index order.
       /// The caller owns the buffer, so this never allocates.
       /// </summary>
       void GetChildTags(GameplayTag tag, List<GameplayTag> childTags);
@@ -84,11 +84,77 @@ namespace CycloneGames.GameplayTags.Core
       /// <summary><see cref="GetParentTags"/> restricted to ancestors of explicitly held tags.</summary>
       void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags);
 
-      /// <summary><see cref="GetChildTags"/> restricted to descendants of explicitly held tags.</summary>
+      /// <summary><see cref="GetChildTags"/> restricted to the explicitly held set.</summary>
       void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags);
 
       /// <summary>True when the container holds <paramref name="runtimeIndex"/>.</summary>
       bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly);
+   }
+
+   /// <summary>
+   /// Declares the epoch a container's indices belong to. A writer refuses a source whose epoch differs
+   /// from its own snapshot's; epochs are process-wide unique, so the comparison also separates indices
+   /// taken from a different registry.
+   /// </summary>
+   public interface IGameplayTagEpochProvider
+   {
+      /// <summary>The epoch of the indices held, or 0 when the container has none yet.</summary>
+      int RuntimeIndexEpoch { get; }
+   }
+
+   /// <summary>Exposes a container's registry binding without adding public API surface.</summary>
+   internal interface IGameplayTagRegistryProvider : IGameplayTagEpochProvider
+   {
+      /// <summary>The bound registry, or null when the container follows the ambient registry.</summary>
+      GameplayTagRegistry Registry { get; }
+   }
+
+   internal static class GameplayTagRegistryBinding
+   {
+      internal static GameplayTagRegistry Resolve<T>(in T container) where T : IReadOnlyGameplayTagContainer
+      {
+         if (container is IGameplayTagRegistryProvider provider)
+            return provider.Registry ?? GameplayTagManager.Current;
+
+         return GameplayTagManager.Current;
+      }
+
+      internal static void Validate<T>(GameplayTagRegistry targetRegistry, in T source, string parameterName)
+         where T : IReadOnlyGameplayTagContainer
+      {
+         if (!(source is IGameplayTagRegistryProvider provider))
+            return;
+
+         GameplayTagRegistry sourceRegistry = provider.Registry ?? GameplayTagManager.Current;
+         GameplayTagRegistry resolvedTarget = targetRegistry ?? GameplayTagManager.Current;
+         if (!ReferenceEquals(sourceRegistry, resolvedTarget))
+         {
+            throw new ArgumentException(
+               "Cannot mix gameplay tag indices from different registries. Copy through persisted names instead.",
+               parameterName);
+         }
+      }
+
+      /// <summary>
+      /// Rejects a source built before a rebuild that reassigned indices. Registry identity alone cannot
+      /// catch this: one registry advances its epoch on a non-preserving rebuild, so the same instance can
+      /// hand out two incompatible index spaces.
+      /// </summary>
+      internal static void ValidateSourceEpoch<T>(TagDataSnapshot snapshot, in T source, string parameterName)
+         where T : IReadOnlyGameplayTagContainer
+      {
+         if (!(source is IGameplayTagEpochProvider provider))
+            return;
+
+         int sourceEpoch = provider.RuntimeIndexEpoch;
+         if (sourceEpoch == 0 || sourceEpoch == snapshot.RuntimeIndexEpoch)
+            return;
+
+         throw new ArgumentException(
+            $"Cannot mix gameplay tag indices from registry epoch {sourceEpoch} into a container bound to " +
+            $"epoch {snapshot.RuntimeIndexEpoch}. Re-resolve the source from its persisted names first.",
+            parameterName);
+      }
    }
 
    /// <summary>Write access to a tag container.</summary>
@@ -136,8 +202,12 @@ namespace CycloneGames.GameplayTags.Core
    /// </remarks>
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>
+   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>, IGameplayTagRegistryProvider
    {
+      GameplayTagRegistry IGameplayTagRegistryProvider.Registry => m_Registry;
+
+      int IGameplayTagEpochProvider.RuntimeIndexEpoch => m_RuntimeIndexEpoch;
+
       /// <summary>Bits of bitset consumed by one runtime index: one for explicit, one for implicit.</summary>
       internal const int BitsPerIndex = 2;
 
@@ -150,6 +220,9 @@ namespace CycloneGames.GameplayTags.Core
       private int[] m_Explicit = Array.Empty<int>();
       private int[] m_Implicit = Array.Empty<int>();
       private int[] m_Scratch = Array.Empty<int>();
+
+      /// <summary>Holds the explicit set while a set operation reads from this same container.</summary>
+      private int[] m_SourceScratch = Array.Empty<int>();
       private int[] m_Bitset = Array.Empty<int>();
       private int m_ExplicitCount;
       private int m_ImplicitCount;
@@ -200,6 +273,10 @@ namespace CycloneGames.GameplayTags.Core
 
       public GameplayTagContainer(IReadOnlyGameplayTagContainer other)
       {
+         if (other == null)
+            throw new ArgumentNullException(nameof(other));
+
+         m_Registry = (other as IGameplayTagRegistryProvider)?.Registry;
          Copy(this, other);
       }
 
@@ -256,6 +333,47 @@ namespace CycloneGames.GameplayTags.Core
          return snapshot;
       }
 
+      private static void ValidateRuntimeIndex(TagDataSnapshot snapshot, int runtimeIndex, string parameterName)
+      {
+         if ((uint)runtimeIndex >= (uint)snapshot.TotalTagCount)
+            throw new ArgumentException($"Runtime index {runtimeIndex} is not registered.", parameterName);
+      }
+
+      private static void ValidateSourceIndices<T>(
+         TagDataSnapshot snapshot,
+         in T source,
+         bool skipNonPositive,
+         string parameterName)
+         where T : IReadOnlyGameplayTagContainer
+      {
+         GameplayTagRegistryBinding.ValidateSourceEpoch(snapshot, source, parameterName);
+
+         int count = source.ExplicitTagCount;
+         for (int i = 0; i < count; i++)
+         {
+            int runtimeIndex = source.GetExplicitTag(i).RuntimeIndex;
+            if (skipNonPositive && runtimeIndex <= 0)
+               continue;
+
+            ValidateRuntimeIndex(snapshot, runtimeIndex, parameterName);
+         }
+      }
+
+      private int[] SnapshotSelfExplicit(out int count)
+      {
+         count = m_ExplicitCount;
+         if (m_SourceScratch.Length < count)
+            m_SourceScratch = new int[Math.Max(4, count)];
+
+         Array.Copy(m_Explicit, m_SourceScratch, count);
+         return m_SourceScratch;
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private static int ExplicitIndexAt<T>(in T container, bool isSelf, int[] selfIndices, int index)
+         where T : IReadOnlyGameplayTagContainer
+         => isSelf ? selfIndices[index] : container.GetExplicitTag(index).RuntimeIndex;
+
       public GameplayTag GetTag(int index)
       {
          if ((uint)index >= (uint)m_ImplicitCount)
@@ -308,11 +426,16 @@ namespace CycloneGames.GameplayTags.Core
       {
          if (destination == null)
             throw new ArgumentNullException(nameof(destination));
+         if (source == null)
+            throw new ArgumentNullException(nameof(source));
          if (source is GameplayTagContainer same && ReferenceEquals(destination, same))
             return;
 
-         destination.Clear();
+         TagDataSnapshot snapshot = destination.GetSnapshotForMutation();
+         GameplayTagRegistryBinding.Validate(destination.m_Registry, source, nameof(source));
+         ValidateSourceIndices(snapshot, source, skipNonPositive: true, nameof(source));
 
+         destination.Clear();
          int count = source.ExplicitTagCount;
          if (count == 0)
             return;
@@ -322,11 +445,20 @@ namespace CycloneGames.GameplayTags.Core
          if (destination.m_Explicit.Length < count)
             destination.m_Explicit = new int[count];
 
+         // Index 0 is the None sentinel; an outside source may report it as explicit, and persisting it
+         // would write "<None>" into the save.
+         int written = 0;
          for (int i = 0; i < count; i++)
-            destination.m_Explicit[i] = source.GetExplicitTag(i).RuntimeIndex;
+         {
+            int runtimeIndex = source.GetExplicitTag(i).RuntimeIndex;
+            if (runtimeIndex <= 0)
+               continue;
 
-         destination.m_ExplicitCount = count;
-         destination.m_RuntimeIndexEpoch = destination.GetSnapshotForMutation().RuntimeIndexEpoch;
+            destination.m_Explicit[written++] = runtimeIndex;
+         }
+
+         destination.m_ExplicitCount = written;
+         destination.m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          destination.RebuildImplicit();
          destination.RebuildBitset();
       }
@@ -345,8 +477,12 @@ namespace CycloneGames.GameplayTags.Core
          m_Explicit = Array.Empty<int>();
          m_Implicit = Array.Empty<int>();
          m_Scratch = Array.Empty<int>();
+         m_SourceScratch = Array.Empty<int>();
          m_Bitset = Array.Empty<int>();
          m_RuntimeIndexEpoch = 0;
+
+         // The recorded owner thread is part of the state that returns to its initial value.
+         Volatile.Write(ref m_OwningThreadId, 0);
       }
 
       public void AddTag(GameplayTag tag)
@@ -356,6 +492,7 @@ namespace CycloneGames.GameplayTags.Core
 
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
+         ValidateRuntimeIndex(snapshot, tag.RuntimeIndex, nameof(tag));
          if (m_RuntimeIndexEpoch == 0)
             m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
@@ -373,6 +510,8 @@ namespace CycloneGames.GameplayTags.Core
 
          AssertMutationThreadAffinity();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
+         GameplayTagRegistryBinding.Validate(m_Registry, container, nameof(container));
+         ValidateSourceIndices(snapshot, container, skipNonPositive: true, nameof(container));
          if (m_RuntimeIndexEpoch == 0)
             m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
 
@@ -400,7 +539,8 @@ namespace CycloneGames.GameplayTags.Core
             throw new ArgumentException("Cannot remove an invalid gameplay tag.", nameof(tag));
 
          AssertMutationThreadAffinity();
-         GetSnapshotForMutation();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
+         ValidateRuntimeIndex(snapshot, tag.RuntimeIndex, nameof(tag));
          if (m_ExplicitCount == 0)
             return;
 
@@ -417,19 +557,27 @@ namespace CycloneGames.GameplayTags.Core
       public void RemoveTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          AssertMutationThreadAffinity();
-         GetSnapshotForMutation();
+         TagDataSnapshot snapshot = GetSnapshotForMutation();
          if (m_ExplicitCount == 0 || container == null || container.IsEmpty)
             return;
+
+         GameplayTagRegistryBinding.Validate(m_Registry, container, nameof(container));
+         ValidateSourceIndices(snapshot, container, skipNonPositive: true, nameof(container));
+
+         // Removing from itself shrinks the array the loop reads.
+         bool sourceIsSelf = ReferenceEquals(container, this);
+         int[] selfIndices = sourceIsSelf ? SnapshotSelfExplicit(out _) : null;
 
          bool changed = false;
          int sourceCount = container.ExplicitTagCount;
          for (int i = 0; i < sourceCount; i++)
          {
-            GameplayTag tag = container.GetExplicitTag(i);
-            int runtimeIndex = tag.RuntimeIndex;
+            int runtimeIndex = sourceIsSelf ? selfIndices[i] : container.GetExplicitTag(i).RuntimeIndex;
             if (runtimeIndex <= 0)
             {
-               GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
+               if (!sourceIsSelf)
+                  GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(container.GetExplicitTag(i));
+
                continue;
             }
 
@@ -455,19 +603,39 @@ namespace CycloneGames.GameplayTags.Core
          where T : IReadOnlyGameplayTagContainer
          where U : IReadOnlyGameplayTagContainer
       {
-         Clear();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
-
          int firstCount = first?.ExplicitTagCount ?? 0;
          int secondCount = second?.ExplicitTagCount ?? 0;
-         if (firstCount + secondCount == 0)
+         int combinedCount = checked(firstCount + secondCount);
+         if (firstCount > 0)
+         {
+            GameplayTagRegistryBinding.Validate(m_Registry, first, nameof(first));
+            ValidateSourceIndices(snapshot, first, skipNonPositive: true, nameof(first));
+         }
+         if (secondCount > 0)
+         {
+            GameplayTagRegistryBinding.Validate(m_Registry, second, nameof(second));
+            ValidateSourceIndices(snapshot, second, skipNonPositive: true, nameof(second));
+         }
+
+         // A container may name itself as an operand, so the merge reads a snapshot taken before any write.
+         bool firstIsSelf = ReferenceEquals(first, this);
+         bool secondIsSelf = ReferenceEquals(second, this);
+         int[] selfIndices = firstIsSelf || secondIsSelf ? SnapshotSelfExplicit(out _) : null;
+
+         if (combinedCount == 0)
+         {
+            Clear();
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
             return;
+         }
 
-         if (m_Explicit.Length < firstCount + secondCount)
-            m_Explicit = new int[Math.Max(4, firstCount + secondCount)];
+         if (m_Explicit.Length < combinedCount)
+            m_Explicit = new int[Math.Max(4, combinedCount)];
 
+         // Written in place: the result is a superset of the previous contents only when this container is
+         // one of the operands, and that case reads from the snapshot above.
+         int written = 0;
          int i = 0;
          int j = 0;
          while (i < firstCount || j < secondCount)
@@ -475,16 +643,16 @@ namespace CycloneGames.GameplayTags.Core
             int next;
             if (i >= firstCount)
             {
-               next = second.GetExplicitTag(j++).RuntimeIndex;
+               next = ExplicitIndexAt(second, secondIsSelf, selfIndices, j++);
             }
             else if (j >= secondCount)
             {
-               next = first.GetExplicitTag(i++).RuntimeIndex;
+               next = ExplicitIndexAt(first, firstIsSelf, selfIndices, i++);
             }
             else
             {
-               int a = first.GetExplicitTag(i).RuntimeIndex;
-               int b = second.GetExplicitTag(j).RuntimeIndex;
+               int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+               int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
                if (a == b)
                {
                   i++;
@@ -505,9 +673,12 @@ namespace CycloneGames.GameplayTags.Core
             if (next <= 0)
                continue;
 
-            m_Explicit[m_ExplicitCount++] = next;
+            m_Explicit[written++] = next;
          }
 
+         m_ExplicitCount = written;
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          RebuildImplicit();
          RebuildBitset();
       }
@@ -519,29 +690,47 @@ namespace CycloneGames.GameplayTags.Core
          where T : IReadOnlyGameplayTagContainer
          where U : IReadOnlyGameplayTagContainer
       {
-         Clear();
          TagDataSnapshot snapshot = GetSnapshotForMutation();
-         if (m_RuntimeIndexEpoch == 0)
-            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
-
          int firstCount = first?.ExplicitTagCount ?? 0;
          int secondCount = second?.ExplicitTagCount ?? 0;
-         if (firstCount > 0 && secondCount > 0)
+         if (firstCount > 0)
          {
-            // Clear leaves the explicit array empty; the intersection can never exceed the smaller side.
-            m_Explicit = new int[Math.Min(firstCount, secondCount)];
+            GameplayTagRegistryBinding.Validate(m_Registry, first, nameof(first));
+            ValidateSourceIndices(snapshot, first, skipNonPositive: true, nameof(first));
+         }
+         if (secondCount > 0)
+         {
+            GameplayTagRegistryBinding.Validate(m_Registry, second, nameof(second));
+            ValidateSourceIndices(snapshot, second, skipNonPositive: true, nameof(second));
          }
 
+         bool firstIsSelf = ReferenceEquals(first, this);
+         bool secondIsSelf = ReferenceEquals(second, this);
+         int[] selfIndices = firstIsSelf || secondIsSelf ? SnapshotSelfExplicit(out _) : null;
+
+         if (firstCount == 0 || secondCount == 0)
+         {
+            Clear();
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
+            return;
+         }
+
+         // The intersection can never exceed the smaller side, and the result is written in place.
+         int capacity = Math.Min(firstCount, secondCount);
+         if (m_Explicit.Length < capacity)
+            m_Explicit = new int[Math.Max(4, capacity)];
+
+         int written = 0;
          int i = 0;
          int j = 0;
          while (i < firstCount && j < secondCount)
          {
-            int a = first.GetExplicitTag(i).RuntimeIndex;
-            int b = second.GetExplicitTag(j).RuntimeIndex;
+            int a = ExplicitIndexAt(first, firstIsSelf, selfIndices, i);
+            int b = ExplicitIndexAt(second, secondIsSelf, selfIndices, j);
             if (a == b)
             {
                if (a > 0)
-                  m_Explicit[m_ExplicitCount++] = a;
+                  m_Explicit[written++] = a;
 
                i++;
                j++;
@@ -556,6 +745,9 @@ namespace CycloneGames.GameplayTags.Core
             }
          }
 
+         m_ExplicitCount = written;
+         if (m_RuntimeIndexEpoch == 0)
+            m_RuntimeIndexEpoch = snapshot.RuntimeIndexEpoch;
          RebuildImplicit();
          RebuildBitset();
       }
@@ -586,7 +778,7 @@ namespace CycloneGames.GameplayTags.Core
       /// </summary>
       private static GameplayTagRegistry ResolveBinding<T>(in T container)
          where T : IReadOnlyGameplayTagContainer
-         => container is GameplayTagContainer concrete ? concrete.m_Registry : null;
+         => container is IGameplayTagRegistryProvider provider ? provider.Registry : null;
 
       /// <summary>
       /// Writes the names of the explicitly held tags for a persistence boundary.
@@ -647,6 +839,7 @@ namespace CycloneGames.GameplayTags.Core
             if (string.IsNullOrEmpty(name))
                continue;
 
+            name = GameplayTagRedirector.Resolve(name);
             if (!snapshot.TryGetIndex(name, out int runtimeIndex))
             {
                if (GameplayTagsCoreDiagnostics.TryGetEnabled(
@@ -759,10 +952,14 @@ namespace CycloneGames.GameplayTags.Core
             return;
          }
 
-         if (m_Bitset.Length != wordCount)
+         // Capacity is reused while the bitset stays active: the word count follows the highest held index,
+         // so a grant/drop pair above the threshold would otherwise reallocate. Dropping to zero, falling
+         // below the activation threshold, or becoming too sparse releases the array. Clearing the whole
+         // retained array keeps stale high words from answering membership tests for indices no longer held.
+         if (m_Bitset.Length < wordCount)
             m_Bitset = new int[wordCount];
          else
-            Array.Clear(m_Bitset, 0, wordCount);
+            Array.Clear(m_Bitset, 0, m_Bitset.Length);
 
          for (int i = 0; i < m_ExplicitCount; i++)
             SetBit(m_Bitset, m_Explicit[i], explicitOnly: true);

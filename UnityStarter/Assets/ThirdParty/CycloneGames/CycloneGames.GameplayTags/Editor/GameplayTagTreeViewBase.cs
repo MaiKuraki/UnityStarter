@@ -101,6 +101,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private string m_CachedReadOnlyTooltip;
       private GUIContent m_TempDeleteContent;
       private bool m_IsSearching;
+      private readonly Dictionary<int, GameplayTagTreeViewItem> m_ItemByRuntimeIndex = new();
 
       public GameplayTagTreeViewBase(TreeViewState treeViewState)
          : base(treeViewState)
@@ -438,10 +439,13 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          m_IsEmpty = true;
 
          List<TreeViewItem> items = new();
+         m_ItemByRuntimeIndex.Clear();
 
          foreach (GameplayTag tag in GameplayTagManager.Current.CreateAllTagsArray())
          {
-            items.Add(new GameplayTagTreeViewItem(tag.RuntimeIndex, tag));
+            var item = new GameplayTagTreeViewItem(tag.RuntimeIndex, tag);
+            items.Add(item);
+            m_ItemByRuntimeIndex.Add(tag.RuntimeIndex, item);
             m_IsEmpty = false;
          }
 
@@ -451,7 +455,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       protected GameplayTagTreeViewItem FindItem(int runtimeTagIndex)
       {
-         return FindItem(runtimeTagIndex, rootItem) as GameplayTagTreeViewItem;
+         return m_ItemByRuntimeIndex.TryGetValue(runtimeTagIndex, out GameplayTagTreeViewItem item) ? item : null;
       }
 
       protected class Styles

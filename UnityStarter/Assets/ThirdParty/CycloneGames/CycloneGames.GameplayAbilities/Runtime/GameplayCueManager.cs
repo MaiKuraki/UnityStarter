@@ -1179,12 +1179,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        private async UniTask<GameplayCueSO> GetCueSOAsync(GameplayTag cueTag, CancellationToken ct = default)
+        private UniTask<GameplayCueSO> GetCueSOAsync(GameplayTag cueTag, CancellationToken ct = default)
         {
-            if (!staticCueAddressRegistry.TryGetValue(cueTag, out var address)) return null;
+            if (!staticCueAddressRegistry.TryGetValue(cueTag, out string address))
+            {
+                return UniTask.FromResult<GameplayCueSO>(null);
+            }
 
-            if (loadedStaticCues.TryGetValue(address, out var cueHandle)) return cueHandle.Asset;
+            // Cached assets complete synchronously without allocating an async state machine.
+            if (loadedStaticCues.TryGetValue(address, out IResourceHandle<GameplayCueSO> cueHandle))
+            {
+                return UniTask.FromResult(cueHandle.Asset);
+            }
 
+            return WaitForCueSOAsync(cueTag, address, ct);
+        }
+
+        private async UniTask<GameplayCueSO> WaitForCueSOAsync(
+            GameplayTag cueTag,
+            string address,
+            CancellationToken ct)
+        {
             if (!pendingStaticCueLoads.TryGetValue(
                     address,
                     out UniTaskCompletionSource<IResourceHandle<GameplayCueSO>> completion))

@@ -49,14 +49,22 @@ namespace CycloneGames.GameplayTags.Core
          internal readonly int[] Tokens;
          internal readonly int[] TagIndices;
          internal readonly GameplayTagQueryExpression Root;
+         internal readonly GameplayTagRegistry Registry;
          internal readonly int RegistryGeneration;
          internal readonly int MaxStackDepth;
 
-         internal CompiledQuery(int[] tokens, int[] tagIndices, GameplayTagQueryExpression root, int registryGeneration, int maxStackDepth)
+         internal CompiledQuery(
+            int[] tokens,
+            int[] tagIndices,
+            GameplayTagQueryExpression root,
+            GameplayTagRegistry registry,
+            int registryGeneration,
+            int maxStackDepth)
          {
             Tokens = tokens;
             TagIndices = tagIndices;
             Root = root;
+            Registry = registry;
             RegistryGeneration = registryGeneration;
             MaxStackDepth = maxStackDepth;
          }
@@ -92,7 +100,8 @@ namespace CycloneGames.GameplayTags.Core
             return false;
          }
 
-         EnsureCompiled();
+         GameplayTagRegistry registry = GameplayTagRegistryBinding.Resolve(container);
+         EnsureCompiled(registry);
          return Evaluate(container);
       }
 
@@ -135,12 +144,13 @@ namespace CycloneGames.GameplayTags.Core
          };
       }
 
-      private void EnsureCompiled()
+      private void EnsureCompiled(GameplayTagRegistry registry)
       {
-         int registryGeneration = GameplayTagManager.Generation;
+         int registryGeneration = registry.Generation;
          CompiledQuery cached = m_Compiled;
          if (cached != null &&
             ReferenceEquals(cached.Root, RootExpression) &&
+            ReferenceEquals(cached.Registry, registry) &&
             cached.RegistryGeneration == registryGeneration)
          {
             return;
@@ -160,7 +170,13 @@ namespace CycloneGames.GameplayTags.Core
          // measures depth, but a wide node keeps N child results live, which is width.
          int compiledDepth = SimulateStackDepth(compiledTokens);
 
-         m_Compiled = new CompiledQuery(compiledTokens, tagIndices.ToArray(), RootExpression, registryGeneration, compiledDepth);
+         m_Compiled = new CompiledQuery(
+            compiledTokens,
+            tagIndices.ToArray(),
+            RootExpression,
+            registry,
+            registryGeneration,
+            compiledDepth);
       }
 
       /// <summary>
@@ -372,7 +388,7 @@ namespace CycloneGames.GameplayTags.Core
                   break;
 
                case GameplayTagQueryOpcode.PushFalse:
-                  stackCount++;
+                  stack &= ~(1UL << stackCount++);
                   break;
 
                case GameplayTagQueryOpcode.EvalAllTags:
@@ -385,7 +401,7 @@ namespace CycloneGames.GameplayTags.Core
                   if (result)
                      stack |= 1UL << stackCount++;
                   else
-                     stackCount++;
+                     stack &= ~(1UL << stackCount++);
                   break;
                }
 

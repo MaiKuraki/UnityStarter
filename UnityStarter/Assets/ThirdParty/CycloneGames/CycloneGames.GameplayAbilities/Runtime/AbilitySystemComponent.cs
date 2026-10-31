@@ -4657,13 +4657,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void RemoveActiveEffectsWithGrantedTags(GameplayTagContainer tags)
         {
+            RemoveActiveEffectsWithGrantedTags<GameplayTagContainer>(in tags);
+        }
+
+        public void RemoveActiveEffectsWithGrantedTags<T>(in T tags)
+            where T : IReadOnlyGameplayTagContainer
+        {
             AssertRuntimeThread();
             if (effectMutationTransactionDepth != 0 || activeEffectIterationDepth != 0)
             {
                 throw new GASReentrancyRejectedException(
                     "Active-effect removal cannot re-enter an effect mutation transaction.");
             }
-            RemoveActiveEffectsWithGrantedTags(tags, null);
+            RemoveActiveEffectsWithGrantedTags(in tags, null);
         }
 
         /// <summary>
@@ -4733,9 +4739,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return source != null ? RemoveActiveEffectsBySource(source.CoreEntity) : 0;
         }
 
-        private void RemoveActiveEffectsWithGrantedTags(
-            GameplayTagContainer tags,
+        private void RemoveActiveEffectsWithGrantedTags<T>(
+            in T tags,
             ActiveGameplayEffect excludedEffect)
+            where T : IReadOnlyGameplayTagContainer
         {
             if (tags == null || tags.IsEmpty) return;
 
@@ -4746,7 +4753,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     var effect = activeEffects[i];
                     if (ReferenceEquals(effect, excludedEffect)) continue;
-                    bool shouldRemove = effect.Spec.Def.GrantedTags.HasAny(tags) || effect.Spec.Def.AssetTags.HasAny(tags);
+                    GameplayEffectSpec spec = effect.Spec;
+                    bool shouldRemove = spec.Def.GrantedTags.HasAny(in tags) ||
+                                        spec.Def.AssetTags.HasAny(in tags) ||
+                                        spec.DynamicGrantedTags.HasAny(in tags) ||
+                                        spec.DynamicAssetTags.HasAny(in tags);
                     if (shouldRemove)
                     {
                         removedEffects.Add(effect);
@@ -6043,6 +6054,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void CancelAbilitiesWithTags(GameplayTagContainer tags)
         {
+            CancelAbilitiesWithTags<GameplayTagContainer>(in tags);
+        }
+
+        public void CancelAbilitiesWithTags<T>(in T tags)
+            where T : IReadOnlyGameplayTagContainer
+        {
             AssertRuntimeThread();
             ThrowIfActiveEffectMutationLocked("Ability cancellation");
             if (tags == null || tags.IsEmpty) return;
@@ -6054,7 +6071,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (!spec.IsLocallyExecuting) continue;
 
                 var abilityTags = spec.GetPrimaryInstance()?.AbilityTags;
-                if (abilityTags != null && abilityTags.HasAny(tags))
+                if (abilityTags != null && abilityTags.HasAny(in tags))
                 {
                     hasMatchingActiveAbility = true;
                     break;
@@ -6074,7 +6091,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (!spec.IsLocallyExecuting) continue;
 
                     var abilityTags = spec.GetPrimaryInstance()?.AbilityTags;
-                    if (abilityTags != null && abilityTags.HasAny(tags))
+                    if (abilityTags != null && abilityTags.HasAny(in tags))
                     {
                         spec.GetPrimaryInstance()?.CancelAbility();
                     }
@@ -6088,9 +6105,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public bool AreAbilitiesBlockedByTag(GameplayTagContainer abilityTags)
         {
+            return AreAbilitiesBlockedByTag<GameplayTagContainer>(in abilityTags);
+        }
+
+        public bool AreAbilitiesBlockedByTag<T>(in T abilityTags)
+            where T : IReadOnlyGameplayTagContainer
+        {
             if (abilityTags == null || abilityTags.IsEmpty) return false;
 
-            if (blockedAbilityTags.HasAny(abilityTags))
+            if (blockedAbilityTags.HasAny(in abilityTags))
             {
                 return true;
             }
@@ -6101,7 +6124,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (!spec.IsActive) continue;
 
                 var blockTags = spec.GetPrimaryInstance()?.BlockAbilitiesWithTag;
-                if (blockTags != null && !blockTags.IsEmpty && abilityTags.HasAny(blockTags))
+                if (blockTags != null && !blockTags.IsEmpty && abilityTags.HasAny(in blockTags))
                 {
                     return true;
                 }
@@ -7059,11 +7082,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             MarkAttributesDirtyFromEffect(existingEffect);
             return true;
         }
-        private void RemoveEffectsWithTags(
-            GameplayTagContainer tags,
+        private void RemoveEffectsWithTags<T>(
+            in T tags,
             ActiveGameplayEffect excludedEffect = null)
+            where T : IReadOnlyGameplayTagContainer
         {
-            RemoveActiveEffectsWithGrantedTags(tags, excludedEffect);
+            RemoveActiveEffectsWithGrantedTags(in tags, excludedEffect);
         }
 
         /// <summary>
