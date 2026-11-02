@@ -266,7 +266,7 @@ namespace CycloneGames.Audio.Runtime
     /// Runtime event of an AudioEvent that is currently playing
     /// </summary>
     [Serializable]
-    public class ActiveEvent
+    public partial class ActiveEvent
     {
         private static readonly LogChannel Log = AudioRuntimeLog.Channel;
 
@@ -533,13 +533,11 @@ namespace CycloneGames.Audio.Runtime
 #endif
         }
 
-        public void Update()
-        {
-            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Update");
-            UpdateInternal();
-        }
-
-        internal void UpdateInternal()
+        /// <summary>
+        /// Advances the event by <paramref name="dt"/> seconds. The caller owns the clock so fixed-step
+        /// drivers, replay and tests all share one time source.
+        /// </summary>
+        internal void UpdateInternal(float dt)
         {
             if (rootEvent == null)
             {
@@ -549,8 +547,11 @@ namespace CycloneGames.Audio.Runtime
 
             if (IsPaused || status == EventStatus.Preparing) return;
 
-            float dt = Time.deltaTime;
             elapsedTime += dt;
+
+            // Runs before any source-count guard: a virtualised loop has no sources and must still
+            // be able to resume.
+            TickVirtualization(dt);
 
             if (!hasPlayed && elapsedTime >= initialDelay)
             {
@@ -1239,6 +1240,7 @@ namespace CycloneGames.Audio.Runtime
             Vector3 emitterPos = lastEmitterPos;
             float sqrDist = (emitterPos - listenerPos).sqrMagnitude;
             cachedSqrDistance = sqrDist;
+            spatialDistanceValid = true;
 
             float dist = Mathf.Sqrt(sqrDist);
             float minDistance = output.EffectiveMinDistance;
@@ -1377,7 +1379,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private float EvaluateOcclusion(Vector3 emitterPos, Vector3 listenerPos, LayerMask occlusionLayers, int rayCount)
         {
-            float now = Time.unscaledTime;
+            float now = elapsedTime;
             bool requiresProbe = !occlusionResultValid ||
                                  now >= nextOcclusionRefreshTime ||
                                  (emitterPos - lastOcclusionEmitterPos).sqrMagnitude > OcclusionMovementSqrThreshold ||
@@ -1573,6 +1575,7 @@ namespace CycloneGames.Audio.Runtime
             appliedLPCutoff = float.NaN;
             appliedLPFEnabled = false;
             lastAppliedSpatialVolumeScale = 1f;
+            ResetVirtualization();
             occlusionResultValid = false;
             lastOcclusionAmount = 0f;
             lastOcclusionEmitterPos = Vector3.zero;
