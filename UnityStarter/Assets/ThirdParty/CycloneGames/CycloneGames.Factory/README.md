@@ -30,7 +30,7 @@ Use this module when creation policy must be injected, when a hot path needs bou
 - **`IUnityObjectSpawner` / `IUnityObjectLifetime`** — main-thread Unity creation and symmetric terminal-release contracts.
 - **`ObjectPool<TArg, TValue>`** — single-owner managed pool with lifecycle callbacks, capacity policy, diagnostics, and quarantine on failure.
 - **`FastObjectPool<T>`** — parameterless pool base for `Component`-style items that do not need spawn arguments.
-- **`MonoPrefabFactory<T>` / `MonoFastPool<T>`** — Unity main-thread adapters for prefab instantiation and `Component` pooling.
+- **`MonoPrefabFactory<T>` / `MonoFastPool<T>` / `MonoObjectPool<TArg, TValue>`** — Unity main-thread adapters for prefab instantiation, argument-based `Component` pooling, and fake-null-aware validity.
 - **`NativePool<T>` / `NativeDensePool<T>` / `NativeDenseColumnPool2/3/4`** — unmanaged dense pools with stable handles and SoA column streams.
 
 ## Architecture
@@ -38,7 +38,7 @@ Use this module when creation policy must be injected, when a hot path needs bou
 | Assembly | Path | Purpose |
 | --- | --- | --- |
 | `CycloneGames.Factory.Runtime` | `Runtime/Scripts/` (excludes `Unity/`) | Pure-C# factories, `PoolBase`, `ObjectPool`, `FastObjectPool`. `noEngineReferences: true`. |
-| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`, `IUnityObjectLifetime`, `DefaultUnityObjectSpawner`, `MonoPrefabFactory<T>`, `MonoFastPool<T>`. References the core assembly and `UnityEngine`. |
+| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`, `IUnityObjectLifetime`, `DefaultUnityObjectSpawner`, `MonoPrefabFactory<T>`, `MonoFastPool<T>`, `MonoObjectPool<TArg, TValue>`. References the core assembly and `UnityEngine`. |
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`, `NativeDensePool<T>`, `NativeDenseColumnPool2/3/4`. Compiled only when `PRESENT_COLLECTIONS` is defined by the installed `com.unity.collections` package. |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | Core and Unity adapter contract tests. |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership and handle tests. Active only when Collections is installed. |
@@ -131,7 +131,7 @@ if (pool.TrySpawn(new ProjectileSpawn(20f), out Projectile projectile))
 }
 ```
 
-`SoftCapacity` prewarms inactive items; `HardCapacity` bounds total ownership; `TrimOnDespawn` destroys returned items above the soft target instead of retaining them.
+`InitialPrewarm` is the creation budget used at construction (`-1`, the default, inherits `SoftCapacity`). `SoftCapacity` is the retention target `TrimOnDespawn` respects. `HardCapacity` bounds total ownership. The three are independent: `initialPrewarm: 0` with `softCapacity: 512` defers every instantiation while still retaining returned items up to 512.
 
 ## Core Concepts
 
@@ -159,7 +159,8 @@ public sealed class SessionFactory : IFactory<SessionOptions, Session>
 
 | Setting | Meaning |
 | --- | --- |
-| `SoftCapacity` | Prewarm count and inactive retention target used by `TrimOnDespawn`. |
+| `SoftCapacity` | Inactive retention target used by `TrimOnDespawn`, and the sizing hint for the tracking containers. Not a creation budget. |
+| `InitialPrewarm` | Items created during construction. `-1` (default) inherits `SoftCapacity`, which preserves the original single-knob behaviour. |
 | `HardCapacity` | Maximum items owned by the pool; `-1` means unbounded. |
 | `OverflowPolicy.Throw` | `Spawn` throws when the hard capacity is exhausted. |
 | `OverflowPolicy.ReturnNull` | `Spawn` returns `null` (or `default`) when the hard capacity is exhausted. |
@@ -226,11 +227,12 @@ using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
 Console.WriteLine(pool.TrackedItemCount); // equals CountAll while validation is enabled
 ```
 
-Every pool validates that a factory cannot hand back an item the pool already owns. By default that check uses a reference-identity set maintained only on the creation and teardown paths, so it costs `O(1)` instead of scanning the inactive list and bulk warmup stays linear. The set holds one entry per owned item; pass `validateUniqueOwnership: false` to drop it and the memory it uses, at the cost of no longer detecting a factory that repeats an inactive instance. Disabling validation changes nothing else, and `TrackedItemCount` reports `CountAll` either way.
+Every pool validates that a factory cannot hand back an item the pool already owns. That check uses one reference-identity index that maps each owned item to its active-lease slot, or to `-1` while the item is inactive, so duplicate detection costs `O(1)` instead of scanning the inactive list and bulk warmup stays linear. The index is one contiguous structure per pool: it replaces the separate active-index dictionary and ownership set, and costs roughly one slot per owned item. Pass `validateUniqueOwnership: false` to index only active leases, at the cost of no longer detecting a factory that repeats an inactive instance. `TrackedItemCount` reports `CountAll` either way.
 
 ### Prewarm, trim, and clear
 
 ```csharp
+pool.EnsureCapacity(512);        // reserve tracking room; creates no items
 pool.Prewarm(64);                // cold path: create up to remaining capacity
 int created = pool.WarmupStep(8); // create a bounded batch, return what was created
 pool.TrimInactive(32);           // destroy inactive items above target
@@ -238,6 +240,8 @@ pool.DespawnAll();               // return all active items
 int n = pool.DespawnStep(16);    // despawn a bounded batch
 pool.Clear();                    // destroy all owned items
 ```
+
+`EnsureCapacity` is the only call that makes the hot path allocation-free at a known peak: the tracking containers are otherwise sized from the construction prewarm budget and grow on demand. Pair `initialPrewarm: 0` with `EnsureCapacity(peak)` plus `WarmupStep` batches when construction must not instantiate anything.
 
 `WarmupCoroutine` and `DespawnAllCoroutine` are convenience iterators for frame-spread loading or teardown. They allocate iterator state and are not strict zero-allocation hot paths.
 
@@ -265,9 +269,10 @@ The callback may despawn the current item but may not mutate other active items.
 | Factory returns an invalid item | Creation fails immediately; the item is never tracked active. |
 | Spawn callback fails, reset succeeds | The borrow is rolled back; the item may return inactive. |
 | Spawn callback and reset both fail | The item is quarantined and permanently cleaned up; never reused. |
-| Despawn callback or validation fails | Active ownership is removed, the item is quarantined, cleanup is attempted, and the error propagates. |
+| Despawn callback fails | Active ownership is removed, the item is quarantined, cleanup is attempted, and the error propagates. |
 | An inactive item becomes invalid or is externally destroyed | Cleanup is attempted through the same owned-destruction path. Ownership tracking is released when cleanup succeeds; validation or cleanup failures propagate. |
-| One item fails during `Clear` or `Dispose` | Remaining owned items are still processed; failures are reported as `AggregateException`. |
+| An active item is destroyed outside the pool | The lease ends without running the reset callback, the item is quarantined, cleanup is attempted, and `Diagnostics.InvalidatedActiveItems` increments. Returned `UnityEngine.Object` instances surface this way because Unity reports them as fake-null, and no callback can run on them. |
+| One item fails during `DespawnAll`, `Clear`, or `Dispose` | Remaining owned items are still processed; failures are reported as `AggregateException`. |
 | Hard capacity is exhausted | `TrySpawn` returns `false`; `Spawn` follows `OverflowPolicy`. |
 
 ## Advanced Topics
@@ -282,12 +287,14 @@ using UnityEngine;
 
 IUnityObjectSpawner spawner = new DefaultUnityObjectSpawner();
 var factory = new MonoPrefabFactory<Bullet>(spawner, bulletPrefab, poolRoot);
-var pool = new ObjectPool<BulletSpawn, Bullet>(
+var pool = new MonoObjectPool<BulletSpawn, Bullet>(
     factory,
     new PoolCapacitySettings(64, 256, PoolOverflowPolicy.ReturnNull));
 ```
 
 `DefaultUnityObjectSpawner` rejects a null origin and delegates to `Object.Instantiate`. `MonoPrefabFactory<T>` creates inactive instances so the pool controls activation. `MonoFastPool<T>` is a lightweight `Component` pool that handles activation, optional reparenting, and `Object.Destroy` during permanent cleanup — it does not require an `IFactory` because it owns creation directly.
+
+Pool `Component` items through `MonoObjectPool<TArg, TValue>`, not the bare `ObjectPool<TArg, TValue>`. The core pool compares validity as a plain reference, which is correct for engine-independent types but cannot see Unity's fake-null, so a destroyed `Component` would look alive. The adapter answers through `UnityEngine.Object`'s operator and quarantines the destroyed instance on the next spawn or despawn.
 
 For a non-pooled Unity lifetime, depend on the stronger contract:
 
@@ -308,7 +315,12 @@ When items do not need spawn arguments, derive from `FastObjectPool<T>` and over
 ```csharp
 public sealed class EffectPool : FastObjectPool<Effect>
 {
-    public EffectPool(PoolCapacitySettings settings) : base(settings) { }
+    public EffectPool(PoolCapacitySettings settings) : base(settings)
+    {
+        // The base constructor never creates items, so a stateful CreateNew cannot run before the
+        // subclass is initialized. Construction prewarm is an explicit, opt-in step.
+        Prewarm(CapacitySettings.PrewarmCount);
+    }
 
     protected override Effect CreateNew() => new Effect();
     protected override void OnSpawn(Effect item) => item.Activate();
@@ -451,16 +463,21 @@ IEnumerator PrewarmOverFrames(ObjectPool<ProjectileSpawn, Projectile> pool, int 
 
 | Path | Time complexity | Module-owned allocation | Working state |
 | --- | --- | --- | --- |
-| `Spawn` / `TrySpawn` (reuse inactive) | `O(1)` amortized | 0 bytes | `List<T>` + identity `Dictionary<T, int>` |
+| `Spawn` / `TrySpawn` (reuse inactive) | `O(1)` amortized | 0 bytes below `TrackingCapacity` | `List<T>` + reference-ownership index |
 | `Spawn` (create new) | `O(1)` amortized | 0 bytes from pool; factory may allocate | One factory call |
-| `Despawn` | `O(1)` | 0 bytes | Swap-and-pop on active list |
+| `Despawn` | `O(1)` | 0 bytes | Swap-and-pop on active list, one index probe |
 | `Prewarm` / `WarmupStep` | `O(n)` | One item per creation | Cold path only |
 | `TrimInactive` | `O(n - target)` | 0 bytes from pool | Destroy callback may allocate |
 | `ForEachActive` | `O(active)` | 0 bytes | Snapshot-validated iteration |
+| `EnsureCapacity` | `O(n)` | Tracking storage for the requested count | Cold path; removes later growth |
 | DOD `TrySpawn` / `Despawn` | `O(1)` | 0 bytes GC | `NativeArray` + slot map |
 | DOD `SpawnBatch` | `O(batch)` | 0 bytes GC | Bulk slot allocation |
 
-Tracking collections are pre-sized from `SoftCapacity`. Runtime growth can allocate when ownership exceeds the pre-sized count. Prewarm before a strict hot path and use a finite hard capacity to avoid growth spikes.
+Tracking containers are pre-sized from `Math.Max(InitialPrewarm, SoftCapacity)`. Ownership beyond that count grows the containers, and growth is the only allocation the pool performs on the spawn path. Call `EnsureCapacity(measuredPeak)` once from the composition root when a bounded pool must never allocate during gameplay; `TrackingCapacity` reports the reserved slot count so the guarantee is testable without an allocation counter.
+
+An empty pool keeps no tracking storage: when `TrimInactive` or `Clear` leaves zero items, the reserved arrays are released, so a single peak does not become the permanent footprint of an idle pool. The next spawn — or an explicit `EnsureCapacity` — reserves again.
+
+A reference-ownership slot costs roughly 44 bytes across the active list, the inactive list, and the index (measured on a 4096-slot reservation). Reserve a measured peak, not a speculative one.
 
 The module has no static cache, global registry, hidden preference, background thread, or persistent file. Pool-retained items are a bounded reuse cache owned by the pool instance.
 
@@ -498,7 +515,9 @@ Run focused tests from Unity Test Runner:
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Factory.Tests.Editor -testResults <result-path> -quit
 ```
 
-When `com.unity.collections` is installed, also run `CycloneGames.Factory.DOD.Tests.Editor`. The managed suite covers reference identity, capacity exhaustion, duplicate return, spawn rollback, quarantine, callback reentrancy, self-return iteration, disposal, the Unity create/release contract, and a prewarmed current-thread allocation assertion. DOD tests cover handle invalidation, swap-and-pop, batch churn, SoA streams, capacity, and diagnostics.
+When `com.unity.collections` is installed, also run `CycloneGames.Factory.DOD.Tests.Editor`. The managed suite covers reference identity, capacity exhaustion, duplicate return, spawn rollback, quarantine, callback reentrancy, self-return iteration, disposal, the Unity create/release contract, the creation/retention split, and prewarmed allocation gates. DOD tests cover handle invalidation, swap-and-pop, batch churn, SoA streams, capacity, and diagnostics.
+
+The allocation gates verify the byte counter before trusting it: hosts that report a constant 0 from `GC.GetAllocatedBytesForCurrentThread()` (Unity 2022.3 Editor on Mono does) cannot support a byte-level conclusion, so those runs assert the GC-independent `TrackingCapacity` invariant instead and then report as skipped rather than passed. A skipped gate means "not verified on this host", not "verified zero".
 
 For a performance claim, measure a declared workload in the target Player build and record warmup, GC, CPU distribution, peak memory, backend, device, and Unity version. For IL2CPP/AOT support, build and smoke-test the affected target with the current stripping configuration.
 

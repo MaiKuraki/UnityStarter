@@ -33,6 +33,13 @@ namespace CycloneGames.Scheduling.Tests.Editor
         public bool ReenterOnStep { get; set; } = true;
         public bool ReenterFromTermination { get; set; }
 
+        /// <summary>When true, Step reads the scheduler's remaining soft budget before advancing.</summary>
+        public bool ProbeRemainingBudget { get; set; }
+
+        public WorkScheduler BudgetProbeScheduler { get; set; }
+
+        public double ObservedRemainingBudget { get; private set; } = double.NaN;
+
         public TestWorkItem(int stepsUntilCompleted = 1)
         {
             this.stepsUntilCompleted = stepsUntilCompleted;
@@ -41,6 +48,12 @@ namespace CycloneGames.Scheduling.Tests.Editor
         public WorkStepResult Step()
         {
             StepCount++;
+
+            if (ProbeRemainingBudget && BudgetProbeScheduler != null)
+            {
+                ObservedRemainingBudget = BudgetProbeScheduler.RemainingBudgetMilliseconds;
+            }
+
             ExecutionOrder?.Add(Id);
             Clock?.Advance(StepCostMilliseconds);
 
@@ -119,6 +132,11 @@ namespace CycloneGames.Scheduling.Tests.Editor
         public double ToMilliseconds(long ticks)
         {
             return ticks / 1000.0;
+        }
+
+        public long ToTicks(double milliseconds)
+        {
+            return (long)System.Math.Ceiling(milliseconds * 1000.0);
         }
     }
 }

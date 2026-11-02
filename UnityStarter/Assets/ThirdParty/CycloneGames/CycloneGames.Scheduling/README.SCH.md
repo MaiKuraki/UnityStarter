@@ -91,7 +91,10 @@ sealed class BatchWorkItem : IWorkItem
 | `Normal` | 默认通道。 |
 | `Background` | 空闲期维护：缓存清扫、池裁剪、索引重建。 |
 
-最高优先的非空通道先被排空。永不排空的通道也无法饿死其他通道：任何非空通道至少每 `StarvationLimitTicks` 个 Tick（默认 4）获得一次执行机会。
+最高优先的非空通道先被服务。高优先通道长期不空不会饿死低优先通道：任一通道等待达到 `StarvationLimitTicks`（默认 4）个 Tick 后，会在优先序之前获得一步，且同一 Tick 内所有已达窗口的通道都会获得补偿。
+
+- `maxSteps >= LaneCount` 时，饥饿通道最迟在 `StarvationLimitTicks + 1` 个 Tick 内被服务。
+- 步数预算更小时，补偿的通道数量受剩余步数限制，等待最多退化为 `StarvationLimitTicks + (同时饥饿通道数 - 1)`。
 
 ```csharp
 scheduler.TrySchedule(criticalWork, WorkLane.Immediate, out _);
@@ -111,6 +114,8 @@ public interface IWorkItem
 ```
 
 `Step` 返回 `Running` 表示还有后续工作，返回 `Completed` 表示完成。进度与中间结果由工作项自己保存。
+
+实现必须是引用类型。struct 在注册时会被装箱，调度器推进的是装箱副本，调用方的值会静默地永远不前进。Editor 与 Development 构建会拒绝 struct 注册；Release 构建交由编译器的装箱规则处理。
 
 每个被接受的注册恰好触发一次 `OnTerminated`：
 
@@ -134,6 +139,26 @@ scheduler.Tick(maxSteps: 64, softBudgetMs: 2.0);
 `maxSteps` 限制单个 Tick 的 `Step` 调用次数；`softBudgetMs` 按时间限制准入。调度器在启动后续 Step 前读时钟，但无法打断正在执行的 Step，因此预算只约束准入，不约束实际耗时。
 
 预算设为正无穷表示关闭按时间准入，只保留步数上限。
+
+预算在进入 Tick 时一次性换算成时钟 tick，循环内按整数差值比较，因此同一平台时钟下准入判定精确且可复现。
+
+希望「填满剩余预算」而不是猜批次大小的 Step 可以直接读剩余量：
+
+```csharp
+public WorkStepResult Step()
+{
+    while (cursor < data.Length && scheduler.RemainingBudgetMilliseconds > 0.05)
+    {
+        Process(data[cursor++]);
+    }
+
+    return cursor == data.Length ? WorkStepResult.Completed : WorkStepResult.Running;
+}
+```
+
+`RemainingBudgetMilliseconds` 在 Tick 之外或预算为无穷时返回 `+∞`。它基于最近一次时钟采样，最多滞后一个 Step，应视作「大致还剩多少余量」，而不是硬截止时间。
+
+预算精度受平台时钟分辨率限制。预算小于分辨率时可能超支数倍，因此 `softBudgetMs` 应不低于分辨率的两倍；在计时器被钳制的平台上（WebGL 浏览器会钳制 `performance.now()`）优先用 `maxSteps` 主导。
 
 不要假设预算一定守住，读计数器：
 
@@ -183,7 +208,7 @@ if (scheduler.Cancel(handle))
 
 `Cancel` 为 O(1)，并且在调用 `OnTerminated(Cancelled)` 之前就已释放内部引用。
 
-句柄携带槽位、世代与签发调度器的身份。默认、过期、已释放或来自其他调度器的句柄一律返回 `false`，跨调度器误用不会再取消掉无关的工作项。
+句柄携带槽位、世代与签发调度器的身份。默认、过期、已释放或来自其他调度器的句柄一律返回 `false`，因此其他调度器签发的句柄无法取消无关的工作项。
 
 ## 故障处理
 
@@ -222,6 +247,10 @@ scheduler.ShutdownStep(32); // 最多终止 32 项，不执行 Step。
 | `Max Budget Milliseconds` | 软预算的硬上限，即软预算设为无穷也不会卡住一帧。 |
 
 `Update` 驱动正常工作或有界关机。禁用组件只暂停队列，不取消。步数预算为 0 不会卡住关机：排空每帧至少推进一项，`IsShutdownDrainForced` 可用于判断该覆盖是否生效。
+
+驱动以执行顺序 1000 运行，因此玩法脚本在 `Update` 中入队的工作当帧就能被步进，而不是等到下一帧。需要其他相对位置时，在项目的 Script Execution Order 设置里调整。
+
+关机排空期间，终止回调抛出的异常不会从 `Update` 逃逸：排空继续进行，失败次数累计在 `ShutdownFailureCount`，最近一次保留在 `LastShutdownFailure`，且只有第一次会经 `CycloneGames.Scheduling` 日志通道上报。显式调用 `Shutdown()` 仍然会抛出，主动关机的调用方能看到失败。
 
 ## 依赖注入与所有权
 

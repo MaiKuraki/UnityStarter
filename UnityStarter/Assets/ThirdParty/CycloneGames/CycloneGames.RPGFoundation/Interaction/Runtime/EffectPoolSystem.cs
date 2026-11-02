@@ -88,7 +88,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 return pool;
 
             var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
-            pool = new ObjectPool<PooledEffectSpawnData, PooledEffect>(factory: factory, initialCapacity: 8);
+            // Component items can be destroyed by another owner; the adapter answers Unity's fake-null
+            // so a destroyed effect is reclaimed instead of being handed back to gameplay.
+            pool = new MonoObjectPool<PooledEffectSpawnData, PooledEffect>(factory: factory, initialCapacity: 8);
             s_pools.Add(key, pool);
             return pool;
         }
