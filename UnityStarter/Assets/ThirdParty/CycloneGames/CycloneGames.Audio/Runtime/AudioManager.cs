@@ -175,6 +175,35 @@ namespace CycloneGames.Audio.Runtime
         }
     }
 
+    internal readonly struct AudioVirtualizationSettings
+    {
+        internal readonly bool Enabled;
+        internal readonly float FadeSeconds;
+        internal readonly float AudibleRadiusSqr;
+        internal readonly float ResumeRadiusSqr;
+        internal readonly float MinimumDwellSeconds;
+        internal readonly int MaxAudibleLoops;
+        internal readonly int MaxLoopResumesPerFrame;
+
+        internal AudioVirtualizationSettings(
+            bool enabled,
+            float fadeSeconds,
+            float audibleRadiusSqr,
+            float resumeRadiusSqr,
+            float minimumDwellSeconds,
+            int maxAudibleLoops,
+            int maxLoopResumesPerFrame)
+        {
+            Enabled = enabled;
+            FadeSeconds = fadeSeconds;
+            AudibleRadiusSqr = audibleRadiusSqr;
+            ResumeRadiusSqr = resumeRadiusSqr;
+            MinimumDwellSeconds = minimumDwellSeconds;
+            MaxAudibleLoops = maxAudibleLoops;
+            MaxLoopResumesPerFrame = maxLoopResumesPerFrame;
+        }
+    }
+
     internal readonly struct RepeatTriggerKey : IEquatable<RepeatTriggerKey>
     {
         public readonly int EventId;
@@ -2122,6 +2151,227 @@ namespace CycloneGames.Audio.Runtime
 
         #endregion
 
+        #region Loop Virtualization
+
+        private static bool loopVirtualizationEnabled = true;
+        private static float loopAudibleRadius;
+        private static float loopResumeHysteresis = 0.85f;
+        private static float loopVirtualizationFadeSeconds = 0.08f;
+        private static float loopMinimumDwellSeconds = 0.5f;
+        private static int maxAudibleLoops = 32;
+        private static int maxLoopResumesPerFrame = 4;
+        private static int loopResumesRemaining = 8;
+        private static float nextLoopBudgetTime;
+
+        internal static int LastBudgetCandidates;
+        internal static int LastBudgetOverflow;
+        internal static int LastBudgetStarted;
+
+        private static readonly List<ActiveEvent> loopBudgetScratch = new List<ActiveEvent>(64);
+        private static readonly Comparison<ActiveEvent> loopDistanceComparison = CompareLoopDistanceDescending;
+
+        /// <summary>Loops virtualised since startup.</summary>
+        public static long TotalLoopVirtualizations { get; private set; }
+
+        /// <summary>Loops resumed since startup.</summary>
+        public static long TotalLoopResumes { get; private set; }
+
+        /// <summary>
+        /// Enables distance-based virtualisation of looping 3D events. A radius of zero keeps the
+        /// feature off, so existing projects see no behaviour change until it is configured.
+        /// </summary>
+        public static bool LoopVirtualizationEnabled
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopVirtualizationEnabled));
+                return loopVirtualizationEnabled;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopVirtualizationEnabled));
+                loopVirtualizationEnabled = value;
+            }
+        }
+
+        /// <summary>Distance beyond which a looping event releases its source. Zero disables the feature.</summary>
+        public static float LoopAudibleRadius
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopAudibleRadius));
+                return loopAudibleRadius;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopAudibleRadius));
+                loopAudibleRadius = Mathf.Max(0f, value);
+            }
+        }
+
+        /// <summary>Resume radius as a fraction of <see cref="LoopAudibleRadius"/>, providing hysteresis.</summary>
+        public static float LoopResumeHysteresis
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopResumeHysteresis));
+                return loopResumeHysteresis;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopResumeHysteresis));
+                loopResumeHysteresis = Mathf.Clamp(value, 0.5f, 1f);
+            }
+        }
+
+        /// <summary>Fade applied when a loop is virtualised or resumed.</summary>
+        public static float LoopVirtualizationFadeSeconds
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopVirtualizationFadeSeconds));
+                return loopVirtualizationFadeSeconds;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoopVirtualizationFadeSeconds));
+                loopVirtualizationFadeSeconds = Mathf.Clamp(value, 0.005f, 1f);
+            }
+        }
+
+        /// <summary>Upper bound of simultaneously audible loops enforced by the budget pass.</summary>
+        public static int MaxAudibleLoops
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(MaxAudibleLoops));
+                return maxAudibleLoops;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(MaxAudibleLoops));
+                maxAudibleLoops = Mathf.Max(1, value);
+            }
+        }
+
+        /// <summary>Resume operations allowed per frame, bounding AudioSource.Play spikes.</summary>
+        public static int MaxLoopResumesPerFrame
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(MaxLoopResumesPerFrame));
+                return maxLoopResumesPerFrame;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(MaxLoopResumesPerFrame));
+                maxLoopResumesPerFrame = Mathf.Max(1, value);
+            }
+        }
+
+        internal static AudioVirtualizationSettings LoopVirtualization
+        {
+            get
+            {
+                float radius = loopAudibleRadius;
+                bool enabled = loopVirtualizationEnabled && radius > 0f;
+                float resumeRadius = radius * Mathf.Clamp(loopResumeHysteresis, 0.5f, 1f);
+
+                return new AudioVirtualizationSettings(
+                    enabled,
+                    Mathf.Max(0.005f, loopVirtualizationFadeSeconds),
+                    radius * radius,
+                    resumeRadius * resumeRadius,
+                    Mathf.Max(0f, loopMinimumDwellSeconds),
+                    maxAudibleLoops,
+                    maxLoopResumesPerFrame);
+            }
+        }
+
+        internal static bool TryReserveLoopResume()
+        {
+            // The allowance is refilled once per AudioManager.Update (one frame). Drivers that do not
+            // call Update must call ResetLoopResumeBudget explicitly, so the budget never depends on
+            // how many times the frame counter happens to change mid-test.
+            if (loopResumesRemaining <= 0) return false;
+            loopResumesRemaining--;
+            return true;
+        }
+
+        /// <summary>Clears the per-frame resume allowance. Only for drivers that advance several frames.</summary>
+        internal static void ResetLoopResumeBudget()
+        {
+            loopResumesRemaining = maxLoopResumesPerFrame;
+        }
+
+        internal static void NotifyLoopVirtualized()
+        {
+            TotalLoopVirtualizations++;
+        }
+
+        internal static void NotifyLoopResumed()
+        {
+            TotalLoopResumes++;
+        }
+
+        /// <summary>
+        /// Reclaims voices from the farthest audible loops when more than <see cref="MaxAudibleLoops"/>
+        /// are active. Runs every 0.25 s; the fade is started here and completes on the spatial tick.
+        /// </summary>
+        private static void EnforceAudibleLoopBudget()
+        {
+            AudioVirtualizationSettings settings = LoopVirtualization;
+            if (!settings.Enabled) return;
+            if (ActiveEvents == null || ActiveEvents.Count == 0) return;
+            if (Time.unscaledTime < nextLoopBudgetTime) return;
+
+            nextLoopBudgetTime = Time.unscaledTime + 0.25f;
+
+            loopBudgetScratch.Clear();
+            for (int i = 0; i < ActiveEvents.Count; i++)
+            {
+                ActiveEvent activeEvent = ActiveEvents[i];
+                if (activeEvent != null) activeEvent.ClearBudgetHold();
+            }
+
+            for (int i = 0; i < ActiveEvents.Count; i++)
+            {
+                ActiveEvent activeEvent = ActiveEvents[i];
+                if (activeEvent != null && activeEvent.IsLoopBudgetCandidate) loopBudgetScratch.Add(activeEvent);
+            }
+
+            int overflow = loopBudgetScratch.Count - settings.MaxAudibleLoops;
+            LastBudgetCandidates = loopBudgetScratch.Count;
+            LastBudgetOverflow = overflow;
+            if (overflow <= 0) return;
+
+            loopBudgetScratch.Sort(loopDistanceComparison);
+            int started = 0;
+            for (int i = 0; i < overflow; i++)
+            {
+                ActiveEvent candidate = loopBudgetScratch[i];
+                if (candidate.IsVirtualized)
+                {
+                    // Already silent; keep it held so the distance rule cannot resume it this pass.
+                    candidate.MarkBudgetHold();
+                    started++;
+                }
+                else if (candidate.TryBeginVirtualization(settings.FadeSeconds))
+                {
+                    started++;
+                }
+            }
+
+            LastBudgetStarted = started;
+        }
+
+        private static int CompareLoopDistanceDescending(ActiveEvent left, ActiveEvent right)
+        {
+            return right.VirtualizationSqrDistance.CompareTo(left.VirtualizationSqrDistance);
+        }
+
+        #endregion
+
         #region Unity Lifecycle
 
         private void Awake()
@@ -2352,6 +2602,8 @@ namespace CycloneGames.Audio.Runtime
         {
             ProcessPendingEventRecycles();
 
+            loopResumesRemaining = maxLoopResumesPerFrame;
+
             // Process pending delayed removals (replaces async void DelayRemoveActiveEvent)
             float now = Time.unscaledTime;
             for (int i = pendingRemovals.Count - 1; i >= 0; i--)
@@ -2406,7 +2658,7 @@ namespace CycloneGames.Audio.Runtime
                     tempEvent.updateInterval = lodSettings.GetUpdateInterval(sqrDist);
                 }
 
-                tempEvent.UpdateInternal();
+                tempEvent.UpdateInternal(deltaTime);
             }
 
             // Track peak usage
@@ -2418,6 +2670,8 @@ namespace CycloneGames.Audio.Runtime
 
             // Periodic external clip cache eviction
             TryEvictExternalClips();
+
+            EnforceAudibleLoopBudget();
         }
 
         #endregion
