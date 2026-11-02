@@ -185,15 +185,32 @@ namespace CycloneGames.Factory.Tests.Editor
 
             TestPoolable warmup = pool.Spawn(0);
             pool.Despawn(warmup);
-            long before = GC.GetAllocatedBytesForCurrentThread();
+            int reserved = pool.TrackingCapacity;
 
-            for (int i = 0; i < 4096; i++)
+            void Workload()
             {
-                TestPoolable item = pool.Spawn(i);
-                pool.Despawn(item);
+                for (int i = 0; i < 4096; i++)
+                {
+                    TestPoolable item = pool.Spawn(i);
+                    pool.Despawn(item);
+                }
             }
 
+            if (!AllocProbe.IsMeasurable())
+            {
+                Workload();
+
+                // GC-independent judgement: a grown container is the only way this loop could allocate.
+                Assert.That(pool.TrackingCapacity, Is.EqualTo(reserved));
+                AllocProbe.NoteUnmeasurable(nameof(PrewarmedSpawnDespawnLoop_DoesNotAllocateManagedMemory));
+                AllocProbe.SkipUnmeasurable(nameof(PrewarmedSpawnDespawnLoop_DoesNotAllocateManagedMemory));
+            }
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            Workload();
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.That(pool.TrackingCapacity, Is.EqualTo(reserved));
             Assert.That(allocated, Is.Zero);
         }
 
