@@ -84,6 +84,9 @@ namespace CycloneGames.Audio.Runtime
             [Tooltip("Physics layers to test for occlusion. Typically walls, terrain, large static objects.")]
             public LayerMask occlusionLayers;
 
+            [Tooltip("Rays sampled per occlusion probe. 1 = binary (legacy), 2-5 = partial cover between the centre and the sides.")]
+            public int rayCount;
+
             [Tooltip("Low-pass cutoff frequency when fully occluded (Hz). Lower = more muffled.")]
             [Range(200f, 5000f)]
             public float occludedCutoffHz;
@@ -335,6 +338,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 enabled = enabled,
                 occlusionLayers = ~0, // Default: all layers
+                rayCount = 1,
                 occludedCutoffHz = cutoffHz,
                 occludedVolumeScale = volumeScale,
                 interpolationSpeed = interpSpeed,

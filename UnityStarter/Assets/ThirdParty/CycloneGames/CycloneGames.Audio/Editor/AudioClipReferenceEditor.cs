@@ -61,7 +61,8 @@ namespace CycloneGames.Audio.Editor
             }
             else
             {
-                AudioLocationKind kind = (AudioLocationKind)locationKindProp.enumValueIndex;
+                // enumValueIndex is the declaration-order index, not the underlying value.
+                AudioLocationKind kind = (AudioLocationKind)locationKindProp.intValue;
                 switch (kind)
                 {
                     case AudioLocationKind.AssetAddress:

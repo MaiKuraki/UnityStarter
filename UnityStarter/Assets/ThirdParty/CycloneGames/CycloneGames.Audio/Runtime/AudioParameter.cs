@@ -89,8 +89,14 @@ namespace CycloneGames.Audio.Runtime
     /// A runtime value that affects audio properties on an AudioEvent.
     /// Supports min/max range enforcement and optional value interpolation (smoothing).
     /// </summary>
-    public class AudioParameter : ScriptableObject
+    public class AudioParameter : ScriptableObject, IAudioIdentified
     {
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
+
         [SerializeField]
         private float defaultValue = 0;
         [SerializeField]

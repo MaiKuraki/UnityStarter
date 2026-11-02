@@ -404,9 +404,21 @@ namespace CycloneGames.Audio.Runtime
     /// <summary>
     /// The logic, settings, and audio clips that define the playback of a sound
     /// </summary>
-    public class AudioEvent : ScriptableObject
+    public class AudioEvent : ScriptableObject, IAudioIdentified
     {
         private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
+
+        /// <summary>
+        /// Session-scoped handle for this event. Stable while the event is loaded and safe to cache
+        /// for repeated playback calls.
+        /// </summary>
+        public AudioEventId Id => new AudioEventId(RuntimeId);
 
         private const int MaxRuntimeGraphNodes = 1024;
         private const int MaxRuntimeGraphEdges = 4096;

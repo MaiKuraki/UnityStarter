@@ -6,34 +6,37 @@ namespace CycloneGames.Audio.Editor
 {
     /// <summary>
     /// Immutable, non-owning data captured for one profiler sample. It intentionally stores
-    /// names and instance IDs instead of Unity objects or pooled ActiveEvent instances.
+    /// names and session ids instead of Unity objects or pooled ActiveEvent instances.
     /// </summary>
     internal readonly struct ProfilerEventSnapshot
     {
         public readonly string EventName;
         public readonly string EmitterName;
-        public readonly int EmitterInstanceId;
+        public readonly int EmitterId;
         public readonly string BusName;
-        public readonly int BusInstanceId;
+        public readonly int BusId;
         public readonly EventStatus Status;
         public readonly float TimeStarted;
+        /// <summary>Preformatted list row, so repainting the list does not rebuild the string.</summary>
+        public readonly string DisplayLine;
 
         public ProfilerEventSnapshot(
             string eventName,
             string emitterName,
-            int emitterInstanceId,
+            int emitterId,
             string busName,
-            int busInstanceId,
+            int busId,
             EventStatus status,
             float timeStarted)
         {
             EventName = eventName ?? string.Empty;
             EmitterName = emitterName ?? string.Empty;
-            EmitterInstanceId = emitterInstanceId;
+            EmitterId = emitterId;
             BusName = busName ?? string.Empty;
-            BusInstanceId = busInstanceId;
+            BusId = busId;
             Status = status;
             TimeStarted = timeStarted;
+            DisplayLine = $"{timeStarted:F3} : {EventName} - {Status}";
         }
     }
 
