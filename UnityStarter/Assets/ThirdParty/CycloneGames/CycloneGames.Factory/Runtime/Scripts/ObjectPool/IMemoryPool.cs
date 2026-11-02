@@ -23,16 +23,33 @@ namespace CycloneGames.Factory.Runtime
 
     public readonly struct PoolCapacitySettings : IEquatable<PoolCapacitySettings>
     {
+        /// <summary>
+        /// Inactive retention target used by <see cref="PoolTrimPolicy.TrimOnDespawn"/>, and the sizing
+        /// hint for tracking storage. Not a creation budget.
+        /// </summary>
         public int SoftCapacity { get; }
+
+        /// <summary>
+        /// Maximum items owned by the pool. <c>-1</c> means unbounded.
+        /// </summary>
         public int HardCapacity { get; }
         public PoolOverflowPolicy OverflowPolicy { get; }
         public PoolTrimPolicy TrimPolicy { get; }
+
+        /// <summary>
+        /// Items created during pool construction. <c>-1</c> inherits <see cref="SoftCapacity"/>.
+        /// </summary>
+        public int InitialPrewarm { get; }
+
+        /// <summary>Effective construction prewarm count.</summary>
+        public int PrewarmCount => InitialPrewarm >= 0 ? InitialPrewarm : SoftCapacity;
 
         public PoolCapacitySettings(
             int softCapacity = 0,
             int hardCapacity = -1,
             PoolOverflowPolicy overflowPolicy = PoolOverflowPolicy.Throw,
-            PoolTrimPolicy trimPolicy = PoolTrimPolicy.Manual)
+            PoolTrimPolicy trimPolicy = PoolTrimPolicy.Manual,
+            int initialPrewarm = -1)
         {
             if (softCapacity < 0)
             {
@@ -49,10 +66,21 @@ namespace CycloneGames.Factory.Runtime
                 throw new ArgumentException("Soft capacity cannot exceed hard capacity.");
             }
 
+            if (initialPrewarm < -1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(initialPrewarm));
+            }
+
+            if (hardCapacity > 0 && initialPrewarm > hardCapacity)
+            {
+                throw new ArgumentException("Initial prewarm cannot exceed hard capacity.");
+            }
+
             SoftCapacity = softCapacity;
             HardCapacity = hardCapacity;
             OverflowPolicy = overflowPolicy;
             TrimPolicy = trimPolicy;
+            InitialPrewarm = initialPrewarm;
         }
 
         public bool Equals(PoolCapacitySettings other)
@@ -60,7 +88,8 @@ namespace CycloneGames.Factory.Runtime
             return SoftCapacity == other.SoftCapacity
                 && HardCapacity == other.HardCapacity
                 && OverflowPolicy == other.OverflowPolicy
-                && TrimPolicy == other.TrimPolicy;
+                && TrimPolicy == other.TrimPolicy
+                && InitialPrewarm == other.InitialPrewarm;
         }
 
         public override bool Equals(object obj)
@@ -78,6 +107,8 @@ namespace CycloneGames.Factory.Runtime
                 hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
                 hash ^= (uint)OverflowPolicy * 0x27d4eb2d;
                 hash ^= (uint)TrimPolicy * 0x9e3779b9;
+                hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+                hash ^= (uint)InitialPrewarm * 0x27d4eb2d;
                 hash = (hash >> 16) ^ hash;
                 return (int)hash;
             }
@@ -99,6 +130,9 @@ namespace CycloneGames.Factory.Runtime
         public long QuarantinedItems { get; }
         public long InvalidatedInactiveItems { get; }
 
+        /// <summary>Leases that ended because the item was already destroyed outside the pool.</summary>
+        public long InvalidatedActiveItems { get; }
+
         public PoolDiagnostics(
             int peakCountActive,
             int peakCountAll,
@@ -111,7 +145,8 @@ namespace CycloneGames.Factory.Runtime
             long totalDestroyed,
             long callbackFailures,
             long quarantinedItems,
-            long invalidatedInactiveItems)
+            long invalidatedInactiveItems,
+            long invalidatedActiveItems = 0)
         {
             PeakCountActive = peakCountActive;
             PeakCountAll = peakCountAll;
@@ -125,6 +160,7 @@ namespace CycloneGames.Factory.Runtime
             CallbackFailures = callbackFailures;
             QuarantinedItems = quarantinedItems;
             InvalidatedInactiveItems = invalidatedInactiveItems;
+            InvalidatedActiveItems = invalidatedActiveItems;
         }
     }
 
@@ -154,23 +190,25 @@ namespace CycloneGames.Factory.Runtime
         }
     }
 
-    public interface IMemoryPool
+    public interface IMemoryPool : IDisposable
     {
         int CountAll { get; }
         int CountActive { get; }
         int CountInactive { get; }
+        int TrackingCapacity { get; }
         Type ItemType { get; }
         PoolLifecycleState LifecycleState { get; }
         PoolCapacitySettings CapacitySettings { get; }
         PoolDiagnostics Diagnostics { get; }
         PoolProfile Profile { get; }
 
-        void Clear();
-        void DespawnAll();
-        int DespawnStep(int maxItems);
+        void EnsureCapacity(int capacity);
         void Prewarm(int count);
         int WarmupStep(int maxItems);
         void TrimInactive(int targetInactiveCount);
+        void DespawnAll();
+        int DespawnStep(int maxItems);
+        void Clear();
     }
 
     public interface IDespawnableMemoryPool<in TValue> : IMemoryPool

@@ -74,6 +74,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
             public int CountAll => 0;
             public int CountActive => 0;
             public int CountInactive => 0;
+            public int TrackingCapacity => 0;
             public Type ItemType => typeof(PooledEffect);
             public PoolLifecycleState LifecycleState => PoolLifecycleState.Ready;
             public PoolCapacitySettings CapacitySettings => default;
@@ -95,7 +96,15 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
                 return true;
             }
 
+            public void EnsureCapacity(int capacity)
+            {
+            }
+
             public void Clear()
+            {
+            }
+
+            public void Dispose()
             {
             }
 

@@ -57,6 +57,7 @@ namespace CycloneGames.Factory.Tests.Performance
         public PerfFastObjectPool(PoolCapacitySettings capacitySettings)
             : base(capacitySettings)
         {
+            Prewarm(CapacitySettings.PrewarmCount);
         }
 
         protected override PerfFastPoolable CreateNew()

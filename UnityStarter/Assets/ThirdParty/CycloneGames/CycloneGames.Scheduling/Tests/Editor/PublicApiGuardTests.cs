@@ -177,6 +177,7 @@ WorkScheduler prop Capacity : Int32 get
 WorkScheduler prop IsShutdown : Boolean get
 WorkScheduler prop IsShutdownCompleted : Boolean get
 WorkScheduler prop OutstandingCount : Int32 get
+WorkScheduler prop RemainingBudgetMilliseconds : Double get
 WorkScheduler prop SchedulerId : UInt32 get
 WorkScheduler prop StarvationLimitTicks : Int32 get
 WorkScheduler prop TrackStepTiming : Boolean get set

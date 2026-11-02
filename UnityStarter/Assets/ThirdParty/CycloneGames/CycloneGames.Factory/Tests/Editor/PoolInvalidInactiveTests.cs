@@ -154,9 +154,7 @@ namespace CycloneGames.Factory.Tests.Editor
         private sealed class TestPool : FastObjectPool<InvalidItem>
         {
             public TestPool(int hardCapacity)
-                : base(
-                    new PoolCapacitySettings(softCapacity: hardCapacity, hardCapacity: hardCapacity),
-                    deferInitialPrewarm: true)
+                : base(new PoolCapacitySettings(softCapacity: hardCapacity, hardCapacity: hardCapacity))
             {
             }
 

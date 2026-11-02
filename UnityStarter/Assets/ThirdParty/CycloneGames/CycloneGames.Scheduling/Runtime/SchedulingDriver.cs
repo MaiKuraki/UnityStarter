@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using CycloneGames.Scheduling.Core;
 using UnityEngine;
 
@@ -7,7 +8,13 @@ namespace CycloneGames.Scheduling.Runtime
     /// Explicit Unity host for one WorkScheduler. Self-created schedulers are owned by the driver;
     /// bound schedulers remain owned by their external composition root.
     /// </summary>
+    /// <remarks>
+    /// Runs late in the frame so work enqueued by ordinary gameplay scripts is stepped in the same
+    /// frame instead of waiting one. Override through Unity's Script Execution Order when a project
+    /// needs a different relative position.
+    /// </remarks>
     [AddComponentMenu("CycloneGames/Scheduling Driver")]
+    [DefaultExecutionOrder(1000)]
     public sealed class SchedulingDriver : MonoBehaviour
     {
         [SerializeField]
@@ -34,6 +41,9 @@ namespace CycloneGames.Scheduling.Runtime
         private bool hasExternalScheduler;
         private bool isShuttingDown;
         private bool isDestroyed;
+        private int shutdownFailureCount;
+        private System.AggregateException lastShutdownFailure;
+        private bool hasLoggedShutdownFailure;
 
         public WorkScheduler Scheduler
         {
@@ -59,6 +69,15 @@ namespace CycloneGames.Scheduling.Runtime
         /// instead of standing still. Exposed so a host or debug overlay can surface the override.
         /// </summary>
         public bool IsShutdownDrainForced => isShuttingDown && maxStepsPerFrame == 0;
+
+        /// <summary>
+        /// Terminal callbacks that threw while this host was shutting down. The drain continues
+        /// and the failures are retained instead of escaping <c>Update</c>.
+        /// </summary>
+        public int ShutdownFailureCount => shutdownFailureCount;
+
+        /// <summary>The most recent shutdown callback failure, or null.</summary>
+        public System.AggregateException LastShutdownFailure => lastShutdownFailure;
 
         public int MaxStepsPerFrame
         {
@@ -161,6 +180,11 @@ namespace CycloneGames.Scheduling.Runtime
         /// </summary>
         public void Shutdown()
         {
+            ShutdownInternal(suppressCallbackFailures: false);
+        }
+
+        private void ShutdownInternal(bool suppressCallbackFailures)
+        {
             if (isDestroyed)
             {
                 return;
@@ -180,11 +204,38 @@ namespace CycloneGames.Scheduling.Runtime
                     scheduler.Shutdown();
                 }
             }
+            catch (System.AggregateException failure)
+            {
+                if (!suppressCallbackFailures)
+                {
+                    throw;
+                }
+
+                RecordShutdownFailure(failure);
+            }
             finally
             {
                 scheduler = null;
                 ownsScheduler = false;
             }
+        }
+
+        private void RecordShutdownFailure(System.AggregateException failure)
+        {
+            shutdownFailureCount += failure.InnerExceptions.Count;
+            lastShutdownFailure = failure;
+
+            if (hasLoggedShutdownFailure)
+            {
+                return;
+            }
+
+            hasLoggedShutdownFailure = true;
+            SchedulingRuntimeLog.Channel.WriteException(
+                LogSeverity.Error,
+                failure,
+                "A work item terminal callback threw during shutdown. The drain continues and "
+                + "further failures are counted in ShutdownFailureCount.");
         }
 
         private void Awake()
@@ -204,7 +255,15 @@ namespace CycloneGames.Scheduling.Runtime
                 // A zero step budget pauses normal work, but shutdown must still advance,
                 // otherwise the drain never completes and no OnTerminated callback is issued.
                 int drainBudget = maxStepsPerFrame > 0 ? maxStepsPerFrame : 1;
-                scheduler.ShutdownStep(drainBudget);
+                try
+                {
+                    scheduler.ShutdownStep(drainBudget);
+                }
+                catch (System.AggregateException failure)
+                {
+                    RecordShutdownFailure(failure);
+                }
+
                 if (scheduler.OutstandingCount == 0)
                 {
                     scheduler = null;
@@ -247,12 +306,12 @@ namespace CycloneGames.Scheduling.Runtime
 
         private void OnApplicationQuit()
         {
-            Shutdown();
+            ShutdownInternal(suppressCallbackFailures: true);
         }
 
         private void OnDestroy()
         {
-            Shutdown();
+            ShutdownInternal(suppressCallbackFailures: true);
         }
 
         private WorkScheduler CreateOwnedScheduler()

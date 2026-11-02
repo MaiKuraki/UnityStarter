@@ -60,6 +60,11 @@ namespace CycloneGames.Scheduling.Core
         private double _slowestStepMilliseconds;
         private WorkItemHandle _slowestStep;
 
+        // Budget state for RemainingBudgetMilliseconds. Written only by Tick on the owner thread.
+        private bool _budgetActive;
+        private long _budgetDeadline;
+        private long _budgetSampleAt;
+
         public WorkScheduler(int capacity)
             : this(capacity, StopwatchSchedulerClock.Instance, 1u, DefaultStarvationLimitTicks)
         {
@@ -149,6 +154,31 @@ namespace CycloneGames.Scheduling.Core
         /// <summary>Identity embedded in every handle this scheduler issues.</summary>
         public uint SchedulerId => _schedulerId;
 
+        /// <summary>
+        /// Soft budget left in the Tick currently running, in milliseconds, resolved against the
+        /// last clock sample. Returns <see cref="double.PositiveInfinity"/> outside a Tick or when
+        /// the Tick has an infinite budget. A Step can loop until this is nearly exhausted instead
+        /// of guessing a fixed batch size; the value lags by at most one Step.
+        /// </summary>
+        public double RemainingBudgetMilliseconds
+        {
+            get
+            {
+                if (Environment.CurrentManagedThreadId != _ownerThreadId)
+                {
+                    throw new InvalidOperationException("WorkScheduler is confined to its owner thread.");
+                }
+
+                if (!_budgetActive)
+                {
+                    return double.PositiveInfinity;
+                }
+
+                long remaining = _budgetDeadline - _budgetSampleAt;
+                return remaining <= 0 ? 0.0 : _clock.ToMilliseconds(remaining);
+            }
+        }
+
         public int GetLaneOutstanding(WorkLane lane)
         {
             return _laneOutstanding[(int)ValidateLane(lane)];
@@ -183,6 +213,15 @@ namespace CycloneGames.Scheduling.Core
 
 #if DEBUG
             // Reference-identity guard, compiled out of Release Player builds.
+            if (item.GetType().IsValueType)
+            {
+                throw new ArgumentException(
+                    "IWorkItem implementations must be reference types. A struct is boxed when it is "
+                    + "registered, so the scheduler would advance a copy and the caller's value would "
+                    + "silently make no progress.",
+                    nameof(item));
+            }
+
             if (!_duplicateGuard.TryAdd(item))
             {
                 throw new InvalidOperationException(
@@ -245,6 +284,9 @@ namespace CycloneGames.Scheduling.Core
 
             if (_isShutdown || maxSteps == 0 || softBudgetMs == 0 || _outstandingCount == 0)
             {
+                // An idle Tick still advances the counters so diagnostics do not go stale.
+                _tickCount++;
+                _lastTickMilliseconds = 0.0;
                 return 0;
             }
 
@@ -256,100 +298,119 @@ namespace CycloneGames.Scheduling.Core
             List<Exception> faults = null;
 
             long startedAt = _clock.GetTimestamp();
+            long budgetTicks = budgetFinite ? _clock.ToTicks(softBudgetMs) : 0L;
             long sampleAt = startedAt;
             int pendingCostSlot = -1;
             uint pendingCostGeneration = 0u;
 
             _tickCount++;
             _isTicking = true;
+            _budgetActive = budgetFinite;
+            _budgetSampleAt = startedAt;
+            _budgetDeadline = budgetTicks >= long.MaxValue - startedAt
+                ? long.MaxValue
+                : startedAt + budgetTicks;
 
             try
             {
-                int lane = FindStarvedLane();
-                int boostedLane = lane;
+                // Every lane past its starvation window is served once before priority order
+                // resumes; the credit below keeps the traversal from serving that item again.
+                int boostCreditedMask = 0;
+                int boostedMask = 0;
 
                 while (steps < maxSteps && steps < eligibleCount)
                 {
-                    if (budgetFinite)
+                    int boostLane = FindStarvedLane(boostedMask);
+                    if (boostLane < 0)
                     {
-                        long now = _clock.GetTimestamp();
-                        if (trackTiming && pendingCostSlot >= 0)
-                        {
-                            RecordStepCost(pendingCostSlot, pendingCostGeneration, _clock.ToMilliseconds(now - sampleAt));
-                        }
-
-                        sampleAt = now;
-                        if (steps > 0 && _clock.ToMilliseconds(now - startedAt) >= softBudgetMs)
-                        {
-                            break;
-                        }
+                        break;
                     }
 
-                    if (lane < 0)
-                    {
-                        lane = FindHighestNonEmptyLane();
-                        if (lane < 0)
-                        {
-                            break;
-                        }
-                    }
+                    boostedMask |= 1 << boostLane;
 
-                    int slot = PopHead(lane);
-                    servicedMask |= 1 << lane;
+                    int boosted = PopHead(boostLane);
+                    servicedMask |= 1 << boostLane;
                     steps++;
                     _stepCount++;
                     if (trackTiming)
                     {
-                        pendingCostSlot = slot;
-                        pendingCostGeneration = _slots[slot].Generation;
+                        pendingCostSlot = boosted;
+                        pendingCostGeneration = _slots[boosted].Generation;
                     }
 
-                    WorkStepResult result = WorkStepResult.Running;
-                    Exception stepFailure = null;
-                    _isInCallback = true;
-                    try
+                    if (StepAndCollect(boosted, boostLane, ref faults))
                     {
-                        result = _slots[slot].Item.Step();
+                        boostCreditedMask |= 1 << boostLane;
                     }
-                    catch (Exception failure)
+                }
+
+                bool budgetStop = false;
+                for (int lane = 0; lane < LaneCount && !budgetStop; lane++)
+                {
+                    if (steps >= maxSteps || steps >= eligibleCount)
                     {
-                        stepFailure = failure;
-                    }
-                    finally
-                    {
-                        _isInCallback = false;
+                        break;
                     }
 
-                    if (stepFailure != null)
+                    // Snapshot the lane depth on entry: a requeued item keeps its registration,
+                    // so this bounds the pass to one service per item.
+                    int depth = _laneOutstanding[lane];
+                    if ((boostCreditedMask & (1 << lane)) != 0)
                     {
-                        TerminateCollected(slot, WorkTerminationReason.Faulted, stepFailure, ref faults);
-                    }
-                    else if (result == WorkStepResult.Completed)
-                    {
-                        TerminateCollected(slot, WorkTerminationReason.Completed, null, ref faults);
-                    }
-                    else if (result != WorkStepResult.Running)
-                    {
-                        TerminateCollected(
-                            slot,
-                            WorkTerminationReason.Faulted,
-                            new InvalidOperationException("IWorkItem.Step returned an undefined WorkStepResult value."),
-                            ref faults);
-                    }
-                    else
-                    {
-                        AppendToLane(lane, slot);
+                        // The boosted item sits at this lane's tail, so one fewer unserved item
+                        // remains in front of it.
+                        depth--;
                     }
 
-                    if (_laneOutstanding[lane] == 0)
+                    if (depth <= 0)
                     {
-                        lane = -1;
+                        continue;
                     }
-                    else if (lane == boostedLane)
+
+                    int laneBudget = depth;
+                    int remaining = maxSteps - steps;
+                    if (laneBudget > remaining)
                     {
-                        // A starvation boost grants exactly one step, then priority order resumes.
-                        lane = -1;
-                        boostedLane = -1;
+                        laneBudget = remaining;
+                    }
+
+                    remaining = eligibleCount - steps;
+                    if (laneBudget > remaining)
+                    {
+                        laneBudget = remaining;
+                    }
+
+                    for (int served = 0; served < laneBudget; served++)
+                    {
+                        if (budgetFinite)
+                        {
+                            long now = _clock.GetTimestamp();
+                            if (trackTiming && pendingCostSlot >= 0)
+                            {
+                                RecordStepCost(pendingCostSlot, pendingCostGeneration, _clock.ToMilliseconds(now - sampleAt));
+                                pendingCostSlot = -1;
+                            }
+
+                            sampleAt = now;
+                            _budgetSampleAt = now;
+                            if (steps > 0 && now - startedAt >= budgetTicks)
+                            {
+                                budgetStop = true;
+                                break;
+                            }
+                        }
+
+                        int slot = PopHead(lane);
+                        servicedMask |= 1 << lane;
+                        steps++;
+                        _stepCount++;
+                        if (trackTiming)
+                        {
+                            pendingCostSlot = slot;
+                            pendingCostGeneration = _slots[slot].Generation;
+                        }
+
+                        StepAndCollect(slot, lane, ref faults);
                     }
                 }
 
@@ -375,8 +436,57 @@ namespace CycloneGames.Scheduling.Core
 
                 RecordTick(_clock.ToMilliseconds(endedAt - startedAt), softBudgetMs);
                 UpdateStarvation(servicedMask);
+                _budgetActive = false;
                 _isTicking = false;
             }
+        }
+
+        /// <summary>
+        /// Runs one Step, then terminates or requeues the registration. Returns true when the item
+        /// was requeued on <paramref name="lane"/>.
+        /// </summary>
+        private bool StepAndCollect(int slot, int lane, ref List<Exception> faults)
+        {
+            WorkStepResult result = WorkStepResult.Running;
+            Exception stepFailure = null;
+            _isInCallback = true;
+            try
+            {
+                result = _slots[slot].Item.Step();
+            }
+            catch (Exception failure)
+            {
+                stepFailure = failure;
+            }
+            finally
+            {
+                _isInCallback = false;
+            }
+
+            if (stepFailure != null)
+            {
+                TerminateCollected(slot, WorkTerminationReason.Faulted, stepFailure, ref faults);
+                return false;
+            }
+
+            if (result == WorkStepResult.Completed)
+            {
+                TerminateCollected(slot, WorkTerminationReason.Completed, null, ref faults);
+                return false;
+            }
+
+            if (result != WorkStepResult.Running)
+            {
+                TerminateCollected(
+                    slot,
+                    WorkTerminationReason.Faulted,
+                    new InvalidOperationException("IWorkItem.Step returned an undefined WorkStepResult value."),
+                    ref faults);
+                return false;
+            }
+
+            AppendToLane(lane, slot);
+            return true;
         }
 
         /// <summary>
@@ -642,11 +752,13 @@ namespace CycloneGames.Scheduling.Core
             return -1;
         }
 
-        private int FindStarvedLane()
+        private int FindStarvedLane(int excludedMask)
         {
             for (int lane = 0; lane < LaneCount; lane++)
             {
-                if (_laneOutstanding[lane] > 0 && _laneStarvedTicks[lane] >= _starvationLimitTicks)
+                if (_laneOutstanding[lane] > 0
+                    && _laneStarvedTicks[lane] >= _starvationLimitTicks
+                    && (excludedMask & (1 << lane)) == 0)
                 {
                     return lane;
                 }

@@ -47,7 +47,8 @@ namespace CycloneGames.Factory.Tests.Performance
             pool.Clear();
 
             Assert.That(pool.CountAll, Is.EqualTo(0));
-            Assert.That(pool.TrackedItemCount, Is.EqualTo(0), "Ownership set retained references after Clear.");
+            Assert.That(pool.TrackedItemCount, Is.EqualTo(0), "Ownership index retained references after Clear.");
+            Assert.That(pool.TrackingCapacity, Is.EqualTo(0), "An empty pool must not keep peak tracking storage.");
 
             // A stale entry would surface as a false "already owned" rejection on the next creation.
             PerfPoolable respawned = pool.Spawn(1);
