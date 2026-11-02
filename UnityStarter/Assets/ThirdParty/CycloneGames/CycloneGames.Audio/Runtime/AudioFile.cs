@@ -266,7 +266,7 @@ namespace CycloneGames.Audio.Runtime
             if (reference == null || loader == null) return EmptyRegistration.Instance;
 
             long registrationId = GetNextLoaderRegistrationId();
-            int referenceId = reference.GetInstanceID();
+            int referenceId = reference.RuntimeId;
             lock (runtimeReferenceLoaderLock)
             {
                 if (!runtimeReferenceLoaders.TryGetValue(referenceId, out List<LoaderRegistration> registrations))
@@ -344,7 +344,7 @@ namespace CycloneGames.Audio.Runtime
 
             lock (runtimeReferenceLoaderLock)
             {
-                runtimeReferenceLoaders.Remove(reference.GetInstanceID());
+                runtimeReferenceLoaders.Remove(reference.RuntimeId);
             }
         }
 
@@ -469,7 +469,7 @@ namespace CycloneGames.Audio.Runtime
 
             lock (runtimeReferenceLoaderLock)
             {
-                if (!runtimeReferenceLoaders.TryGetValue(reference.GetInstanceID(), out List<LoaderRegistration> registrations) ||
+                if (!runtimeReferenceLoaders.TryGetValue(reference.RuntimeId, out List<LoaderRegistration> registrations) ||
                     registrations.Count == 0)
                 {
                     return null;
@@ -874,6 +874,34 @@ namespace CycloneGames.Audio.Runtime
         private static long evictionScanCount;
         private static long evictionCount;
 
+        private static AudioConcurrencyGate loadGate;
+
+        /// <summary>
+        /// Gate shared by every external load. A capacity change is applied once the gate is idle,
+        /// so in-flight slots are never invalidated.
+        /// </summary>
+        private static AudioConcurrencyGate LoadGate
+        {
+            get
+            {
+                int capacity = AudioManager.ExternalClipMaximumConcurrentLoads;
+                AudioConcurrencyGate current = loadGate;
+                if (current != null && current.Capacity == capacity)
+                {
+                    return current;
+                }
+
+                if (current != null && !current.IsIdle)
+                {
+                    return current;
+                }
+
+                current?.Dispose();
+                loadGate = new AudioConcurrencyGate(capacity);
+                return loadGate;
+            }
+        }
+
         private CacheEntry entry;
         private int localRefCount;
 
@@ -1026,10 +1054,56 @@ namespace CycloneGames.Audio.Runtime
 
         private static async UniTask LoadEntryAsync(CacheEntry entry)
         {
+            AudioConcurrencyGate gate = LoadGate;
+            await gate.WaitAsync();
+            try
+            {
+                await UniTask.SwitchToMainThread();
+
+                bool abandoned;
+                lock (cacheLock)
+                {
+                    abandoned = entry.RemoveWhenUnused && entry.RefCount == 0;
+                }
+
+                if (abandoned)
+                {
+                    lock (cacheLock)
+                    {
+                        MarkEntryFailed(entry);
+                        if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
+                    }
+
+                    return;
+                }
+
+                await LoadEntryCoreAsync(entry);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private static async UniTask LoadEntryCoreAsync(CacheEntry entry)
+        {
             try
             {
                 AudioType audioType = GetAudioType(entry.Location);
-                using (var www = UnityWebRequestMultimedia.GetAudioClip(entry.Location, audioType))
+                if (!AudioClipUri.TryCreate(entry.Location, out string requestUri, out string uriError))
+                {
+                    lock (cacheLock)
+                    {
+                        entry.Error = uriError;
+                        MarkEntryFailed(entry);
+                        entry.Request = null;
+                        totalFailureCount++;
+                        if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
+                    }
+                    return;
+                }
+
+                using (var www = UnityWebRequestMultimedia.GetAudioClip(requestUri, audioType))
                 {
                     www.timeout = Mathf.Max(1, AudioManager.ExternalClipRequestTimeoutSeconds);
                     lock (cacheLock)
@@ -1107,7 +1181,7 @@ namespace CycloneGames.Audio.Runtime
                         if (decodedLimit > 0 && entry.EstimatedMemoryBytes > decodedLimit)
                         {
                             entry.Error = $"Decoded AudioClip exceeds the {decodedLimit}-byte limit.";
-                            UnityEngine.Object.Destroy(entry.Clip);
+                            DestroyClip(entry.Clip);
                             entry.Clip = null;
                             MarkEntryFailed(entry);
                             totalFailureCount++;
@@ -1149,13 +1223,28 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        private static void DestroyClip(AudioClip clip)
+        {
+            if (clip == null) return;
+
+            // EditMode tooling and tests run outside play mode, where Destroy is rejected.
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(clip);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(clip);
+            }
+        }
+
         private static void DestroyAndRemoveEntry(CacheEntry entry)
         {
             if (entry == null) return;
 
             if (entry.Clip != null)
             {
-                UnityEngine.Object.Destroy(entry.Clip);
+                DestroyClip(entry.Clip);
                 entry.Clip = null;
             }
 

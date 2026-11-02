@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Generic;
 using CycloneGames.Logging;
 using System.Threading;
 using UnityEngine;
@@ -314,6 +315,18 @@ namespace CycloneGames.Audio.Runtime
         private float cachedSqrDistance;     // listener distance cached on LOD tick
         private AudioLowPassFilter[] cachedLPFilters = new AudioLowPassFilter[MaxSourcesPerEvent];
         private bool lpFiltersCached;
+        private float appliedLPCutoff = float.NaN;
+        private bool appliedLPFEnabled;
+        private float lastAppliedSpatialVolumeScale = 1f;
+
+        // Raycasts are reused until either endpoint moves past the threshold or the interval elapses.
+        private const float OcclusionRefreshIntervalSeconds = 0.25f;
+        private const float OcclusionMovementSqrThreshold = 0.0625f; // 0.25 m
+        private bool occlusionResultValid;
+        private float lastOcclusionAmount;
+        private Vector3 lastOcclusionEmitterPos;
+        private Vector3 lastOcclusionListenerPos;
+        private float nextOcclusionRefreshTime;
 
         // ---- Warm path fields (accessed during play/stop) ----
         public string name = "";
@@ -365,20 +378,63 @@ namespace CycloneGames.Audio.Runtime
 
         internal ReadOnlySpan<EventSource> SourcesSpan => new ReadOnlySpan<EventSource>(sourcesArray, 0, sourceCount);
 
-        public float EstimatedRemainingTime { get; private set; }
+        /// <summary>Remaining playback time in seconds, evaluated on demand and cached per frame.</summary>
+        public float EstimatedRemainingTime
+        {
+            get
+            {
+                int frame = Time.frameCount;
+                if (estimatedRemainingTimeFrame != frame)
+                {
+                    estimatedRemainingTimeFrame = frame;
+                    estimatedRemainingTime = ComputeRemainingTime(out _);
+                }
+
+                return estimatedRemainingTime;
+            }
+        }
+
+        private float estimatedRemainingTime;
+        private int estimatedRemainingTimeFrame = -1;
         public bool Muted { get; private set; }
         public bool Soloed { get; private set; }
         public AudioHandle Handle => new AudioHandle(this);
 
         public delegate void EventCompleted();
-        public event EventCompleted CompletionCallback;
+
+        /// <summary>
+        /// Raised once when the event reaches a terminal state. Handlers run in registration order and
+        /// one throwing handler does not prevent the remaining handlers from running.
+        /// </summary>
+        public event EventCompleted CompletionCallback
+        {
+            add
+            {
+                if (value == null) return;
+                completionCallbacks ??= new List<EventCompleted>(2);
+                completionCallbacks.Add(value);
+            }
+            remove
+            {
+                if (value == null || completionCallbacks == null) return;
+
+                // Delegates invoke in registration order, so removal must drop the last match.
+                for (int i = completionCallbacks.Count - 1; i >= 0; i--)
+                {
+                    if (!ReferenceEquals(completionCallbacks[i], value)) continue;
+                    completionCallbacks.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+
+        private List<EventCompleted> completionCallbacks;
 
         public ActiveEvent()
         {
-            sourcesArray = new EventSource[MaxSourcesPerEvent];
+            // Fixed scratch buffers are initialized by their field initializers; parameter slots are
+            // created on first use.
             activeParameters = new ActiveParameter[MaxParametersPerEvent];
-            for (int i = 0; i < MaxParametersPerEvent; i++)
-                activeParameters[i] = new ActiveParameter();
         }
 
         public void Initialize(AudioEvent eventToPlay, Transform emitter)
@@ -532,8 +588,13 @@ namespace CycloneGames.Audio.Runtime
 
             if (playbackClockStarted && sourceCount > 0 && !rootEvent.Output.loop)
             {
-                UpdateRemainingTime();
-                if (status == EventStatus.Stopped) return;
+                // Fading events poll remaining time; other events defer it to the property getter.
+                if (rootEvent.FadeOut > 0f)
+                {
+                    UpdateRemainingTime();
+                    if (status == EventStatus.Stopped) return;
+                }
+
                 bool pastGracePeriod = scheduledDspTime > 0
                     ? AudioSettings.dspTime >= scheduledDspTime + MinPlayGracePeriod
                     : (Time.realtimeSinceStartup - playStartRealtime) >= MinPlayGracePeriod;
@@ -670,16 +731,18 @@ namespace CycloneGames.Audio.Runtime
 
             CancelAndReleaseCancellationContext();
 
-            EventCompleted callbacks = CompletionCallback;
-            if (callbacks != null && !callbackActivated)
+            List<EventCompleted> callbacks = completionCallbacks;
+            if (callbacks != null && callbacks.Count > 0 && !callbackActivated)
             {
                 callbackActivated = true;
-                Delegate[] invocationList = callbacks.GetInvocationList();
-                for (int i = 0; i < invocationList.Length; i++)
+
+                // Snapshot: handlers added during dispatch run on the next terminal transition.
+                int callbackCount = callbacks.Count;
+                for (int i = 0; i < callbackCount; i++)
                 {
                     try
                     {
-                        ((EventCompleted)invocationList[i])();
+                        callbacks[i]();
                     }
                     catch (Exception exception)
                     {
@@ -1241,8 +1304,8 @@ namespace CycloneGames.Audio.Runtime
             var occlSettings = AudioManager.ActiveOcclusionSettings;
             if (occlSettings.enabled && sqrDist <= occlSettings.maxOcclusionDistance * occlSettings.maxOcclusionDistance)
             {
-                bool isOccluded = Physics.Linecast(emitterPos, listenerPos, occlSettings.occlusionLayers);
-                float targetFactor = isOccluded ? 1f : 0f;
+                float occlusionAmount = EvaluateOcclusion(emitterPos, listenerPos, occlSettings.occlusionLayers, occlSettings.rayCount);
+                float targetFactor = occlusionAmount;
                 // Scale lerp speed by LOD interval so it doesn't animate slower at higher LOD
                 occlusionFactor = Mathf.MoveTowards(occlusionFactor, targetFactor,
                     dt * updateInterval * occlSettings.interpolationSpeed);
@@ -1284,7 +1347,7 @@ namespace CycloneGames.Audio.Runtime
                 if (lpFiltersCached)
                 {
                     AudioLowPassFilter lpf = cachedLPFilters[i];
-                    if (lpf != null)
+                    if (lpf != null && (appliedLPFEnabled != needsLPF || !Mathf.Approximately(appliedLPCutoff, finalLPCutoff)))
                     {
                         lpf.enabled = needsLPF;
                         lpf.cutoffFrequency = needsLPF ? finalLPCutoff : 22000f;
@@ -1293,7 +1356,43 @@ namespace CycloneGames.Audio.Runtime
 
             }
 
-            ApplyParameters();
+            if (lpFiltersCached)
+            {
+                appliedLPFEnabled = needsLPF;
+                appliedLPCutoff = finalLPCutoff;
+            }
+
+            // Animated parameters and changed attenuation are the only inputs that rewrite sources.
+            if (hasActiveParameters ||
+                Mathf.Abs(spatialVolumeScale - lastAppliedSpatialVolumeScale) > 0.0005f)
+            {
+                lastAppliedSpatialVolumeScale = spatialVolumeScale;
+                ApplyParameters();
+            }
+        }
+
+        /// <summary>
+        /// Returns the cached blocked fraction until an endpoint moves past the threshold or the
+        /// refresh interval elapses.
+        /// </summary>
+        private float EvaluateOcclusion(Vector3 emitterPos, Vector3 listenerPos, LayerMask occlusionLayers, int rayCount)
+        {
+            float now = Time.unscaledTime;
+            bool requiresProbe = !occlusionResultValid ||
+                                 now >= nextOcclusionRefreshTime ||
+                                 (emitterPos - lastOcclusionEmitterPos).sqrMagnitude > OcclusionMovementSqrThreshold ||
+                                 (listenerPos - lastOcclusionListenerPos).sqrMagnitude > OcclusionMovementSqrThreshold;
+            if (!requiresProbe)
+            {
+                return lastOcclusionAmount;
+            }
+
+            lastOcclusionAmount = AudioOcclusionProbe.Sample(emitterPos, listenerPos, occlusionLayers, rayCount);
+            lastOcclusionEmitterPos = emitterPos;
+            lastOcclusionListenerPos = listenerPos;
+            nextOcclusionRefreshTime = now + OcclusionRefreshIntervalSeconds;
+            occlusionResultValid = true;
+            return lastOcclusionAmount;
         }
 
         private void InitializeParameters()
@@ -1304,13 +1403,21 @@ namespace CycloneGames.Audio.Runtime
 
             if (count == 0) return;
 
-            int parameterScopeId = emitterTransform != null ? emitterTransform.gameObject.GetInstanceID() : 0;
+            int parameterScopeId = emitterTransform != null ? AudioObjectId.Of(emitterTransform.gameObject) : 0;
             for (int i = 0; i < count && i < MaxParametersPerEvent; i++)
             {
                 var p = eventParams[i];
                 if (p != null)
                 {
-                    activeParameters[activeParameterCount].ReInitialize(p, parameterScopeId);
+                    int slot = activeParameterCount;
+                    ActiveParameter activeParameter = activeParameters[slot];
+                    if (activeParameter == null)
+                    {
+                        activeParameter = new ActiveParameter();
+                        activeParameters[slot] = activeParameter;
+                    }
+
+                    activeParameter.ReInitialize(p, parameterScopeId);
                     activeParameterCount++;
                 }
             }
@@ -1463,6 +1570,14 @@ namespace CycloneGames.Audio.Runtime
             currentSpread = 0f;
             cachedSqrDistance = 0f;
             lpFiltersCached = false;
+            appliedLPCutoff = float.NaN;
+            appliedLPFEnabled = false;
+            lastAppliedSpatialVolumeScale = 1f;
+            occlusionResultValid = false;
+            lastOcclusionAmount = 0f;
+            lastOcclusionEmitterPos = Vector3.zero;
+            lastOcclusionListenerPos = Vector3.zero;
+            nextOcclusionRefreshTime = 0f;
             System.Array.Clear(cachedLPFilters, 0, MaxSourcesPerEvent);
             useGaze = false;
             callbackActivated = false;
@@ -1491,10 +1606,11 @@ namespace CycloneGames.Audio.Runtime
 
             CancelAndReleaseCancellationContext();
 
-            EstimatedRemainingTime = 0;
+            estimatedRemainingTime = 0;
+            estimatedRemainingTimeFrame = -1;
             Muted = false;
             Soloed = false;
-            CompletionCallback = null;
+            completionCallbacks?.Clear();
         }
 
         private void CancelAndReleaseCancellationContext()
@@ -1516,20 +1632,47 @@ namespace CycloneGames.Audio.Runtime
 
         private void UpdateRemainingTime()
         {
-            if (rootEvent == null)
+            float remainingTime = ComputeRemainingTime(out bool hasValidSource);
+            estimatedRemainingTime = remainingTime;
+            estimatedRemainingTimeFrame = Time.frameCount;
+
+            if (!hasValidSource)
             {
                 StopImmediate();
                 return;
             }
 
-            if (rootEvent.Output.loop)
+            if (IsScheduledPlaybackPending)
             {
-                EstimatedRemainingTime = 500;
                 return;
             }
 
+            if (!fadeStopQueued && remainingTime <= rootEvent.FadeOut)
+            {
+                Stop();
+            }
+        }
+
+        /// <summary>
+        /// Computes the remaining playback time without touching event state.
+        /// </summary>
+        private float ComputeRemainingTime(out bool hasValidSource)
+        {
+            hasValidSource = false;
+            if (rootEvent == null)
+            {
+                return 0f;
+            }
+
+            AudioOutput output = rootEvent.Output;
+            if (output != null && output.loop)
+            {
+                // Looping playback has no natural end; callers use Stop/StopImmediate instead.
+                hasValidSource = true;
+                return 0f;
+            }
+
             float maxRemainingTime = 0f;
-            bool hasValidSource = false;
             for (int i = 0; i < sourceCount; i++)
             {
                 ref var eventSource = ref sourcesArray[i];
@@ -1548,24 +1691,13 @@ namespace CycloneGames.Audio.Runtime
 
             if (!hasValidSource)
             {
-                StopImmediate();
-                return;
+                return 0f;
             }
 
             bool scheduledStartPending = IsScheduledPlaybackPending;
-            float scheduledDelay = scheduledStartPending
-                ? (float)(scheduledDspTime - AudioSettings.dspTime)
-                : 0f;
-            EstimatedRemainingTime = maxRemainingTime + scheduledDelay;
-            if (scheduledStartPending)
-            {
-                return;
-            }
-
-            if (!fadeStopQueued && EstimatedRemainingTime <= rootEvent.FadeOut)
-            {
-                Stop();
-            }
+            return scheduledStartPending
+                ? maxRemainingTime + (float)(scheduledDspTime - AudioSettings.dspTime)
+                : maxRemainingTime;
         }
 
         private bool HasGazeProperty()

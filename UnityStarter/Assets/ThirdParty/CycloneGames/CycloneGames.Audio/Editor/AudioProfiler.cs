@@ -79,6 +79,7 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private const int MaxFrames = 300;
         private const int MaxEventsPerFrame = 2048;
+        private const int MaxRenderedEventWindows = 96;
         private const double SampleInterval = 0.05d;
         private const double RepaintInterval = 0.1d;
 
@@ -207,14 +208,14 @@ namespace CycloneGames.Audio.Editor
             if (emitterObject != null)
             {
                 emitterName = emitterObject.name;
-                emitterInstanceId = emitterObject.GetInstanceID();
+                emitterInstanceId = AudioObjectId.Of(emitterObject);
             }
 
             AudioMixerGroup bus = activeEvent.rootEvent != null && activeEvent.rootEvent.Output != null
                 ? activeEvent.rootEvent.Output.mixerGroup
                 : null;
             string busName = bus != null ? bus.name : string.Empty;
-            int busInstanceId = bus != null ? bus.GetInstanceID() : 0;
+            int busInstanceId = bus != null ? AudioObjectId.Of(bus) : 0;
 
             return new ProfilerEventSnapshot(
                 activeEvent.name,
@@ -264,8 +265,7 @@ namespace CycloneGames.Audio.Editor
 
                 for (int i = 0; i < frame.Count; i++)
                 {
-                    ProfilerEventSnapshot snapshot = frame.Events[i];
-                    GUILayout.Label($"{snapshot.TimeStarted:F3} : {snapshot.EventName} - {snapshot.Status}");
+                    GUILayout.Label(frame.Events[i].DisplayLine);
                 }
             }
 
@@ -289,7 +289,8 @@ namespace CycloneGames.Audio.Editor
             int nullBusIndex = -1;
 
             BeginWindows();
-            for (int i = 0; i < profilerFrame.Count; i++)
+            int renderedEventCount = Mathf.Min(profilerFrame.Count, MaxRenderedEventWindows);
+            for (int i = 0; i < renderedEventCount; i++)
             {
                 ProfilerEventSnapshot tempEvent = profilerFrame.Events[i];
                 this.currentProfiledEvent = tempEvent;
@@ -301,7 +302,7 @@ namespace CycloneGames.Audio.Editor
 
                 int emitterIndex;
                 bool addedEmitter = false;
-                if (tempEvent.EmitterInstanceId == 0)
+                if (tempEvent.EmitterId == 0)
                 {
                     if (nullEmitterIndex < 0)
                     {
@@ -321,10 +322,10 @@ namespace CycloneGames.Audio.Editor
                         DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, 20 + WindowYInterval * emitterIndex));
                     }
                 }
-                else if (!this.cachedEmitterIndices.TryGetValue(tempEvent.EmitterInstanceId, out emitterIndex))
+                else if (!this.cachedEmitterIndices.TryGetValue(tempEvent.EmitterId, out emitterIndex))
                 {
                     emitterIndex = this.cachedEmitterIndices.Count + (nullEmitterIndex >= 0 ? 1 : 0);
-                    this.cachedEmitterIndices.Add(tempEvent.EmitterInstanceId, emitterIndex);
+                    this.cachedEmitterIndices.Add(tempEvent.EmitterId, emitterIndex);
                     GUI.Window(
                         1 + emitterIndex * 3,
                         new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight),
@@ -340,7 +341,7 @@ namespace CycloneGames.Audio.Editor
 
                 float emitterLineY = 20 + WindowYInterval * emitterIndex;
                 int busIndex;
-                if (tempEvent.BusInstanceId == 0)
+                if (tempEvent.BusId == 0)
                 {
                     if (nullBusIndex < 0)
                     {
@@ -360,10 +361,10 @@ namespace CycloneGames.Audio.Editor
                         DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, 20 + WindowYInterval * busIndex));
                     }
                 }
-                else if (!this.cachedBusIndices.TryGetValue(tempEvent.BusInstanceId, out busIndex))
+                else if (!this.cachedBusIndices.TryGetValue(tempEvent.BusId, out busIndex))
                 {
                     busIndex = this.cachedBusIndices.Count + (nullBusIndex >= 0 ? 1 : 0);
-                    this.cachedBusIndices.Add(tempEvent.BusInstanceId, busIndex);
+                    this.cachedBusIndices.Add(tempEvent.BusId, busIndex);
                     GUI.Window(
                         2 + busIndex * 3,
                         new Rect(busX, this.busY, WindowWidth, WindowHeight),
@@ -384,6 +385,13 @@ namespace CycloneGames.Audio.Editor
                 }
             }
             EndWindows();
+
+            if (profilerFrame.Count > renderedEventCount)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Graph shows {renderedEventCount} of {profilerFrame.Count} events. Narrow the list to inspect the rest.",
+                    MessageType.Info);
+            }
         }
 
         /// <summary>
@@ -400,7 +408,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.LabelField("Status", currentProfiledEvent.Status.ToString());
             EditorGUILayout.LabelField(
                 "Emitter",
-                currentProfiledEvent.EmitterInstanceId != 0 ? currentProfiledEvent.EmitterName : "No emitter");
+                currentProfiledEvent.EmitterId != 0 ? currentProfiledEvent.EmitterName : "No emitter");
 
             GUI.DragWindow();
         }

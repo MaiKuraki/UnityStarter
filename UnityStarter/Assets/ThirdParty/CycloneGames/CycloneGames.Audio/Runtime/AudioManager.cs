@@ -231,7 +231,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (reference == null || string.IsNullOrWhiteSpace(reference.Location)) return false;
 
-            int id = reference.GetInstanceID();
+            int id = reference.RuntimeId;
             int bucketIndex = id & (buckets.Length - 1);
             for (int entry = buckets[bucketIndex]; entry >= 0; entry = next[entry])
             {
@@ -341,7 +341,7 @@ namespace CycloneGames.Audio.Runtime
 
         public PreparedAudioEventData(AudioEvent audioEvent, bool ready)
         {
-            EventId = audioEvent != null ? audioEvent.GetInstanceID() : 0;
+            EventId = audioEvent != null ? audioEvent.RuntimeId : 0;
             Ready = ready;
             Output = audioEvent != null ? audioEvent.Output : null;
             InstanceLimit = audioEvent != null ? audioEvent.InstanceLimit : 0;
@@ -384,7 +384,7 @@ namespace CycloneGames.Audio.Runtime
         public AudioBankRegistration(AudioBank bank, bool overwriteExisting)
         {
             Bank = bank;
-            BankId = bank.GetInstanceID();
+            BankId = bank.RuntimeId;
             OverwriteExisting = overwriteExisting;
         }
     }
@@ -426,6 +426,7 @@ namespace CycloneGames.Audio.Runtime
                 cachedMainCamera = null;
                 cachedMainCameraTransform = null;
                 cachedMainCameraFrame = -1;
+                cachedListenerPositionFrame = -1;
                 var banksToNotify = new List<AudioBank>(loadedBanks.Count);
                 foreach (var pair in loadedBanks)
                 {
@@ -466,6 +467,7 @@ namespace CycloneGames.Audio.Runtime
                 playingEventNameCounts.Clear();
                 activeEventIndices.Clear();
                 preparedAudioEvents.Clear();
+                eventsById.Clear();
                 eventNameMap.Clear();
                 parameterNameMap.Clear();
                 stateGroupNameMap.Clear();
@@ -539,6 +541,7 @@ namespace CycloneGames.Audio.Runtime
                 cachedPreviousEventsVersion = -1;
                 ExternalClipMemoryBudgetBytes = 0;
                 ExternalClipMaximumCacheEntryCount = DefaultExternalClipMaximumCacheEntryCount;
+                ExternalClipMaximumConcurrentLoads = DefaultExternalClipMaximumConcurrentLoads;
                 ExternalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
                 ExternalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
                 ExternalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
@@ -589,11 +592,14 @@ namespace CycloneGames.Audio.Runtime
         private static int nextActiveEventHandleGeneration;
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
 
-        // O(1) instance counting: keyed by AudioEvent.GetInstanceID()
+        // O(1) instance counting: keyed by AudioEvent.RuntimeId
         private static readonly Dictionary<int, int> activeInstanceCounts = new Dictionary<int, int>(128);
 
         // O(1) event-name playing check
         private static readonly Dictionary<string, int> playingEventNameCounts = new Dictionary<string, int>(128);
+
+        // O(1) AudioEventId -> AudioEvent resolution for id-based playback
+        private static readonly Dictionary<int, AudioEvent> eventsById = new Dictionary<int, AudioEvent>(128);
 
         // O(1) ActiveEvent -> index mapping for swap-remove
         private static readonly Dictionary<ActiveEvent, int> activeEventIndices = new Dictionary<ActiveEvent, int>(128);
@@ -1120,8 +1126,8 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            int parameterId = parameter.GetInstanceID();
-            int scopeId = emitterObject.GetInstanceID();
+            int parameterId = parameter.RuntimeId;
+            int scopeId = AudioObjectId.Of(emitterObject);
             if (!scopedParameterOwners.TryGetValue(scopeId, out WeakReference<GameObject> ownerReference)
                 || !ownerReference.TryGetTarget(out GameObject currentOwner)
                 || currentOwner != emitterObject)
@@ -1180,7 +1186,7 @@ namespace CycloneGames.Audio.Runtime
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
 
             return emitterObject != null
-                ? GetParameterValue(parameter, emitterObject.GetInstanceID())
+                ? GetParameterValue(parameter, AudioObjectId.Of(emitterObject))
                 : parameter.EvaluateCurrentValue();
         }
 
@@ -1189,7 +1195,7 @@ namespace CycloneGames.Audio.Runtime
             if (parameter == null) return 0f;
             if (scopeId != 0)
             {
-                var key = new AudioParameterScopeKey(parameter.GetInstanceID(), scopeId);
+                var key = new AudioParameterScopeKey(parameter.RuntimeId, scopeId);
                 if (scopedParameterOverrides.TryGetValue(key, out AudioScopedParameterValue scopedValue))
                     return scopedValue.CurrentValue;
             }
@@ -1203,8 +1209,8 @@ namespace CycloneGames.Audio.Runtime
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
             if (emitterObject == null) return false;
 
-            int scopeId = emitterObject.GetInstanceID();
-            bool removed = scopedParameterOverrides.Remove(new AudioParameterScopeKey(parameter.GetInstanceID(), scopeId));
+            int scopeId = AudioObjectId.Of(emitterObject);
+            bool removed = scopedParameterOverrides.Remove(new AudioParameterScopeKey(parameter.RuntimeId, scopeId));
             if (removed)
             {
                 RemoveScopedParameterOwnerIfUnused(scopeId);
@@ -1230,7 +1236,7 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearScopedParameterValues));
             if (emitterObject == null) return 0;
 
-            int scopeId = emitterObject.GetInstanceID();
+            int scopeId = AudioObjectId.Of(emitterObject);
             int removedCount = RemoveScopedParameterOverridesForScope(scopeId);
             scopedParameterOwners.Remove(scopeId);
             return removedCount;
@@ -1247,7 +1253,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (emitterObject == null) return;
 
-            int scopeId = emitterObject.GetInstanceID();
+            int scopeId = AudioObjectId.Of(emitterObject);
             if (!scopedParameterOwners.TryGetValue(scopeId, out WeakReference<GameObject> ownerReference))
                 return;
             if (ownerReference.TryGetTarget(out GameObject currentOwner) && currentOwner == emitterObject)
@@ -1433,6 +1439,17 @@ namespace CycloneGames.Audio.Runtime
         }
 
         /// <summary>
+        /// Whether at least one instance of a resolved event handle is active. O(1) in the number of
+        /// active events, unlike the name-based overload.
+        /// </summary>
+        public static bool IsEventPlaying(AudioEventId eventId)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(IsEventPlaying));
+            if (!eventId.IsValid) return false;
+            return activeInstanceCounts.TryGetValue(eventId.Value, out int count) && count > 0;
+        }
+
+        /// <summary>
         /// DI-friendly: register an externally-created AudioManager as the singleton.
         /// Call before any PlayEvent if using dependency injection.
         /// </summary>
@@ -1549,6 +1566,48 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Play audio at precise DSP time for rhythm games
         /// </summary>
+        /// <summary>
+        /// Resolves the session handle for a registered event name. Cache the result instead of
+        /// looking the name up on every playback call.
+        /// </summary>
+        public static bool TryGetEventId(string eventName, out AudioEventId eventId)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(TryGetEventId));
+            eventId = AudioEventId.None;
+            if (string.IsNullOrEmpty(eventName)) return false;
+            if (!eventNameMap.TryGetValue(eventName, out AudioEvent audioEvent) || audioEvent == null) return false;
+
+            eventId = audioEvent.Id;
+            return eventId.IsValid;
+        }
+
+        /// <summary>
+        /// Plays a previously resolved event handle. Returns null when the owning bank is unloaded or
+        /// the event fails validation.
+        /// </summary>
+        public static ActiveEvent PlayEvent(AudioEventId eventId, GameObject emitterObject)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
+            AudioEvent eventToPlay = GetRegisteredEvent(eventId);
+            return eventToPlay != null ? PlayEvent(eventToPlay, emitterObject) : null;
+        }
+
+        /// <summary>
+        /// Plays a previously resolved event handle at a world position.
+        /// </summary>
+        public static ActiveEvent PlayEvent(AudioEventId eventId, Vector3 position)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
+            AudioEvent eventToPlay = GetRegisteredEvent(eventId);
+            return eventToPlay != null ? PlayEvent(eventToPlay, position) : null;
+        }
+
+        private static AudioEvent GetRegisteredEvent(AudioEventId eventId)
+        {
+            if (!eventId.IsValid) return null;
+            return eventsById.TryGetValue(eventId.Value, out AudioEvent audioEvent) ? audioEvent : null;
+        }
+
         public static ActiveEvent PlayEventScheduled(string eventName, GameObject emitterObject, double dspTime)
         {
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEventScheduled));
@@ -1640,6 +1699,22 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        /// <summary>Stops every active instance of a resolved event handle.</summary>
+        public static void StopAll(AudioEventId eventId)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(StopAll));
+
+            if (!eventId.IsValid || !ValidateManager()) return;
+
+            int id = eventId.Value;
+            for (int i = ActiveEvents.Count - 1; i >= 0; i--)
+            {
+                var tempEvent = ActiveEvents[i];
+                if (tempEvent?.rootEvent != null && tempEvent.rootEvent.RuntimeId == id)
+                    tempEvent.Stop();
+            }
+        }
+
         public static void StopAll(string eventName)
         {
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(StopAll));
@@ -1720,7 +1795,7 @@ namespace CycloneGames.Audio.Runtime
             // Decrement O(1) tracking counters
             if (stoppedEvent.rootEvent != null)
             {
-                int eventId = stoppedEvent.rootEvent.GetInstanceID();
+                int eventId = stoppedEvent.rootEvent.RuntimeId;
                 if (activeInstanceCounts.TryGetValue(eventId, out int cnt))
                 {
                     if (cnt <= 1) activeInstanceCounts.Remove(eventId);
@@ -1819,7 +1894,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (activeEvent.rootEvent != null)
             {
-                int eventId = activeEvent.rootEvent.GetInstanceID();
+                int eventId = activeEvent.rootEvent.RuntimeId;
                 activeInstanceCounts.TryGetValue(eventId, out int cnt);
                 activeInstanceCounts[eventId] = cnt + 1;
                 IncrementActiveEventCategory(activeEvent.rootEvent.Category);
@@ -2205,6 +2280,7 @@ namespace CycloneGames.Audio.Runtime
                 parameterNameMap.Clear();
                 stateGroupNameMap.Clear();
                 preparedAudioEvents.Clear();
+                eventsById.Clear();
                 bankRegistrations.Clear();
                 eventBindings.Clear();
                 parameterBindings.Clear();
@@ -2612,6 +2688,7 @@ namespace CycloneGames.Audio.Runtime
         {
             cachedAudioListener = listener;
             cachedAudioListenerTransform = listener != null ? listener.transform : null;
+            cachedListenerPositionFrame = -1;
         }
 
         private static Camera GetMainCamera()
@@ -2823,7 +2900,29 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        private static int cachedListenerPositionFrame = -1;
+        private static Vector3 cachedListenerPosition;
+
+        /// <summary>
+        /// Listener position for the current frame, resolved once per frame.
+        /// </summary>
         internal static Vector3 GetReferenceListenerPosition()
+        {
+            int frame = Time.frameCount;
+            if (frame != cachedListenerPositionFrame)
+            {
+                cachedListenerPositionFrame = frame;
+                cachedListenerPosition = ResolveReferenceListenerPosition();
+            }
+
+            return cachedListenerPosition;
+        }
+
+        /// <summary>
+        /// Resolves the live listener position. Per-frame callers should use
+        /// <see cref="GetReferenceListenerPosition"/>.
+        /// </summary>
+        internal static Vector3 ResolveReferenceListenerPosition()
         {
             if (cachedAudioListenerTransform != null)
                 return cachedAudioListenerTransform.position;
@@ -3082,7 +3181,7 @@ namespace CycloneGames.Audio.Runtime
         private static int CountActiveInstances(AudioEvent audioEvent)
         {
             if (audioEvent == null) return 0;
-            activeInstanceCounts.TryGetValue(audioEvent.GetInstanceID(), out int count);
+            activeInstanceCounts.TryGetValue(audioEvent.RuntimeId, out int count);
             return count;
         }
 
@@ -3272,7 +3371,7 @@ namespace CycloneGames.Audio.Runtime
         {
             triggerKey = default;
             if (eventToPlay == null) return false;
-            int eventId = eventToPlay.GetInstanceID();
+            int eventId = eventToPlay.RuntimeId;
             if (eventsBeingUnloaded.Contains(eventId)) return false;
             if (!TryGetPreparedAudioEventData(eventToPlay, out PreparedAudioEventData preparedData) || !preparedData.Ready) return false;
             if (preparedData.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= preparedData.InstanceLimit) return false;
@@ -3317,7 +3416,7 @@ namespace CycloneGames.Audio.Runtime
             preparedData = default;
             if (eventToPlay == null) return false;
 
-            int eventId = eventToPlay.GetInstanceID();
+            int eventId = eventToPlay.RuntimeId;
             if (preparedAudioEvents.TryGetValue(eventId, out preparedData))
                 return true;
 
@@ -3346,7 +3445,7 @@ namespace CycloneGames.Audio.Runtime
             if (isScheduledPlayback && !activePlatformSettings.throttleScheduledPlayback) return true;
 
             int scopeId = ResolveTriggerScopeId(emitterTransform, explicitPosition);
-            triggerKey = new RepeatTriggerKey(eventToPlay.GetInstanceID(), scopeId);
+            triggerKey = new RepeatTriggerKey(eventToPlay.RuntimeId, scopeId);
 
             float currentTime = Time.unscaledTime;
             if (recentTriggerTimes.TryGetValue(triggerKey, out float lastTime) &&
@@ -3371,7 +3470,7 @@ namespace CycloneGames.Audio.Runtime
                 return 0;
 
             if (emitterTransform != null)
-                return emitterTransform.GetInstanceID();
+                return AudioObjectId.Of(emitterTransform);
 
             if (explicitPosition.HasValue)
                 return QuantizePositionHash(explicitPosition.Value);
@@ -3528,7 +3627,7 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            int bankId = bank.GetInstanceID();
+            int bankId = bank.RuntimeId;
             if (bankOperationsInProgress.Contains(bankId))
             {
                 Log.Warning($"AudioManager: Bank '{bank.name}' is already being modified.");
@@ -3577,6 +3676,11 @@ namespace CycloneGames.Audio.Runtime
 #endif
         }
 
+        private static string DescribeBank(AudioBank bank)
+        {
+            return bank != null ? bank.name : "<destroyed>";
+        }
+
         private static bool IsFinite(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
@@ -3622,13 +3726,15 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static void UnloadBank(AudioBank bank)
         {
-            if (bank == null) return;
+            // A destroyed bank still owns its registration. Rejecting it here would leak every
+            // entry keyed by that bank, because no later call could ever reference it again.
+            if (ReferenceEquals(bank, null)) return;
 
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(UnloadBank));
 
             if (isTearingDown || !ValidateManager()) return;
 
-            int bankId = bank.GetInstanceID();
+            int bankId = bank.RuntimeId;
             ReleasePreloadedBankClipLease(bankId);
             if (!bankRegistrations.TryGetValue(bankId, out AudioBankRegistration registration))
                 return;
@@ -3649,7 +3755,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < orphanedEvents.Count; i++)
                 {
                     AudioEvent orphanedEvent = orphanedEvents[i];
-                    if (orphanedEvent != null) eventsBeingUnloaded.Add(orphanedEvent.GetInstanceID());
+                    if (orphanedEvent != null) eventsBeingUnloaded.Add(orphanedEvent.RuntimeId);
                 }
 
                 if (orphanedEvents.Count > 0 && ActiveEvents != null && ActiveEvents.Count > 0)
@@ -3670,7 +3776,7 @@ namespace CycloneGames.Audio.Runtime
                 ApplyAllStateMixProfiles();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Log.Info($"AudioManager: Unloaded bank '{bank.name}'.");
+                Log.Info($"AudioManager: Unloaded bank '{DescribeBank(bank)}'.");
 #endif
 
                 NotifyBankUnloaded(registration.Bank);
@@ -3680,7 +3786,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < orphanedEvents.Count; i++)
                 {
                     AudioEvent orphanedEvent = orphanedEvents[i];
-                    if (orphanedEvent != null) eventsBeingUnloaded.Remove(orphanedEvent.GetInstanceID());
+                    if (orphanedEvent != null) eventsBeingUnloaded.Remove(orphanedEvent.RuntimeId);
                 }
                 bankOperationsInProgress.Remove(bankId);
             }
@@ -3777,7 +3883,7 @@ namespace CycloneGames.Audio.Runtime
         private static void AddUniqueObject<T>(List<T> destination, HashSet<int> uniqueIds, T value)
             where T : UnityEngine.Object
         {
-            if (value != null && uniqueIds.Add(value.GetInstanceID()))
+            if (value != null && uniqueIds.Add(AudioObjectId.Of(value)))
                 destination.Add(value);
         }
 
@@ -3786,35 +3892,38 @@ namespace CycloneGames.Audio.Runtime
             for (int i = 0; i < registration.OwnedEvents.Count; i++)
             {
                 AudioEvent audioEvent = registration.OwnedEvents[i];
-                if (IncrementOwnerCount(eventOwnerCounts, audioEvent.GetInstanceID()))
-                    preparedAudioEvents[audioEvent.GetInstanceID()] = PrepareAudioEventData(audioEvent);
+                if (IncrementOwnerCount(eventOwnerCounts, audioEvent.RuntimeId))
+                {
+                    preparedAudioEvents[audioEvent.RuntimeId] = PrepareAudioEventData(audioEvent);
+                    eventsById[audioEvent.RuntimeId] = audioEvent;
+                }
             }
 
             for (int i = 0; i < registration.OwnedParameters.Count; i++)
             {
                 AudioParameter parameter = registration.OwnedParameters[i];
-                if (IncrementOwnerCount(parameterOwnerCounts, parameter.GetInstanceID()))
+                if (IncrementOwnerCount(parameterOwnerCounts, parameter.RuntimeId))
                     parameter.ResetParameter();
             }
 
             for (int i = 0; i < registration.OwnedSwitches.Count; i++)
             {
                 AudioSwitch audioSwitch = registration.OwnedSwitches[i];
-                if (IncrementOwnerCount(switchOwnerCounts, audioSwitch.GetInstanceID()))
+                if (IncrementOwnerCount(switchOwnerCounts, audioSwitch.RuntimeId))
                     audioSwitch.ResetSwitch();
             }
 
             for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
             {
                 AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
-                if (IncrementOwnerCount(stateGroupOwnerCounts, stateGroup.GetInstanceID()))
+                if (IncrementOwnerCount(stateGroupOwnerCounts, stateGroup.RuntimeId))
                     stateGroup.ResetStateGroup();
             }
 
             for (int i = 0; i < registration.OwnedProfiles.Count; i++)
             {
                 AudioStateMixProfile profile = registration.OwnedProfiles[i];
-                if (IncrementOwnerCount(profileOwnerCounts, profile.GetInstanceID()))
+                if (IncrementOwnerCount(profileOwnerCounts, profile.RuntimeId))
                     registeredStateMixProfiles.Add(profile);
             }
         }
@@ -3826,37 +3935,38 @@ namespace CycloneGames.Audio.Runtime
             for (int i = 0; i < registration.OwnedEvents.Count; i++)
             {
                 AudioEvent audioEvent = registration.OwnedEvents[i];
-                if (!DecrementOwnerCount(eventOwnerCounts, audioEvent.GetInstanceID())) continue;
-                preparedAudioEvents.Remove(audioEvent.GetInstanceID());
+                if (!DecrementOwnerCount(eventOwnerCounts, audioEvent.RuntimeId)) continue;
+                preparedAudioEvents.Remove(audioEvent.RuntimeId);
+                eventsById.Remove(audioEvent.RuntimeId);
                 orphanedEvents.Add(audioEvent);
             }
 
             for (int i = 0; i < registration.OwnedParameters.Count; i++)
             {
                 AudioParameter parameter = registration.OwnedParameters[i];
-                if (!DecrementOwnerCount(parameterOwnerCounts, parameter.GetInstanceID())) continue;
-                RemoveScopedParameterOverrides(parameter.GetInstanceID());
+                if (!DecrementOwnerCount(parameterOwnerCounts, parameter.RuntimeId)) continue;
+                RemoveScopedParameterOverrides(parameter.RuntimeId);
                 parameter.ResetParameter();
             }
 
             for (int i = 0; i < registration.OwnedSwitches.Count; i++)
             {
                 AudioSwitch audioSwitch = registration.OwnedSwitches[i];
-                if (DecrementOwnerCount(switchOwnerCounts, audioSwitch.GetInstanceID()))
+                if (DecrementOwnerCount(switchOwnerCounts, audioSwitch.RuntimeId))
                     audioSwitch.ResetSwitch();
             }
 
             for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
             {
                 AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
-                if (DecrementOwnerCount(stateGroupOwnerCounts, stateGroup.GetInstanceID()))
+                if (DecrementOwnerCount(stateGroupOwnerCounts, stateGroup.RuntimeId))
                     stateGroup.ResetStateGroup();
             }
 
             for (int i = 0; i < registration.OwnedProfiles.Count; i++)
             {
                 AudioStateMixProfile profile = registration.OwnedProfiles[i];
-                if (DecrementOwnerCount(profileOwnerCounts, profile.GetInstanceID()))
+                if (DecrementOwnerCount(profileOwnerCounts, profile.RuntimeId))
                     registeredStateMixProfiles.Remove(profile);
             }
         }
@@ -3970,6 +4080,7 @@ namespace CycloneGames.Audio.Runtime
 
         private static void NotifyBankUnloaded(AudioBank bank)
         {
+            // Destroyed assets are not handed to listeners: touching their members throws.
             if (bank == null) return;
 
             Action<AudioBank> callbacks = OnBankUnloaded;
@@ -4205,7 +4316,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < registration.OwnedParameters.Count; i++)
                 {
                     AudioParameter parameter = registration.OwnedParameters[i];
-                    if (parameter != null && visitedIds.Add(parameter.GetInstanceID()))
+                    if (parameter != null && visitedIds.Add(parameter.RuntimeId))
                         parameter.ResetParameter();
                 }
             }
@@ -4217,7 +4328,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < registration.OwnedSwitches.Count; i++)
                 {
                     AudioSwitch audioSwitch = registration.OwnedSwitches[i];
-                    if (audioSwitch != null && visitedIds.Add(audioSwitch.GetInstanceID()))
+                    if (audioSwitch != null && visitedIds.Add(audioSwitch.RuntimeId))
                         audioSwitch.ResetSwitch();
                 }
             }
@@ -4229,7 +4340,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
                 {
                     AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
-                    if (stateGroup != null && visitedIds.Add(stateGroup.GetInstanceID()))
+                    if (stateGroup != null && visitedIds.Add(stateGroup.RuntimeId))
                         stateGroup.ResetStateGroup();
                 }
             }
@@ -4407,7 +4518,7 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < parameters.Count; i++)
                 {
                     AudioParameter parameter = parameters[i];
-                    if (parameter != null && visitedIds.Add(parameter.GetInstanceID()))
+                    if (parameter != null && visitedIds.Add(parameter.RuntimeId))
                     {
                         reusableGlobalParameters.Add(parameter);
                     }
@@ -4462,6 +4573,8 @@ namespace CycloneGames.Audio.Runtime
         private const int MaxExternalClipReferencesPerBank = 1024;
         private const int DefaultExternalClipMaximumCacheEntryCount = 1024;
         private const int HardMaximumExternalClipCacheEntryCount = 16384;
+        private const int DefaultExternalClipMaximumConcurrentLoads = 4;
+        private const int HardMaximumExternalClipConcurrentLoads = 64;
         private const ulong DefaultExternalClipMaxDownloadBytes = 64UL * 1024UL * 1024UL;
         private const long DefaultExternalClipMaxDecodedBytes = 256L * 1024L * 1024L;
         private const long DefaultBankClipLeaseMaxDecodedBytes = 512L * 1024L * 1024L;
@@ -4470,6 +4583,7 @@ namespace CycloneGames.Audio.Runtime
         private const float DefaultExternalClipIdleTtlSeconds = 30f;
         private static long externalClipMemoryBudgetBytes;
         private static int externalClipMaximumCacheEntryCount = DefaultExternalClipMaximumCacheEntryCount;
+        private static int externalClipMaximumConcurrentLoads = DefaultExternalClipMaximumConcurrentLoads;
         private static ulong externalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
         private static long externalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
         private static int externalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
@@ -4514,6 +4628,24 @@ namespace CycloneGames.Audio.Runtime
                     value,
                     1,
                     HardMaximumExternalClipCacheEntryCount);
+            }
+        }
+
+        /// <summary>
+        /// Maximum number of external clip loads that may run at the same time. Requests beyond the
+        /// limit wait in arrival order; a capacity change takes effect once no load is in flight.
+        /// </summary>
+        public static int ExternalClipMaximumConcurrentLoads
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaximumConcurrentLoads));
+                return externalClipMaximumConcurrentLoads;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaximumConcurrentLoads));
+                externalClipMaximumConcurrentLoads = Mathf.Clamp(value, 1, HardMaximumExternalClipConcurrentLoads);
             }
         }
 
@@ -4633,7 +4765,7 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(PreloadBankClipsAsync));
             if (bank == null || isTearingDown) return 0;
 
-            int bankId = bank.GetInstanceID();
+            int bankId = bank.RuntimeId;
             CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             CancellationToken linkedToken = linkedCancellation.Token;
             var request = new PreloadBankRequest(
@@ -4704,7 +4836,7 @@ namespace CycloneGames.Audio.Runtime
         public static bool ReleasePreloadedBankClips(AudioBank bank)
         {
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReleasePreloadedBankClips));
-            return bank != null && ReleasePreloadedBankClipLease(bank.GetInstanceID());
+            return bank != null && ReleasePreloadedBankClipLease(bank.RuntimeId);
         }
 
         /// <summary>

@@ -271,6 +271,8 @@ namespace CycloneGames.Audio.Editor
             {
                 EditorGUILayout.PropertyField(occ.FindPropertyRelative("occlusionLayers"),
                     new GUIContent("Occlusion Layers", "Physics layers that block sound. Walls, terrain, etc."));
+                EditorGUILayout.PropertyField(occ.FindPropertyRelative("rayCount"),
+                    new GUIContent("Ray Count", "1 = binary occlusion (legacy). 2-5 samples partial cover between the centre and the sides."));
                 EditorGUILayout.PropertyField(occ.FindPropertyRelative("maxOcclusionDistance"),
                     new GUIContent("Max Distance (m)", "Events beyond this distance skip occlusion raycasts."));
                 EditorGUILayout.PropertyField(occ.FindPropertyRelative("occludedCutoffHz"),

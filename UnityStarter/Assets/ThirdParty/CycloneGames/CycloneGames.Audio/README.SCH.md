@@ -209,6 +209,26 @@ int removed = AudioManager.ClearScopedParameterValues(vehicle);
 
 安全关闭顺序：`UnloadBank` → 释放 Clip Lease → 释放 Bank 资产 Handle。`OnBankUnloaded` 在注册表过渡后触发。
 
+### 对象身份
+
+注册表键——活动实例计数、已准备的 Event 数据、Bank 所有权、发射器范围参数覆盖、Resolver Lease
+——统一使用 `RuntimeId`，不使用 Unity 的 Instance ID。
+
+| 对象类型 | 解析方式 | 开销 |
+| --- | --- | --- |
+| 音频资产（`AudioEvent`、`AudioBank`、`AudioParameter`、`AudioSwitch`、`AudioStateGroup`、`AudioStateMixProfile`、`AudioClipReference`） | 首次访问时写入非序列化字段 | 一次字段读取 |
+| 其他对象（`GameObject`、`Transform`、`AudioMixerGroup` 等） | 以引用为键的弱表 | 一次表查找 |
+
+`RuntimeId` 非零、进程内唯一且永不重复，因此已销毁对象遗留的注册表项不会被新建对象认领。该值
+在运行期分配，不参与序列化，也不跨域重载保留。
+
+`RuntimeId` 只用于运行期记账。存档、远端配置、分析上报等跨会话键必须使用资产 GUID；
+`AudioClipReference.GUID` 提供了该值。
+
+模块不调用 `Object.GetInstanceID`，因此把该 API 换成 `Object.GetEntityId` 的编辑器版本可以编译
+同一份源码。
+
+
 ## 使用指南
 
 ### AudioClipReference 位置
@@ -297,6 +317,23 @@ public sealed class AudioClipAssetBridge : IDisposable
 ```
 
 相同的所有权模式适用于 Addressables、YooAsset 或任何 Provider。
+
+### Event 句柄
+
+`AudioManager.TryGetEventId` 只解析一次名称；之后使用 `AudioEventId` 重载即可跳过名称查找及其
+字符串哈希。
+
+```csharp
+if (AudioManager.TryGetEventId("Player/Footstep", out AudioEventId footstep))
+{
+    AudioManager.PlayEvent(footstep, emitterObject);
+    AudioManager.IsEventPlaying(footstep);   // 相对活动事件数为 O(1)
+    AudioManager.StopAll(footstep);
+}
+```
+
+只要所属 Bank 仍处于加载状态，该 id 就保持有效，且永不改发给其他 Event。id 属于会话级数据，
+不要序列化；重新加载 Bank 后需重新解析。播放或停止 `AudioEventId.None` 是空操作。
 
 ## 语音本地化
 
@@ -466,6 +503,10 @@ IAudioBankClipLease lease = await residencyProvider
 ## 性能与内存
 
 运行时池化 `ActiveEvent` 和 `AudioSource`，使用固定每 Event Source/Parameter 数组，缓存准备的 Event 数据，限制图执行和 Bank/引用扫描。初始化、池增长、异步状态机、外部 Provider、集合扩容、Unity 对象创建和音频解码仍可能分配。在目标 Player 中 Profile 代表性图、Voice 数量和 Provider 行为后再设预算。
+
+每帧中，活动 Event 只按 Source 轮询 `AudioSource.isPlaying`，并且仅在参数动画或衰减变化时写入 Source 属性。剩余时间按需求值并当帧缓存；带淡出的 Event 仍每 tick 计算一次，以便淡出按时开始。遮挡射线每个 Event 最多每 0.25 s 一次，且只在任一端点位移超过 0.25 m 时执行。参考监听器位置每帧解析一次，由所有 Event 共享。
+
+外部 Clip 加载最多同时进行 `AudioManager.ExternalClipMaximumConcurrentLoads` 个（默认 4）。超出的请求按到达顺序等待，因此一批不同引用不会同时各起一个下载与解码。
 
 `AudioEventRouter` 对每个 trigger index 最多接纳一个活动 looping task。同一 index 且同一 trigger 对象的重复 `StartLoopingTrigger` 调用在该 loop 退出或 Router 取消 loop 前保持幂等；确实需要重叠 loop 的调用方必须使用不同 trigger index。在某个 index 替换 trigger 对象并启动时，会立即取消该槽位原有的 worker。Disable 或销毁会使完整 loop generation 失效。Trigger 数组长度改变后，下一次启动请求会使旧 generation 失效；如果没有新的启动请求，已运行的 loop 会在下一次 delay 后的 index/reference 检查中退出。迟到完成不能清除新启动的 loop。Trigger 接线通过 `AudioEventRouter.Triggers` 属性访问（序列化字段名 `triggers` 保持不变）；由于数组与序列化器共享，允许对元素进行修改。
 
