@@ -209,6 +209,27 @@ Explicit cleanup is the normal path. A periodic scan (~every 120 frames) catches
 
 Safe shutdown: `UnloadBank` → dispose clip lease → dispose bank asset handle. `OnBankUnloaded` fires after registry transition.
 
+### Object identity
+
+Registry keys — active instance counts, prepared event data, bank ownership, scoped parameter
+overrides, resolver leases — use `RuntimeId` instead of Unity instance IDs.
+
+| Object kind | Resolution | Cost |
+| --- | --- | --- |
+| Audio assets (`AudioEvent`, `AudioBank`, `AudioParameter`, `AudioSwitch`, `AudioStateGroup`, `AudioStateMixProfile`, `AudioClipReference`) | Non-serialized field assigned on first access | field read |
+| Any other object (`GameObject`, `Transform`, `AudioMixerGroup`, …) | Reference-keyed weak table | one table lookup |
+
+`RuntimeId` is non-zero, unique within the process, and never reused, so a registry entry left behind
+by a destroyed object cannot be claimed by a newly created one. The value is assigned at runtime, is
+not serialized, and does not survive a domain reload.
+
+Use `RuntimeId` for runtime bookkeeping only. Save data, remote configuration, analytics, and any
+other cross-session key must use the asset GUID; `AudioClipReference.GUID` exposes it for that case.
+
+The module never calls `Object.GetInstanceID`, so editors that replace it with `Object.GetEntityId`
+compile the same source.
+
+
 ## Usage Guide
 
 ### AudioClipReference locations
@@ -297,6 +318,24 @@ public sealed class AudioClipAssetBridge : IDisposable
 ```
 
 The same ownership pattern adapts to Addressables, YooAsset, or any provider.
+
+### Event handles
+
+`AudioManager.TryGetEventId` resolves a name once; the `AudioEventId` overloads then skip the name
+lookup and its string hash on every call.
+
+```csharp
+if (AudioManager.TryGetEventId("Player/Footstep", out AudioEventId footstep))
+{
+    AudioManager.PlayEvent(footstep, emitterObject);
+    AudioManager.IsEventPlaying(footstep);   // O(1) in active events
+    AudioManager.StopAll(footstep);
+}
+```
+
+The id stays valid while the owning bank is loaded and is never reissued to another event. It is
+session-scoped, so do not serialize it; resolve again after reloading the bank. Playing or stopping
+`AudioEventId.None` is a no-op.
 
 ## Voice Localization
 
@@ -466,6 +505,10 @@ IAudioBankClipLease lease = await residencyProvider
 ## Performance and Memory
 
 The runtime pools `ActiveEvent` and `AudioSource` objects, uses fixed per-event source/parameter arrays, caches prepared event data, and bounds graph execution and bank scans. Initialization, pool growth, async state machines, external providers, collection growth, Unity object creation, and audio decoding can still allocate. Profile representative graphs, voice counts, codecs, and asset-provider behavior in target Players before setting budgets.
+
+Each frame, an active event polls `AudioSource.isPlaying` per source and writes source properties only when animated parameters or attenuation change them. Remaining time is computed on demand and cached for the frame; events with a fade-out also compute it every tick so the fade can start on time. Occlusion raycasts run at most once per 0.25 s per event, and only when an endpoint moved more than 0.25 m. The reference listener position is resolved once per frame and shared by all events.
+
+External clip loads run at most `AudioManager.ExternalClipMaximumConcurrentLoads` at a time (default 4). Further requests wait in arrival order, so a burst of distinct references cannot start one download and decode per reference at once.
 
 `AudioEventRouter` admits at most one active looping task per trigger index. Repeated `StartLoopingTrigger` calls for the same index and trigger object are idempotent until that loop exits or the router cancels its loops; callers that intentionally need overlapping loops must use distinct trigger indices. Replacing the trigger object at an index and starting it immediately cancels that slot's prior worker. Disable or destruction invalidates the complete loop generation. When the trigger-array length changes, the next start request invalidates the old generation; without a new start request, an already running loop exits at its next post-delay index/reference check. A late completion cannot clear a newly started loop. Trigger wiring is exposed through the `AudioEventRouter.Triggers` property (serialized name `triggers`, unchanged); element mutation is allowed because the array is shared with the serializer.
 

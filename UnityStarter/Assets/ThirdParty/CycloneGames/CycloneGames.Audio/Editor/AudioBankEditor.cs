@@ -586,7 +586,7 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
-            int id = reference.GetInstanceID();
+            int id = reference.RuntimeId;
             if (!ExternalReferenceIds.Add(id)) return;
 
             ExternalReferences.Add(reference);
