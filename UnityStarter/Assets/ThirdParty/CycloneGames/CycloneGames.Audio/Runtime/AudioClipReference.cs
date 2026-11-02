@@ -18,9 +18,15 @@ namespace CycloneGames.Audio.Runtime
     }
 
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Clip Reference")]
-    public sealed class AudioClipReference : ScriptableObject
+    public sealed class AudioClipReference : ScriptableObject, IAudioIdentified
     {
         private const int MaxLocationLength = 4096;
+
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
 
         [SerializeField] private AudioLocationKind locationKind = AudioLocationKind.FilePath;
         [SerializeField, FormerlySerializedAs("location")] internal string m_Location = string.Empty;

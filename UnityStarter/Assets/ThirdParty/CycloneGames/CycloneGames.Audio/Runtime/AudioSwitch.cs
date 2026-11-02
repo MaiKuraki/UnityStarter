@@ -119,8 +119,14 @@ namespace CycloneGames.Audio.Runtime
 #endif
     }
 
-    public sealed class AudioStateMixProfile : ScriptableObject
+    public sealed class AudioStateMixProfile : ScriptableObject, IAudioIdentified
     {
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
+
         [SerializeField]
         private List<AudioStateMixRule> rules = new List<AudioStateMixRule>(4);
 
@@ -195,9 +201,15 @@ namespace CycloneGames.Audio.Runtime
 #endif
     }
 
-    public class AudioSwitch : ScriptableObject
+    public class AudioSwitch : ScriptableObject, IAudioIdentified
     {
         private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
 
         [SerializeField]
         private int defaultValue = 0;
@@ -300,8 +312,14 @@ namespace CycloneGames.Audio.Runtime
 #endif
     }
 
-    public sealed class AudioStateGroup : ScriptableObject
+    public sealed class AudioStateGroup : ScriptableObject, IAudioIdentified
     {
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
+
         [SerializeField]
         private int defaultValue = 0;
         [SerializeField]

@@ -469,7 +469,7 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
-            int bankId = this.audioBank.GetInstanceID();
+            int bankId = this.audioBank.RuntimeId;
             int eventCount = this.audioBank.EditorEvents.Count;
             if (!this.duplicateCacheDirty && this.duplicateCacheBankId == bankId && this.duplicateCacheEventCount == eventCount)
             {

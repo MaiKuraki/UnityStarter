@@ -13,8 +13,14 @@ namespace CycloneGames.Audio.Runtime
     /// A collection of AudioEvents and AudioParameters
     /// </summary>
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Bank")]
-    public class AudioBank : ScriptableObject
+    public class AudioBank : ScriptableObject, IAudioIdentified
     {
+        [System.NonSerialized] private int runtimeId;
+
+        internal int RuntimeId => AudioObjectId.Ensure(ref runtimeId);
+
+        int IAudioIdentified.RuntimeId => RuntimeId;
+
         /// <summary>
         /// The events included in the bank
         /// </summary>
