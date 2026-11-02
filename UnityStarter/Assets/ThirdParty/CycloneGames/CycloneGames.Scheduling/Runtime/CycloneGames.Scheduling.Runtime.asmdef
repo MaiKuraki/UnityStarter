@@ -2,7 +2,8 @@
     "name": "CycloneGames.Scheduling.Runtime",
     "rootNamespace": "CycloneGames.Scheduling.Runtime",
     "references": [
-        "CycloneGames.Scheduling.Core"
+        "CycloneGames.Scheduling.Core",
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

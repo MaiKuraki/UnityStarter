@@ -30,7 +30,7 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 - **`IUnityObjectSpawner` / `IUnityObjectLifetime`**：Unity 主线程创建与对称终止释放契约。
 - **`ObjectPool<TArg, TValue>`**：single-owner 托管池，含生命周期 callback、容量策略、诊断与失败隔离。
 - **`FastObjectPool<T>`**：无参 pool base，适合不需要 spawn 参数的 `Component` 类型 item。
-- **`MonoPrefabFactory<T>` / `MonoFastPool<T>`**：Unity 主线程 adapter，用于 prefab 实例化与 `Component` 池化。
+- **`MonoPrefabFactory<T>` / `MonoFastPool<T>` / `MonoObjectPool<TArg, TValue>`**：Unity 主线程 adapter，用于 prefab 实例化、带参数的 `Component` 池化，以及识别 Unity 假空的可用性判断。
 - **`NativePool<T>` / `NativeDensePool<T>` / `NativeDenseColumnPool2/3/4`**：unmanaged 密集 pool，含稳定句柄与 SoA 列流。
 
 ## 架构
@@ -38,7 +38,7 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
 | `CycloneGames.Factory.Runtime` | `Runtime/Scripts/`（不含 `Unity/`） | 纯 C# factory、`PoolBase`、`ObjectPool`、`FastObjectPool`。`noEngineReferences: true`。 |
-| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`、`IUnityObjectLifetime`、`DefaultUnityObjectSpawner`、`MonoPrefabFactory<T>`、`MonoFastPool<T>`。引用核心 assembly 与 `UnityEngine`。 |
+| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`、`IUnityObjectLifetime`、`DefaultUnityObjectSpawner`、`MonoPrefabFactory<T>`、`MonoFastPool<T>`、`MonoObjectPool<TArg, TValue>`。引用核心 assembly 与 `UnityEngine`。 |
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`、`NativeDensePool<T>`、`NativeDenseColumnPool2/3/4`。仅当已安装的 `com.unity.collections` 包定义 `PRESENT_COLLECTIONS` 时编译。 |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | 核心与 Unity adapter 契约测试。 |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership 与 handle 测试。仅在安装 Collections 时启用。 |
@@ -131,7 +131,7 @@ if (pool.TrySpawn(new ProjectileSpawn(20f), out Projectile projectile))
 }
 ```
 
-`SoftCapacity` 预热 inactive item；`HardCapacity` 限制总所有权；`TrimOnDespawn` 在 inactive 数量超过 soft 目标时销毁返回的 item 而不是保留。
+`InitialPrewarm` 是构造期的创建预算（`-1` 为默认值，表示沿用 `SoftCapacity`）；`SoftCapacity` 是 `TrimOnDespawn` 遵循的保留目标；`HardCapacity` 限制总所有权。三者互相独立：`initialPrewarm: 0` 配合 `softCapacity: 512` 可以完全推迟实例化，同时仍然把返回的 item 保留到 512 个。
 
 ## 核心概念
 
@@ -159,7 +159,8 @@ public sealed class SessionFactory : IFactory<SessionOptions, Session>
 
 | 设置 | 含义 |
 | --- | --- |
-| `SoftCapacity` | 预热数量，也是 `TrimOnDespawn` 使用的 inactive 保留目标。 |
+| `SoftCapacity` | `TrimOnDespawn` 使用的 inactive 保留目标，同时作为追踪容器的容量提示。它不是创建预算。 |
+| `InitialPrewarm` | 构造期创建的 item 数量。`-1`（默认）沿用 `SoftCapacity`，保持原有单旋钮行为。 |
 | `HardCapacity` | Pool 可拥有的最大 item 数量；`-1` 表示无界。 |
 | `OverflowPolicy.Throw` | 达到 hard capacity 时，`Spawn` 抛出异常。 |
 | `OverflowPolicy.ReturnNull` | 达到 hard capacity 时，`Spawn` 返回 `null`（或 `default`）。 |
@@ -226,11 +227,12 @@ using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
 Console.WriteLine(pool.TrackedItemCount); // 开启校验时等于 CountAll
 ```
 
-每个 pool 都会校验工厂不会交回 pool 已拥有的实例。该检查默认使用一个引用身份集合，只在创建与拆除路径上维护，因此是 `O(1)` 而不是扫描 inactive 列表，批量预热保持线性。集合为每个被拥有的 item 保留一个条目；传入 `validateUniqueOwnership: false` 可去掉它及其内存开销，代价是不再检测"工厂重复返回同一个 inactive 实例"。关闭校验不改变其他任何行为，`TrackedItemCount` 在两种情况下都等于 `CountAll`。
+每个 pool 都会校验工厂不会交回 pool 已拥有的实例。该检查使用一份引用身份索引，把每个被拥有的 item 映射到它的 active 租约槽位，item 处于 inactive 时映射为 `-1`，因此重复检测是 `O(1)` 而不是扫描 inactive 列表，批量预热保持线性。索引是每个 pool 一份的连续结构，取代了原先分离的 active 索引字典与所有权集合，约为每个被拥有 item 一个槽位。传入 `validateUniqueOwnership: false` 只索引 active 租约，代价是不再检测"工厂重复返回同一个 inactive 实例"。两种情况下 `TrackedItemCount` 都报告 `CountAll`。
 
 ### Prewarm、trim 与 clear
 
 ```csharp
+pool.EnsureCapacity(512);        // 预留追踪空间，不创建任何 item
 pool.Prewarm(64);                // 冷路径：最多创建到剩余容量
 int created = pool.WarmupStep(8); // 创建有界批次，返回实际创建数量
 pool.TrimInactive(32);           // 销毁超过目标的 inactive item
@@ -238,6 +240,8 @@ pool.DespawnAll();               // 归还所有 active item
 int n = pool.DespawnStep(16);    // 归还有界批次
 pool.Clear();                    // 销毁所有 owned item
 ```
+
+`EnsureCapacity` 是让热路径在已知峰值下不分配的唯一入口：追踪容器默认按构造期预热预算设置容量，超出后按需增长。若构造阶段必须完全不实例化，用 `initialPrewarm: 0` 配合 `EnsureCapacity(peak)` 与分批 `WarmupStep`。
 
 `WarmupCoroutine` 与 `DespawnAllCoroutine` 是用于分帧 loading/teardown 的便利迭代器，会分配 iterator state，不属于严格 zero-allocation 热路径。
 
@@ -265,9 +269,10 @@ Callback 可以归还当前 item，但不能修改其他 active item。Pool 检�
 | Factory 返回无效 item | 创建立即失败，item 不会进入 active tracking |
 | Spawn callback 失败但 reset 成功 | borrow 回滚，item 可以回到 inactive |
 | Spawn callback 与 reset 均失败 | item 进入 quarantine 并永久清理，绝不再次借出 |
-| Despawn callback 或 validation 失败 | 移除 active ownership、隔离 item、尝试清理并传播错误 |
+| Despawn callback 失败 | 移除 active ownership、隔离 item、尝试清理并传播错误 |
 | Inactive item 失效或被外部销毁 | 通过统一的 owned-destruction 路径尝试清理；清理成功后释放 ownership tracking，validation 或清理失败会传播 |
-| `Clear`/`Dispose` 中一个 item 失败 | 继续处理其余 owned item，最终以 `AggregateException` 报告 |
+| Active item 被外部销毁 | 不执行 reset callback 直接结束租约、隔离 item、尝试清理，并递增 `Diagnostics.InvalidatedActiveItems`。返回的 `UnityEngine.Object` 实例走这条路径，因为 Unity 将其表现为 fake-null，任何 callback 都无法在其上运行 |
+| `DespawnAll`/`Clear`/`Dispose` 中一个 item 失败 | 继续处理其余 owned item，最终以 `AggregateException` 报告 |
 | Hard capacity 耗尽 | `TrySpawn` 返回 `false`；`Spawn` 遵循 `OverflowPolicy` |
 
 ## 进阶主题
@@ -282,12 +287,14 @@ using UnityEngine;
 
 IUnityObjectSpawner spawner = new DefaultUnityObjectSpawner();
 var factory = new MonoPrefabFactory<Bullet>(spawner, bulletPrefab, poolRoot);
-var pool = new ObjectPool<BulletSpawn, Bullet>(
+var pool = new MonoObjectPool<BulletSpawn, Bullet>(
     factory,
     new PoolCapacitySettings(64, 256, PoolOverflowPolicy.ReturnNull));
 ```
 
 `DefaultUnityObjectSpawner` 拒绝 null origin，并委托 `Object.Instantiate`。`MonoPrefabFactory<T>` 创建 inactive instance，让 pool 控制激活。`MonoFastPool<T>` 是轻量 `Component` pool，处理激活、可选 reparent 和永久清理时的 `Object.Destroy`，不需要 `IFactory`，因为它直接拥有创建。
+
+池化 `Component` item 请使用 `MonoObjectPool<TArg, TValue>`，而不是裸 `ObjectPool<TArg, TValue>`。core pool 的可用性判断是普通引用比较，对引擎无关类型是正确的，但看不到 Unity 的假空，已被销毁的 `Component` 在它看来仍然存活。adapter 通过 `UnityEngine.Object` 的运算符判断，并在下一次 spawn 或 despawn 时隔离已销毁的实例。
 
 非池化 Unity 生命周期使用更强的契约：
 
@@ -308,7 +315,12 @@ Item 不需要 spawn 参数时，从 `FastObjectPool<T>` 派生并重写 `OnSpaw
 ```csharp
 public sealed class EffectPool : FastObjectPool<Effect>
 {
-    public EffectPool(PoolCapacitySettings settings) : base(settings) { }
+    public EffectPool(PoolCapacitySettings settings) : base(settings)
+    {
+        // base 构造函数不创建 item，避免有状态的 CreateNew 在子类初始化前被调用。
+        // 构造期预热是显式步骤。
+        Prewarm(CapacitySettings.PrewarmCount);
+    }
 
     protected override Effect CreateNew() => new Effect();
     protected override void OnSpawn(Effect item) => item.Activate();
@@ -451,16 +463,21 @@ IEnumerator PrewarmOverFrames(ObjectPool<ProjectileSpawn, Projectile> pool, int 
 
 | 路径 | 时间复杂度 | 模块级分配 | 工作状态 |
 | --- | --- | --- | --- |
-| `Spawn` / `TrySpawn`（复用 inactive） | 摊销 `O(1)` | 0 字节 | `List<T>` + identity `Dictionary<T, int>` |
+| `Spawn` / `TrySpawn`（复用 inactive） | 摊销 `O(1)` | 未超过 `TrackingCapacity` 时 0 字节 | `List<T>` + 引用所有权索引 |
 | `Spawn`（新建） | 摊销 `O(1)` | Pool 0 字节；factory 可能分配 | 一次 factory 调用 |
-| `Despawn` | `O(1)` | 0 字节 | Active list 上 swap-and-pop |
+| `Despawn` | `O(1)` | 0 字节 | Active list 上 swap-and-pop，单次索引探测 |
 | `Prewarm` / `WarmupStep` | `O(n)` | 每次创建一个 item | 仅冷路径 |
 | `TrimInactive` | `O(n - target)` | Pool 0 字节 | Destroy callback 可能分配 |
 | `ForEachActive` | `O(active)` | 0 字节 | 快照校验迭代 |
+| `EnsureCapacity` | `O(n)` | 为请求数量预留追踪存储 | 冷路径，消除后续增长 |
 | DOD `TrySpawn` / `Despawn` | `O(1)` | 0 GC | `NativeArray` + slot map |
 | DOD `SpawnBatch` | `O(batch)` | 0 GC | 批量 slot 分配 |
 
-Tracking collection 按 `SoftCapacity` 预设容量。ownership 超出预设数量时，运行时增长可能产生分配。严格热路径前完成预热，并使用有限 hard capacity 避免增长尖峰。
+追踪容器按 `Math.Max(InitialPrewarm, SoftCapacity)` 预设容量。所有权数量超出后容器会增长，而增长是 pool 在 spawn 路径上唯一的分配来源。若有限 pool 在 gameplay 期间必须完全不分配，在 composition root 调用一次 `EnsureCapacity(实测峰值)`；`TrackingCapacity` 报告已预留槽位数，使该保证无需分配计数器即可断言。
+
+空 pool 不保留追踪存储：`TrimInactive` 或 `Clear` 后 item 数量为 0 时，预留数组会被释放，单次峰值不会变成空闲 pool 的永久占用。下次 spawn（或显式 `EnsureCapacity`）会重新预留。
+
+一个引用所有权槽位在 active list、inactive list 与索引三者合计约 44 字节（4096 槽位预留实测）。请按实测峰值预留，不要按猜测值预留。
 
 模块没有 static cache、全局 registry、隐藏偏好、后台线程或持久化文件。Pool 保留的 item 是由 pool instance 拥有的有界复用 cache。
 
@@ -498,7 +515,9 @@ Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机目�
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Factory.Tests.Editor -testResults <result-path> -quit
 ```
 
-安装 `com.unity.collections` 后，也运行 `CycloneGames.Factory.DOD.Tests.Editor`。托管测试覆盖 reference identity、容量耗尽、duplicate return、spawn rollback、quarantine、callback reentrancy、self-return iteration、dispose、Unity create/release 契约，以及预热后的当前线程 allocation assertion。DOD tests 覆盖 handle invalidation、swap-and-pop、batch churn、SoA stream、容量与诊断。
+安装 `com.unity.collections` 后，也运行 `CycloneGames.Factory.DOD.Tests.Editor`。托管测试覆盖 reference identity、容量耗尽、duplicate return、spawn rollback、quarantine、callback reentrancy、self-return iteration、dispose、Unity create/release 契约、创建预算与保留目标的分离，以及预热后的 allocation gate。DOD tests 覆盖 handle invalidation、swap-and-pop、batch churn、SoA stream、容量与诊断。
+
+Allocation gate 会先验证字节计数器本身：在 `GC.GetAllocatedBytesForCurrentThread()` 恒返回 0 的宿主上（Unity 2022.3 Editor 的 Mono 即是），字节级结论不成立，因此这些用例改为断言与 GC 无关的 `TrackingCapacity` 不变量，然后报告为 skipped 而不是 passed。Skipped 的含义是"本宿主未验证"，不是"已验证为零"。
 
 声明性能结论前，在目标 Player build 中测量已定义 workload，并记录 warmup、GC、CPU 分布、peak memory、backend、device 和 Unity 版本。声明 IL2CPP/AOT 支持前，使用当前 stripping 配置构建并 smoke-test 受影响目标。
 

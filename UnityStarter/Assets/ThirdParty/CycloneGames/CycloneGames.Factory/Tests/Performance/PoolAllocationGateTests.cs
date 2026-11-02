@@ -5,16 +5,21 @@ using NUnit.Framework;
 namespace CycloneGames.Factory.Tests.Performance
 {
     /// <summary>
-    /// Deterministic zero-allocation gates. These are the only throughput-adjacent assertions allowed
-    /// to run in CI: managed bytes allocated on the current thread is a hard, machine-independent
-    /// signal, unlike wall-clock time.
+    /// Deterministic zero-allocation gates. These are the only throughput-adjacent assertions allowed to
+    /// run in CI: managed bytes allocated on the current thread is a hard, machine-independent signal,
+    /// unlike wall-clock time.
     /// <para>
     /// Each scenario runs <see cref="ROUNDS"/> independent rounds and every round must report exactly
     /// zero. A single round can be polluted by one-off work happening on the main thread (editor tick,
     /// lazy static initialization, list growth in an unrelated subsystem); requiring all rounds to be
     /// clean converts a flaky signal into a hard one and keeps a failure diagnosable via the per-round
-    /// output. <see cref="GC.GetAllocatedBytesForCurrentThread"/> is thread-local, so the measured
-    /// region must stay on the calling (main) thread and must not log.
+    /// output.
+    /// </para>
+    /// <para>
+    /// The byte counter is verified by <see cref="AllocProbe"/> first. Hosts where the counter is dead
+    /// (Unity 2022.3 Editor on Mono) cannot support a byte-level conclusion, so those runs assert the
+    /// GC-independent invariant instead — <see cref="PoolBase{T}.TrackingCapacity"/> must not grow,
+    /// which proves no tracking container reallocated — and then report as skipped rather than passed.
     /// </para>
     /// </summary>
     public sealed class PoolAllocationGateTests
@@ -35,21 +40,7 @@ namespace CycloneGames.Factory.Tests.Performance
             PerfPoolable warmup = pool.Spawn(0);
             pool.Despawn(warmup);
 
-            long[] rounds = new long[ROUNDS];
-            for (int round = 0; round < ROUNDS; round++)
-            {
-                long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < ITERATIONS; i++)
-                {
-                    PerfPoolable item = pool.Spawn(i);
-                    pool.Despawn(item);
-                }
-
-                rounds[round] = GC.GetAllocatedBytesForCurrentThread() - before;
-                TestContext.WriteLine($"round {round}: {rounds[round]} bytes");
-            }
-
-            AssertAllZero(rounds, "Steady-state spawn/despawn after prewarm");
+            RunSteadyState(pool, "ObjectPool steady state after prewarm");
         }
 
         [Test]
@@ -71,21 +62,7 @@ namespace CycloneGames.Factory.Tests.Performance
             PerfPoolable warmup = pool.Spawn(0);
             pool.Despawn(warmup);
 
-            long[] rounds = new long[ROUNDS];
-            for (int round = 0; round < ROUNDS; round++)
-            {
-                long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < ITERATIONS; i++)
-                {
-                    PerfPoolable item = pool.Spawn(i);
-                    pool.Despawn(item);
-                }
-
-                rounds[round] = GC.GetAllocatedBytesForCurrentThread() - before;
-                TestContext.WriteLine($"round {round}: {rounds[round]} bytes");
-            }
-
-            AssertAllZero(rounds, "Steady-state spawn/despawn after TrimInactive");
+            RunSteadyState(pool, "ObjectPool steady state after trim");
         }
 
         [Test]
@@ -102,7 +79,7 @@ namespace CycloneGames.Factory.Tests.Performance
 
             var buffer = new PerfPoolable[batch];
 
-            // Warm-up cycle so active-list and dictionary capacities are already sized.
+            // Warm-up cycle so active-list and index capacities are already sized.
             for (int i = 0; i < batch; i++)
             {
                 buffer[i] = pool.Spawn(i);
@@ -113,10 +90,10 @@ namespace CycloneGames.Factory.Tests.Performance
                 pool.Despawn(buffer[i]);
             }
 
-            long[] rounds = new long[ROUNDS];
-            for (int round = 0; round < ROUNDS; round++)
+            int reserved = pool.TrackingCapacity;
+
+            void Workload()
             {
-                long before = GC.GetAllocatedBytesForCurrentThread();
                 for (int cycle = 0; cycle < cycles; cycle++)
                 {
                     for (int i = 0; i < batch; i++)
@@ -129,12 +106,9 @@ namespace CycloneGames.Factory.Tests.Performance
                         pool.Despawn(buffer[i]);
                     }
                 }
-
-                rounds[round] = GC.GetAllocatedBytesForCurrentThread() - before;
-                TestContext.WriteLine($"round {round}: {rounds[round]} bytes");
             }
 
-            AssertAllZero(rounds, "Batched borrow/return steady state");
+            AssertZeroAllocation(pool, reserved, Workload, "Batched borrow/return steady state");
         }
 
         [Test]
@@ -148,25 +122,70 @@ namespace CycloneGames.Factory.Tests.Performance
             PerfFastPoolable warmup = pool.Spawn();
             pool.Despawn(warmup);
 
+            RunSteadyState(pool, "FastObjectPool steady state");
+        }
+
+        /// <summary>
+        /// Steady-state loop over a single prewarmed item: spawn and despawn repeatedly. Any growth of a
+        /// tracking container shows up as a reserved-capacity change even on hosts where the byte counter
+        /// is unusable.
+        /// </summary>
+        private static void RunSteadyState<T>(PoolBase<T> pool, string scenario) where T : class
+        {
+            int reserved = pool.TrackingCapacity;
+
+            void Workload()
+            {
+                for (int i = 0; i < ITERATIONS; i++)
+                {
+                    T item = SpawnOne(pool, i);
+                    pool.Despawn(item);
+                }
+            }
+
+            AssertZeroAllocation(pool, reserved, Workload, scenario);
+        }
+
+        private static T SpawnOne<T>(PoolBase<T> pool, int i) where T : class
+        {
+            switch (pool)
+            {
+                case IMemoryPool<T> parameterless:
+                    return parameterless.Spawn();
+                case IMemoryPool<int, T> withParam:
+                    return withParam.Spawn(i);
+                default:
+                    throw new InvalidOperationException("Unsupported pool shape for the allocation gate.");
+            }
+        }
+
+        private static void AssertZeroAllocation<T>(PoolBase<T> pool, int reserved, Action workload, string scenario)
+            where T : class
+        {
+            if (!AllocProbe.IsMeasurable())
+            {
+                workload();
+
+                Assert.That(pool.TrackingCapacity, Is.EqualTo(reserved),
+                    $"{scenario}: a tracking container grew, so the hot path allocated.");
+                Assert.That(pool.CountActive, Is.Zero, $"{scenario}: the workload must end with no active lease.");
+
+                AllocProbe.NoteUnmeasurable(scenario);
+                AllocProbe.SkipUnmeasurable(scenario);
+            }
+
             long[] rounds = new long[ROUNDS];
             for (int round = 0; round < ROUNDS; round++)
             {
                 long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < ITERATIONS; i++)
-                {
-                    PerfFastPoolable item = pool.Spawn();
-                    pool.Despawn(item);
-                }
-
+                workload();
                 rounds[round] = GC.GetAllocatedBytesForCurrentThread() - before;
                 TestContext.WriteLine($"round {round}: {rounds[round]} bytes");
             }
 
-            AssertAllZero(rounds, "FastObjectPool steady-state spawn/despawn");
-        }
+            Assert.That(pool.TrackingCapacity, Is.EqualTo(reserved),
+                $"{scenario}: a tracking container grew, so the hot path allocated.");
 
-        private static void AssertAllZero(long[] rounds, string scenario)
-        {
             for (int round = 0; round < rounds.Length; round++)
             {
                 Assert.That(rounds[round], Is.EqualTo(0),

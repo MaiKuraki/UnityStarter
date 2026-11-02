@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.Scheduling.Core",
         "CycloneGames.Scheduling.Runtime",
+        "CycloneGames.Logging.Core",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

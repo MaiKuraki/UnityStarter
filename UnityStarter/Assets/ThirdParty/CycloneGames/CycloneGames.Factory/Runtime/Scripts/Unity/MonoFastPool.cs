@@ -34,7 +34,7 @@ namespace CycloneGames.Factory.Runtime
             PoolCapacitySettings capacitySettings,
             Transform root = null,
             bool autoSetActive = true)
-            : base(capacitySettings, deferInitialPrewarm: true)
+            : base(capacitySettings)
         {
             _spawner = spawner ?? throw new System.ArgumentNullException(nameof(spawner));
             _prefab = prefab != null
@@ -43,9 +43,11 @@ namespace CycloneGames.Factory.Runtime
             _root = root;
             _autoSetActive = autoSetActive;
 
-            if (capacitySettings.SoftCapacity > 0)
+            // Runs here because CreateNew needs the fields assigned above.
+            int prewarmCount = capacitySettings.PrewarmCount;
+            if (prewarmCount > 0)
             {
-                Prewarm(capacitySettings.SoftCapacity);
+                Prewarm(prewarmCount);
             }
         }
 
@@ -60,6 +62,14 @@ namespace CycloneGames.Factory.Runtime
             T instance = _root != null
                 ? _spawner.Create(_prefab, _root)
                 : _spawner.Create(_prefab);
+
+            // A custom spawner can return null or a destroyed instance; both compare equal to null here.
+            if (instance == null)
+            {
+                throw new System.InvalidOperationException(
+                    $"The Unity object spawner returned a null or destroyed instance for {typeof(T).Name}.");
+            }
+
             if (_autoSetActive)
             {
                 instance.gameObject.SetActive(false);
@@ -78,6 +88,12 @@ namespace CycloneGames.Factory.Runtime
 
         protected override void OnDespawn(T item)
         {
+            // A destroyed instance is fake-null and cannot be reset.
+            if (item == null)
+            {
+                return;
+            }
+
             if (_autoSetActive)
             {
                 item.gameObject.SetActive(false);
@@ -98,8 +114,18 @@ namespace CycloneGames.Factory.Runtime
         {
             if (item != null)
             {
-                Object.Destroy(item.gameObject);
+                // Object.Destroy is deferred and rejected outside Play Mode, where it logs an error and
+                // leaves the instance alive.
+                if (Application.isPlaying)
+                {
+                    Object.Destroy(item.gameObject);
+                }
+                else
+                {
+                    Object.DestroyImmediate(item.gameObject);
+                }
             }
+
             base.DestroyItem(item);
         }
     }

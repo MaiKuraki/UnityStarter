@@ -7,7 +7,11 @@ namespace CycloneGames.Factory.Runtime
     /// Requires a factory for item creation and spawn parameters via IPoolable.
     /// All tracking, capacity, diagnostics, and lifecycle infrastructure is in <see cref="PoolBase{TValue}"/>.
     /// </summary>
-    public sealed class ObjectPool<TParam1, TValue> : PoolBase<TValue>, IMemoryPool<TParam1, TValue>
+    /// <remarks>
+    /// Validity uses the engine-independent reference check. Engine adapters derive to answer engine-level
+    /// destruction, as <c>MonoObjectPool&lt;TParam1, TValue&gt;</c> does for <c>UnityEngine.Object</c> items.
+    /// </remarks>
+    public class ObjectPool<TParam1, TValue> : PoolBase<TValue>, IMemoryPool<TParam1, TValue>
         where TValue : class, IPoolable<TParam1, TValue>
     {
         private readonly IFactory<TValue> _factory;
@@ -22,9 +26,10 @@ namespace CycloneGames.Factory.Runtime
         {
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
 
-            if (capacitySettings.SoftCapacity > 0)
+            int prewarmCount = capacitySettings.PrewarmCount;
+            if (prewarmCount > 0)
             {
-                Prewarm(capacitySettings.SoftCapacity);
+                Prewarm(prewarmCount);
             }
         }
 

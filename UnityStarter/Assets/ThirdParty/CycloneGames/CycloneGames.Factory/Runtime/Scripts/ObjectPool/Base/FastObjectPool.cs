@@ -7,6 +7,12 @@ namespace CycloneGames.Factory.Runtime
     /// Provides parameterless Spawn/TrySpawn. Subclasses implement creation and lifecycle hooks.
     /// All tracking, capacity, diagnostics, and lifecycle infrastructure is in <see cref="PoolBase{TValue}"/>.
     /// </summary>
+    /// <remarks>
+    /// The constructor never creates items: a base constructor runs before derived fields are assigned and
+    /// cannot safely call the virtual <see cref="PoolBase{TValue}.CreateNew"/>. A subclass that wants
+    /// construction-time prewarm calls <c>Prewarm(CapacitySettings.PrewarmCount)</c> at the end of its own
+    /// constructor.
+    /// </remarks>
     public abstract class FastObjectPool<T> : PoolBase<T>, IMemoryPool<T> where T : class
     {
         protected FastObjectPool(int initialCapacity = 0, int maxCapacity = -1)
@@ -14,18 +20,9 @@ namespace CycloneGames.Factory.Runtime
         {
         }
 
-        protected FastObjectPool(PoolCapacitySettings capacitySettings)
-            : this(capacitySettings, deferInitialPrewarm: false)
-        {
-        }
-
-        protected FastObjectPool(PoolCapacitySettings capacitySettings, bool deferInitialPrewarm, bool validateUniqueOwnership = true)
+        protected FastObjectPool(PoolCapacitySettings capacitySettings, bool validateUniqueOwnership = true)
             : base(capacitySettings, validateUniqueOwnership)
         {
-            if (!deferInitialPrewarm && capacitySettings.SoftCapacity > 0)
-            {
-                Prewarm(capacitySettings.SoftCapacity);
-            }
         }
 
         public T Spawn()

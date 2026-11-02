@@ -13,15 +13,13 @@ namespace CycloneGames.Factory.Runtime
     {
         private readonly List<TValue> _inactiveItems;
         private readonly List<TValue> _activeItems;
-        private readonly Dictionary<TValue, int> _activeItemIndices;
         private readonly PoolCapacitySettings _capacitySettings;
 
-        /// <summary>
-        /// Every item the pool owns, active or inactive, when ownership validation is enabled.
-        /// Touched only on the creation and teardown paths, never on the spawn/despawn hot path.
-        /// Null when validation is disabled.
-        /// </summary>
-        private readonly HashSet<TValue> _knownItems;
+        /// <summary>Owned item to active-lease index, or -1 while the item is inactive.</summary>
+        private readonly ReferenceOwnershipMap<TValue> _ownership;
+
+        /// <summary>When false the index holds active leases only and misses duplicate inactive instances.</summary>
+        private readonly bool _trackAllOwned;
 
         private int _peakActive;
         private int _peakCountAll;
@@ -35,6 +33,7 @@ namespace CycloneGames.Factory.Runtime
         private long _callbackFailures;
         private long _quarantinedItems;
         private long _invalidatedInactiveItems;
+        private long _invalidatedActiveItems;
 
         private int _lifecycleCallbackDepth;
         private int _structuralVersion;
@@ -42,22 +41,18 @@ namespace CycloneGames.Factory.Runtime
 
         /// <param name="capacitySettings">Capacity, overflow and trim policy for this pool.</param>
         /// <param name="validateUniqueOwnership">
-        /// When true (the default) the pool tracks every owned item in a reference-identity set, so
+        /// When true (the default) the pool tracks every owned item in a reference-identity index, so
         /// detecting a factory that returns an item this pool already owns costs O(1) instead of an O(n)
-        /// scan. This is what keeps bulk warmup linear. When false, the pool only checks the active
-        /// index, which is cheaper in memory but leaves duplicate inactive instances undetected.
+        /// scan. This is what keeps bulk warmup linear. When false, the pool only indexes active leases,
+        /// which is cheaper in memory but leaves duplicate inactive instances undetected.
         /// </param>
         protected PoolBase(PoolCapacitySettings capacitySettings, bool validateUniqueOwnership = true)
         {
-            int initialTrackingCapacity = capacitySettings.SoftCapacity;
+            int initialTrackingCapacity = Math.Max(capacitySettings.PrewarmCount, capacitySettings.SoftCapacity);
             _inactiveItems = new List<TValue>(initialTrackingCapacity);
             _activeItems = new List<TValue>(initialTrackingCapacity);
-            _activeItemIndices = new Dictionary<TValue, int>(
-                initialTrackingCapacity,
-                ReferenceIdentityComparer<TValue>.Instance);
-            _knownItems = validateUniqueOwnership
-                ? new HashSet<TValue>(initialTrackingCapacity, ReferenceIdentityComparer<TValue>.Instance)
-                : null;
+            _ownership = new ReferenceOwnershipMap<TValue>(initialTrackingCapacity);
+            _trackAllOwned = validateUniqueOwnership;
             _capacitySettings = capacitySettings;
             _lifecycleState = PoolLifecycleState.Ready;
         }
@@ -68,18 +63,15 @@ namespace CycloneGames.Factory.Runtime
         public Type ItemType => typeof(TValue);
         public PoolLifecycleState LifecycleState => _lifecycleState;
         public PoolCapacitySettings CapacitySettings => _capacitySettings;
-        public int SoftCapacity => _capacitySettings.SoftCapacity;
-        public int MaxCapacity => _capacitySettings.HardCapacity;
-        public PoolOverflowPolicy OverflowPolicy => _capacitySettings.OverflowPolicy;
-        public PoolTrimPolicy TrimPolicy => _capacitySettings.TrimPolicy;
 
         /// <summary>
-        /// Number of items held by the ownership set. With validation enabled (the default) this must equal
-        /// <see cref="CountAll"/> after every completed operation, which is the invariant the ownership
-        /// tests assert. An item whose destruction throws stays tracked on purpose, so a hostile factory
-        /// cannot re-introduce it.
+        /// Number of items held by the ownership index; equals <see cref="CountAll"/> unless a destruction
+        /// failed, in which case the item stays tracked so a factory cannot re-introduce it.
         /// </summary>
-        public int TrackedItemCount => _knownItems != null ? _knownItems.Count : CountAll;
+        public int TrackedItemCount => _trackAllOwned ? _ownership.Count : CountAll;
+
+        /// <summary>Item count the tracking storage holds without allocating.</summary>
+        public int TrackingCapacity => Math.Min(Math.Min(_activeItems.Capacity, _inactiveItems.Capacity), _ownership.Capacity);
 
         public PoolDiagnostics Diagnostics => new PoolDiagnostics(
             _peakActive,
@@ -93,7 +85,8 @@ namespace CycloneGames.Factory.Runtime
             _totalDestroyed,
             _callbackFailures,
             _quarantinedItems,
-            _invalidatedInactiveItems);
+            _invalidatedInactiveItems,
+            _invalidatedActiveItems);
 
         public PoolProfile Profile => new PoolProfile(
             CountAll,
@@ -103,9 +96,17 @@ namespace CycloneGames.Factory.Runtime
             _capacitySettings,
             Diagnostics);
 
+        /// <summary>
+        /// Ends an active lease and either returns the item to the inactive set or destroys it.
+        /// </summary>
+        /// <remarks>
+        /// Validity is delegated to <see cref="IsValid"/>: with a <c>where TValue : class</c> constraint
+        /// <c>== null</c> is a reference comparison, so engine objects destroyed outside the pool still
+        /// look alive here and only an adapter can detect them.
+        /// </remarks>
         public bool Despawn(TValue item)
         {
-            if (item == null || _lifecycleState != PoolLifecycleState.Ready)
+            if (ReferenceEquals(item, null) || _lifecycleState != PoolLifecycleState.Ready)
             {
                 _invalidDespawns++;
                 return false;
@@ -113,21 +114,47 @@ namespace CycloneGames.Factory.Runtime
 
             ThrowIfLifecycleCallbackIsRunning();
 
-            if (!_activeItemIndices.ContainsKey(item))
-            {
-                _invalidDespawns++;
-                return false;
-            }
-
-            DespawnOwnedItem(item);
-            return true;
+            // Single probe: RemoveActive reports both "not an active lease" and success.
+            return DespawnOwnedItem(item);
         }
 
         public bool Contains(TValue item)
         {
-            return item != null
+            return !ReferenceEquals(item, null)
                 && _lifecycleState == PoolLifecycleState.Ready
-                && _activeItemIndices.ContainsKey(item);
+                && IsActiveLease(item);
+        }
+
+        /// <summary>
+        /// Reserves tracking room for <paramref name="capacity"/> items without creating any, and clamps
+        /// to the declared hard capacity. Call once with a measured peak so the hot path never resizes.
+        /// </summary>
+        public void EnsureCapacity(int capacity)
+        {
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+
+            if (capacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
+            if (_capacitySettings.HardCapacity > 0 && capacity > _capacitySettings.HardCapacity)
+            {
+                capacity = _capacitySettings.HardCapacity;
+            }
+
+            if (_activeItems.Capacity < capacity)
+            {
+                _activeItems.Capacity = capacity;
+            }
+
+            if (_inactiveItems.Capacity < capacity)
+            {
+                _inactiveItems.Capacity = capacity;
+            }
+
+            _ownership.EnsureCapacity(capacity);
         }
 
         public void ForEachActive(Action<TValue> action)
@@ -241,6 +268,7 @@ namespace CycloneGames.Factory.Runtime
 
             List<Exception> failures = null;
             TrimInactiveCore(targetInactiveCount, int.MaxValue, ref failures);
+            ReleaseTrackingStorageIfEmpty();
 
             ThrowFailures("One or more inactive pool items could not be destroyed.", failures);
         }
@@ -262,6 +290,7 @@ namespace CycloneGames.Factory.Runtime
 
             List<Exception> failures = null;
             int processed = TrimInactiveCore(targetInactiveCount, maxWork, ref failures);
+            ReleaseTrackingStorageIfEmpty();
             ThrowFailures("One or more inactive pool items could not be destroyed.", failures);
             return processed;
         }
@@ -271,10 +300,26 @@ namespace CycloneGames.Factory.Runtime
             ThrowIfNotReady();
             ThrowIfLifecycleCallbackIsRunning();
 
+            // Keep going after a failing reset so a single bad item cannot strand the remaining leases.
+            // Failures are aggregated, matching Clear and Dispose.
+            List<Exception> failures = null;
             while (_activeItems.Count > 0)
             {
-                DespawnOwnedItem(_activeItems[_activeItems.Count - 1]);
+                TValue item = _activeItems[_activeItems.Count - 1];
+                try
+                {
+                    if (!DespawnOwnedItem(item))
+                    {
+                        break;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    AddFailure(ref failures, exception);
+                }
             }
+
+            ThrowFailures("One or more active pool items could not be despawned.", failures);
         }
 
         public int DespawnStep(int maxItems)
@@ -287,13 +332,28 @@ namespace CycloneGames.Factory.Runtime
                 throw new ArgumentOutOfRangeException(nameof(maxItems));
             }
 
+            // Same contract as TrimInactiveStep: process the whole batch, then report failures.
+            List<Exception> failures = null;
             int processed = 0;
             while (processed < maxItems && _activeItems.Count > 0)
             {
-                DespawnOwnedItem(_activeItems[_activeItems.Count - 1]);
+                TValue item = _activeItems[_activeItems.Count - 1];
+                try
+                {
+                    if (!DespawnOwnedItem(item))
+                    {
+                        break;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    AddFailure(ref failures, exception);
+                }
+
                 processed++;
             }
 
+            ThrowFailures("One or more active pool items could not be despawned.", failures);
             return processed;
         }
 
@@ -319,6 +379,7 @@ namespace CycloneGames.Factory.Runtime
             ThrowIfNotReady();
             ThrowIfLifecycleCallbackIsRunning();
             List<Exception> failures = ClearOwnedItems();
+            ReleaseTrackingStorageIfEmpty();
             ThrowFailures("One or more pool items could not be cleared.", failures);
         }
 
@@ -351,6 +412,10 @@ namespace CycloneGames.Factory.Runtime
 
         protected abstract void OnDespawn(TValue item);
 
+        /// <summary>
+        /// Reports whether an item can still be reused; false or a thrown exception quarantines it.
+        /// Adapters override this to detect engine objects destroyed by another owner.
+        /// </summary>
         protected virtual bool IsValid(TValue item)
         {
             return item != null;
@@ -379,15 +444,16 @@ namespace CycloneGames.Factory.Runtime
             int index = _activeItems.Count;
             _activeItems.Add(item);
 
-            try
-            {
-                _activeItemIndices.Add(item, index);
-            }
-            catch
+            bool tracked = _trackAllOwned
+                ? _ownership.TrySetValue(item, index)
+                : _ownership.TryAdd(item, index);
+
+            if (!tracked)
             {
                 _activeItems.RemoveAt(index);
                 _inactiveItems.Add(item);
-                throw;
+                throw new InvalidOperationException(
+                    $"Pool for {typeof(TValue).Name} lost ownership tracking for a spawned item.");
             }
 
             _structuralVersion++;
@@ -404,6 +470,10 @@ namespace CycloneGames.Factory.Runtime
             }
 
             _failedSpawnRollbacks++;
+
+            // Keeps TotalSpawned - TotalDespawned == CountActive exact for rolled-back borrows.
+            _totalSpawned--;
+
             Exception resetFailure = InvokeDespawnCallback(item);
             Exception validationFailure = null;
             if (resetFailure == null && TryValidateItem(item, out validationFailure))
@@ -476,7 +546,7 @@ namespace CycloneGames.Factory.Runtime
 
             bool removedCurrentItemOnly = _structuralVersion == versionBeforeCallback + 2
                 && _activeItems.Count == index
-                && !_activeItemIndices.ContainsKey(item);
+                && !IsActiveLease(item);
 
             if (!removedCurrentItemOnly)
             {
@@ -485,36 +555,46 @@ namespace CycloneGames.Factory.Runtime
             }
         }
 
-        private void DespawnOwnedItem(TValue item)
+        private bool DespawnOwnedItem(TValue item)
         {
             if (!RemoveActive(item))
             {
                 _invalidDespawns++;
-                return;
+                return false;
             }
 
             _totalDespawned++;
-            Exception callbackFailure = InvokeDespawnCallback(item);
-            Exception validationFailure = null;
-            bool isValid = callbackFailure == null && TryValidateItem(item, out validationFailure);
 
-            Exception cleanupFailure = null;
-            if (callbackFailure != null || validationFailure != null || !isValid)
+            // Validate first: a destroyed item cannot run reset logic, and its own reset would throw.
+            Exception validationFailure = null;
+            if (!TryValidateItem(item, out validationFailure))
+            {
+                _invalidatedActiveItems++;
+                _quarantinedItems++;
+                Exception invalidCleanupFailure = TryDestroyOwnedItem(item);
+                ThrowCombined(validationFailure, invalidCleanupFailure);
+                return true;
+            }
+
+            Exception callbackFailure = InvokeDespawnCallback(item);
+            if (callbackFailure != null)
             {
                 _quarantinedItems++;
-                cleanupFailure = TryDestroyOwnedItem(item);
-            }
-            else if (ShouldTrimReturnedItem())
-            {
-                cleanupFailure = TryDestroyOwnedItem(item);
-            }
-            else
-            {
-                _inactiveItems.Add(item);
-                _structuralVersion++;
+                Exception callbackCleanupFailure = TryDestroyOwnedItem(item);
+                ThrowCombined(callbackFailure, callbackCleanupFailure);
+                return true;
             }
 
-            ThrowCombined(callbackFailure ?? validationFailure, cleanupFailure);
+            if (ShouldTrimReturnedItem())
+            {
+                Exception trimCleanupFailure = TryDestroyOwnedItem(item);
+                ThrowCombined(null, trimCleanupFailure);
+                return true;
+            }
+
+            _inactiveItems.Add(item);
+            _structuralVersion++;
+            return true;
         }
 
         private Exception InvokeDespawnCallback(TValue item)
@@ -601,25 +681,25 @@ namespace CycloneGames.Factory.Runtime
                     $"Pool factory for {typeof(TValue).Name} returned an invalid item.");
             }
 
-            if (IsAlreadyOwned(item))
+            if (!TryRegisterOwnership(item))
             {
                 throw new InvalidOperationException(
                     $"Pool factory for {typeof(TValue).Name} returned an item already owned by this pool.");
             }
 
-            _knownItems?.Add(item);
             _totalCreated++;
             return item;
         }
 
-        private bool IsAlreadyOwned(TValue item)
+        /// <summary>Registers a created item as inactive, or refuses an item already indexed as active.</summary>
+        private bool TryRegisterOwnership(TValue item)
         {
-            if (_knownItems != null)
-            {
-                return _knownItems.Contains(item);
-            }
+            return _trackAllOwned ? _ownership.TryAdd(item, -1) : !_ownership.ContainsKey(item);
+        }
 
-            return _activeItemIndices.ContainsKey(item);
+        private bool IsActiveLease(TValue item)
+        {
+            return _ownership.TryGetValue(item, out int index) && index >= 0;
         }
 
         private TValue PopInactive()
@@ -633,7 +713,7 @@ namespace CycloneGames.Factory.Runtime
 
         private bool RemoveActive(TValue item)
         {
-            if (!_activeItemIndices.TryGetValue(item, out int index))
+            if (!_ownership.TryGetValue(item, out int index) || index < 0)
             {
                 return false;
             }
@@ -642,11 +722,20 @@ namespace CycloneGames.Factory.Runtime
             TValue lastItem = _activeItems[lastIndex];
             _activeItems[index] = lastItem;
             _activeItems.RemoveAt(lastIndex);
-            _activeItemIndices.Remove(item);
 
             if (index != lastIndex)
             {
-                _activeItemIndices[lastItem] = index;
+                _ownership.TrySetValue(lastItem, index);
+            }
+
+            if (_trackAllOwned)
+            {
+                // The item stays owned; only its lease ends.
+                _ownership.TrySetValue(item, -1);
+            }
+            else
+            {
+                _ownership.Remove(item);
             }
 
             _structuralVersion++;
@@ -674,7 +763,7 @@ namespace CycloneGames.Factory.Runtime
             {
                 DestroyItem(item);
                 _totalDestroyed++;
-                _knownItems?.Remove(item);
+                _ownership.Remove(item);
                 return null;
             }
             catch (Exception exception)
@@ -698,7 +787,10 @@ namespace CycloneGames.Factory.Runtime
                 TValue item = _activeItems[_activeItems.Count - 1];
                 try
                 {
-                    DespawnOwnedItem(item);
+                    if (!DespawnOwnedItem(item))
+                    {
+                        break;
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -755,6 +847,22 @@ namespace CycloneGames.Factory.Runtime
             }
 
             return processed;
+        }
+
+        /// <summary>
+        /// An empty pool keeps no tracking storage: a single spike must not raise the permanent footprint
+        /// of an otherwise idle pool.
+        /// </summary>
+        private void ReleaseTrackingStorageIfEmpty()
+        {
+            if (_activeItems.Count != 0 || _inactiveItems.Count != 0 || _ownership.Count != 0)
+            {
+                return;
+            }
+
+            _activeItems.Capacity = 0;
+            _inactiveItems.Capacity = 0;
+            _ownership.ReleaseCapacity();
         }
 
         private bool ShouldTrimReturnedItem()
