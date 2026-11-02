@@ -91,7 +91,10 @@ Four lanes, drained from `Immediate` to `Background`:
 | `Normal` | Default. |
 | `Background` | Idle-time maintenance: cache sweeps, pool trimming, index rebuilds. |
 
-The highest non-empty lane is drained first. A lane that never empties cannot lock out lower lanes: any non-empty lane is guaranteed a step at least every `StarvationLimitTicks` ticks (default 4).
+The highest non-empty lane is served first. A permanently non-empty higher lane cannot starve lower lanes: any lane that has waited `StarvationLimitTicks` ticks (default 4) is served one step ahead of priority order, and every lane that has reached the window is served in the same Tick.
+
+- With `maxSteps >= LaneCount` a starved lane is served within `StarvationLimitTicks + 1` ticks.
+- A smaller step budget boosts as many starved lanes as it has steps left, so the wait can degrade up to `StarvationLimitTicks + (starved lanes - 1)`.
 
 ```csharp
 scheduler.TrySchedule(criticalWork, WorkLane.Immediate, out _);
@@ -111,6 +114,8 @@ public interface IWorkItem
 ```
 
 `Step` returns `Running` while more work remains and `Completed` when the item is done. The item stores its own progress and partial results.
+
+Implementations must be reference types. A struct is boxed when it is registered, so the scheduler would advance a copy and the caller's value would silently never progress. Editor and Development builds reject a struct registration; Release builds leave it to the compiler's boxing rules.
 
 Every accepted registration ends in exactly one `OnTerminated` call:
 
@@ -134,6 +139,26 @@ scheduler.Tick(maxSteps: 64, softBudgetMs: 2.0);
 `maxSteps` caps the number of `Step` calls per Tick. `softBudgetMs` caps admission by time. The scheduler checks the clock before starting later Steps, but it cannot stop a running Step, so the budget bounds admission rather than elapsed time.
 
 A positive infinity budget disables clock-based admission and keeps only the step limit.
+
+The budget is converted to clock ticks once per Tick and compared as an integer delta, so the admission decision is exact and repeatable for the same platform clock.
+
+A Step that wants to fill the remaining budget instead of guessing a chunk size can read it:
+
+```csharp
+public WorkStepResult Step()
+{
+    while (cursor < data.Length && scheduler.RemainingBudgetMilliseconds > 0.05)
+    {
+        Process(data[cursor++]);
+    }
+
+    return cursor == data.Length ? WorkStepResult.Completed : WorkStepResult.Running;
+}
+```
+
+`RemainingBudgetMilliseconds` returns `+∞` outside a Tick and when the budget is infinite. It is resolved against the last clock sample, so it lags by at most one Step; treat it as "how much room is roughly left", not as a hard deadline.
+
+Budget precision is bounded by the platform clock. A budget smaller than the clock's resolution can overshoot several times over, so keep `softBudgetMs` at or above twice the resolution, and prefer `maxSteps` on platforms with clamped timers (WebGL browsers clamp `performance.now()`).
 
 Read the counters instead of assuming the budget held:
 
@@ -183,7 +208,7 @@ if (scheduler.Cancel(handle))
 
 `Cancel` is O(1). The scheduler drops its reference before calling `OnTerminated(Cancelled)`.
 
-A handle carries the slot, a generation and the issuing scheduler identity. A default, stale, released, or foreign handle returns `false` — using a handle from another scheduler can no longer cancel an unrelated item.
+A handle carries the slot, a generation and the issuing scheduler identity. A default, stale, released, or foreign handle returns `false`, so a handle from another scheduler cannot cancel an unrelated item.
 
 ## Faults
 
@@ -222,6 +247,10 @@ Add `SchedulingDriver` to a GameObject yourself. The package never creates runti
 | `Max Budget Milliseconds` | Hard ceiling on the soft budget, so an infinite soft budget still cannot stall a frame. |
 
 `Update` drives normal work or a bounded shutdown. Disabling the component pauses the queue without cancelling it. A zero step budget does not stall shutdown: the drain advances at least one item per Update, and `IsShutdownDrainForced` reports when that override is active.
+
+The driver runs at execution order 1000, so work enqueued by ordinary gameplay scripts is stepped in the same frame rather than the next one. Change it through the project's Script Execution Order settings if a different position is required.
+
+A terminal callback that throws during the shutdown drain does not escape `Update`: the drain continues, every failure is counted in `ShutdownFailureCount`, the most recent one is kept in `LastShutdownFailure`, and only the first is reported through the `CycloneGames.Scheduling` log channel. Explicit `Shutdown()` calls still throw, so a caller that shuts down deliberately sees the failure.
 
 ## DI and ownership
 

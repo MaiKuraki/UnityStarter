@@ -5,7 +5,9 @@
   "description": "Bounded cooperative work scheduling for Unity and pure C# hosts, with lane priority, a bounded starvation window, soft frame budgets, fault isolation and deterministic shutdown.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {},
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
   "keywords": [
     "CycloneGames",
     "Scheduling",
