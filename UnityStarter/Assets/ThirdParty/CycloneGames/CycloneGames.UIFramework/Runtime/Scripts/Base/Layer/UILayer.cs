@@ -63,7 +63,16 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             destination.Clear();
-            destination.AddRange(_windows);
+            for (int i = 0; i < _windows.Count; i++)
+            {
+                UIWindow window = _windows[i];
+                // Never hand a destroyed window to a caller: a fake-null entry would surface as
+                // MissingReferenceException at the first property access.
+                if (window != null)
+                {
+                    destination.Add(window);
+                }
+            }
         }
 
         internal void Attach(UIWindow window)
@@ -130,14 +139,48 @@ namespace CycloneGames.UIFramework.Runtime
 
             _windows.Insert(index, window);
 
-            // Invariant: this layer maintains the child transform order of its windows so it
-            // matches _windows. Unity shifts the siblings that follow the target index, so a
-            // single move reproduces the priority-sorted order instead of rewriting every
-            // sibling below the insertion point.
+            // Invariant: window child order equals _windows order, so draw order follows priority.
+            // The sibling index comes from the neighbouring window because the layer may also own
+            // non-window children, where a raw _windows index would misplace the window.
             if (window.transform.parent == transform)
             {
-                window.transform.SetSiblingIndex(index);
+                window.transform.SetSiblingIndex(ResolveSiblingIndex(index, window));
             }
+        }
+
+        /// <summary>
+        /// Resolves the transform sibling index that preserves window draw order for the supplied
+        /// position in <see cref="_windows"/>, tolerating non-window children on the layer.
+        /// </summary>
+        private int ResolveSiblingIndex(int windowIndex, UIWindow window)
+        {
+            if (windowIndex > 0)
+            {
+                UIWindow previous = _windows[windowIndex - 1];
+                if (previous != null)
+                {
+                    return previous.transform.GetSiblingIndex() + 1;
+                }
+            }
+
+            // First window: place it after pre-existing decorations so a background stays behind.
+            int childCount = transform.childCount;
+            Transform self = window.transform;
+            for (int i = 0; i < childCount; i++)
+            {
+                Transform child = transform.GetChild(i);
+                if (ReferenceEquals(child, self))
+                {
+                    continue;
+                }
+
+                if (child.GetComponent<UIWindow>() != null)
+                {
+                    return i;
+                }
+            }
+
+            return Mathf.Max(0, childCount - 1);
         }
 
         private void OnDestroy()

@@ -22,6 +22,8 @@ namespace CycloneGames.UIFramework.Runtime
         private bool _isSceneBound;
         private int _boundSceneHandle = -1;
         private int _lifecycleCallbackDepth;
+        private IUIWindowLifetimeObserver _lifetimeObserver;
+        private bool _destroyNotified;
 
         public string WindowId => _windowId ?? string.Empty;
         public int Priority => _configuration != null ? _configuration.Priority : 0;
@@ -68,6 +70,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
             _isSceneBound = isSceneBound;
             _boundSceneHandle = isSceneBound ? sceneHandle : -1;
+            _lifetimeObserver = lifetimeObserver;
             UIWindowLifetimeRelay lifetimeRelay = GetComponent<UIWindowLifetimeRelay>();
             if (lifetimeRelay == null)
             {
@@ -123,10 +126,23 @@ namespace CycloneGames.UIFramework.Runtime
             InvokeClosed();
         }
 
-        internal void ForceClosed()
+        /// <summary>
+        /// Forces the authoritative state to <see cref="UIWindowState.Closed"/>.
+        /// </summary>
+        /// <param name="dispatchViewCallbacks">
+        /// False when the window never entered <see cref="UIWindowState.Opening"/>: a rollback
+        /// must not deliver OnClosing/OnClosed to a view that never received the opening pair.
+        /// </param>
+        internal void ForceClosed(bool dispatchViewCallbacks = true)
         {
             if (_state == UIWindowState.Closed)
             {
+                return;
+            }
+
+            if (!dispatchViewCallbacks)
+            {
+                _state = UIWindowState.Closed;
                 return;
             }
 
@@ -270,10 +286,32 @@ namespace CycloneGames.UIFramework.Runtime
             _state = next;
         }
 
+        /// <summary>
+        /// Publishes destruction to the owning service exactly once. Called from both
+        /// <see cref="OnDestroy"/> and <see cref="UIWindowLifetimeRelay"/> because Unity does not
+        /// guarantee which component message runs first.
+        /// </summary>
+        internal void NotifyDestroyed()
+        {
+            if (_destroyNotified)
+            {
+                return;
+            }
+
+            _destroyNotified = true;
+            IUIWindowLifetimeObserver observer = _lifetimeObserver;
+            _lifetimeObserver = null;
+            if (observer != null)
+            {
+                observer.OnWindowDestroyed(this);
+            }
+        }
+
         protected virtual void OnDestroy()
         {
             _state = UIWindowState.Closed;
             _parentLayer = null;
+            NotifyDestroyed();
         }
     }
 }

@@ -26,13 +26,14 @@ namespace CycloneGames.UIFramework.Runtime
 
             _notified = true;
             UIWindow window = _window;
-            IUIWindowLifetimeObserver observer = _observer;
             _window = null;
             _observer = null;
-            // Unity fake-null semantics: a destroyed window must not be reported to observers.
-            if (window != null)
+
+            // Delegate to the window, which owns the single-shot flag: either this path or
+            // UIWindow.OnDestroy notifies, whichever component Unity tears down first.
+            if (!ReferenceEquals(window, null))
             {
-                observer?.OnWindowDestroyed(window);
+                window.NotifyDestroyed();
             }
         }
     }
