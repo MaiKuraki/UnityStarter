@@ -14,7 +14,10 @@ namespace CycloneGames.UIFramework.Runtime
         private const int DefaultChildCapacity = 2;
 
         private readonly Dictionary<string, Node> _nodes;
-        private readonly List<string> _registrationOrder;
+        // Registration order is a linked list with a node map: removal is O(1) and leaves no stale
+        // entry, which CopyHistory would otherwise count twice once an id is registered again.
+        private readonly LinkedList<string> _registrationOrder;
+        private readonly Dictionary<string, LinkedListNode<string>> _registrationNodes;
         private readonly List<string> _traversalStack;
         private readonly int _ownerThreadId;
 
@@ -37,7 +40,9 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             _nodes = new Dictionary<string, Node>(initialCapacity, StringComparer.Ordinal);
-            _registrationOrder = new List<string>(initialCapacity);
+            _registrationOrder = new LinkedList<string>();
+            _registrationNodes =
+                new Dictionary<string, LinkedListNode<string>>(initialCapacity, StringComparer.Ordinal);
             _traversalStack = new List<string>(initialCapacity);
             _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
         }
@@ -85,7 +90,7 @@ namespace CycloneGames.UIFramework.Runtime
             };
 
             _nodes.Add(windowId, node);
-            _registrationOrder.Add(windowId);
+            _registrationNodes[windowId] = _registrationOrder.AddLast(windowId);
 
             if (!string.IsNullOrEmpty(openerId))
             {
@@ -128,25 +133,31 @@ namespace CycloneGames.UIFramework.Runtime
                 case ChildClosePolicy.Reparent:
                     affectedWindowIds.Add(windowId);
                     ReparentChildren(windowId, node);
+                    RemoveRegistration(windowId);
                     break;
 
                 case ChildClosePolicy.Cascade:
                     CollectCascadeDepthFirst(windowId, affectedWindowIds);
                     RemoveCascade(affectedWindowIds);
+                    for (int i = 0; i < affectedWindowIds.Count; i++)
+                    {
+                        RemoveRegistration(affectedWindowIds[i]);
+                    }
+
                     break;
 
                 case ChildClosePolicy.Detach:
                     affectedWindowIds.Add(windowId);
                     DetachChildren(windowId, node);
+                    RemoveRegistration(windowId);
                     break;
 
                 default:
                     return false;
             }
 
-            CompactRegistrationOrder();
             _currentWindow = _registrationOrder.Count > 0
-                ? _registrationOrder[_registrationOrder.Count - 1]
+                ? _registrationOrder.Last.Value
                 : null;
             return true;
         }
@@ -156,6 +167,7 @@ namespace CycloneGames.UIFramework.Runtime
             EnsureOwnerThread();
             _nodes.Clear();
             _registrationOrder.Clear();
+            _registrationNodes.Clear();
             _traversalStack.Clear();
             _currentWindow = null;
             _lastSequence = 0;
@@ -263,9 +275,11 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             destination.Clear();
-            for (int i = 0; i < _registrationOrder.Count; i++)
+            for (LinkedListNode<string> cursor = _registrationOrder.First;
+                 cursor != null;
+                 cursor = cursor.Next)
             {
-                string windowId = _registrationOrder[i];
+                string windowId = cursor.Value;
                 if (_nodes.TryGetValue(windowId, out Node node))
                 {
                     destination.Add(new UINavigationEntry(
@@ -302,9 +316,11 @@ namespace CycloneGames.UIFramework.Runtime
         private void RenumberActiveNodes()
         {
             long sequence = 0;
-            for (int i = 0; i < _registrationOrder.Count; i++)
+            for (LinkedListNode<string> cursor = _registrationOrder.First;
+                 cursor != null;
+                 cursor = cursor.Next)
             {
-                string windowId = _registrationOrder[i];
+                string windowId = cursor.Value;
                 if (_nodes.TryGetValue(windowId, out Node node))
                 {
                     node.Sequence = ++sequence;
@@ -452,21 +468,16 @@ namespace CycloneGames.UIFramework.Runtime
             _nodes[parentId] = parent;
         }
 
-        private void CompactRegistrationOrder()
+        /// <summary>
+        /// Unlinks one id in O(1) via its cached node. Removal must be eager: a stale entry is
+        /// counted twice by <see cref="CopyHistory"/> once the id is registered again.
+        /// </summary>
+        private void RemoveRegistration(string windowId)
         {
-            int writeIndex = 0;
-            for (int readIndex = 0; readIndex < _registrationOrder.Count; readIndex++)
+            if (_registrationNodes.TryGetValue(windowId, out LinkedListNode<string> node))
             {
-                string windowId = _registrationOrder[readIndex];
-                if (_nodes.ContainsKey(windowId))
-                {
-                    _registrationOrder[writeIndex++] = windowId;
-                }
-            }
-
-            if (writeIndex < _registrationOrder.Count)
-            {
-                _registrationOrder.RemoveRange(writeIndex, _registrationOrder.Count - writeIndex);
+                _registrationOrder.Remove(node);
+                _registrationNodes.Remove(windowId);
             }
         }
     }
