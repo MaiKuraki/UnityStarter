@@ -49,6 +49,12 @@ namespace CycloneGames.UIFramework.Runtime
         public int InitialWindowCapacity { get; set; } = 16;
         public int MaxActiveWindows { get; set; } = 64;
         public int MaxInstantiatesPerFrame { get; set; } = 2;
+
+        /// <summary>
+        /// Upper bound in seconds for draining in-flight provider acquisitions during shutdown.
+        /// Zero waits indefinitely. Keeps a non-cooperative provider from hanging teardown.
+        /// </summary>
+        public int MaxProviderDrainSeconds { get; set; } = 5;
         public UIAssetLoadContext DefaultAssetLoadContext { get; set; }
         public IUIWindowTransitionDriver DefaultTransitionDriver { get; set; }
         public IUINavigationService NavigationService { get; set; }
@@ -70,6 +76,13 @@ namespace CycloneGames.UIFramework.Runtime
             if (MaxInstantiatesPerFrame < 1)
             {
                 throw new ArgumentOutOfRangeException(nameof(MaxInstantiatesPerFrame));
+            }
+
+            if (MaxProviderDrainSeconds < 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(MaxProviderDrainSeconds),
+                    "MaxProviderDrainSeconds must be zero (wait indefinitely) or a positive bound.");
             }
         }
     }
@@ -177,7 +190,6 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly Dictionary<string, WindowSession> _sessions;
         private readonly List<WindowSession> _sessionOrder;
         private readonly List<IUIWindowBinder> _binders = new List<IUIWindowBinder>(4);
-        private readonly List<string> _navigationScratch = new List<string>(8);
         private readonly List<UILayer> _layerScratch = new List<UILayer>(8);
         private readonly List<string> _closeScratch = new List<string>(4);
 
@@ -185,10 +197,14 @@ namespace CycloneGames.UIFramework.Runtime
         // this stack to reject re-entrant open/close requests synchronously instead of
         // deferring them into a self-referential state.
         private readonly List<string> _lifecycleDispatchStack = new List<string>(4);
+        // Window ids inside an asynchronous binding callback. Separate from _lifecycleDispatchStack
+        // because the guard must span the await to reject a self-referential open or close.
+        private readonly List<string> _asyncLifecycleDispatchStack = new List<string>(4);
         private readonly CancellationTokenSource _lifetimeCancellation = new CancellationTokenSource();
         private readonly int _ownerThreadId;
         private readonly int _maxActiveWindows;
         private readonly int _maxInstantiatesPerFrame;
+        private readonly int _maxProviderDrainSeconds;
         private readonly UIAssetLoadContext _defaultAssetLoadContext;
         private readonly IUIWindowTransitionDriver _defaultTransitionDriver;
         private readonly IUINavigationService _navigationService;
@@ -226,6 +242,7 @@ namespace CycloneGames.UIFramework.Runtime
             options.Validate();
             _maxActiveWindows = options.MaxActiveWindows;
             _maxInstantiatesPerFrame = options.MaxInstantiatesPerFrame;
+            _maxProviderDrainSeconds = options.MaxProviderDrainSeconds;
             _defaultAssetLoadContext = options.DefaultAssetLoadContext;
             _defaultTransitionDriver = options.DefaultTransitionDriver;
             _navigationService = options.NavigationService;
@@ -252,7 +269,18 @@ namespace CycloneGames.UIFramework.Runtime
 
         public bool IsDisposed => _isDisposed;
         public bool IsShuttingDown => _isShuttingDown;
-        public int ActiveWindowCount => _activeWindowCount;
+
+        /// <summary>Number of committed windows, after reconciling externally destroyed ones.</summary>
+        public int ActiveWindowCount
+        {
+            get
+            {
+                EnsureMainThread();
+                ReconcileDestroyedSessions();
+                return _activeWindowCount;
+            }
+        }
+
         public IUINavigationService NavigationService => _navigationService;
 
         public UniTask<UIWindow> OpenAsync(
@@ -302,6 +330,20 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             ThrowIfWindowInLifecycleDispatch(windowId);
+
+            if (_sessions.TryGetValue(windowId, out WindowSession closingSession) &&
+                closingSession.CloseCompletion != null)
+            {
+                // A joined close cannot apply its policy: the first request already removed the
+                // navigation node and owns the lifecycle.
+                Log.Warning(
+                    windowId,
+                    static (id, builder) => builder
+                        .Append("[UIService] CloseAsync for '")
+                        .Append(id)
+                        .Append("' joined an in-flight close; the supplied ChildClosePolicy was ignored."));
+            }
+
             UniTask<bool> operation = CloseWithPolicyAsync(windowId, childPolicy);
             return cancellationToken.CanBeCanceled
                 ? operation.AttachExternalCancellation(cancellationToken)
@@ -368,15 +410,108 @@ namespace CycloneGames.UIFramework.Runtime
         {
             EnsureMainThread();
             if (!_isDisposed && !string.IsNullOrEmpty(windowId) &&
-                _sessions.TryGetValue(windowId, out WindowSession session) &&
-                session.IsCommitted && session.Window != null)
+                _sessions.TryGetValue(windowId, out WindowSession session))
             {
-                window = session.Window;
-                return true;
+                if (ReconcileIfDestroyed(session))
+                {
+                    window = null;
+                    return false;
+                }
+
+                if (session.IsCommitted && session.Window != null)
+                {
+                    window = session.Window;
+                    return true;
+                }
             }
 
             window = null;
             return false;
+        }
+
+        /// <summary>
+        /// Reclaims sessions whose window GameObject was destroyed outside the service.
+        /// Unity does not guarantee <c>OnDestroy</c> on every destruction path, so this is also
+        /// detected lazily; every public read reconciles on its own.
+        /// </summary>
+        public void ReconcileDestroyedWindows()
+        {
+            EnsureMainThread();
+            ReconcileDestroyedSessions();
+        }
+
+        private void ReconcileDestroyedSessions()
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            for (int i = _sessionOrder.Count - 1; i >= 0; i--)
+            {
+                ReconcileIfDestroyed(_sessionOrder[i]);
+            }
+        }
+
+        private bool ReconcileIfDestroyed(WindowSession session)
+        {
+            if (session == null || session.CleanupStarted)
+            {
+                return false;
+            }
+
+            UIWindow window = session.Window;
+            if (ReferenceEquals(window, null))
+            {
+                // The session has not instantiated its window yet: nothing to reconcile.
+                return false;
+            }
+
+            if (window != null)
+            {
+                // Unity's overloaded operator is true only while the object is still alive.
+                return false;
+            }
+
+            CleanupExternallyDestroyed(session);
+            return true;
+        }
+
+        /// <summary>
+        /// Cleans a session whose window object is gone. Used by the explicit destruction
+        /// notification (object may still report alive) and by lazy reconciliation (fake-null).
+        /// </summary>
+        private void CleanupExternallyDestroyed(WindowSession session)
+        {
+            InvalidOperationException exception = new InvalidOperationException(
+                $"Window '{session.WindowId}' was destroyed outside UIService ownership.");
+            session.TerminalException = exception;
+            Exception cleanupException = CleanupSession(session, true);
+            session.OpenCompletion.TrySetException(exception);
+            if (cleanupException != null)
+            {
+                session.CloseCompletion?.TrySetException(
+                    new AggregateException(
+                        "Window was destroyed outside UIService ownership and cleanup failed.",
+                        exception,
+                        cleanupException));
+                Log.Error(
+                    cleanupException,
+                    "[UIService] Cleanup failed after a managed window was destroyed externally.");
+                return;
+            }
+
+            // A pending close converges to closed: the object is gone, which is what the caller
+            // asked for. The skipped OnClosing/OnClosed is reported as a warning rather than by
+            // changing the return contract.
+            Log.Warning(
+                session.WindowId,
+                static (windowId, builder) => builder
+                    .Append("[UIService] Window '")
+                    .Append(windowId)
+                    .Append("' was destroyed outside UIService ownership; the pending close ")
+                    .Append("completed without delivering OnClosing/OnClosed."));
+            session.CloseCompletion?.TrySetResult(true);
         }
 
         public int CopyActiveWindows(List<UIWindow> destination)
@@ -387,6 +522,7 @@ namespace CycloneGames.UIFramework.Runtime
                 throw new ArgumentNullException(nameof(destination));
             }
 
+            ReconcileDestroyedSessions();
             destination.Clear();
             for (int i = 0; i < _sessionOrder.Count; i++)
             {
@@ -437,6 +573,7 @@ namespace CycloneGames.UIFramework.Runtime
         public UIPerformanceStats GetPerformanceStats()
         {
             EnsureMainThread();
+            ReconcileDestroyedSessions();
             int opening = 0;
             int open = 0;
             int closing = 0;
@@ -451,7 +588,13 @@ namespace CycloneGames.UIFramework.Runtime
                 {
                     opening++;
                 }
-                else if (window != null && window.State == UIWindowState.Closing)
+                else if (window == null)
+                {
+                    // Committed, but the window reference was already cleared by cleanup while the
+                    // session entry is still in the list: report it as closing, not as open.
+                    closing++;
+                }
+                else if (window.State == UIWindowState.Closing)
                 {
                     closing++;
                 }
@@ -601,27 +744,13 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             if (!_sessions.TryGetValue(window.WindowId, out WindowSession session) ||
-                !ReferenceEquals(session.Window, window))
+                !ReferenceEquals(session.Window, window) ||
+                session.CleanupStarted)
             {
                 return;
             }
 
-            InvalidOperationException exception = new InvalidOperationException(
-                $"Window '{window.WindowId}' was destroyed outside UIService ownership.");
-            session.TerminalException = exception;
-            Exception cleanupException = CleanupSession(session, true);
-            session.OpenCompletion.TrySetException(exception);
-            if (cleanupException != null)
-            {
-                session.CloseCompletion?.TrySetException(cleanupException);
-                Log.Error(
-                    cleanupException,
-                    "[UIService] Cleanup failed after a managed window was destroyed externally.");
-            }
-            else
-            {
-                session.CloseCompletion?.TrySetResult(true);
-            }
+            CleanupExternallyDestroyed(session);
         }
 
         private UniTask<UIWindow> StartOrJoinOpen(
@@ -864,7 +993,9 @@ namespace CycloneGames.UIFramework.Runtime
                             session.OpenOptions.Context))
                     {
                         throw new InvalidOperationException(
-                            $"Navigation rejected registration for '{session.WindowId}'.");
+                            $"Navigation rejected registration for '{session.WindowId}': opener " +
+                            $"'{session.OpenOptions.OpenerId ?? "<root>"}' is not active, the id is " +
+                            "already registered, or the window lists itself as its own opener.");
                     }
 
                     session.NavigationCommitted = true;
@@ -1400,7 +1531,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
         }
 
-        private static async UniTask WaitForProviderAcquisitionDrainAsync(
+        private async UniTask WaitForProviderAcquisitionDrainAsync(
             WindowSession[] sessions)
         {
             if (sessions == null)
@@ -1419,7 +1550,30 @@ namespace CycloneGames.UIFramework.Runtime
                         break;
                     }
 
-                    await acquisition.Task;
+                    if (_maxProviderDrainSeconds <= 0)
+                    {
+                        await acquisition.Task;
+                    }
+                    else
+                    {
+                        int completed = await UniTask.WhenAny(
+                            acquisition.Task,
+                            UniTask.Delay(
+                                TimeSpan.FromSeconds(_maxProviderDrainSeconds),
+                                DelayType.Realtime));
+                        if (completed == 1)
+                        {
+                            Log.Error(
+                                session.WindowId,
+                                static (windowId, builder) => builder
+                                    .Append("[UIService] Provider acquisition for '")
+                                    .Append(windowId)
+                                    .Append("' did not complete within the shutdown drain bound; ")
+                                    .Append("abandoning the wait. The provider must honour cancellation."));
+                            break;
+                        }
+                    }
+
                     await UniTask.SwitchToMainThread();
                     if (ReferenceEquals(acquisition, session.ProviderAcquisitionCompletion))
                     {
@@ -1427,7 +1581,6 @@ namespace CycloneGames.UIFramework.Runtime
                     }
                 }
             }
-
         }
 
         private void ValidateConfiguration(WindowSession session)
@@ -1531,9 +1684,18 @@ namespace CycloneGames.UIFramework.Runtime
 
                         if (binding is IAsyncUIWindowBinding asyncBinding)
                         {
-                            await asyncBinding.OnWindowStateChangedAsync(
-                                callback,
-                                cancellationToken);
+                            PushAsyncLifecycleDispatch(session.WindowId);
+                            try
+                            {
+                                await asyncBinding.OnWindowStateChangedAsync(
+                                    callback,
+                                    cancellationToken);
+                            }
+                            finally
+                            {
+                                PopAsyncLifecycleDispatch();
+                            }
+
                             await UniTask.SwitchToMainThread();
                         }
                         else if (guardSelfDispatch)
@@ -1633,11 +1795,56 @@ namespace CycloneGames.UIFramework.Runtime
 
         private void ThrowIfWindowInLifecycleDispatch(string windowId)
         {
-            if (IsWindowInLifecycleDispatch(windowId) || IsWindowDispatchingOwnCallbacks(windowId))
+            if (IsWindowInLifecycleDispatch(windowId) ||
+                IsWindowInAsyncCloseDispatch(windowId) ||
+                IsWindowDispatchingOwnCallbacks(windowId))
             {
                 throw new InvalidOperationException(
                     "Cannot open or close a window from within its own lifecycle callbacks.");
             }
+        }
+
+        /// <summary>
+        /// True while the window is inside one of its own asynchronous close-stage callbacks.
+        /// A close requested there would await the completion source the current close owns.
+        /// The open stage is excluded: closing during an asynchronous open is deferred.
+        /// </summary>
+        private bool IsWindowInAsyncCloseDispatch(string windowId)
+        {
+            if (!IsWindowInAsyncLifecycleDispatch(windowId))
+            {
+                return false;
+            }
+
+            return _sessions.TryGetValue(windowId, out WindowSession session) &&
+                   (session.CloseExecutionStarted || session.CleanupStarted);
+        }
+
+        private void PushAsyncLifecycleDispatch(string windowId)
+        {
+            _asyncLifecycleDispatchStack.Add(windowId);
+        }
+
+        private void PopAsyncLifecycleDispatch()
+        {
+            int lastIndex = _asyncLifecycleDispatchStack.Count - 1;
+            if (lastIndex >= 0)
+            {
+                _asyncLifecycleDispatchStack.RemoveAt(lastIndex);
+            }
+        }
+
+        private bool IsWindowInAsyncLifecycleDispatch(string windowId)
+        {
+            for (int i = 0; i < _asyncLifecycleDispatchStack.Count; i++)
+            {
+                if (string.Equals(_asyncLifecycleDispatchStack[i], windowId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool IsWindowInLifecycleDispatch(string windowId)
@@ -1743,7 +1950,9 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 try
                 {
-                    window.ForceClosed();
+                    // A rollback that happens before the open stage must not deliver close
+                    // callbacks to a view that never received the matching open callbacks.
+                    window.ForceClosed(window.State != UIWindowState.Created);
                 }
                 catch (Exception exception)
                 {
@@ -1848,12 +2057,15 @@ namespace CycloneGames.UIFramework.Runtime
                 return null;
             }
 
+            // Local buffer: cleanup can be re-entered from user callbacks, so a shared scratch
+            // list could be overwritten mid-iteration.
+            var released = new List<string>(4);
             try
             {
                 _navigationService.Unregister(
                     session.WindowId,
                     ChildClosePolicy.Reparent,
-                    _navigationScratch);
+                    released);
                 return null;
             }
             catch (Exception exception)
@@ -2062,6 +2274,14 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (_isDisposed || _isShuttingDown)
             {
+                return;
+            }
+
+            // UIService is not a UnityEngine.Object: a destroyed UIRoot means no owner is left,
+            // so release the service instead of leaking through the static scene event.
+            if (_root == null)
+            {
+                Dispose();
                 return;
             }
 
