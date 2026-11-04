@@ -356,6 +356,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             }
 
             if (!force &&
+                !_snapshot.IsInspectionPending &&
                 string.Equals(_snapshotKey, key, StringComparison.Ordinal) &&
                 _snapshot != DataTableLubanAuthoringSnapshot.Empty)
             {

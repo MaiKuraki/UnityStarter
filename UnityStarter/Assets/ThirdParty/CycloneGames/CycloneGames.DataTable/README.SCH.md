@@ -663,7 +663,7 @@ dotnet format --verify-no-changes --no-restore
 dotnet run --configuration Release --no-build -- --self-test
 ```
 
-工具面向 `net8.0`、使用 C# 12、无 NuGet package dependency，并固定 SDK `10.0.302`、禁用 roll-forward。缺少该精确 SDK 的机器无法执行工具验证。
+工具面向 `net8.0`、使用 C# 12、无 NuGet package dependency，并要求 .NET SDK `8.0.100` 或更高版本、`rollForward: latestMajor`。产物通过 `RollForward=Major` 运行，因此在只安装了更高版本运行时的机器上也能执行工具验证。
 
 ### Pipeline 与 Player
 
