@@ -167,7 +167,19 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         private static string ValidateProjectPath(string path)
         {
-            string fullPath = ValidateContainedRepositoryPath(path, nameof(path));
+            string fullPath = Path.GetFullPath(path);
+            if (IsInsideRepositoryRoot(fullPath))
+            {
+                fullPath = ValidateContainedRepositoryPath(fullPath, nameof(path));
+            }
+            else if (!IsRegisteredDataTablePackagePath(fullPath))
+            {
+                throw new ArgumentException(
+                    "External tool project must belong to the com.cyclone-games.data-table package: " +
+                    fullPath,
+                    nameof(path));
+            }
+
             if (!File.Exists(fullPath) ||
                 !string.Equals(Path.GetExtension(fullPath), ".csproj", StringComparison.OrdinalIgnoreCase))
             {
@@ -197,26 +209,14 @@ namespace CycloneGames.DataTable.Unity.Editor
             }
 
             string fullPath = Path.GetFullPath(path);
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string prefix = repositoryRoot.TrimEnd(
-                Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            if (!fullPath.StartsWith(
-                    prefix,
-                    Application.platform == RuntimePlatform.WindowsEditor
-                        ? StringComparison.OrdinalIgnoreCase
-                        : StringComparison.Ordinal))
+            string repositoryRoot = GetRepositoryRoot();
+            if (!IsInsideRepositoryRoot(fullPath))
             {
                 throw new ArgumentException("Path must be contained by the repository root: " + fullPath, parameterName);
             }
 
             string probe = fullPath;
-            while (!string.Equals(
-                       probe,
-                       repositoryRoot,
-                       Application.platform == RuntimePlatform.WindowsEditor
-                           ? StringComparison.OrdinalIgnoreCase
-                           : StringComparison.Ordinal))
+            while (!string.Equals(probe, repositoryRoot, PathComparison))
             {
                 if ((File.Exists(probe) || Directory.Exists(probe)) &&
                     (File.GetAttributes(probe) & FileAttributes.ReparsePoint) != 0)
@@ -230,6 +230,49 @@ namespace CycloneGames.DataTable.Unity.Editor
 
             return fullPath;
         }
+
+        private static string GetRepositoryRoot()
+        {
+            return Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+        }
+
+        private static bool IsInsideRepositoryRoot(string fullPath)
+        {
+            string repositoryRoot = GetRepositoryRoot();
+            string prefix = repositoryRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return fullPath.StartsWith(prefix, PathComparison);
+        }
+
+        private static bool IsRegisteredDataTablePackagePath(string fullPath)
+        {
+            const string packageName = "com.cyclone-games.data-table";
+            foreach (UnityEditor.PackageManager.PackageInfo package in
+                     UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
+            {
+                if (!string.Equals(package.name, packageName, StringComparison.Ordinal) ||
+                    string.IsNullOrEmpty(package.resolvedPath))
+                {
+                    continue;
+                }
+
+                string packageRoot = Path.GetFullPath(package.resolvedPath).TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (fullPath.StartsWith(packageRoot + Path.DirectorySeparatorChar, PathComparison))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static StringComparison PathComparison =>
+            Application.platform == RuntimePlatform.WindowsEditor
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
 
         private static string ValidatePortableName(string value, string parameterName, int maximumCharacters)
         {
