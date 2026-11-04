@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 
 namespace CycloneGames.DataTable.CodeGen
 {
@@ -207,6 +208,14 @@ namespace CycloneGames.DataTable.CodeGen
                     SourceFingerprint = sourceFingerprint;
                     ProcessTimeoutSeconds = processTimeoutSeconds;
                     CodegenProjectPath = codegenProjectPath;
+                    CodegenRoot = Path.GetDirectoryName(codegenProjectPath) ?? string.Empty;
+                    IsCodegenProjectExternal =
+                        CodegenRoot.Length != 0 &&
+                        !string.Equals(
+                            Path.TrimEndingDirectorySeparator(Path.GetFullPath(CodegenRoot)),
+                            Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
+                            GetPathComparison()) &&
+                        !IsStrictPipelineChildPath(repositoryRoot, CodegenRoot);
                     StringConstants = stringConstants;
                     CustomTemplateRoot = customTemplateRoot;
                     BridgeFiles = bridgeFiles;
@@ -229,6 +238,8 @@ namespace CycloneGames.DataTable.CodeGen
                 public string SourceFingerprint { get; }
                 public int ProcessTimeoutSeconds { get; }
                 public string CodegenProjectPath { get; }
+                public string CodegenRoot { get; }
+                public bool IsCodegenProjectExternal { get; }
                 public StringConstantConfiguration StringConstants { get; }
                 public string CustomTemplateRoot { get; }
                 public string[] BridgeFiles { get; }
@@ -306,11 +317,10 @@ namespace CycloneGames.DataTable.CodeGen
                     string codegenProjectPath = ResolveConfigurationPath(
                         sourceRoot,
                         RequireValue(codegen, "codegen_project", "codegen"));
-                    AssertPhysicalContainedPath(
+                    ValidateCodegenProject(
                         codegenProjectPath,
                         repositoryRoot,
-                        "CodeGen project",
-                        mustExist: requireDependentInputs);
+                        requireDependentInputs);
                     string[] stringConstantTables = SplitList(GetOptionalValue(codegen, "string_constant_tables"));
                     if (stringConstantTables.Length > MAX_CONFIGURED_TABLES)
                     {
@@ -572,18 +582,30 @@ namespace CycloneGames.DataTable.CodeGen
 
             private static string FindRepositoryRoot(string startDirectory)
             {
-                var current = new DirectoryInfo(startDirectory);
-                for (int depth = 0; current != null && depth < 16; depth++, current = current.Parent)
+                // The repository root is the ancestor that owns the DataTable composition root
+                // containing this configuration. This covers both the monorepo layout
+                // (<repo>/UnityStarter + <repo>/DataTable) and external Unity projects that
+                // reference the package from another checkout. DirectoryInfo.Parent is lexical,
+                // so the walk terminates at the filesystem root without an arbitrary depth cap.
+                string start = Path.TrimEndingDirectorySeparator(Path.GetFullPath(startDirectory));
+                var current = new DirectoryInfo(start);
+                while (current != null)
                 {
-                    if (Directory.Exists(Path.Combine(current.FullName, "UnityStarter")) &&
-                        Directory.Exists(Path.Combine(current.FullName, "DataTable")))
+                    string dataTableRoot = Path.TrimEndingDirectorySeparator(
+                        Path.GetFullPath(Path.Combine(current.FullName, "DataTable")));
+                    if (Directory.Exists(dataTableRoot) &&
+                        (string.Equals(dataTableRoot, start, GetPathComparison()) ||
+                         IsStrictPipelineChildPath(dataTableRoot, start)))
                     {
                         return Path.GetFullPath(current.FullName);
                     }
+
+                    current = current.Parent;
                 }
 
                 throw new InvalidOperationException(
-                    "Could not discover the repository root containing both UnityStarter/ and DataTable/.");
+                    "Could not discover the repository root that owns the DataTable directory for: " +
+                    startDirectory);
             }
 
             private static string ResolveConfigurationPath(string configurationDirectory, string value)
@@ -591,17 +613,148 @@ namespace CycloneGames.DataTable.CodeGen
                 return Path.GetFullPath(Path.Combine(configurationDirectory, value));
             }
 
+            private static void ValidateCodegenProject(
+                string codegenProjectPath,
+                string repositoryRoot,
+                bool mustExist)
+            {
+                if (!string.Equals(
+                        Path.GetExtension(codegenProjectPath),
+                        ".csproj",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "The CodeGen project must be a .csproj file: " + codegenProjectPath);
+                }
+
+                if (mustExist && !File.Exists(codegenProjectPath))
+                {
+                    throw new FileNotFoundException(
+                        "The CodeGen project was not found.",
+                        codegenProjectPath);
+                }
+
+                // An external package checkout is a read-only tool input. Only in-repository
+                // projects are subject to the physical containment policy.
+                if (IsStrictPipelineChildPath(repositoryRoot, codegenProjectPath))
+                {
+                    AssertPhysicalContainedPath(
+                        codegenProjectPath,
+                        repositoryRoot,
+                        "CodeGen project",
+                        mustExist);
+                    return;
+                }
+
+                // An external project is allowed only when it belongs to the package that owns
+                // this tool. Otherwise a configuration file could point the pipeline at any
+                // arbitrary project on disk.
+                string packageName = FindPackageName(Path.GetDirectoryName(codegenProjectPath)!);
+                if (!string.Equals(packageName, "com.cyclone-games.data-table", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "An external CodeGen project must belong to the com.cyclone-games.data-table package. " +
+                        "Resolved package name: '" + packageName + "' for " + codegenProjectPath);
+                }
+            }
+
+            private static string FindPackageName(string startDirectory)
+            {
+                var current = new DirectoryInfo(startDirectory);
+                while (current != null)
+                {
+                    string manifestPath = Path.Combine(current.FullName, "package.json");
+                    if (File.Exists(manifestPath))
+                    {
+                        var info = new FileInfo(manifestPath);
+                        if (info.Length > 1024 * 1024)
+                        {
+                            throw new InvalidOperationException(
+                                "Package manifest exceeds the 1 MiB identity limit: " + manifestPath);
+                        }
+
+                        using JsonDocument document = JsonDocument.Parse(
+                            File.ReadAllBytes(manifestPath),
+                            new JsonDocumentOptions
+                            {
+                                AllowTrailingCommas = true,
+                                CommentHandling = JsonCommentHandling.Skip,
+                                MaxDepth = 16,
+                            });
+                        return document.RootElement.ValueKind == JsonValueKind.Object &&
+                               document.RootElement.TryGetProperty("name", out JsonElement name) &&
+                               name.ValueKind == JsonValueKind.String
+                            ? name.GetString() ?? string.Empty
+                            : string.Empty;
+                    }
+
+                    current = current.Parent;
+                }
+
+                return string.Empty;
+            }
+
             private static void ValidateOutputRoot(string repositoryRoot, string path, string description)
             {
                 string unityAssets = Path.Combine(repositoryRoot, "UnityStarter", "Assets");
                 string generatedRoot = Path.Combine(repositoryRoot, "DataTable", "Luban", "Generated");
-                if (!IsStrictPipelineChildPath(unityAssets, path) && !IsStrictPipelineChildPath(generatedRoot, path))
+                if (!IsStrictPipelineChildPath(unityAssets, path) &&
+                    !IsStrictPipelineChildPath(generatedRoot, path) &&
+                    !IsUnityProjectAssetPath(repositoryRoot, path))
                 {
                     throw new InvalidOperationException(
-                        $"{description} must be a strict child of UnityStarter/Assets or DataTable/Luban/Generated: {path}");
+                        $"{description} must be a strict child of UnityStarter/Assets, a Unity project's Assets directory, or DataTable/Luban/Generated: {path}");
                 }
 
                 AssertPhysicalContainedPath(path, repositoryRoot, description, mustExist: false);
+            }
+
+            private static bool IsUnityProjectAssetPath(string repositoryRoot, string path)
+            {
+                string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                while (!string.IsNullOrEmpty(current))
+                {
+                    if (string.Equals(Path.GetFileName(current), "Assets", StringComparison.Ordinal))
+                    {
+                        string? projectRoot = Path.GetDirectoryName(current);
+                        if (!string.IsNullOrEmpty(projectRoot) &&
+                            IsContainedUnityProjectRoot(repositoryRoot, projectRoot))
+                        {
+                            return true;
+                        }
+
+                        // A nested directory that happens to be named Assets is not necessarily
+                        // the Unity project root; keep walking towards the filesystem root.
+                    }
+
+                    string? parent = Path.GetDirectoryName(current);
+                    if (string.IsNullOrEmpty(parent) ||
+                        string.Equals(parent, current, GetPathComparison()))
+                    {
+                        return false;
+                    }
+
+                    current = parent;
+                }
+
+                return false;
+            }
+
+            private static bool IsContainedUnityProjectRoot(
+                string repositoryRoot,
+                string projectRoot)
+            {
+                string fullProject = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
+                string fullRepository = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(repositoryRoot));
+                if (!string.Equals(fullProject, fullRepository, GetPathComparison()) &&
+                    !IsStrictPipelineChildPath(fullRepository, fullProject))
+                {
+                    return false;
+                }
+
+                return File.Exists(
+                    Path.Combine(projectRoot, "ProjectSettings", "ProjectVersion.txt"));
             }
 
             private static void EnsureProfileOutputsDoNotOverlap(IEnumerable<PipelineProfile> profiles)

@@ -35,13 +35,13 @@ Luban 只会收到事务 candidate 路径，不会收到 live output 路径。�
 
 ## 2. 前置条件与目录布局
 
-从 `<repo-root>` 运行仓库命令。工具使用以下文件限定的 SDK：
+从 `<repo-root>` 运行仓库命令。工具的 SDK 解析范围由以下文件限定：
 
 ```text
 UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/global.json
 ```
 
-当前文件固定 .NET SDK `10.0.302`，并禁用 roll-forward。项目目标为 `net8.0` 与 C# 12。启动脚本会先进入 CodeGen 目录再执行 `dotnet run`，因此只在该工具范围内应用 SDK 固定，不会改变仓库其他工具。
+当前文件要求 .NET SDK `8.0.100` 或更高版本，并使用 `rollForward: latestMajor`，因此本机安装的 8/9/10 SDK 都满足要求。项目目标为 `net8.0` 与 C# 12，并通过 `RollForward=Major` 让产物在只有更高版本运行时的机器上也能运行。启动脚本会先进入 CodeGen 目录再执行 `dotnet run`，因此只在该工具范围内应用 SDK 策略，不会改变仓库其他工具。
 
 准备以下逻辑目录结构：
 
@@ -188,7 +188,7 @@ Bridge 文件会被复制到 code candidate，并进行哈希校验和 receipt �
 
 ### 5.1 准备权威输入
 
-1. 安装 `Tools~/CodeGen/global.json` 指定的精确 SDK。
+1. 安装 `Tools~/CodeGen/global.json` 允许的 SDK（`8.0.100` 或更高）。
 2. 恢复并评审三个必需 schema 工作簿、所有引用的业务工作簿，以及使用的 `Defines/`、`config/` 输入。
 3. 恢复已批准的 `Luban.dll`。可以将 `windows_executable` 置空以使用单一跨平台 DLL 身份，也可以恢复并独立批准 `Luban.exe`。
 4. 确认 `luban.conf` target 与 `[profile.<name>]` section 使用完全相同的名称。
@@ -515,7 +515,7 @@ Receipt 不包含 Unity `.meta`。未变化生成文件会保留已有 metadata�
 
 ## 12. CI 设计
 
-CI 必须在 inspection 前安装精确 SDK 与已批准 Luban 工件。不得在发布输出的同一个 job 中自动计算并接受 hash；批准值必须来自已评审源代码变更。
+CI 必须在 inspection 前安装兼容 SDK（`8.0.100` 或更高）与已批准 Luban 工件。不得在发布输出的同一个 job 中自动计算并接受 hash；批准值必须来自已评审源代码变更。
 
 生成权威 job 示例：
 

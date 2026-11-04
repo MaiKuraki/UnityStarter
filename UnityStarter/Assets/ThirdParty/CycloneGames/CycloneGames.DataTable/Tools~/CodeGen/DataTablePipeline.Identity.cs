@@ -442,7 +442,7 @@ namespace CycloneGames.DataTable.CodeGen
                 AddFingerprintDirectory(
                     configuration,
                     Path.GetDirectoryName(configuration.CodegenProjectPath)!,
-                    GetRepositoryRelativePath(configuration.RepositoryRoot, Path.GetDirectoryName(configuration.CodegenProjectPath)!),
+                    GetToolFingerprintMarker(configuration),
                     excludeDirectToolBuildArtifacts: true,
                     entries,
                     ref fileCount,
@@ -481,7 +481,7 @@ namespace CycloneGames.DataTable.CodeGen
                 AddFingerprintDirectory(
                     configuration,
                     toolRoot,
-                    GetRepositoryRelativePath(configuration.RepositoryRoot, toolRoot),
+                    GetToolFingerprintMarker(configuration),
                     excludeDirectToolBuildArtifacts: true,
                     entries,
                     ref fileCount,
@@ -534,7 +534,10 @@ namespace CycloneGames.DataTable.CodeGen
                     return;
                 }
 
-                AssertPhysicalContainedPath(directory, configuration.RepositoryRoot, "fingerprint source", mustExist: true);
+                string fingerprintRoot = IsUnderExternalToolRoot(configuration, directory)
+                    ? configuration.CodegenRoot
+                    : configuration.RepositoryRoot;
+                AssertPhysicalContainedPath(directory, fingerprintRoot, "fingerprint source", mustExist: true);
                 entries.Add("R present " + marker + "/");
                 var pending = new Stack<string>();
                 pending.Push(directory);
@@ -585,7 +588,7 @@ namespace CycloneGames.DataTable.CodeGen
                     throw new InvalidOperationException("Fingerprint input exceeds its bounded file budget: " + file);
                 }
 
-                string relativePath = GetRepositoryRelativePath(configuration.RepositoryRoot, file);
+                string relativePath = GetFingerprintPath(configuration, file);
                 string fileName = Path.GetFileName(file);
                 string extension = Path.GetExtension(file);
                 string kind;
@@ -889,6 +892,54 @@ namespace CycloneGames.DataTable.CodeGen
                     _destination.Append(SelfPrefix, _matchedSelfPrefixBytes);
                     _matchedSelfPrefixBytes = 0;
                 }
+            }
+
+            private static string GetToolFingerprintMarker(PipelineConfiguration configuration)
+            {
+                // An external package checkout has no stable repository-relative path. Bind its
+                // content under a fixed marker so the fingerprint stays location independent.
+                return configuration.IsCodegenProjectExternal
+                    ? "Tooling/CodeGen"
+                    : GetRepositoryRelativePath(configuration.RepositoryRoot, configuration.CodegenRoot);
+            }
+
+            private static bool IsUnderExternalToolRoot(
+                PipelineConfiguration configuration,
+                string path)
+            {
+                if (!configuration.IsCodegenProjectExternal || configuration.CodegenRoot.Length == 0)
+                {
+                    return false;
+                }
+
+                string root = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(configuration.CodegenRoot));
+                string candidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                return string.Equals(candidate, root, GetPathComparison()) ||
+                       IsStrictPipelineChildPath(root, candidate);
+            }
+
+            private static string GetFingerprintPath(
+                PipelineConfiguration configuration,
+                string file)
+            {
+                if (!IsUnderExternalToolRoot(configuration, file))
+                {
+                    return GetRepositoryRelativePath(configuration.RepositoryRoot, file);
+                }
+
+                string relative = Path.GetRelativePath(configuration.CodegenRoot, file)
+                    .Replace('\\', '/');
+                if (relative.Length == 0 ||
+                    relative.IndexOf('\r') >= 0 ||
+                    relative.IndexOf('\n') >= 0 ||
+                    relative.Any(static character => character < 0x20 || character > 0x7e))
+                {
+                    throw new InvalidOperationException(
+                        "Fingerprint path must be contained and printable ASCII: " + relative);
+                }
+
+                return "Tooling/CodeGen/" + relative;
             }
 
             private static string GetRepositoryRelativePath(string repositoryRoot, string path)

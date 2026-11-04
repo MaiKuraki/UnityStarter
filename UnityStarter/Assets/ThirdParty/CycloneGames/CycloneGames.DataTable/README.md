@@ -664,7 +664,7 @@ dotnet format --verify-no-changes --no-restore
 dotnet run --configuration Release --no-build -- --self-test
 ```
 
-The tool targets `net8.0`, uses C# 12, has no NuGet package dependency, and pins SDK `10.0.302` with roll-forward disabled. A machine without that exact SDK cannot run the tool validation.
+The tool targets `net8.0`, uses C# 12, has no NuGet package dependency, and requires .NET SDK `8.0.100` or newer with `rollForward: latestMajor`. The produced app uses `RollForward=Major`, so it runs on a machine that only has a newer runtime installed.
 
 ### Pipeline and Player
 
