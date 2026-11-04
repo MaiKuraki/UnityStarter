@@ -646,16 +646,36 @@ namespace CycloneGames.DataTable.CodeGen
                     return;
                 }
 
-                // An external project is allowed only when it belongs to the package that owns
-                // this tool. Otherwise a configuration file could point the pipeline at any
-                // arbitrary project on disk.
-                string packageName = FindPackageName(Path.GetDirectoryName(codegenProjectPath)!);
-                if (!string.Equals(packageName, "com.cyclone-games.data-table", StringComparison.Ordinal))
+                // An external project is allowed only when it belongs to the same package that
+                // owns the running tool. Otherwise a configuration file could point the pipeline
+                // at any arbitrary project on disk.
+                string expectedPackageName = ResolveRunningPackageName();
+                string actualPackageName = FindPackageName(Path.GetDirectoryName(codegenProjectPath)!);
+                if (expectedPackageName.Length == 0 ||
+                    !string.Equals(actualPackageName, expectedPackageName, StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException(
-                        "An external CodeGen project must belong to the com.cyclone-games.data-table package. " +
-                        "Resolved package name: '" + packageName + "' for " + codegenProjectPath);
+                        "An external CodeGen project must belong to the package that owns this tool. " +
+                        "Expected package: '" + expectedPackageName + "'. " +
+                        "Resolved package: '" + actualPackageName + "' for " + codegenProjectPath);
                 }
+            }
+
+            private static string ResolveRunningPackageName()
+            {
+                var current = new DirectoryInfo(AppContext.BaseDirectory);
+                while (current != null)
+                {
+                    string manifestPath = Path.Combine(current.FullName, "package.json");
+                    if (File.Exists(manifestPath))
+                    {
+                        return ReadPackageName(manifestPath);
+                    }
+
+                    current = current.Parent;
+                }
+
+                return string.Empty;
             }
 
             private static string FindPackageName(string startDirectory)
@@ -666,26 +686,7 @@ namespace CycloneGames.DataTable.CodeGen
                     string manifestPath = Path.Combine(current.FullName, "package.json");
                     if (File.Exists(manifestPath))
                     {
-                        var info = new FileInfo(manifestPath);
-                        if (info.Length > 1024 * 1024)
-                        {
-                            throw new InvalidOperationException(
-                                "Package manifest exceeds the 1 MiB identity limit: " + manifestPath);
-                        }
-
-                        using JsonDocument document = JsonDocument.Parse(
-                            File.ReadAllBytes(manifestPath),
-                            new JsonDocumentOptions
-                            {
-                                AllowTrailingCommas = true,
-                                CommentHandling = JsonCommentHandling.Skip,
-                                MaxDepth = 16,
-                            });
-                        return document.RootElement.ValueKind == JsonValueKind.Object &&
-                               document.RootElement.TryGetProperty("name", out JsonElement name) &&
-                               name.ValueKind == JsonValueKind.String
-                            ? name.GetString() ?? string.Empty
-                            : string.Empty;
+                        return ReadPackageName(manifestPath);
                     }
 
                     current = current.Parent;
@@ -694,16 +695,38 @@ namespace CycloneGames.DataTable.CodeGen
                 return string.Empty;
             }
 
+            private static string ReadPackageName(string manifestPath)
+            {
+                var info = new FileInfo(manifestPath);
+                if (info.Length > 1024 * 1024)
+                {
+                    throw new InvalidOperationException(
+                        "Package manifest exceeds the 1 MiB identity limit: " + manifestPath);
+                }
+
+                using JsonDocument document = JsonDocument.Parse(
+                    File.ReadAllBytes(manifestPath),
+                    new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip,
+                        MaxDepth = 16,
+                    });
+                return document.RootElement.ValueKind == JsonValueKind.Object &&
+                       document.RootElement.TryGetProperty("name", out JsonElement name) &&
+                       name.ValueKind == JsonValueKind.String
+                    ? name.GetString() ?? string.Empty
+                    : string.Empty;
+            }
+
             private static void ValidateOutputRoot(string repositoryRoot, string path, string description)
             {
-                string unityAssets = Path.Combine(repositoryRoot, "UnityStarter", "Assets");
                 string generatedRoot = Path.Combine(repositoryRoot, "DataTable", "Luban", "Generated");
-                if (!IsStrictPipelineChildPath(unityAssets, path) &&
-                    !IsStrictPipelineChildPath(generatedRoot, path) &&
+                if (!IsStrictPipelineChildPath(generatedRoot, path) &&
                     !IsUnityProjectAssetPath(repositoryRoot, path))
                 {
                     throw new InvalidOperationException(
-                        $"{description} must be a strict child of UnityStarter/Assets, a Unity project's Assets directory, or DataTable/Luban/Generated: {path}");
+                        $"{description} must be a strict child of a Unity project's Assets directory or DataTable/Luban/Generated: {path}");
                 }
 
                 AssertPhysicalContainedPath(path, repositoryRoot, description, mustExist: false);

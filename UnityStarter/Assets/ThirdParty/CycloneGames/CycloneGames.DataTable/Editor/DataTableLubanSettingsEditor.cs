@@ -1061,13 +1061,16 @@ namespace CycloneGames.DataTable.Unity.Editor
                 return false;
             }
 
-            string repositoryRoot = Path.GetFullPath(Path.Combine(projectRoot, ".."));
             string fullPath = Path.GetFullPath(selected);
-            if (!IsContained(repositoryRoot, fullPath))
+            try
+            {
+                DataTableLubanPathPolicy.FindRepositoryRoot(fullPath);
+            }
+            catch (ArgumentException)
             {
                 EditorUtility.DisplayDialog(
                     "Invalid Pipeline Configuration",
-                    "The configuration must remain inside the repository root.",
+                    "The configuration must stay inside a DataTable directory owned by the repository root.",
                     "OK");
                 return false;
             }
@@ -1082,15 +1085,6 @@ namespace CycloneGames.DataTable.Unity.Editor
             var fileUri = new Uri(Path.GetFullPath(fullPath));
             return Uri.UnescapeDataString(baseUri.MakeRelativeUri(fileUri).ToString())
                 .Replace('\\', '/');
-        }
-
-        private static bool IsContained(string root, string path)
-        {
-            string prefix = EnsureTrailingSeparator(Path.GetFullPath(root));
-            StringComparison comparison = Application.platform == RuntimePlatform.WindowsEditor
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return path.StartsWith(prefix, comparison);
         }
 
         private static string EnsureTrailingSeparator(string value)
