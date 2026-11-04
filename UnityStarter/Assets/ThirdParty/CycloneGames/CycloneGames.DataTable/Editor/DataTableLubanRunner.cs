@@ -130,8 +130,11 @@ namespace CycloneGames.DataTable.Unity.Editor
             bool refreshAssetsAfterSuccess,
             int maximumCapturedOutputCharacters)
         {
-            ToolProjectPath = ValidateProjectPath(toolProjectPath);
-            BuildConfigurationPath = ValidateConfigurationPath(buildConfigurationPath);
+            string validatedConfigurationPath = ValidateConfigurationPath(
+                buildConfigurationPath,
+                out string repositoryRoot);
+            BuildConfigurationPath = validatedConfigurationPath;
+            ToolProjectPath = ValidateProjectPath(toolProjectPath, repositoryRoot);
             ProfileName = ValidatePortableName(profileName, nameof(profileName), 128);
             if (timeoutMilliseconds < 1000 || timeoutMilliseconds > 86_400_000)
             {
@@ -165,9 +168,29 @@ namespace CycloneGames.DataTable.Unity.Editor
         internal string ToolWorkingDirectory { get; }
         internal string WriterLockDirectory { get; }
 
-        private static string ValidateProjectPath(string path)
+        private static string ValidateProjectPath(string path, string repositoryRoot)
         {
-            string fullPath = ValidateContainedRepositoryPath(path, nameof(path));
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("Path is required.", nameof(path));
+            }
+
+            string fullPath = Path.GetFullPath(path);
+            if (DataTableLubanPathPolicy.IsContainedBy(repositoryRoot, fullPath))
+            {
+                fullPath = DataTableLubanPathPolicy.ValidateContainedFile(
+                    fullPath,
+                    repositoryRoot,
+                    nameof(path));
+            }
+            else if (!DataTableLubanPathPolicy.IsOwnPackagePath(fullPath))
+            {
+                throw new ArgumentException(
+                    "External tool project must belong to the package that owns this Editor: " +
+                    fullPath,
+                    nameof(path));
+            }
+
             if (!File.Exists(fullPath) ||
                 !string.Equals(Path.GetExtension(fullPath), ".csproj", StringComparison.OrdinalIgnoreCase))
             {
@@ -177,58 +200,27 @@ namespace CycloneGames.DataTable.Unity.Editor
             return fullPath;
         }
 
-        private static string ValidateConfigurationPath(string path)
+        private static string ValidateConfigurationPath(
+            string path,
+            out string repositoryRoot)
         {
-            string fullPath = ValidateContainedRepositoryPath(path, nameof(path));
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("Path is required.", nameof(path));
+            }
+
+            string fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath) ||
                 !string.Equals(Path.GetFileName(fullPath), "build_config.ini", StringComparison.Ordinal))
             {
                 throw new FileNotFoundException("DataTable build_config.ini was not found.", fullPath);
             }
 
-            return fullPath;
-        }
-
-        private static string ValidateContainedRepositoryPath(string path, string parameterName)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                throw new ArgumentException("Path is required.", parameterName);
-            }
-
-            string fullPath = Path.GetFullPath(path);
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string prefix = repositoryRoot.TrimEnd(
-                Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            if (!fullPath.StartsWith(
-                    prefix,
-                    Application.platform == RuntimePlatform.WindowsEditor
-                        ? StringComparison.OrdinalIgnoreCase
-                        : StringComparison.Ordinal))
-            {
-                throw new ArgumentException("Path must be contained by the repository root: " + fullPath, parameterName);
-            }
-
-            string probe = fullPath;
-            while (!string.Equals(
-                       probe,
-                       repositoryRoot,
-                       Application.platform == RuntimePlatform.WindowsEditor
-                           ? StringComparison.OrdinalIgnoreCase
-                           : StringComparison.Ordinal))
-            {
-                if ((File.Exists(probe) || Directory.Exists(probe)) &&
-                    (File.GetAttributes(probe) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new ArgumentException("Path traverses a reparse point: " + probe, parameterName);
-                }
-
-                probe = Path.GetDirectoryName(probe) ??
-                        throw new ArgumentException("Path did not reach the repository root.", parameterName);
-            }
-
-            return fullPath;
+            repositoryRoot = DataTableLubanPathPolicy.FindRepositoryRoot(fullPath);
+            return DataTableLubanPathPolicy.ValidateContainedFile(
+                fullPath,
+                repositoryRoot,
+                nameof(path));
         }
 
         private static string ValidatePortableName(string value, string parameterName, int maximumCharacters)
