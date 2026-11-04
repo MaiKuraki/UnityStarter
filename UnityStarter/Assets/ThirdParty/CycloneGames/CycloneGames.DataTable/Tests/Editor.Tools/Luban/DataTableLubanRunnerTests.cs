@@ -31,7 +31,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         [Test]
         public void Profile_InvalidToolProject_FailsDuringConstruction()
         {
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+            string repositoryRoot = FindRepositoryRootForTests();
             string configuration = Path.Combine(repositoryRoot, "DataTable", "Luban", "build_config.ini");
             Assert.Throws<FileNotFoundException>(() => new DataTableLubanProfile(
                 Path.Combine(repositoryRoot, "missing.csproj"),
@@ -40,6 +40,33 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
                 1000,
                 false,
                 4096));
+        }
+
+        [Test]
+        public void Profile_ArbitraryExternalToolProject_FailsDuringConstruction()
+        {
+            string repositoryRoot = FindRepositoryRootForTests();
+            string externalRoot = Path.Combine(
+                Path.GetTempPath(),
+                "CycloneGames.DataTable.Tests",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(externalRoot);
+            string externalProject = Path.Combine(externalRoot, "Arbitrary.csproj");
+            File.WriteAllText(externalProject, "<Project />");
+            try
+            {
+                Assert.Throws<ArgumentException>(() => new DataTableLubanProfile(
+                    externalProject,
+                    Path.Combine(repositoryRoot, "DataTable", "Luban", "build_config.ini"),
+                    "client",
+                    1000,
+                    false,
+                    4096));
+            }
+            finally
+            {
+                Directory.Delete(externalRoot, recursive: true);
+            }
         }
 
         [Test]
@@ -327,26 +354,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         public void CancelActiveRun_DiagnosticsReentryDoesNotHoldActiveProcessLock()
         {
             int mainThreadId = Thread.CurrentThread.ManagedThreadId;
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string temporaryRoot = Path.Combine(
-                repositoryRoot,
-                "UnityStarter",
-                "Temp",
-                "DataTableLubanRunnerTests",
-                Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(temporaryRoot);
-            string configuration = Path.Combine(temporaryRoot, "build_config.ini");
-            File.WriteAllText(configuration, "# test-only profile path\n");
-            var profile = new DataTableLubanProfile(
-                Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable",
-                    "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj"),
-                configuration,
-                "client",
-                1000,
-                false,
-                4096);
+            DataTableLubanProfile profile = CreateTemporaryProfile(out string temporaryRoot);
             Directory.CreateDirectory(profile.WriterLockDirectory);
             Directory.CreateDirectory(Path.Combine(profile.WriterLockDirectory, "cancel.request"));
 
@@ -445,26 +453,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         [Test]
         public void ActiveProcessState_CancellationAndClearRemainObservable()
         {
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string temporaryRoot = Path.Combine(
-                repositoryRoot,
-                "UnityStarter",
-                "Temp",
-                "DataTableLubanRunnerTests",
-                Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(temporaryRoot);
-            string configuration = Path.Combine(temporaryRoot, "build_config.ini");
-            File.WriteAllText(configuration, "# test-only profile path\n");
-            var profile = new DataTableLubanProfile(
-                Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable",
-                    "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj"),
-                configuration,
-                "client",
-                1000,
-                false,
-                4096);
+            DataTableLubanProfile profile = CreateTemporaryProfile(out string temporaryRoot);
             using var process = new Process();
             try
             {
@@ -625,26 +614,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
         [Test]
         public void CompletingPhase_RejectsUserCancellationButShutdownStillTerminatesOwner()
         {
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string temporaryRoot = Path.Combine(
-                repositoryRoot,
-                "UnityStarter",
-                "Temp",
-                "DataTableLubanRunnerTests",
-                Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(temporaryRoot);
-            string configuration = Path.Combine(temporaryRoot, "build_config.ini");
-            File.WriteAllText(configuration, "# test-only profile path\n");
-            var profile = new DataTableLubanProfile(
-                Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable",
-                    "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj"),
-                configuration,
-                "client",
-                1000,
-                false,
-                4096);
+            DataTableLubanProfile profile = CreateTemporaryProfile(out string temporaryRoot);
             Directory.CreateDirectory(profile.WriterLockDirectory);
             string cancellationRequest = Path.Combine(
                 profile.WriterLockDirectory,
@@ -765,12 +735,9 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
 
         private static DataTableLubanProfile CreateValidProfile()
         {
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+            string repositoryRoot = FindRepositoryRootForTests();
             return new DataTableLubanProfile(
-                Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable",
-                    "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj"),
+                GetPackageToolProjectPath(),
                 Path.Combine(repositoryRoot, "DataTable", "Luban", "build_config.ini"),
                 "client",
                 1000,
@@ -778,12 +745,41 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
                 4096);
         }
 
+        private static string GetPackageToolProjectPath()
+        {
+            UnityEditor.PackageManager.PackageInfo package =
+                UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                    typeof(DataTableLubanProfile).Assembly);
+            Assert.IsNotNull(package, "The test assembly must belong to the DataTable package.");
+            return Path.Combine(
+                package.resolvedPath,
+                "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj");
+        }
+
+        private static string FindRepositoryRootForTests()
+        {
+            var current = new DirectoryInfo(Path.GetFullPath(Path.Combine(Application.dataPath, "..")));
+            while (current != null)
+            {
+                if (File.Exists(Path.Combine(
+                        current.FullName, "DataTable", "Luban", "build_config.ini")))
+                {
+                    return current.FullName;
+                }
+
+                current = current.Parent;
+            }
+
+            throw new InvalidOperationException(
+                "Could not locate a repository containing DataTable/Luban/build_config.ini.");
+        }
+
         private static DataTableLubanProfile CreateTemporaryProfile(out string temporaryRoot)
         {
-            string repositoryRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+            string repositoryRoot = FindRepositoryRootForTests();
             temporaryRoot = Path.Combine(
                 repositoryRoot,
-                "UnityStarter",
+                "DataTable",
                 "Temp",
                 "DataTableLubanRunnerTests",
                 Guid.NewGuid().ToString("N"));
@@ -791,10 +787,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             string configuration = Path.Combine(temporaryRoot, "build_config.ini");
             File.WriteAllText(configuration, "# test-only profile path\n");
             return new DataTableLubanProfile(
-                Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable",
-                    "Tools~", "CodeGen", "CycloneGames.DataTable.CodeGen.csproj"),
+                GetPackageToolProjectPath(),
                 configuration,
                 "client",
                 1000,
