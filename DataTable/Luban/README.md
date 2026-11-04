@@ -35,13 +35,13 @@ Luban receives only transaction candidate paths, never live output paths. All ca
 
 ## 2. Prerequisites and directory layout
 
-Run repository commands from `<repo-root>`. The scoped tool requires exactly the SDK declared by:
+Run repository commands from `<repo-root>`. The scoped tool resolves its SDK from:
 
 ```text
 UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/global.json
 ```
 
-The current file pins .NET SDK `10.0.302` with roll-forward disabled. The project targets `net8.0` and C# 12. The launchers change into the CodeGen directory before `dotnet run`, so the SDK pin applies only to this tool and does not affect other tools in the repository.
+The current file requires .NET SDK `8.0.100` or newer and uses `rollForward: latestMajor`, so any installed 8/9/10 SDK satisfies the pin. The project targets `net8.0` and C# 12, with `RollForward=Major` so the produced app also runs when only a newer runtime is installed. The launchers change into the CodeGen directory before `dotnet run`, so the SDK policy applies only to this tool and does not affect other tools in the repository.
 
 Prepare this logical layout:
 
@@ -188,7 +188,7 @@ Complete these steps in order. Identity approval is a review action, not a comma
 
 ### 5.1 Prepare authoritative inputs
 
-1. Install the exact SDK from `Tools~/CodeGen/global.json`.
+1. Install a compatible SDK (`8.0.100` or newer) from `Tools~/CodeGen/global.json`.
 2. Restore and review the three required schema workbooks, all referenced business workbooks, and any `Defines/` or `config/` inputs.
 3. Restore the approved `Luban.dll`. Either leave `windows_executable` empty for one cross-platform DLL identity, or restore and independently approve `Luban.exe`.
 4. Verify `luban.conf` targets and `[profile.<name>]` sections use the exact same names.
@@ -517,7 +517,7 @@ No pipeline state is stored in `EditorPrefs`, `PlayerPrefs`, or `SessionState`.
 
 ## 12. CI design
 
-CI must install the exact SDK and approved Luban artifact before inspection. Do not calculate and accept hashes automatically in the same job that publishes output; approval must come from a reviewed source change.
+CI must install a compatible SDK (`8.0.100` or newer) and the approved Luban artifact before inspection. Do not calculate and accept hashes automatically in the same job that publishes output; approval must come from a reviewed source change.
 
 For a generation authority job:
 
