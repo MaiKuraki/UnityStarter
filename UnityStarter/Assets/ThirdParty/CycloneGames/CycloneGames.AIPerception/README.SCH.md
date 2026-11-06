@@ -83,7 +83,9 @@ Job 借用 Registry 快照和传感器自有 buffer。Manager 发布新快照或
 
 ### 添加 Manager
 
-在场景对象上添加 `PerceptionManagerComponent`。`AIPerceptionComponent` 初始化时会自动创建实例，但显式 Manager 能让世界容量、空间网格尺寸、调度与 LOD 可见。
+在场景对象上添加 `PerceptionManagerComponent`。感知模块从不隐式生成驱动器：没有 Manager 时 `AIPerceptionComponent` 保持未初始化并记录错误。显式挂载既能让世界容量、空间网格尺寸、调度与 LOD 可见，也便于组合根把同一实例注入到自有系统。
+
+纯代码启动可调用 `PerceptionManagerComponent.CreateInstance()`；这是唯一会创建对象的路径，且永不自发触发。
 
 除非 Gameplay 需要在同一个 `Update` 取得结果，否则保持 `Deferred Job Completion` 开启。初始使用有限的 `Maximum Perceptibles`。仅从 profiling 数据调整 `Spatial Cell Size`。
 
@@ -255,6 +257,8 @@ Sight 使用 Burst 锥体预过滤和可选主线程 `Physics.Raycast`。
 | --- | ---: | --- |
 | `HalfAngle` | 60 度 | 3D 总 FOV 的一半；有限范围 0–180 |
 | `MaxDistance` | 30 | 基础距离；叠加目标半径 |
+| `NearClippingRadius` | 0 | 近距离感知半径，绕过视锥夹角判定；0 关闭 |
+| `LoseSightRadius` | 0 | 对已记忆目标生效的距离；0 或不大于 `MaxDistance` 时沿用 `MaxDistance` |
 | `UpdateInterval` | 0.1 s | LOD 前的基础间隔 |
 | `UseLineOfSight` | 开启 | 启用 3D Physics 精化 |
 | `ObstacleLayer` | 默认 raycast layers | 作为遮挡物的 Layer |
@@ -263,6 +267,8 @@ Sight 使用 Burst 锥体预过滤和可选主线程 `Physics.Raycast`。
 | `MemoryDuration` | 3 s | 0 关闭记忆 |
 
 除非目标 Collider 应当阻挡视线，否则从 `ObstacleLayer` 排除目标 Layer。达到 LOS 预算时，Sight 提交已完成精化的结果，报告 `LineOfSightBudgetExceeded` 并推进 cursor。
+
+`NearClippingRadius` 把"贴身感知"从视锥中分离出来：60 度半角、半径 0 时，侧向 0.3 m 的目标不可见；半径设为 1 即可感知。`LoseSightRadius` 依赖 `MemoryDuration > 0`，因为"曾经看见"的状态存放在记忆表里；宽相位会自动放宽到 `MaxDistance`、`NearClippingRadius`、`LoseSightRadius` 三者中的最大值。
 
 ### Hearing
 
@@ -386,7 +392,7 @@ if (sight != null)
 - 旧数据中的 `0` 现在映射到包级绝对硬上限，不再表示无上限增长；
 - 不能把上限降低到当前 active count 以下。
 
-`SensorManager` 默认最多持有 4,096 个传感器，包级绝对硬上限为 65,536。调用方需要处理准入失败时应使用 `TryRegister`。旧的 `Register` 保持源码兼容，在容量耗尽时执行 no-op，并在该 manager 生命周期内仅为第一次 legacy capacity rejection 输出一条 error；直接调用 `TryRegister` 仍保持静默，并通过返回值暴露结果。Null input、重复注册和其他非容量结果不会触发该诊断。重复 ID、错误 built-in owner 等契约误用仍会抛出异常。`AIPerceptionComponent` 会 Dispose 准入失败的新建 built-in sensor，且不会逐帧重试；容量恢复后应通过显式 cold-path rebuild 或重新启用生命周期恢复。单个 Registry 最多关联 1,024 个 SensorManager，LOD 表最多包含 64 个 level。
+`SensorManager` 默认最多持有 4,096 个传感器，包级绝对硬上限为 65,536。调用方需要处理准入失败时应使用 `TryRegister`：容量耗尽时返回 false 且不写日志，准入失败是调用方的决策而非诊断事件。Null input、重复注册和其他非容量结果同样不产生诊断。重复 ID、错误 built-in owner 等契约误用仍会抛出异常。`AIPerceptionComponent` 会 Dispose 准入失败的新建 built-in sensor，且不会逐帧重试；容量恢复后应通过显式 cold-path rebuild 或重新启用生命周期恢复。单个 Registry 最多关联 1,024 个 SensorManager，LOD 表最多包含 64 个 level。
 
 ### 每个传感器的容量
 
@@ -451,8 +457,12 @@ public sealed class OwnedSightSense : MonoBehaviour
 
     private void OnEnable()
     {
-        _ = PerceptionManagerComponent.Instance;
-        _manager = SensorManager.Instance;
+        _manager = SensorManager.ExistingInstance;
+        if (_manager == null)
+        {
+            Debug.LogError("Add a PerceptionManagerComponent or inject a SensorManager.");
+            return;
+        }
         PerceptibleComponent self = GetComponent<PerceptibleComponent>();
         PerceptibleHandle ignored = self != null
             ? self.Handle
@@ -461,7 +471,11 @@ public sealed class OwnedSightSense : MonoBehaviour
         SightSensorConfig config = SightSensorConfig.Default;
         config.UseLineOfSight = false;
         _sensor = new SightSensor(transform, config, _manager, ignored);
-        _manager.Register(_sensor);
+        if (!_manager.TryRegister(_sensor))
+        {
+            _sensor.Dispose();
+            _sensor = null;
+        }
     }
 
     private void OnDisable()
@@ -493,10 +507,23 @@ Worker Job 读取不可变 Native 快照并写入传感器自有数组，不访�
 
 ### Immediate 与 Deferred 完成
 
-- Immediate 模式在 `UpdateSensor` 内完成传感器，返回时结果可用。
-- Deferred 模式在 Manager `Update` 调度符合条件的传感器，在 `LateUpdate` 完成和提交。
+- Immediate 模式在 `UpdateSensor` 内完成求值，返回时结果可用。
+- Deferred 模式在 Manager `Update` 内完成求值（内联或调度 Job），在 `LateUpdate` 提交。
 - 从 Deferred 切换到 Immediate 前会先完成 pending work。
 - 移除或 Dispose 传感器会排空 pending job。
+
+### 小候选集的内联执行
+
+`SensorManager.InlineExecutionThreshold`（默认 16）让候选数不超过阈值的传感器直接执行查询循环，而不是调度 Job。调度并完成一个 Job 的开销远大于扫描少量候选，因此默认值让小规模感知完全不走 Job 系统。设为 0 可强制所有查询都走 Job。两条路径执行完全相同的 `Execute(int)` 主体，结果逐字节一致。
+
+### 时间源
+
+`SensorManager` 接受可选的 `IPerceptionClock`。默认实现读取 `Time.timeAsDouble`。注入固定步长或回放时钟，即可让 interval 门控与刺激老化由确定性模拟驱动，而不是墙钟帧时间。运行期切换时钟会使所有传感器的老化基线失效。
+
+```csharp
+var clock = new FixedStepClock(ticksPerSecond: 30);
+var manager = new SensorManager(PerceptibleRegistry.Instance, 4096, clock);
+```
 
 ### 扩展模式
 
@@ -625,6 +652,7 @@ Runtime 特征：
 - managed/native array、candidate list、result list、memory list 与 lookup storage 在达到所需容量后复用；
 - 注册增长、首次使用、容量增长、配置重建与空间 Dictionary 增长是分配点；
 - 快照捕获为 O(N)，即使捕获值未变化；
+- 空间重建为每个元素预计算一个 63 位 cell key，并对索引排列排序，因此置脏重建既不会重复推导坐标，也不会在每次比较中复制 48 字节元素；
 - aggregate workload 统计合并在现有 sensor 调度遍历中，并且只计入该 Manager 帧实际更新的 sensor；interval、LOD 或 disabled skip 不会复用过期的单 sensor workload；
 - 只有显式调用 `SensorManager.GetMemoryStats()` 时才执行完整的逐 sensor storage 聚合；
 - `SensorManager.GetMemoryStats()` 只读取缓存的 Manager last-frame 与 peak workload，不会修改任一统计值；
@@ -656,7 +684,7 @@ Unity Physics 实际精度在远低于 `float.MaxValue` 时下降。大世界产
 
 为 `PerceptibleComponent`、`AIPerceptionComponent` 和 `PerceptionManagerComponent` 提供的自定义 Inspector 使用 `SerializedObject`/`SerializedProperty`，支持多对象编辑，保留 Undo 和 Prefab Override，Play Mode 锁定 authoring。
 
-Play Mode 中通过 `Tools > CycloneGames > AI Perception > Show All Runtime Gizmos (Session)` 切换。开关仅当前 session 有效，退出时重置。
+Play Mode 中通过 `Tools > CycloneGames > AI Perception > Scene Gizmos > Show All (Session)` 切换。开关仅当前 session 有效，退出时重置。
 
 ### 平台注意事项
 

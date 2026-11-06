@@ -25,7 +25,7 @@ namespace CycloneGames.AIPerception.Runtime
         [SerializeField, Min(0f)] private float _loudness = 1f;
         [SerializeField] private bool _isSoundSource;
 
-        // Retained for serialized compatibility. Diagnostics are provided by the custom Inspector.
+        // Scene-view pin state. Read by the gizmo drawer; diagnostics come from the custom Inspector.
         [SerializeField, HideInInspector] private bool _showDebugOverlay;
 
         private PerceptibleHandle _handle = PerceptibleHandle.Invalid;

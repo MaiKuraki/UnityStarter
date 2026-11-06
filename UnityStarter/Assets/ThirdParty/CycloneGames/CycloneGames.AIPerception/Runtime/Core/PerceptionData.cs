@@ -17,15 +17,6 @@ namespace CycloneGames.AIPerception.Runtime
 
         public static readonly PerceptibleHandle Invalid = new PerceptibleHandle(0, -1, 0);
 
-        /// <summary>
-        /// Creates a process-local handle without a registry identity. This overload is intended
-        /// for adapters and tests that only compare handles; a registry will never resolve it.
-        /// </summary>
-        public PerceptibleHandle(int id, int generation)
-            : this(0, id, generation)
-        {
-        }
-
         public PerceptibleHandle(int registryId, int id, int generation)
         {
             RegistryId = registryId;
@@ -86,7 +77,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// Sensor detection result. Visibility decays with age for memory entries.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct DetectionResult
+    public struct DetectionResult : IComparable<DetectionResult>
     {
         public PerceptibleHandle Target;
         public float Distance;
@@ -95,6 +86,25 @@ namespace CycloneGames.AIPerception.Runtime
         public float Visibility;
         public SensorType SensorType;
         public bool IsFromMemory;
+
+        /// <summary>Distance first, then the perceptible handle for a stable total order.</summary>
+        public int CompareTo(DetectionResult other)
+        {
+            int distance = Distance.CompareTo(other.Distance);
+            if (distance != 0)
+            {
+                return distance;
+            }
+
+            int registry = Target.RegistryId.CompareTo(other.Target.RegistryId);
+            if (registry != 0)
+            {
+                return registry;
+            }
+
+            int id = Target.Id.CompareTo(other.Target.Id);
+            return id != 0 ? id : Target.Generation.CompareTo(other.Target.Generation);
+        }
     }
 
     /// <summary>
@@ -114,8 +124,8 @@ namespace CycloneGames.AIPerception.Runtime
     }
 
     /// <summary>
-    /// Bounded persistent storage used by one sensor. Values are normalized at runtime so that
-    /// existing serialized configurations whose new fields are zero receive safe defaults.
+    /// Bounded persistent storage used by one sensor. Runtime values are clamped to the package
+    /// ceilings so that authoring data can never reserve unbounded native memory.
     /// </summary>
     [Serializable]
     public struct PerceptionSensorCapacity
@@ -200,16 +210,5 @@ namespace CycloneGames.AIPerception.Runtime
         Disposed = 7,
         OcclusionBudgetExceeded = 8,
         CoordinateRangeExceeded = 9
-    }
-
-    /// <summary>
-    /// Reason why a target was detected.
-    /// </summary>
-    public enum DetectionReason
-    {
-        None = 0,
-        VisualContact = 1,
-        SoundHeard = 2,
-        ProximityAlert = 3
     }
 }

@@ -46,6 +46,12 @@ namespace CycloneGames.AIPerception.Editor
         private static readonly GUIContent MaximumLosChecksLabel = new GUIContent(
             "Maximum LOS Checks",
             "Maximum Physics line-of-sight checks performed by this sensor update.");
+        private static readonly GUIContent NearClippingRadiusLabel = new GUIContent(
+            "Near Clipping Radius",
+            "Targets closer than this radius are sensed regardless of view angle. Zero disables point-blank awareness.");
+        private static readonly GUIContent LoseSightRadiusLabel = new GUIContent(
+            "Lose Sight Radius",
+            "Range used for targets that are already remembered. Zero or below Max Distance keeps Max Distance.");
         private static readonly GUIContent CapacityLabel = new GUIContent(
             "Capacity Limits",
             "Preallocated and maximum candidate, result, and memory capacities for this sensor.");
@@ -72,6 +78,8 @@ namespace CycloneGames.AIPerception.Editor
         private SerializedProperty _sightTargetTypeId;
         private SerializedProperty _sightMemoryDuration;
         private SerializedProperty _sightMaximumLosChecks;
+        private SerializedProperty _sightNearClippingRadius;
+        private SerializedProperty _sightLoseSightRadius;
         private SerializedProperty _sightCapacity;
 
         private SerializedProperty _enableHearing;
@@ -255,6 +263,8 @@ namespace CycloneGames.AIPerception.Editor
             _sightTargetTypeId = _sightConfig.FindPropertyRelative("TargetTypeId");
             _sightMemoryDuration = _sightConfig.FindPropertyRelative("MemoryDuration");
             _sightMaximumLosChecks = _sightConfig.FindPropertyRelative("MaximumLineOfSightChecksPerUpdate");
+            _sightNearClippingRadius = _sightConfig.FindPropertyRelative("NearClippingRadius");
+            _sightLoseSightRadius = _sightConfig.FindPropertyRelative("LoseSightRadius");
             _sightCapacity = _sightConfig.FindPropertyRelative("Capacity");
             _remainingSightProperties = InspectorUiUtility.CacheRemainingChildren(
                 _sightConfig,
@@ -267,6 +277,8 @@ namespace CycloneGames.AIPerception.Editor
                 _sightTargetTypeId,
                 _sightMemoryDuration,
                 _sightMaximumLosChecks,
+                _sightNearClippingRadius,
+                _sightLoseSightRadius,
                 _sightCapacity);
         }
 
@@ -339,6 +351,7 @@ namespace CycloneGames.AIPerception.Editor
                 InspectorUiUtility.DrawSubsectionLabel("Geometry and Scheduling");
                 EditorGUILayout.PropertyField(_sightHalfAngle, HalfAngleLabel);
                 EditorGUILayout.PropertyField(_sightMaxDistance, MaxDistanceLabel);
+                EditorGUILayout.PropertyField(_sightNearClippingRadius, NearClippingRadiusLabel);
                 EditorGUILayout.PropertyField(_sightUpdateInterval, UpdateIntervalLabel);
 
                 InspectorUiUtility.DrawSubsectionLabel("Line of Sight");
@@ -358,6 +371,7 @@ namespace CycloneGames.AIPerception.Editor
 
                 InspectorUiUtility.DrawSubsectionLabel("Memory and Capacity");
                 EditorGUILayout.PropertyField(_sightMemoryDuration, MemoryDurationLabel);
+                EditorGUILayout.PropertyField(_sightLoseSightRadius, LoseSightRadiusLabel);
                 EditorGUILayout.PropertyField(_sightCapacity, CapacityLabel, true);
                 InspectorUiUtility.DrawProperties(_remainingSightProperties);
             }

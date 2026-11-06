@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logging;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
@@ -31,12 +30,13 @@ namespace CycloneGames.AIPerception.Runtime
     /// </summary>
     public sealed class SensorManager : IDisposable
     {
-        private static readonly LogChannel Log = AIPerceptionRuntimeLog.Channel;
         private const int InitialCapacity = 64;
 
         public const int DefaultMaximumSensorCount = 4_096;
         public const int HardMaximumSensorCount = 65_536;
         public const int HardMaximumLODLevelCount = 64;
+        public const int HardMaximumInlineExecutionCount = 4_096;
+        public const int DefaultInlineExecutionThreshold = 16;
 
         private static SensorManager _instance;
         private static bool _isQuitting;
@@ -46,6 +46,7 @@ namespace CycloneGames.AIPerception.Runtime
         private readonly List<ISensor> _sensors;
         private readonly Dictionary<int, ISensor> _sensorLookup;
         private readonly int _maximumSensorCount;
+        private readonly IPerceptionClock _clock;
         private JobHandle _batchedJobHandle;
         private Transform _lodReference;
         private SensorLODLevel[] _lodLevels;
@@ -54,12 +55,12 @@ namespace CycloneGames.AIPerception.Runtime
         private int _lastUpdateWorkload;
         private int _peakUpdateWorkload;
         private long _rejectedSensorRegistrationCount;
-        private bool _legacyRegistrationCapacityReported;
         private bool _hasScheduledJobs;
         private bool _lodEnabled;
         private bool _useDeferredJobCompletion;
         private bool _isIteratingSensors;
         private bool _isProcessingResults;
+        private int _inlineExecutionThreshold = DefaultInlineExecutionThreshold;
 
         public static SensorManager Instance
         {
@@ -88,6 +89,11 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         public SensorManager(PerceptibleRegistry registry, int maximumSensorCount)
+            : this(registry, maximumSensorCount, null)
+        {
+        }
+
+        public SensorManager(PerceptibleRegistry registry, int maximumSensorCount, IPerceptionClock clock)
         {
             _registry = registry ?? throw new ArgumentNullException(nameof(registry));
             if (maximumSensorCount <= 0 || maximumSensorCount > HardMaximumSensorCount)
@@ -95,12 +101,48 @@ namespace CycloneGames.AIPerception.Runtime
                 throw new ArgumentOutOfRangeException(nameof(maximumSensorCount));
             }
 
+            _clock = clock ?? UnityPerceptionClock.Instance;
             _ownerThreadId = Environment.CurrentManagedThreadId;
             _maximumSensorCount = maximumSensorCount;
             int initialCapacity = Math.Min(InitialCapacity, maximumSensorCount);
             _sensors = new List<ISensor>(initialCapacity);
             _sensorLookup = new Dictionary<int, ISensor>(initialCapacity);
             _registry.AttachSensorManager(this);
+        }
+
+        /// <summary>Time source used for interval gating and stimulus aging.</summary>
+        public IPerceptionClock Clock => _clock;
+
+        /// <summary>Current owner-thread timestamp sampled from <see cref="Clock"/>.</summary>
+        public double Now => _clock.NowSeconds;
+
+        /// <summary>
+        /// Candidate count at or below which a sensor executes its query inline instead of paying
+        /// job scheduling and completion overhead. Zero disables inline execution.
+        /// </summary>
+        /// <remarks>
+        /// The default sits at the measured crossover: at one candidate an inline query costs about
+        /// 7 us against 17 us for a scheduled job, while at 37 candidates the Burst-compiled job body
+        /// wins because inline code pays managed math and container-check overhead. Raise this value
+        /// only when Burst compilation is unavailable.
+        /// </remarks>
+        public int InlineExecutionThreshold
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return _inlineExecutionThreshold;
+            }
+            set
+            {
+                EnsureOwnerThread();
+                if (value < 0 || value > HardMaximumInlineExecutionCount)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                }
+
+                _inlineExecutionThreshold = value;
+            }
         }
 
         public bool UseDeferredJobCompletion
@@ -207,27 +249,9 @@ namespace CycloneGames.AIPerception.Runtime
             throw new InvalidOperationException("No free positive sensor ID is available.");
         }
 
-        public void Register(ISensor sensor)
-        {
-            long rejectedBefore = _rejectedSensorRegistrationCount;
-            if (TryRegister(sensor) ||
-                _legacyRegistrationCapacityReported ||
-                _rejectedSensorRegistrationCount <= rejectedBefore)
-            {
-                return;
-            }
-
-            _legacyRegistrationCapacityReported = true;
-            Log.Error(
-                _maximumSensorCount,
-                static (capacity, builder) => builder
-                    .Append("SensorManager capacity exhausted (").Append(capacity)
-                    .Append("). Legacy Register was ignored; use TryRegister to handle admission failure."));
-        }
-
         /// <summary>
         /// Registers a sensor without exceeding the configured owner capacity. Contract misuse
-        /// still throws; capacity exhaustion is reported as false.
+        /// throws; capacity exhaustion is reported as false.
         /// </summary>
         public bool TryRegister(ISensor sensor)
         {
@@ -321,7 +345,7 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            double currentTime = Time.timeAsDouble;
+            double currentTime = Now;
             int updateWorkload = 0;
             _isIteratingSensors = true;
             try

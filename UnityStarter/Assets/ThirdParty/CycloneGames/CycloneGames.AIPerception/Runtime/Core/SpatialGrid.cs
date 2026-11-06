@@ -9,74 +9,77 @@ namespace CycloneGames.AIPerception.Runtime
     /// Main-thread spatial broadphase over the immutable registry snapshot. Queries write indices
     /// into caller-owned persistent storage and fall back to a linear scan for very large bounds.
     /// </summary>
+    /// <remarks>
+    /// Cell coordinates are packed into a 63-bit key once per element, and the rebuild sorts an
+    /// index permutation rather than the payload. Both choices exist to keep a dirty rebuild inside
+    /// one frame: the comparer never re-derives coordinates, and it never copies a 48-byte element.
+    /// </remarks>
     public sealed class SpatialGrid
     {
         private const long MaximumCellVisitsPerQuery = 65536L;
 
-        private readonly struct CellCoordinate : IEquatable<CellCoordinate>
-        {
-            public CellCoordinate(int x, int y, int z)
-            {
-                X = x;
-                Y = y;
-                Z = z;
-            }
+        /// <summary>Bits per axis in the packed cell key. Three axes occupy 63 bits.</summary>
+        private const int AxisBits = 21;
 
-            public int X { get; }
-            public int Y { get; }
-            public int Z { get; }
+        /// <summary>Half of the addressable cell span; cells outside the span collapse to the edge.</summary>
+        private const int AxisLimit = 1 << (AxisBits - 1);
 
-            public bool Equals(CellCoordinate other) => X == other.X && Y == other.Y && Z == other.Z;
-            public override bool Equals(object obj) => obj is CellCoordinate other && Equals(other);
-            public override int GetHashCode() => HashCode.Combine(X, Y, Z);
-        }
+        private const int AxisMask = (1 << AxisBits) - 1;
 
+        /// <summary>
+        /// Orders element indices instead of the 48-byte payload. Sorting indices keeps the
+        /// comparison cost at two 8-byte key reads plus two 4-byte tie-break reads; sorting the
+        /// payload directly copies 48 bytes per comparison and dominates a large rebuild.
+        /// </summary>
         private struct CellRange
         {
             public int StartIndex;
             public int Count;
         }
 
-        private sealed class CellComparer : IComparer<PerceptibleData>
+        private sealed class IndexComparer : IComparer<int>
         {
-            public float CellSize { get; set; }
+            public long[] CellKeys;
+            public int[] TieBreakers;
+            public PerceptibleData[] Data;
 
-            public int Compare(PerceptibleData left, PerceptibleData right)
+            public int Compare(int left, int right)
             {
-                CellCoordinate leftCell = GetCell(left.Position, CellSize);
-                CellCoordinate rightCell = GetCell(right.Position, CellSize);
-                int x = leftCell.X.CompareTo(rightCell.X);
-                if (x != 0)
+                long leftKey = CellKeys[left];
+                long rightKey = CellKeys[right];
+                if (leftKey != rightKey)
                 {
-                    return x;
+                    return leftKey < rightKey ? -1 : 1;
                 }
 
-                int y = leftCell.Y.CompareTo(rightCell.Y);
-                if (y != 0)
+                int leftTie = TieBreakers[left];
+                int rightTie = TieBreakers[right];
+                if (leftTie != rightTie)
                 {
-                    return y;
+                    return leftTie < rightTie ? -1 : 1;
                 }
 
-                int z = leftCell.Z.CompareTo(rightCell.Z);
-                if (z != 0)
-                {
-                    return z;
-                }
-
-                int registry = left.RegistryId.CompareTo(right.RegistryId);
+                // Same slot twice is invalid input; fall back to the full ordering so the result
+                // stays deterministic instead of silently following input order.
+                PerceptibleData leftData = Data[left];
+                PerceptibleData rightData = Data[right];
+                int registry = leftData.RegistryId.CompareTo(rightData.RegistryId);
                 if (registry != 0)
                 {
                     return registry;
                 }
 
-                int id = left.Id.CompareTo(right.Id);
-                return id != 0 ? id : left.Generation.CompareTo(right.Generation);
+                return leftData.Generation.CompareTo(rightData.Generation);
             }
         }
 
-        private readonly Dictionary<CellCoordinate, CellRange> _cellRanges =
-            new Dictionary<CellCoordinate, CellRange>(256);
-        private readonly CellComparer _comparer = new CellComparer();
+        private readonly Dictionary<long, CellRange> _cellRanges = new Dictionary<long, CellRange>(256);
+        private readonly IndexComparer _indexComparer = new IndexComparer();
+        private long[] _keys = Array.Empty<long>();
+        private long[] _sortedKeys = Array.Empty<long>();
+        private int[] _order = Array.Empty<int>();
+        private int[] _tieBreakers = Array.Empty<int>();
+        private PerceptibleData[] _scratch = Array.Empty<PerceptibleData>();
         private float _cellSize;
 
         public float CellSize => _cellSize;
@@ -95,7 +98,6 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _cellSize = size;
-            _comparer.CellSize = _cellSize;
         }
 
         /// <summary>
@@ -119,25 +121,39 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            Array.Sort(data, 0, count, _comparer);
+            EnsureCapacity(count);
+            for (int i = 0; i < count; i++)
+            {
+                _keys[i] = GetCellKey(data[i].Position, _cellSize);
+                _tieBreakers[i] = data[i].Id;
+                _order[i] = i;
+            }
 
-            CellCoordinate current = GetCell(data[0].Position, _cellSize);
+            _indexComparer.Data = data;
+            Array.Sort(_order, 0, count, _indexComparer);
+
+            for (int i = 0; i < count; i++)
+            {
+                int source = _order[i];
+                _sortedKeys[i] = _keys[source];
+                _scratch[i] = data[source];
+            }
+
+            Array.Copy(_scratch, 0, data, 0, count);
+
+            long current = _sortedKeys[0];
             int cellStart = 0;
             for (int i = 1; i <= count; i++)
             {
-                if (i != count)
+                if (i != count && _sortedKeys[i] == current)
                 {
-                    CellCoordinate candidate = GetCell(data[i].Position, _cellSize);
-                    if (candidate.Equals(current))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
 
                 _cellRanges.Add(current, new CellRange { StartIndex = cellStart, Count = i - cellStart });
                 if (i < count)
                 {
-                    current = GetCell(data[i].Position, _cellSize);
+                    current = _sortedKeys[i];
                     cellStart = i;
                 }
             }
@@ -181,12 +197,19 @@ namespace CycloneGames.AIPerception.Runtime
                 return false;
             }
 
-            CellCoordinate minimum = GetCell(origin - range, _cellSize);
-            CellCoordinate maximum = GetCell(origin + range, _cellSize);
+            float3 minimumPosition = origin - range;
+            float3 maximumPosition = origin + range;
+            int minimumX = GetCellAxis(minimumPosition.x, _cellSize);
+            int minimumY = GetCellAxis(minimumPosition.y, _cellSize);
+            int minimumZ = GetCellAxis(minimumPosition.z, _cellSize);
+            int maximumX = GetCellAxis(maximumPosition.x, _cellSize);
+            int maximumY = GetCellAxis(maximumPosition.y, _cellSize);
+            int maximumZ = GetCellAxis(maximumPosition.z, _cellSize);
+
             long cellCount = SaturatingProduct(
-                InclusiveLength(minimum.X, maximum.X),
-                InclusiveLength(minimum.Y, maximum.Y),
-                InclusiveLength(minimum.Z, maximum.Z));
+                InclusiveLength(minimumX, maximumX),
+                InclusiveLength(minimumY, maximumY),
+                InclusiveLength(minimumZ, maximumZ));
             float rangeSquared = range * range;
             bool useDoubleDistance = !math.isfinite(rangeSquared);
             double rangeSquaredDouble = (double)range * range;
@@ -204,13 +227,21 @@ namespace CycloneGames.AIPerception.Runtime
                     maximumResults);
             }
 
-            for (int x = minimum.X; ; x++)
+            int startX = ClampAxis(minimumX);
+            int startY = ClampAxis(minimumY);
+            int startZ = ClampAxis(minimumZ);
+            int endX = ClampAxis(maximumX);
+            int endY = ClampAxis(maximumY);
+            int endZ = ClampAxis(maximumZ);
+
+            for (int x = startX; ; x++)
             {
-                for (int y = minimum.Y; ; y++)
+                for (int y = startY; ; y++)
                 {
-                    for (int z = minimum.Z; ; z++)
+                    for (int z = startZ; ; z++)
                     {
-                        if (_cellRanges.TryGetValue(new CellCoordinate(x, y, z), out CellRange cellRange))
+                        long key = PackCell(x, y, z);
+                        if (_cellRanges.TryGetValue(key, out CellRange cellRange))
                         {
                             int end = cellRange.StartIndex + cellRange.Count;
                             for (int i = cellRange.StartIndex; i < end; i++)
@@ -233,19 +264,19 @@ namespace CycloneGames.AIPerception.Runtime
                             }
                         }
 
-                        if (z == maximum.Z)
+                        if (z == endZ)
                         {
                             break;
                         }
                     }
 
-                    if (y == maximum.Y)
+                    if (y == endY)
                     {
                         break;
                     }
                 }
 
-                if (x == maximum.X)
+                if (x == endX)
                 {
                     break;
                 }
@@ -257,6 +288,28 @@ namespace CycloneGames.AIPerception.Runtime
         public void Clear()
         {
             _cellRanges.Clear();
+        }
+
+        private void EnsureCapacity(int count)
+        {
+            if (_order.Length >= count)
+            {
+                return;
+            }
+
+            int capacity = math.max(64, _order.Length);
+            while (capacity < count)
+            {
+                capacity *= 2;
+            }
+
+            Array.Resize(ref _order, capacity);
+            Array.Resize(ref _keys, capacity);
+            Array.Resize(ref _sortedKeys, capacity);
+            Array.Resize(ref _tieBreakers, capacity);
+            Array.Resize(ref _scratch, capacity);
+            _indexComparer.CellKeys = _keys;
+            _indexComparer.TieBreakers = _tieBreakers;
         }
 
         private static bool CollectLinear(
@@ -317,28 +370,51 @@ namespace CycloneGames.AIPerception.Runtime
             return (x * x) + (y * y) + (z * z) <= rangeSquaredDouble;
         }
 
-        private static CellCoordinate GetCell(float3 position, float cellSize)
+        private static long GetCellKey(float3 position, float cellSize)
         {
-            double inverseCellSize = 1d / cellSize;
-            return new CellCoordinate(
-                FloorToInt((double)position.x * inverseCellSize),
-                FloorToInt((double)position.y * inverseCellSize),
-                FloorToInt((double)position.z * inverseCellSize));
+            return PackCell(
+                GetCellAxis(position.x, cellSize),
+                GetCellAxis(position.y, cellSize),
+                GetCellAxis(position.z, cellSize));
         }
 
-        private static int FloorToInt(double value)
+        private static int GetCellAxis(float value, float cellSize)
         {
-            if (value <= int.MinValue)
+            if (!math.isfinite(value))
+            {
+                return value > 0f ? int.MaxValue : int.MinValue;
+            }
+
+            double normalized = (double)value * (1d / cellSize);
+            if (normalized <= int.MinValue)
             {
                 return int.MinValue;
             }
 
-            if (value >= int.MaxValue)
+            if (normalized >= int.MaxValue)
             {
                 return int.MaxValue;
             }
 
-            return (int)Math.Floor(value);
+            return (int)Math.Floor(normalized);
+        }
+
+        private static int ClampAxis(int value)
+        {
+            if (value < -AxisLimit)
+            {
+                return -AxisLimit;
+            }
+
+            return value > AxisLimit - 1 ? AxisLimit - 1 : value;
+        }
+
+        private static long PackCell(int x, int y, int z)
+        {
+            long packedX = (long)(ClampAxis(x) + AxisLimit) & AxisMask;
+            long packedY = (long)(ClampAxis(y) + AxisLimit) & AxisMask;
+            long packedZ = (long)(ClampAxis(z) + AxisLimit) & AxisMask;
+            return (packedX << (AxisBits * 2)) | (packedY << AxisBits) | packedZ;
         }
 
         private static long InclusiveLength(int minimum, int maximum)

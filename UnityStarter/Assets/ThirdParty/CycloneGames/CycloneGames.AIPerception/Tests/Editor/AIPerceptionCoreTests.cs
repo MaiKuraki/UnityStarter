@@ -82,7 +82,6 @@ namespace CycloneGames.AIPerception.Tests.Editor
 
             PerceptibleTypes.RegisterType(typeId, typeName);
 
-            Assert.That(PerceptibleTypes.IsRegistered(typeId), Is.True);
             Assert.That(PerceptibleTypes.GetTypeName(typeId), Is.EqualTo(typeName));
             Assert.DoesNotThrow(() => PerceptibleTypes.RegisterType(typeId, typeName));
             Assert.Throws<InvalidOperationException>(() =>
@@ -174,53 +173,6 @@ namespace CycloneGames.AIPerception.Tests.Editor
         }
 
         [Test]
-        public void SensorManager_LegacyRegisterReportsOnlyFirstCapacityRejection()
-        {
-            using var registry = new PerceptibleRegistry();
-            using var manager = new SensorManager(registry, maximumSensorCount: 1);
-            var accepted = new TestSensor(1101);
-            var tryRejected = new TestSensor(1102);
-            var firstLegacyRejected = new TestSensor(1103);
-            var repeatedLegacyRejected = new TestSensor(1104);
-            try
-            {
-                using var logs = new RecordingLogWriterScope("CycloneGames.AIPerception");
-                Assert.That(manager.TryRegister(accepted), Is.True);
-
-                // TryRegister is the explicit result channel and must remain silent.
-                Assert.That(manager.TryRegister(tryRejected), Is.False);
-
-                manager.Register(firstLegacyRejected);
-
-                // Further capacity failures and ordinary false outcomes do not create a log storm.
-                manager.Register(repeatedLegacyRejected);
-                manager.Register(null);
-                manager.Register(accepted);
-
-                AIPerceptionMemoryStats stats = manager.GetMemoryStats();
-                Assert.That(stats.SensorCount, Is.EqualTo(1));
-                Assert.That(stats.RejectedSensorRegistrationCount, Is.EqualTo(3L));
-
-                RecordedLogEntry[] entries = logs.Snapshot();
-                Assert.That(entries, Has.Length.EqualTo(1));
-                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
-                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.AIPerception"));
-                Assert.That(
-                    entries[0].Message,
-                    Is.EqualTo(
-                        "SensorManager capacity exhausted (1). " +
-                        "Legacy Register was ignored; use TryRegister to handle admission failure."));
-                Assert.That(entries[0].Exception, Is.Null);
-            }
-            finally
-            {
-                tryRejected.Dispose();
-                firstLegacyRejected.Dispose();
-                repeatedLegacyRejected.Dispose();
-            }
-        }
-
-        [Test]
         public void SensorManager_RejectsLodTablesAbovePackageHardCeiling()
         {
             using var registry = new PerceptibleRegistry();
@@ -255,7 +207,9 @@ namespace CycloneGames.AIPerception.Tests.Editor
             Assert.That(stats.MaximumCandidateCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumCandidates));
             Assert.That(stats.MaximumResultCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumResults));
             Assert.That(stats.MaximumMemoryCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumMemoryEntries));
-            Assert.That(stats.NativeBufferCount, Is.EqualTo(5));
+            // Candidate list + job output array + stimulus-memory handle index. Results and memory
+            // entries are preallocated managed arrays and are not counted as native storage.
+            Assert.That(stats.NativeBufferCount, Is.EqualTo(3));
             Assert.That(stats.NativeBufferCapacity, Is.GreaterThan(0));
         }
 
@@ -964,7 +918,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 PositionValue = new float3(50f, 0f, 0f),
                 UpdateIntervalValue = 10f
             };
-            manager.Register(sensor);
+            manager.TryRegister(sensor);
 
             Assert.That(manager.ConfigureLOD(reference, new[]
             {
@@ -1014,7 +968,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             var sensor = new ProximitySensor(sensorTransform, config, manager);
             try
             {
-                manager.Register(sensor);
+                manager.TryRegister(sensor);
                 manager.Update(0f);
 
                 Assert.That(sensor.DetectedCount, Is.Zero);
@@ -1051,7 +1005,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 firstManager);
             try
             {
-                Assert.Throws<InvalidOperationException>(() => secondManager.Register(sensor));
+                Assert.Throws<InvalidOperationException>(() => secondManager.TryRegister(sensor));
                 Assert.That(secondManager.SensorCount, Is.Zero);
             }
             finally
@@ -1069,7 +1023,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 UpdateIntervalValue = 0f
             };
             sensor.UpdateAction = () => manager.Unregister(sensor);
-            manager.Register(sensor);
+            manager.TryRegister(sensor);
 
             Assert.Throws<InvalidOperationException>(() => manager.Update(0f));
             Assert.That(manager.GetSensor(sensor.SensorId), Is.SameAs(sensor));

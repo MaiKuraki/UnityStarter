@@ -21,7 +21,7 @@ CycloneGames.AIPerception is a Unity runtime module for continuous world percept
 
 Use this module when Unity agents need continuous senses:
 
-- sight within a 3D cone, with optional main-thread Physics line-of-sight checks;
+- sight within a 3D cone, with optional main-thread Physics line-of-sight checks, point-blank near-clipping awareness, and lose-sight hysteresis for already-remembered targets;
 - hearing from perceptibles marked as continuous sound sources (`IsSoundSource == true`);
 - proximity within a 3D radius;
 - short-lived stimulus memory after direct detection ends;
@@ -83,7 +83,9 @@ Jobs borrow the registry snapshot and sensor-owned buffers. The manager complete
 
 ### Add a manager
 
-Create a scene object and add `PerceptionManagerComponent`. An instance is created automatically when an `AIPerceptionComponent` initializes, but an explicit manager makes world capacity, spatial cell size, scheduling, and LOD visible.
+Create a scene object and add `PerceptionManagerComponent`. Perception never spawns a hidden driver: without one the `AIPerceptionComponent` stays uninitialized and logs an error. Authoring the manager explicitly keeps world capacity, spatial cell size, scheduling, and LOD visible, and lets a composition root wire the same instance into its own systems.
+
+Code-only bootstraps may call `PerceptionManagerComponent.CreateInstance()`; that is the only path that creates an object, and it is never implicit.
 
 Keep `Deferred Job Completion` enabled unless gameplay needs results in the same `Update`. Start with a finite `Maximum Perceptibles`. Tune `Spatial Cell Size` from profiling data.
 
@@ -255,6 +257,8 @@ Sight uses a Burst cone prefilter followed by optional main-thread `Physics.Rayc
 | --- | ---: | --- |
 | `HalfAngle` | 60 degrees | Half of total 3D FOV; finite range 0–180 |
 | `MaxDistance` | 30 | Base range; target radius is added |
+| `NearClippingRadius` | 0 | Point-blank awareness radius that bypasses the cone; 0 disables it |
+| `LoseSightRadius` | 0 | Range applied to already-remembered targets; 0 or below `MaxDistance` keeps `MaxDistance` |
 | `UpdateInterval` | 0.1 s | Base interval before LOD |
 | `UseLineOfSight` | enabled | Enables 3D Physics refinement |
 | `ObstacleLayer` | default raycast layers | Layers treated as occluders |
@@ -263,6 +267,8 @@ Sight uses a Burst cone prefilter followed by optional main-thread `Physics.Rayc
 | `MemoryDuration` | 3 s | Zero disables memory |
 
 Exclude target colliders from `ObstacleLayer` unless they intentionally block sight. When the LOS budget is reached, sight commits already refined results, reports `LineOfSightBudgetExceeded`, and advances its cursor.
+
+`NearClippingRadius` separates tactile awareness from the view cone: a target that is 0.3 m to the side of a 60-degree cone is invisible at radius 0 and sensed at radius 1. `LoseSightRadius` requires `MemoryDuration > 0`, because the remembered-stimulus table is what carries the "already seen" state; the broadphase widens automatically to the largest of `MaxDistance`, `NearClippingRadius`, and `LoseSightRadius`.
 
 ### Hearing
 
@@ -383,10 +389,10 @@ if (sight != null)
 
 - a positive value rejects registrations after exhaustion;
 - the default is 16,384 and the package hard ceiling is 1,048,576;
-- legacy `0` now maps to the package hard ceiling instead of unbounded growth;
+- `0` maps to the package hard ceiling instead of unbounded growth;
 - a limit cannot be lowered below the active count.
 
-`SensorManager` defaults to 4,096 sensors and cannot exceed the package hard ceiling of 65,536. Use `TryRegister` when the caller must react to admission failure. The legacy `Register` method remains source-compatible and becomes a no-op when capacity is exhausted; the manager emits one error for the first legacy capacity rejection during its lifetime, while direct `TryRegister` calls remain silent and expose the result through their return value. Null input, duplicate registration, and other non-capacity outcomes do not emit that diagnostic. Contract misuse such as duplicate IDs or a wrong built-in owner still throws. `AIPerceptionComponent` disposes a newly constructed built-in sensor when admission fails and does not retry every frame; recover through an explicit cold-path rebuild or lifecycle re-enable after capacity is available. A registry can attach at most 1,024 sensor managers, and an LOD table can contain at most 64 levels.
+`SensorManager` defaults to 4,096 sensors and cannot exceed the package hard ceiling of 65,536. `TryRegister` returns false when capacity is exhausted and never logs; admission failure is a caller decision, not a diagnostic event. Null input, duplicate registration, and other non-capacity outcomes do not emit a diagnostic. Contract misuse such as duplicate IDs or a wrong built-in owner still throws. `AIPerceptionComponent` disposes a newly constructed built-in sensor when admission fails and does not retry every frame; recover through an explicit cold-path rebuild or lifecycle re-enable after capacity is available. A registry can attach at most 1,024 sensor managers, and an LOD table can contain at most 64 levels.
 
 ### Per-sensor capacity
 
@@ -401,7 +407,7 @@ Each sensor config embeds `PerceptionSensorCapacity`:
 | `InitialMemoryCapacity` | 32 | Initial persistent memory storage |
 | `MaximumMemoryEntries` | 1024 | Hard remembered-target count |
 
-Serialized or runtime values above the absolute package ceilings are normalized to 1,048,576 candidates, 65,536 results, and 65,536 memory entries. Initial capacities are clamped to their effective maximum. These ceilings bound retained Native storage even when legacy data contains `int.MaxValue`.
+Serialized or runtime values above the absolute package ceilings are normalized to 1,048,576 candidates, 65,536 results, and 65,536 memory entries. Initial capacities are clamped to their effective maximum. These ceilings bound retained Native storage even when authoring data contains `int.MaxValue`.
 
 Capacity failure is explicit:
 
@@ -451,8 +457,13 @@ public sealed class OwnedSightSense : MonoBehaviour
 
     private void OnEnable()
     {
-        _ = PerceptionManagerComponent.Instance;
-        _manager = SensorManager.Instance;
+        _manager = SensorManager.ExistingInstance;
+        if (_manager == null)
+        {
+            Debug.LogError("Add a PerceptionManagerComponent or inject a SensorManager.");
+            return;
+        }
+
         PerceptibleComponent self = GetComponent<PerceptibleComponent>();
         PerceptibleHandle ignored = self != null
             ? self.Handle
@@ -461,7 +472,11 @@ public sealed class OwnedSightSense : MonoBehaviour
         SightSensorConfig config = SightSensorConfig.Default;
         config.UseLineOfSight = false;
         _sensor = new SightSensor(transform, config, _manager, ignored);
-        _manager.Register(_sensor);
+        if (!_manager.TryRegister(_sensor))
+        {
+            _sensor.Dispose();
+            _sensor = null;
+        }
     }
 
     private void OnDisable()
@@ -493,10 +508,23 @@ Worker jobs read immutable native snapshots and write sensor-owned arrays. They 
 
 ### Immediate and deferred completion
 
-- Immediate mode completes a sensor inside `UpdateSensor`; results are available when it returns.
-- Deferred mode schedules eligible sensors in manager `Update` and completes/commits them in `LateUpdate`.
+- Immediate mode evaluates a sensor inside `UpdateSensor`; results are available when it returns.
+- Deferred mode evaluates eligible sensors during manager `Update` — inline or as a scheduled job — and commits them in `LateUpdate`.
 - Switching deferred mode off first completes pending work.
 - Removing or disposing a sensor drains its pending job.
+
+### Inline execution for small candidate sets
+
+`SensorManager.InlineExecutionThreshold` (default 16) makes a sensor run its query loop directly instead of scheduling a job when the candidate count is at or below the threshold. Scheduling and completing a job costs far more than scanning a handful of candidates, so the default keeps small senses off the job system entirely. Set it to 0 to force the job path for every query. Both paths execute the identical `Execute(int)` body, so results are byte-identical.
+
+### Time source
+
+`SensorManager` accepts an optional `IPerceptionClock`. The default reads `Time.timeAsDouble`. Inject a fixed-step or replay clock to drive interval gating and stimulus aging from a deterministic simulation instead of wall-clock frame time. Switching clocks at runtime invalidates the aging baseline of every sensor.
+
+```csharp
+var clock = new FixedStepClock(ticksPerSecond: 30);
+var manager = new SensorManager(PerceptibleRegistry.Instance, 4096, clock);
+```
 
 ### Extension patterns
 
@@ -625,6 +653,7 @@ Runtime characteristics:
 - managed/native arrays, candidate lists, result lists, memory lists, and lookup storage are reused after reaching required capacity;
 - registration growth, first use, capacity growth, configuration rebuild, and spatial dictionary growth are allocation points;
 - snapshot capture is O(N) even when captured values do not change;
+- the spatial rebuild packs one 63-bit cell key per element and sorts an index permutation, so a dirty rebuild never re-derives coordinates or copies a 48-byte payload per comparison;
 - aggregate workload tracking is folded into the existing sensor scheduling traversal and counts only sensors actually updated in that manager frame; interval-, LOD-, or disabled-sensor skips cannot reuse stale per-sensor workload;
 - full per-sensor storage aggregation runs only when `SensorManager.GetMemoryStats()` is explicitly called;
 - `SensorManager.GetMemoryStats()` reads the cached last-frame and peak manager workload without mutating either value;
@@ -656,7 +685,7 @@ Practical Unity Physics precision degrades far below `float.MaxValue`. Large-wor
 
 Custom Inspectors provided for `PerceptibleComponent`, `AIPerceptionComponent`, and `PerceptionManagerComponent` use `SerializedObject`/`SerializedProperty`, support multi-object editing, preserve Undo and Prefab overrides, and lock authoring in Play Mode.
 
-During Play Mode, use `Tools > CycloneGames > AI Perception > Show All Runtime Gizmos (Session)`. The toggle is session-scoped and resets on exit.
+During Play Mode, use `Tools > CycloneGames > AI Perception > Scene Gizmos > Show All (Session)`. The toggle is session-scoped and resets on exit.
 
 ### Platform notes
 

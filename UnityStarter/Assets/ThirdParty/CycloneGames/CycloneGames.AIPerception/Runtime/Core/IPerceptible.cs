@@ -65,13 +65,6 @@ namespace CycloneGames.AIPerception.Runtime
             return _typeNames.TryGetValue(typeId, out var name) ? name : $"Type_{typeId}";
         }
 
-        /// <summary>
-        /// Gets all registered type IDs.
-        /// </summary>
-        public static IEnumerable<int> GetAllTypes() => _typeNames.Keys;
-
-        public static bool IsRegistered(int typeId) => _typeNames.ContainsKey(typeId);
-
         private static void ResetCatalog()
         {
             _typeNames.Clear();
@@ -105,4 +98,5 @@ namespace CycloneGames.AIPerception.Runtime
         // Optional: Custom tag for filtering
         string Tag { get; }
     }
+
 }

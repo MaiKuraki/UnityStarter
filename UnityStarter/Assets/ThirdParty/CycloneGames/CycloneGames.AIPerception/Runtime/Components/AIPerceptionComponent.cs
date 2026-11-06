@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using Unity.Collections;
 using UnityEngine;
 
@@ -7,10 +8,17 @@ namespace CycloneGames.AIPerception.Runtime
     /// Unity composition bridge for the three built-in perception senses. Authoring changes are
     /// applied transactionally through <see cref="ApplyAuthoringConfiguration"/>.
     /// </summary>
+    /// <remarks>
+    /// The component never creates a hidden driver object. A <see cref="PerceptionManagerComponent"/>
+    /// must exist in the scene, or an explicit <see cref="SensorManager"/> must be injected with
+    /// <see cref="SetSensorManager"/> before the component enables.
+    /// </remarks>
     [DisallowMultipleComponent]
     [AddComponentMenu("CycloneGames/AI/AI Perception")]
     public sealed class AIPerceptionComponent : MonoBehaviour
     {
+        private static readonly LogChannel Log = AIPerceptionRuntimeLog.Channel;
+
         [Header("Sight")]
         [SerializeField] private bool _enableSight = true;
         [SerializeField] private SightSensorConfig _sightConfig = SightSensorConfig.Default;
@@ -23,14 +31,15 @@ namespace CycloneGames.AIPerception.Runtime
         [SerializeField] private bool _enableProximity;
         [SerializeField] private ProximitySensorConfig _proximityConfig = ProximitySensorConfig.Default;
 
-        // Retained for serialized compatibility. Runtime diagnostics are rendered by the Editor
-        // Inspector and do not run per-object IMGUI or reverse scene scans.
+        // Scene-view pin state. Read by the gizmo drawer; no per-object IMGUI runs at runtime.
         [SerializeField, HideInInspector] private bool _showDebugOverlay;
 
         private SightSensor _sightSensor;
         private HearingSensor _hearingSensor;
         private ProximitySensor _proximitySensor;
+        private SensorManager _sensorManager;
         private bool _initialized;
+        private bool _driverWarningLogged;
 
         public SightSensor SightSensor => _sightSensor;
         public HearingSensor HearingSensor => _hearingSensor;
@@ -42,6 +51,33 @@ namespace CycloneGames.AIPerception.Runtime
         public HearingSensorConfig HearingConfig => _hearingConfig;
         public ProximitySensorConfig ProximityConfig => _proximityConfig;
         public bool IsInitialized => _initialized;
+
+        /// <summary>Sensor manager this component's sensors are registered with, or null before initialization.</summary>
+        public SensorManager SensorManager => _sensorManager;
+
+        /// <summary>
+        /// Binds an explicit sensor manager. Use this from a composition root or DI container instead
+        /// of relying on the process-wide default world. Rebinds live sensors when already enabled.
+        /// </summary>
+        public void SetSensorManager(SensorManager manager, bool rebuild = true)
+        {
+            if (_sensorManager == manager)
+            {
+                return;
+            }
+
+            if (rebuild && isActiveAndEnabled)
+            {
+                DisposeSensors();
+            }
+
+            _sensorManager = manager;
+            if (rebuild && isActiveAndEnabled)
+            {
+                Initialize();
+            }
+        }
+
         public bool HasSightDetection => _sightSensor?.HasDetection ?? false;
         public bool HasHearingDetection => _hearingSensor?.HasDetection ?? false;
         public bool HasProximityDetection => _proximitySensor?.HasDetection ?? false;
@@ -78,14 +114,26 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            _ = PerceptionManagerComponent.Instance;
-            PerceptibleHandle ignoredTarget = GetSelfHandle();
-            SensorManager manager = SensorManager.Instance;
+            SensorManager manager = _sensorManager ?? SensorManager.ExistingInstance;
             if (manager == null)
             {
+                if (!_driverWarningLogged)
+                {
+                    _driverWarningLogged = true;
+                    Log.Error(
+                        name,
+                        static (context, builder) => builder
+                            .Append("No perception driver is available for '").Append(context)
+                            .Append("'. Add a PerceptionManagerComponent to the scene or inject a ")
+                            .Append("SensorManager with SetSensorManager. Perception never spawns a hidden driver."));
+                }
+
                 return;
             }
 
+            _sensorManager = manager;
+            _driverWarningLogged = false;
+            PerceptibleHandle ignoredTarget = GetSelfHandle();
             if (_enableSight)
             {
                 _sightSensor = new SightSensor(transform, _sightConfig, manager, ignoredTarget);
@@ -204,7 +252,7 @@ namespace CycloneGames.AIPerception.Runtime
 
         private void DisposeSensors()
         {
-            SensorManager manager = SensorManager.ExistingInstance;
+            SensorManager manager = _sensorManager ?? SensorManager.ExistingInstance;
             DisposeSensor(manager, ref _sightSensor);
             DisposeSensor(manager, ref _hearingSensor);
             DisposeSensor(manager, ref _proximitySensor);

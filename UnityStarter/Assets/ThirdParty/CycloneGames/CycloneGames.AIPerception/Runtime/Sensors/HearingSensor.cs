@@ -205,7 +205,7 @@ namespace CycloneGames.AIPerception.Runtime
             ThrowIfDisposed();
             CompleteAndCommitPending();
             _memoryCounters.BeginUpdate();
-            double timestamp = Time.timeAsDouble;
+            double timestamp = _owner.Now;
             if (_sensorTransform == null || !IsConfigurationValid())
             {
                 CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
@@ -261,12 +261,31 @@ namespace CycloneGames.AIPerception.Runtime
                 Audibility = _jobAudibility
             };
 
-            _currentJobHandle = job.Schedule(_queryTargetCount, 64);
-            _jobScheduled = true;
+            bool deferred = _owner.UseDeferredJobCompletion && _owner.IsRegistered(this);
             _hasPendingResults = true;
-            if (_owner.UseDeferredJobCompletion && _owner.IsRegistered(this))
+            int inlineThreshold = _owner.InlineExecutionThreshold;
+            if (inlineThreshold > 0 && _queryTargetCount <= inlineThreshold)
             {
-                _owner.AddToBatch(_currentJobHandle);
+                // Same evaluation, no job: the snapshot cannot change between Update and LateUpdate.
+                for (int i = 0; i < _queryTargetCount; i++)
+                {
+                    job.Execute(i);
+                }
+
+                _jobScheduled = false;
+            }
+            else
+            {
+                _currentJobHandle = job.Schedule(_queryTargetCount, 64);
+                _jobScheduled = true;
+            }
+
+            if (deferred)
+            {
+                if (_jobScheduled)
+                {
+                    _owner.AddToBatch(_currentJobHandle);
+                }
             }
             else
             {
