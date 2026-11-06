@@ -18,8 +18,16 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
         [ReadOnly] public float3 Forward;
         [ReadOnly] public float MaxDistance;
         [ReadOnly] public float CosHalfAngle;
+        [ReadOnly] public float NearClippingRadius;
+        [ReadOnly] public float LoseSightRadius;
+        [ReadOnly] public bool UseLoseSightRadius;
+        [ReadOnly] public NativeParallelHashMap<PerceptibleHandle, int> MemoryLookup;
         [ReadOnly] public int TargetTypeId;
         [ReadOnly] public bool FilterByType;
+        [ReadOnly] public byte ObserverTeamId;
+        [ReadOnly] public PerceptionAffiliation Affiliation;
+        /// <summary>256x256 attitude table. Created by the sensor before scheduling when the filter is not All.</summary>
+        [ReadOnly] public NativeArray<byte> AttitudeTable;
         [ReadOnly] public PerceptibleHandle IgnoredTarget;
 
         // Output: 1 = passed pre-filter, 0 = failed
@@ -32,16 +40,39 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
             var target = Targets[CandidateIndices[index]];
 
             if (!target.IsDetectable) return;
-            if (target.ToHandle() == IgnoredTarget) return;
+            PerceptibleHandle handle = target.ToHandle();
+            if (handle == IgnoredTarget) return;
             if (FilterByType && target.TypeId != TargetTypeId) return;
+            if (Affiliation != PerceptionAffiliation.All)
+            {
+                // Sensors materialise the table before scheduling; a hand-built job without one treats
+                // every pair as neutral instead of indexing an uncreated container.
+                PerceptionTeamAttitude attitude = AttitudeTable.IsCreated
+                    ? (PerceptionTeamAttitude)AttitudeTable[PerceptionTeam.AttitudeIndex(ObserverTeamId, target.TeamId)]
+                    : PerceptionTeamAttitude.Neutral;
+                if (((int)Affiliation & (1 << (int)attitude)) == 0) return;
+            }
 
             float3 toTarget = target.Position - Origin;
             float distSq = math.lengthsq(toTarget);
-            float effectiveDistance = MaxDistance + target.DetectionRadius;
+            float baseRange = MaxDistance;
+            if (UseLoseSightRadius && MemoryLookup.TryGetValue(handle, out _))
+            {
+                baseRange = LoseSightRadius;
+            }
+
+            float effectiveDistance = baseRange + target.DetectionRadius;
             float effectiveDistanceSq = effectiveDistance * effectiveDistance;
 
             if (!math.all(math.isfinite(target.Position)) || !math.all(math.isfinite(Origin)) ||
                 !math.isfinite(MaxDistance) || !math.isfinite(target.DetectionRadius)) return;
+
+            // Near clipping: tactile awareness at point-blank range, independent of the view cone.
+            if (NearClippingRadius > 0f && distSq <= NearClippingRadius * NearClippingRadius)
+            {
+                PassedFilter[index] = 1;
+                return;
+            }
 
             if (!math.isfinite(distSq) || !math.isfinite(effectiveDistance) ||
                 !math.isfinite(effectiveDistanceSq))
@@ -56,7 +87,7 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
                     return;
                 }
 
-                double preciseEffectiveDistance = (double)MaxDistance + target.DetectionRadius;
+                double preciseEffectiveDistance = (double)baseRange + target.DetectionRadius;
                 if (preciseEffectiveDistance <= 0d || preciseDistance > preciseEffectiveDistance)
                 {
                     return;
@@ -99,6 +130,10 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
         [ReadOnly] public float Radius;
         [ReadOnly] public int TargetTypeId;
         [ReadOnly] public bool FilterByType;
+        [ReadOnly] public byte ObserverTeamId;
+        [ReadOnly] public PerceptionAffiliation Affiliation;
+        /// <summary>256x256 attitude table. Created by the sensor before scheduling when the filter is not All.</summary>
+        [ReadOnly] public NativeArray<byte> AttitudeTable;
         [ReadOnly] public PerceptibleHandle IgnoredTarget;
 
         // Output: audibility value (0 = not heard, >0 = audibility strength)
@@ -114,6 +149,15 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
             if (!target.IsSoundSource) return;
             if (target.ToHandle() == IgnoredTarget) return;
             if (FilterByType && target.TypeId != TargetTypeId) return;
+            if (Affiliation != PerceptionAffiliation.All)
+            {
+                // Sensors materialise the table before scheduling; a hand-built job without one treats
+                // every pair as neutral instead of indexing an uncreated container.
+                PerceptionTeamAttitude attitude = AttitudeTable.IsCreated
+                    ? (PerceptionTeamAttitude)AttitudeTable[PerceptionTeam.AttitudeIndex(ObserverTeamId, target.TeamId)]
+                    : PerceptionTeamAttitude.Neutral;
+                if (((int)Affiliation & (1 << (int)attitude)) == 0) return;
+            }
 
             float3 toTarget = target.Position - Origin;
             float distSq = math.lengthsq(toTarget);
@@ -172,6 +216,10 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
         [ReadOnly] public float Radius;
         [ReadOnly] public int TargetTypeId;
         [ReadOnly] public bool FilterByType;
+        [ReadOnly] public byte ObserverTeamId;
+        [ReadOnly] public PerceptionAffiliation Affiliation;
+        /// <summary>256x256 attitude table. Created by the sensor before scheduling when the filter is not All.</summary>
+        [ReadOnly] public NativeArray<byte> AttitudeTable;
         [ReadOnly] public PerceptibleHandle IgnoredTarget;
 
         // Output: proximity intensity (0 = outside range, 1 = at center)
@@ -186,6 +234,15 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
             if (!target.IsDetectable) return;
             if (target.ToHandle() == IgnoredTarget) return;
             if (FilterByType && target.TypeId != TargetTypeId) return;
+            if (Affiliation != PerceptionAffiliation.All)
+            {
+                // Sensors materialise the table before scheduling; a hand-built job without one treats
+                // every pair as neutral instead of indexing an uncreated container.
+                PerceptionTeamAttitude attitude = AttitudeTable.IsCreated
+                    ? (PerceptionTeamAttitude)AttitudeTable[PerceptionTeam.AttitudeIndex(ObserverTeamId, target.TeamId)]
+                    : PerceptionTeamAttitude.Neutral;
+                if (((int)Affiliation & (1 << (int)attitude)) == 0) return;
+            }
 
             float3 toTarget = target.Position - Origin;
             float distSq = math.lengthsq(toTarget);
