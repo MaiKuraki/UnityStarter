@@ -648,7 +648,7 @@ Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magni
 
 `Add` 修饰符始终按 `magnitude * stackCount` 线性缩放，`Override` 完全忽略层数，因此没有乘除修饰符时该策略不产生任何效果。此时效果 Inspector 会隐藏该行；若存在非默认值则显示为锁定状态。
 
-> 迁移说明：在该字段出现之前，叠层上限大于 1 且带 `Multiply`/`Division` 的效果按层复合。现在这类效果默认使用 `LinearBias`，除非显式选择 `Exponential`。需要保留原数值的效果请把 `Magnitude Policy` 设为 `Exponential`，并重新核对平衡数值。
+> 只有需要按层复合的效果才应设置 `Magnitude Policy = Exponential`。其余乘法效果统一由 `LinearBias` 解析。该策略按 Effect Definition 存储，修改后会改变结算幅值，必须重新核对平衡数值。
 
 支持三种 Stacking Duration 策略（对标 UE5 `EGameplayEffectStackingDurationPolicy`）。`RefreshOnSuccessfulApplication` 将剩余时间重置为新一次应用的 Duration（包括 `SetDuration` 覆写）；Active Effect 保留原 Spec 的 Lease，仅采用新应用的 Duration。`NeverRefresh` 保持原计时。`ExtendDuration` 将新应用的 Duration 累加到剩余时间（定点数饱和加法），必须搭配 `ClearEntireStack` Expiration（Definition 校验强制）。预测应用若会堆叠到已有 Effect 上，会在任何变更前以 `PredictionUnsupported` 失败关闭，因此预测路径不会扰动权威 Duration Timer。
 
@@ -1032,6 +1032,8 @@ GASDebugOverlay.Cleanup();
 `TryAddTarget` 按 ASC 引用身份判重。再次注册同一个 ASC 会更新 Owner、Tracking Target 与 Display Name，不会占用另一个槽位。Overlay 不拥有也不 Dispose ASC、Owner 或 Transform；调用方必须在这些 Owner 关闭前移除自己的注册。已 Dispose 的 ASC 会被防御性清理。`ClearTargets` 只应由明确要替换完整集合的 Composition Owner 调用。
 
 Target Registration 与 Visibility 相互独立。`TryAddTarget`、`RemoveTarget` 与 `ClearTargets` 不切换 Overlay；`SetEnabled` 不改变注册集合。`IsTargetRegistered` 报告一个 Live ASC 当前是否已注册。`BoundTargetCount` 报告 Live Registration 数量。`TargetCapacity` 报告当前实例的固定注册预算。该预算在 Overlay 初始化时读取 `GASOverlayConfig.MaxPanels`，默认值为 8，并限制在 1 到 32。ASC 为 null、已 Dispose 或有界集合已满时，`TryAddTarget` 返回 `false`，且不会驱逐其他 Target。修改 `MaxPanels` 后，需要重建 Overlay 才会应用新值。
+
+Overlay 按以下顺序解析配置：`GASDebugOverlay.Initialize` 的 `configuration` 参数、`GASDebugOverlay.ActiveConfiguration`，最后是内存中的 `GASOverlayConfig.CreateDefault()` 实例。传入的 Asset 在初始化时会被克隆，因此 Overlay 内的设置面板只修改运行期副本，不会改动项目资产。`ApplyConfiguration` 可为运行中的 Overlay 替换该副本；Target Capacity 在初始化时一次性捕获，不受后续替换影响。
 
 `Toggle` 是单目标便捷 API：它使用传入的 Live ASC 替换完整 Target Set，并切换可见性。Editor 菜单会先从准确选中的 GameObject 收集 Live ASC，再替换自己的 Target Set，不会扫描 Scene。Sample 显式注册 Player 与 Enemy。
 

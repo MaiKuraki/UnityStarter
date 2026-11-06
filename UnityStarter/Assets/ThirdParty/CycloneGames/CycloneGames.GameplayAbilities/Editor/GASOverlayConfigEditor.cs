@@ -1,3 +1,4 @@
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayAbilities.Runtime;
@@ -16,7 +17,9 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             EditorGUILayout.HelpBox(
                 "GAS Debug Overlay Configuration\n" +
-                "Place this asset in a Resources folder (named 'GASOverlayConfig') for auto-loading.\n" +
+                "This asset can live anywhere in the project. Bind it with GASDebugOverlay.ActiveConfiguration, " +
+                "or pass it to Initialize(enableAtStart, dontDestroyOnLoad, configuration).\n" +
+                "When no configuration is supplied, the overlay uses GASOverlayConfig defaults.\n" +
                 "Toggle overlay in Play Mode: Tools > CycloneGames > GameplayAbilities > Overlay > Toggle In Play Mode",
                 MessageType.Info);
 
@@ -39,7 +42,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         [MenuItem(GameplayAbilitiesEditorMenuPaths.OverlayConfig)]
         public static void SelectOrCreateConfig()
         {
-            // Try find existing asset in Resources
+            // Select an existing configuration regardless of where it is stored.
             var guids = AssetDatabase.FindAssets("t:GASOverlayConfig");
             if (guids.Length > 0)
             {
@@ -50,22 +53,40 @@ namespace CycloneGames.GameplayAbilities.Editor
                 return;
             }
 
-            // Create new one in a Resources folder near the Runtime assembly
-            string dir = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/Runtime/Resources";
-            if (!AssetDatabase.IsValidFolder(dir))
-            {
-                string parent = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/Runtime";
-                AssetDatabase.CreateFolder(parent, "Resources");
-            }
-
+            string folder = ResolveCreationFolder();
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath(folder + "/GASOverlayConfig.asset");
             var config = ScriptableObject.CreateInstance<GASOverlayConfig>();
-            string assetPath = dir + "/GASOverlayConfig.asset";
             AssetDatabase.CreateAsset(config, assetPath);
             AssetDatabase.SaveAssets();
 
             Selection.activeObject = config;
             EditorGUIUtility.PingObject(config);
-            Log.Info($"Created GAS overlay config at: {assetPath}");
+            Log.Info($"Created GAS overlay config at: {assetPath}. " +
+                     "Assign it to GASDebugOverlay.ActiveConfiguration or pass it to Initialize(...).");
+        }
+
+        private static string ResolveCreationFolder()
+        {
+            foreach (UnityEngine.Object selected in Selection.objects)
+            {
+                string path = AssetDatabase.GetAssetPath(selected);
+                if (string.IsNullOrEmpty(path)) continue;
+
+                if (AssetDatabase.IsValidFolder(path)) return path;
+
+                string parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
+                if (!string.IsNullOrEmpty(parent) && AssetDatabase.IsValidFolder(parent))
+                {
+                    return parent;
+                }
+            }
+
+            const string defaultFolder = "Assets/Settings";
+            if (!AssetDatabase.IsValidFolder(defaultFolder))
+            {
+                AssetDatabase.CreateFolder("Assets", "Settings");
+            }
+            return defaultFolder;
         }
     }
 }

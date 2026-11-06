@@ -10,11 +10,70 @@ namespace CycloneGames.Foundation2D.Tests.Editor
 {
     public sealed class Foundation2DShaderTests
     {
-        private const string SpriteShaderPath =
-            "Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/Shader/SpriteFlipbookRemap.shader";
+        private const string SpriteShaderFileName = "SpriteFlipbookRemap.shader";
+        private const string UiShaderFileName = "UIFlipbookRemap.shader";
 
-        private const string UiShaderPath =
-            "Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/Shader/UIFlipbookRemap.shader";
+        private static string SpriteShaderPath => FindShaderAsset(SpriteShaderFileName);
+
+        private static string UiShaderPath => FindShaderAsset(UiShaderFileName);
+
+        private static string FindShaderAsset(string fileName)
+        {
+            string filter = Path.GetFileNameWithoutExtension(fileName) + " t:Shader";
+            foreach (string guid in AssetDatabase.FindAssets(filter))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.EndsWith("/" + fileName, StringComparison.Ordinal))
+                {
+                    return path;
+                }
+            }
+
+            Assert.Fail($"Shader '{fileName}' was not found in this project.");
+            return null;
+        }
+
+        // AssetDatabase paths are project-relative. Installed UPM packages are exposed through the
+        // virtual Packages/<id>/ prefix while their files live in Library/PackageCache/<id>@<hash>.
+        private static string ResolveDiskPath(string assetPath)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            Assert.That(projectRoot, Is.Not.Null, "The Unity project root could not be resolved.");
+
+            string normalized = assetPath.Replace('\\', '/');
+            string direct = Path.Combine(projectRoot, normalized.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(direct))
+            {
+                return direct;
+            }
+
+            const string packagesPrefix = "Packages/";
+            if (normalized.StartsWith(packagesPrefix, StringComparison.Ordinal))
+            {
+                string withoutPrefix = normalized.Substring(packagesPrefix.Length);
+                int slash = withoutPrefix.IndexOf('/');
+                if (slash > 0)
+                {
+                    string packageId = withoutPrefix.Substring(0, slash);
+                    string inPackage = withoutPrefix.Substring(slash + 1).Replace('/', Path.DirectorySeparatorChar);
+                    string cacheRoot = Path.Combine(projectRoot, "Library", "PackageCache");
+                    if (Directory.Exists(cacheRoot))
+                    {
+                        foreach (string directory in Directory.EnumerateDirectories(cacheRoot, packageId + "@*"))
+                        {
+                            string candidate = Path.Combine(directory, inPackage);
+                            if (File.Exists(candidate))
+                            {
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+            }
+
+            Assert.Fail("Could not resolve a readable file for shader asset: " + assetPath);
+            return null;
+        }
 
         private static readonly string[] RequiredSpriteProperties =
         {
@@ -77,17 +136,12 @@ namespace CycloneGames.Foundation2D.Tests.Editor
             }
         }
 
-        [TestCase(SpriteShaderPath)]
-        [TestCase(UiShaderPath)]
-        public void FlipbookShaderSource_UsesValidUtf8AndOneLineEndingStyle(string assetPath)
+        [TestCase(SpriteShaderFileName)]
+        [TestCase(UiShaderFileName)]
+        public void FlipbookShaderSource_UsesValidUtf8AndOneLineEndingStyle(string fileName)
         {
-            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
-            Assert.That(projectRoot, Is.Not.Null, "The Unity project root could not be resolved.");
-
-            string fullPath = Path.Combine(
-                projectRoot,
-                assetPath.Replace('/', Path.DirectorySeparatorChar));
-            byte[] bytes = File.ReadAllBytes(fullPath);
+            string assetPath = FindShaderAsset(fileName);
+            byte[] bytes = File.ReadAllBytes(ResolveDiskPath(assetPath));
 
             bool hasUtf8Bom = bytes.Length >= 3 &&
                               bytes[0] == 0xEF &&

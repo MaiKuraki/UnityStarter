@@ -12,6 +12,9 @@ namespace CycloneGames.DataTable.CodeGen
     {
         private static partial class DataTablePipeline
         {
+            private const string ClientCodeOutputLine = "code_output=Generated/ClientCode";
+            private const string ClientCodeOutputMovedLine = "code_output=Generated/ClientCodeMoved";
+
             public static void RunSelfTests()
             {
                 RunInspectionCommandGrammarSelfTests();
@@ -108,13 +111,11 @@ namespace CycloneGames.DataTable.CodeGen
             {
                 string repositoryRoot = Path.Combine(temporaryRoot, "repository");
                 string sourceRoot = Path.Combine(repositoryRoot, "DataTable", "Luban");
-                string unityAssets = Path.Combine(repositoryRoot, "UnityStarter", "Assets");
-                string toolRoot = Path.Combine(
-                    repositoryRoot,
-                    "UnityStarter", "Assets", "ThirdParty", "CycloneGames", "CycloneGames.DataTable", "Tools~", "CodeGen");
+                string generatedRoot = Path.Combine(sourceRoot, "Generated");
+                string toolRoot = Path.Combine(repositoryRoot, "Generated", "CodeGen");
                 Directory.CreateDirectory(sourceRoot);
                 Directory.CreateDirectory(Path.Combine(sourceRoot, "Datas"));
-                Directory.CreateDirectory(unityAssets);
+                Directory.CreateDirectory(generatedRoot);
                 Directory.CreateDirectory(toolRoot);
                 string toolProject = Path.Combine(toolRoot, "CycloneGames.DataTable.CodeGen.csproj");
                 File.WriteAllText(toolProject, "<Project />\n");
@@ -133,7 +134,8 @@ namespace CycloneGames.DataTable.CodeGen
                     "process_timeout_seconds=60\n" +
                     "[templates]\ncustom_template_dir=\nbridge_files=\n" +
                     "[codegen]\n" +
-                    "codegen_project=../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj\n" +
+                    "codegen_project=" +
+                    Path.GetRelativePath(sourceRoot, toolProject).Replace('\\', '/') + "\n" +
                     "string_constant_tables=\n" +
                     "string_constant_value_column=name\n" +
                     "string_constant_comment_column=comment\n" +
@@ -141,8 +143,8 @@ namespace CycloneGames.DataTable.CodeGen
                     "string_constant_scope_column=scope\n" +
                     "string_constant_generated_comment_language=en\n" +
                     "[profile.client]\n" +
-                    "code_output=../../UnityStarter/Assets/GeneratedCode\n" +
-                    "data_output=../../UnityStarter/Assets/GeneratedData\n" +
+                    ClientCodeOutputLine + "\n" +
+                    "data_output=Generated/ClientData\n" +
                     "code_target=cs-bin\n" +
                     "data_target=bin\n" +
                     "line_ending=lf\n";
@@ -153,8 +155,8 @@ namespace CycloneGames.DataTable.CodeGen
                     multiProfileConfigurationPath,
                     configurationText +
                     "[profile.server]\n" +
-                    "code_output=../../UnityStarter/Assets/GeneratedServerCode\n" +
-                    "data_output=../../UnityStarter/Assets/GeneratedServerData\n" +
+                    "code_output=Generated/ServerCode\n" +
+                    "data_output=Generated/ServerData\n" +
                     "code_target=cs-bin\n" +
                     "data_target=bin\n" +
                     "line_ending=lf\n");
@@ -960,8 +962,8 @@ namespace CycloneGames.DataTable.CodeGen
                     string changedRootText = new System.Text.UTF8Encoding(false, true)
                         .GetString(originalConfiguration)
                         .Replace(
-                            "code_output=../../UnityStarter/Assets/GeneratedCode",
-                            "code_output=../../UnityStarter/Assets/GeneratedCodeMoved",
+                            ClientCodeOutputLine,
+                            ClientCodeOutputMovedLine,
                             StringComparison.Ordinal);
                     File.WriteAllText(configurationPath, changedRootText);
                     PipelineConfiguration changedRoot = PipelineConfiguration.Load(configurationPath);

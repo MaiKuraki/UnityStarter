@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 using Cysharp.Threading.Tasks;
@@ -16,10 +17,29 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 {
     public sealed class WorldSettingsTests
     {
-        private const string SampleWorldSettingsPath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Settings/UnitySampleWorldSettings.asset";
-        private const string SampleGameModePrefabPath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Prefabs/UnitySampleGameMode.prefab";
-        private const string SampleCameraManagerPrefabPath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Prefabs/UnitySampleCameraManager.prefab";
-        private const string SampleScenePath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Scene/UnitySampleScene.unity";
+        private static string SampleWorldSettingsPath => FindSampleAsset("UnitySampleWorldSettings.asset");
+        private static string SampleGameModePrefabPath => FindSampleAsset("UnitySampleGameMode.prefab");
+        private static string SampleCameraManagerPrefabPath => FindSampleAsset("UnitySampleCameraManager.prefab");
+        private static string SampleScenePath => FindSampleAsset("UnitySampleScene.unity");
+
+        // Resolve samples by asset name so the tests run in both supported layouts
+        // without depending on the package install location.
+        private static string FindSampleAsset(string fileName)
+        {
+            string filter = Path.GetFileNameWithoutExtension(fileName);
+            string[] guids = AssetDatabase.FindAssets(filter);
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (path.EndsWith("/" + fileName, StringComparison.Ordinal))
+                {
+                    return path;
+                }
+            }
+
+            Assert.Fail($"Sample asset '{fileName}' was not found. Import the package samples before running this test.");
+            return null;
+        }
 
         private readonly List<GameObject> objects = new List<GameObject>(6);
         private WorldSettings settings;
