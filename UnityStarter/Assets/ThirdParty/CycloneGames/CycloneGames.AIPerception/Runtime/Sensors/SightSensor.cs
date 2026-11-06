@@ -17,14 +17,24 @@ namespace CycloneGames.AIPerception.Runtime
         public bool UseLineOfSight;
         [Min(0)] public int MaximumLineOfSightChecksPerUpdate;
 
+        [Tooltip("Targets closer than this radius are sensed regardless of view angle. Zero disables point-blank awareness.")]
+        [Min(0f)] public float NearClippingRadius;
+
+        [Tooltip("Range used for targets that are already remembered. Zero or below MaxDistance keeps MaxDistance.")]
+        [Min(0f)] public float LoseSightRadius;
+
         [Tooltip("Only detect targets of this stable PerceptibleTypes ID.")]
         public int TargetTypeId;
         public bool FilterByType;
 
-        [Header("Memory")]
+        /// <summary>Team of the observer. Used to resolve the attitude towards each target.</summary>
+        [Range(0, PerceptionTeam.NoTeam)] public byte ObserverTeamId;
+
+        /// <summary>Which attitudes this sense reacts to. <see cref="PerceptionAffiliation.All"/> skips the lookup.</summary>
+        public PerceptionAffiliation Affiliation;
+
         [Range(0f, 60f)] public float MemoryDuration;
 
-        [Header("Capacity")]
         public PerceptionSensorCapacity Capacity;
 
         public static SightSensorConfig Default => new SightSensorConfig
@@ -35,8 +45,12 @@ namespace CycloneGames.AIPerception.Runtime
             ObstacleLayer = Physics.DefaultRaycastLayers,
             UseLineOfSight = true,
             MaximumLineOfSightChecksPerUpdate = 64,
+            NearClippingRadius = 0f,
+            LoseSightRadius = 0f,
             TargetTypeId = PerceptibleTypes.Default,
             FilterByType = false,
+            ObserverTeamId = PerceptionTeam.NoTeam,
+            Affiliation = PerceptionAffiliation.All,
             MemoryDuration = 3f,
             Capacity = PerceptionSensorCapacity.Default
         };
@@ -215,7 +229,7 @@ namespace CycloneGames.AIPerception.Runtime
             ThrowIfDisposed();
             CompleteAndCommitPending();
             _memoryCounters.BeginUpdate();
-            double timestamp = Time.timeAsDouble;
+            double timestamp = _owner.Now;
             if (_sensorTransform == null || !IsConfigurationValid())
             {
                 CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
@@ -232,7 +246,11 @@ namespace CycloneGames.AIPerception.Runtime
             _queryOrigin = Position;
             _queryForward = math.normalizesafe(Forward, new float3(0f, 0f, 1f));
             _queryTimestamp = timestamp;
-            float queryRange = _config.MaxDistance + registry.MaximumDetectionRadius;
+            // The broadphase must cover the widest range any per-target rule can accept, otherwise
+            // near-clipping and lose-sight hysteresis would be filtered out before the job runs.
+            float effectiveRange = math.max(_config.MaxDistance, _config.NearClippingRadius);
+            effectiveRange = math.max(effectiveRange, _config.LoseSightRadius);
+            float queryRange = effectiveRange + registry.MaximumDetectionRadius;
             if (!math.isfinite(queryRange))
             {
                 CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
@@ -260,6 +278,13 @@ namespace CycloneGames.AIPerception.Runtime
 
             EnsureJobCapacity(_queryTargetCount);
             _queryTargets = registry.NativeData;
+            bool useLoseSightRadius = _config.LoseSightRadius > _config.MaxDistance;
+            if (_config.Affiliation != PerceptionAffiliation.All)
+            {
+                // The job system rejects an uncreated container, so materialise the table first.
+                _owner.EnsureTeamAttitudeTable();
+            }
+
             var job = new SightConeQueryJob
             {
                 Targets = _queryTargets,
@@ -268,18 +293,45 @@ namespace CycloneGames.AIPerception.Runtime
                 Forward = _queryForward,
                 MaxDistance = _config.MaxDistance,
                 CosHalfAngle = math.cos(math.radians(_config.HalfAngle)),
+                NearClippingRadius = _config.NearClippingRadius,
+                LoseSightRadius = _config.LoseSightRadius,
+                UseLoseSightRadius = useLoseSightRadius,
+                MemoryLookup = _resultBuffer.MemoryLookup,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                ObserverTeamId = _config.ObserverTeamId,
+                Affiliation = _config.Affiliation,
+                AttitudeTable = _owner.AttitudeTable,
                 IgnoredTarget = _ignoredTarget,
                 PassedFilter = _jobPassedFilter
             };
 
-            _currentJobHandle = job.Schedule(_queryTargetCount, 64);
-            _jobScheduled = true;
+            bool deferred = _owner.UseDeferredJobCompletion && _owner.IsRegistered(this);
             _hasPendingResults = true;
-            if (_owner.UseDeferredJobCompletion && _owner.IsRegistered(this))
+            int inlineThreshold = _owner.InlineExecutionThreshold;
+            if (inlineThreshold > 0 && _queryTargetCount <= inlineThreshold)
             {
-                _owner.AddToBatch(_currentJobHandle);
+                // Same evaluation, no job: the snapshot cannot change between Update and LateUpdate,
+                // so running the body eagerly is equivalent to scheduling it.
+                for (int i = 0; i < _queryTargetCount; i++)
+                {
+                    job.Execute(i);
+                }
+
+                _jobScheduled = false;
+            }
+            else
+            {
+                _currentJobHandle = job.Schedule(_queryTargetCount, 64);
+                _jobScheduled = true;
+            }
+
+            if (deferred)
+            {
+                if (_jobScheduled)
+                {
+                    _owner.AddToBatch(_currentJobHandle);
+                }
             }
             else
             {
@@ -434,6 +486,8 @@ namespace CycloneGames.AIPerception.Runtime
                    math.isfinite(_config.MaxDistance) && _config.MaxDistance >= 0f &&
                    math.isfinite(_config.UpdateInterval) && _config.UpdateInterval >= 0f &&
                    math.isfinite(_config.MemoryDuration) && _config.MemoryDuration >= 0f &&
+                   math.isfinite(_config.NearClippingRadius) && _config.NearClippingRadius >= 0f &&
+                   math.isfinite(_config.LoseSightRadius) && _config.LoseSightRadius >= 0f &&
                    _config.MaximumLineOfSightChecksPerUpdate >= 0;
         }
 

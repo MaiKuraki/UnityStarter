@@ -55,7 +55,7 @@ namespace CycloneGames.AIPerception.Editor
             "Up to 64 levels are supported. Each frequency multiplier applies up to its maximum distance. Beyond the last tier, the last multiplier remains active. Effective interval equals base interval divided by the multiplier.");
         private static readonly GUIContent MaximumPerceptiblesLabel = new GUIContent(
             "Maximum Perceptibles",
-            "Hard registry capacity. Legacy zero maps to the package hard ceiling of 1,048,576 perceptibles.");
+            "Hard registry capacity. Zero maps to the package hard ceiling of 1,048,576 perceptibles.");
         private static readonly GUIContent SpatialCellSizeLabel = new GUIContent(
             "Spatial Cell Size",
             "World-space cell width used by broad-phase candidate queries.");
@@ -273,7 +273,7 @@ namespace CycloneGames.AIPerception.Editor
                 if (!_maximumPerceptibles.hasMultipleDifferentValues && _maximumPerceptibles.intValue == 0)
                 {
                     EditorGUILayout.HelpBox(
-                        "Legacy zero maps to the package hard ceiling of 1,048,576 perceptibles. Configure a lower measured product budget when possible.",
+                        "Zero maps to the package hard ceiling of 1,048,576 perceptibles. Configure a measured product budget instead.",
                         MessageType.Info);
                 }
             }

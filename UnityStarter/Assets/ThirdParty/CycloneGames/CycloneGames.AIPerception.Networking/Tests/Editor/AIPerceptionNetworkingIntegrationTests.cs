@@ -574,9 +574,9 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             profileBuilder.MaxSnapshotEntries = 1;
             var bridge = new AIPerceptionNetworkSyncBridge(profileBuilder.Build());
             var resolver = new TestTargetResolver();
-            var first = new PerceptibleHandle(1, 1);
-            var second = new PerceptibleHandle(2, 1);
-            var unresolved = new PerceptibleHandle(3, 1);
+            var first = new PerceptibleHandle(0, 1, 1);
+            var second = new PerceptibleHandle(0, 2, 1);
+            var unresolved = new PerceptibleHandle(0, 3, 1);
             resolver.Map(first, new AIPerceptionNetworkTarget(20u, 1));
             resolver.Map(second, new AIPerceptionNetworkTarget(10u, 1));
             DetectionResult[] detections =
@@ -676,7 +676,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
         {
             var bridge = new AIPerceptionNetworkSyncBridge();
             var resolver = new TestTargetResolver();
-            var handle = new PerceptibleHandle(1, 1);
+            var handle = new PerceptibleHandle(0, 1, 1);
             resolver.Map(handle, new AIPerceptionNetworkTarget(10u, 1));
             DetectionResult[] detections = { CreateDetection(handle, SensorType.Sight) };
             var entries = new AIPerceptionDetectionEntry[1];

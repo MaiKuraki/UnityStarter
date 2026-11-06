@@ -9,6 +9,7 @@ namespace CycloneGames.AIPerception.Runtime
         Sight = 0,
         Hearing = 1,
         Proximity = 2,
+        Damage = 3,
         Custom = 255
     }
 
