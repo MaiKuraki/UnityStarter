@@ -38,14 +38,14 @@ namespace CycloneGames.AIPerception.Editor
         private static readonly GUIContent OcclusionLayerLabel = new GUIContent("Occlusion Layer");
         private static readonly GUIContent OcclusionAttenuationLabel = new GUIContent("Wall Attenuation");
         private static readonly GUIContent MaximumOcclusionChecksLabel = new GUIContent(
-            "Maximum Occlusion Checks (0 = Unlimited)",
+            "Max Occlusion Checks",
             "Maximum Physics occlusion checks performed by one hearing sensor update. Zero checks every filtered candidate without a per-update limit.");
         private static readonly GUIContent MemoryDurationLabel = new GUIContent(
             "Memory Duration",
             "Seconds to retain a stimulus after direct detection ends. Zero disables memory.");
         private static readonly GUIContent MaximumLosChecksLabel = new GUIContent(
-            "Maximum LOS Checks",
-            "Maximum Physics line-of-sight checks performed by this sensor update.");
+            "Max LOS Checks",
+            "Maximum Physics line-of-sight checks performed by this sensor update. Zero checks every filtered candidate without a per-update limit.");
         private static readonly GUIContent NearClippingRadiusLabel = new GUIContent(
             "Near Clipping Radius",
             "Targets closer than this radius are sensed regardless of view angle. Zero disables point-blank awareness.");
@@ -157,6 +157,8 @@ namespace CycloneGames.AIPerception.Editor
                 _sightTargetTypeId,
                 _sightMemoryDuration,
                 _sightMaximumLosChecks,
+                _sightNearClippingRadius,
+                _sightLoseSightRadius,
                 _sightCapacity,
                 _enableHearing,
                 _hearingConfig,
@@ -229,14 +231,32 @@ namespace CycloneGames.AIPerception.Editor
 
             using (new EditorGUI.DisabledScope(authoringLocked))
             {
-                DrawSightSection();
-                DrawHearingSection();
-                DrawProximitySection();
-                InspectorUiUtility.DrawRemainingProperties(
-                    _remainingProperties,
-                    ref _showAdditionalFields,
-                    AdditionalFieldsTitle,
-                    AdditionalColor);
+                // The capacity foldout draws serialized field names such as
+                // "Initial Candidate Capacity"; the default label column clips them.
+                float previousLabelWidth = EditorGUIUtility.labelWidth;
+                // Widest label is "Initial Candidate Capacity" at ~155 px in the default skin, so a
+                // 400 px panel gets ~220 px of label column. The floor is deliberately low: a docked
+                // panel narrower than ~300 px must keep room for the value field rather than
+                // reserving a full label column.
+                EditorGUIUtility.labelWidth = Mathf.Clamp(
+                    EditorGUIUtility.currentViewWidth * 0.55f,
+                    110f,
+                    230f);
+                try
+                {
+                    DrawSightSection();
+                    DrawHearingSection();
+                    DrawProximitySection();
+                    InspectorUiUtility.DrawRemainingProperties(
+                        _remainingProperties,
+                        ref _showAdditionalFields,
+                        AdditionalFieldsTitle,
+                        AdditionalColor);
+                }
+                finally
+                {
+                    EditorGUIUtility.labelWidth = previousLabelWidth;
+                }
             }
 
             if (Application.isPlaying)
@@ -486,7 +506,17 @@ namespace CycloneGames.AIPerception.Editor
             }
 
             InspectorUiUtility.BeginPanel();
-            EditorGUILayout.PropertyField(_showDebugOverlay, PinSceneGizmosLabel);
+            bool mixedPin = _showDebugOverlay.hasMultipleDifferentValues;
+            EditorGUI.showMixedValue = mixedPin;
+            EditorGUI.BeginChangeCheck();
+            bool pinned = EditorGUILayout.ToggleLeft(PinSceneGizmosLabel, _showDebugOverlay.boolValue);
+            if (EditorGUI.EndChangeCheck())
+            {
+                _showDebugOverlay.boolValue = pinned;
+            }
+
+            EditorGUI.showMixedValue = false;
+
             EditorGUI.BeginChangeCheck();
             bool filledVolumes = EditorGUILayout.ToggleLeft(
                 "Filled Debug Volumes (Session)",

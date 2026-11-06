@@ -27,10 +27,8 @@ namespace CycloneGames.AIPerception.Runtime
         public int TargetTypeId;
         public bool FilterByType;
 
-        [Header("Memory")]
         [Range(0f, 60f)] public float MemoryDuration;
 
-        [Header("Capacity")]
         public PerceptionSensorCapacity Capacity;
 
         public static SightSensorConfig Default => new SightSensorConfig

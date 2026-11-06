@@ -15,16 +15,13 @@ namespace CycloneGames.AIPerception.Runtime
         public int TargetTypeId;
         public bool FilterByType;
 
-        [Header("Sound Occlusion")]
         public bool UseOcclusion;
         public LayerMask OcclusionLayer;
         [Range(0f, 1f)] public float OcclusionAttenuation;
         [Min(0)] public int MaximumOcclusionChecksPerUpdate;
 
-        [Header("Memory")]
         [Range(0f, 60f)] public float MemoryDuration;
 
-        [Header("Capacity")]
         public PerceptionSensorCapacity Capacity;
 
         public static HearingSensorConfig Default => new HearingSensorConfig
