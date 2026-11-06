@@ -8,30 +8,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// Runtime IMGUI debug overlay for an explicitly registered set of AbilitySystemComponents.
-    /// Config: place a <see cref="GASOverlayConfig"/> asset in a Resources folder.
+    /// Config: inject a <see cref="GASOverlayConfig"/> through <see cref="ActiveConfiguration"/> or
+    /// the configuration parameter of <c>Initialize</c>. Defaults apply when none is supplied.
     /// Toggle: <see cref="Toggle(AbilitySystemComponent, GameObject, Transform, string)"/> or menu Tools/CycloneGames/GameplayAbilities/Overlay/Toggle In Play Mode.
     /// </summary>
     public class GASDebugOverlay : MonoBehaviour
     {
         private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
 
-        #region Default Colors (shared with GASOverlayConfig)
-
-        // These defaults must match GASOverlayConfig initializer values
-        private static readonly Color DefaultTagColorValue = new Color(0.70f, 1.0f, 0.78f, 1f);
-        private static readonly Color DefaultDebuffEffectColor = new Color(1.0f, 0.62f, 0.84f, 1f);
-        private static readonly Color DefaultInhibitedEffectColor = new Color(0.70f, 0.80f, 1.0f, 1f);
-        private static readonly Color DefaultNormalEffectColor = new Color(0.35f, 1.0f, 0.72f, 1f);
-        private static readonly Color DefaultConnectionLineCoreColor = new Color(0.985f, 0.992f, 1f, 1f);
-        private static readonly Color DefaultConnectionLineDarkOutlineColor = new Color(0f, 0f, 0f, 0.85f);
-        private static readonly Color DefaultConnectionLineLightOutlineColor = new Color(1f, 1f, 1f, 0.65f);
-
-        #endregion
-
         #region Singleton
 
         private static GASDebugOverlay s_Instance;
         private static bool s_Initialized;
+        private static GASOverlayConfig s_PendingConfiguration;
+
+        /// <summary>
+        /// Process-wide explicit configuration. Setting this is equivalent to setting
+        /// <c>GASOverlayConfig.ActiveConfiguration</c>; the next overlay instance clones it at Awake.
+        /// </summary>
+        public static GASOverlayConfig ActiveConfiguration
+        {
+            get => GASOverlayConfig.ActiveConfiguration;
+            set => GASOverlayConfig.ActiveConfiguration = value;
+        }
 
         public static bool IsActive => s_Instance != null && s_Instance.enabled;
 
@@ -64,10 +63,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Initialize the overlay singleton. Call once at startup.
+        /// Pass <paramref name="configuration"/> to override the process-wide
+        /// <see cref="ActiveConfiguration"/> for this instance; null falls back to it or to defaults.
         /// For production builds, wrap with conditional compilation or config checks.
         /// This API must be called from the Unity main thread.
         /// </summary>
-        public static void Initialize(bool enableAtStart = false, bool dontDestroyOnLoad = false)
+        public static void Initialize(
+            bool enableAtStart = false,
+            bool dontDestroyOnLoad = false,
+            GASOverlayConfig configuration = null)
         {
             if (s_Instance != null)
             {
@@ -75,9 +79,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            var go = new GameObject("[GAS Debug Overlay]");
-            s_Instance = go.AddComponent<GASDebugOverlay>();
-            s_Instance.enabled = enableAtStart;
+            // AddComponent invokes Awake synchronously, so the per-call override must be staged
+            // before the component is created and cleared immediately afterwards.
+            s_PendingConfiguration = configuration;
+            GameObject go;
+            GASDebugOverlay instance;
+            try
+            {
+                go = new GameObject("[GAS Debug Overlay]");
+                instance = go.AddComponent<GASDebugOverlay>();
+            }
+            finally
+            {
+                s_PendingConfiguration = null;
+            }
+
+            s_Instance = instance;
+            instance.enabled = enableAtStart;
             s_Initialized = true;
 
             if (dontDestroyOnLoad)
@@ -211,6 +229,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             s_Instance = null;
             s_Initialized = false;
+            s_PendingConfiguration = null;
+            GASOverlayConfig.ActiveConfiguration = null;
         }
 
         #endregion
@@ -235,7 +255,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private float runtimeAlpha = 0.8f;
         private float runtimeScale = 1f;
         private readonly HashSet<int> collapsedPanels = new HashSet<int>();
+
+        // Runtime-owned clone. Never references a project asset, so in-overlay tweaks cannot dirty it.
         private GASOverlayConfig config;
+        private string configSourceLabel = "Defaults";
 
         // Reusable dragging state.
         private int currentlyDraggingPanelKey = -1;
@@ -299,12 +322,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             s_Instance = this;
             s_Initialized = true;
-            config = GASOverlayConfig.Load();
-            targetCapacity = Mathf.Clamp(
-                config != null ? config.MaxPanels : DefaultTargetCapacity,
-                1,
-                AbsoluteTargetCapacity);
-            if (config != null) runtimeAlpha = config.PanelAlpha;
+
+            GASOverlayConfig source = s_PendingConfiguration ?? GASOverlayConfig.ActiveConfiguration;
+            if (source != null)
+            {
+                config = Instantiate(source);
+                configSourceLabel = s_PendingConfiguration != null
+                    ? "Injected: " + source.name
+                    : "Project: " + source.name;
+            }
+            else
+            {
+                config = GASOverlayConfig.CreateDefault();
+                configSourceLabel = "Defaults";
+            }
+
+            targetCapacity = Mathf.Clamp(config.MaxPanels, 1, AbsoluteTargetCapacity);
+            runtimeAlpha = config.PanelAlpha;
+        }
+
+        /// <summary>
+        /// Replaces the runtime configuration clone. Passing null resolves the process-wide
+        /// <see cref="ActiveConfiguration"/> or the defaults. Target capacity stays fixed for
+        /// this instance lifetime.
+        /// </summary>
+        public void ApplyConfiguration(GASOverlayConfig configuration)
+        {
+            GASOverlayConfig source = configuration ?? GASOverlayConfig.ActiveConfiguration;
+            GASOverlayConfig replacement = source != null
+                ? Instantiate(source)
+                : GASOverlayConfig.CreateDefault();
+
+            if (config != null) Destroy(config);
+            config = replacement;
+            configSourceLabel = source != null ? "Project: " + source.name : "Defaults";
+            runtimeAlpha = config.PanelAlpha;
         }
 
         private void OnDestroy()
@@ -315,6 +367,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 s_Instance = null;
                 s_Initialized = false;
             }
+            if (config != null) Destroy(config);
             if (barBgTex != null) Destroy(barBgTex);
             if (barFillTex != null) Destroy(barFillTex);
             if (panelBgTex != null) Destroy(panelBgTex);
@@ -764,20 +817,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
             float baseScale = GetUIScale();
             float scale = baseScale * runtimeScale;
             SyncLayoutWithScale(scale);
-            float widthRatio = config != null ? config.PanelWidthRatio : 0.20f;
-            float minW = (config != null ? config.MinPanelWidth : 200f) * scale;
-            float maxW = (config != null ? config.MaxPanelWidth : 360f) * scale;
+            float widthRatio = config.PanelWidthRatio;
+            float minW = config.MinPanelWidth * scale;
+            float maxW = config.MaxPanelWidth * scale;
             float panelWidth = Mathf.Clamp(Screen.width * widthRatio, minW, maxW);
             float margin = 6 * baseScale;
             float panelSpacing = 4 * scale;
             float lineH = 16 * scale;
             float barH = 8 * scale;
             int maxPanels = GetTargetCapacity();
-            bool preferTopLeftStack = config != null ? config.PreferTopLeftStackLayout : true;
-            bool trackWorld = !preferTopLeftStack && (config == null || (config != null && config.TrackWorldPosition));
-            bool stackedSingleColumn = config != null ? config.StackSingleColumn : true;
-            bool drawStackedLinks = config != null ? config.DrawConnectionLinesInStackedMode : true;
-            float stackedLinkAlpha = config != null ? config.StackedConnectionLineAlpha : 0.82f;
+            bool preferTopLeftStack = config.PreferTopLeftStackLayout;
+            bool trackWorld = !preferTopLeftStack && config.TrackWorldPosition;
+            bool stackedSingleColumn = config.StackSingleColumn;
+            bool drawStackedLinks = config.DrawConnectionLinesInStackedMode;
+            float stackedLinkAlpha = config.StackedConnectionLineAlpha;
 
             // Config button uses baseScale only --stays fixed regardless of runtimeScale
             float configW = 44 * baseScale;
@@ -833,7 +886,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (screenPos.z < 0) continue;
 
                     float screenY = Screen.height - screenPos.y;
-                    float offsetY = config != null ? config.WorldTrackingOffsetY * scale : 30f * scale;
+                    float offsetY = config.WorldTrackingOffsetY * scale;
 
                     float px = screenPos.x - panelWidth * 0.5f;
                     float py = screenY - panelHeight - offsetY;
@@ -842,7 +895,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                     panelRect = new Rect(px, py, panelWidth, panelHeight);
 
-                    Color worldLineColor = config != null ? config.ConnectionLineCoreColor : new Color(0.985f, 0.992f, 1f, 1f);
+                    Color worldLineColor = config.ConnectionLineCoreColor;
                     worldLineColor.a = Mathf.Max(0.55f, stackedLinkAlpha) * runtimeAlpha;
                     shouldDrawLink = true;
                     linkTargetX = screenPos.x;
@@ -868,7 +921,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         if (screenPos.z > 0f)
                         {
                             float screenY = Screen.height - screenPos.y;
-                            Color stackedLineColor = config != null ? config.ConnectionLineCoreColor : new Color(0.985f, 0.992f, 1f, 1f);
+                            Color stackedLineColor = config.ConnectionLineCoreColor;
                             stackedLineColor.a = stackedLinkAlpha * runtimeAlpha;
                             shouldDrawLink = true;
                             linkTargetX = screenPos.x;
@@ -964,40 +1017,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             GUILayout.Space(4);
 
-            if (config != null)
+            // config is a runtime-owned clone; these edits never touch a project asset.
+            config.PreferTopLeftStackLayout = GUILayout.Toggle(config.PreferTopLeftStackLayout, " Top-Left Stacked Layout");
+            if (config.PreferTopLeftStackLayout)
             {
-                config.PreferTopLeftStackLayout = GUILayout.Toggle(config.PreferTopLeftStackLayout, " Top-Left Stacked Layout");
-                if (config.PreferTopLeftStackLayout)
-                {
-                    config.StackSingleColumn = GUILayout.Toggle(config.StackSingleColumn, " Single Column");
-                    config.DrawConnectionLinesInStackedMode = GUILayout.Toggle(config.DrawConnectionLinesInStackedMode, " Draw Connector Lines");
-
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label("Line Alpha:", GUILayout.Width(60 * baseScale));
-                    float newLineAlpha = GUILayout.HorizontalSlider(config.StackedConnectionLineAlpha, 0.1f, 1f);
-                    if (Mathf.Abs(newLineAlpha - config.StackedConnectionLineAlpha) > 0.005f)
-                        config.StackedConnectionLineAlpha = newLineAlpha;
-                    sb.Clear(); AppendFloat2(sb, config.StackedConnectionLineAlpha);
-                    GUILayout.Label(sb.ToString(), GUILayout.Width(30 * baseScale));
-                    GUILayout.EndHorizontal();
-                }
-                else
-                {
-                    config.TrackWorldPosition = GUILayout.Toggle(config.TrackWorldPosition, " Track World Position");
-                }
-
-                GUILayout.Space(2);
-                config.UseHighContrastConnectionLines = GUILayout.Toggle(config.UseHighContrastConnectionLines, " High-Contrast Connector");
+                config.StackSingleColumn = GUILayout.Toggle(config.StackSingleColumn, " Single Column");
+                config.DrawConnectionLinesInStackedMode = GUILayout.Toggle(config.DrawConnectionLinesInStackedMode, " Draw Connector Lines");
 
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Line Width:", GUILayout.Width(60 * baseScale));
-                float newLineWidth = GUILayout.HorizontalSlider(config.ConnectionLineThickness, 0.5f, 4f);
-                if (Mathf.Abs(newLineWidth - config.ConnectionLineThickness) > 0.005f)
-                    config.ConnectionLineThickness = newLineWidth;
-                sb.Clear(); AppendFloat2(sb, config.ConnectionLineThickness);
+                GUILayout.Label("Line Alpha:", GUILayout.Width(60 * baseScale));
+                float newLineAlpha = GUILayout.HorizontalSlider(config.StackedConnectionLineAlpha, 0.1f, 1f);
+                if (Mathf.Abs(newLineAlpha - config.StackedConnectionLineAlpha) > 0.005f)
+                    config.StackedConnectionLineAlpha = newLineAlpha;
+                sb.Clear(); AppendFloat2(sb, config.StackedConnectionLineAlpha);
                 GUILayout.Label(sb.ToString(), GUILayout.Width(30 * baseScale));
                 GUILayout.EndHorizontal();
             }
+            else
+            {
+                config.TrackWorldPosition = GUILayout.Toggle(config.TrackWorldPosition, " Track World Position");
+            }
+
+            GUILayout.Space(2);
+            config.UseHighContrastConnectionLines = GUILayout.Toggle(config.UseHighContrastConnectionLines, " High-Contrast Connector");
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Line Width:", GUILayout.Width(60 * baseScale));
+            float newLineWidth = GUILayout.HorizontalSlider(config.ConnectionLineThickness, 0.5f, 4f);
+            if (Mathf.Abs(newLineWidth - config.ConnectionLineThickness) > 0.005f)
+                config.ConnectionLineThickness = newLineWidth;
+            sb.Clear(); AppendFloat2(sb, config.ConnectionLineThickness);
+            GUILayout.Label(sb.ToString(), GUILayout.Width(30 * baseScale));
+            GUILayout.EndHorizontal();
 
             GUILayout.Space(4);
 
@@ -1014,10 +1065,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GUILayout.EndHorizontal();
 
             GUILayout.Space(4);
-            string configStatus = config != null ? "Config loaded" : "No config (defaults)";
-            GUILayout.Label(configStatus, tooltipStyle);
-            if (config == null && GUILayout.Button("Reload", GUILayout.Height(16 * baseScale)))
-                config = GASOverlayConfig.Load();
+            GUILayout.Label("Config: " + configSourceLabel, tooltipStyle);
 
             GUILayout.EndArea();
         }
@@ -1039,9 +1087,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             float dist = Mathf.Sqrt(distSq);
-            float baseThickness = Mathf.Max(1f, (config != null ? config.ConnectionLineThickness : 1.2f) * scale);
+            float baseThickness = Mathf.Max(1f, config.ConnectionLineThickness * scale);
             float angle = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg;
-            bool useHighContrast = config == null || config.UseHighContrastConnectionLines;
+            bool useHighContrast = config.UseHighContrastConnectionLines;
 
             var matrixBackup = GUI.matrix;
             var savedColor = GUI.color;
@@ -1050,13 +1098,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Draw dark outline (high contrast)
             if (useHighContrast)
             {
-                Color darkOutline = config != null ? config.ConnectionLineDarkOutlineColor : new Color(0f, 0f, 0f, 0.85f);
+                Color darkOutline = config.ConnectionLineDarkOutlineColor;
                 darkOutline.a *= color.a;
                 GUI.color = darkOutline;
                 GUI.DrawTexture(new Rect(from.x, from.y - (baseThickness * 2.1f) * 0.5f, dist, baseThickness * 2.1f), barFillTex);
 
                 // Draw light outline
-                Color lightOutline = config != null ? config.ConnectionLineLightOutlineColor : new Color(1f, 1f, 1f, 0.65f);
+                Color lightOutline = config.ConnectionLineLightOutlineColor;
                 GUI.color = lightOutline;
                 GUI.DrawTexture(new Rect(from.x, from.y - (baseThickness * 1.5f) * 0.5f, dist, baseThickness * 1.5f), barFillTex);
             }
@@ -1161,8 +1209,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 GameplayAttribute bestAttr = null;
                 bool found = false;
                 
-                // Use config's primary attribute preferences, or just fallback to first attribute if no config
-                var primarySubs = config?.PrimaryAttributeSubstrings;
+                // Prefer the configured primary attribute substrings; the first attribute is the fallback.
+                var primarySubs = config.PrimaryAttributeSubstrings;
                 int primaryCount = primarySubs != null ? primarySubs.Count : 0;
 
                 foreach (var attrSet in asc.AttributeSets)
@@ -1448,9 +1496,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     string tagName = tag.Name;
 
                     // Get tag color from config - use config's semantic classification
-                    Color tagColor = config != null 
-                        ? config.GetTagColor(tagName) 
-                        : Color.white;  // Generic fallback (not Sample-specific)
+                    Color tagColor = config.GetTagColor(tagName);
                     string hex = GetHexCached(tagColor);
 
                     int count = asc.CombinedTags.GetExplicitTagCount(tag);
@@ -1509,14 +1555,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             GUI.DrawTexture(new Rect(barX, barY, barW, inlineBarH), barBgTex);
 
-            // Use a simple, generic bar coloring strategy:
-            // - Based on fill percentage, not Sample-specific values
-            // - Over-capacity renders with accent, but uses theme colors from config if available
+            // Bar colors come from the runtime configuration clone.
             Color barColor;
             if (attr.CurrentValue > denominator + 0.01f)
             {
                 // Over-capacity state - use a neutral accent color
-                barColor = config?.ConnectionLineCoreColor ?? new Color(0.6f, 0.7f, 1f, 1f);
+                barColor = config.ConnectionLineCoreColor;
             }
             else if (fill <= 0f)
             {
@@ -1526,7 +1570,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else if (fill <= 0.33f)
             {
                 // Low - use config's debuff color if available (warning indicator)
-                barColor = config?.DebuffEffectColor ?? new Color(1f, 0.3f, 0.3f, 1f);
+                barColor = config.DebuffEffectColor;
             }
             else if (fill <= 0.66f)
             {
@@ -1536,7 +1580,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else
             {
                 // Full - use config's normal effect color if available (healthy indicator)
-                barColor = config?.NormalEffectColor ?? new Color(0.3f, 1f, 0.5f, 1f);
+                barColor = config.NormalEffectColor;
             }
             
             var savedColor = GUI.color;
@@ -1576,7 +1620,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (currentAttr == null || attributeLookup == null || attributeLookup.Count == 0)
                 return false;
 
-            if (config != null && config.PreferMaxAttributeForBars)
+            if (config.PreferMaxAttributeForBars)
             {
                 if (config.TryGetMappedMaxAttributeName(currentAttr.Name, out string mappedMaxToken))
                 {
@@ -1648,17 +1692,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             Color effectColor;
             bool isInhibited = effect.IsInhibited;
-            bool isDebuff = config != null && config.IsDebuffEffect(effect.Spec.Def.GrantedTags);
+            bool isDebuff = config.IsDebuffEffect(effect.Spec.Def.GrantedTags);
             
-            // Get color from config, or use fallback (no hardcoded Sample values)
-            if (isDebuff && config != null)
+            if (isDebuff)
                 effectColor = config.DebuffEffectColor;
-            else if (isInhibited && config != null)
+            else if (isInhibited)
                 effectColor = config.InhibitedEffectColor;
-            else if (config != null)
-                effectColor = config.NormalEffectColor;
             else
-                effectColor = Color.white;  // Generic fallback (not Sample-specific)
+                effectColor = config.NormalEffectColor;
 
             sb.Append("<color=").Append(GetHexCached(effectColor)).Append('>').Append(effect.Spec.Def.Name).Append("</color>");
 

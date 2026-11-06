@@ -17,10 +17,11 @@ MonoBehaviour:
   windowPrefab: {fileID: 9051948941192421662, guid: bdbe6d26fb1db9b48860759c7a0d6fad,
     type: 3}
   prefabAssetRef:
-    location: Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/Samples/Resources/UIWindow_SampleUI.prefab
+    location: 
     editorGuid: bdbe6d26fb1db9b48860759c7a0d6fad
-  prefabLocation: Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/Samples/Resources/UIWindow_SampleUI.prefab
+  prefabLocation: 
   layer: {fileID: 11400000, guid: ba5952d225fc36646a190ee3fda7c68a, type: 2}
   priority: 0
   isSceneBound: 0
   subCanvasPolicy: 0
+  cullWhenHidden: 0
