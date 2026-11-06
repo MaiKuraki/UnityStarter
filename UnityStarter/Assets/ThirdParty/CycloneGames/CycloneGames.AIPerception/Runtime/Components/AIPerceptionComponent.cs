@@ -31,12 +31,22 @@ namespace CycloneGames.AIPerception.Runtime
         [SerializeField] private bool _enableProximity;
         [SerializeField] private ProximitySensorConfig _proximityConfig = ProximitySensorConfig.Default;
 
+        [Header("Damage")]
+        [SerializeField] private bool _enableDamage;
+        [SerializeField] private DamageSensorConfig _damageConfig = DamageSensorConfig.Default;
+
+        [Header("Identity")]
+        [Tooltip("Team of this observer in 0..254. 255 means no team, which resolves to neutral.")]
+        [Range(0, PerceptionTeam.NoTeam)]
+        [SerializeField] private int _teamId = PerceptionTeam.NoTeam;
+
         // Scene-view pin state. Read by the gizmo drawer; no per-object IMGUI runs at runtime.
         [SerializeField, HideInInspector] private bool _showDebugOverlay;
 
         private SightSensor _sightSensor;
         private HearingSensor _hearingSensor;
         private ProximitySensor _proximitySensor;
+        private DamageSensor _damageSensor;
         private SensorManager _sensorManager;
         private bool _initialized;
         private bool _driverWarningLogged;
@@ -44,9 +54,12 @@ namespace CycloneGames.AIPerception.Runtime
         public SightSensor SightSensor => _sightSensor;
         public HearingSensor HearingSensor => _hearingSensor;
         public ProximitySensor ProximitySensor => _proximitySensor;
+        public DamageSensor DamageSensor => _damageSensor;
+        public int TeamId => _teamId;
         public bool EnableSight => _enableSight;
         public bool EnableHearing => _enableHearing;
         public bool EnableProximity => _enableProximity;
+        public bool EnableDamage => _enableDamage;
         public SightSensorConfig SightConfig => _sightConfig;
         public HearingSensorConfig HearingConfig => _hearingConfig;
         public ProximitySensorConfig ProximityConfig => _proximityConfig;
@@ -81,10 +94,12 @@ namespace CycloneGames.AIPerception.Runtime
         public bool HasSightDetection => _sightSensor?.HasDetection ?? false;
         public bool HasHearingDetection => _hearingSensor?.HasDetection ?? false;
         public bool HasProximityDetection => _proximitySensor?.HasDetection ?? false;
-        public bool HasAnyDetection => HasSightDetection || HasHearingDetection || HasProximityDetection;
+        public bool HasDamageDetection => _damageSensor?.HasDetection ?? false;
+        public bool HasAnyDetection => HasSightDetection || HasHearingDetection || HasProximityDetection || HasDamageDetection;
         public int SightDetectedCount => _sightSensor?.DetectedCount ?? 0;
         public int HearingDetectedCount => _hearingSensor?.DetectedCount ?? 0;
         public int ProximityDetectedCount => _proximitySensor?.DetectedCount ?? 0;
+        public int DamageDetectedCount => _damageSensor?.DetectedCount ?? 0;
 
         public bool ShowDebugOverlay
         {
@@ -136,7 +151,9 @@ namespace CycloneGames.AIPerception.Runtime
             PerceptibleHandle ignoredTarget = GetSelfHandle();
             if (_enableSight)
             {
-                _sightSensor = new SightSensor(transform, _sightConfig, manager, ignoredTarget);
+                SightSensorConfig sightConfig = _sightConfig;
+                sightConfig.ObserverTeamId = (byte)_teamId;
+                _sightSensor = new SightSensor(transform, sightConfig, manager, ignoredTarget);
                 if (!manager.TryRegister(_sightSensor))
                 {
                     _sightSensor.Dispose();
@@ -146,7 +163,9 @@ namespace CycloneGames.AIPerception.Runtime
 
             if (_enableHearing)
             {
-                _hearingSensor = new HearingSensor(transform, _hearingConfig, manager, ignoredTarget);
+                HearingSensorConfig hearingConfig = _hearingConfig;
+                hearingConfig.ObserverTeamId = (byte)_teamId;
+                _hearingSensor = new HearingSensor(transform, hearingConfig, manager, ignoredTarget);
                 if (!manager.TryRegister(_hearingSensor))
                 {
                     _hearingSensor.Dispose();
@@ -156,11 +175,25 @@ namespace CycloneGames.AIPerception.Runtime
 
             if (_enableProximity)
             {
-                _proximitySensor = new ProximitySensor(transform, _proximityConfig, manager, ignoredTarget);
+                ProximitySensorConfig proximityConfig = _proximityConfig;
+                proximityConfig.ObserverTeamId = (byte)_teamId;
+                _proximitySensor = new ProximitySensor(transform, proximityConfig, manager, ignoredTarget);
                 if (!manager.TryRegister(_proximitySensor))
                 {
                     _proximitySensor.Dispose();
                     _proximitySensor = null;
+                }
+            }
+
+            if (_enableDamage)
+            {
+                DamageSensorConfig damageConfig = _damageConfig;
+                damageConfig.ObserverTeamId = (byte)_teamId;
+                _damageSensor = new DamageSensor(transform, damageConfig, manager, ignoredTarget);
+                if (!manager.TryRegister(_damageSensor))
+                {
+                    _damageSensor.Dispose();
+                    _damageSensor = null;
                 }
             }
 
@@ -190,6 +223,8 @@ namespace CycloneGames.AIPerception.Runtime
         public IPerceptible GetClosestSightTarget() => GetClosestTarget(_sightSensor);
         public IPerceptible GetClosestHearingTarget() => GetClosestTarget(_hearingSensor);
         public IPerceptible GetClosestProximityTarget() => GetClosestTarget(_proximitySensor);
+
+        public IPerceptible GetClosestDamageTarget() => GetClosestTarget(_damageSensor);
 
         public void GetAllSightDetections(ref NativeList<DetectionResult> results)
         {
@@ -256,6 +291,7 @@ namespace CycloneGames.AIPerception.Runtime
             DisposeSensor(manager, ref _sightSensor);
             DisposeSensor(manager, ref _hearingSensor);
             DisposeSensor(manager, ref _proximitySensor);
+            DisposeSensor(manager, ref _damageSensor);
             _initialized = false;
         }
 

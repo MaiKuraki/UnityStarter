@@ -49,6 +49,10 @@ namespace CycloneGames.AIPerception.Runtime
         public int Generation;
         public int TypeId;
         public byte Flags;
+
+        /// <summary>Team index in 0..63; the upper bound keeps team masks shift-safe.</summary>
+        public byte TeamId;
+
         public float DetectionRadius;
         public float Loudness;
         public float3 Position;

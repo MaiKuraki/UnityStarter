@@ -15,6 +15,12 @@ namespace CycloneGames.AIPerception.Runtime
         public int TargetTypeId;
         public bool FilterByType;
 
+        /// <summary>Team of the observer. Used to resolve the attitude towards each target.</summary>
+        [Range(0, PerceptionTeam.NoTeam)] public byte ObserverTeamId;
+
+        /// <summary>Which attitudes this sense reacts to. <see cref="PerceptionAffiliation.All"/> skips the lookup.</summary>
+        public PerceptionAffiliation Affiliation;
+
         public bool UseOcclusion;
         public LayerMask OcclusionLayer;
         [Range(0f, 1f)] public float OcclusionAttenuation;
@@ -30,6 +36,8 @@ namespace CycloneGames.AIPerception.Runtime
             UpdateInterval = 0.2f,
             TargetTypeId = PerceptibleTypes.SoundSource,
             FilterByType = false,
+            ObserverTeamId = PerceptionTeam.NoTeam,
+            Affiliation = PerceptionAffiliation.All,
             UseOcclusion = true,
             OcclusionLayer = Physics.DefaultRaycastLayers,
             OcclusionAttenuation = 0.5f,
@@ -246,6 +254,12 @@ namespace CycloneGames.AIPerception.Runtime
 
             EnsureJobCapacity(_queryTargetCount);
             _queryTargets = registry.NativeData;
+            if (_config.Affiliation != PerceptionAffiliation.All)
+            {
+                // The job system rejects an uncreated container, so materialise the table first.
+                _owner.EnsureTeamAttitudeTable();
+            }
+
             var job = new SphereQueryJob
             {
                 Targets = _queryTargets,
@@ -254,6 +268,9 @@ namespace CycloneGames.AIPerception.Runtime
                 Radius = _config.Radius,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                ObserverTeamId = _config.ObserverTeamId,
+                Affiliation = _config.Affiliation,
+                AttitudeTable = _owner.AttitudeTable,
                 IgnoredTarget = _ignoredTarget,
                 Audibility = _jobAudibility
             };

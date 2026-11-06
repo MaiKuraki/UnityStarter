@@ -10,10 +10,14 @@ namespace CycloneGames.AIPerception.Runtime
     [DefaultExecutionOrder(-90)]
     [DisallowMultipleComponent]
     [AddComponentMenu("CycloneGames/AI/Perceptible")]
-    public sealed class PerceptibleComponent : MonoBehaviour, IPerceptible
+    public sealed class PerceptibleComponent : MonoBehaviour, IPerceptible, IPerceptionTeamProvider
     {
         [Header("Type")]
         [SerializeField] private int _typeId = PerceptibleTypes.Default;
+
+        [Tooltip("Team index in 0..254. 255 means no team, which resolves to a neutral attitude.")]
+        [Range(0, PerceptionTeam.NoTeam)]
+        [SerializeField] private int _teamId = PerceptionTeam.NoTeam;
         [SerializeField] private string _tag = string.Empty;
 
         [Header("Detection")]
@@ -33,6 +37,7 @@ namespace CycloneGames.AIPerception.Runtime
 
         public int PerceptibleId => _perceptibleId;
         public int PerceptibleTypeId => _typeId;
+        public int TeamId => _teamId;
         public float DetectionRadius => math.max(0f, _detectionRadius);
         public float Loudness => math.max(0f, _loudness);
         public bool IsSoundSource => _isSoundSource;

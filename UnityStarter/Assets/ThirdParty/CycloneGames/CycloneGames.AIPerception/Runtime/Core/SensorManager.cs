@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
@@ -46,6 +47,11 @@ namespace CycloneGames.AIPerception.Runtime
         private readonly List<ISensor> _sensors;
         private readonly Dictionary<int, ISensor> _sensorLookup;
         private readonly int _maximumSensorCount;
+        private NativeArray<byte> _attitudeTable;
+        private NativeArray<byte> _emptyAttitudeTable;
+        private readonly PerceptionStimulus[] _stimuli;
+        private int _stimulusCount;
+        private long _nextStimulusSequence = 1L;
         private readonly IPerceptionClock _clock;
         private JobHandle _batchedJobHandle;
         private Transform _lodReference;
@@ -107,7 +113,216 @@ namespace CycloneGames.AIPerception.Runtime
             int initialCapacity = Math.Min(InitialCapacity, maximumSensorCount);
             _sensors = new List<ISensor>(initialCapacity);
             _sensorLookup = new Dictionary<int, ISensor>(initialCapacity);
+            // A scheduled job must carry created containers, so jobs that never consult attitudes get
+            // this single-byte placeholder instead of an uncreated array.
+            _emptyAttitudeTable = new NativeArray<byte>(1, Allocator.Persistent);
+            _stimuli = new PerceptionStimulus[DefaultStimulusCapacity];
             _registry.AttachSensorManager(this);
+        }
+
+        /// <summary>
+        /// Attitude table shared by every sensor of this manager. Allocated on first write so a world
+        /// that never uses teams pays nothing; until then every pair resolves to
+        /// <see cref="PerceptionTeamAttitude.Neutral"/>.
+        /// </summary>
+        public bool HasTeamAttitudeTable => _attitudeTable.IsCreated;
+
+        /// <summary>Team attitude table for jobs. Check <see cref="HasTeamAttitudeTable"/> before indexing.</summary>
+        internal NativeArray<byte> AttitudeTable =>
+            _attitudeTable.IsCreated ? _attitudeTable : _emptyAttitudeTable;
+
+        /// <summary>Sets how <paramref name="observerTeam"/> regards <paramref name="targetTeam"/>.</summary>
+        public void SetTeamAttitude(int observerTeam, int targetTeam, PerceptionTeamAttitude attitude)
+        {
+            EnsureOwnerThread();
+            if (observerTeam < 0 || observerTeam >= PerceptionTeam.TeamCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(observerTeam));
+            }
+
+            if (targetTeam < 0 || targetTeam >= PerceptionTeam.TeamCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetTeam));
+            }
+
+            EnsureAttitudeTable();
+            _attitudeTable[PerceptionTeam.AttitudeIndex(observerTeam, targetTeam)] = (byte)attitude;
+        }
+
+        /// <summary>Sets the attitude in both directions. Use when the relation is mutual.</summary>
+        public void SetTeamAttitudeSymmetric(int teamA, int teamB, PerceptionTeamAttitude attitude)
+        {
+            SetTeamAttitude(teamA, teamB, attitude);
+            SetTeamAttitude(teamB, teamA, attitude);
+        }
+
+        /// <summary>Marks every team as friendly with itself, which is the usual baseline policy.</summary>
+        public void SetSameTeamFriendly()
+        {
+            EnsureOwnerThread();
+            EnsureAttitudeTable();
+            for (int team = 0; team < PerceptionTeam.TeamCount; team++)
+            {
+                _attitudeTable[PerceptionTeam.AttitudeIndex(team, team)] = (byte)PerceptionTeamAttitude.Friendly;
+            }
+        }
+
+        /// <summary>
+        /// Replaces the whole table from a flat 256x256 buffer laid out as
+        /// <c>observer * 256 + target</c>. One validation instead of 65536 per-cell calls.
+        /// </summary>
+        public void CopyTeamAttitudes(NativeArray<byte> source)
+        {
+            EnsureOwnerThread();
+            if (!source.IsCreated || source.Length != PerceptionTeam.AttitudeTableSize)
+            {
+                throw new ArgumentException("Attitude table must be 256x256 bytes.", nameof(source));
+            }
+
+            EnsureAttitudeTable();
+            NativeArray<byte>.Copy(source, _attitudeTable, source.Length);
+        }
+
+        /// <summary>Copies the current table into a managed buffer, for tooling and serialization.</summary>
+        public void CopyTeamAttitudesTo(byte[] destination)
+        {
+            EnsureOwnerThread();
+            if (destination == null || destination.Length != PerceptionTeam.AttitudeTableSize)
+            {
+                throw new ArgumentException("Attitude table must be 256x256 bytes.", nameof(destination));
+            }
+
+            for (int i = 0; i < destination.Length; i++)
+            {
+                destination[i] = _attitudeTable.IsCreated
+                    ? _attitudeTable[i]
+                    : (byte)PerceptionTeamAttitude.Neutral;
+            }
+        }
+
+        /// <summary>Resets every pair to <see cref="PerceptionTeamAttitude.Neutral"/>.</summary>
+        public void ClearTeamAttitudes()
+        {
+            EnsureOwnerThread();
+            if (!_attitudeTable.IsCreated)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _attitudeTable.Length; i++)
+            {
+                _attitudeTable[i] = (byte)PerceptionTeamAttitude.Neutral;
+            }
+        }
+
+        /// <summary>Fills the whole table with one attitude, e.g. a free-for-all world.</summary>
+        public void FillTeamAttitude(PerceptionTeamAttitude attitude)
+        {
+            EnsureOwnerThread();
+            EnsureAttitudeTable();
+            for (int i = 0; i < _attitudeTable.Length; i++)
+            {
+                _attitudeTable[i] = (byte)attitude;
+            }
+        }
+
+        public PerceptionTeamAttitude GetTeamAttitude(int observerTeam, int targetTeam)
+        {
+            EnsureOwnerThread();
+            if (!_attitudeTable.IsCreated)
+            {
+                return PerceptionTeamAttitude.Neutral;
+            }
+
+            if (observerTeam < 0 || observerTeam >= PerceptionTeam.TeamCount ||
+                targetTeam < 0 || targetTeam >= PerceptionTeam.TeamCount)
+            {
+                return PerceptionTeamAttitude.Neutral;
+            }
+
+            return (PerceptionTeamAttitude)_attitudeTable[PerceptionTeam.AttitudeIndex(observerTeam, targetTeam)];
+        }
+
+        /// <summary>
+        /// Materialises the attitude table. Sensors call this before scheduling a job so the job never
+        /// carries an uncreated container, which the job system rejects.
+        /// </summary>
+        internal void EnsureTeamAttitudeTable()
+        {
+            EnsureAttitudeTable();
+        }
+
+        private void EnsureAttitudeTable()
+        {
+            if (_attitudeTable.IsCreated)
+            {
+                return;
+            }
+
+            _attitudeTable = new NativeArray<byte>(PerceptionTeam.AttitudeTableSize, Allocator.Persistent);
+            for (int i = 0; i < _attitudeTable.Length; i++)
+            {
+                _attitudeTable[i] = (byte)PerceptionTeamAttitude.Neutral;
+            }
+        }
+
+        /// <summary>Fixed ring size for reported stimuli.</summary>
+        public const int DefaultStimulusCapacity = 256;
+
+        public int StimulusCapacity => _stimuli.Length;
+
+        /// <summary>Number of resident stimuli, bounded by <see cref="StimulusCapacity"/>.</summary>
+        public int StimulusCount => _stimulusCount;
+
+        /// <summary>Sequence of the newest reported stimulus, or 0 when none was reported yet.</summary>
+        public long LatestStimulusSequence => _nextStimulusSequence - 1L;
+
+        /// <summary>Sequence of the oldest resident stimulus, or <see cref="LatestStimulusSequence"/> when empty.</summary>
+        public long OldestStimulusSequence => _nextStimulusSequence - _stimulusCount;
+
+        /// <summary>
+        /// Reports a one-shot stimulus. The manager stamps the timestamp and sequence so every sensor
+        /// observes the same ordering regardless of which one consumes it first. When the ring is full
+        /// the oldest entry is dropped; a sensor that has not consumed it yet will miss that event.
+        /// </summary>
+        public long ReportStimulus(
+            PerceptibleHandle instigator,
+            float3 position,
+            float strength,
+            PerceptionStimulusKind kind = PerceptionStimulusKind.Damage)
+        {
+            EnsureOwnerThread();
+            long sequence = _nextStimulusSequence++;
+            int index = (int)((sequence - 1L) % _stimuli.Length);
+            _stimuli[index] = new PerceptionStimulus
+            {
+                Instigator = instigator,
+                Position = position,
+                Strength = strength,
+                Kind = kind,
+                Timestamp = Now,
+                Sequence = sequence
+            };
+
+            if (_stimulusCount < _stimuli.Length)
+            {
+                _stimulusCount++;
+            }
+
+            return sequence;
+        }
+
+        /// <summary>Reads a resident stimulus by sequence. Returns false when it has already been evicted.</summary>
+        public bool TryGetStimulus(long sequence, out PerceptionStimulus stimulus)
+        {
+            if (sequence < OldestStimulusSequence || sequence >= _nextStimulusSequence)
+            {
+                stimulus = default;
+                return false;
+            }
+
+            stimulus = _stimuli[(int)((sequence - 1L) % _stimuli.Length)];
+            return true;
         }
 
         /// <summary>Time source used for interval gating and stimulus aging.</summary>
@@ -673,6 +888,16 @@ namespace CycloneGames.AIPerception.Runtime
                 _isIteratingSensors = false;
                 _sensors.Clear();
                 _sensorLookup.Clear();
+                if (_attitudeTable.IsCreated)
+                {
+                    _attitudeTable.Dispose();
+                }
+
+                if (_emptyAttitudeTable.IsCreated)
+                {
+                    _emptyAttitudeTable.Dispose();
+                }
+
                 _registry.DetachSensorManager(this);
                 if (_instance == this)
                 {

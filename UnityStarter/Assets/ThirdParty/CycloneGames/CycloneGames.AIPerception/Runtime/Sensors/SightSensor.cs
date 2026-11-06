@@ -27,6 +27,12 @@ namespace CycloneGames.AIPerception.Runtime
         public int TargetTypeId;
         public bool FilterByType;
 
+        /// <summary>Team of the observer. Used to resolve the attitude towards each target.</summary>
+        [Range(0, PerceptionTeam.NoTeam)] public byte ObserverTeamId;
+
+        /// <summary>Which attitudes this sense reacts to. <see cref="PerceptionAffiliation.All"/> skips the lookup.</summary>
+        public PerceptionAffiliation Affiliation;
+
         [Range(0f, 60f)] public float MemoryDuration;
 
         public PerceptionSensorCapacity Capacity;
@@ -43,6 +49,8 @@ namespace CycloneGames.AIPerception.Runtime
             LoseSightRadius = 0f,
             TargetTypeId = PerceptibleTypes.Default,
             FilterByType = false,
+            ObserverTeamId = PerceptionTeam.NoTeam,
+            Affiliation = PerceptionAffiliation.All,
             MemoryDuration = 3f,
             Capacity = PerceptionSensorCapacity.Default
         };
@@ -271,6 +279,12 @@ namespace CycloneGames.AIPerception.Runtime
             EnsureJobCapacity(_queryTargetCount);
             _queryTargets = registry.NativeData;
             bool useLoseSightRadius = _config.LoseSightRadius > _config.MaxDistance;
+            if (_config.Affiliation != PerceptionAffiliation.All)
+            {
+                // The job system rejects an uncreated container, so materialise the table first.
+                _owner.EnsureTeamAttitudeTable();
+            }
+
             var job = new SightConeQueryJob
             {
                 Targets = _queryTargets,
@@ -285,6 +299,9 @@ namespace CycloneGames.AIPerception.Runtime
                 MemoryLookup = _resultBuffer.MemoryLookup,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                ObserverTeamId = _config.ObserverTeamId,
+                Affiliation = _config.Affiliation,
+                AttitudeTable = _owner.AttitudeTable,
                 IgnoredTarget = _ignoredTarget,
                 PassedFilter = _jobPassedFilter
             };

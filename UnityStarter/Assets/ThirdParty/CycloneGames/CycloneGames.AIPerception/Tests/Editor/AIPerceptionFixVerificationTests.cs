@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using CycloneGames.AIPerception.Runtime;
+using CycloneGames.AIPerception.Runtime.Jobs;
+using UnityEditor;
 using NUnit.Framework;
 using Unity.Mathematics;
 using UnityEngine;
@@ -147,6 +149,757 @@ namespace CycloneGames.AIPerception.Tests.Editor
 
             Assert.That(exponent, Is.LessThan(1.35d), "Bulk registration is superlinear again; the dedupe scan probably returned.");
             Assert.That(measurements[measurements.Length - 1], Is.LessThan(40d), "16k bulk registration exceeded the spike budget.");
+        }
+
+        private sealed class TestClock : IPerceptionClock
+        {
+            public double NowSeconds { get; set; }
+        }
+
+        [Test]
+        public void Feature_TeamAttitudeAsset_NormalizeRepairsDuplicateAndInvalidRelations()
+        {
+            var asset = ScriptableObject.CreateInstance<PerceptionTeamAttitudeAsset>();
+            try
+            {
+                // Reproduces a hand-edited asset: three entries for the same pair plus one out-of-range
+                // team. Without normalisation the cache is last-wins and the list keeps duplicate rows.
+                var serialized = new SerializedObject(asset);
+                serialized.FindProperty("_sameTeamFriendly").boolValue = true;
+                SerializedProperty relations = serialized.FindProperty("_relations");
+                relations.arraySize = 4;
+                WriteRelation(relations.GetArrayElementAtIndex(0), 0, 0, PerceptionTeamAttitude.Friendly);
+                WriteRelation(relations.GetArrayElementAtIndex(1), 0, 0, PerceptionTeamAttitude.Neutral);
+                WriteRelation(relations.GetArrayElementAtIndex(2), 0, 0, PerceptionTeamAttitude.Hostile);
+                WriteRelation(relations.GetArrayElementAtIndex(3), 999, 0, PerceptionTeamAttitude.Hostile);
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+
+                // OnValidate already repaired the list when the serialized object was applied, so the
+                // four hand-written rows are observed only through their collapsed result.
+                int beforeNormalize = asset.RelationCount;
+                asset.Normalize();
+                int after = asset.RelationCount;
+                PerceptionTeamAttitude repaired = asset.GetAttitude(0, 0);
+
+                EvidenceWriter.Write(
+                    $"feature.teamAssetNormalize|afterApply={beforeNormalize}|afterNormalize={after}|cell00={repaired}");
+
+                Assert.That(beforeNormalize, Is.EqualTo(1), "OnValidate must collapse duplicates on load");
+                Assert.That(after, Is.EqualTo(1), "duplicates and out-of-range teams must collapse to one override");
+                Assert.That(asset.Relations[0].ObserverTeam, Is.Zero);
+                Assert.That(asset.Relations[0].TargetTeam, Is.Zero);
+                Assert.That(asset.Relations[0].Attitude, Is.EqualTo(PerceptionTeamAttitude.Hostile), "last write wins");
+                Assert.That(repaired, Is.EqualTo(PerceptionTeamAttitude.Hostile));
+
+                asset.Normalize();
+                Assert.That(asset.RelationCount, Is.EqualTo(1), "normalising twice must be a no-op");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(asset);
+            }
+        }
+
+        private static void WriteRelation(
+            SerializedProperty element,
+            int observer,
+            int target,
+            PerceptionTeamAttitude attitude)
+        {
+            element.FindPropertyRelative("ObserverTeam").intValue = observer;
+            element.FindPropertyRelative("TargetTeam").intValue = target;
+            element.FindPropertyRelative("Attitude").intValue = (int)attitude;
+        }
+
+        [Test]
+        public void Feature_TeamAttitudeAsset_CapturesMinimalRelationList()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 8, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            var asset = ScriptableObject.CreateInstance<PerceptionTeamAttitudeAsset>();
+            try
+            {
+                manager.SetSameTeamFriendly();
+                manager.SetTeamAttitude(0, 1, PerceptionTeamAttitude.Hostile);
+
+                asset.CaptureFrom(manager);
+
+                // Policy inference should absorb the 256 diagonal cells into SameTeamFriendly and keep
+                // only the real override, otherwise a two-faction table serializes 257 rows.
+                EvidenceWriter.Write(
+                    $"feature.teamAssetMinimal|relations={asset.RelationCount}|sameFriendly={asset.SameTeamFriendly}" +
+                    $"|default={asset.DefaultAttitude}|cell01={asset.GetAttitude(0, 1)}|cell00={asset.GetAttitude(0, 0)}");
+
+                Assert.That(asset.RelationCount, Is.EqualTo(1));
+                Assert.That(asset.SameTeamFriendly, Is.True);
+                Assert.That(asset.DefaultAttitude, Is.EqualTo(PerceptionTeamAttitude.Neutral));
+                Assert.That(asset.GetAttitude(0, 1), Is.EqualTo(PerceptionTeamAttitude.Hostile));
+                Assert.That(asset.GetAttitude(0, 0), Is.EqualTo(PerceptionTeamAttitude.Friendly));
+
+                manager.FillTeamAttitude(PerceptionTeamAttitude.Hostile);
+                var hostile = ScriptableObject.CreateInstance<PerceptionTeamAttitudeAsset>();
+                try
+                {
+                    hostile.CaptureFrom(manager);
+                    EvidenceWriter.Write(
+                        $"feature.teamAssetAllHostile|relations={hostile.RelationCount}|default={hostile.DefaultAttitude}");
+                    Assert.That(hostile.RelationCount, Is.Zero, "a uniform table must serialize as policy only");
+                    Assert.That(hostile.DefaultAttitude, Is.EqualTo(PerceptionTeamAttitude.Hostile));
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(hostile);
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(asset);
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_TeamAttitudeAsset_DefaultsToNeutralAndRoundTrips()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 8, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            var asset = ScriptableObject.CreateInstance<PerceptionTeamAttitudeAsset>();
+            try
+            {
+                // A freshly created asset must be neutral, not friendly: byte defaults to zero and
+                // zero is Friendly in the attitude enum.
+                int freshNeutralPairs = 0;
+                for (int team = 0; team < PerceptionTeam.TeamCount; team++)
+                {
+                    if (asset.GetAttitude(team, team) == PerceptionTeamAttitude.Neutral)
+                    {
+                        freshNeutralPairs++;
+                    }
+                }
+
+                asset.SetSameTeamFriendly();
+                asset.SetAttitude(0, 2, PerceptionTeamAttitude.Hostile);
+                asset.ApplyTo(manager);
+
+                PerceptionTeamAttitude self = manager.GetTeamAttitude(0, 0);
+                PerceptionTeamAttitude untouched = manager.GetTeamAttitude(0, 1);
+                PerceptionTeamAttitude hostile = manager.GetTeamAttitude(0, 2);
+
+                var captured = ScriptableObject.CreateInstance<PerceptionTeamAttitudeAsset>();
+                try
+                {
+                    captured.CaptureFrom(manager);
+                    PerceptionTeamAttitude capturedHostile = captured.GetAttitude(0, 2);
+                    PerceptionTeamAttitude capturedNeutral = captured.GetAttitude(0, 1);
+                    PerceptionTeamAttitude capturedSelf = captured.GetAttitude(1, 1);
+
+                    EvidenceWriter.Write(
+                        $"feature.teamAsset|freshNeutral={freshNeutralPairs}|self={self}|neutral={untouched}|hostile={hostile}" +
+                        $"|roundTrip=({capturedHostile},{capturedNeutral},{capturedSelf})");
+
+                    Assert.That(freshNeutralPairs, Is.EqualTo(PerceptionTeam.TeamCount), "a new asset must be all-neutral");
+                    Assert.That(self, Is.EqualTo(PerceptionTeamAttitude.Friendly));
+                    Assert.That(untouched, Is.EqualTo(PerceptionTeamAttitude.Neutral));
+                    Assert.That(hostile, Is.EqualTo(PerceptionTeamAttitude.Hostile));
+                    Assert.That(capturedHostile, Is.EqualTo(PerceptionTeamAttitude.Hostile));
+                    Assert.That(capturedNeutral, Is.EqualTo(PerceptionTeamAttitude.Neutral));
+                    Assert.That(capturedSelf, Is.EqualTo(PerceptionTeamAttitude.Friendly));
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(captured);
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(asset);
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_DamageSensor_ConsumesReportedStimulusOnce()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 16, cellSize: 20f);
+            var clock = new TestClock { NowSeconds = 100d };
+            var manager = new SensorManager(registry, 64, clock);
+            Transform transform = CreateGameObject("damage-sensor").transform;
+            DamageSensor sensor = null;
+            try
+            {
+                var instigator = new FixPerceptible
+                {
+                    PerceptibleId = 1,
+                    Position = new float3(0f, 0f, 3f),
+                    LineOfSightPoint = new float3(0f, 0f, 3f),
+                    IsDetectable = true
+                };
+                PerceptibleHandle handle = registry.Register(instigator);
+                registry.RebuildData();
+
+                DamageSensorConfig config = DamageSensorConfig.Default;
+                config.MaxDistance = 25f;
+                config.MemoryDuration = 0f;
+                sensor = new DamageSensor(transform, config, manager);
+                manager.TryRegister(sensor);
+
+                sensor.UpdateSensor(0f);
+                int beforeReport = sensor.DetectedCount;
+
+                manager.ReportStimulus(handle, new float3(0f, 0f, 5f), 40f);
+                sensor.UpdateSensor(0f);
+                int afterReport = sensor.DetectedCount;
+                bool hasResult = sensor.TryGetResult(0, out DetectionResult result);
+
+                sensor.UpdateSensor(0f);
+                int afterSecondUpdate = sensor.DetectedCount;
+
+                EvidenceWriter.Write(
+                    $"feature.damage|before={beforeReport}|after={afterReport}|second={afterSecondUpdate}" +
+                    $"|distance={(hasResult ? result.Distance : -1f):F2}|type={(hasResult ? result.SensorType.ToString() : "none")}");
+
+                Assert.That(beforeReport, Is.Zero);
+                Assert.That(afterReport, Is.EqualTo(1));
+                Assert.That(hasResult, Is.True);
+                Assert.That(result.Target, Is.EqualTo(handle));
+                Assert.That(result.SensorType, Is.EqualTo(SensorType.Damage));
+                Assert.That(result.Distance, Is.EqualTo(5f).Within(0.01f));
+                Assert.That(result.Visibility, Is.EqualTo(0.8f).Within(0.01f));
+                Assert.That(afterSecondUpdate, Is.Zero);
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_DamageSensor_RejectsOutOfRangeAndWeakStimuli()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 16, cellSize: 20f);
+            var clock = new TestClock { NowSeconds = 200d };
+            var manager = new SensorManager(registry, 64, clock);
+            Transform transform = CreateGameObject("damage-filter").transform;
+            DamageSensor sensor = null;
+            try
+            {
+                var instigator = new FixPerceptible
+                {
+                    PerceptibleId = 1,
+                    Position = new float3(0f, 0f, 3f),
+                    IsDetectable = true
+                };
+                PerceptibleHandle handle = registry.Register(instigator);
+                registry.RebuildData();
+
+                DamageSensorConfig config = DamageSensorConfig.Default;
+                config.MaxDistance = 10f;
+                config.MinimumStrength = 5f;
+                config.MemoryDuration = 0f;
+                sensor = new DamageSensor(transform, config, manager);
+                manager.TryRegister(sensor);
+
+                manager.ReportStimulus(handle, new float3(0f, 0f, 40f), 100f);
+                sensor.UpdateSensor(0f);
+                int farCount = sensor.DetectedCount;
+
+                manager.ReportStimulus(handle, new float3(0f, 0f, 2f), 1f);
+                sensor.UpdateSensor(0f);
+                int weakCount = sensor.DetectedCount;
+
+                manager.ReportStimulus(handle, new float3(0f, 0f, 2f), 50f);
+                sensor.UpdateSensor(0f);
+                int validCount = sensor.DetectedCount;
+
+                EvidenceWriter.Write($"feature.damageFilter|far={farCount}|weak={weakCount}|valid={validCount}");
+
+                Assert.That(farCount, Is.Zero);
+                Assert.That(weakCount, Is.Zero);
+                Assert.That(validCount, Is.EqualTo(1));
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_Affiliation_ResolvesAttitudeThroughManagerTable()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 8, maximumCapacity: 32, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            Transform transform = CreateGameObject("affiliation-sensor").transform;
+            ProximitySensor sensor = null;
+            try
+            {
+                // Team 1 is the observer. Team 2 is an enemy, team 3 is neutral, team 4 is friendly.
+                for (int i = 1; i <= 4; i++)
+                {
+                    registry.Register(new FixPerceptible
+                    {
+                        PerceptibleId = i,
+                        TeamId = i,
+                        Position = new float3(0f, 0f, i),
+                        IsDetectable = true
+                    });
+                }
+
+                registry.RebuildData();
+                manager.SetSameTeamFriendly();
+                manager.SetTeamAttitude(1, 2, PerceptionTeamAttitude.Hostile);
+                manager.SetTeamAttitude(1, 4, PerceptionTeamAttitude.Friendly);
+
+                ProximitySensorConfig config = ProximitySensorConfig.Default;
+                config.Radius = 50f;
+                config.UpdateInterval = 0f;
+                config.MemoryDuration = 0f;
+                config.ObserverTeamId = 1;
+                config.Affiliation = PerceptionAffiliation.Enemies;
+
+                sensor = new ProximitySensor(transform, config, manager);
+                manager.TryRegister(sensor);
+                sensor.UpdateSensor(0f);
+                int enemiesOnly = sensor.DetectedCount;
+                int enemyTeam = sensor.TryGetResult(0, out DetectionResult first)
+                    ? registry.Get(first.Target) is IPerceptionTeamProvider teamProvider ? teamProvider.TeamId : -1
+                    : -1;
+
+                config.Affiliation = PerceptionAffiliation.Friendlies;
+                sensor.ApplyConfig(config);
+                sensor.UpdateSensor(0f);
+                int friendliesOnly = sensor.DetectedCount;
+
+                config.Affiliation = PerceptionAffiliation.All;
+                sensor.ApplyConfig(config);
+                sensor.UpdateSensor(0f);
+                int all = sensor.DetectedCount;
+
+                EvidenceWriter.Write(
+                    $"feature.affiliation|enemies={enemiesOnly}|enemyTeam={enemyTeam}|friendlies={friendliesOnly}|all={all}");
+
+                Assert.That(enemiesOnly, Is.EqualTo(1));
+                Assert.That(enemyTeam, Is.EqualTo(2));
+                // Team 1's own target counts as friendly too, so friendlies are the self target and team 4.
+                Assert.That(friendliesOnly, Is.EqualTo(2));
+                Assert.That(all, Is.EqualTo(4));
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_Affiliation_SupportsAsymmetricRelations()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 8, maximumCapacity: 32, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            Transform teamA = CreateGameObject("observer-a").transform;
+            Transform teamB = CreateGameObject("observer-b").transform;
+            ProximitySensor sensorA = null;
+            ProximitySensor sensorB = null;
+            try
+            {
+                registry.Register(new FixPerceptible
+                {
+                    PerceptibleId = 1,
+                    TeamId = 2,
+                    Position = new float3(0f, 0f, 2f),
+                    IsDetectable = true
+                });
+                registry.RebuildData();
+
+                // A regards B as hostile; B regards A as friendly.
+                manager.SetTeamAttitude(1, 2, PerceptionTeamAttitude.Hostile);
+                manager.SetTeamAttitude(2, 1, PerceptionTeamAttitude.Friendly);
+
+                ProximitySensorConfig config = ProximitySensorConfig.Default;
+                config.Radius = 50f;
+                config.UpdateInterval = 0f;
+                config.MemoryDuration = 0f;
+                config.Affiliation = PerceptionAffiliation.Enemies;
+                config.ObserverTeamId = 1;
+                sensorA = new ProximitySensor(teamA, config, manager);
+                manager.TryRegister(sensorA);
+
+                config.ObserverTeamId = 2;
+                sensorB = new ProximitySensor(teamB, config, manager);
+                manager.TryRegister(sensorB);
+
+                sensorA.UpdateSensor(0f);
+                sensorB.UpdateSensor(0f);
+
+                EvidenceWriter.Write($"feature.affiliationAsymmetry|a={sensorA.DetectedCount}|b={sensorB.DetectedCount}");
+                Assert.That(sensorA.DetectedCount, Is.EqualTo(1), "A must see B as hostile");
+                Assert.That(sensorB.DetectedCount, Is.Zero, "B must see A as friendly");
+            }
+            finally
+            {
+                sensorA?.Dispose();
+                sensorB?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_Affiliation_TreatsNoTeamAndMissingTableAsNeutral()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 8, maximumCapacity: 32, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            Transform transform = CreateGameObject("no-team-sensor").transform;
+            ProximitySensor sensor = null;
+            try
+            {
+                registry.Register(new FixPerceptible
+                {
+                    PerceptibleId = 1,
+                    TeamId = PerceptionTeam.NoTeam,
+                    Position = new float3(0f, 0f, 2f),
+                    IsDetectable = true
+                });
+                registry.RebuildData();
+
+                ProximitySensorConfig config = ProximitySensorConfig.Default;
+                config.Radius = 50f;
+                config.UpdateInterval = 0f;
+                config.MemoryDuration = 0f;
+                config.ObserverTeamId = 1;
+
+                // No table written yet: every pair is neutral, so an enemy-only sense sees nothing and
+                // a neutral-only sense sees the target. Only filtering sensors materialise the table.
+                bool tableBeforeUpdate = manager.HasTeamAttitudeTable;
+
+                config.Affiliation = PerceptionAffiliation.Enemies;
+                sensor = new ProximitySensor(transform, config, manager);
+                manager.TryRegister(sensor);
+                sensor.UpdateSensor(0f);
+                int enemiesWithoutTable = sensor.DetectedCount;
+                bool tableAllocatedOnFilteredUpdate = manager.HasTeamAttitudeTable;
+
+                config.Affiliation = PerceptionAffiliation.Neutrals;
+                sensor.ApplyConfig(config);
+                sensor.UpdateSensor(0f);
+                int neutralsWithoutTable = sensor.DetectedCount;
+
+                // Out-of-range team ids collapse to NoTeam instead of aliasing into a real team.
+                var clamped = new FixPerceptible { PerceptibleId = 2, TeamId = 9000, IsDetectable = true };
+                PerceptibleHandle clampedHandle = registry.Register(clamped);
+                registry.RebuildData();
+                int clampedTeam = -1;
+                using (var snapshot = registry.CreateNativeDataCopy(Unity.Collections.Allocator.Temp))
+                {
+                    for (int i = 0; i < snapshot.Length; i++)
+                    {
+                        if (snapshot[i].Id == clampedHandle.Id)
+                        {
+                            clampedTeam = snapshot[i].TeamId;
+                        }
+                    }
+                }
+
+                EvidenceWriter.Write(
+                    $"feature.affiliationNoTeam|enemies={enemiesWithoutTable}|neutrals={neutralsWithoutTable}" +
+                    $"|tableBefore={tableBeforeUpdate}|tableAfterFiltered={tableAllocatedOnFilteredUpdate}" +
+                    $"|clampedTeam={clampedTeam}");
+
+                Assert.That(enemiesWithoutTable, Is.Zero);
+                Assert.That(neutralsWithoutTable, Is.EqualTo(1));
+                Assert.That(tableBeforeUpdate, Is.False, "a manager must not allocate the table on construction");
+                Assert.That(tableAllocatedOnFilteredUpdate, Is.True, "a filtering sensor must materialise the table");
+                Assert.That(clampedTeam, Is.EqualTo(PerceptionTeam.NoTeam));
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_AffiliationFuzz_MatchesAttitudeTable()
+        {
+            var random = new System.Random(20261107);
+            var registry = new PerceptibleRegistry(initialCapacity: 128, maximumCapacity: 256, cellSize: 8f);
+            var manager = new SensorManager(registry);
+            Transform transform = CreateGameObject("affiliation-fuzz").transform;
+            const int targetCount = 96;
+            var teams = new int[targetCount];
+            var positions = new float3[targetCount];
+            ProximitySensor sensor = null;
+            int cases = 0;
+            int mismatches = 0;
+            try
+            {
+                for (int i = 0; i < targetCount; i++)
+                {
+                    teams[i] = random.Next(0, 6);
+                    positions[i] = new float3(
+                        (float)(random.NextDouble() * 40d - 20d),
+                        0f,
+                        (float)(random.NextDouble() * 40d - 20d));
+                    registry.Register(new FixPerceptible
+                    {
+                        PerceptibleId = i,
+                        TeamId = teams[i],
+                        Position = positions[i],
+                        IsDetectable = true
+                    });
+                }
+
+                registry.RebuildData();
+
+                // Random but fixed attitude matrix over six teams, so the reference can read it back.
+                var table = new PerceptionTeamAttitude[6, 6];
+                for (int a = 0; a < 6; a++)
+                {
+                    for (int b = 0; b < 6; b++)
+                    {
+                        var attitude = (PerceptionTeamAttitude)random.Next(0, 3);
+                        table[a, b] = attitude;
+                        manager.SetTeamAttitude(a, b, attitude);
+                    }
+                }
+
+                ProximitySensorConfig config = ProximitySensorConfig.Default;
+                config.UpdateInterval = 0f;
+                config.MemoryDuration = 0f;
+                sensor = new ProximitySensor(transform, config, manager);
+                manager.TryRegister(sensor);
+
+                for (int iteration = 0; iteration < 200; iteration++)
+                {
+                    int observerTeam = random.Next(0, 6);
+                    var affiliation = (PerceptionAffiliation)random.Next(0, 8);
+                    float radius = 5f + (float)random.NextDouble() * 20f;
+                    config.ObserverTeamId = (byte)observerTeam;
+                    config.Affiliation = affiliation;
+                    config.Radius = radius;
+                    sensor.ApplyConfig(config);
+                    sensor.UpdateSensor(0f);
+
+                    int expected = 0;
+                    float radiusSq = radius * radius;
+                    for (int i = 0; i < targetCount; i++)
+                    {
+                        int attitude = (int)table[observerTeam, teams[i]];
+                        if (((int)affiliation & (1 << attitude)) == 0)
+                        {
+                            continue;
+                        }
+
+                        float distSq = math.distancesq(positions[i], float3.zero);
+                        if (distSq > radiusSq)
+                        {
+                            continue;
+                        }
+
+                        // The job drops anything above 99% of the radius, so the reference must too.
+                        if (1f - math.sqrt(distSq) / radius < 0.01f)
+                        {
+                            continue;
+                        }
+
+                        expected++;
+                    }
+
+                    cases++;
+                    if (sensor.DetectedCount != expected)
+                    {
+                        mismatches++;
+                    }
+                }
+
+                EvidenceWriter.Write($"feature.affiliationFuzz|cases={cases}|targets={targetCount}|mismatches={mismatches}");
+                Assert.That(mismatches, Is.Zero, "affiliation result diverged from the attitude table");
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_AffiliationSoak_RotatingFiltersStayStable()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 2048, maximumCapacity: 8192, cellSize: 8f);
+            var manager = new SensorManager(registry);
+            Transform transform = CreateGameObject("affiliation-soak").transform;
+            const int targetCount = 4000;
+            const int updates = 600;
+            ProximitySensor sensor = null;
+            var expectedByAffiliation = new System.Collections.Generic.Dictionary<PerceptionAffiliation, int>();
+            PerceptionAffiliation[] filters =
+            {
+                PerceptionAffiliation.Enemies,
+                PerceptionAffiliation.Friendlies,
+                PerceptionAffiliation.Enemies | PerceptionAffiliation.Neutrals,
+                PerceptionAffiliation.All
+            };
+            try
+            {
+                int side = (int)math.ceil(math.sqrt((float)targetCount));
+                for (int i = 0; i < targetCount; i++)
+                {
+                    registry.Register(new FixPerceptible
+                    {
+                        PerceptibleId = i,
+                        TeamId = i % 4,
+                        Position = new float3((i % side) * 2f, 0f, (i / side) * 2f),
+                        IsDetectable = true
+                    });
+                }
+
+                registry.RebuildData();
+
+                // Observer is team 0: team 1 hostile, team 2 friendly, team 3 neutral, team 0 friendly.
+                manager.SetSameTeamFriendly();
+                manager.SetTeamAttitude(0, 1, PerceptionTeamAttitude.Hostile);
+                manager.SetTeamAttitude(0, 2, PerceptionTeamAttitude.Friendly);
+                manager.SetTeamAttitude(0, 3, PerceptionTeamAttitude.Neutral);
+
+                ProximitySensorConfig config = ProximitySensorConfig.Default;
+                config.Radius = 30f;
+                config.UpdateInterval = 0f;
+                // Memory off so a filter change takes effect immediately; memory interplay has its own tests.
+                config.MemoryDuration = 0f;
+                config.ObserverTeamId = 0;
+                config.Capacity = new PerceptionSensorCapacity
+                {
+                    InitialCandidateCapacity = 256,
+                    MaximumCandidates = 8192,
+                    InitialResultCapacity = 256,
+                    MaximumResults = 4096,
+                    InitialMemoryCapacity = 256,
+                    MaximumMemoryEntries = 4096
+                };
+                sensor = new ProximitySensor(transform, config, manager);
+                manager.TryRegister(sensor);
+
+                // Reference counts from one unfiltered pass.
+                config.Affiliation = PerceptionAffiliation.All;
+                sensor.ApplyConfig(config);
+                sensor.UpdateSensor(0f);
+                var handles = new System.Collections.Generic.List<(PerceptibleHandle handle, int team)>(sensor.DetectedCount);
+                for (int i = 0; i < sensor.DetectedCount; i++)
+                {
+                    if (sensor.TryGetResult(i, out DetectionResult result))
+                    {
+                        handles.Add((result.Target, registry.Get(result.Target) is IPerceptionTeamProvider rowProvider ? rowProvider.TeamId : PerceptionTeam.NoTeam));
+                    }
+                }
+
+                foreach (PerceptionAffiliation filter in filters)
+                {
+                    int count = 0;
+                    foreach ((PerceptibleHandle handle, int team) in handles)
+                    {
+                        var attitude = (int)manager.GetTeamAttitude(0, team);
+                        if (((int)filter & (1 << attitude)) != 0)
+                        {
+                            count++;
+                        }
+                    }
+
+                    expectedByAffiliation[filter] = count;
+                }
+
+                long heapBefore = GC.GetTotalMemory(true);
+                int mismatches = 0;
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < updates; i++)
+                {
+                    PerceptionAffiliation filter = filters[(i / 25) % filters.Length];
+                    if (config.Affiliation != filter)
+                    {
+                        config.Affiliation = filter;
+                        sensor.ApplyConfig(config);
+                    }
+
+                    sensor.UpdateSensor(0.016f);
+                    if (sensor.DetectedCount != expectedByAffiliation[filter])
+                    {
+                        mismatches++;
+                    }
+                }
+
+                watch.Stop();
+                long heapAfter = GC.GetTotalMemory(true);
+                EvidenceWriter.Write(
+                    $"feature.affiliationSoak|updates={updates}|targets={targetCount}|mismatches={mismatches}" +
+                    $"|msPerUpdate={watch.Elapsed.TotalMilliseconds / updates:F3}|heapDelta={heapAfter - heapBefore}");
+
+                Assert.That(mismatches, Is.Zero, "rotating affiliation filters diverged from the attitude table");
+                Assert.That(heapAfter - heapBefore, Is.LessThan(256 * 1024));
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
+        }
+
+        [Test]
+        public void Feature_DamageSensor_RespectsAffiliation()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 16, cellSize: 20f);
+            var clock = new TestClock { NowSeconds = 400d };
+            var manager = new SensorManager(registry, 64, clock);
+            Transform transform = CreateGameObject("damage-affiliation").transform;
+            DamageSensor sensor = null;
+            try
+            {
+                var instigator = new FixPerceptible
+                {
+                    PerceptibleId = 1,
+                    TeamId = 5,
+                    Position = new float3(0f, 0f, 3f),
+                    IsDetectable = true
+                };
+                PerceptibleHandle handle = registry.Register(instigator);
+                registry.RebuildData();
+                manager.SetTeamAttitude(1, 5, PerceptionTeamAttitude.Hostile);
+
+                DamageSensorConfig config = DamageSensorConfig.Default;
+                config.MaxDistance = 25f;
+                config.MemoryDuration = 0f;
+                config.ObserverTeamId = 1;
+                config.Affiliation = PerceptionAffiliation.Friendlies;
+                sensor = new DamageSensor(transform, config, manager);
+                manager.TryRegister(sensor);
+
+                manager.ReportStimulus(handle, new float3(0f, 0f, 2f), 30f);
+                sensor.UpdateSensor(0f);
+                int filteredOut = sensor.DetectedCount;
+
+                config.Affiliation = PerceptionAffiliation.Enemies;
+                sensor.ApplyConfig(config);
+                manager.ReportStimulus(handle, new float3(0f, 0f, 2f), 30f);
+                sensor.UpdateSensor(0f);
+                int allowed = sensor.DetectedCount;
+
+                EvidenceWriter.Write($"feature.damageAffiliation|filteredOut={filteredOut}|allowed={allowed}");
+                Assert.That(filteredOut, Is.Zero);
+                Assert.That(allowed, Is.EqualTo(1));
+            }
+            finally
+            {
+                sensor?.Dispose();
+                manager.Dispose();
+                registry.Dispose();
+            }
         }
 
         [Test]
@@ -908,10 +1661,11 @@ namespace CycloneGames.AIPerception.Tests.Editor
             public double NowSeconds { get; set; }
         }
 
-        private sealed class FixPerceptible : IPerceptible
+        private sealed class FixPerceptible : IPerceptible, IPerceptionTeamProvider
         {
             public int PerceptibleId { get; set; }
             public int PerceptibleTypeId { get; set; }
+            public int TeamId { get; set; }
             public bool IsDetectable { get; set; }
             public float3 Position { get; set; }
             public float DetectionRadius { get; set; }

@@ -89,7 +89,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
         }
 
         [Test]
-        public void Registry_LegacyZeroMaximum_MapsToPackageHardCeiling()
+        public void Registry_ZeroMaximum_MapsToPackageHardCeiling()
         {
             using var registry = new PerceptibleRegistry(initialCapacity: 1, maximumCapacity: 0);
             var handles = new PerceptibleHandle[129];
@@ -634,6 +634,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Forward = new float3(1f, 0f, 0f),
                 MaxDistance = 5f,
@@ -670,6 +671,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Forward = new float3(1f, 0f, 0f),
                 MaxDistance = 2e20f,
@@ -680,6 +682,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Radius = 2e20f,
                 Audibility = audibility
@@ -688,6 +691,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Radius = 2e20f,
                 Proximity = proximity
@@ -724,6 +728,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = origin,
                 Forward = new float3(1f, 0f, 0f),
                 MaxDistance = float.MaxValue,
@@ -734,6 +739,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = origin,
                 Radius = float.MaxValue,
                 Audibility = audibility
@@ -742,6 +748,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = origin,
                 Radius = float.MaxValue,
                 Proximity = proximity
@@ -825,6 +832,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Radius = 5f,
                 IgnoredTarget = self.ToHandle(),
@@ -896,6 +904,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidateIndices,
+                Affiliation = PerceptionAffiliation.All,
                 Origin = float3.zero,
                 Radius = 0f,
                 Proximity = proximity
@@ -1276,6 +1285,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             {
                 Targets = targets,
                 CandidateIndices = candidates.AsArray(),
+                Affiliation = PerceptionAffiliation.All,
                 Origin = origin,
                 Radius = radius,
                 Proximity = proximity
@@ -1292,7 +1302,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
             return true;
         }
 
-        private sealed class TestPerceptible : IPerceptible
+        private sealed class TestPerceptible : IPerceptible, IPerceptionTeamProvider
         {
             public TestPerceptible(
                 int perceptibleId,
@@ -1310,6 +1320,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
 
             public int PerceptibleId { get; }
             public int PerceptibleTypeId { get; set; }
+            public int TeamId { get; set; }
             public bool IsDetectable { get; set; }
             public float3 Position { get; set; }
             public float DetectionRadius { get; set; }

@@ -35,6 +35,7 @@ namespace CycloneGames.AIPerception.Runtime
         private IPerceptible[] _perceptibles;
         private PerceptibleData[] _slotData;
         private int[] _generations;
+        private bool[] _hasTeamProvider;
         private int[] _freeNext;
         private int[] _activeIds;
         private int[] _activeIndexBySlot;
@@ -91,6 +92,7 @@ namespace CycloneGames.AIPerception.Runtime
             _perceptibles = new IPerceptible[initialCapacity];
             _slotData = new PerceptibleData[initialCapacity];
             _generations = new int[initialCapacity];
+            _hasTeamProvider = new bool[initialCapacity];
             _freeNext = new int[initialCapacity];
             _activeIds = new int[initialCapacity];
             _activeIndexBySlot = new int[initialCapacity];
@@ -177,6 +179,8 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _perceptibles[index] = perceptible;
+            // Resolved once per slot so capture never pays a type check per entity.
+            _hasTeamProvider[index] = perceptible is IPerceptionTeamProvider;
             _slotByPerceptible[perceptible] = index;
             _activeIndexBySlot[index] = _count;
             _activeIds[_count] = index;
@@ -262,6 +266,20 @@ namespace CycloneGames.AIPerception.Runtime
 
             DrainAttachedManagers();
             RebuildDataCore();
+        }
+
+        /// <summary>Number of managers currently attached to this registry.</summary>
+        public int SensorManagerCount => _sensorManagers.Count;
+
+        /// <summary>Manager at <paramref name="index"/>, for tooling that needs to enumerate them.</summary>
+        public SensorManager GetSensorManager(int index)
+        {
+            if (index < 0 || index >= _sensorManagers.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
+            return _sensorManagers[index];
         }
 
         internal void AttachSensorManager(SensorManager manager)
@@ -440,6 +458,13 @@ namespace CycloneGames.AIPerception.Runtime
                           math.isfinite(radius) &&
                           math.isfinite(loudness);
             bool detectable = perceptible.IsDetectable && finite;
+            // Team identity is optional: only providers report one, everyone else is NoTeam.
+            byte teamId = PerceptionTeam.NoTeam;
+            if (_hasTeamProvider[slot])
+            {
+                int team = ((IPerceptionTeamProvider)perceptible).TeamId;
+                teamId = team < 0 || team > PerceptionTeam.NoTeam ? PerceptionTeam.NoTeam : (byte)team;
+            }
             byte flags = detectable ? PerceptibleData.DetectableFlag : (byte)0;
             if (detectable && perceptible.IsSoundSource)
             {
@@ -453,6 +478,7 @@ namespace CycloneGames.AIPerception.Runtime
                 Generation = _generations[slot],
                 TypeId = perceptible.PerceptibleTypeId,
                 Flags = flags,
+                TeamId = teamId,
                 DetectionRadius = finite ? math.max(0f, radius) : 0f,
                 Loudness = finite ? math.max(0f, loudness) : 0f,
                 Position = finite ? position : float3.zero,
@@ -467,6 +493,7 @@ namespace CycloneGames.AIPerception.Runtime
                    left.Generation == right.Generation &&
                    left.TypeId == right.TypeId &&
                    left.Flags == right.Flags &&
+                   left.TeamId == right.TeamId &&
                    left.DetectionRadius.Equals(right.DetectionRadius) &&
                    left.Loudness.Equals(right.Loudness) &&
                    math.all(left.Position == right.Position) &&
@@ -509,6 +536,7 @@ namespace CycloneGames.AIPerception.Runtime
             Array.Resize(ref _perceptibles, newCapacity);
             Array.Resize(ref _slotData, newCapacity);
             Array.Resize(ref _generations, newCapacity);
+            Array.Resize(ref _hasTeamProvider, newCapacity);
             ResizeAndFill(ref _freeNext, newCapacity, -1);
             Array.Resize(ref _activeIds, newCapacity);
             ResizeAndFill(ref _activeIndexBySlot, newCapacity, -1);

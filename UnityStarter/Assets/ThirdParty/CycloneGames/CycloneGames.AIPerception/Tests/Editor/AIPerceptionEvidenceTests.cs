@@ -2180,10 +2180,11 @@ namespace CycloneGames.AIPerception.Tests.Editor
             }
         }
 
-        private sealed class EvidencePerceptible : IPerceptible
+        private sealed class EvidencePerceptible : IPerceptible, IPerceptionTeamProvider
         {
             public int PerceptibleId { get; set; }
             public int PerceptibleTypeId { get; set; }
+            public int TeamId { get; set; }
             public bool IsDetectable { get; set; }
             public float3 Position { get; set; }
             public float DetectionRadius { get; set; }

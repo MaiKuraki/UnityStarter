@@ -88,6 +88,7 @@ namespace CycloneGames.AIPerception.Runtime
     {
         int PerceptibleId { get; }
         int PerceptibleTypeId { get; }
+
         bool IsDetectable { get; }
         float3 Position { get; }
         float DetectionRadius { get; }

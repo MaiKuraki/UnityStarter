@@ -16,10 +16,11 @@ namespace CycloneGames.AIPerception.Tests.Editor
     /// </summary>
     public static class PerceptionStressHarness
     {
-        private sealed class Target : IPerceptible
+        private sealed class Target : IPerceptible, IPerceptionTeamProvider
         {
             public int PerceptibleId { get; set; }
             public int PerceptibleTypeId { get; set; }
+            public int TeamId { get; set; }
             public bool IsDetectable { get; set; }
             public float3 Position { get; set; }
             public float DetectionRadius { get; set; }
