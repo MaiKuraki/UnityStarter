@@ -31,9 +31,11 @@ namespace CycloneGames.AIPerception.Runtime
         private readonly int _ownerThreadId;
         private readonly SpatialGrid _spatialGrid;
         private readonly List<SensorManager> _sensorManagers = new List<SensorManager>(1);
+        private readonly Dictionary<IPerceptible, int> _slotByPerceptible;
         private IPerceptible[] _perceptibles;
         private PerceptibleData[] _slotData;
         private int[] _generations;
+        private bool[] _hasTeamProvider;
         private int[] _freeNext;
         private int[] _activeIds;
         private int[] _activeIndexBySlot;
@@ -90,27 +92,21 @@ namespace CycloneGames.AIPerception.Runtime
             _perceptibles = new IPerceptible[initialCapacity];
             _slotData = new PerceptibleData[initialCapacity];
             _generations = new int[initialCapacity];
+            _hasTeamProvider = new bool[initialCapacity];
             _freeNext = new int[initialCapacity];
             _activeIds = new int[initialCapacity];
             _activeIndexBySlot = new int[initialCapacity];
             _managedData = new PerceptibleData[initialCapacity];
+            _slotByPerceptible = new Dictionary<IPerceptible, int>(initialCapacity, ReferenceComparer.Instance);
             _spatialGrid = new SpatialGrid(cellSize);
             Fill(_freeNext, -1);
             Fill(_activeIndexBySlot, -1);
         }
 
         /// <summary>
-        /// Sets the hard world capacity. Legacy zero maps to the package hard ceiling. The limit
+        /// Sets the hard world capacity. A zero argument selects the package hard ceiling. The limit
         /// cannot be lowered below the current active count.
         /// </summary>
-        public void SetMaxCapacity(int maximumCapacity)
-        {
-            if (!TrySetMaxCapacity(maximumCapacity))
-            {
-                throw new ArgumentOutOfRangeException(nameof(maximumCapacity));
-            }
-        }
-
         public bool TrySetMaxCapacity(int maximumCapacity)
         {
             EnsureOwnerThread();
@@ -149,13 +145,9 @@ namespace CycloneGames.AIPerception.Runtime
                 return PerceptibleHandle.Invalid;
             }
 
-            for (int i = 0; i < _count; i++)
+            if (_slotByPerceptible.TryGetValue(perceptible, out int existingSlot))
             {
-                int activeSlot = _activeIds[i];
-                if (ReferenceEquals(_perceptibles[activeSlot], perceptible))
-                {
-                    return new PerceptibleHandle(_registryId, activeSlot, _generations[activeSlot]);
-                }
+                return new PerceptibleHandle(_registryId, existingSlot, _generations[existingSlot]);
             }
 
             if (_maximumCapacity > 0 && _count >= _maximumCapacity)
@@ -187,6 +179,9 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _perceptibles[index] = perceptible;
+            // Resolved once per slot so capture never pays a type check per entity.
+            _hasTeamProvider[index] = perceptible is IPerceptionTeamProvider;
+            _slotByPerceptible[perceptible] = index;
             _activeIndexBySlot[index] = _count;
             _activeIds[_count] = index;
             _count++;
@@ -216,6 +211,7 @@ namespace CycloneGames.AIPerception.Runtime
 
             _activeIds[lastActiveIndex] = 0;
             _activeIndexBySlot[index] = -1;
+            _slotByPerceptible.Remove(_perceptibles[index]);
             _perceptibles[index] = null;
             _slotData[index] = default;
             _generations[index] = NextGeneration(_generations[index]);
@@ -270,6 +266,20 @@ namespace CycloneGames.AIPerception.Runtime
 
             DrainAttachedManagers();
             RebuildDataCore();
+        }
+
+        /// <summary>Number of managers currently attached to this registry.</summary>
+        public int SensorManagerCount => _sensorManagers.Count;
+
+        /// <summary>Manager at <paramref name="index"/>, for tooling that needs to enumerate them.</summary>
+        public SensorManager GetSensorManager(int index)
+        {
+            if (index < 0 || index >= _sensorManagers.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
+            return _sensorManagers[index];
         }
 
         internal void AttachSensorManager(SensorManager manager)
@@ -395,41 +405,6 @@ namespace CycloneGames.AIPerception.Runtime
             return copy;
         }
 
-        public NativeArray<PerceptibleData> CreateNativeDataCopyInRange(
-            float3 origin,
-            float range,
-            Allocator allocator = Allocator.TempJob)
-        {
-            RebuildData();
-            var indices = new NativeList<int>(math.max(1, _dataCount), Allocator.Temp);
-            try
-            {
-                bool success = _spatialGrid.CollectIndices(
-                    _managedData,
-                    _dataCount,
-                    origin,
-                    range,
-                    ref indices,
-                    math.max(1, _dataCount));
-                if (!success)
-                {
-                    throw new InvalidOperationException("The range query rejected invalid bounds or capacity.");
-                }
-
-                var copy = new NativeArray<PerceptibleData>(indices.Length, allocator);
-                for (int i = 0; i < indices.Length; i++)
-                {
-                    copy[i] = _managedData[indices[i]];
-                }
-
-                return copy;
-            }
-            finally
-            {
-                indices.Dispose();
-            }
-        }
-
         internal bool CollectCandidateIndices(
             float3 origin,
             float range,
@@ -483,6 +458,13 @@ namespace CycloneGames.AIPerception.Runtime
                           math.isfinite(radius) &&
                           math.isfinite(loudness);
             bool detectable = perceptible.IsDetectable && finite;
+            // Team identity is optional: only providers report one, everyone else is NoTeam.
+            byte teamId = PerceptionTeam.NoTeam;
+            if (_hasTeamProvider[slot])
+            {
+                int team = ((IPerceptionTeamProvider)perceptible).TeamId;
+                teamId = team < 0 || team > PerceptionTeam.NoTeam ? PerceptionTeam.NoTeam : (byte)team;
+            }
             byte flags = detectable ? PerceptibleData.DetectableFlag : (byte)0;
             if (detectable && perceptible.IsSoundSource)
             {
@@ -496,6 +478,7 @@ namespace CycloneGames.AIPerception.Runtime
                 Generation = _generations[slot],
                 TypeId = perceptible.PerceptibleTypeId,
                 Flags = flags,
+                TeamId = teamId,
                 DetectionRadius = finite ? math.max(0f, radius) : 0f,
                 Loudness = finite ? math.max(0f, loudness) : 0f,
                 Position = finite ? position : float3.zero,
@@ -510,6 +493,7 @@ namespace CycloneGames.AIPerception.Runtime
                    left.Generation == right.Generation &&
                    left.TypeId == right.TypeId &&
                    left.Flags == right.Flags &&
+                   left.TeamId == right.TeamId &&
                    left.DetectionRadius.Equals(right.DetectionRadius) &&
                    left.Loudness.Equals(right.Loudness) &&
                    math.all(left.Position == right.Position) &&
@@ -552,6 +536,7 @@ namespace CycloneGames.AIPerception.Runtime
             Array.Resize(ref _perceptibles, newCapacity);
             Array.Resize(ref _slotData, newCapacity);
             Array.Resize(ref _generations, newCapacity);
+            Array.Resize(ref _hasTeamProvider, newCapacity);
             ResizeAndFill(ref _freeNext, newCapacity, -1);
             Array.Resize(ref _activeIds, newCapacity);
             ResizeAndFill(ref _activeIndexBySlot, newCapacity, -1);
@@ -634,6 +619,26 @@ namespace CycloneGames.AIPerception.Runtime
             }
         }
 
+        /// <summary>
+        /// Identity-based comparer. Registry admission is keyed on object identity, and the default
+        /// comparer would route through <see cref="object.GetHashCode"/>, which Unity objects
+        /// override with a native-backed identity lookup.
+        /// </summary>
+        private sealed class ReferenceComparer : IEqualityComparer<IPerceptible>
+        {
+            public static readonly ReferenceComparer Instance = new ReferenceComparer();
+
+            public bool Equals(IPerceptible x, IPerceptible y)
+            {
+                return ReferenceEquals(x, y);
+            }
+
+            public int GetHashCode(IPerceptible obj)
+            {
+                return RuntimeHelpers.GetHashCode(obj);
+            }
+        }
+
         private void EnsureOwnerThread()
         {
             if (Environment.CurrentManagedThreadId != _ownerThreadId)
@@ -679,6 +684,7 @@ namespace CycloneGames.AIPerception.Runtime
             _activeIndexBySlot = null;
             _managedData = null;
             _sensorManagers.Clear();
+            _slotByPerceptible.Clear();
             _spatialGrid.Clear();
             if (_instance == this)
             {

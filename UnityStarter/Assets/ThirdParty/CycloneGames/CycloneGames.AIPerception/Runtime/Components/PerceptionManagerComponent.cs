@@ -37,18 +37,33 @@ namespace CycloneGames.AIPerception.Runtime
                     return null;
                 }
 
-                if (_instance == null)
-                {
-                    var owner = new GameObject("[PerceptionManager]");
-                    _instance = owner.AddComponent<PerceptionManagerComponent>();
-                    DontDestroyOnLoad(owner);
-                }
-
                 return _instance;
             }
         }
 
         public static bool HasInstance => _instance != null;
+
+        public static bool TryGetInstance(out PerceptionManagerComponent instance)
+        {
+            instance = _isQuitting ? null : _instance;
+            return instance != null;
+        }
+
+        /// <summary>
+        /// Explicitly creates a driver at runtime. Perception never spawns a hidden GameObject on its
+        /// own; callers that need a code-only bootstrap must use this method or author a scene object.
+        /// </summary>
+        public static PerceptionManagerComponent CreateInstance()
+        {
+            if (_instance != null)
+            {
+                return _instance;
+            }
+
+            var owner = new GameObject("[PerceptionManager]");
+            DontDestroyOnLoad(owner);
+            return owner.AddComponent<PerceptionManagerComponent>();
+        }
 
         public bool UseDeferredJobCompletion
         {

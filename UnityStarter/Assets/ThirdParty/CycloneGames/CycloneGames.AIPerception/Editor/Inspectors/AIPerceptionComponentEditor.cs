@@ -15,6 +15,7 @@ namespace CycloneGames.AIPerception.Editor
         private static readonly Color SightColor = new Color(0.92f, 0.69f, 0.12f, 1f);
         private static readonly Color HearingColor = new Color(0.26f, 0.66f, 0.9f, 1f);
         private static readonly Color ProximityColor = new Color(0.92f, 0.4f, 0.16f, 1f);
+        private static readonly Color DamageColor = new Color(0.78f, 0.22f, 0.3f, 1f);
         private static readonly Color SceneDebugColor = new Color(0.16f, 0.58f, 0.66f, 1f);
         private static readonly Color DebugColor = new Color(0.3f, 0.7f, 0.4f, 1f);
         private static readonly Color AdditionalColor = new Color(0.58f, 0.42f, 0.74f, 1f);
@@ -23,6 +24,7 @@ namespace CycloneGames.AIPerception.Editor
         private static readonly GUIContent SightTitle = new GUIContent("Sight Sensor");
         private static readonly GUIContent HearingTitle = new GUIContent("Hearing Sensor");
         private static readonly GUIContent ProximityTitle = new GUIContent("Proximity Sensor");
+        private static readonly GUIContent DamageTitle = new GUIContent("Damage Sensor");
         private static readonly GUIContent SceneDebugTitle = new GUIContent("Scene Diagnostics");
         private static readonly GUIContent RuntimeTitle = new GUIContent("Runtime Diagnostics");
         private static readonly GUIContent AdditionalFieldsTitle = new GUIContent("Additional Fields");
@@ -33,19 +35,34 @@ namespace CycloneGames.AIPerception.Editor
         private static readonly GUIContent UseLineOfSightLabel = new GUIContent("Use Line of Sight");
         private static readonly GUIContent FilterByTypeLabel = new GUIContent("Filter by Type");
         private static readonly GUIContent TargetTypeIdLabel = new GUIContent("Target Type ID");
+        private static readonly GUIContent AffiliationLabel = new GUIContent(
+            "Detect Attitudes",
+            "Which team attitudes this sense reacts to. All skips the attitude lookup entirely.");
+        private static readonly GUIContent ObserverTeamLabel = new GUIContent(
+            "Observer Team",
+            "Team used to resolve attitudes for every sense on this component. 255 means no team.");
         private static readonly GUIContent RadiusLabel = new GUIContent("Detection Radius");
         private static readonly GUIContent UseOcclusionLabel = new GUIContent("Enable Occlusion");
         private static readonly GUIContent OcclusionLayerLabel = new GUIContent("Occlusion Layer");
         private static readonly GUIContent OcclusionAttenuationLabel = new GUIContent("Wall Attenuation");
         private static readonly GUIContent MaximumOcclusionChecksLabel = new GUIContent(
-            "Maximum Occlusion Checks (0 = Unlimited)",
+            "Max Occlusion Checks",
             "Maximum Physics occlusion checks performed by one hearing sensor update. Zero checks every filtered candidate without a per-update limit.");
         private static readonly GUIContent MemoryDurationLabel = new GUIContent(
             "Memory Duration",
             "Seconds to retain a stimulus after direct detection ends. Zero disables memory.");
         private static readonly GUIContent MaximumLosChecksLabel = new GUIContent(
-            "Maximum LOS Checks",
-            "Maximum Physics line-of-sight checks performed by this sensor update.");
+            "Max LOS Checks",
+            "Maximum Physics line-of-sight checks performed by this sensor update. Zero checks every filtered candidate without a per-update limit.");
+        private static readonly GUIContent NearClippingRadiusLabel = new GUIContent(
+            "Near Clipping Radius",
+            "Targets closer than this radius are sensed regardless of view angle. Zero disables point-blank awareness.");
+        private static readonly GUIContent MinimumDamageStrengthLabel = new GUIContent(
+            "Minimum Strength",
+            "Reported damage below this amount is ignored. Zero accepts every event.");
+        private static readonly GUIContent LoseSightRadiusLabel = new GUIContent(
+            "Lose Sight Radius",
+            "Range used for targets that are already remembered. Zero or below Max Distance keeps Max Distance.");
         private static readonly GUIContent CapacityLabel = new GUIContent(
             "Capacity Limits",
             "Preallocated and maximum candidate, result, and memory capacities for this sensor.");
@@ -61,6 +78,7 @@ namespace CycloneGames.AIPerception.Editor
             "Pin Scene Gizmos",
             "Keep this component's gizmos visible when it is not selected. Selected components are always previewed.");
 
+        private SerializedProperty _teamId;
         private SerializedProperty _enableSight;
         private SerializedProperty _sightConfig;
         private SerializedProperty _sightHalfAngle;
@@ -72,7 +90,11 @@ namespace CycloneGames.AIPerception.Editor
         private SerializedProperty _sightTargetTypeId;
         private SerializedProperty _sightMemoryDuration;
         private SerializedProperty _sightMaximumLosChecks;
+        private SerializedProperty _sightNearClippingRadius;
+        private SerializedProperty _sightLoseSightRadius;
         private SerializedProperty _sightCapacity;
+        private SerializedProperty _sightAffiliation;
+        private SerializedProperty _sightObserverTeamId;
 
         private SerializedProperty _enableHearing;
         private SerializedProperty _hearingConfig;
@@ -86,6 +108,8 @@ namespace CycloneGames.AIPerception.Editor
         private SerializedProperty _hearingTargetTypeId;
         private SerializedProperty _hearingMemoryDuration;
         private SerializedProperty _hearingCapacity;
+        private SerializedProperty _hearingAffiliation;
+        private SerializedProperty _hearingObserverTeamId;
 
         private SerializedProperty _enableProximity;
         private SerializedProperty _proximityConfig;
@@ -95,17 +119,31 @@ namespace CycloneGames.AIPerception.Editor
         private SerializedProperty _proximityTargetTypeId;
         private SerializedProperty _proximityMemoryDuration;
         private SerializedProperty _proximityCapacity;
+        private SerializedProperty _proximityAffiliation;
+        private SerializedProperty _proximityObserverTeamId;
+
+        private SerializedProperty _enableDamage;
+        private SerializedProperty _damageConfig;
+        private SerializedProperty _damageMaxDistance;
+        private SerializedProperty _damageUpdateInterval;
+        private SerializedProperty _damageMinimumStrength;
+        private SerializedProperty _damageMemoryDuration;
+        private SerializedProperty _damageCapacity;
+        private SerializedProperty _damageAffiliation;
+        private SerializedProperty _damageObserverTeamId;
 
         private SerializedProperty _showDebugOverlay;
         private SerializedProperty[] _remainingProperties;
         private SerializedProperty[] _remainingSightProperties;
         private SerializedProperty[] _remainingHearingProperties;
         private SerializedProperty[] _remainingProximityProperties;
+        private SerializedProperty[] _remainingDamageProperties;
         private bool _propertiesValid;
 
         private bool _showSight = true;
         private bool _showHearing = true;
         private bool _showProximity = true;
+        private bool _showDamage = true;
         private bool _showSceneDiagnostics = true;
         private bool _showRuntimeDiagnostics = true;
         private bool _showAdditionalFields = true;
@@ -125,6 +163,7 @@ namespace CycloneGames.AIPerception.Editor
 
         protected virtual void OnEnable()
         {
+            _teamId = serializedObject.FindProperty("_teamId");
             _enableSight = serializedObject.FindProperty("_enableSight");
             _sightConfig = serializedObject.FindProperty("_sightConfig");
             _enableHearing = serializedObject.FindProperty("_enableHearing");
@@ -136,8 +175,10 @@ namespace CycloneGames.AIPerception.Editor
             CacheSightProperties();
             CacheHearingProperties();
             CacheProximityProperties();
+            CacheDamageProperties();
 
             _propertiesValid = InspectorUiUtility.AreAssigned(
+                _teamId,
                 _enableSight,
                 _sightConfig,
                 _sightHalfAngle,
@@ -149,7 +190,11 @@ namespace CycloneGames.AIPerception.Editor
                 _sightTargetTypeId,
                 _sightMemoryDuration,
                 _sightMaximumLosChecks,
+                _sightNearClippingRadius,
+                _sightLoseSightRadius,
                 _sightCapacity,
+                _sightAffiliation,
+                _sightObserverTeamId,
                 _enableHearing,
                 _hearingConfig,
                 _hearingRadius,
@@ -162,6 +207,8 @@ namespace CycloneGames.AIPerception.Editor
                 _hearingTargetTypeId,
                 _hearingMemoryDuration,
                 _hearingCapacity,
+                _hearingAffiliation,
+                _hearingObserverTeamId,
                 _enableProximity,
                 _proximityConfig,
                 _proximityRadius,
@@ -170,18 +217,31 @@ namespace CycloneGames.AIPerception.Editor
                 _proximityTargetTypeId,
                 _proximityMemoryDuration,
                 _proximityCapacity,
+                _proximityAffiliation,
+                _proximityObserverTeamId,
+                _enableDamage,
+                _damageMaxDistance,
+                _damageUpdateInterval,
+                _damageMinimumStrength,
+                _damageMemoryDuration,
+                _damageCapacity,
+                _damageAffiliation,
+                _damageObserverTeamId,
                 _showDebugOverlay);
 
             if (_propertiesValid)
             {
                 _remainingProperties = InspectorUiUtility.CacheRemainingProperties(
                     serializedObject,
+                    _teamId,
                     _enableSight,
                     _sightConfig,
                     _enableHearing,
                     _hearingConfig,
                     _enableProximity,
                     _proximityConfig,
+                    _enableDamage,
+                    _damageConfig,
                     _showDebugOverlay);
             }
 
@@ -217,18 +277,36 @@ namespace CycloneGames.AIPerception.Editor
                 InspectorUiUtility.DrawAuthoringLockedHelpBox(AuthoringLockedMessage);
             }
 
+            DrawIdentityRow();
             DrawSceneDiagnostics();
 
             using (new EditorGUI.DisabledScope(authoringLocked))
             {
-                DrawSightSection();
-                DrawHearingSection();
-                DrawProximitySection();
-                InspectorUiUtility.DrawRemainingProperties(
-                    _remainingProperties,
-                    ref _showAdditionalFields,
-                    AdditionalFieldsTitle,
-                    AdditionalColor);
+                // The capacity foldout draws serialized field names such as
+                // "Initial Candidate Capacity"; the default label column clips them.
+                float previousLabelWidth = EditorGUIUtility.labelWidth;
+                // Widest label is "Initial Candidate Capacity" at ~155 px in the default skin. The floor
+                // keeps room for the value field when the panel is docked narrow.
+                EditorGUIUtility.labelWidth = Mathf.Clamp(
+                    EditorGUIUtility.currentViewWidth * 0.55f,
+                    110f,
+                    230f);
+                try
+                {
+                    DrawSightSection();
+                    DrawHearingSection();
+                    DrawProximitySection();
+                DrawDamageSection();
+                    InspectorUiUtility.DrawRemainingProperties(
+                        _remainingProperties,
+                        ref _showAdditionalFields,
+                        AdditionalFieldsTitle,
+                        AdditionalColor);
+                }
+                finally
+                {
+                    EditorGUIUtility.labelWidth = previousLabelWidth;
+                }
             }
 
             if (Application.isPlaying)
@@ -255,7 +333,11 @@ namespace CycloneGames.AIPerception.Editor
             _sightTargetTypeId = _sightConfig.FindPropertyRelative("TargetTypeId");
             _sightMemoryDuration = _sightConfig.FindPropertyRelative("MemoryDuration");
             _sightMaximumLosChecks = _sightConfig.FindPropertyRelative("MaximumLineOfSightChecksPerUpdate");
+            _sightNearClippingRadius = _sightConfig.FindPropertyRelative("NearClippingRadius");
+            _sightLoseSightRadius = _sightConfig.FindPropertyRelative("LoseSightRadius");
             _sightCapacity = _sightConfig.FindPropertyRelative("Capacity");
+            _sightAffiliation = _sightConfig.FindPropertyRelative("Affiliation");
+            _sightObserverTeamId = _sightConfig.FindPropertyRelative("ObserverTeamId");
             _remainingSightProperties = InspectorUiUtility.CacheRemainingChildren(
                 _sightConfig,
                 _sightHalfAngle,
@@ -267,7 +349,11 @@ namespace CycloneGames.AIPerception.Editor
                 _sightTargetTypeId,
                 _sightMemoryDuration,
                 _sightMaximumLosChecks,
-                _sightCapacity);
+                _sightNearClippingRadius,
+                _sightLoseSightRadius,
+                _sightCapacity,
+                _sightAffiliation,
+                _sightObserverTeamId);
         }
 
         private void CacheHearingProperties()
@@ -287,6 +373,8 @@ namespace CycloneGames.AIPerception.Editor
             _hearingTargetTypeId = _hearingConfig.FindPropertyRelative("TargetTypeId");
             _hearingMemoryDuration = _hearingConfig.FindPropertyRelative("MemoryDuration");
             _hearingCapacity = _hearingConfig.FindPropertyRelative("Capacity");
+            _hearingAffiliation = _hearingConfig.FindPropertyRelative("Affiliation");
+            _hearingObserverTeamId = _hearingConfig.FindPropertyRelative("ObserverTeamId");
             _remainingHearingProperties = InspectorUiUtility.CacheRemainingChildren(
                 _hearingConfig,
                 _hearingRadius,
@@ -298,7 +386,9 @@ namespace CycloneGames.AIPerception.Editor
                 _hearingFilterByType,
                 _hearingTargetTypeId,
                 _hearingMemoryDuration,
-                _hearingCapacity);
+                _hearingCapacity,
+                _hearingAffiliation,
+                _hearingObserverTeamId);
         }
 
         private void CacheProximityProperties()
@@ -314,6 +404,8 @@ namespace CycloneGames.AIPerception.Editor
             _proximityTargetTypeId = _proximityConfig.FindPropertyRelative("TargetTypeId");
             _proximityMemoryDuration = _proximityConfig.FindPropertyRelative("MemoryDuration");
             _proximityCapacity = _proximityConfig.FindPropertyRelative("Capacity");
+            _proximityAffiliation = _proximityConfig.FindPropertyRelative("Affiliation");
+            _proximityObserverTeamId = _proximityConfig.FindPropertyRelative("ObserverTeamId");
             _remainingProximityProperties = InspectorUiUtility.CacheRemainingChildren(
                 _proximityConfig,
                 _proximityRadius,
@@ -321,7 +413,36 @@ namespace CycloneGames.AIPerception.Editor
                 _proximityFilterByType,
                 _proximityTargetTypeId,
                 _proximityMemoryDuration,
-                _proximityCapacity);
+                _proximityCapacity,
+                _proximityAffiliation,
+                _proximityObserverTeamId);
+        }
+
+        private void CacheDamageProperties()
+        {
+            _enableDamage = serializedObject.FindProperty("_enableDamage");
+            _damageConfig = serializedObject.FindProperty("_damageConfig");
+            if (_damageConfig == null)
+            {
+                return;
+            }
+
+            _damageMaxDistance = _damageConfig.FindPropertyRelative("MaxDistance");
+            _damageUpdateInterval = _damageConfig.FindPropertyRelative("UpdateInterval");
+            _damageMinimumStrength = _damageConfig.FindPropertyRelative("MinimumStrength");
+            _damageMemoryDuration = _damageConfig.FindPropertyRelative("MemoryDuration");
+            _damageCapacity = _damageConfig.FindPropertyRelative("Capacity");
+            _damageAffiliation = _damageConfig.FindPropertyRelative("Affiliation");
+            _damageObserverTeamId = _damageConfig.FindPropertyRelative("ObserverTeamId");
+            _remainingDamageProperties = InspectorUiUtility.CacheRemainingChildren(
+                _damageConfig,
+                _damageMaxDistance,
+                _damageUpdateInterval,
+                _damageMinimumStrength,
+                _damageMemoryDuration,
+                _damageCapacity,
+                _damageAffiliation,
+                _damageObserverTeamId);
         }
 
         private void DrawSightSection()
@@ -339,6 +460,7 @@ namespace CycloneGames.AIPerception.Editor
                 InspectorUiUtility.DrawSubsectionLabel("Geometry and Scheduling");
                 EditorGUILayout.PropertyField(_sightHalfAngle, HalfAngleLabel);
                 EditorGUILayout.PropertyField(_sightMaxDistance, MaxDistanceLabel);
+                EditorGUILayout.PropertyField(_sightNearClippingRadius, NearClippingRadiusLabel);
                 EditorGUILayout.PropertyField(_sightUpdateInterval, UpdateIntervalLabel);
 
                 InspectorUiUtility.DrawSubsectionLabel("Line of Sight");
@@ -356,8 +478,11 @@ namespace CycloneGames.AIPerception.Editor
                     EditorGUILayout.PropertyField(_sightTargetTypeId, TargetTypeIdLabel);
                 }
 
+                EditorGUILayout.PropertyField(_sightAffiliation, AffiliationLabel);
+
                 InspectorUiUtility.DrawSubsectionLabel("Memory and Capacity");
                 EditorGUILayout.PropertyField(_sightMemoryDuration, MemoryDurationLabel);
+                EditorGUILayout.PropertyField(_sightLoseSightRadius, LoseSightRadiusLabel);
                 EditorGUILayout.PropertyField(_sightCapacity, CapacityLabel, true);
                 InspectorUiUtility.DrawProperties(_remainingSightProperties);
             }
@@ -396,6 +521,8 @@ namespace CycloneGames.AIPerception.Editor
                     EditorGUILayout.PropertyField(_hearingTargetTypeId, TargetTypeIdLabel);
                 }
 
+                EditorGUILayout.PropertyField(_hearingAffiliation, AffiliationLabel);
+
                 InspectorUiUtility.DrawSubsectionLabel("Memory and Capacity");
                 EditorGUILayout.PropertyField(_hearingMemoryDuration, MemoryDurationLabel);
                 EditorGUILayout.PropertyField(_hearingCapacity, CapacityLabel, true);
@@ -427,12 +554,55 @@ namespace CycloneGames.AIPerception.Editor
                     EditorGUILayout.PropertyField(_proximityTargetTypeId, TargetTypeIdLabel);
                 }
 
+                EditorGUILayout.PropertyField(_proximityAffiliation, AffiliationLabel);
+
                 InspectorUiUtility.DrawSubsectionLabel("Memory and Capacity");
                 EditorGUILayout.PropertyField(_proximityMemoryDuration, MemoryDurationLabel);
                 EditorGUILayout.PropertyField(_proximityCapacity, CapacityLabel, true);
                 InspectorUiUtility.DrawProperties(_remainingProximityProperties);
             }
             InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawDamageSection()
+        {
+            InspectorUiUtility.DrawSectionHeader(ref _showDamage, DamageTitle, DamageColor, _enableDamage);
+            if (!_showDamage)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUI.DisabledScope(!InspectorUiUtility.IsEnabledOrMixed(_enableDamage)))
+            {
+                InspectorUiUtility.DrawSubsectionLabel("Range and Scheduling");
+                EditorGUILayout.PropertyField(_damageMaxDistance, MaxDistanceLabel);
+                EditorGUILayout.PropertyField(_damageUpdateInterval, UpdateIntervalLabel);
+                EditorGUILayout.PropertyField(_damageMinimumStrength, MinimumDamageStrengthLabel);
+
+                InspectorUiUtility.DrawSubsectionLabel("Filtering");
+                EditorGUILayout.PropertyField(_damageAffiliation, AffiliationLabel);
+
+                InspectorUiUtility.DrawSubsectionLabel("Memory and Capacity");
+                EditorGUILayout.PropertyField(_damageMemoryDuration, MemoryDurationLabel);
+                EditorGUILayout.PropertyField(_damageCapacity, CapacityLabel, true);
+                InspectorUiUtility.DrawProperties(_remainingDamageProperties);
+            }
+
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawIdentityRow()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PropertyField(_teamId, ObserverTeamLabel);
+                if (GUILayout.Button("Team Matrix…", EditorStyles.miniButton, GUILayout.Width(110f)))
+                {
+                    AIPerceptionTeamMatrixWindow.OpenFromMenu();
+                }
+            }
         }
 
         private void DrawSceneDiagnostics()
@@ -472,7 +642,17 @@ namespace CycloneGames.AIPerception.Editor
             }
 
             InspectorUiUtility.BeginPanel();
-            EditorGUILayout.PropertyField(_showDebugOverlay, PinSceneGizmosLabel);
+            bool mixedPin = _showDebugOverlay.hasMultipleDifferentValues;
+            EditorGUI.showMixedValue = mixedPin;
+            EditorGUI.BeginChangeCheck();
+            bool pinned = EditorGUILayout.ToggleLeft(PinSceneGizmosLabel, _showDebugOverlay.boolValue);
+            if (EditorGUI.EndChangeCheck())
+            {
+                _showDebugOverlay.boolValue = pinned;
+            }
+
+            EditorGUI.showMixedValue = false;
+
             EditorGUI.BeginChangeCheck();
             bool filledVolumes = EditorGUILayout.ToggleLeft(
                 "Filled Debug Volumes (Session)",
