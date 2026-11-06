@@ -81,7 +81,8 @@ flowchart LR
 ### 在 build pipeline 中使用同一文件
 
 ```csharp
-using System.IO;
+using System;
+using UnityEditor;
 using UnityEngine;
 using TMPro;
 
@@ -89,8 +90,16 @@ public static class FontAtlasBuilder
 {
     public static void CreateChineseFontAsset(TMP_FontAsset source, string outputPath)
     {
-        string collectionPath = "Packages/com.cyclone-games.fontassets/CharacterCollection/chinese_amount_3500_with_symbols.txt";
-        string characters = File.ReadAllText(collectionPath);
+        // 通过资产名定位字符集，不假定包的安装目录。
+        string[] guids = AssetDatabase.FindAssets("chinese_amount_3500_with_symbols t:TextAsset");
+        if (guids.Length == 0)
+        {
+            throw new InvalidOperationException("Character collection was not found in this project.");
+        }
+
+        TextAsset collection = AssetDatabase.LoadAssetAtPath<TextAsset>(
+            AssetDatabase.GUIDToAssetPath(guids[0]));
+        string characters = collection.text;
 
         // 使用 TMP_FontAsset.CreateFontAsset 或你自己的 atlas baker：
         TMP_FontAsset fontAsset = TMP_FontAsset.CreateFontAsset(source.sourceFontFile, samplingPointSize: 36, atlasPadding: 5);
@@ -321,10 +330,17 @@ public static class FontAssetBuildStep
     public static void Regenerate()
     {
         var source = AssetDatabase.LoadAssetAtPath<Font>("Assets/Fonts/NotoSansSC.otf");
-        string collection = "Packages/com.cyclone-games.fontassets/CharacterCollection/chinese_amount_7000_with_symbols.txt";
+        string[] guids = AssetDatabase.FindAssets("chinese_amount_7000_with_symbols t:TextAsset");
+        if (guids.Length == 0)
+        {
+            throw new InvalidOperationException("Character collection was not found in this project.");
+        }
+
+        TextAsset collection = AssetDatabase.LoadAssetAtPath<TextAsset>(
+            AssetDatabase.GUIDToAssetPath(guids[0]));
 
         var fontAsset = TMP_FontAsset.CreateFontAsset(source, samplingPointSize: 36, atlasPadding: 5);
-        fontAsset.AddCharacters(System.IO.File.ReadAllText(collection));
+        fontAsset.AddCharacters(collection.text);
 
         AssetDatabase.CreateAsset(fontAsset, "Assets/Generated/NotoSansSC_7000.asset");
         AssetDatabase.SaveAssets();
@@ -401,7 +417,7 @@ Atlas 大小随字符数大致平方增长。4,096×4,096 RGBA8 atlas 未压缩�
 | 现象 | 可能原因 | 解决方法 |
 | --- | --- | --- |
 | 运行时缺字警告 | 字符串包含 atlas 之外的字符 | 把缺失字符追加到项目本地字符集副本并重新生成 font asset |
-| Font Asset Creator 报告空 atlas | 字符文件路径错误，或文件为空 | 确认路径在 `Packages/com.cyclone-games.fontassets/CharacterCollection/` 下解析且文件非零字节 |
+| Font Asset Creator 报告空 atlas | 字符文件路径错误，或文件为空 | 用 `AssetDatabase.FindAssets("<name> t:TextAsset")` 定位，并确认加载的 `TextAsset` 非空 |
 | Atlas 太大无法放入一张纹理 | 字符数在所选 point size 下超过 atlas 容量 | 降低 point size、提高 atlas 分辨率、启用 multi-atlas 或拆分字符集 |
 | TextMeshPro 渲染豆腐块 | 源字体不包含请求的字形 | 使用覆盖目标脚本的字体（CJK 用 Noto Sans CJK，拉丁用 Noto Sans） |
 | Build 失败提示 `Character is not in the font asset` | 字符表包含静态 atlas 之外的字符 | 运行 build 时覆盖校验，扩展字符集或切换到动态模式 |

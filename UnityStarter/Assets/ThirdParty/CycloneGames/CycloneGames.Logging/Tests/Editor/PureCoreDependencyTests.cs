@@ -119,24 +119,26 @@ namespace CycloneGames.Logging.Tests
         public void GovernedProductionSources_DoNotBypassLoggingContract()
         {
             var violations = new List<string>();
-            string root = Snapshot.Value.CycloneGamesRoot;
 
-            foreach (string sourcePath in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            foreach (string root in Snapshot.Value.CycloneGamesRoots)
             {
-                if (IsExemptSourcePath(sourcePath, root))
+                foreach (string sourcePath in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
                 {
-                    continue;
-                }
+                    if (IsExemptSourcePath(sourcePath, root))
+                    {
+                        continue;
+                    }
 
-                string source = ReadAllText(sourcePath);
-                string codeOnly = MaskCommentsAndLiterals(source);
-                MatchCollection matches = DirectLoggingPattern.Matches(codeOnly);
-                for (int i = 0; i < matches.Count; i++)
-                {
-                    Match match = matches[i];
-                    violations.Add(
-                        MakeRelativePath(root, sourcePath) + ":" +
-                        GetLineNumber(codeOnly, match.Index) + " uses " + match.Value.Trim() + ".");
+                    string source = ReadAllText(sourcePath);
+                    string codeOnly = MaskCommentsAndLiterals(source);
+                    MatchCollection matches = DirectLoggingPattern.Matches(codeOnly);
+                    for (int i = 0; i < matches.Count; i++)
+                    {
+                        Match match = matches[i];
+                        violations.Add(
+                            MakeRelativePath(root, sourcePath) + ":" +
+                            GetLineNumber(codeOnly, match.Index) + " uses " + match.Value.Trim() + ".");
+                    }
                 }
             }
 
@@ -483,76 +485,80 @@ namespace CycloneGames.Logging.Tests
         private sealed class ArchitectureSnapshot
         {
             private ArchitectureSnapshot(
-                string cycloneGamesRoot,
+                string[] cycloneGamesRoots,
                 AssemblyDefinition[] assemblies,
                 Dictionary<string, AssemblyDefinition> byName,
                 Dictionary<string, string> nameByGuid)
             {
-                CycloneGamesRoot = cycloneGamesRoot;
+                CycloneGamesRoots = cycloneGamesRoots;
                 Assemblies = assemblies;
                 ByName = byName;
                 NameByGuid = nameByGuid;
             }
 
-            internal string CycloneGamesRoot { get; }
+            internal string[] CycloneGamesRoots { get; }
             internal AssemblyDefinition[] Assemblies { get; }
             internal Dictionary<string, AssemblyDefinition> ByName { get; }
             internal Dictionary<string, string> NameByGuid { get; }
 
             internal static ArchitectureSnapshot Load()
             {
-                string root = FindCycloneGamesRoot();
+                string[] roots = FindCycloneGamesRoots();
                 var definitions = new List<AssemblyDefinition>();
                 var byName = new Dictionary<string, AssemblyDefinition>(StringComparer.Ordinal);
                 var nameByGuid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (string asmdefPath in Directory.EnumerateFiles(root, "*.asmdef", SearchOption.AllDirectories))
+                foreach (string root in roots)
                 {
-                    string json = ReadAllText(asmdefPath);
-                    Match nameMatch = NamePattern.Match(json);
-                    if (!nameMatch.Success)
+                    foreach (string asmdefPath in Directory.EnumerateFiles(root, "*.asmdef", SearchOption.AllDirectories))
                     {
-                        throw new InvalidDataException("Missing asmdef name: " + asmdefPath);
-                    }
-
-                    string name = nameMatch.Groups["value"].Value;
-                    var definition = new AssemblyDefinition(
-                        name,
-                        asmdefPath,
-                        ReadBoolean(json, "noEngineReferences", false),
-                        ReadBoolean(json, "autoReferenced", true),
-                        ReadReferences(json),
-                        IsExemptDefinition(name, asmdefPath, root));
-
-                    definitions.Add(definition);
-                    byName.Add(name, definition);
-
-                    string metaPath = asmdefPath + ".meta";
-                    if (FileExists(metaPath))
-                    {
-                        Match guidMatch = Regex.Match(
-                            ReadAllText(metaPath),
-                            @"(?m)^guid:\s*(?<value>[A-Fa-f0-9]+)\s*$",
-                            RegexOptions.CultureInvariant);
-                        if (guidMatch.Success)
+                        string json = ReadAllText(asmdefPath);
+                        Match nameMatch = NamePattern.Match(json);
+                        if (!nameMatch.Success)
                         {
-                            nameByGuid[guidMatch.Groups["value"].Value] = name;
+                            throw new InvalidDataException("Missing asmdef name: " + asmdefPath);
+                        }
+
+                        string name = nameMatch.Groups["value"].Value;
+                        var definition = new AssemblyDefinition(
+                            name,
+                            asmdefPath,
+                            ReadBoolean(json, "noEngineReferences", false),
+                            ReadBoolean(json, "autoReferenced", true),
+                            ReadReferences(json),
+                            IsExemptDefinition(name, asmdefPath, root));
+
+                        definitions.Add(definition);
+                        byName.Add(name, definition);
+
+                        string metaPath = asmdefPath + ".meta";
+                        if (FileExists(metaPath))
+                        {
+                            Match guidMatch = Regex.Match(
+                                ReadAllText(metaPath),
+                                @"(?m)^guid:\s*(?<value>[A-Fa-f0-9]+)\s*$",
+                                RegexOptions.CultureInvariant);
+                            if (guidMatch.Success)
+                            {
+                                nameByGuid[guidMatch.Groups["value"].Value] = name;
+                            }
                         }
                     }
                 }
 
-                return new ArchitectureSnapshot(root, definitions.ToArray(), byName, nameByGuid);
+                return new ArchitectureSnapshot(roots, definitions.ToArray(), byName, nameByGuid);
             }
 
-            private static string FindCycloneGamesRoot()
+            private static string[] FindCycloneGamesRoots()
             {
                 string current = Path.GetFullPath(Directory.GetCurrentDirectory());
+                string projectRoot = null;
                 while (!string.IsNullOrEmpty(current))
                 {
                     string projectCandidate = Path.Combine(current, "Assets", "ThirdParty", "CycloneGames");
                     if (Directory.Exists(projectCandidate))
                     {
-                        return Path.GetFullPath(projectCandidate);
+                        return new[] { Path.GetFullPath(projectCandidate) };
                     }
 
                     string repositoryCandidate = Path.Combine(
@@ -563,15 +569,60 @@ namespace CycloneGames.Logging.Tests
                         "CycloneGames");
                     if (Directory.Exists(repositoryCandidate))
                     {
-                        return Path.GetFullPath(repositoryCandidate);
+                        return new[] { Path.GetFullPath(repositoryCandidate) };
+                    }
+
+                    if (projectRoot == null &&
+                        Directory.Exists(Path.Combine(current, "Assets")) &&
+                        Directory.Exists(Path.Combine(current, "ProjectSettings")))
+                    {
+                        projectRoot = current;
                     }
 
                     DirectoryInfo parent = Directory.GetParent(current);
                     current = parent?.FullName;
                 }
 
-                throw new DirectoryNotFoundException(
-                    "Could not locate Assets/ThirdParty/CycloneGames from the current working directory.");
+                // UPM layout: each installed CycloneGames package is an independent root.
+                // Only BCL APIs are used here because this test assembly has noEngineReferences=true.
+                if (projectRoot != null)
+                {
+                    var roots = new List<string>();
+                    AddCyclonePackageRoots(Path.Combine(projectRoot, "Packages"), roots);
+                    AddCyclonePackageRoots(Path.Combine(projectRoot, "Library", "PackageCache"), roots);
+                    if (roots.Count > 0)
+                    {
+                        return roots.ToArray();
+                    }
+                }
+
+                Assert.Ignore(
+                    "No CycloneGames package sources were found. This repository-level architecture guard does not apply to this project.");
+                return Array.Empty<string>();
+            }
+
+            private static void AddCyclonePackageRoots(string container, List<string> roots)
+            {
+                if (!Directory.Exists(container))
+                {
+                    return;
+                }
+
+                foreach (string directory in Directory.EnumerateDirectories(container))
+                {
+                    string manifest = Path.Combine(directory, "package.json");
+                    if (!FileExists(manifest))
+                    {
+                        continue;
+                    }
+
+                    Match match = NamePattern.Match(ReadAllText(manifest));
+                    if (match.Success &&
+                        match.Groups["value"].Value.StartsWith("com.cyclone-games.", StringComparison.Ordinal))
+                    {
+                        roots.Add(Path.GetFullPath(directory));
+                    }
+                }
             }
 
             private static bool ReadBoolean(string json, string propertyName, bool defaultValue)

@@ -13,8 +13,22 @@ namespace CycloneGames.InputSystem.Tests.Editor
 {
     public sealed class InputEditorBridgeEditorTests
     {
-        private const string LegacyAssetPath =
-            "Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/Tests/Editor/Fixtures/LegacyInputConfiguration.asset";
+        private static string LegacyAssetPath => FindFixtureAsset("LegacyInputConfiguration.asset");
+
+        private static string FindFixtureAsset(string fileName)
+        {
+            foreach (string guid in AssetDatabase.FindAssets(Path.GetFileNameWithoutExtension(fileName)))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.EndsWith("/" + fileName, StringComparison.Ordinal))
+                {
+                    return path;
+                }
+            }
+
+            Assert.Fail($"Fixture asset '{fileName}' was not found in this project.");
+            return null;
+        }
 
         [Test]
         public void YamlWorkingCopyRoundTrip_PreservesVersionNullsAndExtendedBindings()
