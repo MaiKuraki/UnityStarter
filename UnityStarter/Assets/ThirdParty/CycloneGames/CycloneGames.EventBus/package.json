@@ -5,7 +5,9 @@
   "description": "Zero-allocation event bus for Unity: single-thread-confined dispatch, tombstone compaction with pooled subscription handles, a bounded lock-free MPSC ring for cross-thread producers, and preallocated event streams. Optional R3, UniTask, VitalRouter and CycloneGames.Logging adapters.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {},
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
   "keywords": [
     "CycloneGames",
     "EventBus",

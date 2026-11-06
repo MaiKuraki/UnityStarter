@@ -17,11 +17,37 @@ namespace CycloneGames.UIFramework.Tests.Editor
 {
     public sealed class UIEditorAuthoringTests
     {
-        private const string PackageRoot =
-            "Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework";
-        private const string SamplesFolder = PackageRoot + "/Samples";
-        private const string DocumentationFolder = PackageRoot + "/Documents~";
+        private const string PackageFolderName = "CycloneGames.UIFramework";
+        private const string PackageId = "com.cyclone-games.ui-framework";
         private const string RuntimeAssemblyName = "CycloneGames.UIFramework.Runtime";
+
+        private static string PackageRoot => FindPackageRoot();
+        private static string SamplesFolder => PackageRoot + "/Samples";
+        private static string DocumentationFolder => PackageRoot + "/Documents~";
+
+        // Derive the package root from this test script's asset path so the tests work
+        // in both supported package layouts.
+        private static string FindPackageRoot()
+        {
+            foreach (string guid in AssetDatabase.FindAssets("t:MonoScript UIEditorAuthoringTests"))
+            {
+                string directory = Path.GetDirectoryName(AssetDatabase.GUIDToAssetPath(guid))?.Replace('\\', '/');
+                while (!string.IsNullOrEmpty(directory))
+                {
+                    string leaf = Path.GetFileName(directory);
+                    if (string.Equals(leaf, PackageFolderName, StringComparison.Ordinal) ||
+                        string.Equals(leaf, PackageId, StringComparison.Ordinal))
+                    {
+                        return directory;
+                    }
+
+                    directory = Path.GetDirectoryName(directory)?.Replace('\\', '/');
+                }
+            }
+
+            Assert.Fail($"Could not locate the {PackageFolderName} package root for this test.");
+            return null;
+        }
 
         private readonly List<UnityEngine.Object> _ownedObjects =
             new List<UnityEngine.Object>(16);
@@ -70,7 +96,7 @@ namespace CycloneGames.UIFramework.Tests.Editor
         [Test]
         public void CreatorValidator_BuildsExactProjectAssetPaths()
         {
-            const string folderPath = SamplesFolder;
+            string folderPath = SamplesFolder;
             DefaultAsset folder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(folderPath);
             Assert.IsNotNull(folder, "The UIFramework Samples folder must be importable.");
             var request = new UIWindowCreationRequest(
@@ -164,9 +190,15 @@ namespace CycloneGames.UIFramework.Tests.Editor
         [Test]
         public void CreatorValidator_RejectsIncompatibleAssemblyOutputs()
         {
-            const string editorFolder = PackageRoot + "/Editor/UIWindowCreator/";
-            const string noEngineFolder =
-                "Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/Core/";
+            string editorFolder = PackageRoot + "/Editor/UIWindowCreator/";
+            string deterministicMathAsmdef =
+                CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(
+                    "CycloneGames.DeterministicMath.Core");
+            Assert.IsNotEmpty(
+                deterministicMathAsmdef,
+                "Assembly 'CycloneGames.DeterministicMath.Core' must resolve to an asmdef path.");
+            string noEngineFolder =
+                Path.GetDirectoryName(deterministicMathAsmdef)?.Replace('\\', '/') + "/";
             string runtimeAsmdef =
                 CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(
                     RuntimeAssemblyName);

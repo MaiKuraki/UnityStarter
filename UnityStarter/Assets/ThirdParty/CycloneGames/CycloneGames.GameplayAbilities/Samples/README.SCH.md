@@ -40,7 +40,7 @@
 
 Inspector 控件是临时命令，不是按 ASC 序列化的开关。它们不会产生 Prefab Override、拥有或 Dispose ASC、调用 `ClearTargets`、移除未选中的 ASC，也不会销毁 Overlay Singleton。Registry 对每个 ASC 只有一条共享记录，因此即使最初由其他调用方注册，Inspector 命令仍会修改选中 ASC 的同一记录。注册关系不拥有目标、不扫描 Scene，也不改变 ASC 生命周期。`SampleCombatManager` 在关闭时移除 Player 与 Enemy 的记录；只有 Singleton 由示例创建且没有其他注册时，示例才销毁 Overlay Singleton。
 
-在 Overlay 初始化前，通过 `GASOverlayConfig.MaxPanels` 设置有界面板容量。默认值为 8，取值限制为 1 到 32，并在当前 Overlay 实例生命周期内保持固定。Runtime IMGUI Diagnostics 运行在 Unity Main Thread，适用于开发环境和明确配置的支持版本，不应进入 Gameplay Hot Path。
+示例使用 Overlay 的默认配置。如需自定义，可创建 `GASOverlayConfig` 资产（`Create > CycloneGames > GameplayAbilities > Diagnostics > GAS Overlay Config`），在 Overlay 初始化前赋值给 `GASDebugOverlay.ActiveConfiguration`，或作为 `GASDebugOverlay.Initialize` 的 `configuration` 参数传入。`MaxPanels` 控制有界面板容量：默认值为 8，取值限制为 1 到 32，并在当前 Overlay 实例生命周期内保持固定。Overlay 会克隆传入的 Asset，因此 Overlay 内的面板调整不会修改项目资产。Runtime IMGUI Diagnostics 运行在 Unity Main Thread，适用于开发环境和明确配置的支持版本，不应进入 Gameplay Hot Path。
 
 ## 建议阅读顺序
 

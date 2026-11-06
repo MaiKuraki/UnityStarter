@@ -81,7 +81,8 @@ The produced `TMP_FontAsset` contains exactly the 3,500 characters in the collec
 ### Use the same file in a build pipeline
 
 ```csharp
-using System.IO;
+using System;
+using UnityEditor;
 using UnityEngine;
 using TMPro;
 
@@ -89,8 +90,16 @@ public static class FontAtlasBuilder
 {
     public static void CreateChineseFontAsset(TMP_FontAsset source, string outputPath)
     {
-        string collectionPath = "Packages/com.cyclone-games.fontassets/CharacterCollection/chinese_amount_3500_with_symbols.txt";
-        string characters = File.ReadAllText(collectionPath);
+        // Resolve the collection by asset name instead of assuming an install directory.
+        string[] guids = AssetDatabase.FindAssets("chinese_amount_3500_with_symbols t:TextAsset");
+        if (guids.Length == 0)
+        {
+            throw new InvalidOperationException("Character collection was not found in this project.");
+        }
+
+        TextAsset collection = AssetDatabase.LoadAssetAtPath<TextAsset>(
+            AssetDatabase.GUIDToAssetPath(guids[0]));
+        string characters = collection.text;
 
         // Use TMP_FontAsset.CreateFontAsset or your own atlas baker:
         TMP_FontAsset fontAsset = TMP_FontAsset.CreateFontAsset(source.sourceFontFile, samplingPointSize: 36, atlasPadding: 5);
@@ -321,10 +330,17 @@ public static class FontAssetBuildStep
     public static void Regenerate()
     {
         var source = AssetDatabase.LoadAssetAtPath<Font>("Assets/Fonts/NotoSansSC.otf");
-        string collection = "Packages/com.cyclone-games.fontassets/CharacterCollection/chinese_amount_7000_with_symbols.txt";
+        string[] guids = AssetDatabase.FindAssets("chinese_amount_7000_with_symbols t:TextAsset");
+        if (guids.Length == 0)
+        {
+            throw new InvalidOperationException("Character collection was not found in this project.");
+        }
+
+        TextAsset collection = AssetDatabase.LoadAssetAtPath<TextAsset>(
+            AssetDatabase.GUIDToAssetPath(guids[0]));
 
         var fontAsset = TMP_FontAsset.CreateFontAsset(source, samplingPointSize: 36, atlasPadding: 5);
-        fontAsset.AddCharacters(System.IO.File.ReadAllText(collection));
+        fontAsset.AddCharacters(collection.text);
 
         AssetDatabase.CreateAsset(fontAsset, "Assets/Generated/NotoSansSC_7000.asset");
         AssetDatabase.SaveAssets();
@@ -401,7 +417,7 @@ Every file is UTF-8 without BOM. Reading the file with `File.ReadAllText` return
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
 | Missing-glyph warnings at runtime | The string contains characters not in the atlas | Append the missing characters to a project-local copy of the collection and regenerate the font asset |
-| Font Asset Creator reports an empty atlas | The character file path is wrong, or the file is empty | Verify the path resolves under `Packages/com.cyclone-games.fontassets/CharacterCollection/` and the file is not zero bytes |
+| Font Asset Creator reports an empty atlas | The character file path is wrong, or the file is empty | Locate it with `AssetDatabase.FindAssets("<name> t:TextAsset")` and confirm the loaded `TextAsset` is not empty |
 | Atlas is too large to fit in one texture | The character count exceeds the atlas capacity at the chosen point size | Lower the point size, raise the atlas resolution, enable multi-atlas, or split the collection |
 | TextMeshPro renders tofu boxes | The source font does not contain the requested glyph | Use a font that covers the target script (Noto Sans CJK for CJK, Noto Sans for Latin) |
 | Build fails with `Character is not in the font asset` | A string table contains characters not in the static atlas | Run a build-time coverage validator and either expand the collection or switch to dynamic mode |

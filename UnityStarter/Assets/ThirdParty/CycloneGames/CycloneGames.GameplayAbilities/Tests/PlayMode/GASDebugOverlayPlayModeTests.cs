@@ -16,6 +16,7 @@ namespace CycloneGames.GameplayAbilities.Tests.PlayMode
         [UnitySetUp]
         public IEnumerator SetUp()
         {
+            GASDebugOverlay.ActiveConfiguration = null;
             GASDebugOverlay.Cleanup();
             yield return null;
             createdASCs.Clear();
@@ -49,6 +50,82 @@ namespace CycloneGames.GameplayAbilities.Tests.PlayMode
 
             createdASCs.Clear();
             createdOwners.Clear();
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator Initialize_WithoutConfiguration_UsesDefaultCapacity()
+        {
+            GASDebugOverlay.Initialize(enableAtStart: false);
+
+            Assert.That(GASDebugOverlay.IsInitialized, Is.True);
+            Assert.That(GASDebugOverlay.TargetCapacity, Is.EqualTo(8));
+
+            GASDebugOverlay.Cleanup();
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator Initialize_WithExplicitConfiguration_UsesConfiguredCapacity()
+        {
+            var config = ScriptableObject.CreateInstance<GASOverlayConfig>();
+            config.MaxPanels = 3;
+
+            try
+            {
+                GASDebugOverlay.Initialize(enableAtStart: false, configuration: config);
+                Assert.That(GASDebugOverlay.TargetCapacity, Is.EqualTo(3));
+            }
+            finally
+            {
+                GASDebugOverlay.Cleanup();
+                Object.DestroyImmediate(config);
+            }
+
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator Initialize_WithActiveConfiguration_UsesConfiguredCapacity()
+        {
+            var config = ScriptableObject.CreateInstance<GASOverlayConfig>();
+            config.MaxPanels = 5;
+            GASDebugOverlay.ActiveConfiguration = config;
+
+            try
+            {
+                GASDebugOverlay.Initialize(enableAtStart: false);
+                Assert.That(GASDebugOverlay.TargetCapacity, Is.EqualTo(5));
+            }
+            finally
+            {
+                GASDebugOverlay.Cleanup();
+                GASDebugOverlay.ActiveConfiguration = null;
+                Object.DestroyImmediate(config);
+            }
+
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator CreateDefault_ProducesIndependentInstances()
+        {
+            GASOverlayConfig first = GASOverlayConfig.CreateDefault();
+            GASOverlayConfig second = GASOverlayConfig.CreateDefault();
+
+            try
+            {
+                Assert.That(first, Is.Not.Null);
+                Assert.That(second, Is.Not.SameAs(first));
+                first.MaxPanels = 2;
+                Assert.That(second.MaxPanels, Is.EqualTo(8));
+            }
+            finally
+            {
+                Object.DestroyImmediate(first);
+                Object.DestroyImmediate(second);
+            }
+
             yield return null;
         }
 

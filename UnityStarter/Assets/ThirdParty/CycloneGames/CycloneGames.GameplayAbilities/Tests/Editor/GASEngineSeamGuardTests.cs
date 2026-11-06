@@ -5,6 +5,8 @@ using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
 using NUnit.Framework;
+using UnityEditor.Compilation;
+using UnityEditor.PackageManager;
 
 namespace CycloneGames.GameplayAbilities.Tests.Editor
 {
@@ -17,7 +19,46 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
     /// </summary>
     public sealed class GASEngineSeamGuardTests
     {
-        private const string PackagesRoot = "Assets/ThirdParty/CycloneGames";
+        private const string GameplayTagsFolder = "CycloneGames.GameplayTags";
+        private const string GameplayTagsPackageId = "com.cyclone-games.gameplay-tags";
+        private const string GameplayAbilitiesFolder = "CycloneGames.GameplayAbilities";
+        private const string GameplayAbilitiesPackageId = "com.cyclone-games.gameplay-abilities";
+
+        // Resolve sources without assuming where the packages are installed. An installed UPM
+        // package exposes its real filesystem path through resolvedPath; the embedded asset
+        // layout is discovered from the Core asmdef of that package.
+        private static string ResolvePackageDirectory(string folderName, string packageId)
+        {
+            foreach (PackageInfo package in PackageInfo.GetAllRegisteredPackages())
+            {
+                if (string.Equals(package.name, packageId, StringComparison.Ordinal) &&
+                    !string.IsNullOrEmpty(package.resolvedPath) &&
+                    System.IO.Directory.Exists(package.resolvedPath))
+                {
+                    return package.resolvedPath;
+                }
+            }
+
+            string asmdefPath = CompilationPipeline.GetAssemblyDefinitionFilePathFromAssemblyName(
+                folderName + ".Core");
+            if (!string.IsNullOrEmpty(asmdefPath))
+            {
+                string directory = System.IO.Path.GetDirectoryName(asmdefPath)?.Replace('\\', '/');
+                while (!string.IsNullOrEmpty(directory) &&
+                       !string.Equals(directory, "Assets", StringComparison.Ordinal))
+                {
+                    if (string.Equals(System.IO.Path.GetFileName(directory), folderName, StringComparison.Ordinal))
+                    {
+                        return System.IO.Path.GetFullPath(directory);
+                    }
+
+                    directory = System.IO.Path.GetDirectoryName(directory)?.Replace('\\', '/');
+                }
+            }
+
+            Assert.Ignore($"Sources of package '{packageId}' are not available in this project layout.");
+            return null;
+        }
 
         private static readonly string[] RuntimeUnityWhitelist =
         {
@@ -44,13 +85,15 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void GameplayTagsCore_HasNoUnityEngineReference()
         {
-            AssertNoUnityEngineReference(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayTags", "Core"));
+            AssertNoUnityEngineReference(System.IO.Path.Combine(
+                ResolvePackageDirectory(GameplayTagsFolder, GameplayTagsPackageId), "Core"));
         }
 
         [Test]
         public void GameplayAbilitiesCore_HasNoUnityEngineReference()
         {
-            AssertNoUnityEngineReference(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayAbilities", "Core"));
+            AssertNoUnityEngineReference(System.IO.Path.Combine(
+                ResolvePackageDirectory(GameplayAbilitiesFolder, GameplayAbilitiesPackageId), "Core"));
         }
 
         /// <summary>
@@ -60,14 +103,17 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void CoreAssemblies_UseNoHostSpecificCompilationSymbols()
         {
-            AssertNoHostSymbols(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayTags", "Core"));
-            AssertNoHostSymbols(System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayAbilities", "Core"));
+            AssertNoHostSymbols(System.IO.Path.Combine(
+                ResolvePackageDirectory(GameplayTagsFolder, GameplayTagsPackageId), "Core"));
+            AssertNoHostSymbols(System.IO.Path.Combine(
+                ResolvePackageDirectory(GameplayAbilitiesFolder, GameplayAbilitiesPackageId), "Core"));
         }
 
         [Test]
         public void GameplayAbilitiesRuntime_UnityReferencesStayWhitelisted()
         {
-            string runtimeRoot = System.IO.Path.Combine(PackagesRoot, "CycloneGames.GameplayAbilities", "Runtime");
+            string runtimeRoot = System.IO.Path.Combine(
+                ResolvePackageDirectory(GameplayAbilitiesFolder, GameplayAbilitiesPackageId), "Runtime");
             var offenders = new List<string>();
             foreach (string file in System.IO.Directory.GetFiles(runtimeRoot, "*.cs", System.IO.SearchOption.AllDirectories))
             {
