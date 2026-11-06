@@ -149,7 +149,16 @@ Damage is an event, not a snapshot query. Report it once; every damage sensor co
 manager.ReportStimulus(attackerHandle, hitPoint, damageAmount);
 ```
 
-The manager stamps the clock and a monotonic sequence, so two sensors observing the same frame agree on order. The ring holds 256 events; a sensor that falls behind misses the oldest rather than growing memory. Stimuli reported before a sensor is created are never replayed.
+The manager stamps the clock and a monotonic sequence, so two sensors observing the same frame agree on order.
+
+Sequence semantics:
+
+- starts at 1 (`0` means "no stimulus") and increases by one per report, never reused;
+- **per manager**, not global - two managers each count from 1, so sequences from different managers are not comparable;
+- the ring holds 256 events, so only `[latest - 255, latest]` is resident; `TryGetStimulus` returns false outside that window;
+- a sensor that falls behind misses the oldest event rather than growing memory, and stimuli reported before a sensor exists are never replayed.
+
+A `long` counter at 1 000 reports per second would take about 292 million years to wrap, so overflow is not a practical concern.
 
 ### Drive perception from your own clock
 

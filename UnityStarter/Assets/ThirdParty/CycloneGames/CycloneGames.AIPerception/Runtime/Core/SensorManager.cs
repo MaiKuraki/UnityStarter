@@ -266,8 +266,10 @@ namespace CycloneGames.AIPerception.Runtime
             }
         }
 
-        /// <summary>Fixed ring size for reported stimuli.</summary>
+        /// <summary>Fixed ring size for reported stimuli. Must stay a power of two.</summary>
         public const int DefaultStimulusCapacity = 256;
+
+        private const int StimulusIndexMask = DefaultStimulusCapacity - 1;
 
         public int StimulusCapacity => _stimuli.Length;
 
@@ -293,7 +295,7 @@ namespace CycloneGames.AIPerception.Runtime
         {
             EnsureOwnerThread();
             long sequence = _nextStimulusSequence++;
-            int index = (int)((sequence - 1L) % _stimuli.Length);
+            int index = (int)((sequence - 1L) & StimulusIndexMask);
             _stimuli[index] = new PerceptionStimulus
             {
                 Instigator = instigator,
@@ -321,7 +323,7 @@ namespace CycloneGames.AIPerception.Runtime
                 return false;
             }
 
-            stimulus = _stimuli[(int)((sequence - 1L) % _stimuli.Length)];
+            stimulus = _stimuli[(int)((sequence - 1L) & StimulusIndexMask)];
             return true;
         }
 

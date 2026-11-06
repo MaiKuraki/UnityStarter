@@ -320,6 +320,76 @@ namespace CycloneGames.AIPerception.Tests.Editor
         }
 
         [Test]
+        public void Feature_StimulusSequence_RingWrapKeepsResidentWindowConsistent()
+        {
+            var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 8, cellSize: 20f);
+            var manager = new SensorManager(registry);
+            var otherRegistry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 8, cellSize: 20f);
+            var otherManager = new SensorManager(otherRegistry);
+            try
+            {
+                var instigator = new FixPerceptible { PerceptibleId = 1, TeamId = 0, IsDetectable = true };
+                PerceptibleHandle handle = registry.Register(instigator);
+                registry.RebuildData();
+
+                int capacity = manager.StimulusCapacity;
+                const int reports = 1000;
+
+                long firstSequence = 0;
+                long lastSequence = 0;
+                for (int i = 1; i <= reports; i++)
+                {
+                    lastSequence = manager.ReportStimulus(handle, float3.zero, i);
+                    if (i == 1)
+                    {
+                        firstSequence = lastSequence;
+                    }
+                }
+
+                long oldest = manager.OldestStimulusSequence;
+                long latest = manager.LatestStimulusSequence;
+
+                // Every resident entry must resolve to the payload that was reported with its sequence.
+                int payloadMismatches = 0;
+                for (long sequence = oldest; sequence <= latest; sequence++)
+                {
+                    if (!manager.TryGetStimulus(sequence, out PerceptionStimulus stimulus) ||
+                        stimulus.Sequence != sequence ||
+                        Mathf.Abs(stimulus.Strength - sequence) > 0.5f)
+                    {
+                        payloadMismatches++;
+                    }
+                }
+
+                bool evictedRejected = !manager.TryGetStimulus(oldest - 1, out _);
+                bool futureRejected = !manager.TryGetStimulus(latest + 1, out _);
+
+                // A second manager keeps its own counter: sequences are per manager, not global.
+                long otherFirst = otherManager.ReportStimulus(default, float3.zero, 1f);
+
+                EvidenceWriter.Write(
+                    $"feature.stimulusSequence|capacity={capacity}|first={firstSequence}|latest={latest}" +
+                    $"|oldest={oldest}|resident={latest - oldest + 1}|payloadMismatches={payloadMismatches}" +
+                    $"|evictedRejected={evictedRejected}|futureRejected={futureRejected}|otherManagerFirst={otherFirst}");
+
+                Assert.That(firstSequence, Is.EqualTo(1), "sequence must start at 1 so 0 stays a sentinel");
+                Assert.That(latest, Is.EqualTo(reports));
+                Assert.That(latest - oldest + 1, Is.EqualTo(capacity), "resident window must equal ring capacity");
+                Assert.That(payloadMismatches, Is.Zero, "ring wrap must not alias sequences onto wrong payloads");
+                Assert.That(evictedRejected, Is.True);
+                Assert.That(futureRejected, Is.True);
+                Assert.That(otherFirst, Is.EqualTo(1), "each manager owns an independent sequence space");
+            }
+            finally
+            {
+                manager.Dispose();
+                registry.Dispose();
+                otherManager.Dispose();
+                otherRegistry.Dispose();
+            }
+        }
+
+        [Test]
         public void Feature_DamageSensor_ConsumesReportedStimulusOnce()
         {
             var registry = new PerceptibleRegistry(initialCapacity: 4, maximumCapacity: 16, cellSize: 20f);
