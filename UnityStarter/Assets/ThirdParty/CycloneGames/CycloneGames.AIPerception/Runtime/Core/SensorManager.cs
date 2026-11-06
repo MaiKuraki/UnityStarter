@@ -267,7 +267,7 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         /// <summary>Fixed ring size for reported stimuli. Must stay a power of two.</summary>
-        public const int DefaultStimulusCapacity = 256;
+        private const int DefaultStimulusCapacity = 256;
 
         private const int StimulusIndexMask = DefaultStimulusCapacity - 1;
 
