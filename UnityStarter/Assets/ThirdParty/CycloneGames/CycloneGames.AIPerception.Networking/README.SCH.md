@@ -11,7 +11,7 @@
 - [快速上手](#快速上手)
 - [核心规则](#核心规则)
 - [协议参考](#协议参考)
-- [验证](#验证)
+- [上线前检查](#上线前检查)
 - [故障排查](#故障排查)
 
 ## 概述
@@ -296,7 +296,7 @@ FNV state hash 只是同步 checksum，不是认证码。传输认证和密码�
 
 `AIPerceptionNetworkSyncBridge.GetMemoryStats()` 报告 profile limit、supplied/scanned/written entry、全部 loss category、accepted/rejected snapshot，以及最近和峰值 snapshot entry/payload。调用方可以通过自己的 diagnostics adapter 发布这些 counter。Bridge 不安装 pressure responder、不虚构 confirmation history，也不会重复统计 Networking 或 AIPerception 持有的 bytes。
 
-## 验证
+## 上线前检查
 
 - 在 Unity Test Runner EditMode 运行 `AIPerceptionNetworkingIntegrationTests`，覆盖 oversized input、canonical selection、allocation、codec、authority 与 replay。
 - 运行 companion contract tests，确认每个输出指标都匹配对应 cold descriptor。

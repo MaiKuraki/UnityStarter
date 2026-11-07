@@ -3,15 +3,17 @@
 Perception for Unity agents: register what can be noticed, evaluate it for many observers at once in Burst jobs, and read the result without allocating.
 
 - [What it is for](#what-it-is-for)
+- [What it provides](#what-it-provides)
+- [Why this design](#why-this-design)
 - [How it works](#how-it-works)
 - [Getting started](#getting-started)
 - [Tutorials](#tutorials)
-- [Parameters and their cost](#parameters-and-their-cost)
-- [Performance and memory](#performance-and-memory)
+- [Parameters and their cost](#parameters)
+- [Performance and memory](#performance)
 - [Debugging](#debugging)
-- [API reference](#api-reference)
+- [API reference](#api)
 
-## What it is for
+## <a id="what-it-is-for"></a>What it is for
 
 Three questions, answered without touching your gameplay code:
 
@@ -23,7 +25,32 @@ Three questions, answered without touching your gameplay code:
 
 It does not model stealth modifiers, threat scoring, cover, or behaviour selection. Those consume perception; keeping them outside is what lets the data model stay small.
 
-## How it works
+## <a id="what-it-provides"></a>What it provides
+
+- Sight, hearing, proximity and damage sensors, all evaluating the same registered target set.
+- Results ordered by distance, with position, timestamp and an `IsFromMemory` flag.
+- Per-sensor memory that ages on a clock you supply, so a target that left stays known for a configured duration.
+- Team attitudes from an asset, with per-sensor affiliation filters.
+- Scene gizmos, live counts and a team matrix window for debugging.
+- A manual clock, so perception can run on a server tick instead of `Update`.
+
+It does not provide pathfinding, threat scoring, cover selection or behaviour decisions. Those read perception and live in gameplay code.
+
+## <a id="why-this-design"></a>Why this design
+
+Perception can be built in several ways. The choice starts to matter once agent count grows.
+
+| Approach | How it works | Where it breaks |
+| --- | --- | --- |
+| Per-agent `Physics.OverlapSphere` | Each agent queries the physics scene every frame | Cost scales with agents × colliders; results vary with physics state |
+| Per-agent raycasts against a target list | Each agent tests its own list | Duplicate work when many agents look at the same targets; hard to bound per frame |
+| One registry plus a batch job | Targets register once, a snapshot is taken per frame, sensors evaluate in jobs, results commit on the owner thread | Needs a frame boundary and an owner-thread commit step |
+
+This package takes the third path. Registration is explicit, the snapshot is read-only while jobs run, and results commit once per frame. That is what makes the cost predictable and the output repeatable for a given snapshot.
+
+The trade is real: perception cannot be queried from arbitrary threads, and every perceptible must register. In exchange, the frame cost is one snapshot plus one job per sensor, no matter how many agents read the result.
+
+## <a id="how-it-works"></a>How it works
 
 ```mermaid
 flowchart LR
@@ -39,7 +66,7 @@ Two invariants make the Burst path possible:
 1. The snapshot is written once per frame on the owner thread and never mutated while jobs read it.
 2. Results and memory are only updated on the owner thread, after job completion.
 
-## Getting started
+## <a id="getting-started"></a>Getting started
 
 ### 1. Add a manager
 
@@ -108,7 +135,7 @@ Results are ordered by distance, so index `0` is always the nearest. A target th
 
 If the count stays at zero, check in this order: manager present, target `Is Detectable`, type filter, affiliation mask.
 
-## Tutorials
+## <a id="tutorials"></a>Tutorials
 
 ### Filter by type
 
@@ -183,7 +210,7 @@ sensor.UpdateSensor(0f);
 
 Dispose in reverse order: sensors, then manager, then registry.
 
-## Parameters and their cost
+## <a id="parameters"></a>Parameters and their cost
 
 | Setting | Trades |
 | --- | --- |
@@ -194,7 +221,7 @@ Dispose in reverse order: sensors, then manager, then registry.
 | Maximum Results | preallocated per sensor; overflow drops the farthest results |
 | Spatial Cell Size | too small multiplies cells, too large degrades to a linear scan |
 
-## Performance and memory
+## <a id="performance"></a>Performance and memory
 
 - One snapshot per frame regardless of sensor count; cost scales with registered perceptibles.
 - Each sensor runs one job over its candidates. Below `InlineExecutionThreshold` candidates the query runs inline, which is cheaper than scheduling.
@@ -203,7 +230,7 @@ Dispose in reverse order: sensors, then manager, then registry.
 
 Measure with `SensorManager.GetMemoryStats()`: peak candidate count, result capacity, eviction count and per-update workload per sensor.
 
-## Debugging
+## <a id="debugging"></a>Debugging
 
 | Tool | Shows |
 | --- | --- |
@@ -221,7 +248,7 @@ Common symptoms:
 | Every target detected | `Affiliation = All` and no type filter |
 | Editor hitches while playing | LOS checks over many candidates; lower Max LOS Checks |
 
-## API reference
+## <a id="api"></a>API reference
 
 ```csharp
 // Registry

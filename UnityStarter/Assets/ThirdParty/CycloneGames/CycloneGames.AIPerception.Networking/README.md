@@ -11,7 +11,7 @@
 - [Quick Start](#quick-start)
 - [Core Rules](#core-rules)
 - [Protocol Reference](#protocol-reference)
-- [Validation](#validation)
+- [Pre-release checks](#pre-release-checks)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -296,7 +296,7 @@ FNV state hashes are synchronization checksums, not authentication codes. Transp
 
 `AIPerceptionNetworkSyncBridge.GetMemoryStats()` reports profile limits, supplied/scanned/written entries, all loss categories, accepted/rejected snapshots, and last/peak snapshot entry and payload sizes. Callers may publish these counters through their own diagnostics adapter. The bridge installs no pressure responder, invents no confirmation history, and does not duplicate bytes owned by Networking or AIPerception.
 
-## Validation
+## Pre-release checks
 
 - Run `AIPerceptionNetworkingIntegrationTests` in Unity Test Runner EditMode, including oversized input, canonical selection, allocation, codec, authority, and replay tests.
 - Run the companion contract tests and verify every emitted metric matches its cold descriptor.

@@ -2,175 +2,432 @@
 
 [English](README.md) | 简体中文
 
-CycloneGames.BehaviorTree 是 Unity 行为树模块。可通过 GraphView 编辑器以 ScriptableObject 资产创作行为树，也可通过 `RuntimeBehaviorTreeBuilder` 纯代码构建。模块包含托管运行时、强类型 Blackboard、有界调度，以及可选的 Burst/Jobs DOD 执行路径。
+面向 agent 的 Unity 行为树运行时。默认使用托管节点图，需要时切到平面 Burst 路径。
 
-## 目录
+## <a id="what-is-a-bt"></a>什么是行为树
 
-- [概览](#概览)
-- [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [高级主题](#高级主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [故障排查](#故障排查)
+行为树是一种从根节点开始、每个 tick 重新求值的决策结构。叶子节点执行动作或判断条件，内部节点决定运行哪些叶子、以什么顺序运行。每个节点返回 `Success`、`Failure` 或 `Running`。`Running` 是它适合 agent 的原因：一个节点可以跨越多帧而不丢失位置，下一个 tick 从同一分支继续。
 
-## 概览
+巡逻、Boss 阶段、交互流程都可以用同一种结构表达。变化的只是叶子集合，求值规则不变。
 
-本模块提供：
-
-- ScriptableObject 行为树资产与 GraphView 编辑器。
-- 由 `RuntimeNode` 对象和 `RuntimeBlackboard` 状态组成的托管运行时图。
-- 不依赖创作资产的纯代码 `RuntimeBehaviorTreeBuilder` 路径。
-- 明确的节点激活、完成、中止、故障、重置和释放语义。
-- Self、Manual、Managed 和 PriorityManaged Tick 所有权模型。
-- 强类型 Blackboard 值、内嵌且显式启用的严格创作 schema、snapshot、delta、变更 stamp 和 observer。
-- 有界创作编译器以及显式、无反射的 built-in emitter。
-- 可选 DOD assembly，用于 Burst job 执行的同构平面树。
-- 隔离在可选 benchmark assembly 中的 Editor 与 PlayMode 性能工具。
-
-### 核心特性
-
-- **ScriptableObject 创作**——支持 Undo 的 GraphView 编辑器，含校验与修复命令。
-- **纯代码 API**——通过 `RuntimeBehaviorTreeBuilder` 提供 compositor、decorator 与 leaf 的流式方法。
-- **节点库**——15+ compositor、15+ decorator、condition strategy 与 action 边界。
-- **强类型 Blackboard**——`int`、`float`、`bool`、`Vector3`、`long`、`Long2`、`Long3`、`object`；FNV-1a 字符串 key 和可选的严格契约。
-- **有界编译**——迭代校验、精确 emitter 分发、不使用 private-field 反射。
-- **托管调度**——轮询与 8 桶 priority/LOD tick manager。
-- **可选 DOD 路径**——Burst/Jobs 平面树调度器，含 `BTAgentHandle` 代际安全。
-- **Runtime `object` owner**——核心 API 中通过 `GetOwner<T>()` 契约不暴露 Unity 类型。
-
-## 架构
-
-```mermaid
-flowchart LR
-    Asset["BehaviorTree asset\nBTNode sub-assets"] --> Compiler["Bounded validator\nexplicit emitters"]
-    Asset --> Contract["内嵌的可选\n严格 Blackboard schema"]
-    Contract --> Compiler
-    Builder["RuntimeBehaviorTreeBuilder"] --> Runtime["RuntimeBehaviorTree"]
-    Compiler --> Runtime
-    Runtime --> Root["Owned RuntimeNode graph"]
-    Runtime --> Blackboard["Owned RuntimeBlackboard"]
-    Runner["BTRunnerComponent"] --> Runtime
-    Manager["Tick manager"] --> Runtime
-    Runtime -. "explicit context" .-> Services["Owner + service resolver"]
-```
-
-### Assembly
-
-| Assembly | 默认引用 | 职责 |
+| 模型 | 长处 | 代价 |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime` | 是 | 创作资产、托管运行时、Blackboard、编译器、Runner 和托管调度器 |
-| `CycloneGames.BehaviorTree.Editor` | 仅 Editor | Graph 编辑器、Inspector、校验和 benchmark 窗口 |
-| `CycloneGames.BehaviorTree.Benchmarks` | 否 | Benchmark 模型、session、场景 runner 和导出工具 |
-| `CycloneGames.BehaviorTree.Runtime.DOD` | 否 | Burst/Jobs 平面树调度器与 NativeArray 状态 |
-| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | 否 | Fixed-point Blackboard/schema adapter 与支持保存/恢复的确定性随机数 provider |
+| 有限状态机 | 转移显式，状态少时容易读 | 状态对增加后转移数量膨胀；跨 agent 复用要手工做 |
+| 行为树 | 子树可组合，求值规则统一，`Running` 让跨帧任务简单 | 写得随意时，条件每个 tick 都会被重新检查 |
+| 目标导向规划 | 能处理没人预先写过的动作组合 | 每次决策都要规划；难以界定上界，也难以调试 |
+| 效用评分 | 多个小选项之间可以平滑切换优先级 | 调分数占掉大部分工作；表达顺序很别扭 |
 
-Runtime assembly 依赖 `com.cyclone-games.hash` 与不含引擎 API 的 `com.cyclone-games.logging` 生产者契约。Runtime、Editor 与 benchmark 诊断分别集中通过各自 assembly-local `Diagnostics/` 目录中的 internal `BehaviorTreeRuntimeLog`、`BehaviorTreeEditorLog` 和 `BehaviorTreeBenchmarksLog` facade 接入。每个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员，并保留 category `CycloneGames.BehaviorTree`、`CycloneGames.BehaviorTree.Editor` 和 `CycloneGames.BehaviorTree.Benchmarks`；未安装 backend 时，由 `NullLogWriter` 安全丢弃 ambient 诊断。DOD assembly 只在 Burst、Collections 和 Mathematics 均存在时启用，使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Runtime.DOD`。DeterministicMath bridge 及其测试只在 UPM 解析到受支持的 `com.cyclone-games.deterministic-math` `1.x` 版本时具备编译条件。它们的 asmdef 通过 `versionDefines` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，再通过 `defineConstraints` 消费该 capability，并保持 `autoReferenced: false`。使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Integrations.DeterministicMath`。不要在 PlayerSettings 中手工添加 capability symbol；依赖缺失或版本不受支持时，integration 被排除，Core 与 Runtime 仍可编译。
+行为树保留手写的控制流，同时允许一棵子树挂到不同父节点下。这是它相对状态机的取舍：少写转移，多拿复用。
 
-### 所有权规则
+## <a id="why-this-module"></a>为什么需要这个模块
 
-- 一个 `RuntimeBehaviorTree` 只拥有一份 runtime node graph 和一个 Blackboard。
-- Runtime node graph 必须无环，每个 node 只能有一个 parent 和一个 owning tree。
-- Tree owner 必须在创建 tree 的线程调用生命周期方法。
-- `RuntimeBehaviorTree.Dispose()` 会中止活动工作、释放 node-owned resource、释放 Blackboard，并清除 termination subscriber。
-- 同一份 `BehaviorTree` 创作资产可创建多个相互独立的运行时实例。
-- `BehaviorTree.Root`、`BehaviorTree.Nodes` 和每条创作 node link 是序列化创作数据。只能在 Edit Mode 中通过支持 Undo 的工具写入；Play Mode 使用已编译的 runtime instance。
-- `BTRunnerComponent` 拥有并释放它编译的运行时实例。
-- `BTTickScheduler` 拥有自己的 NativeArray，但只借用 `FlatBehaviorTree`；调用方必须让 flat tree 存活到 scheduler 释放之后。
+多数行为树库为编辑体验优化。这个模块为"在商业项目里长期运行大量树"优化，需求因此不同：
 
-## 快速上手
+- 每 tick 的工作必须有上界，一棵深树不能吃掉整帧。
+- 稳态执行不能分配，GC 尖峰会直接反映在帧时间上。
+- 同一棵树在重载、回放、网络往返之后必须表现一致。
+- 失败要早且局部。非法图应该在编译期失败，而不是打到一半才炸。
 
-### 使用资产创作行为树
+模块按层拆分，让每个决定只有一个归属。
 
-1. 在 Project 窗口选择 `Create > CycloneGames > AI > BehaviorTree`。
-2. 双击资产，或打开 `Tools > CycloneGames > Behavior Tree > Behavior Tree Editor`。
-3. 资产没有 root 时，单击 `Repair Root`。
-4. 在 Graph 右键菜单中创建 `SequencerNode`，再创建 `DebugLogNode`、`WaitNode` 等 action，并将它们连接到 root 下方。
-5. 单击 `Validate`。解决全部诊断，然后单击 `Save`。
-6. 为 GameObject 添加 `BTRunnerComponent`，指定 tree，选择 Tick mode，并启用 `Start On Awake`。
-7. 进入 Play Mode。选择 runner 或资产即可在 Graph 和 runner Inspector 中查看运行状态。
+| 层 | 解决的问题 | 不在范围内 |
+| --- | --- | --- |
+| 创作层（可选） | 在 Edit Mode 序列化 `BehaviorTree` 资产与布局 | 运行时状态 |
+| composition root | 构建或编译 `RuntimeBehaviorTree`，持有生命周期，注入 owner 与服务，挂载调度器 | 节点语义、传输策略 |
+| 托管运行时 | 持有一份无环 `RuntimeNode` 图与一份 `RuntimeBlackboard`；定义激活、完成、中止、故障、重置与释放 | 线程与 job |
+| 重评估 | 把单调 epoch 从生产者送到 owner 线程 | 判定什么算事件 |
+| 调度 | 限制一次 pass 扫描多少棵树 | 帧节奏，由 `MonoBehaviour` 包装驱动 |
+| 序列化契约 | 生成与消费有界 snapshot、delta、hash payload | 传输、authority、排序、限流、重同步 |
+| DOD 运行时 | 在 Burst job 中执行同构平面树，使用固定 slot | 托管节点、observer、schema、`object` 值 |
 
-最小 Graph 如下：
+由此得到两条规则。托管树、节点、runner 组件与托管调度器只在 owner 线程执行；`WakeUp()` 与 `RequestReevaluation()` 是跨线程入口。网络类型只负责编解码字节，何时发送、收到后怎么处理由产品层决定。
 
-```mermaid
-flowchart TB
-    Root["Root"] --> Sequence["Sequencer"]
-    Sequence --> Log["DebugLog"]
-    Sequence --> Wait["Wait"]
-```
+## <a id="design-approaches"></a>行为树的常见设计
 
-Runner 会编译出一个新的运行时实例。资产始终是创作数据；节点执行状态和 Blackboard 状态属于该运行时实例。
+生产代码里常见四种做法。区别在于树存在哪里，以及什么时候重新求值。
 
-### 五分钟配置严格 Blackboard
+| 设计 | 树存在哪里 | 何时重新求值 | 适合 |
+| --- | --- | --- | --- |
+| 节点图 | 带父子引用的对象 | 每个 tick，从根开始 | 经常改动的手写树 |
+| 表驱动 | 配置或资产中的行 | 每个 tick，从根开始 | 内容团队大、批量编辑、本地化 |
+| 事件驱动 | 节点图 + key observer | 被观察的值变化时 | guard 开销大、大量空闲 agent |
+| 平面 / 数据导向 | 连续数组中的 struct | 每个 tick，在 job 内 | 数千个同构 agent |
 
-严格 schema 直接内嵌在每个 `BehaviorTree` 资产中，并且需要显式启用。现有资产在显式启用前保持 Legacy Open 模式。
+前两种是创作方式，后两种是运行方式，可以组合：表可以生成节点图，事件驱动的树仍然可以按 budget tick。
 
-1. 在 Project 窗口中选中 behavior-tree 资产。
-2. 在 **Blackboard Contract** 中启用 **Strict Schema**。
-3. 保持只读的 **Format Version** 不变。新契约的 **Contract Version** 从 `1` 开始。
-4. 添加 graph 实际使用的 key。例如：`HasTarget` 使用 `Bool` 且默认为 `false`，`Health` 使用 `Int` 且默认为 `100`，`Target` 使用 `Object` 且不设默认值。
-5. 除非已实现的持久化或网络路径明确拥有同步 policy，否则 **Sync Flags** 保持 `LocalOnly`。
-6. 打开 graph。已支持的 key 字段保留手工文本编辑，同时提供由 schema 驱动的下拉列表；带类型的字段只显示兼容条目。
-7. 实例需要场景对象时，在 Runner 的 **Initial Objects** 中添加 `Target`。
-8. 再次选中 tree，点击 **Validate Tree**，解决所有诊断，然后进入 Play Mode。
+本模块默认使用节点图，按装饰器支持事件驱动重评估，并为同构人群提供平面 Burst 路径。三者共用 Blackboard 与调度契约，因此一棵子树可以迁到平面路径，而不必改写项目其余部分。
 
-编译时会先应用 root schema 默认值。`BTRunnerComponent` 随后按数组顺序应用 **Initial Objects**，因此重复 Object 条目中最后一项生效。Runner replay 会先恢复 root 默认值，再重新应用同一组初始 Object 条目，然后开始下一次 activation。
+## <a id="features"></a>这个模块提供什么
 
-### 使用纯代码构建行为树
+- 托管运行时，生命周期、中止与故障处理都是显式的。一棵树就是一张对象图，没有隐藏的全局状态。
+- 类型化 Blackboard，可选严格 schema。key 是 int，值有类型，热路径不装箱。
+- 有界调度：持久游标、按 bucket 的 budget、可选的 distance LOD。
+- 事件驱动重评估：Blackboard observer 可以请求重新扫描，不必每个 tick 轮询所有 guard。
+- 网络同步用的 snapshot、delta 与 hash 契约；authority 与复制策略在独立包中。
+- 编辑器把 `BehaviorTree` 资产显示为图，并显示实时状态、当前 child 索引与已耗时。
+- 六个 CI 门控，每个都在一秒内完成：存储 FUZZ、调度公平性、带脉冲的短 SOAK、深度上限、两档分配检查。
+
+它不提供：传输、authority 判定、预测或回滚、感知、技能、tag。这些在独立包里，第 13 章说明如何连接。
+
+## <a id="authoring"></a>两种创作方式
+
+一棵树可以做成 `BehaviorTree` 资产，也可以用代码构建。两者最终都是同一个 `RuntimeBehaviorTree`。
+
+| 方式 | 做法 | 适合 |
+| --- | --- | --- |
+| 资产 | 创建 `BehaviorTree` 资产，在图编辑器里添加节点、连父子、指定 blackboard schema，然后让 `BTRunnerComponent` 引用它 | 策划/设计反复调整行为；需要跨构建修改的树 |
+| 代码 | `RuntimeBehaviorTreeBuilder`，或在测试里直接构造节点 | 程序化生成、单元测试、工具、原型 |
+| 混合 | 资产负责结构，代码负责自定义叶子节点 | 需要项目内强类型引用的动作 |
+
+编辑器把节点对象存进资产；树启动时 `BehaviorTree.Compile` 把它们转成 runtime node。Builder 直接生成同样的 runtime node 类型。tick 成本取决于你用了哪些节点，与创作方式无关。
+
+下面的示例用 Builder，因为它在文档里更好读。生产环境的树通常以资产形式创作。
+
+编辑器按类型给节点着色，在每个节点上打印运行状态，并标出当前 child 索引。右键菜单可以直接添加动作、条件、组合与装饰节点。
+
+## <a id="contents"></a>目录
+
+- [什么是行为树](#what-is-a-bt)
+- [为什么需要这个模块](#why-this-module)
+- [行为树的常见设计](#design-approaches)
+- [这个模块提供什么](#features)
+- [两种创作方式](#authoring)
+- [1. 环境与程序集边界](#environment)
+- [2. 第 1 步：最小可运行树](#step-1)
+- [3. 第 2 步：黑板与键](#step-2)
+- [4. 第 3 步：严格 schema](#step-3)
+- [5. 第 4 步：组合节点](#step-4)
+- [6. 第 5 步：装饰器与条件](#step-5)
+- [7. 第 6 步：事件驱动重评估](#step-6)
+- [8. 第 7 步：tick 归属与调度](#step-7)
+- [9. 第 8 步：LOD 与显式 composition root](#step-8)
+- [10. 第 9 步：快照 / 增量 / 网络契约](#step-9)
+- [11. 第 10 步：DOD Burst 路径](#step-10)
+- [12. 综合示例：一棵多层树](#composite-example)
+- [13. 与其他 CycloneGames 包组合](#combining)
+- [14. 性能、容量与测量](#performance)
+- [15. API 速查表](#api)
+
+## <a id="environment"></a>1. 环境与程序集边界
+
+工程打开路径为 `<repo-root>/UnityStarter`。运行时 assembly `CycloneGames.BehaviorTree.Runtime` 为 `autoReferenced: true`，引用 `CycloneGames.Hash.Core` 与 `CycloneGames.Logging.Core`，包含托管运行时、Blackboard、schema、编译器、runner、托管调度器以及序列化契约。`CycloneGames.BehaviorTree.Editor` 仅在 Editor 下可用。三个可选 assembly 均为 `autoReferenced: false`，使用方 asmdef 必须显式引用：
+
+- `CycloneGames.BehaviorTree.Runtime.DOD` 由 `com.unity.burst`、`com.unity.collections`、`com.unity.mathematics` 的 `versionDefines` 及对应 `defineConstraints` 门控，并引用 Unity.Burst、Unity.Collections、Unity.Mathematics 与 Unity.Jobs。
+- `CycloneGames.BehaviorTree.Integrations.DeterministicMath` 由 `com.cyclone-games.deterministic-math` 在 `[1.0.0,2.0.0)` 上的 `versionDefine` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，并由对应的 `defineConstraint` 消费。
+- `CycloneGames.BehaviorTree.Benchmarks` 承载 Editor 与 PlayMode 测量工具。
+
+可选包缺失或版本不受支持时，对应 assembly 被排除，Core 与 Runtime 仍可编译。capability symbol 来自 `versionDefines`，不应写入 PlayerSettings。共享上限以常量暴露：
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Core;
 
-private static readonly int HasTargetKey =
-    RuntimeBlackboard.DefaultStringHashFunc("HasTarget");
-private static readonly int AttackCountKey =
-    RuntimeBlackboard.DefaultStringHashFunc("AttackCount");
+public static class Step0
+{
+    public static void ReadLimits()
+    {
+        int maxDepth = BTCapacityLimits.MaxTreeDepth;             // 256
+        int maxNodes = BTCapacityLimits.MaxNodeCount;             // 65536
+        int defaultNodes = BTCapacityLimits.DefaultNodeCount;     // 4096
+        int priorityLevels = BTCapacityLimits.PriorityLevelCount; // 8
+        int defaultAgents = BTCapacityLimits.DefaultAgentCount;  // 65536
+    }
+}
+```
 
-RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
-    .Selector()
-        .Sequence()
-            .Condition(bb => bb.GetBool(HasTargetKey), "HasTarget")
-            .CoolDown(0.75f)
-                .Action(bb =>
+托管图校验、托管调度与平面树校验都消费 `BTCapacityLimits`，因此边界不会在执行路径之间漂移。
+
+## <a id="step-1"></a>2. 第 1 步：最小可运行树
+
+一棵树是由 `RuntimeBehaviorTreeBuilder` 构建的 `RuntimeBehaviorTree`。builder 使用流式 scope：组合节点或装饰器打开一个 scope，`.End()` 闭合，`Build()` 闭合所有剩余 scope。树只能有一个 root child，因此单个 `.Action(...)` 就是最小完整树。
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public static class Step1
+{
+    public static void Run()
+    {
+        RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+            .Action(_ => RuntimeState.Success, "Complete")
+            .Build();
+
+        tree.Terminated += state => UnityEngine.Debug.Log($"Terminated: {state}");
+
+        RuntimeState result = tree.Tick();  // Success
+        bool stopped = tree.IsStopped;     // true
+
+        tree.Dispose();
+    }
+}
+```
+
+`Tick()` 按需开始 root activation，返回 `RuntimeState.Running`、`Success` 或 `Failure`。`Success` 与 `Failure` 是终态结果：tree 会设置 `IsStopped`、清除调度唤醒状态，并且只发布一次 `Terminated`。`Play()` 在 stopped tree 上开始新的 activation；`Stop()` 中止活动节点栈并发布 `Terminated(NotEntered)`。生命周期操作拒绝重入。builder 一次性使用：`Build()` 会冻结它，并拒绝没有 root child 的树。`Dispose()` 中止活动工作、释放 node-owned resource、释放所拥有的 Blackboard 并移除 termination subscriber；释放后公开操作抛出 `ObjectDisposedException`。
+
+## <a id="step-2"></a>3. 第 2 步：黑板与键
+
+`RuntimeBlackboard` 持有八个相互独立的强类型存储：`int`、`float`、`bool`、`Vector3`、`long`、`Long2`、`Long3`、`object`。强类型访问不会装箱 primitive 值。key 是 `int` hash；`DefaultStringHashFunc` 是稳定的 `BTHash.FNV1A`，因此字符串 key overload 只是每次调用时执行 hash 的便利方法。高频 key 应预先 hash 一次。
+
+```csharp
+using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public static class Step2
+{
+    private static readonly int StageKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Stage");
+    private static readonly int FocusKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Focus");
+    private static readonly int ActiveKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Active");
+    private static readonly int PositionKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Position");
+    private static readonly int SequenceKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Sequence");
+    private static readonly int PairKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Pair");
+    private static readonly int TripleKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Triple");
+    private static readonly int ReferenceKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Reference");
+
+    public static void Run()
+    {
+        var shared = new RuntimeBlackboard();
+        shared.SetInt(StageKey, 3);
+
+        // Parent chain: reads fall back through Parent; writes affect only the local board.
+        var local = new RuntimeBlackboard(parent: shared);
+        int fromParent = local.GetInt(StageKey);          // 3
+        local.SetInt(StageKey, 4);                        // local only
+        int parentValue = shared.GetInt(StageKey);        // still 3
+
+        // Eight typed stores.
+        local.SetFloat(FocusKey, 1.5f);
+        local.SetBool(ActiveKey, true);
+        local.SetVector3(PositionKey, new Vector3(1f, 2f, 3f));
+        local.SetLong(SequenceKey, 42L);
+        local.SetLong2(PairKey, new RuntimeBlackboardLong2(1L, 2L));
+        local.SetLong3(TripleKey, new RuntimeBlackboardLong3(1L, 2L, 3L));
+        local.SetObject(ReferenceKey, shared);
+
+        // String-key convenience hashes with DefaultStringHashFunc.
+        local.SetInt("Stage", 7);
+        int viaString = local.GetInt("Stage");
+
+        // Stamps change only when the local value actually changes.
+        ulong stamp0 = local.GetStamp(StageKey);
+        local.SetInt(StageKey, 8);
+        ulong stamp1 = local.GetStamp(StageKey);
+        local.SetInt(StageKey, 8);
+        ulong stamp2 = local.GetStamp(StageKey);         // equals stamp1
+
+        // Observers run synchronously after the write commits.
+        BlackboardObserverCallback onStage = (key, bb) =>
+            Debug.Log($"Stage changed: {bb.GetInt(key)}");
+        local.AddObserver(StageKey, onStage);
+        local.AddGlobalObserver((key, bb) => { });
+        local.SetInt(StageKey, 9);
+        local.RemoveObserver(StageKey, onStage);
+        local.ClearAllObservers();
+
+        // Restart the per-blackboard deterministic random stream.
+        local.ResetDefaultRandom(seed: 1234u);
+
+        // Precise type probing without a default fallback.
+        bool hasInt = local.TryGetInt(StageKey, out int probed);
+
+        local.Dispose();
+        shared.Dispose();
+    }
+}
+```
+
+读取沿 `Parent` 回退，写入不会。`GetStamp` 返回 `ulong`，仅在本地值变化时递增，可用于低成本变更检测。`AddObserver`、`AddGlobalObserver`、`RemoveObserver`、`RemoveGlobalObserver` 与 `ClearAllObservers` 管理回调集合；订阅变化会分配新的 callback array，因此应在 setup 阶段注册、在 owner shutdown 时移除。`RuntimeBlackboard.ResetDefaultRandom(uint seed = 0u)` 重启确定性随机流；当未提供 `IRuntimeBTRandomProvider` 时，随机节点使用该流，而不依赖进程全局状态。`EnableConcurrentStorageAccess()` 为值表安装 `ReaderWriterLockSlim`，它只保护值表，不保护 `Parent`、`Context`、树执行或 Unity 对象。
+
+## <a id="step-3"></a>4. 第 3 步：严格 schema
+
+`RuntimeBlackboardSchema` 把 key 是否存在、类型、默认值与同步 flag 固化为显式契约。`RuntimeBlackboardSchemaBuilder` 负责构建；把它绑定到 Blackboard 会应用默认值，并使写入校验 key 存在性与类型。
+
+```csharp
+using System.IO;
+using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public static class Step3
+{
+    private static readonly int StageKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Stage");
+
+    public static void Run()
+    {
+        RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+            .AddInt("Stage", 0, RuntimeBlackboardSyncFlags.SnapshotAndDelta)
+            .AddBool("EventActive", false, RuntimeBlackboardSyncFlags.LocalOnly)
+            .AddFloat("Focus", 0f, RuntimeBlackboardSyncFlags.Snapshot)
+            .AddVector3("Position", Vector3.zero, RuntimeBlackboardSyncFlags.Delta)
+            .AddLong("Sequence", 0L, RuntimeBlackboardSyncFlags.LocalOnly)
+            .AddObject("Reference")
+            .Build();
+
+        var blackboard = new RuntimeBlackboard(schema: schema);
+
+        // Defaults are applied at construction.
+        int stage = blackboard.GetInt(StageKey);   // 0
+
+        // Schema-bound writes validate the key and its type.
+        blackboard.SetInt(StageKey, 2);
+        blackboard.ResetToSchemaDefaults();       // Stage back to 0
+
+        // Inspect the contract.
+        bool known = schema.IsKnownKey(StageKey);
+        bool delta = schema.UsesDelta(StageKey);
+        bool snapshot = schema.UsesSnapshot(StageKey);
+        int contractVersion = schema.ContractVersion;
+
+        // Bounded snapshot payload; returns the captured revision.
+        ulong revision;
+        using (var stream = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(stream))
+            {
+                revision = blackboard.WriteTo(
+                    writer, RuntimeBlackboardNetworkScope.Snapshot, maxBytes: 8192);
+                writer.Flush();
+            }
+        }
+
+        ulong hash = blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
+
+        blackboard.Dispose();
+    }
+}
+```
+
+`RuntimeBlackboardSyncFlags` 包含 `LocalOnly`、`Snapshot`、`Delta` 与 `SnapshotAndDelta`。`SnapshotAndDelta` 同时把 key 标记为参与全量 snapshot scope 与 delta 路径。`Object` key 始终为 `LocalOnly`，不能带创作默认值；`AddObject` 通过代码注入引用。向未声明 key 写入会抛出 `KeyNotFoundException`，类型不匹配会抛出 `InvalidOperationException`。`RuntimeBlackboardNetworkScope` 为 `Snapshot`（标记为全量 snapshot 的 key）或 `Networked`（全部非本地 primitive，包括仅 delta 的 key）。`WriteTo` 还提供 `maxBytes` overload：计算出的大小超过上界时不写入任何 payload 字节，并返回同一把锁下捕获的 Blackboard revision。`ResetToSchemaDefaults()` 原子替换本地值；未绑定 schema 时重置为空的本地 board。
+
+需要由树拥有 schema 时，可在 builder 上使用 `WithBlackboardSchema(schema, applyDefaults)`；也可先用 `WithBlackboard(...)` 传入预先构建好的 Blackboard。两者都属于 composition root 的决策。
+
+## <a id="step-4"></a>5. 第 4 步：组合节点
+
+组合节点拥有一个有序 child array。`Seal()` 把 setup 阶段的 list 一次性转换为该数组，执行阶段直接读取 sealed array。builder 为以下方法各打开一个组合 scope：`Sequence`、`Selector`、`SequenceWithMemory`、`SelectorRandom`、`ReactiveSequence`、`ReactiveFallback`、`Parallel`、`ParallelAll`、`IfThenElse`、`WhileDoElse`、`Switch`、`ProbabilityBranch`、`UtilitySelector`。
+
+| 组合节点 | 语义 |
+| --- | --- |
+| `RuntimeSequencer`（`Sequence`） | 从左到右运行 child；首个 `Failure` 使其失败；全部 `Success` 才成功。 |
+| `RuntimeSelector`（`Selector`） | 从左到右运行 child；首个 `Success` 使其成功；全部 `Failure` 才失败。同时承担由 `AbortType` 驱动的 abort scan。 |
+| `RuntimeSequenceWithMemory`（`SequenceWithMemory`） | 跳过已成功的 child，从上一个 running child 继续。 |
+| `RuntimeSelectorRandom`（`SelectorRandom`） | 使用 setup 阶段 index array 洗牌，然后执行 selector 语义。 |
+| `RuntimeReactiveSequence` / `RuntimeReactiveFallback`（`ReactiveSequence` / `ReactiveFallback`） | 每步从头部重新扫描 guard，并中止被取代的 running branch。 |
+| `RuntimeIfThenElseNode`（`IfThenElse`） | child 依次为 `[condition, then, else]`。 |
+| `RuntimeWhileDoElseNode`（`WhileDoElse`） | child 依次为 `[condition, body, else]`。 |
+| `RuntimeSwitchNode`（`Switch`） | 使用 Blackboard 中的 `int` 作为从零开始的 case；最后一个 child 是 default。 |
+| `RuntimeProbabilityBranch`（`ProbabilityBranch`） | 每次 activation 依据已校验的非负权重选择一个 child。 |
+| `RuntimeUtilitySelector`（`UtilitySelector`） | 为每个 child 读取一个 Blackboard `float` score，运行得分最高者。 |
+| `RuntimeParallelNode` / `RuntimeParallelAllNode`（`Parallel` / `ParallelAll`） | 在 owner 线程内交错 branch；完成策略见下文。 |
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+
+public static class Step4
+{
+    private static readonly int PhaseKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Phase");
+    private static readonly int GateKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Gate");
+    private static readonly int ScoreAKey =
+        RuntimeBlackboard.DefaultStringHashFunc("ScoreA");
+    private static readonly int ScoreBKey =
+        RuntimeBlackboard.DefaultStringHashFunc("ScoreB");
+
+    public static void Run()
+    {
+        RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+            .Selector(selector => selector.AbortType = RuntimeAbortType.LowerPriority)
+                .Sequence()
+                    .Condition(bb => bb.GetInt(PhaseKey) >= 0, "PhaseReady")
+                    .Action(bb => RuntimeState.Success, "Advance")
+                .End()
+                .SequenceWithMemory()
+                    .Action(bb => RuntimeState.Success, "Prepare")
+                    .Action(bb => RuntimeState.Success, "Commit")
+                .End()
+                .ReactiveFallback(fallback =>
                 {
-                    bb.SetInt(AttackCountKey, bb.GetInt(AttackCountKey) + 1);
-                    return RuntimeState.Success;
-                }, "Attack")
+                    fallback.AbortType = RuntimeAbortType.LowerPriority;
+                    fallback.ReevaluationMode = RuntimeReevaluationMode.Hybrid;
+                    fallback.ReevaluationPollInterval = 4;
+                })
+                    .Condition(bb => bb.GetBool(GateKey), "Gate")
+                    .Action(bb => RuntimeState.Running, "Observe")
+                .End()
+                .IfThenElse()
+                    .Condition(bb => bb.GetBool(GateKey), "BranchGate")
+                    .Action(bb => RuntimeState.Success, "Then")
+                    .Action(bb => RuntimeState.Success, "Else")
+                .End()
+                .Switch(PhaseKey)
+                    .Action(bb => RuntimeState.Success, "Case0")
+                    .Action(bb => RuntimeState.Success, "Case1")
+                    .Action(bb => RuntimeState.Success, "Default")
+                .End()
+                .UtilitySelector(new[] { ScoreAKey, ScoreBKey })
+                    .Action(bb => RuntimeState.Success, "OptionA")
+                    .Action(bb => RuntimeState.Success, "OptionB")
+                .End()
+                .ProbabilityBranch(new[] { 1f, 3f })
+                    .Action(bb => RuntimeState.Success, "LowWeight")
+                    .Action(bb => RuntimeState.Success, "HighWeight")
+                .End()
+                .WhileDoElse()
+                    .Condition(bb => bb.GetBool(GateKey), "LoopGuard")
+                    .Action(bb => RuntimeState.Success, "Body")
+                    .Action(bb => RuntimeState.Success, "Exit")
+                .End()
             .End()
-        .End()
-        .Action(bb => RuntimeState.Success, "Idle")
-    .End()
-    .Build();
+            .Build();
 
-tree.Terminated += state => HandleTreeTermination(state);
-tree.Tick();
-tree.Dispose();
+        tree.Dispose();
+    }
+
+    public static void FinishPolicy()
+    {
+        // Parallel finish policy is expressed by RuntimeParallelMode,
+        // plus thresholds on RuntimeParallelAllNode.
+        RuntimeBehaviorTree parallel = new RuntimeBehaviorTreeBuilder()
+            .Parallel(RuntimeParallelMode.UntilAnySuccess)
+                .Action(bb => RuntimeState.Success, "CompleteA")
+                .Action(bb => RuntimeState.Running, "HoldB")
+            .End()
+            .Build();
+
+        RuntimeBehaviorTree thresholds = new RuntimeBehaviorTreeBuilder()
+            .ParallelAll(all => all.SuccessThreshold = 2)
+                .Action(bb => RuntimeState.Success, "A")
+                .Action(bb => RuntimeState.Success, "B")
+                .Action(bb => RuntimeState.Success, "C")
+            .End()
+            .Build();
+
+        parallel.Dispose();
+        thresholds.Dispose();
+    }
+}
 ```
 
-Builder 可以接收已有 Blackboard、`RuntimeBlackboardSchema`、`RuntimeBTContext` 或 `IRuntimeBTServiceResolver`。一个 builder 只能使用一次；`Build()` 会闭合未结束的 builder scope，并拒绝缺少 root child 的树。
+`RuntimeParallelMode` 为 `Default`、`UntilAnyComplete`、`UntilAnyFailure`、`UntilAnySuccess`。`RuntimeParallelNode` 保留每个 child 的终态，同一 activation 内不会再次运行已终止的 child。`RuntimeParallelAllNode` 每个 step Tick 每个尚未完成的 child 一次；`SuccessThreshold` 与 `FailureThreshold` 可取 `-1` 表示全部 child，或取 `1` 到 child count 之间的值；若同一步同时达到两个 threshold，failure 优先。托管 Parallel 只在一个 owner-thread Tick 内交错 branch，不创建线程、task 或 job。`RuntimeCompositeNode` 还暴露 `ReevaluationMode`、`ReevaluationPollInterval` 与 `AbortType`，这是第 6 步的主题。
 
-`RuntimeBTContext.Owner` 和 `WithOwner(...)` 通过 `object` 接收任意引用类型 owner。通过 `GetOwner<T>()` 取得：
+## <a id="step-5"></a>6. 第 5 步：装饰器与条件
 
-```csharp
-public sealed class AgentRuntimeOwner { }
+装饰器只包裹一个 child。builder 为 `Inverter`、`Succeeder`、`ForceFailure`、`Repeat`、`RepeatForever`、`Retry`、`Timeout`、`Delay`、`CoolDown`、`RunOnce`、`KeepRunningUntilFailure`、`WaitSuccess`、`Wait`、`WaitRandom` 提供直接 helper。需要单独配置的节点，使用泛型 `Decorator<TNode>(node, configure)` overload：它会在节点被加入、被树拥有之前调用 `configure`。
 
-var owner = new AgentRuntimeOwner();
-RuntimeBehaviorTree ownedTree = new RuntimeBehaviorTreeBuilder(owner)
-    .Action(_ => RuntimeState.Success)
-    .Build();
-
-AgentRuntimeOwner resolvedOwner = ownedTree.GetOwner<AgentRuntimeOwner>();
-ownedTree.Dispose();
-```
-
-当 `RuntimeBTContext.Owner` 是 Unity `GameObject` 时，`GetOwner<GameObject>()` 会返回该对象，`GetOwner<TComponent>()` 会执行 component lookup。`BTRunnerComponent` 仍会注入自己的 GameObject。
-
-对于可复用行为，应优先使用具名 command 或 condition 对象，不要捕获 lambda：
+`BBComparisonNode` 是创作态 ScriptableObject 装饰器，其 `BehaviorTreeComparisonValueType` 可选 `Int`、`Float`、`Bool`、`Object`。对应的运行时节点是 `RuntimeBBComparisonNode`，带 `BBComparisonOp`（`Equal`、`NotEqual`、`GreaterThan`、`GreaterOrEqual`、`LessThan`、`LessOrEqual`、`IsSet`、`IsNotSet`）与强类型 reference 值。`SubTreeNode` / `RuntimeSubTreeNode` 在自有 scoped Blackboard 上运行 child，并支持带方向的 port remapping。`RuntimeServiceNode` 在 child 执行期间按间隔运行副作用回调。
 
 ```csharp
-public sealed class AttackCommand : IRuntimeBTCommand
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+
+public sealed class AdvanceCommand : IRuntimeBTCommand
 {
     public RuntimeState Execute(RuntimeBlackboard blackboard)
     {
@@ -178,530 +435,720 @@ public sealed class AttackCommand : IRuntimeBTCommand
     }
 }
 
-RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
-    .Sequence()
-        .Condition(new HasTargetCondition(), "HasTarget")
-        .Command(new AttackCommand(), "Attack")
-    .End()
-    .Build();
-```
-
-## 核心概念
-
-### 运行时生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> Active: constructed
-    Active --> Active: Tick returns Running
-    Active --> StoppedSuccess: Tick returns Success
-    Active --> StoppedFailure: Tick returns Failure or throws
-    Active --> StoppedExplicit: Stop
-    StoppedSuccess --> Active: Play
-    StoppedFailure --> Active: Play
-    StoppedExplicit --> Active: Play
-    Active --> Disposed: Dispose
-    StoppedSuccess --> Disposed: Dispose
-    StoppedFailure --> Disposed: Dispose
-    StoppedExplicit --> Disposed: Dispose
-```
-
-- 新建 tree 处于 active 状态。调用 `Tick()` 时，root 会按需开始 activation。
-- 构造时会校验 runtime graph 无环、node owner 唯一，并保证 runtime GUID 唯一。`RuntimeBehaviorTreeLimits` 为 code-first node count（默认 4096，硬上限 65536）和深度（默认 256，硬上限 256）设置边界。
-- 如果构造在返回前抛出异常，调用方传入的 Blackboard 会恢复原 Context 并继续由调用方拥有；内部创建的 Blackboard 会被释放。构造成功后，tree 会拥有并负责释放其 Blackboard。
-- `Success` 和 `Failure` 都是 tree 的终态结果。Tree 会设置 `IsStopped`、清除调度唤醒状态，并在本次 activation 中只发布一次 `Terminated`。
-- `Stop()` 会中止活动调用栈、将 tree state 设为 `NotEntered`，并发布一次 `Terminated(NotEntered)`。
-- 对 stopped tree 调用 `Play()` 会重置 node graph 并开始新的 activation。
-- 生命周期操作拒绝重入。不要从 node callback 或 `Terminated` callback 中调用 `Tick`、`Play`、`Stop` 或 `SetContext`。
-- `Dispose()` 后，公开操作抛出 `ObjectDisposedException`（延迟到达的 `WakeUp()` 会被忽略）。Runtime node instance 是一次性 owner。
-
-### Node 生命周期
-
-| Hook 或方法 | 契约 |
-| --- | --- |
-| `OnAwake()` | Runtime graph 获得 owner 后调用一次的 setup hook |
-| `OnStart(bb)` | 每次 activation 开始时调用一次 |
-| `OnRun(bb)` | 每个执行 step 调用；必须返回 `Running`、`Success` 或 `Failure` |
-| `OnExit(bb, Completed, null)` | 正常返回 `Success` 或 `Failure` 后调用一次 |
-| `OnExit(bb, Aborted, null)` | 活动 node 被 parent 或 tree owner 停止时调用一次 |
-| `OnExit(bb, Faulted, exception)` | 执行抛出异常时调用一次 |
-| `OnReset(bb)` | 为新 activation 清除持久运行状态 |
-| `OnDispose(bb)` | 释放 node 拥有的资源 |
-
-`RuntimeStatefulActionNode` 将操作分为 `OnActionStart`、`OnActionRunning`、`OnActionHalted` 和 `OnActionFaulted`。仅当 action 已进入 `Running` 后被中止时，才用 `OnActionHalted` 取消操作；正常完成不会调用 halt hook。
-
-前置和后置 condition 在 setup 阶段注册。`FailWhenFalse`、`SucceedWhenFalse` 和 `AbortWhenFalse` 显式表达 false 路径结果。当 condition 变为 false 时，会先中止已经运行的 activation，再返回 policy 结果。
-
-### Blackboard
-
-`RuntimeBlackboard` 分别存储 `int`、`float`、`bool`、`Vector3`、`long`、`RuntimeBlackboardLong2`、`RuntimeBlackboardLong3` 和 `object`。强类型访问不会装箱 primitive 值。
-
-字符串 key overload 使用稳定的 `RuntimeBlackboard.DefaultStringHashFunc`，其实现是 `BTHash.FNV1A`。高频 key 应预先 hash 一次：
-
-```csharp
-private static readonly int HealthKey =
-    RuntimeBlackboard.DefaultStringHashFunc("Health");
-
-blackboard.SetInt(HealthKey, 100);
-int health = blackboard.GetInt(HealthKey);
-```
-
-Schema 将 key 是否存在、类型、默认值和同步 flag 固化为显式契约：
-
-```csharp
-RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-    .AddInt("Health", 100, RuntimeBlackboardSyncFlags.Networked)
-    .AddBool("IsAlert", false, RuntimeBlackboardSyncFlags.Delta)
-    .AddObject("Target")
-    .Build();
-
-var blackboard = new RuntimeBlackboard(schema: schema);
-```
-
-绑定 schema 后，未知 key 和类型不匹配的写入都会被拒绝。
-
-- 读取会沿 `Parent` 回退；写入只影响当前 Blackboard。
-- 只有本地值实际变化时 key stamp 才会变化。可用 `GetStamp` 进行低成本变更检测。
-- Key observer 和 global observer 会在 write lock 释放后同步运行。
-- 订阅变化会分配新的 callback array。应在 setup 阶段注册、owner shutdown 时取消。
-- `SubTreeNode` 拥有可复用的 scoped Blackboard。`RuntimeSubTreePortDirection.Input` 每个 child step 前刷新，`Output` 正常完成时提交，`InOut` 捕获初始值和最终值。
-
-### 资产创作的严格 Blackboard schema
-
-创作 schema 属于 `BehaviorTree` 资产本身；它不是独立项目资产，也不是全局 registry。编译器会将它转换为一个不可变 `RuntimeBlackboardSchema`，供 root runtime Blackboard 使用。
-
-| 模式 | Inspector 状态 | key 列表为空 | 运行时契约 |
-| --- | --- | --- | --- |
-| Legacy Open | **Strict Schema** 关闭 | 忽略 | 继续允许动态字符串/hash key；现有资产保持兼容 |
-| Strict Empty | **Strict Schema** 启用 | 有效 | 不允许任何 Blackboard key；适用于明确不依赖 Blackboard 的 tree |
-| Strict Populated | **Strict Schema** 启用 | 一个或多个条目 | 创作 key 必须存在且类型匹配；运行时写入会拒绝未知 key 和类型不匹配 |
-
-因此，即使列表为空，启用 strict 模式仍然是行为变更。已有 Blackboard 读写的 tree 不应把空 strict schema 当作临时占位配置。
-
-Inspector 支持全部八种运行时值类型：
-
-| 类型 | 创作默认值 | 重要规则 |
-| --- | --- | --- |
-| `Int`、`Bool`、`Long`、`Long2`、`Long3` | 可选 | 直接序列化到 tree 资产 |
-| `Float`、`Vector3` | 可选 | 默认值的每个分量必须是有限数；会拒绝 `NaN` 和无穷大 |
-| `Object` | 不支持 | 必须保持 `LocalOnly`；通过 Runner **Initial Objects** 或代码注入实例引用 |
-
-新条目默认为 `Int`、`LocalOnly`，并且没有默认值。Schema 编译器会拒绝 null 条目、空白或首尾空白名称、超过 256 个 UTF-16 code unit 的名称、重复名称、FNV-1a collision、保留的零 hash、不支持的 enum 值、非法同步 flag、超过 4,096 个条目、非有限默认值、需同步的 Object key，以及 Object 创作默认值。
-
-Key picker 会直接读取当前 tree 的 schema。它不会取代序列化 string 字段：仍可手工编辑，而缺少声明、hash collision 和类型不兼容会显示 Inspector 警告。`SwitchNode` 接受 `Int`，`UtilitySelectorNode` score 接受 `Float`，message pass/receive 和 Runner **Initial Objects** 接受 `Object`，`BBComparison` 遵循其当前选择的 comparison value type。即使某个字段没有自定义 picker，最终仍以编译器校验为准。
-
-Composition root 需要在编译前检查创作契约时调用带缓存的 public query：
-
-```csharp
-if (!treeAsset.TryGetRuntimeBlackboardSchema(
-        out RuntimeBlackboardSchema schema,
-        out string schemaError))
+public sealed class StageGate : IRuntimeBTConditionStrategy
 {
-    throw new InvalidOperationException(schemaError);
+    public bool Evaluate(RuntimeBlackboard blackboard)
+    {
+        return true;
+    }
 }
 
-// Legacy Open 模式返回成功，且 schema == null。
-RuntimeBehaviorTree runtime = treeAsset.Compile(context);
-```
-
-`Format Version` 和 `Contract Version` 服务于不同 owner：
-
-- **Format Version** 标识模块的序列化创作布局。它在 Inspector 中只读，编译器只接受当前 format。不要把它当作 gameplay 或发布版本手工修改。
-- **Contract Version** 是项目控制的 metadata，值必须至少为 `1`。已发布的名称、类型、同步 policy 或默认值发生不兼容变更时应递增它。它本身不执行数据迁移或网络协商。
-
-Key 名称是契约 identity，因为运行时以及适用的持久化/网络边界使用其稳定 FNV-1a hash。应将 rename 视为"删除旧 key + 新增新 key"。已发布契约需要在过渡期同时保留两个名称，显式复制或迁移数据，协调全部 producer 和 consumer，只在不再需要兼容性后才移除旧 key。
-
-现有资产按以下顺序迁移：
-
-1. 在清点每个创作 key、代码写入、Runner Initial Object、subtree 依赖、snapshot/save 字段和 network consumer 期间，保持 **Strict Schema** 关闭。
-2. 添加完整 root 契约，policy 默认使用 `LocalOnly`。只为属于新 activation 的值设置默认值。
-3. 为可复用 subtree 添加可选 strict subset 声明，然后校验引入它们的每个 root。
-4. 修复所有 key/type 诊断，并为 rename 或废弃 key 添加显式数据迁移。
-5. 协调持久化和网络发布；已发布契约发生不兼容变更时递增 **Contract Version**，然后启用 strict 模式。
-6. 批量修改生产资产前，测试 reload、replay、save/load、network mismatch 和 rollback。
-
-关闭 **Strict Schema** 可以将创作行为可逆地回退到 Legacy Open，但不会撤销已写入的 save data、network payload 或 key rename。
-
-### 编译
-
-`BehaviorTreeCompiler` 会在创建可变 runtime node 前校验创作 graph。结构校验会拒绝缺少 root、cycle、共享 child ownership、null link、无效 arity、重复 GUID、超出 size/depth 限制、无效 built-in node 配置，以及 strict schema key/type 违规。
-
-`BehaviorTreeCompiler.Analyze(...)` 每次调用都会执行有界迭代校验和精确 authoring type emitter 预检，并返回 `BehaviorTreeCompileArtifact`。`EmitRuntimeRoot()` 会重新校验当前可变 source，再创建新的 runtime graph。
-
-每个显式 `SubTreeNode` asset reference 都是一个 occurrence boundary。同一 subtree asset 可以在 graph 的多个位置引用；校验会独立展开和计数，生成过程会创建互不共享的 runtime node，嵌套 runtime GUID 会获得确定性的 occurrence 前缀。
-
-Root tree 是完整展开 occurrence graph 的唯一 runtime schema authority：
-
-- Strict root 下的 open subtree 会按 root schema 校验。
-- Strict parent 下的 strict subtree 必须是该 parent 契约的 exact subset，因此也必然是 root 契约的子集。每个 subtree 条目的名称、类型、sync flag、是否具有默认值，以及默认值本身都必须一致。嵌套 subtree 不能借用其直接可复用 parent 声明中未列出的 root-only key。
-- Legacy Open root 下的 strict subtree 会被拒绝，因为它会引入第二个 authority。
-- 只有 root schema 默认值会初始化或重置 root runtime Blackboard。Scoped Blackboard 实例保留独立的 local key space，包括 code-first port remapping；值写回 root 时由 root schema 校验。Subtree 声明用于校验已创作的可复用依赖，其默认值不会再次应用。
-
-`BehaviorTree.Compile(...)` 会捕获 `BehaviorTreeCompileException`、针对资产记录日志，并返回 `null`。需要结构化失败信息的 composition root 应先调用 `BehaviorTreeCompiler.Analyze(...)`。
-
-Built-in emitter 通过显式只读配置属性读取数据，不使用 private-field 反射。Emitter lookup 按 authoring type 精确匹配；派生 authoring node 必须注册自己的 emitter。
-
-## 使用指南
-
-### Runner 与调度
-
-```csharp
-BTRunnerComponent runner = GetComponent<BTRunnerComponent>();
-
-runner.BTSetData("Health", 100);
-runner.WakeUp(boostedTicks: 2);
-runner.Pause();
-runner.Resume();
-runner.Stop();
-runner.Play();
-```
-
-- 自然 `Success` 或 `Failure`、显式 `Stop` 和运行时 fault 都会将 runner 标为 stopped、从托管调度中注销，并只触发一次 `OnTreeStopped`。
-- `Pause()` 保留 node 与 Blackboard 状态，并从 managed mode 注销。`Resume()` 继续未终止的 tree；stopped runner 会开始新的 activation。
-- 对已有 runtime 调用 `Play()` 会停止旧 activation、重置 graph、将 Blackboard 恢复为 root schema 默认值（Legacy Open 模式则为空状态），然后重新应用 Inspector 的 `Initial Objects`。
-- 每个 **Initial Objects** key 都是一次 `Object` 写入。Strict tree 必须将每个 key 声明为 `Object`；靠后的重复条目会覆盖靠前的条目。Object key 始终是 `LocalOnly`，不支持创作默认值。
-- `SetTree(...)` 在 `LateUpdate` 应用；旧 runtime 会被释放，再编译新 runtime。
-- Node stack 活动期间，`RuntimeBehaviorTree.SetContext` 会拒绝修改。
-
-### Tick mode
-
-| Mode | Owner | Policy |
-| --- | --- | --- |
-| `Self` | `BTRunnerComponent.Update` | 每帧由 component 提供一次 Tick 机会 |
-| `Manual` | 调用方 | 调用方执行 `ManualTick()` |
-| `Managed` | `BTTickManagerComponent` | 有界 round-robin scan |
-| `PriorityManaged` | `BTPriorityTickManagerComponent` | 8 个 priority bucket，加 distance/marker LOD |
-
-`BTTickManager.TickBudget` 计算一次 pass 中扫描的 tree 数；被扫描的 tree 仍可能因 `TickInterval` 跳过执行。Tick 期间请求的注册和移除会延迟到 pass 结束。Terminal tree 会自动移除。
-
-`BTPriorityTickManager` 使用 8 个 bucket。每个 budget 限制该 bucket 的扫描量；设为零会禁用该 bucket。首次访问 `Instance` 时，每种场景 component 都会在创建 persistent fallback GameObject 前执行一次 cold-path 查询。
-
-### LOD 配置
-
-`BTLODConfig` 要求 distance 为严格递增的有限值、tick interval 至少为一、priority 为 `0` 到 `7`、budget 非负，并为每个被引用的 priority 提供 budget entry。Distance check 使用预先平方的 threshold。
-
-### Blackboard 操作
-
-```csharp
-// 强类型访问，使用 int hash key
-blackboard.SetInt(HealthKey, 100);
-blackboard.SetFloat(SpeedKey, 5.5f);
-blackboard.SetBool(AlertKey, true);
-blackboard.SetVector3(PositionKey, transform.position);
-
-// 字符串 key 便利方法
-blackboard.SetInt("Health", 100);
-
-// 变更检测，通过 stamp
-ulong stamp = blackboard.GetStamp(HealthKey);
-
-// Observer 注册
-LogChannel log = LogChannel.Create("MyGame.BehaviorTree");
-blackboard.AddObserver(HealthKey, (key, bb) => log.Info($"Health changed: {bb.GetInt(key)}"));
-```
-
-运行时节点状态观察与诊断相互独立，通过 `BTStatusObserver` 暴露。可以直接设置 `RuntimeBehaviorTree.StatusObserver`，也可以在 Editor 与 Development build 中调用 `BTStatusObserver.AttachToTree`；状态变化经 `NotifyStatusChanged` 传递，观察器契约不耦合任何日志 backend。
-
-### Composite node
-
-| Node | 终止规则与重要行为 |
-| --- | --- |
-| `RuntimeSequencer` | 从左到右运行 child；第一个 failure 使其失败；全部 success 才成功 |
-| `RuntimeSequenceWithMemory` | 从上一个 running child 继续，不重复检查已完成的前置 child |
-| `RuntimeSelector` | 从左到右运行 child；第一个 success 使其成功；全部 failure 才失败 |
-| `RuntimeSelectorRandom` | 使用 setup 阶段 index array 洗牌，然后执行 selector 语义。`Seed` 与 `ShuffleOnStart` 随 owned graph 一同冻结 |
-| `RuntimeReactiveSequence` | 每步重新检查高优先级 child，并中止被取代的 running branch |
-| `RuntimeReactiveFallback` | 每步重新检查 fallback priority，并中止被取代的 running branch |
-| `RuntimeIfThenElseNode` | Child 0 是 condition，child 1 是 then，child 2 是 else |
-| `RuntimeWhileDoElseNode` | 按 condition/body/else 位置使用 child |
-| `RuntimeSwitchNode` | 使用 Blackboard integer 作为从零开始的 case；最后一个 child 是 default |
-| `RuntimeProbabilityBranch` | 每次 activation 根据已校验的非负权重选择一次 |
-| `RuntimeUtilitySelector` | 根据配置的 Blackboard score key 选择 |
-| `RuntimeServiceNode` | Child 执行期间按 interval 运行配置的 service callback |
-
-### Parallel node
-
-Parallel node 在同一个 tree owner thread 的 Tick 内交错执行多个 branch。它不会创建 thread、task 或 job。
-
-`RuntimeParallelNode` 会保留每个 child 的终态，同一 activation 中不会再次运行已经终止的 child：
-
-| Mode | Success | Failure |
-| --- | --- | --- |
-| `Default` | 所有 child 成功 | 任意 child 失败 |
-| `UntilAnyFailure` | 所有 child 成功 | 任意 child 失败 |
-| `UntilAnySuccess` | 任意 child 成功 | 所有 child 失败 |
-| `UntilAnyComplete` | 首个观察到的 child 成功 | 首个观察到的 child 失败 |
-
-`RuntimeParallelAllNode` 每个 step 会 Tick 每个尚未完成的 child 一次。`SuccessThreshold` 和 `FailureThreshold` 可设为 `-1` 表示全部 child，或设为 `1` 到 child count。若同一步同时达到两个 threshold，failure 优先。
-
-### Decorator 与 leaf
-
-| 类别 | 包含的行为 |
-| --- | --- |
-| Result | `Inverter`、`Succeeder`、`ForceFailure`、`KeepRunningUntilFailure` |
-| Repetition | `Repeat`、`Retry`、`RunOnce` |
-| Time | `Wait`、`Delay`、`Timeout`、`CoolDown`、`WaitSuccess` |
-| Blackboard | `BBComparison`、`BlackBoardNode`、`SubTreeNode`、message pass/remove/receive |
-| Branch support | `OnOff`、`RandomChance`、纯代码 condition strategy |
-| 项目 action 边界 | `IRuntimeBTCommand`、`RuntimeStatefulActionNode`、lambda action |
-
-时间相关托管 node 会先从 runtime context 解析 `IRuntimeBTTimeProvider`。随机 node 可以解析 `IRuntimeBTRandomProvider`，否则使用自身的确定性 generator 契约。
-
-## 高级主题
-
-### 纯 Runtime node
-
-使用 `RuntimeStatefulActionNode` 处理启动一次、running 期间轮询，且必须在 abort 时取消的操作：
-
-```csharp
-public sealed class RuntimeMoveAction : RuntimeStatefulActionNode
+public static class Step5
 {
-    protected override RuntimeState OnActionStart(RuntimeBlackboard blackboard)
-    {
-        return StartMove(blackboard)
-            ? RuntimeState.Running
-            : RuntimeState.Failure;
-    }
+    private static readonly int PhaseKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Phase");
+    private static readonly int LocalPhaseKey =
+        RuntimeBlackboard.DefaultStringHashFunc("LocalPhase");
+    private static readonly int ParentPhaseKey =
+        RuntimeBlackboard.DefaultStringHashFunc("ParentPhase");
 
-    protected override RuntimeState OnActionRunning(RuntimeBlackboard blackboard)
+    public static void Run()
     {
-        return HasArrived(blackboard)
-            ? RuntimeState.Success
-            : RuntimeState.Running;
-    }
+        RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+            .Sequence()
+                .Inverter()
+                    .Condition(new StageGate(), "Negated")
+                .End()
+                .Repeat(3)
+                    .Action(bb => RuntimeState.Success, "RepeatBody")
+                .End()
+                .CoolDown(0.5f)
+                    .Action(bb => RuntimeState.Success, "RateLimited")
+                .End()
+                .Timeout(2f)
+                    .Action(bb => RuntimeState.Running, "BoundedWork")
+                .End()
+                .Decorator(new RuntimeBBComparisonNode(), comparison =>
+                {
+                    comparison.KeyHash = PhaseKey;
+                    comparison.ValueType = BehaviorTreeComparisonValueType.Int;
+                    comparison.Operator = BBComparisonOp.GreaterOrEqual;
+                    comparison.RefInt = 1;
+                    comparison.AbortMode = RuntimeAbortType.Self;
+                })
+                    .Command(new AdvanceCommand(), "GuardedAdvance")
+                .End()
+                .Decorator(new RuntimeSubTreeNode(), subtree =>
+                {
+                    subtree.SetPortRemapping(
+                        new[] { LocalPhaseKey },
+                        new[] { ParentPhaseKey },
+                        new byte[] { 1 },
+                        new[] { RuntimeSubTreePortDirection.InOut });
+                })
+                    .Action(bb => RuntimeState.Success, "ScopedWork")
+                .End()
+            .End()
+            .Build();
 
-    protected override void OnActionHalted(RuntimeBlackboard blackboard)
-    {
-        CancelMove();
+        tree.Dispose();
     }
 }
 ```
 
-### 自定义创作 node
+具名 `IRuntimeBTCommand` 与 `IRuntimeBTConditionStrategy` 对象避免捕获 lambda，并可在多棵树间复用。任意 `RuntimeNode` 还通过 `AddPreCondition` 与 `AddPostCondition` 提供前置/后置条件，配合 `ConditionPolicy.FailWhenFalse`、`SucceedWhenFalse`、`AbortWhenFalse`。时间相关托管节点从 runtime context 解析 `IRuntimeBTTimeProvider`；随机节点在提供 `IRuntimeBTRandomProvider` 时优先使用，否则使用每黑板确定性随机流。
 
-创作 node 需要一个 ScriptableObject 类型，以及在 composition root 显式注册的 emitter：
+## <a id="step-6"></a>7. 第 6 步：事件驱动重评估
+
+`RuntimeBTEvaluationController` 为一棵树维护一个单调 epoch。`RequestReevaluation()` 是一次 `Interlocked.Increment`；任意线程的并发请求合并为单个计数，因此突发的外部事件流不会产生队列、分配或积压。owner 线程在 tick 时通过 `ShouldReevaluate(ref lastSeenEpoch, ref pollCounter, mode, pollInterval)` 消费该 epoch。
+
+- `RuntimeReevaluationMode.PollEveryTick` 无条件扫描 guard。适用于 guard 成本低、且不允许漏掉任何一帧的情况。
+- `RuntimeReevaluationMode.OnChange` 仅在收到请求后扫描。适用于生产者能够发出相关变更信号的情况。
+- `RuntimeReevaluationMode.Hybrid` 在收到请求时扫描，并按 `ReevaluationPollInterval` 额外定期扫描。适用于以事件为主、同时保留有界周期性重扫的情况。
+
+`RuntimeCompositeNode.ReevaluationMode` 与 `ReevaluationPollInterval` 按组合节点选择模式；`RuntimeReactiveSequence` 与 `RuntimeReactiveFallback` 在 `OnChange` 或 `Hybrid` 下，空闲 tick 只推进 active branch。`RuntimeBBComparisonNode.AbortMode` 是类型为 `RuntimeAbortType`（`None`、`Self`、`LowerPriority`、`Both`）的属性：非 `None` 值会在 graph commit 时绑定 Blackboard observer，被跟踪 key 变化时调用 `RuntimeBehaviorTree.RequestReevaluation()`，后者递增 epoch 并调度一次立即唤醒。`RuntimeNode.EmitWakeUpSignal()` 是 protected helper，节点可在执行内部调用它请求重评估。
 
 ```csharp
-var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
-emitters.Register<MoveToTargetNode>((source, context) =>
-    context.WithGuid(
-        source,
-        new RuntimeMoveToTarget(
-            RuntimeBlackboard.DefaultStringHashFunc(source.TargetKey),
-            source.ArrivalRadius)));
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
 
-var options = new BehaviorTreeCompileOptions
+public sealed class WakeUpOnSignalNode : RuntimeNode
 {
-    Emitters = emitters
-};
+    private readonly int _signalKey;
 
-RuntimeBehaviorTree tree = BehaviorTreeCompiler.Compile(asset, context, options);
+    public WakeUpOnSignalNode(int signalKey) => _signalKey = signalKey;
+
+    protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+    {
+        if (blackboard.GetBool(_signalKey))
+        {
+            EmitWakeUpSignal();
+            return RuntimeState.Success;
+        }
+
+        return RuntimeState.Running;
+    }
+}
+
+public static class Step6
+{
+    private static readonly int GateKey =
+        RuntimeBlackboard.DefaultStringHashFunc("Gate");
+
+    public static void Run()
+    {
+        RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+            .Selector(selector =>
+            {
+                selector.AbortType = RuntimeAbortType.Both;
+                selector.ReevaluationMode = RuntimeReevaluationMode.OnChange;
+            })
+                .Decorator(new RuntimeBBComparisonNode(), comparison =>
+                {
+                    comparison.KeyHash = GateKey;
+                    comparison.ValueType = BehaviorTreeComparisonValueType.Bool;
+                    comparison.Operator = BBComparisonOp.Equal;
+                    comparison.RefBool = true;
+                    comparison.AbortMode = RuntimeAbortType.Both;
+                })
+                    .Action(bb => RuntimeState.Running, "GuardedWork")
+                .End()
+                .Node(new WakeUpOnSignalNode(GateKey))
+            .End()
+            .Build();
+
+        // Producer side: requests coalesce into one epoch counter.
+        int epochBefore = tree.Evaluation.Epoch;
+        tree.Evaluation.RequestReevaluation();
+        int epochAfter = tree.Evaluation.Epoch;
+
+        // Schedule bounded immediate owner-thread ticks.
+        tree.WakeUp(boostedTicks: 2);
+
+        // A tracked key change also calls tree.RequestReevaluation() through the observer.
+        tree.Blackboard.SetBool(GateKey, true);
+
+        RuntimeState state = tree.Tick();
+        tree.Dispose();
+    }
+}
 ```
 
-Emitter 注册必须显式且可被 AOT 看见。自定义 authoring 配置应通过有意设计的只读属性暴露，不要用 reflection 读取 private serialized field。`Analyze` 会确认精确 custom emitter 存在。
+`RuntimeBehaviorTree.RequestReevaluation(int boostedTicks = 1)` 是合并入口：它递增 epoch 并调用 `RequestWakeUp`。`WakeUp(int boostedTicks = 1)` 只携带 bounded immediate-tick budget。`ShouldTick()` 消费一次 boosted tick 并重置 tick-interval 计数；`WakeUpTickBudget` 与 `HasWakeUpRequest` 暴露待处理状态。没有可靠生产者、或 guard 成本可忽略时使用轮询；变更可观测且需要限制 tick 工作量时使用事件。`Hybrid` 在事件之外保留周期性重扫。
 
-### DOD 执行
+## <a id="step-7"></a>8. 第 7 步：tick 归属与调度
 
-`CycloneGames.BehaviorTree.Runtime.DOD` 是需要显式选择的 assembly，且 `autoReferenced: false`。它只支持受限的 flat node set，以及固定的 `int`/`float`/`bool` Blackboard slot：
+`BTRunnerComponent` 上的 `TickMode` 有四个值：
+
+| 模式 | Owner | 驱动方式 |
+| --- | --- | --- |
+| `Self` | `BTRunnerComponent.Update` | 每帧由 component 提供一次 Tick 机会。 |
+| `Manual` | 调用方 | `ManualTick()`。 |
+| `Managed` | `BTTickManagerComponent` | 有界 round-robin scan。 |
+| `PriorityManaged` | `BTPriorityTickManagerComponent` | 八个 priority bucket，加可选距离 LOD。 |
+
+组件之下，`BTTickManager` 与 `BTPriorityTickManager` 是不依赖 Unity logging 的纯 C# 类。`BTTickManager.TickBudget` 计算一次 pass 中扫描的树数；被扫描的树仍可能因 `TickInterval` 跳过执行。`BTPriorityTickManager` 持有八个 bucket 与逐 bucket 的 `int[]` budget；`SetBudgets(int[])` 更新它们，零值禁用对应 bucket。`Tick()` 期间请求的注册、注销与 priority 变更按树排队，并在 pass 结束后应用，因此节点回调无法在扫描中途改动集合。终态树会被自动移除。
+
+```csharp
+using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Components;
+
+public static class Step7
+{
+    public static RuntimeBehaviorTree BuildHoldTree()
+    {
+        return new RuntimeBehaviorTreeBuilder()
+            .WithTickInterval(2)
+            .Selector()
+                .Action(bb => RuntimeState.Running, "Hold")
+            .End()
+            .Build();
+    }
+
+    public static void ConfigureRunner(BTRunnerComponent runner)
+    {
+        runner.SetTickMode(TickMode.Managed);
+        runner.SetTickInterval(2);
+        runner.WakeUp(boostedTicks: 2);
+        runner.Pause();
+        runner.Resume();
+        runner.Stop();
+        runner.Play();
+    }
+
+    public static void Schedule()
+    {
+        RuntimeBehaviorTree a = BuildHoldTree();
+        var roundRobin = new BTTickManager(initialCapacity: 64);
+        roundRobin.TickBudget = 32;
+        if (roundRobin.TryRegister(a))
+        {
+            roundRobin.Tick();       // deferred mutations applied at pass end
+        }
+        roundRobin.Unregister(a);
+        a.Dispose();
+
+        RuntimeBehaviorTree b = BuildHoldTree();
+        var priority = new BTPriorityTickManager(
+            new[] { 64, 32, 16, 8, 4, 2, 1, 1 });
+        priority.TryRegister(b, priority: 2);
+        priority.Tick();
+        priority.UpdatePriority(b, 0);
+        priority.Unregister(b);
+        b.Dispose();
+
+        RuntimeBehaviorTree c = BuildHoldTree();
+        BTTickManagerComponent managed = BTTickManagerComponent.CreateInstance();
+        managed.TickBudget = 128;
+        managed.Register(c);
+        managed.Unregister(c);
+        c.Dispose();
+
+        RuntimeBehaviorTree d = BuildHoldTree();
+        BTPriorityTickManagerComponent priorityManaged =
+            BTPriorityTickManagerComponent.CreateInstance();
+        priorityManaged.Register(d, priorityManaged.transform);
+        priorityManaged.Unregister(d);
+        d.Dispose();
+    }
+}
+```
+
+`RuntimeBehaviorTree.TickInterval` 可在 owner 线程设置；`ShouldTick()` 依此门控执行，而 `WakeUp` boost 会在有界次数的 owner-thread tick 内绕过该间隔。`BTCapacityLimits.DefaultAgentCount` 为 `65536`，`MaxAgentCount` 为 `1048576`；manager 拒绝超过硬上限的配置。tree 或 deferred-mutation 容量不足时 `TryRegister` 返回 `false`，而 `void` 包装方法委托给 `Try*` 路径。`BTTickManagerComponent.Instance` 与 `BTPriorityTickManagerComponent.Instance` 只解析场景中已挂载的 manager，不创建对象；`CreateInstance()` 是 composition root 显式创建常驻 manager 的入口。
+
+## <a id="step-8"></a>9. 第 8 步：LOD 与显式 composition root
+
+managed 模式下的 runner 必须有 manager 组件：要么显式挂载在场景 GameObject 上，要么由 composition root 通过 `BTTickManagerComponent.CreateInstance()` / `BTPriorityTickManagerComponent.CreateInstance()` 创建。`Instance` 只解析已有场景组件，不做分配。没有 manager 时，managed tick 模式的 runner 会在 `Update()` 中本地 tick 并输出一次警告，因此在挂载 manager 之前，managed 调度处于非激活状态。
+
+`BTLODConfig` 把严格递增的距离映射到 `TickInterval` 与 `0` 到 `7` 的 priority bucket，并带 `PriorityBudgets`、`BoostedPriority`、`BoostedTickInterval`。`BTDistanceLODProvider` 是可选组件，挂载在 priority manager 所在 GameObject 上：`Initialize()` 通过 `TryGetComponent` 查找它。没有该 provider 时，manager 保留 priority 调度，并使用每棵树自身的 tick interval。
+
+```csharp
+using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Components;
+
+public static class Step8
+{
+    public static void Run(Transform reference)
+    {
+        RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+            .Action(bb => RuntimeState.Running, "Hold")
+            .Build();
+
+        // Option A: explicit composition-root creation for Managed mode.
+        BTTickManagerComponent managed = BTTickManagerComponent.CreateInstance();
+        bool hasManaged = BTTickManagerComponent.HasInstance;
+        managed.TickBudget = 64;
+
+        // Option B: explicitly mounted priority manager with the optional LOD provider.
+        var host = new GameObject("[BTPriorityTickManager]");
+        host.AddComponent<BTDistanceLODProvider>();
+        BTPriorityTickManagerComponent priority =
+            host.AddComponent<BTPriorityTickManagerComponent>();
+
+        BTLODConfig config = ScriptableObject.CreateInstance<BTLODConfig>();
+        config.PriorityBudgets = new[] { 64, 32, 16, 8 };
+        config.BoostedPriority = 0;
+        config.BoostedTickInterval = 1;
+        priority.Config = config;
+        priority.SetReferencePoint(reference);
+        priority.Register(tree, reference);
+        priority.BoostPriority(tree, 0.5f);
+
+        priority.Unregister(tree);
+        Object.Destroy(config);
+        Object.Destroy(host);
+        tree.Dispose();
+    }
+}
+```
+
+先挂载可选的 `BTDistanceLODProvider`、再添加 manager 组件是必要的：manager 在自身初始化时解析一次并保留引用。`BTLODConfig.TryValidate(out string error)` 校验有限且严格递增的距离、至少为一的 tick interval、合法 priority、非负 budget，以及每个被使用的 priority 都有 budget entry。距离检查使用预先平方的 threshold。没有场景对象时，`BTPriorityTickManagerComponent.CreateInstance()` 是等价的 composition root 调用；它返回已有实例，不会创建重复对象。
+
+## <a id="step-9"></a>10. 第 9 步：快照 / 增量 / 网络契约
+
+`RuntimeBlackboard.WriteTo`、`ReadFrom` 与 `ComputeHash` 是基础契约。`RuntimeBlackboardNetworkScope` 选择可见性边界：`Snapshot` 只包含标记为全量 snapshot 的 key，`Networked` 包含全部非本地 primitive（含仅 delta 的 key）。第 3 步的 `RuntimeBlackboardSyncFlags.SnapshotAndDelta` 决定每个 key 参与哪个 scope。`Object` key 永不进入 payload。
+
+`CycloneGames.BehaviorTree.Runtime.Core.Networking` 中的类型是 contract-only：`BTNetworkSync` 提供 snapshot 捕获、序列化、反序列化、树状态 hash、反同步比较与 Blackboard snapshot 应用；`BTBlackboardDelta` 跟踪变化的 key 并生成或应用有界 delta frame。它们不创建 transport、不选择 authority、不定义排序或速率限制，也不执行重新同步与故障恢复。产品层决定何时调用、发送哪些字节，以及如何应对不一致。
+
+同级包 `CycloneGames.BehaviorTree.Networking` 在这些原语之上补充消息与 authority 契约：`BehaviorTreeNetworkProtocol` 冻结消息 ID 与 payload schema；`BehaviorTreeNetworkProfile` 声明同步模型、feature flag 与 tick 节奏；`BehaviorTreeNetworkAuthority` 把 tree 绑定到网络身份并判定 tick / apply 权限；`BehaviorTreeNetworkReplication` 按 owner、team 或 area 过滤观察者；`BehaviorTreeNetworkSyncBridge` 捕获 snapshot、delta 与 hash-only frame，并应用经过校验的 payload。该包各 assembly 均为 `autoReferenced: false`，不含 transport 或驱动循环：composition root 需自行按节奏调用 `CaptureSnapshot`、`TryCreateBlackboardDelta` 或 `TryApplyPayload`，并显式驱动 profile 的节奏字段。`CycloneGames.AIPerception.Networking` 对感知数据采用同样的 contract-only 形态。
+
+```csharp
+using System;
+using System.IO;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+
+public static class Step9
+{
+    public static void Run(RuntimeBehaviorTree tree)
+    {
+        RuntimeBlackboard bb = tree.Blackboard;
+
+        // Bounded snapshot payload.
+        byte[] payload;
+        using (var stream = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(stream))
+            {
+                bb.WriteTo(writer, RuntimeBlackboardNetworkScope.Snapshot, maxBytes: 8192);
+                writer.Flush();
+            }
+            payload = stream.ToArray();
+        }
+
+        using (var stream = new MemoryStream(payload))
+        using (var reader = new BinaryReader(stream))
+        {
+            bb.ReadFrom(reader, RuntimeBlackboardSerializationLimits.Default,
+                RuntimeBlackboardNetworkScope.Snapshot);
+        }
+
+        ulong bbHash = bb.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
+
+        // Snapshot projection and tree-state hash (contracts only).
+        BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(tree);
+        byte[] wire = BTNetworkSync.SerializeSnapshot(snapshot);
+        BTStateSnapshot decoded = BTNetworkSync.DeserializeSnapshot(wire);
+        BTNetworkSync.ApplyBlackboardSnapshot(tree, decoded);
+
+        using (var buffer = new BTStateSnapshotBuffer())
+        {
+            ulong treeHash = BTNetworkSync.ComputeTreeStateHash(
+                tree, RuntimeBlackboardNetworkScope.Networked, buffer,
+                BTNetworkSync.Limits.Default);
+            bool desynced = BTNetworkSync.CheckDesync(tree, treeHash);
+        }
+
+        // Delta frames from the schema's delta-enabled keys.
+        using (var delta = BTBlackboardDelta.CreateForSchema(bb.Schema))
+        {
+            delta.Attach(bb);
+            if (delta.TryFlush(bb, out ArraySegment<byte> patch))
+            {
+                byte[] frame = new byte[patch.Count];
+                Array.Copy(patch.Array, patch.Offset, frame, 0, patch.Count);
+                BTBlackboardDelta.Apply(bb, frame);
+            }
+            delta.Detach();
+        }
+    }
+}
+```
+
+`WriteTo(BinaryWriter, RuntimeBlackboardNetworkScope, int maxBytes)` 返回同一把存储锁下捕获的 Blackboard revision，并在计算大小超过上界时不写入任何 payload 字节。`ReadFrom` 在提交前校验 framing、计数、stamp 与 schema 声明；schema 不匹配会被拒绝。`ComputeHash` 按 key 升序折叠，使各端得到相同结果。`BTBlackboardDelta.CreateForSchema(schema)` 精确跟踪 `RuntimeBlackboardSyncFlags` 含 `Delta` 的 key；`TryFlush` 返回指向内部复用 buffer 的 `ArraySegment<byte>`，在下一次 flush 之前有效。`BTNetworkSync.ApplyBlackboardSnapshot` 只应用 snapshot 中的 Blackboard 部分，托管节点执行状态不会被通用地重建。
+
+## <a id="step-10"></a>11. 第 10 步：DOD Burst 路径
+
+当大量 agent 共享同一棵同构平面树，且 workload 适配受限节点集、固定 `int`/`float`/`bool` Blackboard slot 与固定 action slot 时，使用 DOD 路径。它是独立的执行模型：`FlatBehaviorTree` 为共享的不可变 definition 持有 persistent native storage，`BTTickScheduler` 以 NativeArray 持有每 agent 可变状态，并由 Burst `BTTickJob` 调度。它不使用 `RuntimeNode` 对象、`RuntimeBlackboard` observer、schema、`object` 值或托管 tick manager。
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.DOD;
 
-var nodes = new[]
+public static class Step10
 {
-    new FlatNodeDef
+    public static void Run()
     {
-        Type = FlatNodeType.Root,
-        ChildStartIndex = 0,
-        ChildCount = 1
-    },
-    new FlatNodeDef
-    {
-        Type = FlatNodeType.BlackboardCondition,
-        BBKey = 0,
-        Compare = CompareOp.Greater,
-        CompareValue = 0
+        var nodes = new[]
+        {
+            new FlatNodeDef
+            {
+                Type = FlatNodeType.Root,
+                ChildCount = 1,
+                ChildStartIndex = 0
+            },
+            new FlatNodeDef
+            {
+                Type = FlatNodeType.BlackboardCondition,
+                BBKey = 0,
+                Compare = CompareOp.Greater,
+                CompareValue = 0
+            }
+        };
+
+        using (var flatTree = new FlatBehaviorTree(nodes, new[] { 1 }))
+        using (var scheduler = new BTTickScheduler(
+                   flatTree,
+                   bbSlotCount: 1,
+                   actionSlotCount: 0,
+                   initialCapacity: 256))
+        {
+            BTAgentHandle agent = scheduler.AddAgent(tickInterval: 1);
+            scheduler.SetBBInt(agent, 0, 10);
+            scheduler.ScheduleTick(deltaTime: 0.016f, batchSize: 64);
+            scheduler.CompleteTick();
+            RuntimeState result = scheduler.GetRootState(agent);
+            scheduler.RemoveAgent(agent);
+        }
     }
-};
-using var flatTree = new FlatBehaviorTree(nodes, new[] { 1 });
-
-using var scheduler = new BTTickScheduler(
-    flatTree,
-    bbSlotCount: 1,
-    actionSlotCount: 0,
-    initialCapacity: 256);
-
-BTAgentHandle agent = scheduler.AddAgent(tickInterval: 1);
-scheduler.SetBBInt(agent, 0, 10);
-scheduler.ScheduleTick(deltaTime: 0.016f, batchSize: 64);
-scheduler.CompleteTick();
-RuntimeState result = scheduler.GetRootState(agent);
+}
 ```
 
-DOD 关键契约：
+节点 `0` 必须是唯一的 `FlatNodeType.Root`，组合节点的 child 通过扁平化的 `ChildIndices` 数组引用。`BTAgentHandle` 携带 slot index 与 generation，被回收的 slot 会拒绝 stale handle。`TryAddAgent` 是带 admission 的形式；`AddAgent` 在 effective capacity 处抛出 `InvalidOperationException`。终态 agent 会保持终态，直到调用 `ResetAgent(handle, clearBlackboard)`。外部 action 通过 `TryGetActionRequest` 与 `TrySetActionStatus` 使用 `BTActionRequestHandle`。每个公开状态访问都会先完成尚未结束的 scheduled job，再访问 NativeArray，且 scheduler 具有 creator/owner-thread affinity。必须先释放所有 scheduler，再释放共享 `FlatBehaviorTree`；上面嵌套的 `using` 顺序正是如此。平面树深度校验同样使用 `BTCapacityLimits.MaxTreeDepth`。
 
-- `FlatBehaviorTree` 拥有 persistent native storage。必须先释放所有 scheduler，再释放共享 definition。
-- `BTAgentHandle` 包含 slot index 和 generation。被移除或回收的 slot 会拒绝 stale handle。
-- Terminal agent 会保持终态，后续 Tick 会跳过它。开始新 activation 时调用 `ResetAgent(handle, clearBlackboard)`。
-- External action 使用 `BTActionRequestHandle`。先通过 `TryGetActionRequest` 取得它，再通过 `TrySetActionStatus` 完成。
-- Scheduler 具有 creator/owner-thread affinity。
-- `BTTickScheduler` 是唯一公开的调度入口。其 Burst `BTTickJob` 为 internal。
-- 每个公开状态访问都会先完成尚未结束的 scheduled job，再访问 NativeArray。
+## <a id="composite-example"></a>12. 综合示例：一棵多层树
 
-### 持久化
-
-| 数据 | Owner 与位置 | 格式与生命周期 |
-| --- | --- | --- |
-| Behavior-tree 创作数据 | 项目，位于 `Assets/` | 包含 node sub-asset 和可选内嵌 strict Blackboard schema 的 Unity `.asset` |
-| Graph layout | 同一 behavior-tree asset | Serialized node position |
-| Compile analysis artifact | 调用方 | 短生命周期的内存包装 |
-| Runtime tree/Blackboard | Runner 或 composition scope | 内存可变状态 |
-| Blackboard snapshot/delta byte | 调用方 | 版本化的 `BTS2` snapshot 与 `BTDP1` delta frame |
-| Benchmark export | 用户指定路径 | CSV 与 JSON |
-
-### 平台
-
-- 托管 runtime 使用 C#、UnityEngine 和 managed collection，不含 native plugin。
-- DOD 路径使用 Burst、Jobs、Collections、Mathematics 和 persistent NativeArray。
-- Built-in authoring emission 使用直接属性访问与显式注册。
-- `RuntimeBehaviorTree`、managed node、runner component 和 managed scheduler 都具有 single-owner-thread affinity。
-- `WakeUp()` 是显式 cross-thread producer signal。它携带有界的 immediate-tick budget。
-- Dedicated Server 可使用纯代码或资产编译的 runtime tree。
-
-## 常见场景
-
-### 状态机集成
-
-`BTStateMachineComponent` 将 behavior-tree asset 与 FSM state 关联。状态机转换到新 state 时，component 会编译并启动对应的 tree。返回到先前 state 时，会从干净的 activation 重放其 tree。状态机与行为树运行时共享同一个 Blackboard，使状态转换可以传递数据。
-
-### 基于 LOD 的 AI 调度
-
-`BTPriorityTickManagerComponent` 将基于距离的 LOD 级别映射到八个 priority bucket。近距离 agent 获得高优先级 bucket 且 tick budget 更大；远距离 agent 执行频率更低。`BTLODConfig` 强制要求严格递增的 distance、有效 priority 和非负 budget。配合 `BTDistanceLODProvider` 使用可实现基于距离的自动 LOD 级别分配。
-
-### 纯代码 composition root
-
-当行为树由项目配置而非 Graph 编辑生成时，使用 `RuntimeBehaviorTreeBuilder` 构建：
+本示例把严格 schema、observer abort、`Hybrid` 重评估、Service、Parallel 完成策略、显式调度、可选 LOD 与事件唤醒组装进同一棵树。它是一个完整可编译的 `MonoBehaviour` composition root。
 
 ```csharp
-var blackboard = new RuntimeBlackboard(schema: mySchema);
-var context = new RuntimeBTContext(owner);
-context.ServiceResolver = new MyServiceResolver();
+using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Runtime.Components;
 
-var tree = new RuntimeBehaviorTreeBuilder(context)
-    .WithBlackboard(blackboard)
-    .WithTickInterval(2)
-    .Selector()
-        .Sequence()
-            .Condition(new HasTargetCondition())
-            .CoolDown(0.5f)
-                .Command(new AttackCommand())
-            .End()
-        .End()
-        .Action(_ => RuntimeState.Success, "Idle")
-    .End()
-    .Build();
+public sealed class MultiLayerTreeRoot : MonoBehaviour
+{
+    private static readonly int PerceptionReadyKey =
+        RuntimeBlackboard.DefaultStringHashFunc("PerceptionReady");
+    private static readonly int TaskStageKey =
+        RuntimeBlackboard.DefaultStringHashFunc("TaskStage");
+    private static readonly int SignalLevelKey =
+        RuntimeBlackboard.DefaultStringHashFunc("SignalLevel");
+    private static readonly int WorkCounterKey =
+        RuntimeBlackboard.DefaultStringHashFunc("WorkCounter");
+    private static readonly int ScoreAKey =
+        RuntimeBlackboard.DefaultStringHashFunc("ScoreA");
+    private static readonly int ScoreBKey =
+        RuntimeBlackboard.DefaultStringHashFunc("ScoreB");
+
+    private RuntimeBehaviorTree _tree;
+    private BTPriorityTickManagerComponent _priorityManager;
+    private BTDistanceLODProvider _lodProvider;
+    private BTLODConfig _lodConfig;
+    private GameObject _managerObject;
+
+    private void Awake()
+    {
+        // (1) Strict schema: defaults, validation, and sync flags.
+        RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+            .AddBool("PerceptionReady", false, RuntimeBlackboardSyncFlags.LocalOnly)
+            .AddInt("TaskStage", 0, RuntimeBlackboardSyncFlags.SnapshotAndDelta)
+            .AddInt("SignalLevel", 0, RuntimeBlackboardSyncFlags.LocalOnly)
+            .AddInt("WorkCounter", 0, RuntimeBlackboardSyncFlags.Delta)
+            .AddFloat("ScoreA", 0f, RuntimeBlackboardSyncFlags.LocalOnly)
+            .AddFloat("ScoreB", 0f, RuntimeBlackboardSyncFlags.LocalOnly)
+            .Build();
+
+        var blackboard = new RuntimeBlackboard(schema: schema);
+
+        // (2)-(6) Multi-layer tree.
+        _tree = new RuntimeBehaviorTreeBuilder()
+            .WithBlackboard(blackboard)
+            .WithTickInterval(2)
+            .Selector(selector =>
+            {
+                selector.AbortType = RuntimeAbortType.Both;
+                selector.ReevaluationMode = RuntimeReevaluationMode.Hybrid;
+                selector.ReevaluationPollInterval = 4;
+            })
+                // Branch A: observer-abort guard + Parallel finish policy.
+                .Decorator(new RuntimeBBComparisonNode(), guard =>
+                {
+                    guard.KeyHash = PerceptionReadyKey;
+                    guard.ValueType = BehaviorTreeComparisonValueType.Bool;
+                    guard.Operator = BBComparisonOp.Equal;
+                    guard.RefBool = true;
+                    guard.AbortMode = RuntimeAbortType.Both;
+                })
+                    .Parallel(RuntimeParallelMode.UntilAnySuccess)
+                        .Action(bb =>
+                        {
+                            bb.SetInt(WorkCounterKey, bb.GetInt(WorkCounterKey) + 1);
+                            return RuntimeState.Success;
+                        }, "CountWork")
+                        .Wait(0.25f)
+                    .End()          // Parallel
+                .End()              // RuntimeBBComparisonNode
+                // Branch B: Service + Utility selection under Hybrid reevaluation.
+                .Decorator(new RuntimeServiceNode(), service =>
+                {
+                    service.Interval = 0.25f;
+                    service.OnServiceTick = bb =>
+                    {
+                        int stage = bb.GetInt(TaskStageKey);
+                        bb.SetFloat(ScoreAKey, stage * 0.5f);
+                        bb.SetInt(SignalLevelKey, bb.GetInt(SignalLevelKey) + 1);
+                    };
+                })
+                    .UtilitySelector(new[] { ScoreAKey, ScoreBKey })
+                        .Action(bb =>
+                        {
+                            bb.SetInt(TaskStageKey, bb.GetInt(TaskStageKey) + 1);
+                            return RuntimeState.Success;
+                        }, "AdvanceStage")
+                        .Action(bb => RuntimeState.Success, "HoldStage")
+                    .End()          // UtilitySelector
+                .End()              // RuntimeServiceNode
+            .End()                  // Selector
+            .Build();
+
+        _tree.Terminated += state => Debug.Log($"Tree terminated: {state}");
+    }
+
+    private void Start()
+    {
+        // (7) Scheduling + explicit composition root + optional LOD provider.
+        _managerObject = new GameObject("[BTPriorityTickManager]");
+        _lodProvider = _managerObject.AddComponent<BTDistanceLODProvider>();
+        _priorityManager =
+            _managerObject.AddComponent<BTPriorityTickManagerComponent>();
+
+        _lodConfig = ScriptableObject.CreateInstance<BTLODConfig>();
+        _lodConfig.PriorityBudgets = new[] { 64, 32, 16, 8 };
+        _priorityManager.Config = _lodConfig;
+        _priorityManager.SetReferencePoint(transform);
+        _priorityManager.Register(_tree, transform);
+    }
+
+    // External event stream: coalesced epoch + bounded immediate ticks.
+    public void PushExternalEvent()
+    {
+        if (_tree == null) return;
+        _tree.Evaluation.RequestReevaluation();
+        _tree.WakeUp(boostedTicks: 2);
+    }
+
+    // Perception data change: an observer-driven abort request.
+    public void PushPerceptionChange(bool ready)
+    {
+        if (_tree == null) return;
+        _tree.Blackboard.SetBool(PerceptionReadyKey, ready);
+    }
+
+    private void OnDestroy()
+    {
+        if (_priorityManager != null && _tree != null)
+        {
+            _priorityManager.Unregister(_tree);
+        }
+        _tree?.Dispose();
+        if (_lodConfig != null) Destroy(_lodConfig);
+        if (_managerObject != null) Destroy(_managerObject);
+    }
+}
 ```
 
-### 网络同步 Blackboard
+逐步讲解：
 
-使用 `RuntimeBlackboard.WriteTo(BinaryWriter, RuntimeBlackboardNetworkScope)` 生成有界 snapshot payload，在远端使用 `ReadFrom(BinaryReader)` 应用。Snapshot 使用版本化的 `BTS2` 帧，delta 使用 `BTDP1` 帧。Schema 的 `RuntimeBlackboardSyncFlags` 控制每个 key 参与哪个 scope。`ComputeHash()` 使用 FNV-1a hash 进行快速反同步检测。
+1. schema 声明六个 key。`TaskStage` 使用 `RuntimeBlackboardSyncFlags.SnapshotAndDelta`，`WorkCounter` 使用 `Delta`，其余为 `LocalOnly`。Blackboard 构造时应用默认值，此后的每次写入都按该契约校验。
+2. `WithBlackboard(blackboard)` 注入这份绑定 schema 的 board；`WithTickInterval(2)` 设置基线节奏。builder 只使用一次。
+3. 根 `RuntimeSelector` 使用 `AbortType.Both` 与 `ReevaluationMode.Hybrid`，`ReevaluationPollInterval = 4`，因此 guard 重扫既由事件触发，也按有界的轮询节奏触发。
+4. Branch A 用 `AbortMode` 为 `Both` 的 `RuntimeBBComparisonNode` 包裹 `Parallel(RuntimeParallelMode.UntilAnySuccess)`。`PerceptionReady` 变化会触发 observer，进而调用 `RuntimeBehaviorTree.RequestReevaluation()`，让 selector 重扫 guard。
+5. Parallel 完成策略在首个 `Success` 时结束该 branch，并中止仍处于 `Running` 的兄弟节点。
+6. Branch B 用 `RuntimeServiceNode` 包裹 `UtilitySelector`。Service 在 child 执行期间按间隔刷新 score key；UtilitySelector 读取两个 `float` score key，运行得分最高的 child。
+7. `Start()` 先挂载 `BTDistanceLODProvider`，再添加 `BTPriorityTickManagerComponent`，使 manager 在初始化时解析到它；随后赋 `BTLODConfig`、设置 reference point 并注册树。
+8. `PushExternalEvent()` 与 `PushPerceptionChange(bool)` 是两个生产者入口：前者直接发出 epoch 与 wake-up budget，后者写入被跟踪 key，由 observer 路径发出信号。`OnDestroy()` 按顺序注销并释放。
 
-创作条目默认为 `LocalOnly`。只有当拥有该路径的 integration 定义了 authority、ordering、rate limit、payload limit、resynchronization 和 failure recovery 时，才选择 `Snapshot`、`Delta` 或 `Networked`。Sync flag 只过滤序列化范围；它不会创建 transport，也不会让 Blackboard 变成多线程安全类型。`Object` key 永不参与同步。
+## <a id="combining"></a>13. 与其他 CycloneGames 包组合
 
-Client、server、replay tool 以及 save/load consumer 必须在交换状态前协调相同的已发布 key 名称、hash、类型、flag、默认值和 contract version。`Contract Version` 可从 `RuntimeBlackboardSchema` 获取，但它不是自动 wire handshake。Networking composition root 必须在应用 snapshot 或 delta payload 之前拒绝或迁移不兼容的 manifest/template。
+模块不硬依赖其他包。集成的形态只有一种：外部系统写入一个 Blackboard key，行为树对它作出反应。
 
-## 性能与内存
+### 感知：AIPerception
 
-### 成本模型
+把当前 sighting 发布为事实，让装饰器观察该 key。写入会唤醒行为树，不需要每帧轮询节点。
 
-| 操作 | 预期成本与分配边界 |
+```csharp
+using CycloneGames.AIPerception.Runtime;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using UnityEngine;
+
+public sealed class PerceptionBridge : MonoBehaviour
+{
+    private AIPerceptionComponent _perception;
+    private RuntimeBlackboard _blackboard;
+
+    public void Bind(AIPerceptionComponent perception, RuntimeBlackboard blackboard)
+    {
+        _perception = perception;
+        _blackboard = blackboard;
+    }
+
+    private void Update()
+    {
+        if (_perception == null || _blackboard == null) return;
+
+        IPerceptible target = _perception.GetClosestSightTarget();
+        bool hasTarget = _perception.HasSightDetection && target != null;
+        _blackboard.SetBool("HasTarget", hasTarget);
+        _blackboard.SetFloat("TargetDistance",
+            hasTarget ? Vector3.Distance(transform.position, target.Position) : float.MaxValue);
+    }
+}
+```
+
+在 `HasTarget` 上放一个 `RuntimeBBComparisonNode`，把 `AbortMode` 设为 `Self`、`LowerPriority` 或 `Both`，写入就会变成重评估请求。`IPerceptible.IsFromMemory` 用于区分实时 sighting 与记忆中的位置。
+
+### Tag：GameplayTags
+
+`GameplayTag` 由 tag manager 持有。启动时请求一次，然后把名称哈希成 Blackboard key。树需要同时判断多个 tag 时，也可以把只读容器作为 `Object` 值存入。
+
+```csharp
+using CycloneGames.GameplayTags;
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+GameplayTag alerted = GameplayTagManager.Request("State.Alerted");
+int alertedKey = RuntimeBlackboard.DefaultStringHashFunc("State.Alerted");
+
+// 每帧，在 owner 线程。`view` 是你的 tag 组件暴露的只读容器。
+_blackboard.SetBool(alertedKey, view.HasTag(alerted));
+_blackboard.SetObject("TagContainer", view);
+```
+
+`Object` key 始终是 LocalOnly，不会进入 snapshot 或 delta。需要同步的决策请放在 primitive key 上。
+
+### 技能：GameplayAbilities
+
+叶子节点很适合启动技能。把 spec 留在 composition 层，调用 `TryActivateAbility`，并把结果写成 key，让 guard 可以响应。
+
+```csharp
+using CycloneGames.GameplayAbilities;
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public sealed class ActivateAbilityNode : RuntimeNode
+{
+    private readonly AbilitySystemComponent _abilities;
+    private readonly GameplayAbilitySpec _spec;
+
+    public ActivateAbilityNode(AbilitySystemComponent abilities, GameplayAbilitySpec spec)
+    {
+        _abilities = abilities;
+        _spec = spec;
+    }
+
+    protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+    {
+        bool started = _abilities.TryActivateAbility(_spec);
+        blackboard.SetBool("AbilityStarted", started);
+        return started ? RuntimeState.Success : RuntimeState.Failure;
+    }
+}
+```
+
+在技能结束回调或 `AbilityTask_WaitAbilityEnd` 中再次写入 `AbilityStarted`，用来驱动下一个分支。
+
+### 框架：GameplayFramework
+
+框架的 actor 持有 runner，并决定行为树何时更新。行为树不假设更新来源：`Self`、`Managed`、`PriorityManaged` 与 `ManualTick` 都成立。
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime;
+using CycloneGames.BehaviorTree.Runtime.Components;
+
+// 在框架 actor 上，tree 资产赋值之后。
+var runner = gameObject.AddComponent<BTRunnerComponent>();
+runner.SetTree(treeAsset);
+// tick mode 是序列化字段，在 Inspector 中选择。
+```
+
+如果控制器自己有更新时钟，可以保留 `ManualTick()`，由框架更新调用，而不挂 manager。
+
+## <a id="performance"></a>14. 性能、容量与测量
+
+稳态低分配结构来自托管运行时的构建方式。组合节点把 setup 阶段的 child list 一次性转换为 sealed array，每个执行 step 都读取该数组。强类型 Blackboard 存储避免装箱 primitive 值，`RuntimeBlackboard.DefaultStringHashFunc` 的结果可预先 hash。manager scan 复用其存储，重评估 epoch 是一次不产生队列的 `Interlocked.Increment`。`Tick` 期间不解析严格 schema；运行时访问使用强类型存储与预计算整数 hash，绑定 schema 的写入在 mutation 之前多一次 dictionary 契约查询。dictionary 扩容、首次 array、observer 订阅变更、编译操作、schema 构造与 capacity 扩容都会分配。未使用可复用 buffer API 时，序列化也可能分配。
+
+图校验是有界的。`RuntimeBehaviorTreeLimits` 限制纯代码 node count 与深度，`BTCapacityLimits.MaxTreeDepth` 是托管校验与平面树校验共同消费的上限。`BTCapacityLimits.MaxNodeCount`、`DefaultNodeCount`、`DefaultAgentCount`、`MaxAgentCount`、`PriorityLevelCount`、`DefaultTickManagerCapacity`、`DefaultPriorityBucketCapacity` 暴露其余上限。这些是安全边界，不是容量目标。
+
+### 选择调度配置
+
+配置取决于每帧需要运行多少棵树，而不是某张 benchmark 表。先按下面的规则起步，再在你实际发布的构建里测量：
+
+| 负载 | 建议起点 |
 | --- | --- |
-| 托管 node Tick | Tree traversal 与实际访问的 node 数成比例；setup array 复用 |
-| 强类型 Blackboard get/set | 平均 dictionary lookup；primitive 不装箱；扩容可能分配 |
-| String-key access | 增加 hash 成本；热 key 应预 hash |
-| Observer notification | 同步 callback dispatch；subscription 变化会分配 array |
-| Managed registration | 可能扩展 manager storage；steady-state scan 复用 storage |
-| Compiler analysis | Cold-path 有界 graph 校验与诊断分配 |
-| Strict schema 编译 | Cold-path 构建 array/dictionary 并排序；按创作资产缓存，直到 validation 或 deserialization 使缓存失效 |
-| Runtime graph emission | Cold-path 显式 emitter 分发及新可变 node graph 的分配 |
-| DOD Tick | Burst job 内按 agent 执行 flat traversal；schedule 和 complete 有固定开销 |
-| Snapshot/delta | 未使用可复用 buffer API 时可能分配 |
+| 少于 100 agent | 图省事用 `Self`，或用 `Managed` 且 budget 不小于 agent 数。 |
+| 数百 agent | 用 `Managed`；先提高 `TickBudget` 直到帧成本符合预算，再提高 `TickInterval`。 |
+| 数千 agent | 用 `PriorityManaged` 加 distance LOD，让远处的树降低 tick 频率。 |
+| 数万 agent | LOD 且 `TickInterval` 至少为 4，或把同构场景交给 DOD 路径。 |
+| Reactive composite 宽度超过约 128 | 改用 `ReevaluationMode.OnChange` 或 `Hybrid`；全扫会在每个 tick 访问每个 child。 |
 
-模块包含 steady-state low-allocation 路径。Dictionary growth、首次 array、subscription、compile、schema 编译和 capacity growth 都会分配。`Tick` 期间不解析 strict schema；运行时访问继续使用 typed store 和预计算整数 hash。Schema-bound write 会在 mutation 之前多执行一次 dictionary contract lookup。
+`Managed` 的 budget 小于 agent 数不构成公平性问题：游标是持久的，每棵树都会轮流被访问。它降低的是单树 tick 频率，这通常正是 budget 的目的。
 
-内嵌创作 schema 的 hard limit 为 4,096 个条目。默认 snapshot/delta limit 仍为每种值类型 4,096 个条目，总计 16,384 个条目。这些是 safety ceiling，不是容量目标：每个 tree 的契约应保持精简，对热 key 预先 hash，并在具代表性的 Player build 中测量。
+### 测量
 
-Managed scheduling 同样受容量治理。`BTTickManager`、`BTPriorityTickManager` 与 `BTDistanceLODProvider` 默认最多容纳 65,536 棵 tree，并拒绝高于 1,048,576 棵的 hard ceiling 配置。当 tree 或 deferred mutation 容量不足时，其 `TryRegister*` API 返回 `false` 并增加精确 rejection counter；现有 `void Register`/`Unregister`/`UpdatePriority` 方法保持源码兼容并委托给 `Try*` 路径，因此 legacy registration 被拒绝时会 fail closed 且不产生副作用。纯 C# manager 不引入 Unity logging 依赖。其 Unity-facing component wrapper 会比较 O(1) counter snapshot，并且仅在 legacy registration 确实增加 tree、LOD 或 deferred-mutation capacity-rejection counter 时，每个 component 输出一次 error。直接调用 `Try*`、null 或 stopped tree、重复注册以及普通 removal failure 均保持静默。Deferred mutation 按 tree 合并并单独受限。`BTPriorityTickManagerComponent` 还会合并重复的跨线程 wake-up；其 queue 默认容量为 4,096，配置不得超过 65,536。queue 满时拒绝新的 wake-up，但不会取消或注销 tree。`BTRunnerComponent` 仅在 admission 成功后记录 registration，并可在之后重试。
+吞吐、分配与 soak 使用 Benchmark 窗口（`Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`），可导出 CSV 与 JSON。Editor 内的逐帧分配请用 `ProfilerRecorder` 的 `GC Allocated In Frame`；`GC.GetAllocatedBytesForCurrentThread()` 在 Editor 中恒为 0，不能用于此处。
 
-DOD scheduler 使用相同的默认与 hard agent ceiling；当 flattened tree/Blackboard layout 无法表示那么多 slot 时，effective maximum 会进一步降低。应优先使用 `TryAddAgent`；legacy `AddAgent` 保持源码兼容，但达到 effective capacity 时抛出 `InvalidOperationException`，不会无上限扩容。所有受治理 owner 都提供 current、maximum、peak 与 capacity rejection snapshot；managed 与 DOD metric 分离，因为 DOD assembly 仍是可选模块。
+### 调试行为树
 
-`BehaviorTree` 创作数据及其 schema cache 归 Unity main thread 所有。`TryGetRuntimeBlackboardSchema`、Inspector 编辑、graph validation 和资产编译必须保持在 main thread。编译后的托管 runtime 保持现有 single-owner-thread affinity；strict 模式不会新增后台 worker 或 lock。DOD flat-tree 路径拥有自己的 fixed-slot Blackboard 契约，不消费这份内嵌创作 schema。
+编辑器显示运行中树的实时状态：节点颜色与状态标签、当前 child 索引，以及时间节点的已耗时。树不再推进时，先检查 runner 的 tick mode 与是否解析到 manager；managed runner 没有 manager 时会输出一次警告并在本地 tick。编译与校验失败由 `BehaviorTreeCompiler` 在任何 runtime node 创建之前报告，非法图不会进入 `Tick`。
 
-### 调优顺序
+结构性保证来自源码：密封的 child 数组、类型化存储、重评估 epoch、延迟变更、深度与容量上限。每 tick 成本、分配与常驻内存取决于构建目标、后端、硬件与 workload，请在你自己的环境中测量。
 
-1. 确定具有代表性的 tree shape、active-agent 分布、Tick cadence 和 frame budget。
-2. 预 hash key，缓存注入 service，预分配 manager 和 DOD capacity，移除每 Tick subscription 或 closure。
-3. 完成真实 key inventory 后再启用 strict schema；不创建投机性全局契约，也不要填满 4,096 条的容量上限。
-4. 使用 `Managed` 调度限制 scan work；只有存在真实 LOD/priority policy 时才引入 `PriorityManaged`。
-5. 在 observable behavior 相同的条件下比较 managed 与 DOD 路径。对小型或异构 workload，DOD 不一定更快。
-6. 在每档硬件上测量 release Player build。记录 average、percentile、GC、retained memory 和 scene change 后的恢复情况。
+## <a id="api"></a>15. API 速查表
 
-Benchmark 代码隔离在 `CycloneGames.BehaviorTree.Benchmarks`。
-
-## 故障排查
-
-| 现象 | 原因 | 处理方式 |
-| --- | --- | --- |
-| 新资产没有 root | Root 创建是显式操作 | 单击 `Repair Root`，再保存资产 |
-| `BehaviorTree.Compile()` 返回 `null` | Compiler 拒绝资产并记录了诊断 | 使用 `Validate` 或 `BehaviorTreeCompiler.Analyze`，修复全部 error |
-| Strict Empty tree 拒绝现有 node key | 启用 strict 且为空时不允许任何 Blackboard 依赖 | 声明每个必需 key，或在完成迁移前关闭 strict 模式 |
-| Key picker 不可用 | Tree 处于 Legacy Open、strict schema 无效，或没有兼容 key | 选中 tree 资产，启用/修复 strict schema，并添加所需类型的条目 |
-| Strict subtree 不兼容 | Root 为 open，或 child 声明不是 root 的 exact subset | 以 root 为 authority，并将完全一致的 child definition 复制到 root 契约 |
-| Runner 应用 `Initial Objects` 时失败 | Strict schema 未将该 key 声明为 `Object` | 添加匹配的 LocalOnly Object 条目，或移除 Runner 条目 |
-| Tree Tick 一次后停止 | Root 返回 `Success` 或 `Failure` | 调用 `Play()` 开始新 activation，或让目标 branch 保持 `Running` |
-| `Play()` 后丢失 runtime Blackboard 值 | Runner replay 会有意恢复 root 默认值，然后应用 Initial Objects | 将跨 activation 持久的数据存入外部 owner，并显式注入 |
-| String key 不再匹配旧 integer key | 默认 hash 改为 FNV1A | 迁移 Graph 创作与持久化 key space |
-| `SetContext` 抛出异常 | Node stack 正在活动或发生重入 | 在 Tick 前或 tree 停止后设置 context |
-| Managed tree 从不 Tick | Manager 不存在、runner paused/stopped/disabled，或 bucket budget 为零 | 检查 runner state、manager component、Tick mode、interval 和 budget |
-| Parallel 没有使用多个 CPU thread | Managed Parallel 只表达 branch policy | 只有受支持且经过测量的 workload 才使用 Jobs/DOD |
-| Respawn 后 DOD handle 抛出异常 | Slot 已回收，handle 已 stale | 用最新 `AddAgent` 返回值替换保存的 handle |
-| DOD action completion 被拒绝 | Request 已 timeout、cancel/reset，或属于旧 generation | 丢弃 stale completion，使用下一次 request token |
-| DOD asmdef 无法解析 | 缺少可选 package 或显式 assembly reference | 确认 Burst/Collections/Mathematics，并在 consumer 中添加 DOD asmdef reference |
-| DeterministicMath integration assembly 不可用 | `com.cyclone-games.deterministic-math` 缺失、不在 `1.x` 范围，或 consumer asmdef 未引用 integration | 通过 UPM 解析受支持版本并添加显式 asmdef reference；不要手工添加 capability symbol |
-| Editor layout 不可用 | 无法解析 Editor-only asset GUID | Reimport package，并确认 Editor asset 及其 `.meta` 完整 |
-
-## 验证
-
-### Unity Test Runner
-
-按需运行以下 assembly：
-
-```text
-EditMode  CycloneGames.BehaviorTree.Tests.Editor
-EditMode  CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor
-PlayMode  CycloneGames.BehaviorTree.Tests.PlayMode
-EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
-```
-
-仅当 UPM 已解析受支持的 `1.x` package 时运行 DeterministicMath 测试 assembly。还应验证一个干净的 BehaviorTree-only consumer：Core 与 Runtime 必须编译，而 integration 及其测试 assembly 必须不存在。`Assets/` 下相邻的 `package.json` 只是 metadata，不属于已安装 UPM package，因此不会激活该 gate。
-
-### 最小编辑器手动检查
-
-1. 创建 asset，使用 `Repair Asset` 和 `Repair Root`，创建、连接、删除和粘贴 node，再分别执行 Undo 与 Redo。
-2. 确认旧资产保持 Legacy Open。在副本上启用 Strict Schema 并保持空列表，确认使用 Blackboard 的 node 校验失败。
-3. 添加类型正确的 key，使用每个可用 dropdown，保存、关闭并重新打开，确认条目、默认值、sync flag、node 配置和 position 在 Undo/Redo 后仍保持。
-4. 将一个 key 改为不兼容类型，并创建一个重复名称；确认 Inspector 和 `Validate Tree` 报错，且编译拒绝该资产。
-5. 编译 strict tree 并确认 root 默认值已存在。设置 Runner Initial Objects，连续调用两次 `Play()`，确认先重置默认值，再重新应用 Object 条目。
-6. 引用一个可复用 subtree。确认 exact strict subset 通过，不兼容 child definition 失败，open root 下的 strict child 失败，且 child 默认值不会独立应用。
-7. 尝试创建 cycle、第二个 parent，以及 root/decorator 的第二个 child，确认 Editor 拒绝每条 link。使用聚焦 fixture 引用第二个 asset 中的 node，再确认 `Validate` 会报告该问题且 `Repair Asset` 会拒绝。
-8. 进入 Play Mode，确认 selection、pan、search、focus 与 live state 仍可使用，同时创作操作为只读。
-9. 根据产品实际用法，分别以 `Self`、`Managed`、`PriorityManaged` 和 `Manual` ownership 进入 Play Mode。
-10. 确认自然完成会注销 runner，`Play` 会创建新 activation，disable/enable 不会重复注册。
-11. 对 synchronized key，在发送状态前校验匹配的 client/server manifest 和一个故意的 mismatch。确认 integration 会拒绝或迁移 mismatch。
-12. 在聚焦 fixture 中设置较小的 tree、pending mutation、wake-up、LOD 与 DOD agent capacity。确认每个 `Try*` admission 在 ceiling 处失败、legacy wrapper 符合所记录的 no-op/throw 行为、重复 wake-up 被合并、active tree 继续运行，并且 current/peak/rejected snapshot 与 fixture 一致。
-12. 在运行 matrix 或 soak 前先执行一个有界 benchmark case。
-
-## 参考资料
-
-- [Tests/README.SCH.md](Tests/README.SCH.md)——batchmode command 与 benchmark 结果解释。
+| 类型 / 成员 | 用途 |
+| --- | --- |
+| `RuntimeBehaviorTreeBuilder` | 纯代码流式 builder；`Build()` 返回一棵 `RuntimeBehaviorTree`。 |
+| `RuntimeBehaviorTree` | `Tick()`、`Play()`、`Stop()`、`Dispose()`、`Terminated`、`State`、`IsStopped`、`Blackboard`、`Root`、`Evaluation`、`TickInterval`、`WakeUp`、`RequestReevaluation`、`ShouldTick`、`GetOwner<T>()`、`GetService<T>()`、`SetContext`。 |
+| `RuntimeState` | `NotEntered`、`Running`、`Success`、`Failure`。 |
+| `RuntimeBlackboard` | 八种强类型 `Set*`/`Get*`/`TryGet*` 存储，`Parent`、`GetStamp`、`HasKey`、`Remove`、`Clear`、`ResetToSchemaDefaults`、`AddObserver`、`AddGlobalObserver`、`RemoveObserver`、`ClearAllObservers`、`EnableConcurrentStorageAccess`、`ResetDefaultRandom`、`WriteTo`、`ReadFrom`、`ComputeHash`、`Schema`、`BindSchema`。 |
+| `RuntimeBlackboard.DefaultStringHashFunc` | 稳定的 `BTHash.FNV1A` 字符串到 `int` key hash。 |
+| `RuntimeBlackboardSchemaBuilder` / `RuntimeBlackboardSchema` | `AddInt`、`AddFloat`、`AddBool`、`AddVector3`、`AddLong`、`AddLong2`、`AddLong3`、`AddObject`、`Build`、`Count`、`ContractVersion`、`IsKnownKey`、`UsesSnapshot`、`UsesDelta`、`IsNetworkedKey`、`TryGetDefinition`、`ValidateWrite`。 |
+| `RuntimeBlackboardSyncFlags` | `LocalOnly`、`Snapshot`、`Delta`、`SnapshotAndDelta`。 |
+| `RuntimeBlackboardNetworkScope` | `Snapshot`、`Networked`。 |
+| `BTCapacityLimits` | `MaxTreeDepth`、`MaxNodeCount`、`DefaultNodeCount`、`MaxAgentCount`、`DefaultAgentCount`、`PriorityLevelCount`、`DefaultTickManagerCapacity`、`DefaultPriorityBucketCapacity`。 |
+| `RuntimeBTEvaluationController` | `Epoch`、`RequestReevaluation()`、`ShouldReevaluate(...)`。 |
+| `RuntimeReevaluationMode` | `PollEveryTick`、`OnChange`、`Hybrid`。 |
+| `RuntimeCompositeNode` | `AbortType`、`ReevaluationMode`、`ReevaluationPollInterval`、`Children`、`ChildCount`、`Seal()`、`AddChild`、`CurrentIndex`。 |
+| `RuntimeAbortType` | `None`、`Self`、`LowerPriority`、`Both`。 |
+| `RuntimeBBComparisonNode` | `KeyHash`、`Operator`、`ValueType`、`RefInt`、`RefFloat`、`RefBool`、`RefKeyHash`、`UseRefKey`、`FloatEpsilon`、`AbortMode`。 |
+| `BehaviorTreeComparisonValueType` / `BBComparisonOp` | `Int`、`Float`、`Bool`、`Object`；`Equal`、`NotEqual`、`GreaterThan`、`GreaterOrEqual`、`LessThan`、`LessOrEqual`、`IsSet`、`IsNotSet`。 |
+| `RuntimeParallelMode` / `RuntimeParallelNode.Mode` | `Default`、`UntilAnyComplete`、`UntilAnyFailure`、`UntilAnySuccess`。 |
+| `RuntimeParallelAllNode` | `SuccessThreshold`、`FailureThreshold`。 |
+| `RuntimeServiceNode` | `Interval`、`RandomDeviation`、`UseUnscaledTime`、`OnServiceTick`。 |
+| `RuntimeSubTreeNode` | `SetPortRemapping(...)`，配合 `RuntimeSubTreePortDirection.Input`、`Output`、`InOut`。 |
+| `RuntimeNode.EmitWakeUpSignal()` | protected 的节点侧重评估信号。 |
+| `IRuntimeBTCommand` / `IRuntimeBTConditionStrategy` | 可复用的 command 与 condition 对象。 |
+| `RuntimeBTContext` | `Owner`、`ServiceResolver`、`GetOwner<T>()`、`GetService<T>()`；builder 上的 `WithOwner`、`WithContext`、`WithServiceResolver`。 |
+| `BTTickManager` / `BTPriorityTickManager` | `TickBudget`、`SetBudgets`、`Register`、`TryRegister`、`Unregister`、`TryUnregister`、`UpdatePriority`、`TryUpdatePriority`、`Tick`、`Clear`、`GetMemoryStats`、`GetTreeCount`、`GetTotalCount`。 |
+| `BTTickManagerComponent.CreateInstance()` / `Instance` | Managed 模式组件的创建与解析。 |
+| `BTPriorityTickManagerComponent.CreateInstance()` / `Instance` | PriorityManaged 模式组件的创建与解析；`Config`、`Register(tree, transform)`、`BoostPriority`、`SetReferencePoint`。 |
+| `TickMode` | `Self`、`Manual`、`Managed`、`PriorityManaged`。 |
+| `BTRunnerComponent` | `ManualTick`、`SetTickMode`、`SetTickInterval`、`WakeUp`、`BoostPriority`、`Pause`、`Resume`、`Stop`、`Play`、`BTSetData`、`SetContext`、`SetServiceResolver`、`OnTreeStopped`、`RuntimeTree`。 |
+| `BTDistanceLODProvider` | 可选 LOD 来源：`Config`、`ReferencePoint`、`MaximumTreeCount`、`TryRegisterTree`、`UnregisterTree`、`GetPriority`、`GetTickInterval`、`UpdateAllLOD`、`BoostPriority`。 |
+| `BTLODConfig` | `Levels`、`PriorityBudgets`、`BoostedPriority`、`BoostedTickInterval`、`TryValidate`、`GetLODLevel`、`GetLODLevelSqr`。 |
+| `BTNetworkSync` / `BTStateSnapshot` / `BTStateSnapshotBuffer` | `CaptureSnapshot`、`SerializeSnapshot`、`DeserializeSnapshot`、`ApplyBlackboardSnapshot`、`CheckDesync`、`ComputeTreeStateHash`、`DoesExecutionStateMatch`。 |
+| `BTBlackboardDelta` | `CreateForSchema`、`TrackKey`、`Attach`、`Detach`、`TryFlush`、`Apply`。 |
+| `FlatBehaviorTree` / `BTTickScheduler` | DOD definition owner 与 agent scheduler：`AddAgent`、`TryAddAgent`、`RemoveAgent`、`ResetAgent`、`ScheduleTick`、`CompleteTick`、`SetBBInt`、`GetRootState`、`TryGetActionRequest`、`TrySetActionStatus`、`ComputeAgentStateHash`。 |
+| `FlatNodeDef` / `FlatNodeType` / `CompareOp` / `BTAgentHandle` | 平面树节点定义、节点类型枚举、比较运算符，以及带 generation 的 agent handle。 |
