@@ -1,8 +1,9 @@
 using System;
 using System.Reflection;
+using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
 using CycloneGames.BehaviorTree.Tests.Support;
 using CycloneGames.Logging;
 using NUnit.Framework;

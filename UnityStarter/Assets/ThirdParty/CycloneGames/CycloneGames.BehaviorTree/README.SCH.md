@@ -110,16 +110,70 @@
 
 ## <a id="environment"></a>1. 环境与程序集边界
 
-工程打开路径为 `<repo-root>/UnityStarter`。运行时 assembly `CycloneGames.BehaviorTree.Runtime` 为 `autoReferenced: true`，引用 `CycloneGames.Hash.Core` 与 `CycloneGames.Logging.Core`，包含托管运行时、Blackboard、schema、编译器、runner、托管调度器以及序列化契约。`CycloneGames.BehaviorTree.Editor` 仅在 Editor 下可用。三个可选 assembly 均为 `autoReferenced: false`，使用方 asmdef 必须显式引用：
+工程打开路径为 `<repo-root>/UnityStarter`。运行时拆成引擎无关的 Core 与 Unity 层两部分，因此同一棵树、同一套黑板、同一套调度契约可以跑在 Editor、Player 和无 Unity 的 .NET 服务端。
+
+| Assembly | 引擎依赖 | 内容 |
+| --- | --- | --- |
+| `CycloneGames.BehaviorTree.Core` | 无（`noEngineReferences: true`） | `RuntimeBehaviorTree`、黑板与 schema、托管节点、调度、`BTFloat3`、序列化契约 |
+| `CycloneGames.BehaviorTree.Runtime` | Unity | `BehaviorTree` 与 `BTNode` 资源、编译器、runner 与管理器组件、LOD、`UnityBTContext` |
+| `CycloneGames.BehaviorTree.Editor` | Unity Editor | 图窗口、Inspector、黑板 schema 编辑 |
+
+依赖只有一个方向：`Runtime -> Core`。Core 仅引用 `CycloneGames.Hash.Core` 与 `CycloneGames.Logging.Core`，服务端只引用 Core 即可，不需要引擎 assembly。
+
+三个可选 assembly 均为 `autoReferenced: false`，使用方 asmdef 必须显式引用：
 
 - `CycloneGames.BehaviorTree.Runtime.DOD` 由 `com.unity.burst`、`com.unity.collections`、`com.unity.mathematics` 的 `versionDefines` 及对应 `defineConstraints` 门控，并引用 Unity.Burst、Unity.Collections、Unity.Mathematics 与 Unity.Jobs。
 - `CycloneGames.BehaviorTree.Integrations.DeterministicMath` 由 `com.cyclone-games.deterministic-math` 在 `[1.0.0,2.0.0)` 上的 `versionDefine` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，并由对应的 `defineConstraint` 消费。
 - `CycloneGames.BehaviorTree.Benchmarks` 承载 Editor 与 PlayMode 测量工具。
 
-可选包缺失或版本不受支持时，对应 assembly 被排除，Core 与 Runtime 仍可编译。capability symbol 来自 `versionDefines`，不应写入 PlayerSettings。共享上限以常量暴露：
+可选包缺失或版本不受支持时，对应 assembly 被排除，Core 与 Unity 层仍可编译。capability symbol 来自 `versionDefines`，不应写入 PlayerSettings。
+
+### Unity 层补了什么
+
+有两件事无法放进 Core：时钟和组件查找。`UnityBTContext` 同时提供两者，并且调用方注册的 service 永远优先于内置兜底。
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Runtime;
+using UnityEngine;
+
+public sealed class UnityContextUsage
+{
+    public RuntimeBehaviorTree Build(Component owner)
+    {
+        // GetOwner<T>() 经由 GameObject 解析；计时节点读取注入的时钟。
+        var context = new UnityBTContext(owner);
+        return new RuntimeBehaviorTreeBuilder(context)
+            .Action(_ => RuntimeState.Success)
+            .Build();
+    }
+}
+```
+
+Core 用 `BTFloat3` 取代 `Vector3`，黑板、快照与增量因此保持引擎无关。Unity 层提供 `SetVector3`、`GetVector3`、`TryGetVector3` 三个不产生分配的转换扩展方法，Unity 代码仍按 `Vector3` 写。
+
+### 不依赖 Unity 运行
+
+无引擎宿主引用 `CycloneGames.BehaviorTree.Core` 加 `CycloneGames.Hash.Core` 与 `CycloneGames.Logging.Core`。它用同一个 builder 创建树，自己调用 `Tick`：没有 `BTRunnerComponent`，没有 manager，没有场景。
+
+```csharp
+using CycloneGames.BehaviorTree.Core;
+
+public static void TickUntilStopped(RuntimeBehaviorTree tree)
+{
+    while (!tree.IsStopped)
+    {
+        tree.Tick();
+    }
+}
+```
+
+注册了 `IRuntimeBTTimeProvider` 就用它，否则回落到单调的 `Stopwatch`，因此 `RuntimeWaitNode` 与超时装饰器在 Unity 之外同样保持正确计时。日志走 `CycloneGames.Logging`，本身没有引擎依赖。第 2 章会构建这个循环驱动的树。
+
+共享上限以常量暴露：
+
+```csharp
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step0
 {
@@ -129,7 +183,7 @@ public static class Step0
         int maxNodes = BTCapacityLimits.MaxNodeCount;             // 65536
         int defaultNodes = BTCapacityLimits.DefaultNodeCount;     // 4096
         int priorityLevels = BTCapacityLimits.PriorityLevelCount; // 8
-        int defaultAgents = BTCapacityLimits.DefaultAgentCount;  // 65536
+        int defaultAgents = BTCapacityLimits.DefaultAgentCount;   // 65536
     }
 }
 ```
@@ -141,7 +195,7 @@ public static class Step0
 一棵树是由 `RuntimeBehaviorTreeBuilder` 构建的 `RuntimeBehaviorTree`。builder 使用流式 scope：组合节点或装饰器打开一个 scope，`.End()` 闭合，`Build()` 闭合所有剩余 scope。树只能有一个 root child，因此单个 `.Action(...)` 就是最小完整树。
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step1
 {
@@ -165,11 +219,11 @@ public static class Step1
 
 ## <a id="step-2"></a>3. 第 2 步：黑板与键
 
-`RuntimeBlackboard` 持有八个相互独立的强类型存储：`int`、`float`、`bool`、`Vector3`、`long`、`Long2`、`Long3`、`object`。强类型访问不会装箱 primitive 值。key 是 `int` hash；`DefaultStringHashFunc` 是稳定的 `BTHash.FNV1A`，因此字符串 key overload 只是每次调用时执行 hash 的便利方法。高频 key 应预先 hash 一次。
+`RuntimeBlackboard` 持有八个相互独立的强类型存储：`int`、`float`、`bool`、`Float3`、`long`、`Long2`、`Long3`、`object`。其中 `Float3` 是引擎无关的三元组，Unity 层另外提供 `Vector3` overload。强类型访问不会装箱 primitive 值。key 是 `int` hash；`DefaultStringHashFunc` 是稳定的 `BTHash.FNV1A`，因此字符串 key overload 只是每次调用时执行 hash 的便利方法。高频 key 应预先 hash 一次。
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step2
 {
@@ -204,7 +258,7 @@ public static class Step2
         // Eight typed stores.
         local.SetFloat(FocusKey, 1.5f);
         local.SetBool(ActiveKey, true);
-        local.SetVector3(PositionKey, new Vector3(1f, 2f, 3f));
+        local.SetFloat3(PositionKey, new BTFloat3(1f, 2f, 3f));
         local.SetLong(SequenceKey, 42L);
         local.SetLong2(PairKey, new RuntimeBlackboardLong2(1L, 2L));
         local.SetLong3(TripleKey, new RuntimeBlackboardLong3(1L, 2L, 3L));
@@ -251,7 +305,7 @@ public static class Step2
 ```csharp
 using System.IO;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step3
 {
@@ -264,7 +318,7 @@ public static class Step3
             .AddInt("Stage", 0, RuntimeBlackboardSyncFlags.SnapshotAndDelta)
             .AddBool("EventActive", false, RuntimeBlackboardSyncFlags.LocalOnly)
             .AddFloat("Focus", 0f, RuntimeBlackboardSyncFlags.Snapshot)
-            .AddVector3("Position", Vector3.zero, RuntimeBlackboardSyncFlags.Delta)
+            .AddFloat3("Position", BTFloat3.Zero, RuntimeBlackboardSyncFlags.Delta)
             .AddLong("Sequence", 0L, RuntimeBlackboardSyncFlags.LocalOnly)
             .AddObject("Reference")
             .Build();
@@ -326,8 +380,8 @@ public static class Step3
 | `RuntimeParallelNode` / `RuntimeParallelAllNode`（`Parallel` / `ParallelAll`） | 在 owner 线程内交错 branch；完成策略见下文。 |
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
 
 public static class Step4
 {
@@ -424,8 +478,8 @@ public static class Step4
 `BBComparisonNode` 是创作态 ScriptableObject 装饰器，其 `BehaviorTreeComparisonValueType` 可选 `Int`、`Float`、`Bool`、`Object`。对应的运行时节点是 `RuntimeBBComparisonNode`，带 `BBComparisonOp`（`Equal`、`NotEqual`、`GreaterThan`、`GreaterOrEqual`、`LessThan`、`LessOrEqual`、`IsSet`、`IsNotSet`）与强类型 reference 值。`SubTreeNode` / `RuntimeSubTreeNode` 在自有 scoped Blackboard 上运行 child，并支持带方向的 port remapping。`RuntimeServiceNode` 在 child 执行期间按间隔运行副作用回调。
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
 public sealed class AdvanceCommand : IRuntimeBTCommand
 {
@@ -509,8 +563,8 @@ public static class Step5
 `RuntimeCompositeNode.ReevaluationMode` 与 `ReevaluationPollInterval` 按组合节点选择模式；`RuntimeReactiveSequence` 与 `RuntimeReactiveFallback` 在 `OnChange` 或 `Hybrid` 下，空闲 tick 只推进 active branch。`RuntimeBBComparisonNode.AbortMode` 是类型为 `RuntimeAbortType`（`None`、`Self`、`LowerPriority`、`Both`）的属性：非 `None` 值会在 graph commit 时绑定 Blackboard observer，被跟踪 key 变化时调用 `RuntimeBehaviorTree.RequestReevaluation()`，后者递增 epoch 并调度一次立即唤醒。`RuntimeNode.EmitWakeUpSignal()` 是 protected helper，节点可在执行内部调用它请求重评估。
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
 public sealed class WakeUpOnSignalNode : RuntimeNode
 {
@@ -591,7 +645,7 @@ public static class Step6
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public static class Step7
@@ -665,7 +719,7 @@ managed 模式下的 runner 必须有 manager 组件：要么显式挂载在场�
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public static class Step8
@@ -710,15 +764,15 @@ public static class Step8
 
 `RuntimeBlackboard.WriteTo`、`ReadFrom` 与 `ComputeHash` 是基础契约。`RuntimeBlackboardNetworkScope` 选择可见性边界：`Snapshot` 只包含标记为全量 snapshot 的 key，`Networked` 包含全部非本地 primitive（含仅 delta 的 key）。第 3 步的 `RuntimeBlackboardSyncFlags.SnapshotAndDelta` 决定每个 key 参与哪个 scope。`Object` key 永不进入 payload。
 
-`CycloneGames.BehaviorTree.Runtime.Core.Networking` 中的类型是 contract-only：`BTNetworkSync` 提供 snapshot 捕获、序列化、反序列化、树状态 hash、反同步比较与 Blackboard snapshot 应用；`BTBlackboardDelta` 跟踪变化的 key 并生成或应用有界 delta frame。它们不创建 transport、不选择 authority、不定义排序或速率限制，也不执行重新同步与故障恢复。产品层决定何时调用、发送哪些字节，以及如何应对不一致。
+`CycloneGames.BehaviorTree.Core.Networking` 中的类型是 contract-only：`BTNetworkSync` 提供 snapshot 捕获、序列化、反序列化、树状态 hash、反同步比较与 Blackboard snapshot 应用；`BTBlackboardDelta` 跟踪变化的 key 并生成或应用有界 delta frame。它们不创建 transport、不选择 authority、不定义排序或速率限制，也不执行重新同步与故障恢复。产品层决定何时调用、发送哪些字节，以及如何应对不一致。
 
 同级包 `CycloneGames.BehaviorTree.Networking` 在这些原语之上补充消息与 authority 契约：`BehaviorTreeNetworkProtocol` 冻结消息 ID 与 payload schema；`BehaviorTreeNetworkProfile` 声明同步模型、feature flag 与 tick 节奏；`BehaviorTreeNetworkAuthority` 把 tree 绑定到网络身份并判定 tick / apply 权限；`BehaviorTreeNetworkReplication` 按 owner、team 或 area 过滤观察者；`BehaviorTreeNetworkSyncBridge` 捕获 snapshot、delta 与 hash-only frame，并应用经过校验的 payload。该包各 assembly 均为 `autoReferenced: false`，不含 transport 或驱动循环：composition root 需自行按节奏调用 `CaptureSnapshot`、`TryCreateBlackboardDelta` 或 `TryApplyPayload`，并显式驱动 profile 的节奏字段。`CycloneGames.AIPerception.Networking` 对感知数据采用同样的 contract-only 形态。
 
 ```csharp
 using System;
 using System.IO;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 
 public static class Step9
 {
@@ -784,7 +838,7 @@ public static class Step9
 当大量 agent 共享同一棵同构平面树，且 workload 适配受限节点集、固定 `int`/`float`/`bool` Blackboard slot 与固定 action slot 时，使用 DOD 路径。它是独立的执行模型：`FlatBehaviorTree` 为共享的不可变 definition 持有 persistent native storage，`BTTickScheduler` 以 NativeArray 持有每 agent 可变状态，并由 Burst `BTTickJob` 调度。它不使用 `RuntimeNode` 对象、`RuntimeBlackboard` observer、schema、`object` 值或托管 tick manager。
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.DOD;
 
 public static class Step10
@@ -834,9 +888,9 @@ public static class Step10
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public sealed class MultiLayerTreeRoot : MonoBehaviour
@@ -992,7 +1046,7 @@ public sealed class MultiLayerTreeRoot : MonoBehaviour
 
 ```csharp
 using CycloneGames.AIPerception.Runtime;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
 public sealed class PerceptionBridge : MonoBehaviour
@@ -1027,7 +1081,7 @@ public sealed class PerceptionBridge : MonoBehaviour
 
 ```csharp
 using CycloneGames.GameplayTags;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 GameplayTag alerted = GameplayTagManager.Request("State.Alerted");
 int alertedKey = RuntimeBlackboard.DefaultStringHashFunc("State.Alerted");
@@ -1045,7 +1099,7 @@ _blackboard.SetObject("TagContainer", view);
 
 ```csharp
 using CycloneGames.GameplayAbilities;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public sealed class ActivateAbilityNode : RuntimeNode
 {
@@ -1084,6 +1138,10 @@ runner.SetTree(treeAsset);
 ```
 
 如果控制器自己有更新时钟，可以保留 `ManualTick()`，由框架更新调用，而不挂 manager。
+
+### 空间：Spatial
+
+邻近决策放在同级包 `CycloneGames.BehaviorTree.Spatial` 里，不在本包。它把最近邻查询的结果写进黑板槽位，树只读普通键，本包因此不需要引入任何空间依赖。接线方式见那个包的 README：每个 agent 每次更新查询一次，随后用 `RuntimeBBComparisonNode` 比较产出的 `bool` 与 `float` 槽位。
 
 ## <a id="performance"></a>14. 性能、容量与测量
 
@@ -1124,7 +1182,7 @@ runner.SetTree(treeAsset);
 | `RuntimeState` | `NotEntered`、`Running`、`Success`、`Failure`。 |
 | `RuntimeBlackboard` | 八种强类型 `Set*`/`Get*`/`TryGet*` 存储，`Parent`、`GetStamp`、`HasKey`、`Remove`、`Clear`、`ResetToSchemaDefaults`、`AddObserver`、`AddGlobalObserver`、`RemoveObserver`、`ClearAllObservers`、`EnableConcurrentStorageAccess`、`ResetDefaultRandom`、`WriteTo`、`ReadFrom`、`ComputeHash`、`Schema`、`BindSchema`。 |
 | `RuntimeBlackboard.DefaultStringHashFunc` | 稳定的 `BTHash.FNV1A` 字符串到 `int` key hash。 |
-| `RuntimeBlackboardSchemaBuilder` / `RuntimeBlackboardSchema` | `AddInt`、`AddFloat`、`AddBool`、`AddVector3`、`AddLong`、`AddLong2`、`AddLong3`、`AddObject`、`Build`、`Count`、`ContractVersion`、`IsKnownKey`、`UsesSnapshot`、`UsesDelta`、`IsNetworkedKey`、`TryGetDefinition`、`ValidateWrite`。 |
+| `RuntimeBlackboardSchemaBuilder` / `RuntimeBlackboardSchema` | `AddInt`、`AddFloat`、`AddBool`、`AddFloat3`（Unity 侧另有 `AddVector3`）、`AddLong`、`AddLong2`、`AddLong3`、`AddObject`、`Build`、`Count`、`ContractVersion`、`IsKnownKey`、`UsesSnapshot`、`UsesDelta`、`IsNetworkedKey`、`TryGetDefinition`、`ValidateWrite`。 |
 | `RuntimeBlackboardSyncFlags` | `LocalOnly`、`Snapshot`、`Delta`、`SnapshotAndDelta`。 |
 | `RuntimeBlackboardNetworkScope` | `Snapshot`、`Networked`。 |
 | `BTCapacityLimits` | `MaxTreeDepth`、`MaxNodeCount`、`DefaultNodeCount`、`MaxAgentCount`、`DefaultAgentCount`、`PriorityLevelCount`、`DefaultTickManagerCapacity`、`DefaultPriorityBucketCapacity`。 |

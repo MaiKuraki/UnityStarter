@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
     [Flags]
     public enum RuntimeSubTreePortDirection : byte

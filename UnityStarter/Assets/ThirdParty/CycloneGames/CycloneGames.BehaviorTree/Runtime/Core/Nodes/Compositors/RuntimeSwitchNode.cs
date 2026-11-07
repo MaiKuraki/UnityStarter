@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
     /// Reads an integer case from the blackboard. The final child is the default branch;

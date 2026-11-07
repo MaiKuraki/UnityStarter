@@ -1,6 +1,6 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
 using NUnit.Framework;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency

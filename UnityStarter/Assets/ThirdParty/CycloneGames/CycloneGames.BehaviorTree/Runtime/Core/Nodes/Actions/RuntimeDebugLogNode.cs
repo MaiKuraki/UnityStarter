@@ -1,6 +1,6 @@
 using CycloneGames.Logging;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Actions
 {
     public class RuntimeDebugLogNode : RuntimeNode
     {

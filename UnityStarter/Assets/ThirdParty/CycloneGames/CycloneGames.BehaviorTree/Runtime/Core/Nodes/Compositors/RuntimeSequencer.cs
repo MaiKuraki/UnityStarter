@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     public class RuntimeSequencer : RuntimeCompositeNode
     {

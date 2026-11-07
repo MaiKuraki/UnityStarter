@@ -1,6 +1,6 @@
 using CycloneGames.Logging;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {

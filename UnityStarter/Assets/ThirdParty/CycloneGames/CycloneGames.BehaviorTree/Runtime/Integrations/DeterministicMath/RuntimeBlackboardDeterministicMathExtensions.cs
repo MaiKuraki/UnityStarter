@@ -1,6 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.DeterministicMath;
 
 namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath

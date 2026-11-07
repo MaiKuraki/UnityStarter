@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Editor.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
 using UnityEditor;
 using UnityEngine;

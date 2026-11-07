@@ -1,8 +1,8 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
 using NUnit.Framework;
 using Unity.Profiling;
 using UnityEngine;

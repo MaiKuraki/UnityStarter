@@ -4,7 +4,7 @@ using System.Linq;
 using System.Reflection;
 using CycloneGames.BehaviorTree.Editor;
 using CycloneGames.BehaviorTree.Runtime.Conditions.BlackBoards;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards;

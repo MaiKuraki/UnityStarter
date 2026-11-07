@@ -1,9 +1,9 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using NUnit.Framework;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
@@ -88,7 +88,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
                 Assert.AreEqual(0, errors, "short soak raised exceptions");
                 // Thresholds are intentionally loose: this gate catches order-of-magnitude
-                // regressions, not host noise. Editor measurements of this workload are ~0.6 ms p99.
+                // regressions, not host noise.
                 Assert.Less(p99, 5_000_000d, "p99 frame exceeded 5 ms: " + p99);
                 Assert.Less(max, 100_000_000d, "max frame exceeded 100 ms: " + max);
                 Assert.Less(heapAfter - heapBefore, 16L * 1024 * 1024,

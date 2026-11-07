@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Allocation-free steady-state tick manager with bounded round-robin work.

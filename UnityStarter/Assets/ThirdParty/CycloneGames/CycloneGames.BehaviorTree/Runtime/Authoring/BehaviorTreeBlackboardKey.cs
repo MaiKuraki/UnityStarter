@@ -1,5 +1,5 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime

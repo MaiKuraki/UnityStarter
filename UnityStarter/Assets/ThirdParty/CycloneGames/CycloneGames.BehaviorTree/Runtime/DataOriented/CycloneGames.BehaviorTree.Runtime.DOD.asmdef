@@ -2,7 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Runtime.DOD",
     "rootNamespace": "CycloneGames.BehaviorTree.Runtime.DOD",
     "references": [
-        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Core",
         "CycloneGames.Hash.Core",
         "Unity.Burst",
         "Unity.Collections",

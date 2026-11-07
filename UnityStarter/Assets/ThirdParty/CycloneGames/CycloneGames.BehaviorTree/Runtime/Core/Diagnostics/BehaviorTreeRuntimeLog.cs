@@ -1,7 +1,7 @@
 using System;
 using CycloneGames.Logging;
 
-namespace CycloneGames.BehaviorTree.Runtime
+namespace CycloneGames.BehaviorTree.Core
 {
     internal static class BehaviorTreeRuntimeLog
     {

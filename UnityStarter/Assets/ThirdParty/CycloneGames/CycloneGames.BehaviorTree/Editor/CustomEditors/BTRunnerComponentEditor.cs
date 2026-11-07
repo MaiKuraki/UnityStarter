@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEditor;
 using UnityEngine;
 
@@ -246,7 +246,8 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
                             EditorGUILayout.Toggle(label, entry.BoolValue);
                             break;
                         case RuntimeBlackboardValueType.Vector3:
-                            EditorGUILayout.Vector3Field(label, entry.VectorValue);
+                            BTFloat3 vector = entry.VectorValue;
+                            EditorGUILayout.Vector3Field(label, new Vector3(vector.X, vector.Y, vector.Z));
                             break;
                         case RuntimeBlackboardValueType.Object:
                             EditorGUILayout.TextField(label, entry.ObjectValue?.ToString() ?? "NULL");

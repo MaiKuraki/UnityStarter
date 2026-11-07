@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.BehaviorTree.Runtime",
         "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
-        "CycloneGames.DeterministicMath.Core"
+        "CycloneGames.DeterministicMath.Core",
+        "CycloneGames.BehaviorTree.Core"
     ],
     "includePlatforms": [
         "Editor"

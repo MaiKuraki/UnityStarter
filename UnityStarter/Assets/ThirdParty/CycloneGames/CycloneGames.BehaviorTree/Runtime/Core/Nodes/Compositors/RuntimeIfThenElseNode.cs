@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
     /// Expects exactly 3 children: [condition, then_branch, else_branch].

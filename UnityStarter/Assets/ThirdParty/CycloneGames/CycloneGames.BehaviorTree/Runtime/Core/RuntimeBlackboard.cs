@@ -4,10 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
-using UnityEngine;
 using CycloneGames.Hash.Core;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public delegate void BlackboardObserverCallback(int keyHash, RuntimeBlackboard bb);
 
@@ -44,7 +43,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public int IntValue;
         public float FloatValue;
         public bool BoolValue;
-        public Vector3 VectorValue;
+        public BTFloat3 VectorValue;
         public object ObjectValue;
         public long LongValue;
         public RuntimeBlackboardLong2 Long2Value;
@@ -60,7 +59,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             int intValue = default,
             float floatValue = default,
             bool boolValue = default,
-            Vector3 vectorValue = default,
+            BTFloat3 vectorValue = default,
             object objectValue = null,
             long longValue = default,
             RuntimeBlackboardLong2 long2Value = default,
@@ -83,7 +82,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public int IntValue { get; }
         public float FloatValue { get; }
         public bool BoolValue { get; }
-        public Vector3 VectorValue { get; }
+        public BTFloat3 VectorValue { get; }
         public object ObjectValue { get; }
         public long LongValue { get; }
         public RuntimeBlackboardLong2 Long2Value { get; }
@@ -134,7 +133,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             public int IntValue;
             public float FloatValue;
             public bool BoolValue;
-            public Vector3 VectorValue;
+            public BTFloat3 VectorValue;
             public long LongValue;
             public RuntimeBlackboardLong2 Long2Value;
             public RuntimeBlackboardLong3 Long3Value;
@@ -411,14 +410,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Parent != null ? Parent.GetBool(key, defaultValue) : defaultValue;
         }
 
-        public void SetVector3(int key, Vector3 value)
+        public void SetFloat3(int key, BTFloat3 value)
         {
             ThrowIfDisposed();
             bool changed;
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
-                changed = SetVector3Core(key, value);
+                changed = SetFloat3Core(key, value);
             }
             finally { if (_lock != null) _lock.ExitWriteLock(); }
 
@@ -428,7 +427,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-        public Vector3 GetVector3(int key, Vector3 defaultValue = default)
+        public BTFloat3 GetFloat3(int key, BTFloat3 defaultValue = default)
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
@@ -438,7 +437,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_VECTOR3) return _cells[cellIndex].VectorValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
-            return Parent != null ? Parent.GetVector3(key, defaultValue) : defaultValue;
+            return Parent != null ? Parent.GetFloat3(key, defaultValue) : defaultValue;
         }
 
         public void SetLong(int key, long value)
@@ -624,8 +623,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public void SetBool(string key, bool value) => SetBool(Hash(key), value);
         public bool GetBool(string key, bool defaultValue = false) => GetBool(Hash(key), defaultValue);
 
-        public void SetVector3(string key, Vector3 value) => SetVector3(Hash(key), value);
-        public Vector3 GetVector3(string key, Vector3 defaultValue = default) => GetVector3(Hash(key), defaultValue);
+        public void SetFloat3(string key, BTFloat3 value) => SetFloat3(Hash(key), value);
+        public BTFloat3 GetFloat3(string key, BTFloat3 defaultValue = default) => GetFloat3(Hash(key), defaultValue);
 
         public void SetLong(string key, long value) => SetLong(Hash(key), value);
         public long GetLong(string key, long defaultValue = 0L) => GetLong(Hash(key), defaultValue);
@@ -699,7 +698,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
-        public bool TryGetVector3(int key, out Vector3 value)
+        public bool TryGetFloat3(int key, out BTFloat3 value)
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
@@ -792,7 +791,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public bool TryGetInt(string key, out int value) => TryGetInt(Hash(key), out value);
         public bool TryGetFloat(string key, out float value) => TryGetFloat(Hash(key), out value);
         public bool TryGetBool(string key, out bool value) => TryGetBool(Hash(key), out value);
-        public bool TryGetVector3(string key, out Vector3 value) => TryGetVector3(Hash(key), out value);
+        public bool TryGetFloat3(string key, out BTFloat3 value) => TryGetFloat3(Hash(key), out value);
         public bool TryGetLong(string key, out long value) => TryGetLong(Hash(key), out value);
         public bool TryGetLong2(string key, out RuntimeBlackboardLong2 value) => TryGetLong2(Hash(key), out value);
         public bool TryGetLong3(string key, out RuntimeBlackboardLong3 value) => TryGetLong3(Hash(key), out value);
@@ -1066,13 +1065,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
 
             int vecCount = ReadValidatedEntryCount(reader, "vector3", limits, ref totalEntryCount, 16);
-            var vectorData = new Dictionary<int, Vector3>(vecCount);
+            var vectorData = new Dictionary<int, BTFloat3>(vecCount);
             for (int i = 0; i < vecCount; i++)
             {
                 int key = reader.ReadInt32();
                 AddSerializedPrimitiveKey(allKeys, key);
                 typeByKey[key] = TYPE_VECTOR3;
-                vectorData[key] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+                vectorData[key] = new BTFloat3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             }
 
             int longCount = ReadValidatedEntryCount(reader, "long", limits, ref totalEntryCount, 12);
@@ -1206,7 +1205,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     CommitWireValue(new RuntimeBlackboardCell {
                         Key = item.Key, Type = TYPE_BOOL, Stamp = NextSequence(), BoolValue = item.Value });
 
-                foreach (KeyValuePair<int, Vector3> item in vectorData)
+                foreach (KeyValuePair<int, BTFloat3> item in vectorData)
                     CommitWireValue(new RuntimeBlackboardCell {
                         Key = item.Key, Type = TYPE_VECTOR3, Stamp = NextSequence(), VectorValue = item.Value });
 
@@ -1290,12 +1289,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
-                    Vector3 value = _cells[FindCellIndex(key)].VectorValue;
+                    BTFloat3 value = _cells[FindCellIndex(key)].VectorValue;
                     hash = (hash ^ TYPE_VECTOR3) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
-                    var ux = new FloatUintUnion { FloatValue = value.x };
-                    var uy = new FloatUintUnion { FloatValue = value.y };
-                    var uz = new FloatUintUnion { FloatValue = value.z };
+                    var ux = new FloatUintUnion { FloatValue = value.X };
+                    var uy = new FloatUintUnion { FloatValue = value.Y };
+                    var uz = new FloatUintUnion { FloatValue = value.Z };
                     hash = (hash ^ ux.UintValue) * FNV_PRIME;
                     hash = (hash ^ uy.UintValue) * FNV_PRIME;
                     hash = (hash ^ uz.UintValue) * FNV_PRIME;
@@ -1361,11 +1360,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return leftBits.UintValue == rightBits.UintValue;
         }
 
-        private static bool VectorBitsEqual(Vector3 left, Vector3 right)
+        private static bool VectorBitsEqual(BTFloat3 left, BTFloat3 right)
         {
-            return FloatBitsEqual(left.x, right.x) &&
-                   FloatBitsEqual(left.y, right.y) &&
-                   FloatBitsEqual(left.z, right.z);
+            return BTFloat3.BitEquals(left, right);
         }
         #endregion
 
@@ -1772,7 +1769,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return true;
         }
 
-        private bool SetVector3Core(int key, Vector3 value)
+        private bool SetFloat3Core(int key, BTFloat3 value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Vector3);
             int existing = FindCellIndex(key);
@@ -1894,7 +1891,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     SetBoolCore(entry.KeyHash, entry.DefaultValue.BoolValue);
                     break;
                 case RuntimeBlackboardValueType.Vector3:
-                    SetVector3Core(entry.KeyHash, entry.DefaultValue.Vector3Value);
+                    SetFloat3Core(entry.KeyHash, entry.DefaultValue.Vector3Value);
                     break;
                 case RuntimeBlackboardValueType.Long:
                     SetLongCore(entry.KeyHash, entry.DefaultValue.LongValue);
@@ -2163,9 +2160,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                         writer.Write(cell.BoolValue ? (byte)1 : (byte)0);
                         break;
                     case TYPE_VECTOR3:
-                        writer.Write(cell.VectorValue.x);
-                        writer.Write(cell.VectorValue.y);
-                        writer.Write(cell.VectorValue.z);
+                        writer.Write(cell.VectorValue.X);
+                        writer.Write(cell.VectorValue.Y);
+                        writer.Write(cell.VectorValue.Z);
                         break;
                     case TYPE_LONG:
                         writer.Write(cell.LongValue);
@@ -2534,7 +2531,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     SetBoolCore(mutation.Key, mutation.BoolValue);
                     break;
                 case RuntimeBlackboardMutationKind.Vector3:
-                    SetVector3Core(mutation.Key, mutation.VectorValue);
+                    SetFloat3Core(mutation.Key, mutation.VectorValue);
                     break;
                 case RuntimeBlackboardMutationKind.Object:
                     SetObjectCore(mutation.Key, mutation.ObjectValue);

@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
     /// <summary>
     /// Executes child once, then returns the cached result on subsequent ticks

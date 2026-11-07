@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
     /// <summary>
     /// Executes its child against an isolated blackboard that falls back to the parent blackboard.

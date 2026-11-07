@@ -2,7 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using CycloneGames.Hash.Core;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Deterministic FNV-1a string hash for blackboard keys, independent of Unity APIs so

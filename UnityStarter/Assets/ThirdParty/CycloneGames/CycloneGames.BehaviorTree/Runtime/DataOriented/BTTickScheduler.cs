@@ -2,7 +2,7 @@ using System;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.DOD
 {

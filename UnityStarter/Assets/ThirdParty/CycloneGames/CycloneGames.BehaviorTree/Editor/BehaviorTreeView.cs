@@ -5,6 +5,7 @@ using UnityEditor.Experimental.GraphView;
 using UnityEngine.UIElements;
 using System.Linq;
 using System.Reflection;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
@@ -112,9 +113,9 @@ namespace CycloneGames.BehaviorTree.Editor
 
             switch (runner.RuntimeTree.State)
             {
-                case Runtime.Core.RuntimeState.Success: return BTState.SUCCESS;
-                case Runtime.Core.RuntimeState.Failure: return BTState.FAILURE;
-                case Runtime.Core.RuntimeState.Running: return BTState.RUNNING;
+                case RuntimeState.Success: return BTState.SUCCESS;
+                case RuntimeState.Failure: return BTState.FAILURE;
+                case RuntimeState.Running: return BTState.RUNNING;
                 default: return BTState.NOT_ENTERED;
             }
         }
@@ -148,7 +149,7 @@ namespace CycloneGames.BehaviorTree.Editor
             return _boundRunner;
         }
 
-        public Runtime.Core.RuntimeNode GetRuntimeNodeByGuid(string guid)
+        public RuntimeNode GetRuntimeNodeByGuid(string guid)
         {
             if (string.IsNullOrEmpty(guid)) return null;
 
@@ -797,15 +798,15 @@ namespace CycloneGames.BehaviorTree.Editor
             return nodeView.GetLastKnownState();
         }
 
-        private static BTState ToBTState(Runtime.Core.RuntimeState state)
+        private static BTState ToBTState(RuntimeState state)
         {
             switch (state)
             {
-                case Runtime.Core.RuntimeState.Success:
+                case RuntimeState.Success:
                     return BTState.SUCCESS;
-                case Runtime.Core.RuntimeState.Failure:
+                case RuntimeState.Failure:
                     return BTState.FAILURE;
-                case Runtime.Core.RuntimeState.Running:
+                case RuntimeState.Running:
                     return BTState.RUNNING;
                 default:
                     return BTState.NOT_ENTERED;

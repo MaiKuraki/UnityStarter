@@ -1,14 +1,23 @@
 using System;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Runtime
 {
+    /// <summary>
+    /// Per-agent override for scheduling priority and tick interval. Values outside the configured
+    /// bounds are rejected instead of clamped, so an authoring mistake is visible.
+    /// </summary>
     public interface IBTPriorityMarker
     {
         int Priority { get; }
         int TickInterval { get; }
     }
 
+    /// <summary>
+    /// Group identity for agents that share one scheduling budget. Applies when an agent exposes no
+    /// <see cref="IBTPriorityMarker"/>.
+    /// </summary>
     public interface IBTAgentGroupProvider
     {
         int GroupId { get; }
@@ -16,10 +25,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         int GroupTickInterval { get; }
     }
 
+    /// <summary>
+    /// Maps distance bands to tick intervals and priority buckets, and sizes the per-priority budgets
+    /// of <c>BTPriorityTickManager</c>.
+    /// </summary>
+    /// <remarks>
+    /// Bands must be sorted by ascending <see cref="LODLevel"/> distance; the last band usually ends
+    /// with <c>float.MaxValue</c>. Budgets must cover every priority the bands use.
+    /// </remarks>
     [CreateAssetMenu(fileName = "BTLODConfig", menuName = "CycloneGames/AI/BT LOD Config")]
     public class BTLODConfig : ScriptableObject
     {
 
+        /// <summary>
+        /// One distance band: up to its maximum distance the tree ticks every
+        /// <see cref="TickInterval"/> frames in the given priority bucket.
+        /// </summary>
         [Serializable]
         public struct LODLevel
         {
@@ -58,6 +79,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private float[] _sqrDistances;
         private bool _isValid;
 
+        /// <summary>True when the last validation pass accepted the current arrays.</summary>
         public bool IsValid => _isValid;
 
         private void OnEnable()
@@ -87,6 +109,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        /// <summary>
+        /// Index of the band that contains <paramref name="distance"/>, or -1 when the config is
+        /// invalid or the distance is negative or NaN.
+        /// </summary>
         public int GetLODLevel(float distance)
         {
             if (!_isValid || float.IsNaN(distance) || distance < 0f)
@@ -102,7 +128,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Levels.Length - 1;
         }
 
-        // sqrMagnitude-based LOD check avoids sqrt per agent per LOD update
+        /// <summary>
+        /// Same as <see cref="GetLODLevel"/> for callers that already hold a squared distance, so the
+        /// per-agent update skips a square root.
+        /// </summary>
         public int GetLODLevelSqr(float sqrDistance)
         {
             if (_sqrDistances == null) RebuildSqrDistances();
@@ -119,6 +148,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Levels.Length - 1;
         }
 
+        /// <summary>
+        /// Reads a per-agent override from <paramref name="owner"/>. Returns false when no marker is
+        /// attached or its values fall outside the configured bounds.
+        /// </summary>
         public bool TryGetPriorityMarker(GameObject owner, out int priority, out int tickInterval)
         {
             priority = -1;
@@ -143,6 +176,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return false;
         }
 
+        /// <summary>
+        /// Checks band ordering, interval and priority bounds, and that budgets cover every used
+        /// priority. Errors name the offending field.
+        /// </summary>
         public bool TryValidate(out string error)
         {
             if (Levels == null || Levels.Length == 0)

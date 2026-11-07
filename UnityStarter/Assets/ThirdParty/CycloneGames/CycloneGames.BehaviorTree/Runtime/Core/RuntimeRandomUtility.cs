@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Deterministic random generator for replay, networking, and seeded nodes;

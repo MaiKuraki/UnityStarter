@@ -1,6 +1,6 @@
 using System;
 using System.Threading;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.DOD;
 using NUnit.Framework;
 

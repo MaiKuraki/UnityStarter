@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Shared ceilings for the managed and data-oriented runtimes.

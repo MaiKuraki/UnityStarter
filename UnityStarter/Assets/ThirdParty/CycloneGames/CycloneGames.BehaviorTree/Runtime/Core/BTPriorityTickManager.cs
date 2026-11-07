@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Priority-based, allocation-free steady-state tick manager.

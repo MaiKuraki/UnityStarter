@@ -2,14 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.Hash.Core;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
+namespace CycloneGames.BehaviorTree.Core.Networking
 {
     public static class BTNetworkSync
     {
-        // "BTS2" in little-endian order. V2 hashes composite execution cursors.
+        // "BTS2" in little-endian order. The hash covers node state and composite execution cursors.
         private const uint SNAPSHOT_MAGIC = 0x32535442u;
 
         public readonly struct Limits
@@ -106,7 +106,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             snapshot.TreeStateHash = ComputeTreeStateHash(snapshot);
-            snapshot.Timestamp = RuntimeBTTime.GetUnityTime(false);
+            snapshot.Timestamp = RuntimeBTTime.GetMonotonicTime();
             snapshot.IsValid = true;
 
             return snapshot;

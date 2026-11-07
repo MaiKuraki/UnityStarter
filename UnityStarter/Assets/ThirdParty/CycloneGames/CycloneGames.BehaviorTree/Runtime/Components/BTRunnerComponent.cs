@@ -5,7 +5,7 @@ using UnityEngine.Serialization;
 using Object = UnityEngine.Object;
 
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
@@ -251,7 +251,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (behaviorTree == null) return false;
 
-            _context ??= new RuntimeBTContext();
+            _context ??= new UnityBTContext();
             _context.Owner = gameObject;
 
             RuntimeBehaviorTree compiledTree = behaviorTree.Compile(_context);
@@ -420,7 +420,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public void SetContext(RuntimeBTContext context)
         {
             EnsureContextCanChange();
-            _context = context ?? new RuntimeBTContext();
+            _context = context ?? new UnityBTContext();
             _context.Owner = gameObject;
 
             if (_runtimeTree != null && _runtimeTree.Blackboard != null)
@@ -432,7 +432,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public void SetServiceResolver(IRuntimeBTServiceResolver resolver)
         {
             EnsureContextCanChange();
-            _context ??= new RuntimeBTContext();
+            _context ??= new UnityBTContext();
             _context.Owner = gameObject;
             _context.ServiceResolver = resolver;
 

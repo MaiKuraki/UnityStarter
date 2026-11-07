@@ -5,13 +5,12 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Conditions.BlackBoards;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.State;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Conditions;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards;
@@ -50,7 +49,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new BehaviorTreeCompileException(FormatErrors(source, artifact.Errors));
             }
 
-            context ??= new RuntimeBTContext();
+            context ??= new UnityBTContext();
 
             RuntimeNode runtimeRoot;
             try
@@ -1103,6 +1102,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         public int MaxDepth { get; set; } = BTCapacityLimits.MaxTreeDepth;
     }
 
+    /// <summary>
+    /// Result of one compile pass: the source asset, the emitted node count, the registry used, and
+    /// every validation error.
+    /// </summary>
     public sealed class BehaviorTreeCompileArtifact
     {
         private readonly IReadOnlyList<string> _errors;
@@ -1172,6 +1175,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         }
     }
 
+    /// <summary>
+    /// Authoring node handed to an emitter: its concrete type, GUID, and the child count the compiler
+    /// resolved for it.
+    /// </summary>
     public readonly struct BehaviorTreeNodeDescriptor
     {
         public BehaviorTreeNodeDescriptor(BTNode source, int childCount)
@@ -1188,10 +1195,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         public int ChildCount { get; }
     }
 
+    /// <summary>
+    /// Converts one authoring node into a runtime node.
+    /// </summary>
+    /// <remarks>
+    /// Emitters must be stateless between compiles; per-compile data travels on
+    /// <see cref="BehaviorTreeEmitContext"/>. Returned nodes are stamped with the authoring GUID by
+    /// <c>WithGuid</c>.
+    /// </remarks>
     public delegate RuntimeNode BehaviorTreeNodeEmitter(
         BehaviorTreeNodeDescriptor descriptor,
         BehaviorTreeEmitContext context);
 
+    /// <summary>
+    /// Maps authoring node types to emitters.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BuiltIn"/> holds the shipped emitters and is read-only. Construct a registry with a
+    /// fallback to add project emitters without re-registering the built-in ones.
+    /// </remarks>
     public sealed class BehaviorTreeNodeEmitterRegistry
     {
         private readonly Dictionary<Type, BehaviorTreeNodeEmitter> _emitters = new Dictionary<Type, BehaviorTreeNodeEmitter>(64);
@@ -1532,6 +1554,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         }
     }
 
+    /// <summary>
+    /// Per-compile state for emitters: the registry in use, subtree bookkeeping, and helpers to emit
+    /// children and carry the authoring GUID onto runtime nodes.
+    /// </summary>
     public sealed class BehaviorTreeEmitContext
     {
         private readonly HashSet<BehaviorTree> _activeSubTreeAssets;

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 using CycloneGames.BehaviorTree.Runtime.PerformanceTest;
 using CycloneGames.BehaviorTree.Tests.Editor.Framework;
 using NUnit.Framework;

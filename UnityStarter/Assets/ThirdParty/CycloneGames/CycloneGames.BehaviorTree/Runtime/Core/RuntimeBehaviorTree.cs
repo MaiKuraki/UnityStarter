@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public readonly struct RuntimeBehaviorTreeLimits
     {
@@ -123,6 +123,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// Play starts a new activation and resets the notification gate.
         /// </summary>
         public event Action<RuntimeState> Terminated;
+
+        /// <summary>
+        /// Raised on the requesting thread the first time a dormant tree is woken, so a
+        /// caller-supplied scheduler can enqueue it. Handlers must be thread-safe and must
+        /// not block; the event is not raised again until the tree drains its wake-up state.
+        /// </summary>
         internal event Action<RuntimeBehaviorTree> WakeUpRequested;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD

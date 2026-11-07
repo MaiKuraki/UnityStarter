@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -131,7 +131,7 @@ namespace CycloneGames.BehaviorTree.Runtime
         /// </summary>
         public RuntimeBehaviorTree Compile()
         {
-            return Compile(new RuntimeBTContext());
+            return Compile(new UnityBTContext());
         }
 
         public RuntimeBehaviorTree Compile(RuntimeBTContext context)
@@ -149,7 +149,7 @@ namespace CycloneGames.BehaviorTree.Runtime
 
         public RuntimeBehaviorTree Compile(UnityEngine.GameObject owner)
         {
-            return Compile(new RuntimeBTContext(owner));
+            return Compile(new UnityBTContext(owner));
         }
 
         #region Editor Methods

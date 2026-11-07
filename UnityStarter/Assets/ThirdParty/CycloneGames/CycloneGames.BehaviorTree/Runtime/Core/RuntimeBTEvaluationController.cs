@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Selects when a composite re-evaluates its conditional abort and reactive branches.

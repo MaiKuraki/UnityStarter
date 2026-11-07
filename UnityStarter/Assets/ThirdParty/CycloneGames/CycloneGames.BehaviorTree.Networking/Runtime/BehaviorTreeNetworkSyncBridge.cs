@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 
 namespace CycloneGames.BehaviorTree.Networking
 {

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using CycloneGames.Logging;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
@@ -221,7 +221,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 0;
             ref var data = ref _values[idx];
 
-            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
+            if (UnityBTTimeProvider.Instance.TimeAsDouble < data.BoostEndTime && _config != null)
                 return _config.BoostedPriority;
 
             if (data.HasTypeOverride && data.TypePriority >= 0)
@@ -238,7 +238,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 1;
             ref var data = ref _values[idx];
 
-            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
+            if (UnityBTTimeProvider.Instance.TimeAsDouble < data.BoostEndTime && _config != null)
                 return _config.BoostedTickInterval;
 
             if (data.HasTypeOverride && data.TypeTickInterval >= 0)
@@ -263,7 +263,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public void BoostPriority(RuntimeBehaviorTree tree, float duration)
         {
             if (!_indexMap.TryGetValue(tree, out int idx)) return;
-            _values[idx].BoostEndTime = RuntimeBTTime.GetUnityTime(false) + duration;
+            _values[idx].BoostEndTime = UnityBTTimeProvider.Instance.TimeAsDouble + duration;
         }
 
         public void UpdateLOD(RuntimeBehaviorTree tree)

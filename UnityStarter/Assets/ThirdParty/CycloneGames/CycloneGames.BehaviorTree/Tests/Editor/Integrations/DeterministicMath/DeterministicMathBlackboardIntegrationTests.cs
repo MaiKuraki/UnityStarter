@@ -1,7 +1,7 @@
 using System;
 using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 using CycloneGames.DeterministicMath;
 using NUnit.Framework;
 

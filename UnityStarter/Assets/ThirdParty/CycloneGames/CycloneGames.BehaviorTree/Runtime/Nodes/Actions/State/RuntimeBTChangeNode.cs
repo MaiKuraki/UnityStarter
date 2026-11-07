@@ -1,7 +1,8 @@
 using CycloneGames.BehaviorTree.Runtime.Components;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.State
+namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
 {
     public class RuntimeBTChangeNode : RuntimeNode
     {

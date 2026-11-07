@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Conditions
 {
     public class RuntimeOnOffNode : RuntimeNode
     {

@@ -110,16 +110,70 @@ The graph editor colours nodes by type, prints the runtime state on each node, a
 
 ## <a id="environment"></a>1. Environment and assembly boundaries
 
-The project opens at `<repo-root>/UnityStarter`. The runtime assembly `CycloneGames.BehaviorTree.Runtime` is `autoReferenced: true` and references `CycloneGames.Hash.Core` and `CycloneGames.Logging.Core`; it contains the managed runtime, blackboard, schema, compiler, runner, managed schedulers, and serialization contracts. `CycloneGames.BehaviorTree.Editor` is Editor-only. Three optional assemblies are `autoReferenced: false` and must be referenced explicitly by a consumer asmdef:
+The project opens at `<repo-root>/UnityStarter`. The runtime is split into an engine-independent core and a Unity layer, so the same tree, the same blackboard and the same scheduling contract run in the editor, in a player, and in a headless .NET service.
+
+| Assembly | Engine reference | Contents |
+| --- | --- | --- |
+| `CycloneGames.BehaviorTree.Core` | none (`noEngineReferences: true`) | `RuntimeBehaviorTree`, blackboard and schema, managed nodes, scheduling, `BTFloat3`, serialization contracts |
+| `CycloneGames.BehaviorTree.Runtime` | Unity | `BehaviorTree` and `BTNode` ScriptableObjects, compiler, runner and manager components, LOD, `UnityBTContext` |
+| `CycloneGames.BehaviorTree.Editor` | Unity Editor | graph window, inspectors, blackboard schema editing |
+
+Dependencies point one way: `Runtime -> Core`. The core references `CycloneGames.Hash.Core` and `CycloneGames.Logging.Core` only, so a server that references the core needs no engine assembly.
+
+Three optional assemblies are `autoReferenced: false` and must be referenced explicitly by a consumer asmdef:
 
 - `CycloneGames.BehaviorTree.Runtime.DOD` is gated by `versionDefines` on `com.unity.burst`, `com.unity.collections`, and `com.unity.mathematics` and by matching `defineConstraints`. It references Unity.Burst, Unity.Collections, Unity.Mathematics, and Unity.Jobs.
 - `CycloneGames.BehaviorTree.Integrations.DeterministicMath` is gated by a `versionDefine` on `com.cyclone-games.deterministic-math` in `[1.0.0,2.0.0)` producing `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`, and by the matching `defineConstraint`.
 - `CycloneGames.BehaviorTree.Benchmarks` holds the Editor and PlayMode measurement tooling.
 
-A missing or unsupported optional package excludes the corresponding assembly; the Core and Runtime assemblies continue to compile. Capability symbols come from `versionDefines`, not from PlayerSettings. The shared ceilings are exposed as constants:
+A missing or unsupported optional package excludes the corresponding assembly; the core and Unity assemblies continue to compile. Capability symbols come from `versionDefines`, not from PlayerSettings.
+
+### What the Unity layer adds
+
+Two things cannot live in the core: a clock and component lookup. `UnityBTContext` supplies both, and a caller-registered service always wins over the built-in fallback.
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Runtime;
+using UnityEngine;
+
+public sealed class UnityContextUsage
+{
+    public RuntimeBehaviorTree Build(Component owner)
+    {
+        // GetOwner<T>() resolves through the GameObject; timed nodes read the injected clock.
+        var context = new UnityBTContext(owner);
+        return new RuntimeBehaviorTreeBuilder(context)
+            .Action(_ => RuntimeState.Success)
+            .Build();
+    }
+}
+```
+
+`BTFloat3` replaces `Vector3` in the core so the blackboard, snapshots and deltas stay engine-free. The Unity assembly adds `SetVector3`, `GetVector3` and `TryGetVector3` extension methods that convert without allocating, so Unity code keeps writing `Vector3`.
+
+### Running without Unity
+
+A headless host references `CycloneGames.BehaviorTree.Core` plus `CycloneGames.Hash.Core` and `CycloneGames.Logging.Core`. It creates the tree with the same builder and calls `Tick` itself: no `BTRunnerComponent`, no manager, no scene.
+
+```csharp
+using CycloneGames.BehaviorTree.Core;
+
+public static void TickUntilStopped(RuntimeBehaviorTree tree)
+{
+    while (!tree.IsStopped)
+    {
+        tree.Tick();
+    }
+}
+```
+
+The clock comes from `IRuntimeBTTimeProvider` when one is registered and from a monotonic `Stopwatch` otherwise, so `RuntimeWaitNode` and the timeout decorators keep correct timing outside Unity. Logging goes through `CycloneGames.Logging`, which has no engine dependency. Chapter 2 builds the tree that this loop drives.
+
+The shared ceilings are exposed as constants:
+
+```csharp
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step0
 {
@@ -129,7 +183,7 @@ public static class Step0
         int maxNodes = BTCapacityLimits.MaxNodeCount;             // 65536
         int defaultNodes = BTCapacityLimits.DefaultNodeCount;     // 4096
         int priorityLevels = BTCapacityLimits.PriorityLevelCount; // 8
-        int defaultAgents = BTCapacityLimits.DefaultAgentCount;  // 65536
+        int defaultAgents = BTCapacityLimits.DefaultAgentCount;   // 65536
     }
 }
 ```
@@ -141,7 +195,7 @@ public static class Step0
 A tree is a `RuntimeBehaviorTree` built from a `RuntimeBehaviorTreeBuilder`. The builder has a fluent scope: a composite or decorator opens a scope, `.End()` closes it, and `Build()` closes any remaining scopes. A tree has exactly one root child, so a single `.Action(...)` is the smallest complete tree.
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step1
 {
@@ -165,11 +219,11 @@ public static class Step1
 
 ## <a id="step-2"></a>3. Step 2: blackboard and keys
 
-`RuntimeBlackboard` holds eight independent typed stores: `int`, `float`, `bool`, `Vector3`, `long`, `Long2`, `Long3`, and `object`. Typed access avoids boxing primitive values. A key is an `int` hash; `DefaultStringHashFunc` is stable `BTHash.FNV1A`, so string-key overloads are a convenience that hashes on each call. Pre-hash frequently used keys once.
+`RuntimeBlackboard` holds eight independent typed stores: `int`, `float`, `bool`, `Float3`, `long`, `Long2`, `Long3`, and `object`. `Float3` is the engine-free triple; the Unity assembly adds `Vector3` overloads. Typed access avoids boxing primitive values. A key is an `int` hash; `DefaultStringHashFunc` is stable `BTHash.FNV1A`, so string-key overloads are a convenience that hashes on each call. Pre-hash frequently used keys once.
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step2
 {
@@ -204,7 +258,7 @@ public static class Step2
         // Eight typed stores.
         local.SetFloat(FocusKey, 1.5f);
         local.SetBool(ActiveKey, true);
-        local.SetVector3(PositionKey, new Vector3(1f, 2f, 3f));
+        local.SetFloat3(PositionKey, new BTFloat3(1f, 2f, 3f));
         local.SetLong(SequenceKey, 42L);
         local.SetLong2(PairKey, new RuntimeBlackboardLong2(1L, 2L));
         local.SetLong3(TripleKey, new RuntimeBlackboardLong3(1L, 2L, 3L));
@@ -251,7 +305,7 @@ A `RuntimeBlackboardSchema` turns key existence, type, defaults, and synchroniza
 ```csharp
 using System.IO;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public static class Step3
 {
@@ -264,7 +318,7 @@ public static class Step3
             .AddInt("Stage", 0, RuntimeBlackboardSyncFlags.SnapshotAndDelta)
             .AddBool("EventActive", false, RuntimeBlackboardSyncFlags.LocalOnly)
             .AddFloat("Focus", 0f, RuntimeBlackboardSyncFlags.Snapshot)
-            .AddVector3("Position", Vector3.zero, RuntimeBlackboardSyncFlags.Delta)
+            .AddFloat3("Position", BTFloat3.Zero, RuntimeBlackboardSyncFlags.Delta)
             .AddLong("Sequence", 0L, RuntimeBlackboardSyncFlags.LocalOnly)
             .AddObject("Reference")
             .Build();
@@ -326,8 +380,8 @@ Composites own an ordered child array. `Seal()` converts the setup-time list int
 | `RuntimeParallelNode` / `RuntimeParallelAllNode` (`Parallel` / `ParallelAll`) | Interleave branches on the owner thread; see the finish policy below. |
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
 
 public static class Step4
 {
@@ -424,8 +478,8 @@ Decorators wrap exactly one child. The builder has direct helpers for `Inverter`
 `BBComparisonNode` is the authored ScriptableObject decorator whose `BehaviorTreeComparisonValueType` selects `Int`, `Float`, `Bool`, or `Object`. Its runtime counterpart is `RuntimeBBComparisonNode`, with `BBComparisonOp` (`Equal`, `NotEqual`, `GreaterThan`, `GreaterOrEqual`, `LessThan`, `LessOrEqual`, `IsSet`, `IsNotSet`) and typed reference values. `SubTreeNode` / `RuntimeSubTreeNode` runs a child against an owned scoped blackboard with directional port remapping. `RuntimeServiceNode` runs a periodic side-effect callback while its child executes.
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
 public sealed class AdvanceCommand : IRuntimeBTCommand
 {
@@ -509,8 +563,8 @@ Named `IRuntimeBTCommand` and `IRuntimeBTConditionStrategy` objects avoid captur
 `RuntimeCompositeNode.ReevaluationMode` and `ReevaluationPollInterval` select the mode per composite; `RuntimeReactiveSequence` and `RuntimeReactiveFallback` advance only the active branch on idle ticks under `OnChange` or `Hybrid`. `RuntimeBBComparisonNode.AbortMode` is a property of type `RuntimeAbortType` (`None`, `Self`, `LowerPriority`, `Both`): a non-`None` value binds blackboard observers at graph commit, and a tracked key change calls `RuntimeBehaviorTree.RequestReevaluation()`, which increments the epoch and schedules an immediate wake-up. `RuntimeNode.EmitWakeUpSignal()` is the protected helper a node calls to request reevaluation from inside execution.
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
 public sealed class WakeUpOnSignalNode : RuntimeNode
 {
@@ -591,7 +645,7 @@ Underneath the components, `BTTickManager` and `BTPriorityTickManager` are pure 
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public static class Step7
@@ -665,7 +719,7 @@ A managed-mode runner requires a manager component to be present: either mounted
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public static class Step8
@@ -710,15 +764,15 @@ Mounting the optional `BTDistanceLODProvider` before adding the manager componen
 
 `RuntimeBlackboard.WriteTo`, `ReadFrom`, and `ComputeHash` are the primitive contracts. `RuntimeBlackboardNetworkScope` selects the visibility boundary: `Snapshot` includes keys marked for full snapshots, `Networked` includes every non-local primitive including delta-only keys. `RuntimeBlackboardSyncFlags.SnapshotAndDelta` from Step 3 determines which keys participate in which scope. `Object` keys never enter a payload.
 
-The `CycloneGames.BehaviorTree.Runtime.Core.Networking` types are contract-only: `BTNetworkSync` provides snapshot capture, serialization, deserialization, tree-state hashing, desync comparison, and blackboard snapshot application; `BTBlackboardDelta` tracks changed keys and produces or applies bounded delta frames. They do not create a transport, choose authority, define ordering or rate limits, or perform resynchronization and failure recovery. The product layer decides when to call them, which bytes to send, and how to react to a mismatch.
+The `CycloneGames.BehaviorTree.Core.Networking` types are contract-only: `BTNetworkSync` provides snapshot capture, serialization, deserialization, tree-state hashing, desync comparison, and blackboard snapshot application; `BTBlackboardDelta` tracks changed keys and produces or applies bounded delta frames. They do not create a transport, choose authority, define ordering or rate limits, or perform resynchronization and failure recovery. The product layer decides when to call them, which bytes to send, and how to react to a mismatch.
 
 The sibling `CycloneGames.BehaviorTree.Networking` package extends those primitives. `BehaviorTreeNetworkProtocol` freezes message identifiers and payload schemas; `BehaviorTreeNetworkProfile` declares sync models, feature flags and tick cadences; `BehaviorTreeNetworkAuthority` binds a tree to a network identity and resolves tick and apply permission; `BehaviorTreeNetworkReplication` filters observers by owner, team or area; `BehaviorTreeNetworkSyncBridge` captures snapshots, deltas and hash-only frames and applies validated payloads. Its assemblies are `autoReferenced: false` and contain no transport or driver loop: a composition root calls `CaptureSnapshot`, `TryCreateBlackboardDelta` or `TryApplyPayload` on its own schedule, and drives the profile cadences explicitly. `CycloneGames.AIPerception.Networking` follows the same contract-only shape for perception data.
 
 ```csharp
 using System;
 using System.IO;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 
 public static class Step9
 {
@@ -784,7 +838,7 @@ public static class Step9
 Use the DOD path when many agents share one homogeneous flat tree and the workload fits a restricted node set with fixed `int`/`float`/`bool` blackboard slots and fixed action slots. It is a separate execution model: `FlatBehaviorTree` owns persistent native storage for the shared immutable definition, and `BTTickScheduler` owns per-agent mutable state in NativeArrays scheduled by a Burst `BTTickJob`. It does not use `RuntimeNode` objects, `RuntimeBlackboard` observers, schemas, `object` values, or the managed tick managers.
 
 ```csharp
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.DOD;
 
 public static class Step10
@@ -834,9 +888,9 @@ This example assembles one tree that uses a strict schema, observer abort, `Hybr
 
 ```csharp
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Components;
 
 public sealed class MultiLayerTreeRoot : MonoBehaviour
@@ -992,7 +1046,7 @@ Publish the current sighting as a fact and let a decorator observe the key. The 
 
 ```csharp
 using CycloneGames.AIPerception.Runtime;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
 public sealed class PerceptionBridge : MonoBehaviour
@@ -1027,7 +1081,7 @@ A `RuntimeBBComparisonNode` over `HasTarget` with `AbortMode` set to `Self`, `Lo
 
 ```csharp
 using CycloneGames.GameplayTags;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 GameplayTag alerted = GameplayTagManager.Request("State.Alerted");
 int alertedKey = RuntimeBlackboard.DefaultStringHashFunc("State.Alerted");
@@ -1046,7 +1100,7 @@ A leaf node is a natural place to start an ability. Keep the spec at the composi
 
 ```csharp
 using CycloneGames.GameplayAbilities;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public sealed class ActivateAbilityNode : RuntimeNode
 {
@@ -1086,6 +1140,10 @@ runner.SetTree(treeAsset);
 
 A controller that owns its own clock can keep `ManualTick()` and call it from the framework update instead of mounting a manager.
 
+### Space: Spatial
+
+Proximity-driven behavior lives in the sibling package `CycloneGames.BehaviorTree.Spatial`, not here. It publishes a nearest-neighbour query into blackboard slots, so the tree reads ordinary keys and this package never gains a spatial dependency. Its README documents the wiring; the shape is one query per agent per update, then a `RuntimeBBComparisonNode` on the resulting `bool` and `float` slots.
+
 ## <a id="performance"></a>14. Performance, capacity and measurement
 
 The steady-state low-allocation structure comes from how the managed runtime is built. A composite converts its setup-time child list into a sealed array once, and every execution step reads that array. Typed blackboard stores avoid boxing primitive values, and `RuntimeBlackboard.DefaultStringHashFunc` values can be pre-hashed. Manager scans reuse their storage, and the reevaluation epoch is a single `Interlocked.Increment` with no queue. Strict schema parsing does not happen in `Tick`; runtime access uses typed stores and precomputed integer hashes, with one dictionary contract lookup before a schema-bound write. Dictionary growth, first-time arrays, observer subscription changes, compile operations, schema construction, and capacity growth do allocate. Serialization may allocate unless the reusable-buffer APIs are used.
@@ -1123,9 +1181,9 @@ The structural guarantees come from the source: sealed child arrays, typed store
 | `RuntimeBehaviorTreeBuilder` | Code-first fluent builder; `Build()` returns one `RuntimeBehaviorTree`. |
 | `RuntimeBehaviorTree` | `Tick()`, `Play()`, `Stop()`, `Dispose()`, `Terminated`, `State`, `IsStopped`, `Blackboard`, `Root`, `Evaluation`, `TickInterval`, `WakeUp`, `RequestReevaluation`, `ShouldTick`, `GetOwner<T>()`, `GetService<T>()`, `SetContext`. |
 | `RuntimeState` | `NotEntered`, `Running`, `Success`, `Failure`. |
-| `RuntimeBlackboard` | Eight typed `Set*`/`Get*`/`TryGet*` stores, `Parent`, `GetStamp`, `HasKey`, `Remove`, `Clear`, `ResetToSchemaDefaults`, `AddObserver`, `AddGlobalObserver`, `RemoveObserver`, `ClearAllObservers`, `EnableConcurrentStorageAccess`, `ResetDefaultRandom`, `WriteTo`, `ReadFrom`, `ComputeHash`, `Schema`, `BindSchema`. |
+| `RuntimeBlackboard` | Eight typed `Set*`/`Get*`/`TryGet*` stores (`SetFloat3` for vectors; `SetVector3` in the Unity assembly), `Parent`, `GetStamp`, `HasKey`, `Remove`, `Clear`, `ResetToSchemaDefaults`, `AddObserver`, `AddGlobalObserver`, `RemoveObserver`, `ClearAllObservers`, `EnableConcurrentStorageAccess`, `ResetDefaultRandom`, `WriteTo`, `ReadFrom`, `ComputeHash`, `Schema`, `BindSchema`. |
 | `RuntimeBlackboard.DefaultStringHashFunc` | Stable `BTHash.FNV1A` string-to-`int` key hash. |
-| `RuntimeBlackboardSchemaBuilder` / `RuntimeBlackboardSchema` | `AddInt`, `AddFloat`, `AddBool`, `AddVector3`, `AddLong`, `AddLong2`, `AddLong3`, `AddObject`, `Build`, `Count`, `ContractVersion`, `IsKnownKey`, `UsesSnapshot`, `UsesDelta`, `IsNetworkedKey`, `TryGetDefinition`, `ValidateWrite`. |
+| `RuntimeBlackboardSchemaBuilder` / `RuntimeBlackboardSchema` | `AddInt`, `AddFloat`, `AddBool`, `AddFloat3` (`AddVector3` in the Unity assembly), `AddLong`, `AddLong2`, `AddLong3`, `AddObject`, `Build`, `Count`, `ContractVersion`, `IsKnownKey`, `UsesSnapshot`, `UsesDelta`, `IsNetworkedKey`, `TryGetDefinition`, `ValidateWrite`. |
 | `RuntimeBlackboardSyncFlags` | `LocalOnly`, `Snapshot`, `Delta`, `SnapshotAndDelta`. |
 | `RuntimeBlackboardNetworkScope` | `Snapshot`, `Networked`. |
 | `BTCapacityLimits` | `MaxTreeDepth`, `MaxNodeCount`, `DefaultNodeCount`, `MaxAgentCount`, `DefaultAgentCount`, `PriorityLevelCount`, `DefaultTickManagerCapacity`, `DefaultPriorityBucketCapacity`. |
@@ -1142,6 +1200,9 @@ The structural guarantees come from the source: sealed child arrays, typed store
 | `RuntimeNode.EmitWakeUpSignal()` | Protected node-side reevaluation signal. |
 | `IRuntimeBTCommand` / `IRuntimeBTConditionStrategy` | Reusable command and condition objects. |
 | `RuntimeBTContext` | `Owner`, `ServiceResolver`, `GetOwner<T>()`, `GetService<T>()`; `WithOwner`, `WithContext`, `WithServiceResolver` on the builder. |
+| `UnityBTContext` / `UnityBTTimeProvider` | Unity-side context: component lookup from a `GameObject` owner, and the `Time`-backed clock. |
+| `BTFloat3` | Engine-free float triple stored by the core blackboard; `ToVector3()` and `ToBTFloat3()` convert in the Unity assembly. |
+| `SpatialBlackboardQuery<TItem>` | `QueryNearest`, `QueryNearestFrom`, `PublishNearest`, `PublishCount`, `NearestItem`, `NearestSquaredDistance`, `Results`, `SquaredDistances`. |
 | `BTTickManager` / `BTPriorityTickManager` | `TickBudget`, `SetBudgets`, `Register`, `TryRegister`, `Unregister`, `TryUnregister`, `UpdatePriority`, `TryUpdatePriority`, `Tick`, `Clear`, `GetMemoryStats`, `GetTreeCount`, `GetTotalCount`. |
 | `BTTickManagerComponent.CreateInstance()` / `Instance` | Managed-mode component creation and resolution. |
 | `BTPriorityTickManagerComponent.CreateInstance()` / `Instance` | Priority-managed component creation and resolution; `Config`, `Register(tree, transform)`, `BoostPriority`, `SetReferencePoint`. |

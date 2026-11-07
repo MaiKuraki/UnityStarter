@@ -1,8 +1,7 @@
 using System;
-using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Actions
 {
     public class RuntimeWaitNode : RuntimeNode
     {

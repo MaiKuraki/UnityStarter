@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.Logging;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
@@ -295,7 +295,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (!_initialized) return;
 
-            double currentTime = RuntimeBTTime.GetUnityTime(false);
+            double currentTime = UnityBTTimeProvider.Instance.TimeAsDouble;
             if (currentTime - _lastLODUpdateTime >= _lodUpdateInterval)
             {
                 if (_autoFindPlayer && _referencePoint == null)

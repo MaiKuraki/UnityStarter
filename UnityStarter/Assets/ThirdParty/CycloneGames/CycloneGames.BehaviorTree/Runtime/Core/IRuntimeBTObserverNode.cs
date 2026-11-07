@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     /// <summary>
     /// Implemented by nodes that subscribe to blackboard keys. Binding happens once during

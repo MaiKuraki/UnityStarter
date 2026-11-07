@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
+namespace CycloneGames.BehaviorTree.Core.Networking
 {
     /// <summary>
     /// Tracks blackboard key changes between network sync frames.
@@ -432,9 +432,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                     break;
                 case RuntimeBlackboardMutationKind.Vector3:
                     _flushWriter.Write(TAG_VECTOR3);
-                    _flushWriter.Write(mutation.VectorValue.x);
-                    _flushWriter.Write(mutation.VectorValue.y);
-                    _flushWriter.Write(mutation.VectorValue.z);
+                    _flushWriter.Write(mutation.VectorValue.X);
+                    _flushWriter.Write(mutation.VectorValue.Y);
+                    _flushWriter.Write(mutation.VectorValue.Z);
                     break;
                 case RuntimeBlackboardMutationKind.Long:
                     _flushWriter.Write(TAG_LONG);
@@ -670,7 +670,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                             break;
                         case TAG_VECTOR3:
                             entries[i].Kind = RuntimeBlackboardMutationKind.Vector3;
-                            entries[i].VectorValue = new UnityEngine.Vector3(
+                            entries[i].VectorValue = new BTFloat3(
                                 reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
                             break;
                         case TAG_LONG:
