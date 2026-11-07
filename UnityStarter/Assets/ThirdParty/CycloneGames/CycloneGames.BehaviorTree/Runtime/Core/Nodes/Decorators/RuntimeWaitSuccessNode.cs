@@ -72,11 +72,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _startTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
-            var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
             _actualWaitTime = UseRandomRange
-                ? (randomProvider != null
-                    ? randomProvider.Range(RangeMin, RangeMax)
-                    : UnityEngine.Random.Range(RangeMin, RangeMax))
+                ? RuntimeRandomUtility.Range(blackboard, RangeMin, RangeMax)
                 : WaitTime;
         }
 

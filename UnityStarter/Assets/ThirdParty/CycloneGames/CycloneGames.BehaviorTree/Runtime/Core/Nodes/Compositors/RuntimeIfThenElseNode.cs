@@ -23,13 +23,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             RuntimeNode[] children = ChildArray;
             if (children == null || children.Length < 2) return RuntimeState.Failure;
 
-            // Already decided: continue ticking the selected branch
             if (_selectedBranch > 0)
             {
                 return children[_selectedBranch].Run(blackboard);
             }
 
-            // Evaluate condition (child[0])
             var condState = children[0].Run(blackboard);
 
             if (condState == RuntimeState.Running)
@@ -41,7 +39,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 return children[1].Run(blackboard);
             }
 
-            // FAILURE → else branch (if exists)
             if (children.Length >= 3)
             {
                 _selectedBranch = 2;

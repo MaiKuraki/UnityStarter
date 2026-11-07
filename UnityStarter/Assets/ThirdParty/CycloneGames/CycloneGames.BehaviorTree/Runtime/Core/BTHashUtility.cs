@@ -5,16 +5,8 @@ using CycloneGames.Hash.Core;
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     /// <summary>
-    /// Pure C# string hash utility for blackboard key hashing.
-    /// Provides a deterministic FNV-1a hash as an alternative to
-    /// Animator.StringToHash, enabling compilation on non-Unity targets.
-    ///
-    /// Usage:
-    ///   int key = BTHash.FNV1A("Health");  // deterministic, same result every process
-    ///   int key = BTHash.FNV1ACaseInsensitive("Health"); // ASCII case-insensitive variant
-    ///
-    /// Note: These produce different hash values than Animator.StringToHash.
-    /// Choose one at project initialization and use consistently.
+    /// Deterministic FNV-1a string hash for blackboard keys, independent of Unity APIs so
+    /// hashing works on non-Unity and AOT targets. The case-insensitive variant is ASCII-only.
     /// </summary>
     public static class BTHash
     {

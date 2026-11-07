@@ -1,10 +1,5 @@
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 {
-    /// <summary>
-    /// Like Sequencer but skips children that have already succeeded.
-    /// Only re-ticks children still in RUNNING or NOT_ENTERED state.
-    /// Returns SUCCESS once all children have succeeded.
-    /// </summary>
     public class RuntimeSequenceWithMemory : RuntimeCompositeNode
     {
         private int _current;
@@ -49,7 +44,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 if (state == RuntimeState.Running)
                     return RuntimeState.Running;
 
-                // SUCCESS
                 _completed[_current] = true;
                 _current++;
             }

@@ -72,7 +72,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 
         private int _currentRepeatCount;
         private int _targetRepeatCount;
-        public int CurrentRepeatCount => _currentRepeatCount; // Exposed for debug
+        public int CurrentRepeatCount => _currentRepeatCount;
 
         protected override void ValidateSetup()
         {

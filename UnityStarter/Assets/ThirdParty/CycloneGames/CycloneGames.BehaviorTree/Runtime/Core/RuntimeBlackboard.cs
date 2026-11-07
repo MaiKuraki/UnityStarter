@@ -9,22 +9,8 @@ using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
-    /// <summary>
-    /// Observer callback for blackboard key changes.
-    /// keyHash: the changed key, bb: the blackboard instance.
-    /// </summary>
     public delegate void BlackboardObserverCallback(int keyHash, RuntimeBlackboard bb);
 
-    /// <summary>
-    /// Typed runtime Blackboard with:
-    /// - Separate typed dictionaries to avoid boxing for primitives
-    /// - int-key (hash) addressing for 0GC string operations at runtime
-    /// - Hierarchical parent chain for scoped blackboards (SubTree)
-    /// - Stamped entries for change-detection without polling overhead
-    /// - Optional concurrent storage access via ReaderWriterLockSlim
-    /// - Observer system for push-based key change notifications
-    /// - A single type index for average O(1) local key-existence checks
-    /// </summary>
     public delegate int StringHashFunction(string key);
 
     /// <summary>
@@ -66,10 +52,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     }
 
 #if UNITY_EDITOR
-    /// <summary>
-    /// Immutable editor-facing copy of one local blackboard value.
-    /// </summary>
-    public readonly struct RuntimeBlackboardDebugEntry
+        public readonly struct RuntimeBlackboardDebugEntry
     {
         internal RuntimeBlackboardDebugEntry(
             int key,
@@ -126,17 +109,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             new RuntimeBlackboardSerializationLimits(DEFAULT_MAX_ENTRIES_PER_TYPE, DEFAULT_MAX_TOTAL_ENTRIES);
     }
 
+    /// <summary>
+    /// Typed key/value store with optional strict schema, per-key stamps and observers.
+    /// Storage is a single open-addressed table; steady-state mutations allocate nothing.
+    /// </summary>
     public class RuntimeBlackboard : IDisposable
     {
-        private readonly Dictionary<int, int> _intData;
-        private readonly Dictionary<int, float> _floatData;
-        private readonly Dictionary<int, bool> _boolData;
-        private readonly Dictionary<int, Vector3> _vectorData;
-        private readonly Dictionary<int, long> _longData;
-        private readonly Dictionary<int, RuntimeBlackboardLong2> _long2Data;
-        private readonly Dictionary<int, RuntimeBlackboardLong3> _long3Data;
-        private readonly Dictionary<int, object> _objectData;
-
         private const byte TYPE_INT = 1;
         private const byte TYPE_FLOAT = 2;
         private const byte TYPE_BOOL = 3;
@@ -146,20 +124,51 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private const byte TYPE_LONG2 = 7;
         private const byte TYPE_LONG3 = 8;
 
-        // O(1) existence and current value-slot lookup.
-        private readonly Dictionary<int, byte> _typeByKey;
+        private const int Tombstone = -1;
 
-        // Monotonic sequence counter for change detection (per-blackboard)
+        private struct RuntimeBlackboardCell
+        {
+            public int Key;
+            public byte Type;
+            public ulong Stamp;
+            public int IntValue;
+            public float FloatValue;
+            public bool BoolValue;
+            public Vector3 VectorValue;
+            public long LongValue;
+            public RuntimeBlackboardLong2 Long2Value;
+            public RuntimeBlackboardLong3 Long3Value;
+            public object ObjectValue;
+        }
+
+        // Single contiguous open-addressed table. _buckets stores cellIndex+1 (0 = empty,
+        // Tombstone = deleted) and is probed linearly from HashKey; _cells[0.._count) are
+        // the live entries in dense order. A probe chain ends only at a 0 bucket, so
+        // tombstones must survive until a rebuild or keys further down become unreachable.
+        // Deletion tombstones one bucket and swap-removes the dense cell, repointing the
+        // moved cell's bucket. _used counts live + tombstones; crossing the load threshold
+        // rebuilds (doubling when live entries dominate) to bound probe length and reclaim
+        // tombstones.
+        private RuntimeBlackboardCell[] _cells;
+        private int[] _buckets;
+        private int _count;
+        private int _used;
+
         private ulong _sequenceId;
-        private readonly Dictionary<int, ulong> _stamps;
         private readonly List<int> _sortedKeyScratch;
 
-        // Observer system: key-specific and global observers
+        internal RuntimeDeterministicRandom _defaultRandom;
+
+        // _observerCount is a fast gate for the common no-observer case. An observer
+        // registered concurrently with a write is not guaranteed to observe that write.
         private readonly object _observerGate = new object();
+        private int _observerCount;
         private Dictionary<int, BlackboardObserverCallback[]> _keyObservers;
         private BlackboardObserverCallback[] _globalObservers;
 
-        // Thread-safety: null when single-threaded (default), allocated on demand
+        // Storage is single-threaded by default; the optional lock guards every access.
+        // Serialization and hashing reuse the instance scratch, so they take the exclusive
+        // write lock even though they do not mutate values.
         private ReaderWriterLockSlim _lock;
         private RuntimeBlackboardSchema _schema;
 
@@ -192,15 +201,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         private StringHashFunction _stringHashFunc;
 
-        /// <summary>
-        /// Stable default hash function for RuntimeBlackboard and authoring compilation.
-        /// Use StringHashFunc for an explicit per-instance legacy or project-specific contract.
-        /// </summary>
         public static StringHashFunction DefaultStringHashFunc { get; } = BTHash.FNV1A;
 
-        /// <summary>
-        /// Per-instance hash override. Falls back to DefaultStringHashFunc when null.
-        /// </summary>
         public StringHashFunction StringHashFunc
         {
             get
@@ -232,17 +234,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             bool applySchemaDefaults = true)
         {
             Parent = parent;
-            _intData = new Dictionary<int, int>(initialCapacity);
-            _floatData = new Dictionary<int, float>(initialCapacity);
-            _boolData = new Dictionary<int, bool>(initialCapacity);
-            _vectorData = new Dictionary<int, Vector3>(initialCapacity);
-            _longData = new Dictionary<int, long>(initialCapacity);
-            _long2Data = new Dictionary<int, RuntimeBlackboardLong2>(initialCapacity);
-            _long3Data = new Dictionary<int, RuntimeBlackboardLong3>(initialCapacity);
-            _objectData = new Dictionary<int, object>(initialCapacity);
-            _stamps = new Dictionary<int, ulong>(initialCapacity);
-            _typeByKey = new Dictionary<int, byte>(initialCapacity);
-            _sortedKeyScratch = new List<int>(initialCapacity);
+            int bucketCount = ComputeBucketCount(initialCapacity > 0 ? initialCapacity : 8);
+            _buckets = new int[bucketCount];
+            _cells = new RuntimeBlackboardCell[bucketCount];
+            _count = 0;
+            _used = 0;
+            _sortedKeyScratch = new List<int>(bucketCount);
+            _defaultRandom = new RuntimeDeterministicRandom(0u);
             _schema = schema;
 
             if (_schema != null && applySchemaDefaults)
@@ -273,7 +271,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         /// <summary>
-        /// Protects typed value storage for concurrent reads and writes.
+        /// Protects the value table for concurrent reads and writes.
         /// Observer callbacks still run synchronously on the writing thread; Parent,
         /// Context, tree execution, and Unity objects are not made thread-safe.
         /// Call only during setup and quiesce all users before Dispose.
@@ -306,7 +304,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Parent != null ? Parent.GetService<T>() : null;
         }
 
-        #region Int-Key Methods (0GC)
+        internal int NextDefaultInt(int minInclusive, int maxExclusive)
+        {
+            return _defaultRandom.NextInt(minInclusive, maxExclusive);
+        }
+
+        internal float NextDefaultFloat()
+        {
+            return _defaultRandom.NextFloat();
+        }
+
+        public void ResetDefaultRandom(uint seed = 0u)
+        {
+            ThrowIfDisposed();
+            _defaultRandom = new RuntimeDeterministicRandom(seed);
+        }
+
+        #region Int-Key Methods
         public void SetInt(int key, int value)
         {
             ThrowIfDisposed();
@@ -330,7 +344,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_intData.TryGetValue(key, out var val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_INT) return _cells[cellIndex].IntValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetInt(key, defaultValue) : defaultValue;
@@ -359,7 +374,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_floatData.TryGetValue(key, out var val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_FLOAT) return _cells[cellIndex].FloatValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetFloat(key, defaultValue) : defaultValue;
@@ -388,7 +404,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_boolData.TryGetValue(key, out var val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_BOOL) return _cells[cellIndex].BoolValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetBool(key, defaultValue) : defaultValue;
@@ -417,7 +434,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_vectorData.TryGetValue(key, out var val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_VECTOR3) return _cells[cellIndex].VectorValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetVector3(key, defaultValue) : defaultValue;
@@ -446,7 +464,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_longData.TryGetValue(key, out long val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG) return _cells[cellIndex].LongValue;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetLong(key, defaultValue) : defaultValue;
@@ -475,7 +494,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_long2Data.TryGetValue(key, out RuntimeBlackboardLong2 val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG2) return _cells[cellIndex].Long2Value;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetLong2(key, defaultValue) : defaultValue;
@@ -504,7 +524,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_long3Data.TryGetValue(key, out RuntimeBlackboardLong3 val)) return val;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG3) return _cells[cellIndex].Long3Value;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetLong3(key, defaultValue) : defaultValue;
@@ -533,23 +554,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_objectData.TryGetValue(key, out var val) && val is T tVal) return tVal;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_OBJECT && _cells[cellIndex].ObjectValue is T tVal) return tVal;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetObject<T>(key) : default;
         }
 
-        /// <summary>
-        /// Returns the stamp (sequence ID) for a given key, or 0 if not found.
-        /// Use to detect whether a value has changed since last read.
-        /// </summary>
         public ulong GetStamp(int key)
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_stamps.TryGetValue(key, out var stamp)) return stamp;
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0) return _cells[cellIndex].Stamp;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null ? Parent.GetStamp(key) : 0;
@@ -561,7 +580,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_typeByKey.ContainsKey(key)) return true;
+                if (FindCellIndex(key) >= 0) return true;
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
             return Parent != null && Parent.HasKey(key);
@@ -574,16 +593,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
-                if (!_typeByKey.TryGetValue(key, out byte oldType))
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex < 0)
                 {
                     changed = false;
                 }
                 else
                 {
                     NextSequence();
-                    RemoveTypedValue(key, oldType);
-                    _typeByKey.Remove(key);
-                    _stamps.Remove(key);
+                    RemoveCellAt(key, cellIndex);
                     changed = true;
                 }
             }
@@ -626,16 +644,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public ulong GetStamp(string key) => GetStamp(Hash(key));
         #endregion
 
-        #region TryGet Methods (precise type probing, 0GC)
-        /// <summary>
-        /// Try to get an int value from THIS blackboard only (no parent chain).
-        /// Returns true if the key exists in the int dictionary.
-        /// </summary>
+        #region TryGet Methods (typed probing)
         public bool TryGetInt(int key, out int value)
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _intData.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_INT)
+                {
+                    value = _cells[cellIndex].IntValue;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -643,7 +667,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _floatData.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_FLOAT)
+                {
+                    value = _cells[cellIndex].FloatValue;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -651,7 +685,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _boolData.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_BOOL)
+                {
+                    value = _cells[cellIndex].BoolValue;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -659,7 +703,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _vectorData.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_VECTOR3)
+                {
+                    value = _cells[cellIndex].VectorValue;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -667,7 +721,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _longData.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG)
+                {
+                    value = _cells[cellIndex].LongValue;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -675,7 +739,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _long2Data.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG2)
+                {
+                    value = _cells[cellIndex].Long2Value;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -683,7 +757,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             ThrowIfDisposed();
             if (_lock != null) _lock.EnterReadLock();
-            try { return _long3Data.TryGetValue(key, out value); }
+            try
+            {
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_LONG3)
+                {
+                    value = _cells[cellIndex].Long3Value;
+                    return true;
+                }
+                value = default;
+                return false;
+            }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
@@ -693,7 +777,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                if (_objectData.TryGetValue(key, out var obj) && obj is T tVal)
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0 && _cells[cellIndex].Type == TYPE_OBJECT && _cells[cellIndex].ObjectValue is T tVal)
                 {
                     value = tVal;
                     return true;
@@ -704,7 +789,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
 
-        // String-key overloads
         public bool TryGetInt(string key, out int value) => TryGetInt(Hash(key), out value);
         public bool TryGetFloat(string key, out float value) => TryGetFloat(Hash(key), out value);
         public bool TryGetBool(string key, out bool value) => TryGetBool(Hash(key), out value);
@@ -723,15 +807,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
-                removedCount = _typeByKey.Count;
+                removedCount = _count;
                 if (removedCount > 0)
                 {
                     NextSequence();
                     removedKeys = ArrayPool<int>.Shared.Rent(removedCount);
-                    int index = 0;
-                    foreach (int key in _typeByKey.Keys)
+                    for (int i = 0; i < _count; i++)
                     {
-                        removedKeys[index++] = key;
+                        removedKeys[i] = _cells[i].Key;
                     }
 
                     Array.Sort(removedKeys, 0, removedCount);
@@ -774,11 +857,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 {
                     RuntimeBlackboardSchema schema = _schema;
                     int schemaCount = schema != null ? schema.Count : 0;
-                    int candidateCapacity = checked(_typeByKey.Count + schemaCount);
+                    int candidateCapacity = checked(_count + schemaCount);
                     _sortedKeyScratch.Clear();
-                    foreach (int key in _typeByKey.Keys)
+                    for (int i = 0; i < _count; i++)
                     {
-                        _sortedKeyScratch.Add(key);
+                        _sortedKeyScratch.Add(_cells[i].Key);
                     }
 
                     for (int i = 0; i < schemaCount; i++)
@@ -805,7 +888,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
                         previousKey = key;
                         hasPreviousKey = true;
-                        bool hasExistingValue = _typeByKey.ContainsKey(key);
+                        bool hasExistingValue = FindCellIndex(key) >= 0;
                         RuntimeBlackboardKeyDefinition definition = default;
                         bool hasDefault =
                             schema != null &&
@@ -835,12 +918,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                             continue;
                         }
 
-                        if (_typeByKey.TryGetValue(key, out byte oldType))
+                        int existingIndex = FindCellIndex(key);
+                        if (existingIndex >= 0)
                         {
                             NextSequence();
-                            RemoveTypedValue(key, oldType);
-                            _typeByKey.Remove(key);
-                            _stamps.Remove(key);
+                            RemoveCellAt(key, existingIndex);
                         }
                     }
                 }
@@ -862,10 +944,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         #region Serialization (Network Sync)
-        /// <summary>
-        /// Serialize all primitive blackboard data to a byte buffer for network transmission.
-        /// Object references are skipped (not serializable across network boundary).
-        /// </summary>
+        // Object values are local-only and never enter the wire payload.
         public void WriteTo(BinaryWriter writer)
         {
             WriteTo(writer, RuntimeBlackboardNetworkScope.Snapshot);
@@ -897,7 +976,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             ValidateNetworkScope(scope);
             if (maxBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
             // Serialization reuses the instance sorting scratch, so concurrent readers
-            // must be excluded even though the value dictionaries are not modified.
+            // must be excluded even though the stored values are not modified.
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
@@ -911,36 +990,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 revision = _sequenceId;
                 writer.Write(_sequenceId);
 
-                WriteOrdered(_intData, writer, scope, static (w, value) => w.Write(value));
-                WriteOrdered(_floatData, writer, scope, static (w, value) => w.Write(value));
-                WriteOrdered(_boolData, writer, scope, static (w, value) => w.Write(value ? (byte)1 : (byte)0));
-                WriteOrdered(_vectorData, writer, scope, static (w, value) =>
-                {
-                    w.Write(value.x);
-                    w.Write(value.y);
-                    w.Write(value.z);
-                });
-                WriteOrdered(_longData, writer, scope, static (w, value) => w.Write(value));
-                WriteOrdered(_long2Data, writer, scope, static (w, value) =>
-                {
-                    w.Write(value.X);
-                    w.Write(value.Y);
-                });
-                WriteOrdered(_long3Data, writer, scope, static (w, value) =>
-                {
-                    w.Write(value.X);
-                    w.Write(value.Y);
-                    w.Write(value.Z);
-                });
+                // Wire contract: keys within each typed section are emitted in ascending
+                // order so payloads and hashes stay deterministic across peers.
+                WriteTypeSection(writer, TYPE_INT, scope);
+                WriteTypeSection(writer, TYPE_FLOAT, scope);
+                WriteTypeSection(writer, TYPE_BOOL, scope);
+                WriteTypeSection(writer, TYPE_VECTOR3, scope);
+                WriteTypeSection(writer, TYPE_LONG, scope);
+                WriteTypeSection(writer, TYPE_LONG2, scope);
+                WriteTypeSection(writer, TYPE_LONG3, scope);
                 WritePrimitiveStampsOrdered(writer, scope);
             }
             finally { if (_lock != null) _lock.ExitWriteLock(); }
         }
 
-        /// <summary>
-        /// Restore blackboard state from a serialized byte buffer.
-        /// Typically called on client side after receiving server snapshot.
-        /// </summary>
         public void ReadFrom(BinaryReader reader)
         {
             ThrowIfDisposed();
@@ -1088,21 +1151,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 // protected by the same write lock as the following commit.
                 ValidateSerializedKeysAgainstSchema(typeByKey, scope);
 
-                foreach (int key in allKeys)
+                for (int i = 0; i < _count; i++)
                 {
-                    if (_typeByKey.TryGetValue(key, out byte existingType) && existingType == TYPE_OBJECT)
+                    RuntimeBlackboardCell cell = _cells[i];
+                    if (cell.Type == TYPE_OBJECT && allKeys.Contains(cell.Key))
                     {
                         throw new InvalidDataException(
-                            $"RuntimeBlackboard serialized primitive key {key} conflicts with a local object value.");
+                            $"RuntimeBlackboard serialized primitive key {cell.Key} conflicts with a local object value.");
                     }
                 }
 
                 var changedKeySet = new HashSet<int>(allKeys);
-                foreach (KeyValuePair<int, byte> item in _typeByKey)
+                for (int i = 0; i < _count; i++)
                 {
-                    if (item.Value != TYPE_OBJECT && ShouldIncludeKey(item.Key, scope))
+                    RuntimeBlackboardCell cell = _cells[i];
+                    if (cell.Type != TYPE_OBJECT && ShouldIncludeKey(cell.Key, scope))
                     {
-                        changedKeySet.Add(item.Key);
+                        changedKeySet.Add(cell.Key);
                     }
                 }
 
@@ -1130,53 +1195,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 }
 
                 foreach (KeyValuePair<int, int> item in intData)
-                {
-                    _intData[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_INT;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_INT, Stamp = NextSequence(), IntValue = item.Value });
 
                 foreach (KeyValuePair<int, float> item in floatData)
-                {
-                    _floatData[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_FLOAT;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_FLOAT, Stamp = NextSequence(), FloatValue = item.Value });
 
                 foreach (KeyValuePair<int, bool> item in boolData)
-                {
-                    _boolData[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_BOOL;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_BOOL, Stamp = NextSequence(), BoolValue = item.Value });
 
                 foreach (KeyValuePair<int, Vector3> item in vectorData)
-                {
-                    _vectorData[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_VECTOR3;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_VECTOR3, Stamp = NextSequence(), VectorValue = item.Value });
 
                 foreach (KeyValuePair<int, long> item in longData)
-                {
-                    _longData[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_LONG;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_LONG, Stamp = NextSequence(), LongValue = item.Value });
 
                 foreach (KeyValuePair<int, RuntimeBlackboardLong2> item in long2Data)
-                {
-                    _long2Data[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_LONG2;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_LONG2, Stamp = NextSequence(), Long2Value = item.Value });
 
                 foreach (KeyValuePair<int, RuntimeBlackboardLong3> item in long3Data)
-                {
-                    _long3Data[item.Key] = item.Value;
-                    _typeByKey[item.Key] = TYPE_LONG3;
-                    _stamps[item.Key] = NextSequence();
-                }
+                    CommitWireValue(new RuntimeBlackboardCell {
+                        Key = item.Key, Type = TYPE_LONG3, Stamp = NextSequence(), Long3Value = item.Value });
             }
             finally { if (_lock != null) _lock.ExitWriteLock(); }
 
@@ -1193,10 +1237,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-        /// <summary>
-        /// FNV-1a hash of all primitive blackboard data for fast desync detection.
-        /// Compare hashes between server and client — if mismatch, do full sync.
-        /// </summary>
         public ulong ComputeHash()
         {
             return ComputeHash(RuntimeBlackboardNetworkScope.Networked);
@@ -1215,39 +1255,42 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 const ulong FNV_PRIME = Fnv1a64.Prime;
                 ulong hash = (FNV_OFFSET ^ (byte)scope) * FNV_PRIME;
 
-                FillSortedKeys(_intData, scope);
+                FillSortedKeys(TYPE_INT, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
+                    RuntimeBlackboardCell cell = _cells[FindCellIndex(key)];
                     hash = (hash ^ TYPE_INT) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
-                    hash = (hash ^ (uint)_intData[key]) * FNV_PRIME;
+                    hash = (hash ^ (uint)cell.IntValue) * FNV_PRIME;
                 }
 
-                FillSortedKeys(_floatData, scope);
+                FillSortedKeys(TYPE_FLOAT, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
+                    RuntimeBlackboardCell cell = _cells[FindCellIndex(key)];
                     hash = (hash ^ TYPE_FLOAT) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
-                    var u = new FloatUintUnion { FloatValue = _floatData[key] };
+                    var u = new FloatUintUnion { FloatValue = cell.FloatValue };
                     hash = (hash ^ u.UintValue) * FNV_PRIME;
                 }
 
-                FillSortedKeys(_boolData, scope);
+                FillSortedKeys(TYPE_BOOL, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
+                    RuntimeBlackboardCell cell = _cells[FindCellIndex(key)];
                     hash = (hash ^ TYPE_BOOL) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
-                    hash = (hash ^ (_boolData[key] ? 1u : 0u)) * FNV_PRIME;
+                    hash = (hash ^ (cell.BoolValue ? 1u : 0u)) * FNV_PRIME;
                 }
 
-                FillSortedKeys(_vectorData, scope);
+                FillSortedKeys(TYPE_VECTOR3, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
-                    Vector3 value = _vectorData[key];
+                    Vector3 value = _cells[FindCellIndex(key)].VectorValue;
                     hash = (hash ^ TYPE_VECTOR3) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
                     var ux = new FloatUintUnion { FloatValue = value.x };
@@ -1258,31 +1301,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     hash = (hash ^ uz.UintValue) * FNV_PRIME;
                 }
 
-                FillSortedKeys(_longData, scope);
+                FillSortedKeys(TYPE_LONG, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
+                    RuntimeBlackboardCell cell = _cells[FindCellIndex(key)];
                     hash = (hash ^ TYPE_LONG) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
-                    hash = MixInt64(hash, _longData[key]);
+                    hash = MixInt64(hash, cell.LongValue);
                 }
 
-                FillSortedKeys(_long2Data, scope);
+                FillSortedKeys(TYPE_LONG2, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
-                    RuntimeBlackboardLong2 value = _long2Data[key];
+                    RuntimeBlackboardLong2 value = _cells[FindCellIndex(key)].Long2Value;
                     hash = (hash ^ TYPE_LONG2) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
                     hash = MixInt64(hash, value.X);
                     hash = MixInt64(hash, value.Y);
                 }
 
-                FillSortedKeys(_long3Data, scope);
+                FillSortedKeys(TYPE_LONG3, scope);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
                     int key = _sortedKeyScratch[i];
-                    RuntimeBlackboardLong3 value = _long3Data[key];
+                    RuntimeBlackboardLong3 value = _cells[FindCellIndex(key)].Long3Value;
                     hash = (hash ^ TYPE_LONG3) * FNV_PRIME;
                     hash = (hash ^ (uint)key) * FNV_PRIME;
                     hash = MixInt64(hash, value.X);
@@ -1326,11 +1370,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         #endregion
 
         #region Observer System
-        /// <summary>
-        /// Register an observer for a specific blackboard key.
-        /// Callback fires immediately after the key is Set or Removed.
-        /// Compatible with AIPerception and any external system.
-        /// </summary>
         public void AddObserver(int keyHash, BlackboardObserverCallback callback)
         {
             ThrowIfDisposed();
@@ -1345,24 +1384,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 if (!_keyObservers.TryGetValue(keyHash, out var observers))
                 {
                     _keyObservers[keyHash] = new[] { callback };
+                    Interlocked.Increment(ref _observerCount);
                     return;
                 }
 
-                _keyObservers[keyHash] = AddObserverCallback(observers, callback);
+                int before = observers.Length;
+                var updated = AddObserverCallback(observers, callback);
+                _keyObservers[keyHash] = updated;
+                if (updated.Length > before)
+                {
+                    Interlocked.Increment(ref _observerCount);
+                }
             }
         }
 
-        /// <summary>
-        /// Register an observer for a specific blackboard key using string name.
-        /// </summary>
         public void AddObserver(string key, BlackboardObserverCallback callback)
         {
             AddObserver(Hash(key), callback);
         }
 
-        /// <summary>
-        /// Remove a specific observer for a key.
-        /// </summary>
         public void RemoveObserver(int keyHash, BlackboardObserverCallback callback)
         {
             ThrowIfDisposed();
@@ -1375,7 +1415,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
                 if (_keyObservers.TryGetValue(keyHash, out var observers))
                 {
+                    int before = observers.Length;
                     observers = RemoveObserverCallback(observers, callback);
+                    if (observers.Length < before)
+                    {
+                        Interlocked.Decrement(ref _observerCount);
+                    }
                     if (observers.Length == 0)
                     {
                         _keyObservers.Remove(keyHash);
@@ -1392,10 +1437,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             RemoveObserver(Hash(key), callback);
         }
 
-        /// <summary>
-        /// Register a global observer that fires on ANY key change.
-        /// Useful for network sync, debug logging, or AI perception bridges.
-        /// </summary>
         public void AddGlobalObserver(BlackboardObserverCallback callback)
         {
             ThrowIfDisposed();
@@ -1406,7 +1447,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
             lock (_observerGate)
             {
-                _globalObservers = AddObserverCallback(_globalObservers, callback);
+                int before = _globalObservers != null ? _globalObservers.Length : 0;
+                var updated = AddObserverCallback(_globalObservers, callback);
+                _globalObservers = updated;
+                if (updated.Length > before)
+                {
+                    Interlocked.Increment(ref _observerCount);
+                }
             }
         }
 
@@ -1415,13 +1462,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             ThrowIfDisposed();
             lock (_observerGate)
             {
-                _globalObservers = RemoveObserverCallback(_globalObservers, callback);
+                int before = _globalObservers != null ? _globalObservers.Length : 0;
+                var updated = RemoveObserverCallback(_globalObservers, callback);
+                _globalObservers = updated;
+                if (updated != null && updated.Length < before)
+                {
+                    Interlocked.Decrement(ref _observerCount);
+                }
             }
         }
 
-        /// <summary>
-        /// Remove all observers (key-specific and global).
-        /// </summary>
         public void ClearAllObservers()
         {
             ThrowIfDisposed();
@@ -1429,11 +1479,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             {
                 _keyObservers?.Clear();
                 _globalObservers = null;
+                Volatile.Write(ref _observerCount, 0);
             }
         }
 
         private void NotifyObservers(int keyHash)
         {
+            if (Volatile.Read(ref _observerCount) == 0)
+            {
+                return;
+            }
+
             BlackboardObserverCallback[] keyObservers = null;
             BlackboardObserverCallback[] globalObservers = null;
 
@@ -1507,6 +1563,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             {
                 _keyObservers?.Clear();
                 _globalObservers = null;
+                Volatile.Write(ref _observerCount, 0);
             }
             _lock?.Dispose();
             _lock = null;
@@ -1544,195 +1601,230 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        #region Open-Addressed Table
+        private static int ComputeBucketCount(int required)
+        {
+            int buckets = 8;
+            while (buckets - (buckets >> 2) < required)
+            {
+                buckets <<= 1;
+            }
+            return buckets;
+        }
+
+        private static int HashKey(int key)
+        {
+            uint x = (uint)key;
+            x ^= x >> 16;
+            x *= 0x7feb352du;
+            x ^= x >> 15;
+            x *= 0x846ca68bu;
+            x ^= x >> 16;
+            return (int)x;
+        }
+
+        // Linear probing over _buckets. A 0 bucket terminates the chain; tombstones and
+        // non-matching live buckets are skipped. Returns the dense cell index or -1.
+        private int FindCellIndex(int key)
+        {
+            int[] buckets = _buckets;
+            int mask = buckets.Length - 1;
+            int slot = HashKey(key) & mask;
+            while (true)
+            {
+                int bucket = buckets[slot];
+                if (bucket == 0) return -1;
+                if (bucket > 0 && _cells[bucket - 1].Key == key) return bucket - 1;
+                slot = (slot + 1) & mask;
+            }
+        }
+
+        private void EnsureInsertCapacity()
+        {
+            int threshold = _buckets.Length - (_buckets.Length >> 2);
+            if (_used + 1 <= threshold) return;
+            int newSize = _count >= threshold / 2 ? _buckets.Length * 2 : _buckets.Length;
+            Rebuild(newSize);
+        }
+
+        private void Rebuild(int bucketCount)
+        {
+            var newBuckets = new int[bucketCount];
+            var newCells = new RuntimeBlackboardCell[bucketCount];
+            Array.Copy(_cells, newCells, _count);
+            int mask = bucketCount - 1;
+            for (int i = 0; i < _count; i++)
+            {
+                int slot = HashKey(newCells[i].Key) & mask;
+                while (newBuckets[slot] != 0) slot = (slot + 1) & mask;
+                newBuckets[slot] = i + 1;
+            }
+            _buckets = newBuckets;
+            _cells = newCells;
+            _used = _count;
+        }
+
+        // Appends a fresh entry. Called only after EnsureInsertCapacity, so at least one
+        // empty bucket exists. Reusing a tombstone keeps _used unchanged; consuming an
+        // empty bucket increments it.
+        private void InsertNewCell(RuntimeBlackboardCell entry)
+        {
+            int mask = _buckets.Length - 1;
+            int slot = HashKey(entry.Key) & mask;
+            int firstTombstone = -1;
+            while (true)
+            {
+                int bucket = _buckets[slot];
+                if (bucket == 0) break;
+                if (bucket < 0 && firstTombstone < 0) firstTombstone = slot;
+                slot = (slot + 1) & mask;
+            }
+            int target = firstTombstone >= 0 ? firstTombstone : slot;
+            if (firstTombstone < 0) _used++;
+            int cellIndex = _count;
+            _cells[cellIndex] = entry;
+            _count++;
+            _buckets[target] = cellIndex + 1;
+        }
+
+        private void CommitCell(int existingIndex, RuntimeBlackboardCell entry)
+        {
+            if (existingIndex >= 0)
+            {
+                _cells[existingIndex] = entry;
+                return;
+            }
+            EnsureInsertCapacity();
+            InsertNewCell(entry);
+        }
+
+        private void CommitWireValue(RuntimeBlackboardCell entry)
+        {
+            int existingIndex = FindCellIndex(entry.Key);
+            if (existingIndex >= 0)
+            {
+                _cells[existingIndex] = entry;
+                return;
+            }
+            EnsureInsertCapacity();
+            InsertNewCell(entry);
+        }
+
+        private bool HasObjectValue(int key)
+        {
+            int cellIndex = FindCellIndex(key);
+            return cellIndex >= 0 && _cells[cellIndex].Type == TYPE_OBJECT;
+        }
+
+        // Tombstones the removed key's bucket and swap-removes the dense cell, repointing
+        // the moved cell's bucket so lookups stay correct. _used is unchanged.
+        private void RemoveCellAt(int key, int cellIndex)
+        {
+            int mask = _buckets.Length - 1;
+            int slot = HashKey(key) & mask;
+            while (_buckets[slot] != cellIndex + 1) slot = (slot + 1) & mask;
+            _buckets[slot] = Tombstone;
+
+            int last = _count - 1;
+            if (cellIndex != last)
+            {
+                _cells[cellIndex] = _cells[last];
+                int movedKey = _cells[cellIndex].Key;
+                int movedSlot = HashKey(movedKey) & mask;
+                while (_buckets[movedSlot] != last + 1) movedSlot = (movedSlot + 1) & mask;
+                _buckets[movedSlot] = cellIndex + 1;
+            }
+            _cells[last] = default;
+            _count--;
+        }
+        #endregion
+
         private bool SetIntCore(int key, int value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Int);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_INT && _intData.TryGetValue(key, out int oldValue) && oldValue == value)
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_INT && _cells[existing].IntValue == value) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_INT) RemoveTypedValue(key, oldType);
-            _intData[key] = value;
-            _typeByKey[key] = TYPE_INT;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_INT, Stamp = NextSequence(), IntValue = value });
             return true;
         }
 
         private bool SetFloatCore(int key, float value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Float);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_FLOAT && _floatData.TryGetValue(key, out float oldValue) && FloatBitsEqual(oldValue, value))
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_FLOAT && FloatBitsEqual(_cells[existing].FloatValue, value)) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_FLOAT) RemoveTypedValue(key, oldType);
-            _floatData[key] = value;
-            _typeByKey[key] = TYPE_FLOAT;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_FLOAT, Stamp = NextSequence(), FloatValue = value });
             return true;
         }
 
         private bool SetBoolCore(int key, bool value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Bool);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_BOOL && _boolData.TryGetValue(key, out bool oldValue) && oldValue == value)
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_BOOL && _cells[existing].BoolValue == value) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_BOOL) RemoveTypedValue(key, oldType);
-            _boolData[key] = value;
-            _typeByKey[key] = TYPE_BOOL;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_BOOL, Stamp = NextSequence(), BoolValue = value });
             return true;
         }
 
         private bool SetVector3Core(int key, Vector3 value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Vector3);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_VECTOR3 && _vectorData.TryGetValue(key, out Vector3 oldValue) && VectorBitsEqual(oldValue, value))
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_VECTOR3 && VectorBitsEqual(_cells[existing].VectorValue, value)) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_VECTOR3) RemoveTypedValue(key, oldType);
-            _vectorData[key] = value;
-            _typeByKey[key] = TYPE_VECTOR3;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_VECTOR3, Stamp = NextSequence(), VectorValue = value });
             return true;
         }
 
         private bool SetLongCore(int key, long value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Long);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_LONG && _longData.TryGetValue(key, out long oldValue) && oldValue == value)
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_LONG && _cells[existing].LongValue == value) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_LONG) RemoveTypedValue(key, oldType);
-            _longData[key] = value;
-            _typeByKey[key] = TYPE_LONG;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_LONG, Stamp = NextSequence(), LongValue = value });
             return true;
         }
 
         private bool SetLong2Core(int key, RuntimeBlackboardLong2 value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Long2);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_LONG2 && _long2Data.TryGetValue(key, out RuntimeBlackboardLong2 oldValue) && oldValue.Equals(value))
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_LONG2 && _cells[existing].Long2Value.Equals(value)) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_LONG2) RemoveTypedValue(key, oldType);
-            _long2Data[key] = value;
-            _typeByKey[key] = TYPE_LONG2;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_LONG2, Stamp = NextSequence(), Long2Value = value });
             return true;
         }
 
         private bool SetLong3Core(int key, RuntimeBlackboardLong3 value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Long3);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_LONG3 && _long3Data.TryGetValue(key, out RuntimeBlackboardLong3 oldValue) && oldValue.Equals(value))
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_LONG3 && _cells[existing].Long3Value.Equals(value)) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_LONG3) RemoveTypedValue(key, oldType);
-            _long3Data[key] = value;
-            _typeByKey[key] = TYPE_LONG3;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_LONG3, Stamp = NextSequence(), Long3Value = value });
             return true;
         }
 
         private bool SetObjectCore(int key, object value)
         {
             ValidateSchemaWrite(key, RuntimeBlackboardValueType.Object);
-            bool hasOldValue = _typeByKey.TryGetValue(key, out byte oldType);
-            if (hasOldValue)
-            {
-                if (oldType == TYPE_OBJECT && _objectData.TryGetValue(key, out object oldValue) && ReferenceEquals(oldValue, value))
-                {
-                    return false;
-                }
-            }
-
+            int existing = FindCellIndex(key);
+            if (existing >= 0 && _cells[existing].Type == TYPE_OBJECT && ReferenceEquals(_cells[existing].ObjectValue, value)) return false;
             EnsureSequenceCapacity(1);
-            if (hasOldValue && oldType != TYPE_OBJECT) RemoveTypedValue(key, oldType);
-            _objectData[key] = value;
-            _typeByKey[key] = TYPE_OBJECT;
-            _stamps[key] = NextSequence();
+            CommitCell(existing, new RuntimeBlackboardCell {
+                Key = key, Type = TYPE_OBJECT, Stamp = NextSequence(), ObjectValue = value });
             return true;
-        }
-
-        private void RemoveTypedValue(int key, byte type)
-        {
-            switch (type)
-            {
-                case TYPE_INT:
-                    _intData.Remove(key);
-                    break;
-                case TYPE_FLOAT:
-                    _floatData.Remove(key);
-                    break;
-                case TYPE_BOOL:
-                    _boolData.Remove(key);
-                    break;
-                case TYPE_VECTOR3:
-                    _vectorData.Remove(key);
-                    break;
-                case TYPE_LONG:
-                    _longData.Remove(key);
-                    break;
-                case TYPE_LONG2:
-                    _long2Data.Remove(key);
-                    break;
-                case TYPE_LONG3:
-                    _long3Data.Remove(key);
-                    break;
-                case TYPE_OBJECT:
-                    _objectData.Remove(key);
-                    break;
-            }
         }
 
         private void ValidateSchemaWrite(int key, RuntimeBlackboardValueType valueType)
@@ -1742,9 +1834,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         private void ValidateExistingValuesAgainstSchema(RuntimeBlackboardSchema schema)
         {
-            foreach (KeyValuePair<int, byte> item in _typeByKey)
+            for (int i = 0; i < _count; i++)
             {
-                schema.ValidateWrite(item.Key, ToValueType(item.Value));
+                schema.ValidateWrite(_cells[i].Key, ToValueType(_cells[i].Type));
             }
         }
 
@@ -1779,7 +1871,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             for (int i = 0; i < schema.Count; i++)
             {
                 RuntimeBlackboardKeyDefinition entry = schema.GetEntry(i);
-                if (!entry.HasDefaultValue || _typeByKey.ContainsKey(entry.KeyHash))
+                if (!entry.HasDefaultValue || FindCellIndex(entry.KeyHash) >= 0)
                 {
                     continue;
                 }
@@ -1821,45 +1913,31 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         private bool MatchesSchemaDefault(RuntimeBlackboardKeyDefinition entry)
         {
-            if (!_typeByKey.TryGetValue(entry.KeyHash, out byte currentType))
+            int cellIndex = FindCellIndex(entry.KeyHash);
+            if (cellIndex < 0)
             {
                 return false;
             }
 
+            RuntimeBlackboardCell cell = _cells[cellIndex];
             switch (entry.ValueType)
             {
                 case RuntimeBlackboardValueType.Int:
-                    return currentType == TYPE_INT &&
-                           _intData.TryGetValue(entry.KeyHash, out int intValue) &&
-                           intValue == entry.DefaultValue.IntValue;
+                    return cell.Type == TYPE_INT && cell.IntValue == entry.DefaultValue.IntValue;
                 case RuntimeBlackboardValueType.Float:
-                    return currentType == TYPE_FLOAT &&
-                           _floatData.TryGetValue(entry.KeyHash, out float floatValue) &&
-                           FloatBitsEqual(floatValue, entry.DefaultValue.FloatValue);
+                    return cell.Type == TYPE_FLOAT && FloatBitsEqual(cell.FloatValue, entry.DefaultValue.FloatValue);
                 case RuntimeBlackboardValueType.Bool:
-                    return currentType == TYPE_BOOL &&
-                           _boolData.TryGetValue(entry.KeyHash, out bool boolValue) &&
-                           boolValue == entry.DefaultValue.BoolValue;
+                    return cell.Type == TYPE_BOOL && cell.BoolValue == entry.DefaultValue.BoolValue;
                 case RuntimeBlackboardValueType.Vector3:
-                    return currentType == TYPE_VECTOR3 &&
-                           _vectorData.TryGetValue(entry.KeyHash, out Vector3 vectorValue) &&
-                           VectorBitsEqual(vectorValue, entry.DefaultValue.Vector3Value);
+                    return cell.Type == TYPE_VECTOR3 && VectorBitsEqual(cell.VectorValue, entry.DefaultValue.Vector3Value);
                 case RuntimeBlackboardValueType.Object:
-                    return currentType == TYPE_OBJECT &&
-                           _objectData.TryGetValue(entry.KeyHash, out object objectValue) &&
-                           ReferenceEquals(objectValue, entry.DefaultValue.ObjectValue);
+                    return cell.Type == TYPE_OBJECT && ReferenceEquals(cell.ObjectValue, entry.DefaultValue.ObjectValue);
                 case RuntimeBlackboardValueType.Long:
-                    return currentType == TYPE_LONG &&
-                           _longData.TryGetValue(entry.KeyHash, out long longValue) &&
-                           longValue == entry.DefaultValue.LongValue;
+                    return cell.Type == TYPE_LONG && cell.LongValue == entry.DefaultValue.LongValue;
                 case RuntimeBlackboardValueType.Long2:
-                    return currentType == TYPE_LONG2 &&
-                           _long2Data.TryGetValue(entry.KeyHash, out RuntimeBlackboardLong2 long2Value) &&
-                           long2Value.Equals(entry.DefaultValue.Long2Value);
+                    return cell.Type == TYPE_LONG2 && cell.Long2Value.Equals(entry.DefaultValue.Long2Value);
                 case RuntimeBlackboardValueType.Long3:
-                    return currentType == TYPE_LONG3 &&
-                           _long3Data.TryGetValue(entry.KeyHash, out RuntimeBlackboardLong3 long3Value) &&
-                           long3Value.Equals(entry.DefaultValue.Long3Value);
+                    return cell.Type == TYPE_LONG3 && cell.Long3Value.Equals(entry.DefaultValue.Long3Value);
                 default:
                     return false;
             }
@@ -1868,22 +1946,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private void RemoveScopeValues(RuntimeBlackboardNetworkScope scope)
         {
             _sortedKeyScratch.Clear();
-            foreach (KeyValuePair<int, byte> item in _typeByKey)
+            for (int i = 0; i < _count; i++)
             {
-                if (item.Value != TYPE_OBJECT && ShouldIncludeKey(item.Key, scope))
+                RuntimeBlackboardCell cell = _cells[i];
+                if (cell.Type != TYPE_OBJECT && ShouldIncludeKey(cell.Key, scope))
                 {
-                    _sortedKeyScratch.Add(item.Key);
+                    _sortedKeyScratch.Add(cell.Key);
                 }
             }
 
             for (int i = 0; i < _sortedKeyScratch.Count; i++)
             {
                 int key = _sortedKeyScratch[i];
-                if (_typeByKey.TryGetValue(key, out byte type))
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex >= 0)
                 {
-                    RemoveTypedValue(key, type);
-                    _typeByKey.Remove(key);
-                    _stamps.Remove(key);
+                    RemoveCellAt(key, cellIndex);
                 }
             }
         }
@@ -1971,17 +2049,31 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return result;
         }
 
-        private void FillSortedKeys<T>(Dictionary<int, T> source, RuntimeBlackboardNetworkScope scope)
+        private void FillSortedKeys(byte type, RuntimeBlackboardNetworkScope scope)
         {
             _sortedKeyScratch.Clear();
-            foreach (var kvp in source)
+            for (int i = 0; i < _count; i++)
             {
-                if (!ShouldIncludeKey(kvp.Key, scope))
+                RuntimeBlackboardCell cell = _cells[i];
+                if (cell.Type == type && ShouldIncludeKey(cell.Key, scope))
                 {
-                    continue;
+                    _sortedKeyScratch.Add(cell.Key);
                 }
+            }
 
-                _sortedKeyScratch.Add(kvp.Key);
+            _sortedKeyScratch.Sort();
+        }
+
+        private void FillSortedPrimitiveKeys(RuntimeBlackboardNetworkScope scope)
+        {
+            _sortedKeyScratch.Clear();
+            for (int i = 0; i < _count; i++)
+            {
+                RuntimeBlackboardCell cell = _cells[i];
+                if (cell.Type != TYPE_OBJECT && ShouldIncludeKey(cell.Key, scope))
+                {
+                    _sortedKeyScratch.Add(cell.Key);
+                }
             }
 
             _sortedKeyScratch.Sort();
@@ -2049,63 +2141,60 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-        private void WriteOrdered<T>(Dictionary<int, T> source, BinaryWriter writer,
-            RuntimeBlackboardNetworkScope scope,
-            Action<BinaryWriter, T> writeValue)
+        private void WriteTypeSection(BinaryWriter writer, byte type, RuntimeBlackboardNetworkScope scope)
         {
-            FillNetworkScopeKeys(source, scope);
+            FillSortedKeys(type, scope);
             writer.Write(_sortedKeyScratch.Count);
 
             for (int i = 0; i < _sortedKeyScratch.Count; i++)
             {
                 int key = _sortedKeyScratch[i];
+                RuntimeBlackboardCell cell = _cells[FindCellIndex(key)];
                 writer.Write(key);
-                writeValue(writer, source[key]);
-            }
-        }
-
-        private void FillNetworkScopeKeys<T>(
-            Dictionary<int, T> source,
-            RuntimeBlackboardNetworkScope scope)
-        {
-            _sortedKeyScratch.Clear();
-            foreach (KeyValuePair<int, T> item in source)
-            {
-                if (ShouldIncludeKey(item.Key, scope))
+                switch (type)
                 {
-                    _sortedKeyScratch.Add(item.Key);
+                    case TYPE_INT:
+                        writer.Write(cell.IntValue);
+                        break;
+                    case TYPE_FLOAT:
+                        writer.Write(cell.FloatValue);
+                        break;
+                    case TYPE_BOOL:
+                        writer.Write(cell.BoolValue ? (byte)1 : (byte)0);
+                        break;
+                    case TYPE_VECTOR3:
+                        writer.Write(cell.VectorValue.x);
+                        writer.Write(cell.VectorValue.y);
+                        writer.Write(cell.VectorValue.z);
+                        break;
+                    case TYPE_LONG:
+                        writer.Write(cell.LongValue);
+                        break;
+                    case TYPE_LONG2:
+                        writer.Write(cell.Long2Value.X);
+                        writer.Write(cell.Long2Value.Y);
+                        break;
+                    case TYPE_LONG3:
+                        writer.Write(cell.Long3Value.X);
+                        writer.Write(cell.Long3Value.Y);
+                        writer.Write(cell.Long3Value.Z);
+                        break;
                 }
             }
-
-            _sortedKeyScratch.Sort();
         }
 
         private void WritePrimitiveStampsOrdered(
             BinaryWriter writer,
             RuntimeBlackboardNetworkScope scope)
         {
-            _sortedKeyScratch.Clear();
-            foreach (KeyValuePair<int, byte> item in _typeByKey)
-            {
-                if (item.Value != TYPE_OBJECT && ShouldIncludeKey(item.Key, scope))
-                {
-                    _sortedKeyScratch.Add(item.Key);
-                }
-            }
-
-            _sortedKeyScratch.Sort();
+            FillSortedPrimitiveKeys(scope);
             writer.Write(_sortedKeyScratch.Count);
 
             for (int i = 0; i < _sortedKeyScratch.Count; i++)
             {
                 int key = _sortedKeyScratch[i];
-                if (!_stamps.TryGetValue(key, out ulong stamp))
-                {
-                    throw new InvalidOperationException($"RuntimeBlackboard key {key} is missing a change stamp.");
-                }
-
                 writer.Write(key);
-                writer.Write(stamp);
+                writer.Write(_cells[FindCellIndex(key)].Stamp);
             }
         }
 
@@ -2142,46 +2231,48 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             try
             {
                 mutation = new RuntimeBlackboardMutation { Key = key };
-                if (!_typeByKey.TryGetValue(key, out byte type))
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex < 0)
                 {
                     mutation.Kind = RuntimeBlackboardMutationKind.Remove;
                     stamp = 0;
                     return true;
                 }
 
-                if (type == TYPE_OBJECT)
+                RuntimeBlackboardCell cell = _cells[cellIndex];
+                if (cell.Type == TYPE_OBJECT)
                 {
-                    stamp = _stamps.TryGetValue(key, out ulong objectStamp) ? objectStamp : 0;
+                    stamp = cell.Stamp;
                     return false;
                 }
 
-                stamp = _stamps.TryGetValue(key, out ulong valueStamp) ? valueStamp : 0;
-                mutation.Kind = (RuntimeBlackboardMutationKind)type;
-                switch (type)
+                stamp = cell.Stamp;
+                mutation.Kind = (RuntimeBlackboardMutationKind)cell.Type;
+                switch (cell.Type)
                 {
                     case TYPE_INT:
-                        mutation.IntValue = _intData[key];
+                        mutation.IntValue = cell.IntValue;
                         break;
                     case TYPE_FLOAT:
-                        mutation.FloatValue = _floatData[key];
+                        mutation.FloatValue = cell.FloatValue;
                         break;
                     case TYPE_BOOL:
-                        mutation.BoolValue = _boolData[key];
+                        mutation.BoolValue = cell.BoolValue;
                         break;
                     case TYPE_VECTOR3:
-                        mutation.VectorValue = _vectorData[key];
+                        mutation.VectorValue = cell.VectorValue;
                         break;
                     case TYPE_LONG:
-                        mutation.LongValue = _longData[key];
+                        mutation.LongValue = cell.LongValue;
                         break;
                     case TYPE_LONG2:
-                        mutation.Long2Value = _long2Data[key];
+                        mutation.Long2Value = cell.Long2Value;
                         break;
                     case TYPE_LONG3:
-                        mutation.Long3Value = _long3Data[key];
+                        mutation.Long3Value = cell.Long3Value;
                         break;
                     default:
-                        throw new InvalidOperationException($"Unknown blackboard value slot type {type}.");
+                        throw new InvalidOperationException($"Unknown blackboard value slot type {cell.Type}.");
                 }
 
                 return true;
@@ -2200,40 +2291,42 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             try
             {
                 mutation = new RuntimeBlackboardMutation { Key = key };
-                if (!_typeByKey.TryGetValue(key, out byte type))
+                int cellIndex = FindCellIndex(key);
+                if (cellIndex < 0)
                 {
                     return false;
                 }
 
-                mutation.Kind = (RuntimeBlackboardMutationKind)type;
-                switch (type)
+                RuntimeBlackboardCell cell = _cells[cellIndex];
+                mutation.Kind = (RuntimeBlackboardMutationKind)cell.Type;
+                switch (cell.Type)
                 {
                     case TYPE_INT:
-                        mutation.IntValue = _intData[key];
+                        mutation.IntValue = cell.IntValue;
                         break;
                     case TYPE_FLOAT:
-                        mutation.FloatValue = _floatData[key];
+                        mutation.FloatValue = cell.FloatValue;
                         break;
                     case TYPE_BOOL:
-                        mutation.BoolValue = _boolData[key];
+                        mutation.BoolValue = cell.BoolValue;
                         break;
                     case TYPE_VECTOR3:
-                        mutation.VectorValue = _vectorData[key];
+                        mutation.VectorValue = cell.VectorValue;
                         break;
                     case TYPE_OBJECT:
-                        mutation.ObjectValue = _objectData[key];
+                        mutation.ObjectValue = cell.ObjectValue;
                         break;
                     case TYPE_LONG:
-                        mutation.LongValue = _longData[key];
+                        mutation.LongValue = cell.LongValue;
                         break;
                     case TYPE_LONG2:
-                        mutation.Long2Value = _long2Data[key];
+                        mutation.Long2Value = cell.Long2Value;
                         break;
                     case TYPE_LONG3:
-                        mutation.Long3Value = _long3Data[key];
+                        mutation.Long3Value = cell.Long3Value;
                         break;
                     default:
-                        throw new InvalidOperationException($"Unknown blackboard value slot type {type}.");
+                        throw new InvalidOperationException($"Unknown blackboard value slot type {cell.Type}.");
                 }
 
                 return true;
@@ -2301,8 +2394,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
             int[] changedKeys = count > 0 ? ArrayPool<int>.Shared.Rent(count) : null;
             int changedCount = 0;
+            int duplicateCapacity = count > 0 ? NextPowerOfTwo(count * 2) : 0;
+            long[] seenKeys = count > 0 ? ArrayPool<long>.Shared.Rent(duplicateCapacity) : null;
             try
             {
+                if (seenKeys != null)
+                {
+                    Array.Clear(seenKeys, 0, duplicateCapacity);
+                }
+
                 if (_lock != null) _lock.EnterWriteLock();
                 try
                 {
@@ -2315,14 +2415,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     for (int i = 0; i < count; i++)
                     {
                         RuntimeBlackboardMutation mutation = mutations[i];
-                        for (int earlierIndex = 0; earlierIndex < i; earlierIndex++)
+                        // Duplicate detection is O(1) average. The token stores key<<32 | 1 so that
+                        // zero means "empty" for every int key, including 0 and negative values.
+                        long token = ((long)mutation.Key << 32) | 1L;
+                        int mask = duplicateCapacity - 1;
+                        int slot = HashKey(mutation.Key) & mask;
+                        while (seenKeys[slot] != 0L)
                         {
-                            if (mutations[earlierIndex].Key == mutation.Key)
+                            if (seenKeys[slot] == token)
                             {
                                 throw new InvalidDataException(
                                     $"RuntimeBlackboard batch contains duplicate destination key {mutation.Key}.");
                             }
+                            slot = (slot + 1) & mask;
                         }
+                        seenKeys[slot] = token;
 
                         if (mutation.Kind != RuntimeBlackboardMutationKind.Remove)
                         {
@@ -2334,17 +2441,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
                             RuntimeBlackboardValueType valueType = ToValueType((byte)mutation.Kind);
                             ValidateSchemaWrite(mutation.Key, valueType);
-                            if (!allowObjects &&
-                                _typeByKey.TryGetValue(mutation.Key, out byte existingType) &&
-                                existingType == TYPE_OBJECT)
+                            if (!allowObjects && HasObjectValue(mutation.Key))
                             {
                                 throw new InvalidDataException(
                                     $"Network primitive key {mutation.Key} conflicts with a local object value.");
                             }
                         }
-                        else if (!allowObjects &&
-                                 _typeByKey.TryGetValue(mutation.Key, out byte existingType) &&
-                                 existingType == TYPE_OBJECT)
+                        else if (!allowObjects && HasObjectValue(mutation.Key))
                         {
                             throw new InvalidDataException(
                                 $"Network removal key {mutation.Key} conflicts with a local object value.");
@@ -2368,6 +2471,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
             finally
             {
+                if (seenKeys != null)
+                {
+                    ArrayPool<long>.Shared.Return(seenKeys, clearArray: false);
+                }
                 if (changedKeys != null)
                 {
                     ArrayPool<int>.Shared.Return(changedKeys, clearArray: true);
@@ -2375,28 +2482,40 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        private static int NextPowerOfTwo(int value)
+        {
+            int result = 1;
+            while (result < value)
+            {
+                result <<= 1;
+            }
+            return result;
+        }
+
         private bool WouldMutationChange(RuntimeBlackboardMutation mutation)
         {
-            if (!_typeByKey.TryGetValue(mutation.Key, out byte existingType))
+            int cellIndex = FindCellIndex(mutation.Key);
+            if (cellIndex < 0)
             {
                 return mutation.Kind != RuntimeBlackboardMutationKind.Remove;
             }
 
-            if (mutation.Kind == RuntimeBlackboardMutationKind.Remove || existingType != (byte)mutation.Kind)
+            RuntimeBlackboardCell cell = _cells[cellIndex];
+            if (mutation.Kind == RuntimeBlackboardMutationKind.Remove || cell.Type != (byte)mutation.Kind)
             {
                 return true;
             }
 
             return mutation.Kind switch
             {
-                RuntimeBlackboardMutationKind.Int => _intData[mutation.Key] != mutation.IntValue,
-                RuntimeBlackboardMutationKind.Float => !FloatBitsEqual(_floatData[mutation.Key], mutation.FloatValue),
-                RuntimeBlackboardMutationKind.Bool => _boolData[mutation.Key] != mutation.BoolValue,
-                RuntimeBlackboardMutationKind.Vector3 => !VectorBitsEqual(_vectorData[mutation.Key], mutation.VectorValue),
-                RuntimeBlackboardMutationKind.Object => !ReferenceEquals(_objectData[mutation.Key], mutation.ObjectValue),
-                RuntimeBlackboardMutationKind.Long => _longData[mutation.Key] != mutation.LongValue,
-                RuntimeBlackboardMutationKind.Long2 => !_long2Data[mutation.Key].Equals(mutation.Long2Value),
-                RuntimeBlackboardMutationKind.Long3 => !_long3Data[mutation.Key].Equals(mutation.Long3Value),
+                RuntimeBlackboardMutationKind.Int => cell.IntValue != mutation.IntValue,
+                RuntimeBlackboardMutationKind.Float => !FloatBitsEqual(cell.FloatValue, mutation.FloatValue),
+                RuntimeBlackboardMutationKind.Bool => cell.BoolValue != mutation.BoolValue,
+                RuntimeBlackboardMutationKind.Vector3 => !VectorBitsEqual(cell.VectorValue, mutation.VectorValue),
+                RuntimeBlackboardMutationKind.Object => !ReferenceEquals(cell.ObjectValue, mutation.ObjectValue),
+                RuntimeBlackboardMutationKind.Long => cell.LongValue != mutation.LongValue,
+                RuntimeBlackboardMutationKind.Long2 => !cell.Long2Value.Equals(mutation.Long2Value),
+                RuntimeBlackboardMutationKind.Long3 => !cell.Long3Value.Equals(mutation.Long3Value),
                 _ => false
             };
         }
@@ -2430,14 +2549,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     SetLong3Core(mutation.Key, mutation.Long3Value);
                     break;
                 case RuntimeBlackboardMutationKind.Remove:
-                    if (_typeByKey.TryGetValue(mutation.Key, out byte type))
                     {
-                        NextSequence();
-                        RemoveTypedValue(mutation.Key, type);
-                        _typeByKey.Remove(mutation.Key);
-                        _stamps.Remove(mutation.Key);
+                        int cellIndex = FindCellIndex(mutation.Key);
+                        if (cellIndex >= 0)
+                        {
+                            NextSequence();
+                            RemoveCellAt(mutation.Key, cellIndex);
+                        }
+                        break;
                     }
-                    break;
                 default:
                     throw new InvalidOperationException($"Unknown blackboard mutation kind {mutation.Kind}.");
             }
@@ -2447,14 +2567,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             long byteCount = 8L + (7L * sizeof(int)) + sizeof(int);
             int primitiveCount = 0;
-            byteCount += CountSerializedBytes(_intData, scope, 8, ref primitiveCount);
-            byteCount += CountSerializedBytes(_floatData, scope, 8, ref primitiveCount);
-            byteCount += CountSerializedBytes(_boolData, scope, 5, ref primitiveCount);
-            byteCount += CountSerializedBytes(_vectorData, scope, 16, ref primitiveCount);
-            byteCount += CountSerializedBytes(_longData, scope, 12, ref primitiveCount);
-            byteCount += CountSerializedBytes(_long2Data, scope, 20, ref primitiveCount);
-            byteCount += CountSerializedBytes(_long3Data, scope, 28, ref primitiveCount);
-            byteCount += primitiveCount * 12L;
+            for (int i = 0; i < _count; i++)
+            {
+                RuntimeBlackboardCell cell = _cells[i];
+                if (cell.Type == TYPE_OBJECT || !ShouldIncludeKey(cell.Key, scope)) continue;
+                byteCount += SerializedEntrySize(cell.Type);
+                primitiveCount++;
+            }
+            byteCount = checked(byteCount + primitiveCount * 12L);
             if (byteCount > int.MaxValue)
             {
                 throw new InvalidOperationException("RuntimeBlackboard serialized payload exceeds Int32 capacity.");
@@ -2463,23 +2583,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return (int)byteCount;
         }
 
-        private long CountSerializedBytes<T>(
-            Dictionary<int, T> source,
-            RuntimeBlackboardNetworkScope scope,
-            int bytesPerEntry,
-            ref int primitiveCount)
+        private static long SerializedEntrySize(byte type)
         {
-            int count = 0;
-            foreach (int key in source.Keys)
+            switch (type)
             {
-                if (ShouldIncludeKey(key, scope))
-                {
-                    count++;
-                }
+                case TYPE_INT: return 8L;
+                case TYPE_FLOAT: return 8L;
+                case TYPE_BOOL: return 5L;
+                case TYPE_VECTOR3: return 16L;
+                case TYPE_LONG: return 12L;
+                case TYPE_LONG2: return 20L;
+                case TYPE_LONG3: return 28L;
+                default: return 0L;
             }
-
-            primitiveCount = checked(primitiveCount + count);
-            return count * (long)bytesPerEntry;
         }
 
         private static void ValidateNetworkScope(RuntimeBlackboardNetworkScope scope)
@@ -2511,16 +2627,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         private void ClearStorageNoNotify()
         {
-            _intData.Clear();
-            _floatData.Clear();
-            _boolData.Clear();
-            _vectorData.Clear();
-            _longData.Clear();
-            _long2Data.Clear();
-            _long3Data.Clear();
-            _objectData.Clear();
-            _typeByKey.Clear();
-            _stamps.Clear();
+            Array.Clear(_buckets, 0, _buckets.Length);
+            Array.Clear(_cells, 0, _count);
+            _count = 0;
+            _used = 0;
         }
 
         private void NotifyObserversAfterCommit(int[] keys, int count)
@@ -2564,22 +2674,37 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             try
             {
                 destination.Clear();
-                foreach (KeyValuePair<int, int> item in _intData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Int, intValue: item.Value));
-                foreach (KeyValuePair<int, float> item in _floatData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Float, floatValue: item.Value));
-                foreach (KeyValuePair<int, bool> item in _boolData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Bool, boolValue: item.Value));
-                foreach (KeyValuePair<int, Vector3> item in _vectorData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Vector3, vectorValue: item.Value));
-                foreach (KeyValuePair<int, object> item in _objectData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Object, objectValue: item.Value));
-                foreach (KeyValuePair<int, long> item in _longData)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Long, longValue: item.Value));
-                foreach (KeyValuePair<int, RuntimeBlackboardLong2> item in _long2Data)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Long2, long2Value: item.Value));
-                foreach (KeyValuePair<int, RuntimeBlackboardLong3> item in _long3Data)
-                    destination.Add(new RuntimeBlackboardDebugEntry(item.Key, RuntimeBlackboardValueType.Long3, long3Value: item.Value));
+                for (int i = 0; i < _count; i++)
+                {
+                    RuntimeBlackboardCell cell = _cells[i];
+                    switch (cell.Type)
+                    {
+                        case TYPE_INT:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Int, intValue: cell.IntValue));
+                            break;
+                        case TYPE_FLOAT:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Float, floatValue: cell.FloatValue));
+                            break;
+                        case TYPE_BOOL:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Bool, boolValue: cell.BoolValue));
+                            break;
+                        case TYPE_VECTOR3:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Vector3, vectorValue: cell.VectorValue));
+                            break;
+                        case TYPE_OBJECT:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Object, objectValue: cell.ObjectValue));
+                            break;
+                        case TYPE_LONG:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Long, longValue: cell.LongValue));
+                            break;
+                        case TYPE_LONG2:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Long2, long2Value: cell.Long2Value));
+                            break;
+                        case TYPE_LONG3:
+                            destination.Add(new RuntimeBlackboardDebugEntry(cell.Key, RuntimeBlackboardValueType.Long3, long3Value: cell.Long3Value));
+                            break;
+                    }
+                }
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
 

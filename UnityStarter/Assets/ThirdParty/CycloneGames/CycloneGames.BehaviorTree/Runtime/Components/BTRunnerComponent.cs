@@ -10,14 +10,21 @@ using CycloneGames.BehaviorTree.Runtime.Nodes;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
+    /// <summary>
+    /// Selects who drives RuntimeBehaviorTree.Tick.
+    /// </summary>
     public enum TickMode
     {
-        Self,            // Component's Update() handles tick
-        Managed,         // BTTickManager handles tick (simple)
-        PriorityManaged, // BTPriorityTickManager with LOD (for 1000+ AIs)
-        Manual           // User calls ManualTick() directly (full control)
+        Self, // Component Update() drives ticks
+        Managed, // BTTickManager drives ticks
+        PriorityManaged, // BTPriorityTickManager with LOD
+        Manual // Caller drives ticks via ManualTick()
     }
 
+    /// <summary>
+    /// Owns one runtime tree and its tick registration. Managed modes register with the
+    /// resolved manager; without a manager the tree ticks locally and warns once.
+    /// </summary>
     public class BTRunnerComponent : MonoBehaviour
     {
         private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
@@ -33,10 +40,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [Serializable]
         private class BlackBoardPassObject
         {
-            [FormerlySerializedAs("Key")]
             [BehaviorTreeBlackboardKey(RuntimeBlackboardValueType.Object, allowEmpty: true)]
             [SerializeField] private string KeyField;
-            [FormerlySerializedAs("Value")]
             [SerializeField] private Object ValueField;
 
             public string Key
@@ -67,6 +72,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private BTTickManagerComponent _registeredTickManager;
         private BTPriorityTickManagerComponent _registeredPriorityManager;
         private bool _managerRegistrationRejected;
+        private bool _managerMissing;
+        private bool _managerMissingReported;
         private BehaviorTree _nextTree;
         private RuntimeBTContext _context;
 
@@ -149,16 +156,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
 
+            _managerMissing = false;
+
             if (_tickMode == TickMode.Managed)
             {
                 BTTickManagerComponent manager = BTTickManagerComponent.Instance;
-                if (manager != null && manager.TryRegister(_runtimeTree))
+                if (manager == null)
+                {
+                    _managerMissing = true;
+                    ReportManagerMissing();
+                }
+                else if (manager.TryRegister(_runtimeTree))
                 {
                     _registeredTickManager = manager;
                     _isRegistered = true;
                     _managerRegistrationRejected = false;
                 }
-                else if (manager != null)
+                else
                 {
                     ReportManagerRegistrationRejected();
                 }
@@ -166,17 +180,36 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             else if (_tickMode == TickMode.PriorityManaged)
             {
                 BTPriorityTickManagerComponent manager = BTPriorityTickManagerComponent.Instance;
-                if (manager != null && manager.TryRegister(_runtimeTree, transform))
+                if (manager == null)
+                {
+                    _managerMissing = true;
+                    ReportManagerMissing();
+                }
+                else if (manager.TryRegister(_runtimeTree, transform))
                 {
                     _registeredPriorityManager = manager;
                     _isRegistered = true;
                     _managerRegistrationRejected = false;
                 }
-                else if (manager != null)
+                else
                 {
                     ReportManagerRegistrationRejected();
                 }
             }
+        }
+
+        private void ReportManagerMissing()
+        {
+            if (_managerMissingReported)
+            {
+                return;
+            }
+
+            _managerMissingReported = true;
+            Log.Warning(
+                $"[BTRunnerComponent] No tick manager component is present for '{gameObject.name}'. " +
+                "Managed scheduling is inactive; the tree ticks locally until a manager is placed in the scene. " +
+                "Place a manager component or call its explicit CreateInstance() from a composition root.");
         }
 
         private void ReportManagerRegistrationRejected()
@@ -221,7 +254,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _context ??= new RuntimeBTContext();
             _context.Owner = gameObject;
 
-            // Compile to Pure C# Runtime Tree
             RuntimeBehaviorTree compiledTree = behaviorTree.Compile(_context);
             if (compiledTree == null)
             {
@@ -285,6 +317,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (_tickMode == TickMode.Managed || _tickMode == TickMode.PriorityManaged)
             {
                 RegisterWithManager();
+                if (_managerMissing &&
+                    _runtimeTree != null &&
+                    !_runtimeTree.IsStopped &&
+                    !_isPaused &&
+                    !_isStopped &&
+                    isActiveAndEnabled)
+                {
+                    _runtimeTree.Tick();
+                }
                 return;
             }
 
@@ -300,9 +341,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _runtimeTree.Tick();
         }
 
-        /// <summary>
-        /// Manual tick for Manual mode. Returns current tree state.
-        /// </summary>
         public RuntimeState ManualTick()
         {
             if (_runtimeTree == null) return RuntimeState.NotEntered;

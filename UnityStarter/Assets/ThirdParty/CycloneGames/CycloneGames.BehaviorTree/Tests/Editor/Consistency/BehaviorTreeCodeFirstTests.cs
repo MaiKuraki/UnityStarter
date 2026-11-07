@@ -555,7 +555,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void SubTree_LegacyMappingPreservesMultiTickInOutState()
+        public void SubTree_InOutMappingPreservesMultiTickState()
         {
             const int localKey = 2201;
             const int parentKey = 2202;

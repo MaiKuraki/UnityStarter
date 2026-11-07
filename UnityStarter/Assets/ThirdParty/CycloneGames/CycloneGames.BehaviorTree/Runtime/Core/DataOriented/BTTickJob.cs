@@ -7,19 +7,13 @@ using CycloneGames.BehaviorTree.Runtime.Core;
 namespace CycloneGames.BehaviorTree.Runtime.DOD
 {
     /// <summary>
-    /// Burst-compiled parallel job that ticks N agents simultaneously.
-    /// Each agent shares the same FlatBehaviorTree (read-only) but has
-    /// its own execution state stored in interleaved NativeArrays.
-    ///
-    /// For 10,000+ agents: schedule with batchSize=64 for optimal cache usage.
-    ///
-    /// Interleaved layout: agent[i]'s node j is at index [i * NodeCount + j].
-    /// This ensures each Execute(i) touches a contiguous memory region.
+    /// Burst-compiled parallel job; each agent shares one read-only FlatBehaviorTree and owns
+    /// interleaved NativeArray state. Per-agent node j is at [i * NodeCount + j], so Execute(i)
+    /// touches a contiguous memory region.
     /// </summary>
     [BurstCompile]
     internal struct BTTickJob : IJobParallelFor
     {
-        // Shared tree definition (read-only, same for all agents)
         [ReadOnly] public NativeArray<FlatNodeDef> TreeNodes;
         [ReadOnly] public NativeArray<int> ChildIndices;
         public int NodeCount;
@@ -41,11 +35,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         [NativeDisableParallelForRestriction] public NativeArray<byte> AllBBBools;
         public int BBSlotCount;
 
-        // LOD tick gating
         [NativeDisableParallelForRestriction] public NativeArray<int> TickCountdowns;
         [ReadOnly] public NativeArray<int> TickIntervals;
         [NativeDisableParallelForRestriction] public NativeArray<float> AccumulatedDeltaTimes;
-        /// <summary>Agents marked inactive will be skipped entirely.</summary>
         [ReadOnly] public NativeArray<byte> ActiveFlags;
 
         public void Execute(int agentIndex)
@@ -153,7 +145,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             return result;
         }
 
-        // Reset a subtree rooted at nodeIdx to NotEntered
         private void ResetSubtree(int nodeIdx, int nOff, int bbOff, int actOff)
         {
             var def = TreeNodes[nodeIdx];
@@ -282,7 +273,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             }
         }
 
-        // Re-evaluate from child[0] every tick (reactive pattern)
         private byte TickReactiveSequence(int nodeIdx, int gi, int nOff, int bbOff, int actOff, float deltaTime)
         {
             var def = TreeNodes[nodeIdx];
@@ -348,7 +338,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         #region Decorators
 
-        /// <summary>Single-child decorator with optional invert / force result.</summary>
         private byte TickDecorator1Child(int nodeIdx, int nOff, int bbOff, int actOff,
             float deltaTime, bool invert, bool forceSuccess, bool forceFail)
         {
@@ -416,7 +405,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 return (byte)RuntimeState.Success;
             }
 
-            // Child failed — retry
             int attempts = AllAuxInts[gi] + 1;
             int maxAttempts = def.ParamInt; // -1 = infinite
 
@@ -482,7 +470,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         private byte TickRunOnce(int nodeIdx, int gi, int nOff, int bbOff, int actOff, float deltaTime)
         {
-            // AuxInt: 0=not run, 1=completed success, 2=completed failure
             int cached = AllAuxInts[gi];
             if (cached == 1) return (byte)RuntimeState.Success;
             if (cached == 2) return (byte)RuntimeState.Failure;
@@ -519,7 +506,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             byte childResult = TickNode(childIdx, nOff, bbOff, actOff, deltaTime);
 
             if (childResult == (byte)RuntimeState.Success || childResult == (byte)RuntimeState.Failure)
-                AllAuxFloats[gi] = def.ParamFloat; // start cooldown
+                AllAuxFloats[gi] = def.ParamFloat;
 
             return childResult;
         }
@@ -528,10 +515,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         #region Leaf Nodes
 
-        /// <summary>
-        /// Action node: reads/writes external action slot.
-        /// BT requests action → external system executes → signals completion.
-        /// </summary>
         private byte TickAction(int nodeIdx, int gi, int actOff)
         {
             int actionId = TreeNodes[nodeIdx].ParamInt;
@@ -584,10 +567,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             return generation == 0u ? 1u : generation;
         }
 
-        /// <summary>
-        /// Blackboard condition: compare BB int value against a constant.
-        /// Returns Success if condition holds, Failure otherwise.
-        /// </summary>
         private byte TickBBCondition(int nodeIdx, int bbOff)
         {
             var def = TreeNodes[nodeIdx];
@@ -612,7 +591,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             return passed ? (byte)RuntimeState.Success : (byte)RuntimeState.Failure;
         }
 
-        /// <summary>Wait for N ticks, then return Success.</summary>
         private byte TickWaitTicks(int nodeIdx, int gi)
         {
             int count = AllAuxInts[gi] + 1;

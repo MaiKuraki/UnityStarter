@@ -10,10 +10,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// </summary>
     public sealed class BTPriorityTickManager
     {
-        public const int DefaultInitialBucketCapacity = 256;
-        public const int DefaultMaximumTreeCount = 65_536;
-        public const int HardMaximumTreeCount = 1_048_576;
-        private const int MAX_PRIORITY_LEVELS = 8;
 
         private readonly List<RuntimeBehaviorTree>[] _buckets;
         private readonly int[] _bucketIndices;
@@ -36,9 +32,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public BTPriorityTickManager(int[] budgets = null)
             : this(
                 budgets,
-                DefaultInitialBucketCapacity,
-                DefaultMaximumTreeCount,
-                DefaultMaximumTreeCount)
+                BTCapacityLimits.DefaultPriorityBucketCapacity,
+                BTCapacityLimits.DefaultAgentCount,
+                BTCapacityLimits.DefaultAgentCount)
         {
         }
 
@@ -53,30 +49,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 throw new ArgumentOutOfRangeException(nameof(initialBucketCapacity));
             }
 
-            if (maximumTreeCount < 1 || maximumTreeCount > HardMaximumTreeCount)
+            if (maximumTreeCount < 1 || maximumTreeCount > BTCapacityLimits.MaxAgentCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumTreeCount));
             }
 
             if (maximumPendingMutationCount < 1 ||
-                maximumPendingMutationCount > HardMaximumTreeCount)
+                maximumPendingMutationCount > BTCapacityLimits.MaxAgentCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumPendingMutationCount));
             }
 
-            _priorityLevelCount = MAX_PRIORITY_LEVELS;
+            _priorityLevelCount = BTCapacityLimits.PriorityLevelCount;
             _ownerThreadId = Environment.CurrentManagedThreadId;
             _maximumTreeCount = maximumTreeCount;
             _maximumPendingMutationCount = maximumPendingMutationCount;
-            _buckets = new List<RuntimeBehaviorTree>[MAX_PRIORITY_LEVELS];
-            _bucketIndices = new int[MAX_PRIORITY_LEVELS];
+            _buckets = new List<RuntimeBehaviorTree>[BTCapacityLimits.PriorityLevelCount];
+            _bucketIndices = new int[BTCapacityLimits.PriorityLevelCount];
             _budgets = new[] { 100, 50, 30, 20, 15, 10, 5, 5 };
             _treeLocations = new Dictionary<RuntimeBehaviorTree, TreeLocation>(initialBucketCapacity);
             int pendingInitialCapacity = Math.Min(maximumPendingMutationCount, 32);
             _pendingMutations = new List<PendingMutation>(pendingInitialCapacity);
             _pendingMutationIndices = new Dictionary<RuntimeBehaviorTree, int>(pendingInitialCapacity);
 
-            for (int i = 0; i < MAX_PRIORITY_LEVELS; i++)
+            for (int i = 0; i < BTCapacityLimits.PriorityLevelCount; i++)
             {
                 _buckets[i] = new List<RuntimeBehaviorTree>(initialBucketCapacity);
                 _bucketIndices[i] = 0;
@@ -96,7 +92,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 throw new ArgumentNullException(nameof(budgets));
             }
 
-            for (int i = 0; i < budgets.Length && i < MAX_PRIORITY_LEVELS; i++)
+            for (int i = 0; i < budgets.Length && i < BTCapacityLimits.PriorityLevelCount; i++)
             {
                 if (budgets[i] < 0)
                 {
@@ -335,7 +331,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private int ClampPriority(int priority)
         {
             if (priority < 0) return 0;
-            if (priority >= MAX_PRIORITY_LEVELS) return MAX_PRIORITY_LEVELS - 1;
+            if (priority >= BTCapacityLimits.PriorityLevelCount) return BTCapacityLimits.PriorityLevelCount - 1;
             return priority;
         }
 

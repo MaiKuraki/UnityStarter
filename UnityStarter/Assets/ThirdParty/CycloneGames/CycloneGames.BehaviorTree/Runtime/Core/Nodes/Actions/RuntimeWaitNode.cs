@@ -74,11 +74,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
             _actualDuration = UseRandomRange
-                ? (randomProvider != null
-                    ? randomProvider.Range(RangeMin, RangeMax)
-                    : UnityEngine.Random.Range(RangeMin, RangeMax))
+                ? RuntimeRandomUtility.Range(blackboard, RangeMin, RangeMax)
                 : Duration;
 
             _startTime = GetCurrentTime(blackboard);

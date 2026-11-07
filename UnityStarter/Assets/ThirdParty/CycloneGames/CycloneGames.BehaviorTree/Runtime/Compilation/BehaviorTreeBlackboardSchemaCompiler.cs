@@ -106,7 +106,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 }
 
                 RuntimeBlackboardSyncFlags syncFlags = key.SyncFlags;
-                if ((((byte)syncFlags) & ~(byte)RuntimeBlackboardSyncFlags.Networked) != 0)
+                if ((((byte)syncFlags) & ~(byte)RuntimeBlackboardSyncFlags.SnapshotAndDelta) != 0)
                 {
                     error = $"Blackboard schema key[{i}] '{name}' has unsupported sync flags {(byte)syncFlags}.";
                     return false;

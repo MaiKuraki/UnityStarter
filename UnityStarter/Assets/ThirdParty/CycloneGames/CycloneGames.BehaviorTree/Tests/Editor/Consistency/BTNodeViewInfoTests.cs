@@ -52,7 +52,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 var comparison = CreateNode<BBComparisonNode>(nodes);
                 ConfigureNode(comparison, "_key", property => property.stringValue = "TargetDistance");
                 ConfigureNode(comparison, "_operator", property => property.enumValueIndex = (int)BBComparisonOp.LessThan);
-                ConfigureNode(comparison, "_valueType", property => property.enumValueIndex = (int)BBValueType.Float);
+                ConfigureNode(comparison, "_valueType", property => property.enumValueIndex = (int)BehaviorTreeComparisonValueType.Float);
                 Assert.That(GetEditorModeInfo(comparison), Is.EqualTo("[TargetDistance] LessThan (Float)"));
 
                 var service = CreateNode<ServiceNode>(nodes);

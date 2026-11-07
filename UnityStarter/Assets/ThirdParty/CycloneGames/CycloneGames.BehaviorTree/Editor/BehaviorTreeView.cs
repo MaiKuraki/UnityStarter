@@ -27,15 +27,11 @@ namespace CycloneGames.BehaviorTree.Editor
         private const float NODE_MIN_WIDTH = 130;
         private const float NODE_HEIGHT = 80;
 
-        // Cached runners to avoid FindObjectsOfType GC every frame
         private static readonly List<Runtime.Components.BTRunnerComponent> _cachedRunners = new List<Runtime.Components.BTRunnerComponent>(8);
         private static double _lastRunnerCacheTime = double.NegativeInfinity;
         private static bool _runnerFallbackPending = true;
-        private const double RUNNER_CACHE_INTERVAL = 0.5; // Refresh every 0.5 seconds
+        private const double RUNNER_CACHE_INTERVAL = 0.5;
 
-        /// <summary>
-        /// Gets cached BTRunnerComponents, refreshing the cache periodically to avoid GC allocations.
-        /// </summary>
         public static List<Runtime.Components.BTRunnerComponent> GetCachedRunners()
         {
             double currentTime = EditorApplication.timeSinceStartup;
@@ -51,7 +47,6 @@ namespace CycloneGames.BehaviorTree.Editor
                     }
                 }
 
-                // Fallback for editor edge-cases (domain reload/scene reload timing).
                 if (_cachedRunners.Count == 0 && _runnerFallbackPending)
                 {
                     var foundRunners = UnityEngine.Object.FindObjectsOfType<Runtime.Components.BTRunnerComponent>();
@@ -66,9 +61,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return _cachedRunners;
         }
 
-        /// <summary>
-        /// Forces immediate refresh of cached runners (call when entering play mode).
-        /// </summary>
         public static void InvalidateRunnerCache()
         {
             _lastRunnerCacheTime = double.NegativeInfinity;
@@ -105,19 +97,14 @@ namespace CycloneGames.BehaviorTree.Editor
         private bool AuthoringWritesBlocked =>
             _isAuthoringReadOnly || EditorApplication.isPlayingOrWillChangePlaymode;
 
-        // Cached lists to avoid per-frame ToList() allocations
         private readonly List<UnityEditor.Experimental.GraphView.Node> _cachedNodeList = new List<UnityEditor.Experimental.GraphView.Node>(64);
 
-        /// <summary>Clears and refills the cached list from the GraphView node enumerator.</summary>
         private void RefreshCachedNodeList()
         {
             _cachedNodeList.Clear();
             foreach (var n in nodes) _cachedNodeList.Add(n);
         }
 
-        /// <summary>
-        /// Gets the actual tree state from the matched RuntimeBehaviorTree via BTRunnerComponent.
-        /// </summary>
         private BTState GetRuntimeTreeState()
         {
             var runner = GetBoundRunner();
@@ -246,9 +233,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Handles Alt+Click to delete edges connecting nodes.
-        /// </summary>
         private void OnMouseDown(MouseDownEvent evt)
         {
             if (!AuthoringWritesBlocked && evt.altKey)
@@ -333,13 +317,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Calculates the shortest distance from a point to a line segment.
-        /// </summary>
-        /// <param name="point">Point to measure distance from</param>
-        /// <param name="lineStart">Start of the line segment</param>
-        /// <param name="lineEnd">End of the line segment</param>
-        /// <returns>Distance from point to line segment</returns>
         private float DistanceToLineSegment(Vector2 point, Vector2 lineStart, Vector2 lineEnd)
         {
             Vector2 line = lineEnd - lineStart;
@@ -354,9 +331,6 @@ namespace CycloneGames.BehaviorTree.Editor
             Vector2 closestPoint = lineStart + line * projection;
             return Vector2.Distance(point, closestPoint);
         }
-        /// <summary>
-        /// Clears all graph elements and unsubscribes from events.
-        /// </summary>
         public void ClearView()
         {
             UnsubscribeEditorEvents();
@@ -364,15 +338,8 @@ namespace CycloneGames.BehaviorTree.Editor
             DeleteElements(graphElements);
             _tree = null;
         }
-        /// <summary>
-        /// Caches node states by GUID to preserve final states across PopulateView calls.
-        /// </summary>
         private Dictionary<string, BTState> _stateCache = new Dictionary<string, BTState>();
 
-        /// <summary>
-        /// Populates the view with the given behavior tree. If the tree is the same reference,
-        /// only updates states to preserve node view instances and their cached states.
-        /// </summary>
         public void PopulateView(Runtime.BehaviorTree tree)
         {
             if (this._tree == tree)
@@ -668,9 +635,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 : string.Join("\n", issues);
         }
 
-        /// <summary>
-        /// Saves final states (SUCCESS/FAILURE) from existing node views before they are destroyed.
-        /// </summary>
         private void SaveStateCache()
         {
             _stateCache.Clear();
@@ -694,9 +658,6 @@ namespace CycloneGames.BehaviorTree.Editor
 
         }
 
-        /// <summary>
-        /// Restores cached final states to newly created node views.
-        /// </summary>
         private void RestoreStateCache()
         {
             if (_stateCache.Count == 0) return;
@@ -717,12 +678,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Updates all node states. If tree is completed, proactively caches final states
-        /// before BehaviorTree.Stop() resets them to NOT_ENTERED.
-        /// Uses multi-pass inference to ensure all nodes get their correct states.
-        /// Clears state cache when tree restarts from a completed state.
-        /// </summary>
         public void UpdateNodeStates()
         {
             if (!Application.isPlaying || _tree == null || _tree.Nodes == null) return;
@@ -798,16 +753,9 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
 
-            // Update edge states based on connected node states
             UpdateEdgeStates();
         }
 
-        /// <summary>
-        /// Updates edge visual styles based on node state.
-        /// Uses GetLastKnownState() as fallback to ensure colors persist after tree completion.
-        /// When the parent is Running, uses granular child-state coloring.
-        /// Inactive edges are dimmed to highlight the execution path.
-        /// </summary>
         private void UpdateEdgeStates()
         {
             if (!Application.isPlaying) return;
@@ -823,10 +771,8 @@ namespace CycloneGames.BehaviorTree.Editor
 
                     if (edge.output?.node is BTNodeView parentView)
                     {
-                        // Resolve parent state: prefer RuntimeNode, fall back to last known
                         BTState parentState = ResolveNodeState(parentView);
 
-                        // When parent is Running, show per-child granularity
                         if (parentState == BTState.RUNNING && edge.input?.node is BTNodeView childView)
                         {
                             BTState childState = ResolveNodeState(childView);
@@ -841,7 +787,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>Resolves the most accurate state for a node view: RuntimeNode first, then last known state.</summary>
         private BTState ResolveNodeState(BTNodeView nodeView)
         {
             var runtimeNode = nodeView.RuntimeNode;
@@ -867,7 +812,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>Applies visual styling to an edge based on BTState.</summary>
         private void ApplyEdgeVisual(Edge edge, BTState state)
         {
             switch (state)
@@ -902,7 +846,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     if (edge is BTAnimatedEdge aeFail) aeFail.SetAnimating(false);
                     break;
 
-                default: // NOT_ENTERED
+                default:
                     edge.AddToClassList("inactive-edge");
                     edge.edgeControl.edgeWidth = 2;
                     edge.edgeControl.inputColor = new Color(0.4f, 0.4f, 0.4f, 0.35f);
@@ -912,9 +856,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Infers the final state of a composite node based on its children's states and tree state.
-        /// </summary>
         private BTState InferCompositeNodeState(CompositeNode composite, BTState treeState, List<UnityEditor.Experimental.GraphView.Node> nodeList, int nodeCount)
         {
             if (composite == null || composite.Children == null || composite.Children.Count == 0)
@@ -989,9 +930,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return BTState.NOT_ENTERED;
         }
 
-        /// <summary>
-        /// Infers the final state of a leaf node based on its parent's state.
-        /// </summary>
         private BTState InferLeafNodeState(BTNode leafNode, BTState treeState, List<UnityEditor.Experimental.GraphView.Node> nodeList, int nodeCount)
         {
             if (leafNode == null || _tree == null || _tree.Nodes == null) return BTState.NOT_ENTERED;
@@ -1038,9 +976,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return BTState.NOT_ENTERED;
         }
 
-        /// <summary>
-        /// Gets the last known state of a child node by finding its corresponding node view.
-        /// </summary>
         private BTState GetChildLastKnownState(BTNode childNode, List<UnityEditor.Experimental.GraphView.Node> nodeList, int nodeCount)
         {
             if (childNode == null) return BTState.NOT_ENTERED;
@@ -1071,9 +1006,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return runtimeNode != null ? ToBTState(runtimeNode.State) : BTState.NOT_ENTERED;
         }
 
-        /// <summary>
-        /// Clears state cache for all node views when tree restarts.
-        /// </summary>
         private void ClearAllNodeStateCache()
         {
             RefreshCachedNodeList();
@@ -1086,10 +1018,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
         }
-        /// <summary>
-        /// Returns all ports that are compatible for connection with the start port.
-        /// Ports must have opposite directions and belong to different nodes.
-        /// </summary>
         public override List<Port> GetCompatiblePorts(Port startPort, NodeAdapter nodeAdapter)
         {
             var compatiblePorts = new List<Port>();
@@ -1218,9 +1146,6 @@ namespace CycloneGames.BehaviorTree.Editor
             if (_tree == null) return;
             DrawGraph();
         }
-        /// <summary>
-        /// Draws the entire behavior tree graph by creating node views and connecting edges.
-        /// </summary>
         private void DrawGraph()
         {
             if (_tree == null)
@@ -1518,9 +1443,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 ? DropdownMenuAction.Status.Disabled
                 : DropdownMenuAction.Status.Normal;
         }
-        /// <summary>
-        /// Copies selected nodes for pasting.
-        /// </summary>
         private void CopySelectedNodes(Vector2 mousePosition)
         {
             _copiedNodes.Clear();
@@ -1535,9 +1457,6 @@ namespace CycloneGames.BehaviorTree.Editor
             _copiedNodes.AddRange(selectedNodes);
         }
 
-        /// <summary>
-        /// Pastes copied nodes to the tree at the specified position.
-        /// </summary>
         private void PasteCopiedNodes(Vector2 mousePosition)
         {
             if (AuthoringWritesBlocked || _tree == null || _copiedNodes.Count == 0)
@@ -1679,9 +1598,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
         }
-        /// <summary>
-        /// Centers the view on the root node and resets zoom level.
-        /// </summary>
         public void ReturnToRoot()
         {
             if (_tree == null || _tree.Root == null || string.IsNullOrEmpty(_tree.Root.GUID))
@@ -1848,9 +1764,6 @@ namespace CycloneGames.BehaviorTree.Editor
         }
 
         #region Sort Nodes
-        /// <summary>
-        /// Sort all nodes in the tree
-        /// </summary>
         public void SortNodes()
         {
             if (AuthoringWritesBlocked || _tree == null || _tree.Root == null || _tree.Nodes == null) return;
@@ -1897,9 +1810,6 @@ namespace CycloneGames.BehaviorTree.Editor
             EditorUtility.SetDirty(_tree);
         }
 
-        /// <summary>
-        /// Measures each reachable subtree once and rejects graphs that are unsafe to lay out.
-        /// </summary>
         private bool TryMeasureSubtree(
             BTNode node,
             Dictionary<BTNode, float> subtreeWidths,
@@ -2092,8 +2002,6 @@ namespace CycloneGames.BehaviorTree.Editor
                     return false;
                 }
 
-                // AddObjectToAsset exposes the correct path before IsSubAsset becomes true.
-                // The transaction performs a synchronous import before final ownership validation.
             }
 
             var nullCompositeChildLists = new List<CompositeNode>();
@@ -2277,17 +2185,11 @@ namespace CycloneGames.BehaviorTree.Editor
         #endregion
 
         #region Attribute Methods
-        /// <summary>
-        /// Gets a custom attribute of the specified type from a node type.
-        /// </summary>
         private T GetAttribute<T>(Type type) where T : Attribute
         {
             return type.GetCustomAttributes<T>().FirstOrDefault();
         }
 
-        /// <summary>
-        /// Gets the category name for a node type from its BTInfoAttribute.
-        /// </summary>
         private string GetNodeCategory(Type type)
         {
             var attribute = GetAttribute<BTInfoAttribute>(type);

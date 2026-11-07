@@ -2,10 +2,6 @@ using System;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
-    /// <summary>
-    /// Retries child on FAILURE up to N times. Returns SUCCESS on child success,
-    /// FAILURE after all attempts are exhausted. Use MaxAttempts = -1 for infinite retry.
-    /// </summary>
     public class RuntimeRetryNode : RuntimeDecoratorNode
     {
         private int _maxAttempts = 3;

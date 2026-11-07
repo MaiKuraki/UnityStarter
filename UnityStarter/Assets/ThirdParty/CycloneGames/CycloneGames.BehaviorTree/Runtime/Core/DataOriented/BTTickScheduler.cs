@@ -83,9 +83,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
     /// </summary>
     public sealed class BTTickScheduler : IDisposable
     {
-        public const int MAX_SUPPORTED_TREE_DEPTH = 128;
-        public const int DefaultMaximumAgentCount = 65_536;
-        public const int HardMaximumAgentCount = 1_048_576;
 
         private readonly FlatBehaviorTree _tree;
         private readonly int _bbSlotCount;
@@ -150,7 +147,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 bbSlotCount,
                 actionSlotCount,
                 initialCapacity,
-                DefaultMaximumAgentCount)
+                BTCapacityLimits.DefaultAgentCount)
         {
         }
 
@@ -182,7 +179,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             }
 
-            if (maximumAgentCount < 1 || maximumAgentCount > HardMaximumAgentCount)
+            if (maximumAgentCount < 1 || maximumAgentCount > BTCapacityLimits.MaxAgentCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumAgentCount));
             }
@@ -437,9 +434,6 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             return _actionSlots[agent.Index * _actionSlotCount + actionId];
         }
 
-        /// <summary>
-        /// Gets the activation token for a requested or running action.
-        /// </summary>
         public bool TryGetActionRequest(
             BTAgentHandle agent,
             int actionId,
@@ -809,7 +803,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             int blackboardSlotCount,
             int actionSlotCount)
         {
-            int maximum = HardMaximumAgentCount;
+            int maximum = BTCapacityLimits.MaxAgentCount;
             maximum = Math.Min(maximum, int.MaxValue / nodeCount);
             if (blackboardSlotCount > 0)
             {
@@ -1049,10 +1043,10 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 }
 
                 depth++;
-                if (depth >= MAX_SUPPORTED_TREE_DEPTH || depth >= nodeCount)
+                if (depth >= BTCapacityLimits.MaxTreeDepth || depth >= nodeCount)
                 {
                     throw new ArgumentException(
-                        $"Flat tree depth exceeds the supported limit of {MAX_SUPPORTED_TREE_DEPTH}.",
+                        $"Flat tree depth exceeds the supported limit of {BTCapacityLimits.MaxTreeDepth}.",
                         nameof(tree));
                 }
 

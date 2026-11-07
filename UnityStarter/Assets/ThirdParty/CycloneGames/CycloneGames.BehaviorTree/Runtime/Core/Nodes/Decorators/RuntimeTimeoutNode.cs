@@ -2,10 +2,6 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
-    /// <summary>
-    /// Halts child and returns FAILURE if child runs longer than TimeoutSeconds.
-    /// Supports both scaled and unscaled time.
-    /// </summary>
     public class RuntimeTimeoutNode : RuntimeDecoratorNode
     {
         private float _timeoutSeconds = 5f;

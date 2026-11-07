@@ -19,7 +19,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     [CreateAssetMenu(fileName = "BTLODConfig", menuName = "CycloneGames/AI/BT LOD Config")]
     public class BTLODConfig : ScriptableObject
     {
-        public const int MaxPriorityLevels = 8;
 
         [Serializable]
         public struct LODLevel
@@ -55,7 +54,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         [Tooltip("Tick interval when boosted")]
         public int BoostedTickInterval = 1;
 
-        // Pre-squared distances for 0GC LOD checks
+        // Pre-squared distances avoid a square root per LOD check.
         private float[] _sqrDistances;
         private bool _isValid;
 
@@ -131,7 +130,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (marker != null)
             {
                 if (marker.Priority < 0
-                    || marker.Priority >= MaxPriorityLevels
+                    || marker.Priority >= BTCapacityLimits.PriorityLevelCount
                     || marker.TickInterval < 1)
                 {
                     return false;
@@ -152,9 +151,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 return false;
             }
 
-            if (Levels.Length > MaxPriorityLevels)
+            if (Levels.Length > BTCapacityLimits.PriorityLevelCount)
             {
-                error = $"LOD Levels cannot exceed {MaxPriorityLevels} entries.";
+                error = $"LOD Levels cannot exceed {BTCapacityLimits.PriorityLevelCount} entries.";
                 return false;
             }
 
@@ -178,9 +177,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     return false;
                 }
 
-                if (level.Priority < 0 || level.Priority >= MaxPriorityLevels)
+                if (level.Priority < 0 || level.Priority >= BTCapacityLimits.PriorityLevelCount)
                 {
-                    error = $"LOD Levels[{i}].Priority must be between 0 and {MaxPriorityLevels - 1}.";
+                    error = $"LOD Levels[{i}].Priority must be between 0 and {BTCapacityLimits.PriorityLevelCount - 1}.";
                     return false;
                 }
 
@@ -189,9 +188,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 previousDistance = level.MaxDistance;
             }
 
-            if (PriorityBudgets == null || PriorityBudgets.Length == 0 || PriorityBudgets.Length > MaxPriorityLevels)
+            if (PriorityBudgets == null || PriorityBudgets.Length == 0 || PriorityBudgets.Length > BTCapacityLimits.PriorityLevelCount)
             {
-                error = $"PriorityBudgets must contain between 1 and {MaxPriorityLevels} entries.";
+                error = $"PriorityBudgets must contain between 1 and {BTCapacityLimits.PriorityLevelCount} entries.";
                 return false;
             }
 
@@ -210,9 +209,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 return false;
             }
 
-            if (BoostedPriority < 0 || BoostedPriority >= MaxPriorityLevels)
+            if (BoostedPriority < 0 || BoostedPriority >= BTCapacityLimits.PriorityLevelCount)
             {
-                error = $"BoostedPriority must be between 0 and {MaxPriorityLevels - 1}.";
+                error = $"BoostedPriority must be between 0 and {BTCapacityLimits.PriorityLevelCount - 1}.";
                 return false;
             }
 

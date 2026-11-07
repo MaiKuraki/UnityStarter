@@ -142,7 +142,6 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             EditorGUILayout.LabelField("Runtime Controls", Styles.HeaderStyle);
             EditorGUILayout.BeginVertical(Styles.BoxStyle);
 
-            // Status bar with color
             DrawStatusBar();
 
             EditorGUILayout.Space(4);
@@ -204,15 +203,12 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
             var rect = EditorGUILayout.GetControlRect(false, 22);
 
-            // Draw background
             Color bgColor = isDarkTheme ? new Color(0.2f, 0.2f, 0.2f) : new Color(0.85f, 0.85f, 0.85f);
             EditorGUI.DrawRect(rect, bgColor);
 
-            // Draw status indicator circle
             var indicatorRect = new Rect(rect.x + 8, rect.y + 5, 12, 12);
             EditorGUI.DrawRect(indicatorRect, statusColor);
 
-            // Draw status text
             Styles.StatusLabelStyle.normal.textColor = statusColor;
             var labelRect = new Rect(rect.x + 28, rect.y, rect.width - 28, rect.height);
             EditorGUI.LabelField(labelRect, statusText, Styles.StatusLabelStyle);
@@ -315,12 +311,8 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             }
         }
 
-        /// <summary>
-        /// Draw additional fields from child classes. Override to customize.
-        /// </summary>
         protected virtual void DrawChildClassFields()
         {
-            // Auto-draw remaining serialized fields from derived classes
             var iterator = serializedObject.GetIterator();
             bool enterChildren = true;
 
@@ -328,7 +320,6 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             {
                 enterChildren = false;
 
-                // Skip already drawn fields
                 if (IsPropertyDrawnExplicitly(iterator.name))
                 {
                     continue;

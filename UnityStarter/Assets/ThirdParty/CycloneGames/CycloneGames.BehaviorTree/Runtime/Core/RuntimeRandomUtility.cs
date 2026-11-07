@@ -1,10 +1,8 @@
-using UnityEngine;
-
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     /// <summary>
-    /// Stable deterministic random generator for replay, networking, and seeded behavior nodes.
-    /// The algorithm is intentionally fixed and platform-independent.
+    /// Deterministic random generator for replay, networking, and seeded nodes;
+    /// the algorithm is fixed and platform-independent.
     /// </summary>
     public struct RuntimeDeterministicRandom
     {
@@ -78,9 +76,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 ? blackboard.GetService<IRuntimeBTRandomProvider>()
                 : null;
 
-            return randomProvider != null
-                ? randomProvider.Range(minInclusive, maxInclusive)
-                : Random.Range(minInclusive, maxInclusive);
+            if (randomProvider != null)
+            {
+                return randomProvider.Range(minInclusive, maxInclusive);
+            }
+
+            return blackboard != null
+                ? minInclusive + (maxInclusive - minInclusive) * blackboard.NextDefaultFloat()
+                : minInclusive;
         }
 
         public static int RangeInt(RuntimeBlackboard blackboard, int minInclusive, int maxExclusive)
@@ -97,10 +100,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (randomProvider != null)
             {
                 int value = (int)randomProvider.Range(minInclusive, maxExclusive);
-                return Mathf.Clamp(value, minInclusive, maxExclusive - 1);
+                return value < minInclusive ? minInclusive :
+                       value >= maxExclusive ? maxExclusive - 1 : value;
             }
 
-            return Random.Range(minInclusive, maxExclusive);
+            return blackboard != null
+                ? blackboard.NextDefaultInt(minInclusive, maxExclusive)
+                : minInclusive;
         }
     }
 }

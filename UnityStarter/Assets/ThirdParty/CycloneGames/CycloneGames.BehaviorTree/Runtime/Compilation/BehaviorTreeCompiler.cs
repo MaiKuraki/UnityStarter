@@ -22,6 +22,10 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Compilation
 {
+    /// <summary>
+    /// Cold-path compiler. Validates depth and node ceilings from BTCapacityLimits
+    /// before allocating any runtime node.
+    /// </summary>
     public static class BehaviorTreeCompiler
     {
         public static RuntimeBehaviorTree Compile(BehaviorTree source, RuntimeBTContext context = null)
@@ -146,8 +150,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         {
             return Validate(
                 source,
-                BehaviorTreeCompileOptions.DefaultMaxNodeCount,
-                BehaviorTreeCompileOptions.DefaultMaxDepth,
+                BTCapacityLimits.DefaultNodeCount,
+                BTCapacityLimits.MaxTreeDepth,
                 BehaviorTreeNodeEmitterRegistry.BuiltIn,
                 out _);
         }
@@ -179,10 +183,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return errors;
             }
 
-            if (maxNodeCount > RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT)
+            if (maxNodeCount > BTCapacityLimits.MaxNodeCount)
             {
                 errors.Add(
-                    $"Compile limit MaxNodeCount cannot exceed the hard safety limit of {RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT}.");
+                    $"Compile limit MaxNodeCount cannot exceed the hard safety limit of {BTCapacityLimits.MaxNodeCount}.");
                 return errors;
             }
 
@@ -192,10 +196,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return errors;
             }
 
-            if (maxDepth > RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH)
+            if (maxDepth > BTCapacityLimits.MaxTreeDepth)
             {
                 errors.Add(
-                    $"Compile limit MaxDepth cannot exceed the hard safety limit of {RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH}.");
+                    $"Compile limit MaxDepth cannot exceed the hard safety limit of {BTCapacityLimits.MaxTreeDepth}.");
                 return errors;
             }
 
@@ -444,8 +448,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             if (!parentStrictSchema)
             {
                 errors.Add(
-                    $"{path}: strict subtree '{asset.name}' cannot be embedded in a legacy-open root; " +
-                    "enable a compatible strict root schema or make the subtree legacy-open.");
+                    $"{path}: strict subtree '{asset.name}' cannot be embedded in a open-schema root; " +
+                    "enable a compatible strict root schema or make the subtree open-schema.");
                 return;
             }
 
@@ -507,7 +511,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 string key = comparison.Key;
                 float epsilon = comparison.FloatEpsilon;
                 BBComparisonOp comparisonOperator = comparison.Operator;
-                BBValueType valueType = comparison.ValueType;
+                BehaviorTreeComparisonValueType valueType = comparison.ValueType;
                 if (string.IsNullOrWhiteSpace(key))
                 {
                     errors.Add($"{path}: BBComparison requires a blackboard key.");
@@ -520,7 +524,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 {
                     errors.Add($"{path}: BBComparison operator value {(int)comparisonOperator} is invalid.");
                 }
-                if ((uint)(int)valueType > (uint)BBValueType.Object)
+                if ((uint)(int)valueType > (uint)BehaviorTreeComparisonValueType.Object)
                 {
                     errors.Add($"{path}: BBComparison value type {(int)valueType} is invalid.");
                 }
@@ -528,7 +532,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 {
                     errors.Add($"{path}: BBComparison epsilon must be finite and non-negative.");
                 }
-                if (valueType == BBValueType.Bool
+                if (valueType == BehaviorTreeComparisonValueType.Bool
                     && comparisonOperator != BBComparisonOp.Equal
                     && comparisonOperator != BBComparisonOp.NotEqual
                     && comparisonOperator != BBComparisonOp.IsSet
@@ -536,13 +540,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 {
                     errors.Add($"{path}: bool values only support Equal, NotEqual, IsSet, or IsNotSet.");
                 }
-                if (valueType == BBValueType.Object
+                if (valueType == BehaviorTreeComparisonValueType.Object
                     && comparisonOperator != BBComparisonOp.IsSet
                     && comparisonOperator != BBComparisonOp.IsNotSet)
                 {
                     errors.Add($"{path}: object values only support IsSet or IsNotSet.");
                 }
-                if (valueType == BBValueType.Float
+                if (valueType == BehaviorTreeComparisonValueType.Float
                     && comparisonOperator != BBComparisonOp.IsSet
                     && comparisonOperator != BBComparisonOp.IsNotSet
                     && string.IsNullOrEmpty(comparison.ReferenceKey)
@@ -904,17 +908,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             }
         }
 
-        private static RuntimeBlackboardValueType? ToRuntimeValueType(BBValueType valueType)
+        private static RuntimeBlackboardValueType? ToRuntimeValueType(BehaviorTreeComparisonValueType valueType)
         {
             switch (valueType)
             {
-                case BBValueType.Int:
+                case BehaviorTreeComparisonValueType.Int:
                     return RuntimeBlackboardValueType.Int;
-                case BBValueType.Float:
+                case BehaviorTreeComparisonValueType.Float:
                     return RuntimeBlackboardValueType.Float;
-                case BBValueType.Bool:
+                case BehaviorTreeComparisonValueType.Bool:
                     return RuntimeBlackboardValueType.Bool;
-                case BBValueType.Object:
+                case BehaviorTreeComparisonValueType.Object:
                     return RuntimeBlackboardValueType.Object;
                 default:
                     return null;
@@ -1085,16 +1089,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         }
     }
 
+    /// <summary>
+    /// Limits applied by the compiler. Values above the hard ceilings are rejected
+    /// before a graph is built.
+    /// </summary>
     public sealed class BehaviorTreeCompileOptions
     {
-        public const int DefaultMaxNodeCount = RuntimeBehaviorTreeLimits.DEFAULT_MAX_NODE_COUNT;
-        public const int DefaultMaxDepth = RuntimeBehaviorTreeLimits.DEFAULT_MAX_DEPTH;
 
         public static BehaviorTreeCompileOptions Default => new BehaviorTreeCompileOptions();
 
         public BehaviorTreeNodeEmitterRegistry Emitters { get; set; } = BehaviorTreeNodeEmitterRegistry.BuiltIn;
-        public int MaxNodeCount { get; set; } = DefaultMaxNodeCount;
-        public int MaxDepth { get; set; } = DefaultMaxDepth;
+        public int MaxNodeCount { get; set; } = BTCapacityLimits.DefaultNodeCount;
+        public int MaxDepth { get; set; } = BTCapacityLimits.MaxTreeDepth;
     }
 
     public sealed class BehaviorTreeCompileArtifact

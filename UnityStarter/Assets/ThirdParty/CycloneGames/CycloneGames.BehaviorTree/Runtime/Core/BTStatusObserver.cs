@@ -3,9 +3,7 @@ using System;
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     /// <summary>
-    /// Lightweight status change observer for runtime debugging and replay.
-    /// Designed for 0GC in release builds: callback-based, no allocation.
-    /// Use #if UNITY_EDITOR || DEVELOPMENT_BUILD to gate observation in shipping builds.
+    /// Allocation-free callback-based state-change observer for runtime debugging and replay.
     /// </summary>
     public sealed class BTStatusObserver
     {
@@ -33,8 +31,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         /// <summary>
-        /// Wraps a RuntimeNode to observe state changes.
-        /// Use for development builds only; zero overhead when not attached.
+        /// Wraps a RuntimeNode to observe state changes; zero overhead when not attached.
         /// </summary>
         public static void AttachToTree(RuntimeBehaviorTree tree, StatusChangeHandler handler)
         {

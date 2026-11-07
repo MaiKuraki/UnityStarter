@@ -9,14 +9,12 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
     /// </summary>
     public enum FlatNodeType : byte
     {
-        // Composites
         Sequence,
         Selector,
         Parallel,
         ReactiveSequence,
         ReactiveSelector,
 
-        // Decorators
         Inverter,
         Repeater,
         Succeeder,
@@ -27,18 +25,14 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         RunOnce,
         CoolDown,
 
-        // Leaf nodes
         ActionSlot,         // References an external action by ID
         BlackboardCondition,// Check a BB key against a constant
         WaitTicks,          // Idle for N ticks
 
-        // Root identity node. Appended to preserve the numeric values of existing node types.
+        // Root sentinel appended last; node-type ordinals are part of the wire format.
         Root,
     }
 
-    /// <summary>
-    /// Comparison operator for BlackboardCondition nodes.
-    /// </summary>
     public enum CompareOp : byte
     {
         Equal,
@@ -50,12 +44,8 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
     }
 
     /// <summary>
-    /// Compact node definition (28 bytes). Fixed-size for NativeArray storage.
-    /// All data needed for Burst-compiled dispatch is stored inline.
-    ///
-    /// Architecture: FlatBehaviorTree stores an array of these structs.
-    /// Node 0 is always the root. Children of composite/decorator nodes
-    /// are stored contiguously in a separate ChildIndices array.
+    /// Fixed-size (28-byte) node definition stored inline in NativeArrays for Burst dispatch.
+    /// Node 0 is the root; composite/decorator children are contiguous in ChildIndices.
     /// </summary>
     public struct FlatNodeDef
     {
@@ -83,15 +73,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
     }
 
     /// <summary>
-    /// Shared, read-only BehaviorTree definition stored as flat NativeArrays.
-    /// Created once per BT template; shared across all agents using that template.
-    ///
-    /// Flyweight pattern:
-    ///   FlatBehaviorTree = shared immutable structure (tree topology + parameters)
-    ///   BTTickScheduler  = per-agent mutable execution state (node states + blackboard)
-    ///
-    /// This reference type is the sole owner of its native storage. Schedulers acquire
-    /// an internal lease so the storage cannot be released while a job can still read it.
+    /// Shared, read-only flat NativeArray definition created once per template. This type is the
+    /// sole owner of its native storage; schedulers hold a lease so storage cannot be released
+    /// while a job can still read it.
     /// </summary>
     public sealed class FlatBehaviorTree : IDisposable
     {

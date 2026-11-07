@@ -10,11 +10,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// </summary>
     public sealed class BTTickManager
     {
-        public const int DefaultInitialCapacity = 1024;
-        public const int DefaultMaximumTreeCount = 65_536;
-        public const int HardMaximumTreeCount = 1_048_576;
 
         private RuntimeBehaviorTree[] _trees;
+        private readonly Dictionary<RuntimeBehaviorTree, int> _treeIndices;
         private int _capacity;
         private int _count;
         private int _currentIndex;
@@ -52,8 +50,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-        public BTTickManager(int initialCapacity = DefaultInitialCapacity)
-            : this(initialCapacity, DefaultMaximumTreeCount, DefaultMaximumTreeCount)
+        public BTTickManager(int initialCapacity = BTCapacityLimits.DefaultTickManagerCapacity)
+            : this(initialCapacity, BTCapacityLimits.DefaultAgentCount, BTCapacityLimits.DefaultAgentCount)
         {
         }
 
@@ -70,13 +68,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     "Tick manager capacity must be at least 1.");
             }
 
-            if (maximumTreeCount < initialCapacity || maximumTreeCount > HardMaximumTreeCount)
+            if (maximumTreeCount < initialCapacity || maximumTreeCount > BTCapacityLimits.MaxAgentCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumTreeCount));
             }
 
             if (maximumPendingMutationCount < 1 ||
-                maximumPendingMutationCount > HardMaximumTreeCount)
+                maximumPendingMutationCount > BTCapacityLimits.MaxAgentCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumPendingMutationCount));
             }
@@ -86,6 +84,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _maximumPendingMutationCount = maximumPendingMutationCount;
             _ownerThreadId = Environment.CurrentManagedThreadId;
             _trees = new RuntimeBehaviorTree[_capacity];
+            _treeIndices = new Dictionary<RuntimeBehaviorTree, int>(_capacity);
             int pendingInitialCapacity = Math.Min(maximumPendingMutationCount, 64);
             _pendingMutations = new List<PendingMutation>(pendingInitialCapacity);
             _pendingMutationIndices = new Dictionary<RuntimeBehaviorTree, int>(pendingInitialCapacity);
@@ -115,11 +114,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             if (tree == null || tree.IsStopped) return false;
 
-            // Check if already registered
-            for (int i = 0; i < _count; i++)
-            {
-                if (_trees[i] == tree) return true;
-            }
+            if (_treeIndices.ContainsKey(tree)) return true;
 
             if (_count >= _maximumTreeCount)
             {
@@ -142,6 +137,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
 
             _trees[_count] = tree;
+            _treeIndices[tree] = _count;
             _count++;
             if (_count > _peakTreeCount)
             {
@@ -173,25 +169,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             if (tree == null) return false;
 
-            for (int i = 0; i < _count; i++)
+            if (!_treeIndices.TryGetValue(tree, out int index))
             {
-                if (_trees[i] == tree)
-                {
-                    // Swap with last element for O(1) removal
-                    _count--;
-                    _trees[i] = _trees[_count];
-                    _trees[_count] = null;
-
-                    // Adjust index if needed
-                    if (_currentIndex >= _count && _count > 0)
-                    {
-                        _currentIndex = 0;
-                    }
-                    return true;
-                }
+                return false;
             }
 
-            return false;
+            _count--;
+            RuntimeBehaviorTree moved = _trees[_count];
+            _trees[index] = moved;
+            _trees[_count] = null;
+            _treeIndices.Remove(tree);
+            if (index < _count && moved != null)
+            {
+                _treeIndices[moved] = index;
+            }
+
+            if (_currentIndex >= _count && _count > 0)
+            {
+                _currentIndex = 0;
+            }
+            return true;
         }
 
         public void Tick()
@@ -257,6 +254,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
             _count = 0;
             _currentIndex = 0;
+            _treeIndices.Clear();
             _pendingMutations.Clear();
             _pendingMutationIndices.Clear();
         }

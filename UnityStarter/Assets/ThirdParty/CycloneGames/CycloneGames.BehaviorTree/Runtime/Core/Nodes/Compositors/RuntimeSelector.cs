@@ -8,7 +8,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _current = 0;
-            // Reset children states from previous iteration so editor doesn't show stale results
             RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
                 children[i].PrepareForActivation();
@@ -22,30 +21,33 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 return RuntimeState.Failure;
             }
 
-            // LowerPriority / Both: check if a higher-priority sibling should take over
-            if (_current > 0 && (AbortType == RuntimeAbortType.LowerPriority || AbortType == RuntimeAbortType.Both))
+            if (ShouldReevaluate())
             {
-                for (int i = 0; i < _current; i++)
+                // LowerPriority / Both: a higher-priority sibling can take over. The takeover
+                // only moves the scan cursor; the normal loop below must still run that child
+                // and continue to later siblings when it fails.
+                if (_current > 0 && (AbortType == RuntimeAbortType.LowerPriority || AbortType == RuntimeAbortType.Both))
                 {
-                    if (children[i].CanEvaluate && children[i].Evaluate(blackboard))
+                    for (int i = 0; i < _current; i++)
                     {
-                        if (children[_current].IsStarted)
-                            children[_current].Abort(blackboard);
-                        _current = i;
-                        return children[_current].Run(blackboard);
+                        if (children[i].CanEvaluate && children[i].Evaluate(blackboard))
+                        {
+                            if (children[_current].IsStarted)
+                                children[_current].Abort(blackboard);
+                            _current = i;
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Self / Both: check if current child's conditions still hold
-            if (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both)
-            {
-                if (children[_current].IsStarted && children[_current].CanEvaluate
-                    && !children[_current].Evaluate(blackboard))
+                if (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both)
                 {
-                    children[_current].Abort(blackboard);
-                    _current++;
-                    // Fall through to normal selector loop from new _current
+                    if (children[_current].IsStarted && children[_current].CanEvaluate
+                        && !children[_current].Evaluate(blackboard))
+                    {
+                        children[_current].Abort(blackboard);
+                        _current++;
+                    }
                 }
             }
 

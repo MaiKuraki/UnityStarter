@@ -633,7 +633,7 @@ namespace CycloneGames.BehaviorTree.Networking
         {
             return new BTNetworkSync.Limits(
                 maxSnapshotPayloadBytes,
-                BTNetworkSync.Limits.DEFAULT_MAX_NODE_COUNT,
+                BTNetworkSync.Limits.DEFAULT_MAX_SNAPSHOT_NODE_COUNT,
                 maxSnapshotPayloadBytes,
                 new RuntimeBlackboardSerializationLimits(
                     _profile.MaxTrackedBlackboardKeys,

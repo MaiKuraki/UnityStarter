@@ -2,10 +2,6 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
-    /// <summary>
-    /// Delays ticking child for DelaySeconds. Returns RUNNING during delay,
-    /// then passes through child results.
-    /// </summary>
     public class RuntimeDelayNode : RuntimeDecoratorNode
     {
         private float _delaySeconds = 1f;

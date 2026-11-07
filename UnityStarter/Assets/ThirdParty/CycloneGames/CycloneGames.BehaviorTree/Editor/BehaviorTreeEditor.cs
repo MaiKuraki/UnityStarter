@@ -238,11 +238,6 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private Runtime.BehaviorTree _lastTree;
 
-        /// <summary>
-        /// Handles selection changes to update the behavior tree view.
-        /// Supports both asset selection and BTRunnerComponent selection in play mode.
-        /// In play mode, also tries to auto-find a BTRunnerComponent using the viewed tree.
-        /// </summary>
         private void OnSelectionChange()
         {
             if (!Application.isPlaying && _lastTree != null)
@@ -286,8 +281,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
                 else
                 {
-                    // In play mode without a tree selected, try to find any running BTRunner
-                    // that matches the previously viewed tree
                     TryAutoSelectRunningTree();
                 }
             }
@@ -302,14 +295,10 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Attempts to auto-select a running tree from active BTRunnerComponents.
-        /// </summary>
         private void TryAutoSelectRunningTree()
         {
             if (!Application.isPlaying || _behaviorTreeView == null) return;
 
-            // If we already have a tree displayed, try to find a runner using it
             if (_behaviorTreeView.Tree != null)
             {
                 var runners = BehaviorTreeView.GetCachedRunners();
@@ -357,10 +346,6 @@ namespace CycloneGames.BehaviorTree.Editor
             UpdateStats(nodeView);
         }
 
-        /// <summary>
-        /// Updates node states every frame in play mode to capture final states
-        /// before BehaviorTree.Stop() resets them.
-        /// </summary>
         private void OnEditorUpdate()
         {
             if (Application.isPlaying && _behaviorTreeView != null)

@@ -14,8 +14,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
     {
         public const int DEFAULT_MAX_PATCH_ENTRIES = 4096;
 
-        // "BTDP" in little-endian order. The version and fixed header size are
-        // encoded separately so malformed or future frames fail before entry parsing.
+        // "BTDP" in little-endian order. Version and fixed header size are encoded separately
+        // so malformed or unknown-version frames fail before entry parsing.
         private const uint PATCH_MAGIC = 0x50445442u;
         private const ushort PATCH_VERSION = 1;
         private const ushort PATCH_HEADER_SIZE = 16;
@@ -130,10 +130,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             TrackKey(hashFunction(key));
         }
 
-        /// <summary>
-        /// Tracks a string key using the exact hash provider configured on the target blackboard.
-        /// Use this overload whenever a blackboard has a per-instance hash override.
-        /// </summary>
+        /// <summary>Tracks a string key using the target blackboard's configured hash provider.</summary>
         public void TrackKey(string key, RuntimeBlackboard blackboard)
         {
             EnsureOwnerThread();

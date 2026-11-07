@@ -34,11 +34,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return ServiceResolver?.Resolve<T>();
         }
 
-        /// <summary>
-        /// Convenience wrapper for <see cref="IServiceProvider"/>-based containers.
-        /// Use: <c>new ServiceProviderResolver(myServiceProvider)</c> as the
-        /// <see cref="IRuntimeBTServiceResolver"/> argument.
-        /// </summary>
         public sealed class ServiceProviderResolver : IRuntimeBTServiceResolver
         {
             private readonly IServiceProvider _provider;

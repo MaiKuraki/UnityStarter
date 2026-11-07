@@ -13,14 +13,10 @@ using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.UIElements;
 using BBComparisonOp = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp;
-using BBValueType = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType;
+using BehaviorTreeComparisonValueType = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BehaviorTreeComparisonValueType;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
-    /// <summary>
-    /// Visual representation of a behavior tree node in the GraphView editor.
-    /// Handles node state visualization, port connections, and runtime state synchronization.
-    /// </summary>
     public class BTNodeView : Node
     {
         public Action<BTNodeView> OnNodeSelected;
@@ -32,10 +28,9 @@ namespace CycloneGames.BehaviorTree.Editor
         private BehaviorTreeView _treeView;
         private readonly Capabilities _editableCapabilities;
 
-        // ── Info text throttle (avoid per-frame string allocs) ──
         private string _cachedInfoText = "";
         private double _lastInfoUpdateTime;
-        private const double INFO_UPDATE_INTERVAL = 0.1; // ~10 updates/sec
+        private const double INFO_UPDATE_INTERVAL = 0.1;
         private static readonly StringBuilder s_sb = new StringBuilder(128);
 
         internal void SetTreeView(BehaviorTreeView treeView)
@@ -43,10 +38,6 @@ namespace CycloneGames.BehaviorTree.Editor
             _treeView = treeView;
         }
 
-        /// <summary>
-        /// Gets the runtime node instance if tree is cloned, otherwise returns the original node.
-        /// Uses GUID-based matching to find the corresponding runtime node.
-        /// </summary>
         private CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode GetRuntimeNode()
         {
             if (_node == null) return null;
@@ -62,11 +53,9 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
 
-            // Use cached runners to avoid FindObjectsOfType GC
             var runners = BehaviorTreeView.GetCachedRunners();
             int runnersCount = runners.Count;
 
-            // First, try to get from the tree view if it has a reference to the current runner
             if (_treeView != null && _treeView.Tree != null)
             {
                 for (int i = 0; i < runnersCount; i++)
@@ -85,7 +74,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
 
-            // Fallback: Try finding by node tree reference directly
             for (int i = 0; i < runnersCount; i++)
             {
                 var runner = runners[i];
@@ -103,8 +91,6 @@ namespace CycloneGames.BehaviorTree.Editor
         }
         public CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode RuntimeNode => GetRuntimeNode();
 
-        /// <summary>Returns the runtime state of the tree root (used to distinguish
-        /// "tree completed" from "node not yet reached in current iteration").</summary>
         private CycloneGames.BehaviorTree.Runtime.Core.RuntimeState GetTreeRootRuntimeState()
         {
             if (_treeView == null) return CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.NotEntered;
@@ -113,8 +99,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return runner.RuntimeTree.State;
         }
 
-        // Helper to avoid repeated lookups if we cache it per frame? 
-        // For now calling GetRuntimeNode() is safer as Runner might change.
 
 
         private Label _stateLabel;
@@ -122,24 +106,15 @@ namespace CycloneGames.BehaviorTree.Editor
         private Label _badgeLabel;
         private VisualElement _infoContainer;
 
-        // Progress bar elements for WaitNode and Sequencer/Selector
         private VisualElement _progressBarContainer;
         private VisualElement _progressBarFill;
         private Label _progressLabel;
         private bool _matchesSearch = true;
 
-        /// <summary>
-        /// Caches the last known final state (SUCCESS/FAILURE) to preserve node state
-        /// even after BehaviorTree.Stop() resets all node states to NOT_ENTERED.
-        /// </summary>
         private BTState _lastKnownState = BTState.NOT_ENTERED;
 
         public BTState GetLastKnownState() => _lastKnownState;
 
-        /// <summary>
-        /// Restores a cached final state. Only final states (SUCCESS/FAILURE) are restored
-        /// to prevent overwriting completed node states.
-        /// </summary>
         public void RestoreLastKnownState(BTState state)
         {
             if (state == BTState.SUCCESS || state == BTState.FAILURE)
@@ -256,9 +231,6 @@ namespace CycloneGames.BehaviorTree.Editor
             OnNodeSelected?.Invoke(this);
         }
 
-        /// <summary>
-        /// Updates only the visual position. The graph view commits all moved nodes in one Undo operation.
-        /// </summary>
         public override void SetPosition(Rect newPos)
         {
             base.SetPosition(newPos);
@@ -275,10 +247,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Updates the visual state of the node based on runtime node state.
-        /// Caches final states (SUCCESS/FAILURE) to preserve them after tree stops.
-        /// </summary>
         public void UpdateState()
         {
             if (_node == null) return;
@@ -308,8 +276,6 @@ namespace CycloneGames.BehaviorTree.Editor
             BTState currentState = ToBTState(runtimeNode.State);
             bool isStarted = runtimeNode.IsStarted;
 
-            // Note: Composite restart detection logic simplified for now
-            // We focus on current state
 
             if (currentState == BTState.SUCCESS || currentState == BTState.FAILURE)
             {
@@ -321,16 +287,11 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             else if (currentState == BTState.NOT_ENTERED && !isStarted)
             {
-                // Node not entered: if the tree root is still running, this node
-                // hasn't been reached yet in the current iteration (e.g. Repeat
-                // restarted children). Reset cached state so stale SUCCESS/FAILURE
-                // from a previous iteration doesn't linger.
                 var treeRootState = GetTreeRootRuntimeState();
                 if (treeRootState == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
                 {
                     _lastKnownState = BTState.NOT_ENTERED;
                 }
-                // else: tree completed — keep last known state for post-run display
             }
 
             UpdateInfoLabel();
@@ -391,7 +352,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 _infoLabel.style.display = DisplayStyle.None;
             }
 
-            // Update progress bar for WaitNode
             UpdateProgressBar();
         }
 
@@ -403,9 +363,6 @@ namespace CycloneGames.BehaviorTree.Editor
             MarkDirtyRepaint();
         }
 
-        /// <summary>
-        /// Updates the progress bar fill and label for WaitNode during runtime.
-        /// </summary>
         private void UpdateProgressBar()
         {
             if (_progressBarContainer == null || _progressBarFill == null || _progressLabel == null)
@@ -460,10 +417,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Gets node-specific runtime information for display.
-        /// Throttled to avoid per-frame string allocations.
-        /// </summary>
         private string GetNodeSpecificInfo()
         {
             double now = EditorApplication.timeSinceStartup;
@@ -486,7 +439,6 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (_node == null) return "";
 
-            // Show static configuration based on node type
             switch (_node)
             {
                 case DebugLogNode logNode:
@@ -614,14 +566,14 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        private static string GetDisplayName(BBValueType value)
+        private static string GetDisplayName(BehaviorTreeComparisonValueType value)
         {
             switch (value)
             {
-                case BBValueType.Int: return nameof(BBValueType.Int);
-                case BBValueType.Float: return nameof(BBValueType.Float);
-                case BBValueType.Bool: return nameof(BBValueType.Bool);
-                case BBValueType.Object: return nameof(BBValueType.Object);
+                case BehaviorTreeComparisonValueType.Int: return nameof(BehaviorTreeComparisonValueType.Int);
+                case BehaviorTreeComparisonValueType.Float: return nameof(BehaviorTreeComparisonValueType.Float);
+                case BehaviorTreeComparisonValueType.Bool: return nameof(BehaviorTreeComparisonValueType.Bool);
+                case BehaviorTreeComparisonValueType.Object: return nameof(BehaviorTreeComparisonValueType.Object);
                 default: return ((byte)value).ToString();
             }
         }
@@ -749,16 +701,12 @@ namespace CycloneGames.BehaviorTree.Editor
             return text.Substring(0, maxLength - 3) + "...";
         }
 
-        /// <summary>
-        /// Creates visual elements for displaying node state and runtime information.
-        /// </summary>
         private void CreateInfoElements()
         {
             var topContainer = this.Q<VisualElement>("top");
             var titleContainer = this.Q<VisualElement>("title");
             if (topContainer == null || titleContainer == null) return;
 
-            // State label goes into #top between #input and #title (its own row)
             _stateLabel = new Label
             {
                 name = "state-label",
@@ -783,26 +731,20 @@ namespace CycloneGames.BehaviorTree.Editor
             _infoLabel.AddToClassList("info-label");
             _infoContainer.Add(_infoLabel);
 
-            // Create progress bar for WaitNode
             if (_node is WaitNode)
             {
                 CreateProgressBar();
             }
 
-            // Add info container to appropriate location
             var contents = this.Q<VisualElement>("contents");
             if (contents != null)
             {
                 contents.Add(_infoContainer);
             }
 
-            // Initial info update for editor mode
             UpdateInfoLabel();
         }
 
-        /// <summary>
-        /// Creates a stylish progress bar for WaitNode with background, fill, and label.
-        /// </summary>
         private void CreateProgressBar()
         {
             _progressBarContainer = new VisualElement { name = "progress-bar-container" };
@@ -832,7 +774,7 @@ namespace CycloneGames.BehaviorTree.Editor
             _progressBarFill.style.top = 0;
             _progressBarFill.style.bottom = 0;
             _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
-            _progressBarFill.style.backgroundColor = new Color(0.27f, 0.56f, 0.29f, 1f); // Green
+            _progressBarFill.style.backgroundColor = new Color(0.27f, 0.56f, 0.29f, 1f);
             _progressBarFill.style.borderTopLeftRadius = 3;
             _progressBarFill.style.borderBottomLeftRadius = 3;
 
@@ -852,9 +794,6 @@ namespace CycloneGames.BehaviorTree.Editor
             _infoContainer.Add(_progressBarContainer);
         }
 
-        /// <summary>
-        /// Sets up the tooltip for the node using BTInfoAttribute if available.
-        /// </summary>
         private void SetupTooltip()
         {
             var attribute = _node.GetType().GetCustomAttribute<BTInfoAttribute>();
@@ -882,9 +821,6 @@ namespace CycloneGames.BehaviorTree.Editor
             _infoContainer.Insert(0, _badgeLabel);
         }
 
-        /// <summary>
-        /// Creates input port for child nodes (circular connector at top).
-        /// </summary>
         private void CreateInputPorts()
         {
             if (_node is DecoratorNode or CompositeNode or ActionNode or ConditionNode)
@@ -894,7 +830,6 @@ namespace CycloneGames.BehaviorTree.Editor
             if (InputPort != null)
             {
                 InputPort.portName = "";
-                //InputPort.style.flexDirection = FlexDirection.Column;
                 InputPort.style.alignItems = Align.Center;
                 InputPort.style.justifyContent = Justify.Center;
                 InputPort.style.marginLeft = StyleKeyword.Auto;
@@ -912,7 +847,6 @@ namespace CycloneGames.BehaviorTree.Editor
                 InputPort.AddToClassList("bt-port");
                 InputPort.AddToClassList("bt-input-port");
 
-                //  Note: In uss file, there is a padding-left: 8px for center the Input point
                 var portElement = InputPort.Q("connector");
                 if (portElement != null)
                 {
@@ -922,10 +856,6 @@ namespace CycloneGames.BehaviorTree.Editor
                     portElement.style.minHeight = 8;
                     portElement.style.maxWidth = 8;
                     portElement.style.maxHeight = 8;
-                    // portElement.style.borderTopLeftRadius = 4;
-                    // portElement.style.borderTopRightRadius = 4;
-                    // portElement.style.borderBottomLeftRadius = 4;
-                    // portElement.style.borderBottomRightRadius = 4;
                     portElement.style.alignSelf = Align.Center;
                     portElement.style.marginLeft = StyleKeyword.Auto;
                     portElement.style.marginRight = StyleKeyword.Auto;
@@ -938,10 +868,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Creates output port for parent nodes (rounded rectangle connector at bottom).
-        /// Composite nodes support multiple connections, others support single connection.
-        /// </summary>
         private void CreateOutputPorts()
         {
             if (_node is CompositeNode)
@@ -977,10 +903,6 @@ namespace CycloneGames.BehaviorTree.Editor
                     portElement.style.minHeight = 8;
                     portElement.style.maxWidth = 8;
                     portElement.style.maxHeight = 8;
-                    // portElement.style.borderTopLeftRadius = 4;
-                    // portElement.style.borderTopRightRadius = 4;
-                    // portElement.style.borderBottomLeftRadius = 4;
-                    // portElement.style.borderBottomRightRadius = 4;
                     portElement.style.alignSelf = Align.Center;
                     portElement.style.marginLeft = StyleKeyword.Auto;
                     portElement.style.marginRight = StyleKeyword.Auto;
@@ -1004,9 +926,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>
-        /// Updates the visual state of ports to reflect their connection status.
-        /// </summary>
         public void UpdatePortConnectionState()
         {
             if (InputPort != null)
@@ -1028,7 +947,6 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>Checks port connections without LINQ Count() or ToList() calls.</summary>
         private static bool HasAnyConnection(Port port)
         {
             if (port.connections == null) return false;
@@ -1036,9 +954,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return false;
         }
 
-        /// <summary>
-        /// Adds CSS classes to the node based on its type for styling.
-        /// </summary>
         private void SetUpClasses()
         {
             if (_node is CompositeNode)
