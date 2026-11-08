@@ -50,6 +50,22 @@
 
 代价是真实的：感知不能在任意线程查询，每个可感知对象都必须注册。换来的是每帧一次快照加每传感器一个 job，与读取结果的 agent 数量无关。
 
+### 注册表为什么自带网格
+
+注册表把可感知对象放在一个稠密数组里，每次更新由它重建内部 `SpatialGrid`。这里没有复用 `CycloneGames.Spatial`，原因在于工作形态，而非代码量。
+
+| 原因 | 具体差异 |
+| --- | --- |
+| 数据形态 | 注册表本来就持有一份稠密 `PerceptibleData[]`，每次更新整体重建。`SpatialHashGrid` 维护的是句柄，走增量插入、更新与移除。 |
+| 交付方式 | 传感器 job 从 `NativeList<int>` 读取候选。`CycloneGames.Spatial` 是纯托管实现，没有 native 路径。 |
+| 排序语义 | 候选按格键与 tie-breaker 排序，同一份快照永远得到同一顺序。最近邻索引按距离排序。 |
+
+复用共享索引，要么每帧把稠密数组拷进去，要么为每个可感知对象维护句柄并逐次更新。两种做法都比被替换掉的重建更贵，前者还要在每次 job 之前多做一次拷贝。
+
+这个网格属于注册表内部：它不是公开 API，也不是游戏层的第二个宽相。项目自己的查询仍然用 `CycloneGames.Spatial`。
+
+如果共享索引将来支持 job，这个决定应当用两种布局的实测数据重新评估，而不是按对称性改。
+
 ## <a id="how-it-works"></a>工作原理
 
 ```mermaid
@@ -187,6 +203,45 @@ manager.ReportStimulus(attackerHandle, hitPoint, damageAmount);
 
 `long` 计数器在每秒 1000 次上报下需要约 2.92 亿年才会回绕，因此溢出不是实际风险。
 
+### 目标出现或消失时做出反应
+
+只有一个消费方时，轮询 `HasSightDetection` 就够了。当多个系统都需要同一个变化时，每帧各自扫一遍结果列表就是浪费。监听器只收到一次变化。
+
+```csharp
+public sealed class AlertOnSight : MonoBehaviour, IPerceptionEventListener
+{
+    [SerializeField] private AIPerceptionComponent _perception;
+
+    private void Start() => _perception.AddListener(this);
+    private void OnDisable() => _perception.RemoveListener(this);
+
+    public void OnPerceptionEvent(in PerceptionEvent transition)
+    {
+        if (transition.SensorType != SensorType.Sight ||
+            transition.Kind != PerceptionEventKind.Acquired)
+        {
+            return;
+        }
+
+        // 在这里响应新出现的目标。
+    }
+}
+```
+
+| 类型 | 触发时机 |
+| --- | --- |
+| `Acquired` | 该句柄第一次进入传感器的结果集。 |
+| `Lost` | 该句柄离开结果集：记忆过期、可见度衰减到阈值、容量驱逐，或者这个感知不保留记忆而目标当帧就消失。 |
+
+注册要放在管理器存在之后，例如 `Start` 或 composition root；`OnEnable` 可能早于组件解析出管理器。
+
+几条保持零分配与可预测性的约束：
+
+- 事件在 owner 线程上、`SensorManager.Update` 期间同步派发。
+- 没有注册监听器时，传感器完全跳过差异计算。
+- 监听器不允许在回调里增删监听器；管理器会抛异常，而不是静默跳过。
+- 自定义传感器可以用 `SensorManager.PublishEvent` 直接推送，不必走内置记忆。
+
 ### 用你自己的时钟驱动
 
 ```csharp
@@ -263,6 +318,11 @@ void Manager.SetTeamAttitude(int observerTeam, int targetTeam, PerceptionTeamAtt
 void Manager.SetSameTeamFriendly();
 void Manager.CopyTeamAttitudes(NativeArray<byte> source);
 AIPerceptionMemoryStats Manager.GetMemoryStats();
+
+// 变化事件
+void Manager.AddListener(IPerceptionEventListener listener);
+void Manager.RemoveListener(IPerceptionEventListener listener);
+void Manager.PublishEvent(in PerceptionEvent transition);
 
 // 观察者
 bool Perception.HasSightDetection;

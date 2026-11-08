@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
@@ -67,6 +67,8 @@ namespace CycloneGames.AIPerception.Runtime
         private bool _isIteratingSensors;
         private bool _isProcessingResults;
         private int _inlineExecutionThreshold = DefaultInlineExecutionThreshold;
+        private readonly List<IPerceptionEventListener> _listeners = new List<IPerceptionEventListener>(4);
+        private bool _isDispatchingEvents;
 
         public static SensorManager Instance
         {
@@ -287,6 +289,132 @@ namespace CycloneGames.AIPerception.Runtime
         /// observes the same ordering regardless of which one consumes it first. When the ring is full
         /// the oldest entry is dropped; a sensor that has not consumed it yet will miss that event.
         /// </summary>
+        /// <summary>
+        /// Registers a listener for stimulus transitions. Listeners are called on the owner thread,
+        /// once per event, in registration order.
+        /// </summary>
+        /// <remarks>
+        /// Must not be called from inside <see cref="IPerceptionEventListener.OnPerceptionEvent"/>.
+        /// </remarks>
+        public void AddListener(IPerceptionEventListener listener)
+        {
+            EnsureOwnerThread();
+            if (listener == null)
+            {
+                throw new ArgumentNullException(nameof(listener));
+            }
+
+            if (_isDispatchingEvents)
+            {
+                throw new InvalidOperationException("Listeners cannot be added while events are being dispatched.");
+            }
+
+            if (!_listeners.Contains(listener))
+            {
+                _listeners.Add(listener);
+            }
+        }
+
+        /// <inheritdoc cref="AddListener"/>
+        public void RemoveListener(IPerceptionEventListener listener)
+        {
+            EnsureOwnerThread();
+            if (_isDispatchingEvents)
+            {
+                throw new InvalidOperationException("Listeners cannot be removed while events are being dispatched.");
+            }
+
+            _listeners.Remove(listener);
+        }
+
+        /// <summary>
+        /// Raises one transition immediately. Custom sensors call this when they do not use the
+        /// built-in stimulus memory.
+        /// </summary>
+        public void PublishEvent(in PerceptionEvent perceptionEvent)
+        {
+            EnsureOwnerThread();
+            Dispatch(in perceptionEvent);
+        }
+
+        private void Dispatch(in PerceptionEvent perceptionEvent)
+        {
+            if (_listeners.Count == 0)
+            {
+                return;
+            }
+
+            _isDispatchingEvents = true;
+            try
+            {
+                for (int i = 0; i < _listeners.Count; i++)
+                {
+                    _listeners[i].OnPerceptionEvent(in perceptionEvent);
+                }
+            }
+            finally
+            {
+                _isDispatchingEvents = false;
+            }
+        }
+
+        private void SetEventTracking(ISensor sensor)
+        {
+            // Built-in sensors create their storage lazily, so the buffer can be absent on the first update.
+            if (sensor is IPerceptionEventSource source)
+            {
+                SensorResultBuffer buffer = source.EventBuffer;
+                if (buffer != null)
+                {
+                    buffer.EnableEventTracking(_listeners.Count > 0);
+                }
+            }
+        }
+
+        private void DrainSensorEvents(ISensor sensor)
+        {
+            if (!(sensor is IPerceptionEventSource source))
+            {
+                return;
+            }
+
+            SensorResultBuffer buffer = source.EventBuffer;
+            if (buffer == null)
+            {
+                return;
+            }
+
+            int count = buffer.PendingEventCount;
+            if (count == 0)
+            {
+                return;
+            }
+
+            if (_listeners.Count == 0)
+            {
+                buffer.ClearPendingEvents();
+                return;
+            }
+
+            _isDispatchingEvents = true;
+            try
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    PerceptionEvent perceptionEvent = buffer.GetPendingEvent(i);
+                    for (int listenerIndex = 0; listenerIndex < _listeners.Count; listenerIndex++)
+                    {
+                        _listeners[listenerIndex].OnPerceptionEvent(in perceptionEvent);
+                    }
+                }
+            }
+            finally
+            {
+                _isDispatchingEvents = false;
+                buffer.ClearPendingEvents();
+            }
+        }
+
         public long ReportStimulus(
             PerceptibleHandle instigator,
             float3 position,
@@ -577,6 +705,7 @@ namespace CycloneGames.AIPerception.Runtime
 
                     if (sensor.IsEnabled)
                     {
+                        SetEventTracking(sensor);
                         float frequencyMultiplier = GetLODFrequencyMultiplier(sensor.Position);
                         double effectiveInterval = sensor.UpdateInterval <= 0f
                             ? 0d
@@ -584,6 +713,7 @@ namespace CycloneGames.AIPerception.Runtime
                         if (currentTime - sensor.LastUpdateTime >= effectiveInterval)
                         {
                             sensor.UpdateSensor(deltaTime);
+                            DrainSensorEvents(sensor);
                             if (sensor is IAIPerceptionSensorMemoryOwner memoryOwner)
                             {
                                 updateWorkload = SaturatingAdd(updateWorkload, memoryOwner.LastUpdateWorkload);
@@ -778,7 +908,15 @@ namespace CycloneGames.AIPerception.Runtime
             {
                 for (int i = 0; i < _sensors.Count; i++)
                 {
-                    _sensors[i]?.ProcessJobResults();
+                    ISensor sensor = _sensors[i];
+                    if (sensor == null)
+                    {
+                        continue;
+                    }
+
+                    SetEventTracking(sensor);
+                    sensor.ProcessJobResults();
+                    DrainSensorEvents(sensor);
                 }
             }
             finally
@@ -858,6 +996,8 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
+            // Disposal drains pending jobs, which would otherwise dispatch into listeners mid-teardown.
+            _listeners.Clear();
             _registry.EnsureManagerCollectionMutationAllowed();
             Exception disposeFailure = null;
             try

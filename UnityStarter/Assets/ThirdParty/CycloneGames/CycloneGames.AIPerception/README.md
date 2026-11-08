@@ -30,6 +30,7 @@ It does not model stealth modifiers, threat scoring, cover, or behaviour selecti
 - Sight, hearing, proximity and damage sensors, all evaluating the same registered target set.
 - Results ordered by distance, with position, timestamp and an `IsFromMemory` flag.
 - Per-sensor memory that ages on a clock you supply, so a target that left stays known for a configured duration.
+- Transition events for consumers that react instead of poll: acquisition and loss are raised once per change, on the owner thread.
 - Team attitudes from an asset, with per-sensor affiliation filters.
 - Scene gizmos, live counts and a team matrix window for debugging.
 - A manual clock, so perception can run on a server tick instead of `Update`.
@@ -49,6 +50,22 @@ Perception can be built in several ways. The choice starts to matter once agent 
 This package takes the third path. Registration is explicit, the snapshot is read-only while jobs run, and results commit once per frame. That is what makes the cost predictable and the output repeatable for a given snapshot.
 
 The trade is real: perception cannot be queried from arbitrary threads, and every perceptible must register. In exchange, the frame cost is one snapshot plus one job per sensor, no matter how many agents read the result.
+
+### Why the registry keeps its own grid
+
+The registry holds perceptibles in a dense array and rebuilds an internal `SpatialGrid` from it once per update. `CycloneGames.Spatial` is not used here, and the reason is the shape of the work rather than the size of the code.
+
+| Reason | Detail |
+| --- | --- |
+| Data shape | The registry already owns a dense `PerceptibleData[]` and rebuilds from it every update. `SpatialHashGrid` keeps handles and applies incremental inserts, updates and removals. |
+| Delivery | Sensor jobs read candidates from a `NativeList<int>`. `CycloneGames.Spatial` is managed only and exposes no native path. |
+| Ordering | Candidates are ordered by cell key and a tie-breaker, so one snapshot always yields the same order. A nearest-neighbour index orders by distance instead. |
+
+Reusing the shared index would mean either copying the dense array into it every frame or pushing per-perceptible handles through updates. Both cost more than the rebuild they replace, and the first one also adds a copy before every job.
+
+The grid is internal to the registry. It is not a public API and not a second broadphase for gameplay code; `CycloneGames.Spatial` remains the index projects use for their own queries.
+
+If the shared index ever gains a job-compatible path, this decision should be revisited with measurements of both layouts, not by symmetry.
 
 ## <a id="how-it-works"></a>How it works
 
@@ -187,6 +204,45 @@ Sequence semantics:
 
 A `long` counter at 1 000 reports per second would take about 292 million years to wrap, so overflow is not a practical concern.
 
+### React when a target appears or disappears
+
+Polling `HasSightDetection` is fine for one consumer. When several systems need the same change, each of them would re-scan the result list every frame. A listener receives the transition once instead.
+
+```csharp
+public sealed class AlertOnSight : MonoBehaviour, IPerceptionEventListener
+{
+    [SerializeField] private AIPerceptionComponent _perception;
+
+    private void Start() => _perception.AddListener(this);
+    private void OnDisable() => _perception.RemoveListener(this);
+
+    public void OnPerceptionEvent(in PerceptionEvent transition)
+    {
+        if (transition.SensorType != SensorType.Sight ||
+            transition.Kind != PerceptionEventKind.Acquired)
+        {
+            return;
+        }
+
+        // React to the new target here.
+    }
+}
+```
+
+| Kind | When it fires |
+| --- | --- |
+| `Acquired` | The handle entered the sensor's result set for the first time. |
+| `Lost` | The handle left it: memory expired, visibility faded out, capacity evicted it, or the sense keeps no memory and the target left on that update. |
+
+Register after the manager exists, for example in `Start` or from your composition root; `OnEnable` can run before the component has resolved its manager.
+
+Rules that keep the path allocation-free and predictable:
+
+- Events are raised on the perception owner thread, synchronously, while `SensorManager.Update` runs.
+- With no listener registered, the sensors skip transition work entirely.
+- A listener must not add or remove listeners from inside the callback. The manager throws instead of skipping silently.
+- Custom sensors can push transitions with `SensorManager.PublishEvent` and skip the built-in memory.
+
 ### Drive perception from your own clock
 
 ```csharp
@@ -263,6 +319,11 @@ void Manager.SetTeamAttitude(int observerTeam, int targetTeam, PerceptionTeamAtt
 void Manager.SetSameTeamFriendly();
 void Manager.CopyTeamAttitudes(NativeArray<byte> source);
 AIPerceptionMemoryStats Manager.GetMemoryStats();
+
+// Transitions
+void Manager.AddListener(IPerceptionEventListener listener);
+void Manager.RemoveListener(IPerceptionEventListener listener);
+void Manager.PublishEvent(in PerceptionEvent transition);
 
 // Observer
 bool Perception.HasSightDetection;

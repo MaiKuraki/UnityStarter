@@ -29,6 +29,16 @@ namespace CycloneGames.AIPerception.Runtime
         private uint _refreshVersion;
         private bool _disposed;
 
+        // Event storage is sized once: one transition per remembered handle is the upper bound per update.
+        private PerceptionEvent[] _pendingEvents;
+        private PerceptibleHandle[] _previousHandles;
+        private PerceptibleHandle[] _currentHandles;
+        private int _previousCount;
+        private int _pendingEventCount;
+        private bool _eventsEnabled;
+        private int _sensorId;
+        private SensorType _currentSensorType;
+
         public SensorResultBuffer(
             in PerceptionSensorCapacity capacity,
             SensorMemoryCounters memoryCounters)
@@ -44,6 +54,9 @@ namespace CycloneGames.AIPerception.Runtime
             _memoryLookup = new NativeParallelHashMap<PerceptibleHandle, int>(
                 _initialMemoryCapacity,
                 Allocator.Persistent);
+            _pendingEvents = new PerceptionEvent[_maximumMemoryEntries];
+            _previousHandles = new PerceptibleHandle[math.min(_initialResultCapacity, 8)];
+            _currentHandles = new PerceptibleHandle[math.min(_initialResultCapacity, 8)];
         }
 
         public int ResultCount => _resultCount;
@@ -67,10 +80,157 @@ namespace CycloneGames.AIPerception.Runtime
         /// </summary>
         internal NativeParallelHashMap<PerceptibleHandle, int> MemoryLookup => _memoryLookup;
 
+        /// <summary>Sensor identity stamped on emitted transitions.</summary>
+        public void BindSensorId(int sensorId)
+        {
+            _sensorId = sensorId;
+        }
+
+        public int PendingEventCount => _pendingEventCount;
+
+        public PerceptionEvent GetPendingEvent(int index) => _pendingEvents[index];
+
+        public void ClearPendingEvents()
+        {
+            _pendingEventCount = 0;
+        }
+
+        /// <summary>
+        /// Turns transition tracking on or off for this buffer. The manager enables it only when at
+        /// least one listener is registered, so a sensor nobody listens to pays nothing.
+        /// </summary>
+        public void EnableEventTracking(bool enabled)
+        {
+            _eventsEnabled = enabled;
+            if (!enabled)
+            {
+                _previousCount = 0;
+            }
+        }
+
+        /// <summary>
+        /// Compares the committed result set with the previous one. Acquisition means the handle
+        /// entered the result set; loss means it left it, whether because the stimulus expired, faded,
+        /// was evicted, or memory is disabled for this sense.
+        /// </summary>
+        private void EmitTransitions(double timestamp)
+        {
+            if (!_eventsEnabled)
+            {
+                return;
+            }
+
+            int currentCount = _resultCount;
+            if (_currentHandles.Length < currentCount)
+            {
+                Array.Resize(ref _currentHandles, math.max(currentCount, _currentHandles.Length * 2));
+            }
+
+            for (int i = 0; i < currentCount; i++)
+            {
+                _currentHandles[i] = _results[i].Target;
+            }
+
+            Array.Sort(_currentHandles, 0, currentCount);
+            Array.Sort(_previousHandles, 0, _previousCount);
+
+            int previousIndex = 0;
+            int currentIndex = 0;
+            while (previousIndex < _previousCount && currentIndex < currentCount)
+            {
+                int order = CompareHandle(_previousHandles[previousIndex], _currentHandles[currentIndex]);
+                if (order == 0)
+                {
+                    previousIndex++;
+                    currentIndex++;
+                    continue;
+                }
+
+                if (order < 0)
+                {
+                    EmitLost(_previousHandles[previousIndex], timestamp);
+                    previousIndex++;
+                    continue;
+                }
+
+                EmitAcquired(_currentHandles[currentIndex], currentIndex, timestamp);
+                currentIndex++;
+            }
+
+            while (previousIndex < _previousCount)
+            {
+                EmitLost(_previousHandles[previousIndex], timestamp);
+                previousIndex++;
+            }
+
+            while (currentIndex < currentCount)
+            {
+                EmitAcquired(_currentHandles[currentIndex], currentIndex, timestamp);
+                currentIndex++;
+            }
+
+            if (_previousHandles.Length < currentCount)
+            {
+                Array.Resize(ref _previousHandles, math.max(currentCount, _previousHandles.Length * 2));
+            }
+
+            Array.Copy(_currentHandles, 0, _previousHandles, 0, currentCount);
+            _previousCount = currentCount;
+        }
+
+        private void EmitAcquired(in PerceptibleHandle handle, int resultIndex, double timestamp)
+        {
+            if (_pendingEventCount >= _pendingEvents.Length)
+            {
+                return;
+            }
+
+            DetectionResult detection = _results[resultIndex];
+            _pendingEvents[_pendingEventCount++] = new PerceptionEvent(
+                _sensorId,
+                _currentSensorType,
+                PerceptionEventKind.Acquired,
+                handle,
+                detection.LastKnownPosition,
+                detection.Visibility,
+                detection.Distance,
+                timestamp);
+        }
+
+        private void EmitLost(in PerceptibleHandle handle, double timestamp)
+        {
+            if (_pendingEventCount >= _pendingEvents.Length)
+            {
+                return;
+            }
+
+            float3 position = default;
+            float strength = 0f;
+            float distance = 0f;
+            if (_memoryLookup.TryGetValue(handle, out int memoryIndex))
+            {
+                StimulusMemoryEntry entry = _memoryEntries[memoryIndex];
+                position = entry.LastKnownPosition;
+                strength = entry.VisibilityAtLastDetection;
+                distance = entry.DistanceAtDetection;
+            }
+
+            _pendingEvents[_pendingEventCount++] = new PerceptionEvent(
+                _sensorId,
+                _currentSensorType,
+                PerceptionEventKind.Lost,
+                handle,
+                position,
+                strength,
+                distance,
+                timestamp);
+        }
+
         public void BeginUpdate()
         {
             ThrowIfDisposed();
             _resultCount = 0;
+            _pendingEventCount = 0;
         }
 
         public bool TryAddLive(in DetectionResult result)
@@ -95,6 +255,7 @@ namespace CycloneGames.AIPerception.Runtime
             SensorUpdateStatus status)
         {
             ThrowIfDisposed();
+            _currentSensorType = sensorType;
             int liveCount = _resultCount;
             uint refreshVersion = NextRefreshVersion();
 
@@ -102,6 +263,7 @@ namespace CycloneGames.AIPerception.Runtime
             {
                 ClearMemory();
                 SortResults();
+                EmitTransitions(timestamp);
                 return status;
             }
 
@@ -193,6 +355,7 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             SortResults();
+            EmitTransitions(timestamp);
             return resultCapacityExceeded &&
                    (status == SensorUpdateStatus.Ready || status == SensorUpdateStatus.NoTargets)
                 ? SensorUpdateStatus.ResultCapacityExceeded
@@ -237,6 +400,7 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _resultCount = 0;
+            _pendingEventCount = 0;
             ClearMemory();
         }
 
@@ -405,16 +569,9 @@ namespace CycloneGames.AIPerception.Runtime
             }
         }
 
-        private static int CompareHandle(PerceptibleHandle left, PerceptibleHandle right)
+        private static int CompareHandle(in PerceptibleHandle left, in PerceptibleHandle right)
         {
-            int registry = left.RegistryId.CompareTo(right.RegistryId);
-            if (registry != 0)
-            {
-                return registry;
-            }
-
-            int id = left.Id.CompareTo(right.Id);
-            return id != 0 ? id : left.Generation.CompareTo(right.Generation);
+            return left.CompareTo(right);
         }
 
         private void ThrowIfDisposed()

@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.AIEnvQuery.Tests.Editor",
+    "rootNamespace": "CycloneGames.AIEnvQuery.Tests.Editor",
+    "references": [
+        "CycloneGames.AIEnvQuery.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
