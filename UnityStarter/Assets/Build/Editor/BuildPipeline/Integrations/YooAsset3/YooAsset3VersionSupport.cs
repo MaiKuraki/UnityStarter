@@ -71,7 +71,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         {
             var failures = new List<string>();
 
-            // YooAsset-3.0.6 EBuildPipeline.cs
             // This integration selects Scriptable, RawFile, and ArchiveFile pipelines;
             // their enum members must remain present and spelled exactly.
             foreach (string pipeline in RequiredPipelines)
@@ -83,7 +82,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 }
             }
 
-            // YooAsset-3.0.6 IBuildPipeline.cs
             // BuildResult Run(BuildParameters, bool) is the single native build entry point.
             MethodInfo run = typeof(IBuildPipeline).GetMethod(
                 "Run",
@@ -99,7 +97,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     "YooAsset.Editor.IBuildPipeline no longer exposes BuildResult Run(BuildParameters, bool).");
             }
 
-            // YooAsset-3.0.6 BuildParameters.cs
             // Every property below is written by YooAsset3BuildParameterFactory; each
             // must remain a public, writable property with the recorded type.
             foreach (string propertyName in RequiredBuildParameterProperties)
@@ -114,7 +111,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 }
             }
 
-            // YooAsset-3.0.6 EBundledCopyOption.cs
             // Bundled-copy mode is mapped 1:1 into BuildParameters.BundledCopyOption.
             foreach (string option in RequiredBundledCopyOptions)
             {
@@ -125,7 +121,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 }
             }
 
-            // YooAsset-3.0.6 EFileNameStyle.cs
             // Note: EFileNameStyle lives in the YooAsset (runtime) namespace, and its
             // "bundle name + hash" member is spelled BundleName_HashName.
             foreach (string style in RequiredFileNameStyles)
@@ -137,8 +132,6 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 }
             }
 
-            // YooAsset-3.0.6
-            //   IBundleEncryptor.cs, IManifestEncryptor.cs, IManifestDecryptor.cs
             // The cryptography boundary hands these interfaces to BuildParameters.
             if (!typeof(IBundleEncryptor).IsInterface)
             {

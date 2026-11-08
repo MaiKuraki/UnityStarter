@@ -14,7 +14,7 @@ AssetManagement 提供三个 provider（Resources、Addressables、YooAsset）�
 
 ## 概述
 
-每个 provider 作为 `IAssetModule` 暴露，各有不同的能力面。Addressables 与 YooAsset 不能同时通过这些 adapter 激活 —— 框架的 AssetBundle runtime guard 建立单一 provider authority，直到共存、shutdown 顺序与内存行为作为完整产品配置得到验证。
+每个 provider 作为 `IAssetModule` 暴露，各有不同的能力面。Addressables 与 YooAsset 不能同时通过这些 adapter 激活。框架的 AssetBundle runtime guard 建立单一 provider authority，直到共存、shutdown 顺序与内存行为作为完整产品配置得到验证。
 
 ### 主要特性
 
@@ -170,7 +170,7 @@ Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 aw
 
 YooAsset provider 目标为 `[3.0.6,4.0.0)` 范围内的稳定版 `com.tuyoogame.yooasset`。asmdef 范围是 compilation envelope；由于 SemVer prerelease 排在对应正式版之前，范围内的 prerelease 可能进入编译，但 activation test 会把它拒绝为不受支持。`YooAssetModule` 独占进程全局 Yoo runtime。每个需要隔离可写缓存的 client instance，都必须通过 file-system parameters 传入各自独立且显式的 `PackageRoot`。
 
-Pending asset、all-assets、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。这替代了过去要求 YooAsset provider 同步推进 pending 操作的行为；`IAssetSyncOperations` 是独立能力，不受影响。
+Pending asset、all-assets、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。`IAssetSyncOperations` 是提供同步单资产访问的独立能力。
 
 ```csharp
 using YooAsset;
@@ -291,7 +291,7 @@ Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`
 | Addressables catalog 更新分裂 authority | 直接调用 `Addressables.UpdateCatalogs` | 所有 catalog mutation 通过 owning package adapter |
 | Downloader 并发无效 | Provider 全局调度 | Addressables：并发由 provider 管理；YooAsset：每个 downloader 显式 1-32，但多个 downloader 与按需 I/O 会叠加 |
 | `WaitForAsyncComplete` 抛出 | Pending Addressables 或 YooAsset 操作 | 改为 await `Task` |
-| YooAsset raw `FilePath` 为空 | 设计如此 | `FilePath` 刻意为空；await `Task` 并使用 `ReadText`/`ReadBytes` |
+| YooAsset raw `FilePath` 为空 | 该 API 不返回物理路径 | `FilePath` 为空；await `Task` 并使用 `ReadText`/`ReadBytes` |
 | Scene unload 被拒 | 不同 package 或重建 generation | 使用 originating package generation；重建的 generation 被拒 |
 | VContainer shutdown 不 await | Scope dispose 是同步的 | Dispose `LifetimeScope` 前显式 await `module.DestroyAsync()` |
 

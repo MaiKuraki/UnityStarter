@@ -2,8 +2,6 @@
 
 本 Integration 把通用 `asset-content` invocation 转换为一次事务化 YooAsset 构建，其中包含一个或多个显式 Package Profile。它是可选 Editor Adapter，缺少 YooAsset 时 Build Core 不受编译依赖影响。
 
-> **当前 checkout：** `Packages/manifest.json` 未安装 YooAsset。Integration 源码存在，但受门控程序集及其测试未激活。下文描述源码契约，Release 前必须使用实际安装包完成资格验证。
-
 ## 开始之前
 
 需要三件事：
@@ -109,7 +107,7 @@ flowchart LR
 
 只有至少一个启用 Profile 使用 Bundled Copy 时，Content invocation 才开启临时 Player Session。Session 会为依赖它的 Player 激活暂存 Package 数据，并在失败时精确恢复此前内置状态。
 
-如果 Invocation ID、Package Path、Bundled Path 与 Output Claim 不重叠，可以使用多个 YooAsset invocation。契约层允许 Addressables 与 YooAsset 同时供一个 Player 使用，但当前 checkout 没有真实多 Provider Player 构建证据。
+如果 Invocation ID、Package Path、Bundled Path 与 Output Claim 不重叠，可以使用多个 YooAsset invocation。契约层允许 Addressables 与 YooAsset 同时供一个 Player 使用。
 
 ## Clean 与 Incremental
 
@@ -168,8 +166,6 @@ Player 构建期的产物搬移同样具备崩溃可恢复性。每一次把所�
 | Built-in `OnlyCopy` 拒绝 Seed | 恢复包含 `.yoo-pub.json` 的完整旧 Owned Snapshot |
 | Player 无法加载或解密内容 | 检查独立 Runtime Provider 与 Runtime Decrypt Contract 实现 |
 | Workspace 要求恢复 | 更改 Target、Package Version 或 Output Root 前先恢复 |
-
-已知测试问题：`Tests/YooAsset3PublicationTransactionTests.cs` 中有一次请求构造未传入现在必需的 Invocation ID。当前包缺失使该测试程序集未激活。在修复该调用点，并使用受支持 YooAsset 包编译和运行受门控测试前，不得宣称 YooAsset Integration Test 已通过。
 
 ## 上限
 

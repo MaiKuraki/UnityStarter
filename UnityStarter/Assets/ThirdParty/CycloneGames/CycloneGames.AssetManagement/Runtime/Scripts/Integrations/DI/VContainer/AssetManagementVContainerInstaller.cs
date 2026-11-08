@@ -69,7 +69,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
             if (_cacheRetentionOptions.Enabled && _packageResolver == null)
             {
                 throw new InvalidOperationException(
-                    "Cache retention requires an explicit packageResolver. Global package location is intentionally unsupported.");
+                    "Cache retention requires an explicit packageResolver. Package location is not resolved globally.");
             }
 
             // Register IAssetModule.

@@ -84,9 +84,7 @@ AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` 
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
-YooAsset 3.0.6 是最低稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包。产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
-
-YooAsset provider 必须要求 3.0.6：它使用 `UnloadAllAssetsOptions.ShouldWaitUnloadUnused`，并依赖 3.0.6 引入的 `YooAsset.Custom` 友元程序集来接入 Web 预下载。YooAsset 3.0.5 已不再支持，且不保留任何兼容分支。
+YooAsset 3.0.6 是最低稳定版，支持范围为 `[3.0.6,4.0.0)`（与 asmdef 的 `versionDefines` 一致）。activation test 会拒绝 prerelease 包，产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。provider 使用 `UnloadAllAssetsOptions.ShouldWaitUnloadUnused`，并依赖名为 `YooAsset.Custom` 的友元程序集来接入 Web 预下载。
 
 ## 快速上手
 
@@ -140,11 +138,11 @@ Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。L
 
 `WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 与 YooAsset 对每个 pending 操作都拒绝它；terminal 调用是 no-op。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
 
-这是 YooAsset wrapper 的行为迁移：过去会要求 provider 同步推进的 pending 调用现在抛出 `NotSupportedException`。现有调用方必须改为 await `IOperation.Task`；独立的 `IAssetSyncOperations` 能力不受影响。
+Pending 的 YooAsset 操作在被要求同步推进时以 `NotSupportedException` 失败；应 await `IOperation.Task`。`IAssetSyncOperations` 是提供同步单资产访问的独立能力。
 
 调用方取消只取消该调用方的等待，不取消可能被其他调用方使用的共享后端加载。调用方仍必须 Dispose 其 lease。这把请求取消与共享资源所有权分离。
 
-调用方可见的 canceled 并不能证明 provider 已物理终止。当 package 或 module 退役使 pending 的自有操作取消时，adapter 会继续观察其 provider/adapter 尾任务。Package 成功销毁只有在全部保留尾任务排空后才完成，包括迟到的成功、取消或已观察失败。之后到达的 provider 结果不能覆盖已经发布的公开 canceled 状态。普通 `ISceneHandle.Dispose` 被刻意排除在权威退役之外：它只释放调用方 wrapper 所有权，既不取消 load，也不 unload scene。
+调用方可见的 canceled 并不能证明 provider 已物理终止。当 package 或 module 退役使 pending 的自有操作取消时，adapter 会继续观察其 provider/adapter 尾任务。Package 成功销毁只有在全部保留尾任务排空后才完成，包括迟到的成功、取消或已观察失败。之后到达的 provider 结果不能覆盖已经发布的公开 canceled 状态。普通 `ISceneHandle.Dispose` 不属于权威退役：它只释放调用方 wrapper 所有权，既不取消 load，也不 unload scene。
 
 Unity object、provider API、缓存 mutation、handle dispose、scene 操作、module/package 生命周期与维护编排都受主线程约束。允许的 worker-thread 工作很窄：已完成的 `IRawFileHandle.ReadText` 与 `ReadBytes` 读取、telemetry ring-buffer 操作，以及支持平台上产品调度的纯文件哈希。每次成功的 `ReadBytes()` 调用都会返回 caller-owned 的可变快照，该快照在 handle dispose 后仍然有效；应保留这份快照，避免再次申请整份复制。不要从后台任务调用 Unity object 属性、provider handle、`Dispose` 或缓存 mutation。
 
@@ -177,9 +175,9 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
 
-`IAssetPackage` 刻意不提供通用 unload-unused 操作，因为各 provider 无法实现同一种语义。通用框架缓存驱逐使用 `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)`；Resources 的 Unity 进程全局扫描使用 `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync`；YooAsset 的 package-local 操作使用 `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync`。Addressables 除框架缓存 trim 外没有对应操作。这是从已删除 `IAssetPackage.UnloadUnusedAssetsAsync` 的直接迁移方式；不保留 compatibility shim。
+`IAssetPackage` 不提供通用 unload-unused 操作：各 provider 无法实现同一种语义。通用框架缓存驱逐使用 `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)`；Resources 的 Unity 进程全局扫描使用 `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync`；YooAsset 的 package-local 操作使用 `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync`。Addressables 除框架缓存 trim 外没有对应操作。
 
-`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` 是确定性回收出口：它会释放单个 package 内所有 provider 持有的资产，包括 provider 仍视为在用者。当调用方必须确认 native 内存已真正回收时——例如内存门禁式场景切换前，或抓取 Memory Profiler 基线时——传 `waitForEngineUnload: true`；帧时间敏感路径传 `false`，此时 provider 会在引擎底层卸载完成前就上报终态。
+`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` 是确定性回收出口：它会释放单个 package 内所有 provider 持有的资产，包括 provider 仍视为在用者。当调用方必须确认 native 内存已真正回收时（例如内存门禁式场景切换前，或抓取 Memory Profiler 基线时），传 `waitForEngineUnload: true`；帧时间敏感路径传 `false`，此时 provider 会在引擎底层卸载完成前就上报终态。
 
 Addressables 与 YooAsset 不能同时通过这些 adapter 激活。Module 级 AssetBundle runtime guard 建立唯一的框架控制 provider authority，直到共存、shutdown 顺序与内存行为作为完整产品配置得到验证。
 
@@ -353,7 +351,7 @@ Module 级默认通过 `AssetManagementOptions.DefaultCacheTuning` 配置。Pack
 
 ### Provider options 透传：解密与文件系统（YooAsset）
 
-`AssetPackageInitOptions.ProviderOptions` 原样携带 provider 原生 options 对象——适配器不做拷贝或过滤。对 YooAsset 而言就是 `YooAsset.InitializePackageOptions` 及其派生类型（`EditorSimulateModeOptions`、`OfflinePlayModeOptions`、`HostPlayModeOptions`、`WebPlayModeOptions`、`CustomPlayModeOptions`），因此 provider 的全部能力都无需改动适配器即可触达。自定义解密与自定义文件系统走同一条接缝：
+`AssetPackageInitOptions.ProviderOptions` 原样携带 provider 原生 options 对象，适配器不做拷贝或过滤。对 YooAsset 而言就是 `YooAsset.InitializePackageOptions` 及其派生类型（`EditorSimulateModeOptions`、`OfflinePlayModeOptions`、`HostPlayModeOptions`、`WebPlayModeOptions`、`CustomPlayModeOptions`），因此 provider 的全部能力都无需改动适配器即可触达。自定义解密与自定义文件系统走同一条接缝：
 
 ```csharp
 var hostOptions = new HostPlayModeOptions
@@ -370,9 +368,9 @@ hostOptions.CacheFileSystemParameters.AddParameter(
 
 自定义文件系统通过 `new FileSystemParameters("命名空间.类型名,程序集", packageRoot)` 声明；provider 用反射实例化它，并通过 `AddParameter` 注入全部参数。bundle 级策略（`DownloadUrlPolicy`、`DownloadRetryPolicy`、`WebPlatformStrategy`、`BundleUnpackPolicy`、`BuiltinFileAccessor`）使用同样的参数键。由于适配器原样转发 options 对象，只要引用的 YooAsset 版本包含对应类型，新增的 playmode 与参数在适配器升级后继续可用。`EnsureBundleFileAsync` 结果的 `IsEncrypted` 标志让产品在把路径交给原生消费方之前识别加密内容。
 
-### 小游戏平台缓存预下载（YooAsset 3.0.6）
+### 小游戏平台缓存预下载
 
-YooAsset 3.0.6 允许 Web 网络文件系统把 bundle 预下载到平台托管缓存。该策略接口在 YooAsset 内部是 `internal`，只能从名为 `YooAsset.Custom` 的程序集访问，因此 provider 提供了一个使用该名称的友元程序集，并对外暴露公共契约：
+Web 网络文件系统可在受支持的 YooAsset 范围内（最低稳定版 3.0.6，兼容 `[3.0.6,4.0.0)`）把 bundle 预下载到平台托管缓存。该策略接口在 YooAsset 内部是 `internal`，只能从名为 `YooAsset.Custom` 的程序集访问，因此 provider 提供了一个使用该名称的友元程序集，并对外暴露公共契约：
 
 ```csharp
 // 每个平台实现一次（微信、抖音……）。两个成员都在主线程、YooAsset 加载路径内执行：
@@ -565,7 +563,7 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 | 失败后 provider 状态可能已变化 | 操作越过 mutation 边界 | 隔离依赖内容，保留恢复证据，重试前要求显式 owner 决策 |
 | 成功检查后存储不足 | 预检不是预约 | 用实测峰值放大重算 `RequiredFreeBytes` 并重试 |
 | 文件哈希前签名校验失败 | 缺少 verifier、缺少签名或签名被拒 | 校验规范 payload 生成、密钥选择、签名编码；不要为绕过而切换到 `IntegrityOnly` |
-| 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目被有意保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
+| 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目由 retention policy 保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
 | Handle 看起来泄漏 | 某条路径未 Dispose lease | 启用 handle tracking，确认每条成功/异常/取消路径都 Dispose 调用方 lease；取消 `handle.Task` 不会 Dispose 它 |
 | YooAsset raw 读取返回空值 | Provider load 未完成或失败 | await `IRawFileHandle.Task`；检查 `Error`；保留 `ReadBytes()` 结果而非反复调用 |
 | Scene 卸载被取消 | 取消只在 mutation 开始前接受 | 加入不可取消的 provider completion；失败的 unload 仍可重试 |

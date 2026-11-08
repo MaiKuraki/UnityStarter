@@ -340,7 +340,7 @@ Handle tracking is disabled by default. When stack capture is enabled, a recover
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Asset remains in memory after all callers dispose | Idle cache entry retained intentionally | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
+| Asset remains in memory after all callers dispose | Idle cache entry held by the retention policy | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
 | Handle appears leaked | Lease not disposed on some path | Enable handle tracking, confirm every success/exception/cancellation path disposes the caller lease; cancelling `handle.Task` does not dispose it |
 | Business API rejects calls after failed shutdown | Shutdown request is sticky | Fix the cleanup cause and retry `DestroyAsync`; create a new module/package generation for new work |
 | Addressables shutdown repeats the same indeterminate-release failure | Provider cleanup threw after reference-count mutation may have started | Do not call `Addressables.Release` again; preserve diagnostics and use the product's outer teardown or process-restart recovery policy |

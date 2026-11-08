@@ -160,8 +160,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
 	/// <summary>
 	/// Optional capability for scheduling Unity's process-wide unused-asset collection pass.
-	/// This is intentionally separate from <see cref="IAssetPackage"/> because the operation is not
-	/// package-local and provider adapters cannot implement equivalent semantics.
+	/// Separate from <see cref="IAssetPackage"/>: the operation is not package-local, and provider
+	/// adapters cannot implement equivalent semantics.
 	/// </summary>
 	public interface IUnityUnusedAssetCollector
 	{
@@ -198,7 +198,7 @@ namespace CycloneGames.AssetManagement.Runtime
 			CancellationToken cancellationToken = default);
 	}
 
-	/// <summary>Optional synchronous asset operations. Addressables intentionally does not implement this capability.</summary>
+	/// <summary>Optional synchronous asset operations. Addressables does not implement this capability.</summary>
 	public interface IAssetSyncOperations
 	{
 		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object;
@@ -446,7 +446,7 @@ namespace CycloneGames.AssetManagement.Runtime
 	/// consumers (native video players, native plugins, external file IO) without copying bytes through managed
 	/// memory. Path availability is provider and file-system specific: sandbox, cache, and editor file systems
 	/// expose a real path, while a streaming/web file system may report an error instead of a path. The returned
-	/// handle is a one-shot IO operation and is intentionally not cached.
+	/// handle is a one-shot IO operation and is not cached.
 	/// </summary>
 	public interface IAssetBundleFileProvisioner
 	{

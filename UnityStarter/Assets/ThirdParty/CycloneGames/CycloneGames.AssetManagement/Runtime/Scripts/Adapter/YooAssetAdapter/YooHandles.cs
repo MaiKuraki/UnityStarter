@@ -1133,7 +1133,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
                 if (raw.IsDone && raw.Status == EOperationStatus.Failed)
                 {
-                    // YooAsset 3 represents an immediately rejected scene load with ErrorProvider.
+                    // The provider reports an immediately rejected scene load with ErrorProvider.
                     // ErrorProvider cannot construct UnloadSceneOperation; its terminal handle must be
                     // released directly because no Unity Scene was created.
                     DisposeInternal(providerHandleAlreadyReleased: false);
