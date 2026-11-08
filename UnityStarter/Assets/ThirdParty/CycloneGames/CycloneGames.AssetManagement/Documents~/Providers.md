@@ -14,7 +14,7 @@ AssetManagement ships three providers (Resources, Addressables, YooAsset) and tw
 
 ## Overview
 
-Each provider is exposed as an `IAssetModule` with a distinct capability surface. Addressables and YooAsset cannot be active through these adapters simultaneously — the framework AssetBundle runtime guard establishes one provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
+Each provider is exposed as an `IAssetModule` with a distinct capability surface. Addressables and YooAsset cannot be active through these adapters simultaneously. The framework AssetBundle runtime guard establishes one provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
 
 ### Key Features
 
@@ -170,7 +170,7 @@ Pending Addressables operations reject `WaitForAsyncComplete` on every platform.
 
 The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.6,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
 
-Pending asset, all-assets, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. This replaces the prior YooAsset behavior that asked the provider to advance a pending operation synchronously; `IAssetSyncOperations` is a separate capability and is unchanged.
+Pending asset, all-assets, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. `IAssetSyncOperations` is a separate capability for synchronous single-asset access.
 
 ```csharp
 using YooAsset;
@@ -291,7 +291,7 @@ Do not add a capability to `IAssetPackage` unless all providers can implement th
 | Addressables catalog update split authority | Direct `Addressables.UpdateCatalogs` call | Route every catalog mutation through the owning package adapter |
 | Downloader concurrency not effective | Provider-global scheduling | Addressables: concurrency is provider-managed; YooAsset: explicit 1-32 per downloader, but multiple downloaders and on-demand I/O add together |
 | `WaitForAsyncComplete` throws | Pending Addressables or YooAsset operation | Await `Task` instead |
-| YooAsset raw `FilePath` empty | By design | `FilePath` is intentionally empty; await `Task` and use `ReadText`/`ReadBytes` |
+| YooAsset raw `FilePath` empty | The API does not expose a physical path | `FilePath` is empty; await `Task` and use `ReadText`/`ReadBytes` |
 | Scene unload rejected | Different package or recreated generation | Use the originating package generation; a recreated generation is rejected |
 | VContainer shutdown does not await | Scope disposal is synchronous | Explicitly await `module.DestroyAsync()` before disposing the `LifetimeScope` |
 

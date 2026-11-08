@@ -20,7 +20,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             PackageInfo package = FindRegisteredPackage();
             if (package == null)
             {
-                Assert.Pass("Addressables is optional and is not registered in this Unity project.");
+                Assert.Ignore("Addressables is optional and is not registered in this Unity project.");
                 return;
             }
 

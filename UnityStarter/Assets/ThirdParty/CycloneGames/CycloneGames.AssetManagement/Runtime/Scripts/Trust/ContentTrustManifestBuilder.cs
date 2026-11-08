@@ -46,7 +46,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 throw new ArgumentOutOfRangeException(
                     nameof(entry),
                     entry.HashAlgorithm,
-                    "Content trust manifests only accept cryptographic SHA-256 entries. XxHash64 and None are legacy wire values that verification rejects.");
+                    "Content trust manifests only accept cryptographic SHA-256 entries. XxHash64 and None are parseable wire values that verification rejects.");
             }
 
             ContentTrustFileEntry normalizedEntry = ContentTrustManifestValidation.NormalizeEntry(in entry);

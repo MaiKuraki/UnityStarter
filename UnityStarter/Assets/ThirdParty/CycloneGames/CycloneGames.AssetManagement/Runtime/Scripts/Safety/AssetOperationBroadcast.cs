@@ -150,7 +150,7 @@ namespace CycloneGames.AssetManagement.Runtime
             catch (OperationCanceledException)
             {
                 // Cancellation remains observable to every caller awaiter. This internal await only prevents an
-                // intentionally abandoned caller view from surfacing later through the completion-source finalizer.
+                // abandoned caller view from surfacing later through the completion-source finalizer.
             }
             catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
             {

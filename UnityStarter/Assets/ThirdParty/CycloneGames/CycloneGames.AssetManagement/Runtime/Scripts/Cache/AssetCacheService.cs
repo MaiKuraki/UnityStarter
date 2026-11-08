@@ -650,7 +650,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Called via the keyed release callback when a handle's RefCount reaches zero.
-        /// O(1): the key is passed directly by the handle, eliminating the previous O(N) scan.
+        /// O(1): the handle passes its key directly, so the cache does not scan its entries.
         /// </summary>
         internal void OnHandleReleased(AssetCacheKey cacheKey, IReferenceCounted handle)
         {
@@ -799,7 +799,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Disposes a handle that is not (or no longer) tracked by the cache.
-        /// All handles must implement IInternalCacheable; reflection is intentionally not used.
+        /// All handles must implement IInternalCacheable. The cache performs no reflection.
         /// </summary>
         private static void ForceDisposeHandle(IReferenceCounted handle)
         {
@@ -998,7 +998,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Retries at most <paramref name="maxWork"/> parked provider-release failures and returns the number of
-        /// release failures still parked after this pass. Best effort by design: recoverable provider failures are
+        /// release failures still parked after this pass. Best effort: recoverable provider failures are
         /// counted by release-failure telemetry and stay parked for a later pass instead of throwing, so a periodic
         /// maintenance driver can drain the queue without owning exception policy. Fatal exceptions
         /// (out-of-memory, access violation) still propagate. Main-thread only.
@@ -1054,7 +1054,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 remaining = _releaseRetryMap.Count;
             }
 
-            // Recoverable failures intentionally do not surface here: each failure was already counted by
+            // Recoverable failures do not surface here: each failure was already counted by
             // release-failure telemetry, and the returned pending count tells drivers whether to schedule
             // another pass. Throwing would turn background maintenance into an error pump.
             return remaining;
