@@ -131,7 +131,7 @@ namespace CycloneGames.BehaviorTree.Core
         /// </summary>
         internal event Action<RuntimeBehaviorTree> WakeUpRequested;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private readonly Dictionary<string, RuntimeNode> _nodeMap = new Dictionary<string, RuntimeNode>();
 
         public BTStatusObserver StatusObserver { get; set; }
@@ -199,7 +199,7 @@ namespace CycloneGames.BehaviorTree.Core
                     }
                 }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 _nodeMap.Clear();
 #endif
 
@@ -570,7 +570,7 @@ namespace CycloneGames.BehaviorTree.Core
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         public RuntimeNode GetNodeByGUID(string guid)
         {
             EnsureOwnerThread();
@@ -689,7 +689,7 @@ namespace CycloneGames.BehaviorTree.Core
                 RuntimeNode node = orderedNodes[i];
                 node.OwnerTree = this;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 if (!string.IsNullOrEmpty(node.GUID))
                 {
                     _nodeMap[node.GUID] = node;

@@ -1,0 +1,34 @@
+{
+    "name": "CycloneGames.BehaviorTree.Tests.Performance.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Tests.Editor.Performance",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Tests.Editor",
+        "CycloneGames.BehaviorTree.Tests.Support",
+        "Unity.PerformanceTesting",
+        "CycloneGames.BehaviorTree.Benchmarks"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_PERF_TESTING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.test-framework.performance",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_PERF_TESTING"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

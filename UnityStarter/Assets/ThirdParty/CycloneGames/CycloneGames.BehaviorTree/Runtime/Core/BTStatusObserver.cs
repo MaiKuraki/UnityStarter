@@ -35,7 +35,7 @@ namespace CycloneGames.BehaviorTree.Core
         /// </summary>
         public static void AttachToTree(RuntimeBehaviorTree tree, StatusChangeHandler handler)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (tree == null || handler == null) return;
             tree.StatusObserver = new BTStatusObserver(handler);
 #endif

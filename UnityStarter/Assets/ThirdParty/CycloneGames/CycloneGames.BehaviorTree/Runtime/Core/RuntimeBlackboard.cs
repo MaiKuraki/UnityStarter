@@ -50,7 +50,7 @@ namespace CycloneGames.BehaviorTree.Core
         public RuntimeBlackboardLong3 Long3Value;
     }
 
-#if UNITY_EDITOR
+#if DEBUG
         public readonly struct RuntimeBlackboardDebugEntry
     {
         internal RuntimeBlackboardDebugEntry(
@@ -2654,7 +2654,7 @@ namespace CycloneGames.BehaviorTree.Core
             }
         }
 
-#if UNITY_EDITOR
+#if DEBUG
         private static readonly Comparison<RuntimeBlackboardDebugEntry> DebugEntryComparison =
             CompareDebugEntries;
 

@@ -172,7 +172,7 @@ namespace CycloneGames.BehaviorTree.Core
 
                 State = nextState;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 if (State != previousState && OwnerTree?.StatusObserver != null)
                 {
                     OwnerTree.StatusObserver.NotifyStatusChanged(
