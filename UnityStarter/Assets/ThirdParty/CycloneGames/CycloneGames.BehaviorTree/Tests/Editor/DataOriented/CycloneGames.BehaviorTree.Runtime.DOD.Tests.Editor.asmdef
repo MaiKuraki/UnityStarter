@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Tests.Editor.DataOriented",
     "references": [
         "CycloneGames.BehaviorTree.Runtime",
-        "CycloneGames.BehaviorTree.Runtime.DOD"
+        "CycloneGames.BehaviorTree.Runtime.DOD",
+        "CycloneGames.BehaviorTree.Core"
     ],
     "includePlatforms": [
         "Editor"

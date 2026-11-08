@@ -2,7 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Networking.Runtime",
     "rootNamespace": "CycloneGames.BehaviorTree.Networking",
     "references": [
-        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Core",
         "CycloneGames.BehaviorTree.Networking.Core",
         "CycloneGames.Networking.Core"
     ],

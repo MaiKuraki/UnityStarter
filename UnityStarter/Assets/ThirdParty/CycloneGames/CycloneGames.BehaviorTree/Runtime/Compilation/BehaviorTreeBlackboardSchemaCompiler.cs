@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Compilation
@@ -106,7 +106,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 }
 
                 RuntimeBlackboardSyncFlags syncFlags = key.SyncFlags;
-                if ((((byte)syncFlags) & ~(byte)RuntimeBlackboardSyncFlags.Networked) != 0)
+                if ((((byte)syncFlags) & ~(byte)RuntimeBlackboardSyncFlags.SnapshotAndDelta) != 0)
                 {
                     error = $"Blackboard schema key[{i}] '{name}' has unsupported sync flags {(byte)syncFlags}.";
                     return false;
@@ -237,7 +237,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 case RuntimeBlackboardValueType.Bool:
                     return RuntimeBlackboardValue.Bool(key.BoolDefaultValue);
                 case RuntimeBlackboardValueType.Vector3:
-                    return RuntimeBlackboardValue.Vector3(key.Vector3DefaultValue);
+                    return RuntimeBlackboardValue.Vector3(key.Vector3DefaultValue.ToBTFloat3());
                 case RuntimeBlackboardValueType.Long:
                     return RuntimeBlackboardValue.Long(key.LongDefaultValue);
                 case RuntimeBlackboardValueType.Long2:
@@ -277,11 +277,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 case RuntimeBlackboardValueType.Bool:
                     return left.DefaultValue.BoolValue == right.DefaultValue.BoolValue;
                 case RuntimeBlackboardValueType.Vector3:
-                    Vector3 leftVector = left.DefaultValue.Vector3Value;
-                    Vector3 rightVector = right.DefaultValue.Vector3Value;
-                    return FloatBitsEqual(leftVector.x, rightVector.x) &&
-                           FloatBitsEqual(leftVector.y, rightVector.y) &&
-                           FloatBitsEqual(leftVector.z, rightVector.z);
+                    BTFloat3 leftVector = left.DefaultValue.Vector3Value;
+                    BTFloat3 rightVector = right.DefaultValue.Vector3Value;
+                    return FloatBitsEqual(leftVector.X, rightVector.X) &&
+                           FloatBitsEqual(leftVector.Y, rightVector.Y) &&
+                           FloatBitsEqual(leftVector.Z, rightVector.Z);
                 case RuntimeBlackboardValueType.Object:
                     return ReferenceEquals(left.DefaultValue.ObjectValue, right.DefaultValue.ObjectValue);
                 case RuntimeBlackboardValueType.Long:

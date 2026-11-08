@@ -1,17 +1,40 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
     /// Ticks ALL children from first to last every tick (reactive re-evaluation).
     /// If any child returns SUCCESS → halt later siblings, return SUCCESS.
     /// If any child returns RUNNING → halt later siblings, return RUNNING.
     /// All FAILURE → return FAILURE.
-    /// Unlike standard Selector, this always re-evaluates from child[0].
+    /// With OnChange or Hybrid reevaluation, ticks without a request advance only the
+    /// active branch; a request resumes the full head-to-tail scan.
     /// </summary>
     public class RuntimeReactiveFallback : RuntimeCompositeNode
     {
+        private int _activeChild = -1;
+
+        protected override void OnStart(RuntimeBlackboard blackboard)
+        {
+            _activeChild = -1;
+        }
+
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
             RuntimeNode[] children = ChildArray;
+            bool reevaluate = ShouldReevaluate();
+
+            if (ReevaluationMode != RuntimeReevaluationMode.PollEveryTick &&
+                !reevaluate &&
+                _activeChild >= 0 && _activeChild < children.Length)
+            {
+                RuntimeState activeState = children[_activeChild].Run(blackboard);
+                if (activeState == RuntimeState.Running)
+                {
+                    return RuntimeState.Running;
+                }
+
+                _activeChild = -1;
+            }
+
             for (int i = 0; i < children.Length; i++)
             {
                 var state = children[i].Run(blackboard);
@@ -22,6 +45,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                     {
                         if (children[j].IsStarted) children[j].Abort(blackboard);
                     }
+                    _activeChild = -1;
                     return RuntimeState.Success;
                 }
 
@@ -31,14 +55,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                     {
                         if (children[j].IsStarted) children[j].Abort(blackboard);
                     }
+                    _activeChild = i;
                     return RuntimeState.Running;
                 }
             }
+
+            _activeChild = -1;
             return RuntimeState.Failure;
         }
 
         protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
+            _activeChild = -1;
             RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
             {

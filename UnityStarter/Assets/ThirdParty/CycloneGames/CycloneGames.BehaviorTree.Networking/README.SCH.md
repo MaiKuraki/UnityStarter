@@ -92,7 +92,7 @@ public static class BehaviorTreeNetworkInstaller
 ```csharp
 using System;
 using CycloneGames.BehaviorTree.Networking;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public sealed class BehaviorTreeReplicationSession : IDisposable
 {
@@ -161,7 +161,7 @@ Transport adapter 负责序列化 DTO、选择 profile channel、发送数据、
 
 ## 协议契约
 
-本包保留消息范围 `14000-14999`。Protocol version 和 minimum supported version 均为 2：
+本包保留消息范围 `14000-14999`。协议版本为 2，只有 fingerprint 完全一致的对端才会被接受：
 
 | Constant | ID | Contract identity | 固定 schema hash | 默认 channel |
 | --- | ---: | --- | --- | --- |

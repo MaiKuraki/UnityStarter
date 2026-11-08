@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Editor.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
 using UnityEditor;
 using UnityEngine;
@@ -134,15 +134,15 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
                 return;
             }
 
-            switch ((BBValueType)valueTypeProperty.intValue)
+            switch ((BehaviorTreeComparisonValueType)valueTypeProperty.intValue)
             {
-                case BBValueType.Int:
+                case BehaviorTreeComparisonValueType.Int:
                     EditorGUILayout.PropertyField(_refInt, new GUIContent("Constant"));
                     break;
-                case BBValueType.Float:
+                case BehaviorTreeComparisonValueType.Float:
                     EditorGUILayout.PropertyField(_refFloat, new GUIContent("Constant"));
                     break;
-                case BBValueType.Bool:
+                case BehaviorTreeComparisonValueType.Bool:
                     EditorGUILayout.PropertyField(_refBool, new GUIContent("Constant"));
                     break;
             }
@@ -158,18 +158,18 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
                 return false;
             }
 
-            switch ((BBValueType)valueTypeProperty.intValue)
+            switch ((BehaviorTreeComparisonValueType)valueTypeProperty.intValue)
             {
-                case BBValueType.Int:
+                case BehaviorTreeComparisonValueType.Int:
                     expectedType = RuntimeBlackboardValueType.Int;
                     return true;
-                case BBValueType.Float:
+                case BehaviorTreeComparisonValueType.Float:
                     expectedType = RuntimeBlackboardValueType.Float;
                     return true;
-                case BBValueType.Bool:
+                case BehaviorTreeComparisonValueType.Bool:
                     expectedType = RuntimeBlackboardValueType.Bool;
                     return true;
-                case BBValueType.Object:
+                case BehaviorTreeComparisonValueType.Object:
                     expectedType = RuntimeBlackboardValueType.Object;
                     return true;
                 default:

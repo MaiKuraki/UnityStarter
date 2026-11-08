@@ -1,8 +1,8 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
-    /// Reads an integer case from the blackboard. The final child is the default branch.
-    /// Changing the selected case aborts the previously running branch before entering the new one.
+    /// Reads an integer case from the blackboard. The final child is the default branch;
+    /// a changed case aborts the running branch before entering the new one.
     /// </summary>
     public class RuntimeSwitchNode : RuntimeCompositeNode
     {

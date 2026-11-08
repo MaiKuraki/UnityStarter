@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.BehaviorTree.Integrations.Spatial.Tests.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Integrations.Spatial.Tests.Editor",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
+        "CycloneGames.Spatial.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

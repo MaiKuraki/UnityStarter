@@ -1,3 +1,4 @@
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.Logging;
 using System.Collections.Generic;
 using UnityEngine;
@@ -5,17 +6,11 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
     /// <summary>
-    /// Explicit per-manager-type instance registry used to resolve the authoritative
-    /// manager component without scene-wide scans (FindObjectsOfType and friends).
-    ///
-    /// Manager components register themselves in <see cref="MonoBehaviour.OnEnable"/> and
-    /// unregister in <see cref="MonoBehaviour.OnDisable"/>, so the registry only contains
-    /// live, enabled instances. <see cref="FindExisting{T}"/> picks a deterministic winner
-    /// (activity rank, then instance id) and warns when duplicates coexist.
-    ///
-    /// Main-thread only: every call site is a Unity lifecycle callback or a manager's
-    /// static Instance getter, both of which run on the Unity main thread. The registry
-    /// is intentionally lock-free for that reason.
+    /// Per-manager-type registry that resolves the authoritative manager without scene-wide
+    /// scans. Managers register in OnEnable and unregister in OnDisable, so the registry holds
+    /// only live, enabled instances. FindExisting{T} picks a deterministic winner (activity
+    /// rank, then instance id). All call sites run on the Unity main thread; the registry is
+    /// lock-free.
     /// </summary>
     internal static class BTManagerInstanceRegistry
     {
@@ -94,9 +89,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             return candidate.enabled ? 1 : 2;
         }
 
-        // One storage instance per manager component type. Reset on play-mode start so
-        // both domain-reload and disabled-domain-reload (Enter Play Mode Options) flows
-        // start from an empty registry, mirroring the managers' ResetStaticState pattern.
+        // One storage instance per manager type. Reset on play-mode start so domain-reload and
+        // disabled-domain-reload flows start from an empty registry.
         private static class Registry<T>
             where T : MonoBehaviour
         {

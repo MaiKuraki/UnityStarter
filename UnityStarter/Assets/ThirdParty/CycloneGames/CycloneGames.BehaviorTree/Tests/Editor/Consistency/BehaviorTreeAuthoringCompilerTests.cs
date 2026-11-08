@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Reflection;
 using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards;
@@ -139,7 +139,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             first.MaxDepth = 17;
 
-            Assert.That(second.MaxDepth, Is.EqualTo(BehaviorTreeCompileOptions.DefaultMaxDepth));
+            Assert.That(second.MaxDepth, Is.EqualTo(BTCapacityLimits.MaxTreeDepth));
             Assert.That(second, Is.Not.SameAs(first));
         }
 
@@ -193,19 +193,19 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void BlackboardSchema_LegacyOpenAndStrictEmptyKeepDistinctWriteContracts()
+        public void BlackboardSchema_OpenAndStrictEmptyKeepDistinctWriteContracts()
         {
-            Runtime.BehaviorTree legacyTree = CreateOneNodeTree(true);
+            Runtime.BehaviorTree openTree = CreateOneNodeTree(true);
 
             Assert.That(
-                legacyTree.TryGetRuntimeBlackboardSchema(out RuntimeBlackboardSchema legacySchema, out string legacyError),
+                openTree.TryGetRuntimeBlackboardSchema(out RuntimeBlackboardSchema openSchema, out string openError),
                 Is.True);
-            Assert.That(legacyError, Is.Null);
-            Assert.That(legacySchema, Is.Null);
+            Assert.That(openError, Is.Null);
+            Assert.That(openSchema, Is.Null);
 
-            using RuntimeBehaviorTree legacyRuntime = BehaviorTreeCompiler.Compile(legacyTree);
-            Assert.DoesNotThrow(() => legacyRuntime.Blackboard.SetInt("Undeclared", 17));
-            Assert.That(legacyRuntime.Blackboard.GetInt("Undeclared"), Is.EqualTo(17));
+            using RuntimeBehaviorTree openRuntime = BehaviorTreeCompiler.Compile(openTree);
+            Assert.DoesNotThrow(() => openRuntime.Blackboard.SetInt("Undeclared", 17));
+            Assert.That(openRuntime.Blackboard.GetInt("Undeclared"), Is.EqualTo(17));
 
             Runtime.BehaviorTree strictTree = CreateOneNodeTree(true);
             ConfigureBlackboardSchema(strictTree, contractVersion: 3);
@@ -244,7 +244,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 new AuthoringKeySpec(
                     "BoolKey",
                     RuntimeBlackboardValueType.Bool,
-                    RuntimeBlackboardSyncFlags.Networked,
+                    RuntimeBlackboardSyncFlags.SnapshotAndDelta,
                     hasDefaultValue: true,
                     defaultValue: true),
                 new AuthoringKeySpec(
@@ -272,7 +272,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 new AuthoringKeySpec(
                     "Long3Key",
                     RuntimeBlackboardValueType.Long3,
-                    RuntimeBlackboardSyncFlags.Networked,
+                    RuntimeBlackboardSyncFlags.SnapshotAndDelta,
                     hasDefaultValue: true,
                     defaultValue: new RuntimeBlackboardLong3(31L, 32L, 33L)));
 
@@ -294,17 +294,17 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             AssertDefinition(intDefinition, RuntimeBlackboardValueType.Int, RuntimeBlackboardSyncFlags.Snapshot, true);
             AssertDefinition(floatDefinition, RuntimeBlackboardValueType.Float, RuntimeBlackboardSyncFlags.Delta, true);
-            AssertDefinition(boolDefinition, RuntimeBlackboardValueType.Bool, RuntimeBlackboardSyncFlags.Networked, true);
+            AssertDefinition(boolDefinition, RuntimeBlackboardValueType.Bool, RuntimeBlackboardSyncFlags.SnapshotAndDelta, true);
             AssertDefinition(vectorDefinition, RuntimeBlackboardValueType.Vector3, RuntimeBlackboardSyncFlags.LocalOnly, true);
             AssertDefinition(objectDefinition, RuntimeBlackboardValueType.Object, RuntimeBlackboardSyncFlags.LocalOnly, false);
             AssertDefinition(longDefinition, RuntimeBlackboardValueType.Long, RuntimeBlackboardSyncFlags.Snapshot, true);
             AssertDefinition(long2Definition, RuntimeBlackboardValueType.Long2, RuntimeBlackboardSyncFlags.Delta, true);
-            AssertDefinition(long3Definition, RuntimeBlackboardValueType.Long3, RuntimeBlackboardSyncFlags.Networked, true);
+            AssertDefinition(long3Definition, RuntimeBlackboardValueType.Long3, RuntimeBlackboardSyncFlags.SnapshotAndDelta, true);
 
             Assert.That(intDefinition.DefaultValue.IntValue, Is.EqualTo(42));
             Assert.That(floatDefinition.DefaultValue.FloatValue, Is.EqualTo(1.25f));
             Assert.That(boolDefinition.DefaultValue.BoolValue, Is.True);
-            Assert.That(vectorDefinition.DefaultValue.Vector3Value, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+            Assert.That(vectorDefinition.DefaultValue.Vector3Value, Is.EqualTo(new BTFloat3(1f, 2f, 3f)));
             Assert.That(longDefinition.DefaultValue.LongValue, Is.EqualTo(1234567890123L));
             Assert.That(long2Definition.DefaultValue.Long2Value, Is.EqualTo(new RuntimeBlackboardLong2(11L, 22L)));
             Assert.That(long3Definition.DefaultValue.Long3Value, Is.EqualTo(new RuntimeBlackboardLong3(31L, 32L, 33L)));
@@ -521,7 +521,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             comparison.Child = ScriptableObject.CreateInstance<OnOffNode>();
             SetOnOff((OnOffNode)comparison.Child, true);
             SetPrivateField(comparison, "_key", "Health");
-            SetPrivateField(comparison, "_valueType", BBValueType.Object);
+            SetPrivateField(comparison, "_valueType", BehaviorTreeComparisonValueType.Object);
             SetPrivateField(comparison, "_operator", BBComparisonOp.IsSet);
             var tree = ScriptableObject.CreateInstance<Runtime.BehaviorTree>();
             var root = ScriptableObject.CreateInstance<BTRootNode>();
@@ -592,7 +592,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void Compiler_RejectsStrictSubTreeUnderLegacyOpenRoot()
+        public void Compiler_RejectsStrictSubTreeUnderOpenSchemaRoot()
         {
             Runtime.BehaviorTree subTree = CreateOneNodeTree(true);
             ConfigureBlackboardSchema(
@@ -609,7 +609,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             List<string> errors = BehaviorTreeCompiler.Validate(host);
 
-            Assert.That(errors, Has.Some.Contains("cannot be embedded in a legacy-open root"));
+            Assert.That(errors, Has.Some.Contains("cannot be embedded in a open-schema root"));
         }
 
         [Test]
@@ -891,7 +891,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             var comparison = ScriptableObject.CreateInstance<BBComparisonNode>();
             SetPrivateField(comparison, "_key", "Target");
-            SetPrivateField(comparison, "_valueType", BBValueType.Object);
+            SetPrivateField(comparison, "_valueType", BehaviorTreeComparisonValueType.Object);
             SetPrivateField(comparison, "_operator", BBComparisonOp.Equal);
             Assert.That(ValidateSingleNode(comparison), Has.Some.Contains("object values only support"));
         }
@@ -925,25 +925,25 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 tree,
                 new BehaviorTreeCompileOptions
                 {
-                    MaxNodeCount = RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT + 1
+                    MaxNodeCount = BTCapacityLimits.MaxNodeCount + 1
                 });
             BehaviorTreeCompileArtifact depthArtifact = BehaviorTreeCompiler.Analyze(
                 tree,
                 new BehaviorTreeCompileOptions
                 {
-                    MaxDepth = RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH + 1
+                    MaxDepth = BTCapacityLimits.MaxTreeDepth + 1
                 });
 
             Assert.That(nodeArtifact.Errors, Has.Some.Contains("hard safety limit"));
             Assert.That(depthArtifact.Errors, Has.Some.Contains("hard safety limit"));
             Assert.Throws<ArgumentOutOfRangeException>(() =>
                 new RuntimeBehaviorTreeLimits(
-                    RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT + 1,
-                    RuntimeBehaviorTreeLimits.DEFAULT_MAX_DEPTH));
+                    BTCapacityLimits.MaxNodeCount + 1,
+                    BTCapacityLimits.MaxTreeDepth));
             Assert.Throws<ArgumentOutOfRangeException>(() =>
                 new RuntimeBehaviorTreeLimits(
-                    RuntimeBehaviorTreeLimits.DEFAULT_MAX_NODE_COUNT,
-                    RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH + 1));
+                    BTCapacityLimits.DefaultNodeCount,
+                    BTCapacityLimits.MaxTreeDepth + 1));
         }
 
         [Test]

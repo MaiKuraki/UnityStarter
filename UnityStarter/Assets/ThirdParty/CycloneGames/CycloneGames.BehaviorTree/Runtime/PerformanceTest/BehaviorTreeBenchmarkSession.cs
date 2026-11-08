@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
 
 namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 {
@@ -562,7 +562,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         }
 
         private sealed class RuntimeBenchmarkDecoratorNode :
-            CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeDecoratorNode
+            CycloneGames.BehaviorTree.Core.Nodes.Decorators.RuntimeDecoratorNode
         {
             public int DecoratorKey { get; set; }
 

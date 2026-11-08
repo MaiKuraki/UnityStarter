@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.behavior-tree",
   "version": "1.0.0",
   "displayName": "CycloneGames.BehaviorTree",
-  "description": "Cyclone Games Behavior Tree is a simple and easy to use behavior tree system for Unity.",
+  "description": "Behavior tree runtime for Unity and headless .NET hosts: ScriptableObject authoring, engine-independent core, deterministic blackboard, event-driven reevaluation, Burst/Jobs data-oriented execution and contract-only network snapshots.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
@@ -11,7 +11,10 @@
   },
   "keywords": [
     "CycloneGames",
-    "Behavior"
+    "Behavior",
+    "Behavior Tree",
+    "AI",
+    "Headless"
   ],
   "author": {
     "name": "CycloneGames",

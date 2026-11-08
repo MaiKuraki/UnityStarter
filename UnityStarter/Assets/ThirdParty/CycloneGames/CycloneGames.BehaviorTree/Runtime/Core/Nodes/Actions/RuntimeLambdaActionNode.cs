@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Actions
 {
     public sealed class RuntimeLambdaActionNode : RuntimeNode
     {

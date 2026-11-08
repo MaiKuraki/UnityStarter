@@ -1,9 +1,5 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
-    /// <summary>
-    /// Forces child result to FAILURE regardless of actual outcome.
-    /// Running is passed through.
-    /// </summary>
     public class RuntimeForceFailureNode : RuntimeDecoratorNode
     {
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)

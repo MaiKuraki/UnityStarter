@@ -4,11 +4,15 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.Logging;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
     [DisallowMultipleComponent]
+    /// <summary>
+    /// Priority-bucket scheduler. Distance LOD is optional: without a
+    /// BTDistanceLODProvider on the same GameObject every tree keeps priority 0.
+    /// </summary>
     public class BTPriorityTickManagerComponent : MonoBehaviour
     {
         private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
@@ -26,6 +30,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _isQuitting = false;
         }
 
+        /// <summary>
+        /// Resolves the authoritative scene instance without creating anything.
+        /// Returns null when no manager component has been placed in the scene.
+        /// </summary>
         public static BTPriorityTickManagerComponent Instance
         {
             get
@@ -35,21 +43,31 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 if (_instance == null)
                 {
                     _instance = BTManagerInstanceRegistry.FindExisting<BTPriorityTickManagerComponent>(nameof(BTPriorityTickManagerComponent));
-                    if (_instance == null)
+                    if (_instance != null)
                     {
-                        var go = new GameObject("[BTPriorityTickManager]");
-                        BTPriorityTickManagerComponent created = go.AddComponent<BTPriorityTickManagerComponent>();
-                        if (_instance == null)
-                        {
-                            _instance = created;
-                        }
-                        DontDestroyOnLoad(go);
+                        _instance.PrepareForUse();
                     }
-
-                    _instance.PrepareForUse();
                 }
                 return _instance;
             }
+        }
+
+        /// <summary>
+        /// Explicitly creates a persistent manager; scene-authored managers are discovered through
+        /// Instance without allocation.
+        /// </summary>
+        public static BTPriorityTickManagerComponent CreateInstance()
+        {
+            if (_isQuitting) return null;
+
+            BTPriorityTickManagerComponent existing = Instance;
+            if (existing != null) return existing;
+
+            var go = new GameObject("[BTPriorityTickManager]");
+            BTPriorityTickManagerComponent created = go.AddComponent<BTPriorityTickManagerComponent>();
+            DontDestroyOnLoad(go);
+            created.PrepareForUse();
+            return created;
         }
 
         public static bool HasInstance => _instance != null;
@@ -57,7 +75,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [Header("Configuration")]
         [SerializeField] private BTLODConfig _config;
         [SerializeField] private float _lodUpdateInterval = 0.5f;
-        [SerializeField, Min(1)] private int _maximumTreeCount = BTPriorityTickManager.DefaultMaximumTreeCount;
+        [SerializeField, Min(1)] private int _maximumTreeCount = BTCapacityLimits.DefaultAgentCount;
         [SerializeField, Min(1)] private int _pendingWakeUpCapacity = DefaultPendingWakeUpCapacity;
 
         [Header("Reference Point")]
@@ -79,7 +97,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private long _coalescedWakeUpCount;
         private long _capacityRejectedWakeUpCount;
         private string _lastConfigError;
-        private bool _legacyRegistrationCapacityReported;
+        private bool _registrationCapacityReported;
 
 #if UNITY_EDITOR
         [Header("Debug Stats (Editor Only)")]
@@ -181,13 +199,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _maximumTreeCount = Mathf.Clamp(
                 _maximumTreeCount,
                 1,
-                BTPriorityTickManager.HardMaximumTreeCount);
+                BTCapacityLimits.MaxAgentCount);
 
             int[] budgets = _config != null && _config.TryValidate(out _)
                 ? _config.PriorityBudgets
                 : null;
             int initialBucketCapacity = Mathf.Min(
-                BTPriorityTickManager.DefaultInitialBucketCapacity,
+                BTCapacityLimits.DefaultPriorityBucketCapacity,
                 _maximumTreeCount);
             _manager = new BTPriorityTickManager(
                 budgets,
@@ -195,12 +213,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 _maximumTreeCount,
                 _maximumTreeCount);
 
+            // LOD is optional. A scene component provides it; without one the manager
+            // keeps priority scheduling and uses each tree's own tick interval.
             if (!TryGetComponent(out _lodProvider))
             {
-                _lodProvider = gameObject.AddComponent<BTDistanceLODProvider>();
+                _lodProvider = null;
             }
-            _lodProvider.EnsureInitialized();
-            _lodProvider.MaximumTreeCount = _maximumTreeCount;
+            else
+            {
+                _lodProvider.EnsureInitialized();
+                _lodProvider.MaximumTreeCount = _maximumTreeCount;
+            }
             ApplyConfig();
 
             if (_autoFindPlayer && _referencePoint == null)
@@ -272,7 +295,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (!_initialized) return;
 
-            double currentTime = RuntimeBTTime.GetUnityTime(false);
+            double currentTime = UnityBTTimeProvider.Instance.TimeAsDouble;
             if (currentTime - _lastLODUpdateTime >= _lodUpdateInterval)
             {
                 if (_autoFindPlayer && _referencePoint == null)
@@ -325,7 +348,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public void Register(RuntimeBehaviorTree tree, Transform treeTransform)
         {
             BTPriorityTickManagerMemoryStats before = GetMemoryStats();
-            if (TryRegister(tree, treeTransform) || _legacyRegistrationCapacityReported)
+            if (TryRegister(tree, treeTransform) || _registrationCapacityReported)
             {
                 return;
             }
@@ -341,9 +364,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
 
-            _legacyRegistrationCapacityReported = true;
+            _registrationCapacityReported = true;
             Log.Error(
-                $"[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
+                $"[BTPriorityTickManagerComponent] Register was rejected because managed tree, " +
                 $"LOD, or deferred-mutation capacity was exhausted on '{gameObject.name}'. " +
                 "Use TryRegister to handle admission failure.");
         }
@@ -352,17 +375,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (tree == null) return false;
             if (!_initialized) PrepareForUse();
-            if (_lodProvider.ContainsTree(tree)) return true;
 
-            if (!_lodProvider.TryRegisterTree(tree, treeTransform))
+            bool hasLod = _lodProvider != null;
+            if (hasLod && _lodProvider.ContainsTree(tree)) return true;
+            if (hasLod && !_lodProvider.TryRegisterTree(tree, treeTransform))
             {
                 return false;
             }
-            tree.WakeUpRequested += EnqueueWakeUp;
-            _lodProvider.UpdateLOD(tree);
 
-            int priority = _lodProvider.GetPriority(tree);
-            tree.TickInterval = _lodProvider.GetTickInterval(tree);
+            tree.WakeUpRequested += EnqueueWakeUp;
+            int priority = 0;
+            if (hasLod)
+            {
+                _lodProvider.UpdateLOD(tree);
+                priority = _lodProvider.GetPriority(tree);
+                tree.TickInterval = _lodProvider.GetTickInterval(tree);
+            }
 
             if (_manager.TryRegister(tree, priority))
             {
@@ -370,7 +398,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
 
             tree.WakeUpRequested -= EnqueueWakeUp;
-            _lodProvider.UnregisterTree(tree);
+            if (hasLod)
+            {
+                _lodProvider.UnregisterTree(tree);
+            }
             return false;
         }
 
@@ -462,11 +493,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 if (tree == null ||
                     tree.IsDisposed ||
-                    _lodProvider == null ||
-                    !_lodProvider.ContainsTree(tree) ||
                     _manager == null ||
                     _config == null ||
                     !_config.IsValid)
+                {
+                    continue;
+                }
+
+                if (_lodProvider != null && !_lodProvider.ContainsTree(tree))
                 {
                     continue;
                 }
@@ -539,7 +573,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _maximumTreeCount = Mathf.Clamp(
                 _maximumTreeCount,
                 1,
-                BTPriorityTickManager.HardMaximumTreeCount);
+                BTCapacityLimits.MaxAgentCount);
         }
 #endif
 

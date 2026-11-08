@@ -60,7 +60,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// Main-thread-owned sight sensor. Burst performs the cone query; Unity Physics refinement and
     /// result commit run on the owner thread using the pose and timestamp captured at schedule time.
     /// </summary>
-    public sealed class SightSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner
+    public sealed class SightSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner, IPerceptionEventSource
     {
         private readonly int _sensorId;
         private readonly SensorManager _owner;
@@ -522,6 +522,7 @@ namespace CycloneGames.AIPerception.Runtime
                 candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
                 output = new NativeArray<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
                 resultBuffer = new SensorResultBuffer(in capacity, _memoryCounters);
+                resultBuffer.BindSensorId(SensorId);
             }
             catch
             {
@@ -583,6 +584,8 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         int IAIPerceptionSensorMemoryOwner.LastUpdateWorkload => _memoryCounters.LastUpdateWorkload;
+
+        SensorResultBuffer IPerceptionEventSource.EventBuffer => _resultBuffer;
 
         AIPerceptionSensorMemoryStats IAIPerceptionSensorMemoryOwner.GetMemoryStats()
         {

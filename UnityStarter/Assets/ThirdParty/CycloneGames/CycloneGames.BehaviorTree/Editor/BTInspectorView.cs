@@ -3,9 +3,6 @@ using UnityEngine.UIElements;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
-    /// <summary>
-    /// Inspector view for displaying and editing selected node properties.
-    /// </summary>
     public class BTInspectorView : VisualElement
     {
         public new class UxmlFactory : UxmlFactory<BTInspectorView, VisualElement.UxmlTraits> { }

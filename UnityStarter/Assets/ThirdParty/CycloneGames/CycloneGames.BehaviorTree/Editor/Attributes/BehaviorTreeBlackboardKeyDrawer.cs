@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;

@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.behavior-tree-env-query",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.BehaviorTree.EnvQuery",
+  "description": "Environment query integration for CycloneGames.BehaviorTree: runs a query and publishes the best candidate position, its score and the result count into blackboard slots.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.behavior-tree": "1.0.0",
+    "com.cyclone-games.ai-env-query": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "BehaviorTree",
+    "Query",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

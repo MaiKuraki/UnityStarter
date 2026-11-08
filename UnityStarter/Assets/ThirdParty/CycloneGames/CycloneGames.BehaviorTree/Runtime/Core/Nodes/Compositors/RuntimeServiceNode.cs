@@ -1,31 +1,10 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
-    /// <summary>
-    /// Unreal-style Service node: attaches to a composite and runs a periodic
-    /// side-effect callback while the composite is active.
-    ///
-    /// Usage pattern:
-    ///   var service = new RuntimeServiceNode();
-    ///   service.Interval = 0.5f; // run every 0.5 seconds
-    ///   service.OnServiceTick = (bb) => {
-    ///       // Update perception, target selection, etc.
-    ///       var perception = bb.GetContextOwner<AIPerceptionComponent>();
-    ///       var target = perception?.GetClosestSightTarget();
-    ///       if (target != null)
-    ///           bb.SetObject(Animator.StringToHash("Target"), target);
-    ///   };
-    ///
-    /// Open for extension: subclass and override OnServiceUpdate for custom logic,
-    /// or use the delegate-based OnServiceTick for lightweight setup.
-    /// </summary>
     public class RuntimeServiceNode : RuntimeDecoratorNode
     {
-        /// <summary>
-        /// Interval in seconds between service ticks. 0 = every frame.
-        /// </summary>
         public float Interval
         {
             get => _interval;
@@ -37,10 +16,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             }
         }
 
-        /// <summary>
-        /// Optional random deviation added to interval to stagger service updates.
-        /// Actual interval = Interval + Random(-RandomDeviation, +RandomDeviation)
-        /// </summary>
         public float RandomDeviation
         {
             get => _randomDeviation;
@@ -52,19 +27,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             }
         }
 
-        /// <summary>
-        /// Whether to use unscaled time (UI/pause-friendly).
-        /// </summary>
         public bool UseUnscaledTime
         {
             get => _useUnscaledTime;
             set => SetSetupValue(ref _useUnscaledTime, value);
         }
 
-        /// <summary>
-        /// Delegate-based service callback. Set this for lightweight service logic.
-        /// If null, override OnServiceUpdate instead.
-        /// </summary>
         public System.Action<RuntimeBlackboard> OnServiceTick
         {
             get => _onServiceTick;
@@ -92,7 +60,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         {
             _lastServiceTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             _currentInterval = ComputeInterval(blackboard);
-            // Run service immediately on start
             RunService(blackboard);
         }
 
@@ -100,7 +67,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         {
             if (Child == null) return RuntimeState.Failure;
 
-            // Check service interval
             double now = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             if (now - _lastServiceTime >= _currentInterval)
             {
@@ -112,10 +78,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return Child.Run(blackboard);
         }
 
-        /// <summary>
-        /// Override for custom service logic in subclasses.
-        /// Called at Interval rate while the parent composite is active.
-        /// </summary>
         protected virtual void OnServiceUpdate(RuntimeBlackboard blackboard) { }
 
         private void RunService(RuntimeBlackboard blackboard)

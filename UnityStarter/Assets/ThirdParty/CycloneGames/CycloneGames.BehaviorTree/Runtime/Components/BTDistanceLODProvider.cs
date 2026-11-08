@@ -1,30 +1,32 @@
 using System.Collections.Generic;
 using CycloneGames.Logging;
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
     [DisallowMultipleComponent]
+    /// <summary>
+    /// Distance and marker driven priority source. Must be attached to the manager
+    /// GameObject before the manager initializes; it does not create itself.
+    /// </summary>
     public class BTDistanceLODProvider : MonoBehaviour, IBTLODProvider
     {
         private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
 
-        public const int DefaultMaximumTreeCount = 65_536;
-        public const int HardMaximumTreeCount = 1_048_576;
 
         [SerializeField] private BTLODConfig _config;
         [SerializeField] private Transform _referencePoint;
-        [SerializeField, Min(1)] private int _maximumTreeCount = DefaultMaximumTreeCount;
+        [SerializeField, Min(1)] private int _maximumTreeCount = BTCapacityLimits.DefaultAgentCount;
 
-        // Parallel arrays for 0GC iteration (avoids Dictionary enumerator allocation)
+        // Parallel arrays avoid a dictionary enumerator allocation per iteration.
         private RuntimeBehaviorTree[] _keys;
         private TreeLODData[] _values;
         private int _count;
         private int _capacity;
         private int _peakTreeCount;
         private long _capacityRejectedTreeCount;
-        private bool _legacyRegistrationCapacityReported;
+        private bool _registrationCapacityReported;
 
         // O(1) lookup index
         private readonly Dictionary<RuntimeBehaviorTree, int> _indexMap = new Dictionary<RuntimeBehaviorTree, int>();
@@ -64,7 +66,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             get => _maximumTreeCount;
             set
             {
-                if (value < 1 || value > HardMaximumTreeCount)
+                if (value < 1 || value > BTCapacityLimits.MaxAgentCount)
                 {
                     throw new System.ArgumentOutOfRangeException(nameof(value));
                 }
@@ -97,7 +99,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
 
-            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, HardMaximumTreeCount);
+            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, BTCapacityLimits.MaxAgentCount);
             const int INITIAL_CAPACITY = 64;
             _capacity = Mathf.Min(INITIAL_CAPACITY, _maximumTreeCount);
             _keys = new RuntimeBehaviorTree[_capacity];
@@ -111,15 +113,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             long rejectedBefore = _capacityRejectedTreeCount;
             if (TryRegisterTree(tree, treeTransform) ||
-                _legacyRegistrationCapacityReported ||
+                _registrationCapacityReported ||
                 _capacityRejectedTreeCount <= rejectedBefore)
             {
                 return;
             }
 
-            _legacyRegistrationCapacityReported = true;
+            _registrationCapacityReported = true;
             Log.Error(
-                $"[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
+                $"[BTDistanceLODProvider] RegisterTree was rejected because LOD tree capacity " +
                 $"was exhausted on '{gameObject.name}'. Use TryRegisterTree to handle admission failure.");
         }
 
@@ -219,7 +221,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 0;
             ref var data = ref _values[idx];
 
-            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
+            if (UnityBTTimeProvider.Instance.TimeAsDouble < data.BoostEndTime && _config != null)
                 return _config.BoostedPriority;
 
             if (data.HasTypeOverride && data.TypePriority >= 0)
@@ -236,7 +238,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 1;
             ref var data = ref _values[idx];
 
-            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
+            if (UnityBTTimeProvider.Instance.TimeAsDouble < data.BoostEndTime && _config != null)
                 return _config.BoostedTickInterval;
 
             if (data.HasTypeOverride && data.TypeTickInterval >= 0)
@@ -261,7 +263,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public void BoostPriority(RuntimeBehaviorTree tree, float duration)
         {
             if (!_indexMap.TryGetValue(tree, out int idx)) return;
-            _values[idx].BoostEndTime = RuntimeBTTime.GetUnityTime(false) + duration;
+            _values[idx].BoostEndTime = UnityBTTimeProvider.Instance.TimeAsDouble + duration;
         }
 
         public void UpdateLOD(RuntimeBehaviorTree tree)
@@ -281,7 +283,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
         }
 
-        // 0GC: iterates parallel arrays directly, no enumerator allocation
+        // Iterates the parallel arrays directly; no enumerator allocation.
         public void UpdateAllLOD()
         {
             if (_config == null || _referencePoint == null) return;
@@ -303,7 +305,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
         }
 
-        // 0GC: returns pre-allocated buffer filled from parallel arrays
+        // Returns the pre-allocated buffer, filled from the parallel arrays.
         public List<RuntimeBehaviorTree> GetTreeBuffer()
         {
             _iterBuffer.Clear();
@@ -330,7 +332,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 #if UNITY_EDITOR
         private void OnValidate()
         {
-            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, HardMaximumTreeCount);
+            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, BTCapacityLimits.MaxAgentCount);
         }
 #endif
     }

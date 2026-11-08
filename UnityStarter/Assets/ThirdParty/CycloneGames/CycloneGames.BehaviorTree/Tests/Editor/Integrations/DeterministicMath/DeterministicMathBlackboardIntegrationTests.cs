@@ -1,7 +1,7 @@
 using System;
 using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Core.Networking;
 using CycloneGames.DeterministicMath;
 using NUnit.Framework;
 
@@ -40,7 +40,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
         public void SchemaDefaultsAndDeltaSupportFixedPointKeys()
         {
             RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-                .AddFPInt64("Cooldown", FPInt64.Parse("1.25"), RuntimeBlackboardSyncFlags.Networked)
+                .AddFPInt64("Cooldown", FPInt64.Parse("1.25"), RuntimeBlackboardSyncFlags.SnapshotAndDelta)
                 .AddFPVector2("Velocity", new FPVector2(FPInt64.FromInt(1), FPInt64.FromInt(2)), RuntimeBlackboardSyncFlags.Delta)
                 .Build();
 

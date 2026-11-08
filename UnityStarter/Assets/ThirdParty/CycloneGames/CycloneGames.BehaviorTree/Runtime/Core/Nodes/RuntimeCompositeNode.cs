@@ -2,7 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public enum RuntimeAbortType
     {
@@ -20,6 +20,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private readonly ReadOnlyChildrenView _childrenView;
         private bool _sealed;
         private RuntimeAbortType _abortType;
+        private RuntimeReevaluationMode _reevaluationMode = RuntimeReevaluationMode.PollEveryTick;
+        private int _reevaluationPollInterval = 8;
+        private int _lastSeenEpoch;
+        private int _pollCounter;
 
         protected RuntimeCompositeNode()
         {
@@ -46,6 +50,54 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        /// <summary>
+        /// Controls whether conditional abort and reactive scans run every tick or only after
+        /// a reevaluation request. PollEveryTick preserves unconditional scanning.
+        /// </summary>
+        public RuntimeReevaluationMode ReevaluationMode
+        {
+            get => _reevaluationMode;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if ((uint)(int)value > (uint)RuntimeReevaluationMode.Hybrid)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(ReevaluationMode), value, "Unsupported reevaluation mode.");
+                }
+                _reevaluationMode = value;
+            }
+        }
+
+        /// <summary>Cadence used by Hybrid mode. Values below one are treated as one.</summary>
+        public int ReevaluationPollInterval
+        {
+            get => _reevaluationPollInterval;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if (value < 1)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(ReevaluationPollInterval), value, "Poll interval must be at least one.");
+                }
+                _reevaluationPollInterval = value;
+            }
+        }
+
+        protected bool ShouldReevaluate()
+        {
+            RuntimeBehaviorTree tree = OwnerTree;
+            if (tree == null)
+            {
+                return true;
+            }
+
+            return tree.Evaluation.ShouldReevaluate(
+                ref _lastSeenEpoch,
+                ref _pollCounter,
+                _reevaluationMode,
+                _reevaluationPollInterval);
+        }
+
         internal bool IsSealed => _sealed;
 
         /// <summary>
@@ -66,8 +118,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         /// <summary>
-        /// Current child index for composites that execute sequentially.
-        /// Override in subclasses (Sequencer, Selector, etc.) for network snapshot support.
+        /// Current child index for sequential composites; subclasses override it for network snapshots.
         /// </summary>
         public virtual int CurrentIndex => 0;
 
