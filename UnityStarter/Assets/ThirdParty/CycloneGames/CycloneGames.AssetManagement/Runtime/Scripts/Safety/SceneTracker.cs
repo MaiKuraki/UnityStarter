@@ -7,7 +7,7 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary>
     /// Lightweight runtime registry for scene-handle diagnostics.
-    /// This is intentionally provider-agnostic and contains no gameplay assumptions.
+    /// Provider-agnostic; carries no gameplay assumptions.
     /// </summary>
     public static class SceneTracker
     {

@@ -3,7 +3,7 @@ namespace CycloneGames.AssetManagement.Runtime
     /// <summary>
     /// Allocation-free runtime cache counters for telemetry, stress HUDs, and memory governance.
     /// Activity, rejection, eviction, and peak values are cumulative for the lifetime of the owning cache.
-    /// The snapshot intentionally exposes aggregate counters only; per-entry inspection remains an Editor diagnostic path.
+    /// The snapshot exposes aggregate counters only; per-entry inspection is an Editor diagnostic path.
     /// </summary>
     public readonly struct AssetRuntimeCacheSnapshot
     {

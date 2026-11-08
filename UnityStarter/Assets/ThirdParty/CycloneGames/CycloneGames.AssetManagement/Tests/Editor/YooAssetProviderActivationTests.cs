@@ -11,7 +11,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
     {
         private const string PackageId = "com.tuyoogame.yooasset";
         private const string SupportedVersionRange = "[3.0.6,4.0.0)";
-        private static readonly Version MinimumSupportedVersion = new Version(3, 0, 5);
+        private static readonly Version MinimumSupportedVersion = new Version(3, 0, 6);
         private static readonly Version MaximumSupportedVersionExclusive = new Version(4, 0, 0);
         private const string ProviderAssemblyName =
             "CycloneGames.AssetManagement.Runtime.Providers.YooAsset";
@@ -24,7 +24,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             PackageInfo package = FindRegisteredPackage();
             if (package == null)
             {
-                Assert.Pass("YooAsset is optional and is not registered in this Unity project.");
+                Assert.Ignore("YooAsset is optional and is not registered in this Unity project.");
                 return;
             }
 

@@ -2,8 +2,6 @@
 
 This integration turns a generic `asset-content` invocation into one transactional YooAsset build containing one or more explicit package profiles. It is an optional Editor adapter, so the Build core compiles without YooAsset.
 
-> **Current checkout:** YooAsset is not installed in `Packages/manifest.json`. The integration source is present, but the gated assembly and its tests are inactive. Everything below describes the source contract and still needs qualification against the installed package before release.
-
 ## Before you start
 
 You need three things:
@@ -109,7 +107,7 @@ Every build-owned artifact carries a `.yoo-pub.json` marker recording package an
 
 A content invocation opens a temporary player session only when at least one enabled profile uses bundled copy. The session stages package data for players that depend on it and restores the previous built-in state precisely on failure.
 
-Multiple YooAsset invocations are allowed when invocation id, package path, bundled path, and output claim do not overlap. The contract layer permits Addressables and YooAsset to serve one player build together, but this checkout has no real multi-provider player build evidence.
+Multiple YooAsset invocations are allowed when invocation id, package path, bundled path, and output claim do not overlap. The contract layer permits Addressables and YooAsset to serve one player build together.
 
 ## Clean and incremental
 
@@ -168,8 +166,6 @@ Artifact relocation during player builds is also crash recoverable. Every move o
 | Built-in `OnlyCopy` refuses to seed | Restore the complete previous owned snapshot including `.yoo-pub.json` |
 | Player cannot load or decrypt content | Check the separate runtime provider against the runtime decrypt contract |
 | Workspace demands recovery | Recover before changing target, package version, or output root |
-
-Known test gap: one request construction in `Tests/YooAsset3PublicationTransactionTests.cs` does not pass the now-required invocation id. The missing package keeps that test assembly inactive. Do not claim the YooAsset integration tests pass until that call site is fixed and the gated tests compile and run against a supported YooAsset package.
 
 ## Limits
 

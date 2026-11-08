@@ -23,7 +23,7 @@ namespace CycloneGames.AssetManagement.Editor.Providers.YooAsset
     /// </summary>
     public sealed class YooAssetAssetRefLocationResolver : IAssetRefLocationResolver
     {
-        private static readonly LogChannel Log = LogChannel.Create("CycloneGames.AssetManagement.Editor");
+        private static readonly LogChannel Log = AssetManagementYooAssetEditorLog.Channel;
 
         public int Priority => 0;
 

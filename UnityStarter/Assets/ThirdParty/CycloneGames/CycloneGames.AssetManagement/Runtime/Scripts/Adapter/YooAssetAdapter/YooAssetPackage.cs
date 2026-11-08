@@ -1035,9 +1035,9 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 _cacheService.ClearAll();
 
-                // YooAsset 3.0.6 adds the engine-wait flag. Without it the provider reports terminal state before
-                // the engine's native unload pass finishes, so callers that need deterministic reclamation must
-                // opt in explicitly. Provider mutation itself is not cancellable once started.
+                // Without the engine-wait flag the provider reports terminal state before the engine's native
+                // unload pass finishes, so callers that need deterministic reclamation must opt in explicitly.
+                // Provider mutation itself is not cancellable once started.
                 var options = new UnloadAllAssetsOptions(
                     shouldReleaseHandles: true,
                     shouldLockLoading: true,

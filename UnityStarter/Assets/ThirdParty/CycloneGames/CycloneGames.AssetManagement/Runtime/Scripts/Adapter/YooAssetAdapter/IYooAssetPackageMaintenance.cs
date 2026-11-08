@@ -27,8 +27,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
         /// <summary>
         /// Activates a manifest version obtained by product code through an authenticated, response-size-bounded
-        /// version service. Provider-native version requests are intentionally not exposed because their response
-        /// buffering cannot enforce the framework's authentication and response-size boundaries.
+        /// version service. Provider-native version requests are not exposed: their response buffering cannot
+        /// enforce the framework's authentication and response-size boundaries.
         /// </summary>
         UniTask<bool> UpdatePackageManifestAsync(
             string packageVersion,

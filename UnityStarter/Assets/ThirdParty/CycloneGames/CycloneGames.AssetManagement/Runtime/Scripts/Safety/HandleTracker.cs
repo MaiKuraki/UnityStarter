@@ -479,11 +479,11 @@ namespace CycloneGames.AssetManagement.Runtime
         private static readonly object _persistentLock = new object();
         private static volatile bool _hasPersistent;
 
-        /// <summary>True when at least one tracked handle has been marked intentionally long-lived.</summary>
+        /// <summary>True when at least one tracked handle carries the long-lived mark.</summary>
         public static bool HasPersistentEntries => _hasPersistent;
 
         /// <summary>
-        /// Marks one tracked handle as intentionally long-lived for the current runtime session. Diagnostics
+        /// Marks one tracked handle as long-lived for the current runtime session. Diagnostics
         /// report that exact handle as "Persistent" rather than a leak suspect.
         /// </summary>
         public static void MarkPersistent(long handleId)
@@ -503,7 +503,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        /// <summary>Removes a previously marked intentionally long-lived handle identity.</summary>
+        /// <summary>Removes a long-lived mark from a tracked handle identity.</summary>
         public static void UnmarkPersistent(long handleId)
         {
             if (handleId <= 0L) return;
@@ -523,7 +523,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        /// <summary>Returns true if the exact tracked handle is marked intentionally long-lived.</summary>
+        /// <summary>Returns true if the exact tracked handle carries the long-lived mark.</summary>
         public static bool IsPersistent(long handleId)
         {
             if (!_hasPersistent || handleId <= 0L) return false;

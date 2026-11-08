@@ -175,7 +175,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _completion.TryCancelByOwner();
             HandleTracker.Unregister(Id);
-            // Wrapper retirement deliberately drops only this package's strong reference. Resources.UnloadAsset can
+            // Wrapper retirement drops only this package's strong reference. Resources.UnloadAsset can
             // invalidate shared external references, so native reclamation remains an explicit global maintenance pass.
             _request = null;
             _syncAsset = null;
