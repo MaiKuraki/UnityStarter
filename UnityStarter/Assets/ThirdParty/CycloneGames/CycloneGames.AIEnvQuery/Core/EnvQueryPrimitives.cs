@@ -12,10 +12,7 @@ namespace CycloneGames.AIEnvQuery.Core
     /// <summary>
     /// Candidates on a regular grid centred on the querier, clipped to a radius.
     /// </summary>
-    /// <remarks>
-    /// Grid extents are derived from the radius and spacing, so the same generator covers a small
-    /// area and a large one without reconfiguration.
-    /// </remarks>
+    /// <remarks>Extents are derived from the radius and spacing.</remarks>
     public sealed class GridAroundQuerierGenerator : IEnvQueryGenerator
     {
         private readonly float _spacing;
@@ -71,10 +68,7 @@ namespace CycloneGames.AIEnvQuery.Core
     /// <summary>
     /// Candidates taken from a fixed list, optionally filtered by distance from the querier.
     /// </summary>
-    /// <remarks>
-    /// Use it when the positions come from data rather than from a shape: the list is owned by the
-    /// caller and never copied.
-    /// </remarks>
+    /// <remarks>The list is owned by the caller and never copied.</remarks>
     public sealed class PointListGenerator : IEnvQueryGenerator
     {
         private readonly EnvQueryPoint[] _source;

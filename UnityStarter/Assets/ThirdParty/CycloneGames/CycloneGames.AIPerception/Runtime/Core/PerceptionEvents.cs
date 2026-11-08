@@ -19,10 +19,9 @@ namespace CycloneGames.AIPerception.Runtime
     /// One perception transition, delivered to <see cref="IPerceptionEventListener"/>.
     /// </summary>
     /// <remarks>
-    /// A readonly struct with no references, so raising it allocates nothing and it can be passed
-    /// by <c>in</c> without copying. <see cref="Position"/> and <see cref="Strength"/> describe the
-    /// moment the target was last seen: for <see cref="PerceptionEventKind.Lost"/> they are the last
-    /// known values, not the current ones.
+    /// Readonly with no references, so raising it allocates nothing. <see cref="Position"/> and
+    /// <see cref="Strength"/> carry the last known values, including on
+    /// <see cref="PerceptionEventKind.Lost"/>.
     /// </remarks>
     public readonly struct PerceptionEvent
     {

@@ -59,7 +59,13 @@ bridge.Update();
 bridge.PublishNearest(blackboard, visibleKey, distanceKey);
 bridge.PublishNearestPosition(blackboard, positionKey);
 bridge.PublishCount(blackboard, countKey);
+
+// 可选：目标身份，以及当前是"看到"还是"记得"。
+bridge.PublishNearestHandle(blackboard, handleKey);
+bridge.PublishNearestFromMemory(blackboard, fromMemoryKey);
 ```
+
+句柄写成三个 long（注册表、id、代数），因为一个 64 位字装不下注册表编号。读回用 `PerceptionBlackboardBridge.TryUnpackHandle`；全零三元组表示"没有目标"。
 
 调用点必须在提交感知结果的同一线程上，且位于感知更新之后。适配器在构造时记录线程，其他线程调用会被拒绝。
 
@@ -74,7 +80,33 @@ builder.Action(bb => bb.GetFloat(distanceKey) < 12f
 
 槽位就是普通黑板键，任何条件、装饰器或比较节点都能用，无需知道感知的存在。
 
-### 4. 容量吃紧时检查截断
+### 4. 合并多路感知
+
+一个桥服务一个传感器。当树需要按"几路感知中最近的那个"反应时，用聚合器把它们合成一份列表与一组键。
+
+```csharp
+var aggregator = new PerceptionAggregator(capacity: 8, bridgeCapacity: 4);
+aggregator.Add(sightBridge);
+aggregator.Add(hearingBridge);
+
+aggregator.Update();
+aggregator.PublishNearest(blackboard, visibleKey, distanceKey);
+aggregator.PublishNearestHandle(blackboard, handleKey);
+```
+
+合并规则按顺序执行：
+
+| 规则 | 行为 |
+| --- | --- |
+| 身份 | 以 `PerceptibleHandle` 为键，同一句柄只留一条。 |
+| 优先 | 实时检测优先于记忆。 |
+| 平局 | 同类型的两条之间取距离更小的。 |
+| 顺序 | 输出按距离升序。 |
+| 容量 | 超过容量时保留最近的若干条，并置 `IsTruncated`。 |
+
+合并先收集全部目标再压缩重复项，因此结果不依赖各桥的上报顺序。`Add` 会按需扩展内部缓冲，是唯一的分配点；`Update` 与各发布方法不再分配。
+
+### 5. 容量吃紧时检查截断
 
 ```csharp
 if (bridge.IsTruncated)
@@ -110,7 +142,12 @@ bool Update();
 
 void PublishNearest(RuntimeBlackboard blackboard, int visibleKey, int distanceKey);
 void PublishNearestPosition(RuntimeBlackboard blackboard, int positionKey);
+void PublishNearestHandle(RuntimeBlackboard blackboard, int handleKey);
+void PublishNearestFromMemory(RuntimeBlackboard blackboard, int fromMemoryKey);
 void PublishCount(RuntimeBlackboard blackboard, int countKey);
+
+static RuntimeBlackboardLong3 PackHandle(in PerceptibleHandle handle);
+static bool TryUnpackHandle(in RuntimeBlackboardLong3 packed, out PerceptibleHandle handle);
 
 int Count { get; }
 int Capacity { get; }
@@ -118,6 +155,18 @@ bool IsTruncated { get; }
 PerceptionTarget Nearest { get; }
 ReadOnlySpan<PerceptionTarget> Targets { get; }
 ISensor Sensor { get; }
+```
+
+```csharp
+PerceptionAggregator(int capacity = 8, int bridgeCapacity = 4);
+bool Add(PerceptionBlackboardBridge bridge);
+bool Update();
+
+int Count { get; }
+int Capacity { get; }
+bool IsTruncated { get; }
+PerceptionTarget Nearest { get; }
+ReadOnlySpan<PerceptionTarget> Targets { get; }
 ```
 
 ## <a id="limits"></a>已知边界

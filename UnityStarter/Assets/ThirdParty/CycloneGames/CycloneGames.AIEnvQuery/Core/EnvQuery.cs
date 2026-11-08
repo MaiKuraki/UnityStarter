@@ -12,11 +12,7 @@ namespace CycloneGames.AIEnvQuery.Core
         /// <summary>Accumulated score. Higher is better; tests only add to it.</summary>
         public float Score;
 
-        /// <summary>
-        /// Caller-defined identity, carried through scoring and ordering untouched. A generator that
-        /// produces points from data writes the row index or identifier here so the caller can map the
-        /// winning point back without a position lookup.
-        /// </summary>
+        /// <summary>Caller-defined identity, carried through scoring and ordering untouched.</summary>
         public int Payload;
 
         public EnvQueryPoint(float x, float y, float z)
@@ -29,10 +25,7 @@ namespace CycloneGames.AIEnvQuery.Core
         }
     }
 
-    /// <summary>
-    /// Everything a query needs about the asker and its current target. Passed by <c>in</c> so a run
-    /// never copies it per candidate.
-    /// </summary>
+    /// <summary>Inputs shared by every test in one query.</summary>
     public struct EnvQueryContext
     {
         public float QuerierX;
@@ -51,10 +44,7 @@ namespace CycloneGames.AIEnvQuery.Core
         /// <summary>False when the target position is unknown; target-dependent tests then score zero.</summary>
         public bool HasTarget;
 
-        /// <summary>
-        /// Project data for the tests of one query, for example a cover table, a navigation handle or
-        /// a server-side collision world. Never written by the runner and never inspected by it.
-        /// </summary>
+        /// <summary>Project data for the tests of this query. Never read or written by the runner.</summary>
         public object UserData;
 
         public void SetForward(float x, float y, float z)
@@ -80,7 +70,7 @@ namespace CycloneGames.AIEnvQuery.Core
     {
         /// <summary>
         /// Writes candidates into <paramref name="points"/> and returns how many were written.
-        /// The buffer is reused between runs, so a generator must not assume a zeroed or empty buffer.
+        /// The buffer is reused between runs and is not cleared.
         /// </summary>
         int Generate(in EnvQueryContext context, EnvQueryPoint[] points);
     }
@@ -99,13 +89,9 @@ namespace CycloneGames.AIEnvQuery.Core
     }
 
     /// <summary>
-    /// Rejects a candidate before any test runs.
+    /// Rejects a candidate before any test runs. A filter removes the point from the run; a test only
+    /// adjusts its score.
     /// </summary>
-    /// <remarks>
-    /// Filters remove a point from the run; tests only adjust its score. Use a filter for conditions
-    /// that make a position unusable, such as an unreachable point or a disabled slot, and a test for
-    /// qualities that make it better or worse.
-    /// </remarks>
     public interface IEnvQueryFilter
     {
         bool Accept(in EnvQueryContext context, in EnvQueryPoint point);
@@ -115,9 +101,8 @@ namespace CycloneGames.AIEnvQuery.Core
     /// Generates candidates, scores them and returns the best ones.
     /// </summary>
     /// <remarks>
-    /// Buffers are allocated at construction. <see cref="Run"/> allocates nothing, so the same runner
-    /// can be used every frame from one owner thread. Ties are broken by the candidate ordinal, which
-    /// keeps the result deterministic for a fixed generator and context.
+    /// Buffers are allocated at construction; <see cref="Run"/> allocates nothing. One runner belongs
+    /// to one thread. Ties are ordered by candidate index.
     /// </remarks>
     public sealed class EnvQueryRunner : IDisposable
     {
@@ -274,8 +259,8 @@ namespace CycloneGames.AIEnvQuery.Core
         /// In-place heapsort on the index array: best score first, ordinal ascending on ties.
         /// </summary>
         /// <remarks>
-        /// The BCL <c>Array.Sort</c> overload that takes an <c>IComparer</c> allocates per call, and
-        /// this path runs once per query, so the runner carries its own sort instead.
+        /// The <c>IComparer</c> overload of <c>Array.Sort</c> allocates per call, and this path runs
+        /// once per query.
         /// </remarks>
         private void SortByScore(int count)
         {

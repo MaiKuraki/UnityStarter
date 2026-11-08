@@ -8,12 +8,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery
     /// Runs an environment query and publishes the best candidate into blackboard slots.
     /// </summary>
     /// <remarks>
-    /// The bridge owns the runner and both buffers, so a run allocates nothing and the result
-    /// survives until the next call. <see cref="Run"/> must be called on the thread that created the
-    /// bridge; the runner keeps mutable state between runs.
+    /// The bridge owns the runner and both buffers. <see cref="Run"/> does not allocate, its result is
+    /// valid until the next call, and it must run on the creating thread.
     ///
-    /// The query itself decides ordering: candidates are scored by the supplied tests and returned
-    /// best first, with ties broken by candidate index.
+    /// Ordering comes from the runner: score descending, ties by candidate index.
     /// </remarks>
     public sealed class EnvQueryBlackboardBridge : IDisposable
     {
@@ -86,7 +84,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery
 
         /// <summary>
         /// Writes whether a candidate was found and the score of the best one. An empty run writes
-        /// false and a zero score, so a caller must read the flag before using the score.
+        /// false and a zero score.
         /// </summary>
         public void PublishBest(RuntimeBlackboard blackboard, int foundKey, int scoreKey)
         {

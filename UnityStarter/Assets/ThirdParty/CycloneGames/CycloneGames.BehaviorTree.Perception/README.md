@@ -59,7 +59,13 @@ bridge.Update();
 bridge.PublishNearest(blackboard, visibleKey, distanceKey);
 bridge.PublishNearestPosition(blackboard, positionKey);
 bridge.PublishCount(blackboard, countKey);
+
+// Optional: who it is, and whether it is currently seen.
+bridge.PublishNearestHandle(blackboard, handleKey);
+bridge.PublishNearestFromMemory(blackboard, fromMemoryKey);
 ```
+
+The handle is written as three longs (registry, id, generation) because one 64-bit word cannot hold the registry id. Read it back with `PerceptionBlackboardBridge.TryUnpackHandle`; a zero triple means "no target".
 
 Call it on the thread that commits perception results, after the perception update. The bridge records the creating thread and rejects calls from any other.
 
@@ -74,7 +80,33 @@ builder.Action(bb => bb.GetFloat(distanceKey) < 12f
 
 The slots are ordinary blackboard keys, so any condition, decorator or comparison node works without knowing about perception.
 
-### 4. Check truncation when the capacity is tight
+### 4. Merge several senses
+
+One bridge serves one sensor. When a tree should react to the nearest of several senses, an aggregator merges the bridges into one list and one set of keys.
+
+```csharp
+var aggregator = new PerceptionAggregator(capacity: 8, bridgeCapacity: 4);
+aggregator.Add(sightBridge);
+aggregator.Add(hearingBridge);
+
+aggregator.Update();
+aggregator.PublishNearest(blackboard, visibleKey, distanceKey);
+aggregator.PublishNearestHandle(blackboard, handleKey);
+```
+
+Merge rules, in order:
+
+| Rule | Behaviour |
+| --- | --- |
+| Identity | Targets are keyed by `PerceptibleHandle`; one handle yields one entry. |
+| Preference | A live detection beats a remembered one. |
+| Tie | Between two entries of the same kind, the nearer one wins. |
+| Order | Output is sorted by distance, ascending. |
+| Capacity | Beyond capacity the nearest entries survive and `IsTruncated` is set. |
+
+The merge collects every target before collapsing duplicates, so the result does not depend on the order bridges report. `Add` sizes the internal buffer and is the only allocating call; `Update` and the publish methods allocate nothing.
+
+### 5. Check truncation when the capacity is tight
 
 ```csharp
 if (bridge.IsTruncated)
@@ -110,7 +142,12 @@ bool Update();
 
 void PublishNearest(RuntimeBlackboard blackboard, int visibleKey, int distanceKey);
 void PublishNearestPosition(RuntimeBlackboard blackboard, int positionKey);
+void PublishNearestHandle(RuntimeBlackboard blackboard, int handleKey);
+void PublishNearestFromMemory(RuntimeBlackboard blackboard, int fromMemoryKey);
 void PublishCount(RuntimeBlackboard blackboard, int countKey);
+
+static RuntimeBlackboardLong3 PackHandle(in PerceptibleHandle handle);
+static bool TryUnpackHandle(in RuntimeBlackboardLong3 packed, out PerceptibleHandle handle);
 
 int Count { get; }
 int Capacity { get; }
@@ -118,6 +155,18 @@ bool IsTruncated { get; }
 PerceptionTarget Nearest { get; }
 ReadOnlySpan<PerceptionTarget> Targets { get; }
 ISensor Sensor { get; }
+```
+
+```csharp
+PerceptionAggregator(int capacity = 8, int bridgeCapacity = 4);
+bool Add(PerceptionBlackboardBridge bridge);
+bool Update();
+
+int Count { get; }
+int Capacity { get; }
+bool IsTruncated { get; }
+PerceptionTarget Nearest { get; }
+ReadOnlySpan<PerceptionTarget> Targets { get; }
 ```
 
 ## <a id="limits"></a>Limits

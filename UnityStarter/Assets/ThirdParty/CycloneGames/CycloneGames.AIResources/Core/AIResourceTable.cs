@@ -25,10 +25,8 @@ namespace CycloneGames.AIResources.Core
     /// One owner per shared resource, with optional priority preemption and lease expiry.
     /// </summary>
     /// <remarks>
-    /// The table is engine-free and single-threaded by design: decisions that claim resources already
-    /// run on one owner thread, and a lock would serialize them again. Storage is preallocated at
-    /// construction, so claim, release and sweep allocate nothing. Expiry exists so a holder that
-    /// disappears without releasing cannot keep a resource forever.
+    /// Single-threaded: claim, release, query and sweep must run on the same thread. Storage is
+    /// preallocated at construction and no operation allocates.
     /// </remarks>
     public sealed class AIResourceTable : IDisposable
     {
@@ -200,10 +198,9 @@ namespace CycloneGames.AIResources.Core
         }
 
         /// <summary>
-        /// Releases claims whose lease expired at <paramref name="nowSeconds"/>. Call it once per AI
-        /// update; it is the only place a dead owner is reclaimed.
+        /// Releases every claim whose expiry is non-zero and not later than <paramref name="nowSeconds"/>.
         /// </summary>
-        /// <returns>Number of expired claims.</returns>
+        /// <returns>Number of released claims.</returns>
         public int SweepExpired(double nowSeconds)
         {
             ThrowIfDisposed();

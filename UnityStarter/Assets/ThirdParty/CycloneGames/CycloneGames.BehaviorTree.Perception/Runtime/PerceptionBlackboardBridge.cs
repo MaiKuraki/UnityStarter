@@ -41,13 +41,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Integrations.Perception
     /// Reads one sensor and publishes its nearest target into blackboard slots.
     /// </summary>
     /// <remarks>
-    /// Call <see cref="Update"/> once per owner-thread frame after the perception update, then the
+    /// Call <see cref="Update"/> on the creating thread, after the perception update, then the
     /// <c>Publish*</c> methods. Buffers are allocated in the constructor; update and publish allocate
-    /// nothing. Writes go through the blackboard's change detection, so a stable target neither
-    /// notifies observers nor enters the network delta.
+    /// nothing. Blackboard change detection drops unchanged writes.
     ///
-    /// The sensor sorts its results by distance, so the first entry is the nearest target and the
-    /// remaining entries are ordered behind it.
+    /// Sensor results are ordered by distance, ascending.
     /// </remarks>
     public sealed class PerceptionBlackboardBridge : IDisposable
     {
@@ -125,7 +123,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Integrations.Perception
 
         /// <summary>
         /// Writes visibility and distance of the nearest target. An empty result writes false and a
-        /// zero distance, so a caller must read the flag before using the distance.
+        /// zero distance.
         /// </summary>
         public void PublishNearest(RuntimeBlackboard blackboard, int visibleKey, int distanceKey)
         {
@@ -152,6 +150,66 @@ namespace CycloneGames.BehaviorTree.Runtime.Integrations.Perception
 
             float3 position = _count > 0 ? _targets[0].Position : float3.zero;
             blackboard.SetFloat3(positionKey, new BTFloat3(position.x, position.y, position.z));
+        }
+
+        /// <summary>
+        /// Writes the nearest target identity as a triple: registry, id and generation.
+        /// </summary>
+        /// <remarks>
+        /// The slot holds three longs: registry, id and generation. Without a target it is zeroed, which
+        /// <see cref="TryUnpackHandle"/> reports as no target.
+        /// </remarks>
+        public void PublishNearestHandle(RuntimeBlackboard blackboard, int handleKey)
+        {
+            ThrowIfDisposed();
+            EnsureOwnerThread();
+            if (blackboard == null)
+            {
+                throw new ArgumentNullException(nameof(blackboard));
+            }
+
+            blackboard.SetLong3(handleKey, PackHandle(_count > 0 ? _targets[0].Handle : default));
+        }
+
+        /// <summary>Writes whether the nearest target comes from memory rather than a live detection.</summary>
+        public void PublishNearestFromMemory(RuntimeBlackboard blackboard, int fromMemoryKey)
+        {
+            ThrowIfDisposed();
+            EnsureOwnerThread();
+            if (blackboard == null)
+            {
+                throw new ArgumentNullException(nameof(blackboard));
+            }
+
+            blackboard.SetBool(fromMemoryKey, _count > 0 && _targets[0].IsFromMemory);
+        }
+
+        /// <summary>Packs a handle into the three-slot form written by <see cref="PublishNearestHandle"/>.</summary>
+        public static RuntimeBlackboardLong3 PackHandle(in PerceptibleHandle handle)
+        {
+            return new RuntimeBlackboardLong3(handle.RegistryId, handle.Id, handle.Generation);
+        }
+
+        /// <summary>Reads a handle written by <see cref="PublishNearestHandle"/>; false means "no target".</summary>
+        public static bool TryUnpackHandle(in RuntimeBlackboardLong3 packed, out PerceptibleHandle handle)
+        {
+            if (packed.Y < int.MinValue || packed.Y > int.MaxValue ||
+                packed.X < int.MinValue || packed.X > int.MaxValue ||
+                packed.Z < int.MinValue || packed.Z > int.MaxValue)
+            {
+                handle = PerceptibleHandle.Invalid;
+                return false;
+            }
+
+            var candidate = new PerceptibleHandle((int)packed.X, (int)packed.Y, (int)packed.Z);
+            if (!candidate.IsValid)
+            {
+                handle = PerceptibleHandle.Invalid;
+                return false;
+            }
+
+            handle = candidate;
+            return true;
         }
 
         /// <summary>Writes how many targets the last update captured.</summary>

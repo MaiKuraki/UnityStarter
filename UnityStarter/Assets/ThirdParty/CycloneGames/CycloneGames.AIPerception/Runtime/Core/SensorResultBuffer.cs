@@ -29,7 +29,7 @@ namespace CycloneGames.AIPerception.Runtime
         private uint _refreshVersion;
         private bool _disposed;
 
-        // Event storage is sized once: one transition per remembered handle is the upper bound per update.
+        // One transition per remembered handle bounds the size.
         private PerceptionEvent[] _pendingEvents;
         private PerceptibleHandle[] _previousHandles;
         private PerceptibleHandle[] _currentHandles;

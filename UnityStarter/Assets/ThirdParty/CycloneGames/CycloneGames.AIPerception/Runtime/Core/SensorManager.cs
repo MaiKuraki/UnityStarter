@@ -996,7 +996,7 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            // Disposal drains pending jobs, which would otherwise dispatch into listeners mid-teardown.
+            // Disposal drains pending jobs; clear listeners first so the drain dispatches to nobody.
             _listeners.Clear();
             _registry.EnsureManagerCollectionMutationAllowed();
             Exception disposeFailure = null;
