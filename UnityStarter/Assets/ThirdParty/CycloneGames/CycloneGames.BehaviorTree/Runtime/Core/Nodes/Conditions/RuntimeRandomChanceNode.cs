@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Conditions
 {
     public sealed class RuntimeRandomChanceNode : RuntimeNode
     {

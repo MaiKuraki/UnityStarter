@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.behavior-tree-spatial",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.BehaviorTree.Spatial",
+  "description": "Spatial integration for CycloneGames.BehaviorTree: publishes nearest-neighbour query results into blackboard slots so trees react to proximity without holding an index reference.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.behavior-tree": "1.0.0",
+    "com.cyclone-games.spatial": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "BehaviorTree",
+    "Spatial",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

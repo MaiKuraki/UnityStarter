@@ -3,21 +3,13 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public readonly struct RuntimeBehaviorTreeLimits
     {
-        /// <summary>Default maximum runtime nodes accepted during cold-path graph validation.</summary>
-        public const int DEFAULT_MAX_NODE_COUNT = 4096;
-        /// <summary>Default maximum runtime graph depth.</summary>
-        public const int DEFAULT_MAX_DEPTH = 256;
-        /// <summary>Implementation safety ceiling for runtime node count.</summary>
-        public const int HARD_MAX_NODE_COUNT = 65536;
-        /// <summary>Implementation safety ceiling for recursive node lifecycle depth.</summary>
-        public const int HARD_MAX_DEPTH = 256;
 
         public RuntimeBehaviorTreeLimits(int maxNodeCount, int maxDepth)
         {
@@ -26,12 +18,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 throw new ArgumentOutOfRangeException(nameof(maxNodeCount));
             }
 
-            if (maxNodeCount > HARD_MAX_NODE_COUNT)
+            if (maxNodeCount > BTCapacityLimits.MaxNodeCount)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(maxNodeCount),
                     maxNodeCount,
-                    $"Runtime node count cannot exceed the hard safety limit of {HARD_MAX_NODE_COUNT}.");
+                    $"Runtime node count cannot exceed the hard safety limit of {BTCapacityLimits.MaxNodeCount}.");
             }
 
             if (maxDepth <= 0)
@@ -39,12 +31,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 throw new ArgumentOutOfRangeException(nameof(maxDepth));
             }
 
-            if (maxDepth > HARD_MAX_DEPTH)
+            if (maxDepth > BTCapacityLimits.MaxTreeDepth)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(maxDepth),
                     maxDepth,
-                    $"Runtime depth cannot exceed the hard safety limit of {HARD_MAX_DEPTH}.");
+                    $"Runtime depth cannot exceed the hard safety limit of {BTCapacityLimits.MaxTreeDepth}.");
             }
 
             MaxNodeCount = maxNodeCount;
@@ -55,7 +47,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public int MaxDepth { get; }
 
         public static RuntimeBehaviorTreeLimits Default =>
-            new RuntimeBehaviorTreeLimits(DEFAULT_MAX_NODE_COUNT, DEFAULT_MAX_DEPTH);
+            new RuntimeBehaviorTreeLimits(BTCapacityLimits.DefaultNodeCount, BTCapacityLimits.MaxTreeDepth);
 
         internal RuntimeBehaviorTreeLimits Normalize()
         {
@@ -73,6 +65,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private const int DISPOSED_WAKE_STATE = -1;
 
         private readonly int _ownerThreadId;
+        private readonly RuntimeBTEvaluationController _evaluation;
         private int _tickInterval = 1;
         private int _tickCounter;
         private int _wakeUpState;
@@ -89,6 +82,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public RuntimeBehaviorTreeLimits Limits { get; }
 
         public IRuntimeBTServiceResolver ServiceResolver => Context?.ServiceResolver;
+
+        /// <summary>
+        /// Epoch source for event-driven conditional reevaluation. Exposed so external
+        /// adapters can signal that a tree's guards must be checked again.
+        /// </summary>
+        public RuntimeBTEvaluationController Evaluation => _evaluation;
 
         public int TickInterval
         {
@@ -124,9 +123,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// Play starts a new activation and resets the notification gate.
         /// </summary>
         public event Action<RuntimeState> Terminated;
+
+        /// <summary>
+        /// Raised on the requesting thread the first time a dormant tree is woken, so a
+        /// caller-supplied scheduler can enqueue it. Handlers must be thread-safe and must
+        /// not block; the event is not raised again until the tree drains its wake-up state.
+        /// </summary>
         internal event Action<RuntimeBehaviorTree> WakeUpRequested;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private readonly Dictionary<string, RuntimeNode> _nodeMap = new Dictionary<string, RuntimeNode>();
 
         public BTStatusObserver StatusObserver { get; set; }
@@ -139,6 +144,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             RuntimeBehaviorTreeLimits limits = default)
         {
             _ownerThreadId = Environment.CurrentManagedThreadId;
+            _evaluation = new RuntimeBTEvaluationController();
             Root = root ?? throw new ArgumentNullException(nameof(root));
             bool ownsBlackboard = blackboard == null;
             Blackboard = blackboard ?? new RuntimeBlackboard();
@@ -157,12 +163,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 ownedNodes = ValidateNodeGraph(root, Limits);
                 CommitNodeGraph(ownedNodes);
                 SetContextCore(context ?? new RuntimeBTContext());
+                BindObservers(ownedNodes);
                 awakeAttempted = true;
                 root?.OnAwake();
             }
             catch (Exception initializationException)
             {
                 Exception cleanupException = null;
+
+                if (ownedNodes != null)
+                {
+                    UnbindObservers(ownedNodes);
+                }
 
                 if (awakeAttempted && ownedNodes != null)
                 {
@@ -187,7 +199,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     }
                 }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 _nodeMap.Clear();
 #endif
 
@@ -519,6 +531,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        /// <summary>
+        /// Signals that guards must be re-evaluated and schedules an immediate owner-thread tick.
+        /// Safe from any producer thread; concurrent requests coalesce into one epoch increment.
+        /// </summary>
+        public void RequestReevaluation(int boostedTicks = 1)
+        {
+            _evaluation.RequestReevaluation();
+            RequestWakeUp(boostedTicks);
+        }
+
         internal void RequestWakeUp(int boostedTicks = 1)
         {
             if (boostedTicks < 1)
@@ -548,7 +570,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         public RuntimeNode GetNodeByGUID(string guid)
         {
             EnsureOwnerThread();
@@ -667,7 +689,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 RuntimeNode node = orderedNodes[i];
                 node.OwnerTree = this;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 if (!string.IsNullOrEmpty(node.GUID))
                 {
                     _nodeMap[node.GUID] = node;
@@ -680,6 +702,28 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             Context = context;
             Blackboard.Context = context;
+        }
+
+        private void BindObservers(List<RuntimeNode> ownedNodes)
+        {
+            for (int i = 0; i < ownedNodes.Count; i++)
+            {
+                if (ownedNodes[i] is IRuntimeBTObserverNode observer)
+                {
+                    observer.BindObservers(Blackboard, this);
+                }
+            }
+        }
+
+        private static void UnbindObservers(List<RuntimeNode> ownedNodes)
+        {
+            for (int i = 0; i < ownedNodes.Count; i++)
+            {
+                if (ownedNodes[i] is IRuntimeBTObserverNode observer)
+                {
+                    observer.UnbindObservers();
+                }
+            }
         }
 
         private void PublishTerminated(RuntimeState terminalState)

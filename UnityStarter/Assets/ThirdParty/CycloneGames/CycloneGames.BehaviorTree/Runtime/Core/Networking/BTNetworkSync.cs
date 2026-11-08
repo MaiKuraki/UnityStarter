@@ -2,42 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.Hash.Core;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
+namespace CycloneGames.BehaviorTree.Core.Networking
 {
-    /// <summary>
-    /// Multiplayer BehaviorTree synchronization system.
-    ///
-    /// Three recommended sync patterns:
-    ///
-    /// 1. Server-Authoritative (combat AI, competitive):
-    ///    Server runs all trees, captures state, and sends it to clients.
-    ///    Clients validate matching managed execution state before synchronizing blackboard values.
-    ///    Strength: authoritative decisions. Cost: higher bandwidth and coordinated recovery.
-    ///
-    /// 2. Client-Predicted (responsive AI, open world):
-    ///    Both server and client run BTs independently with same inputs.
-    ///    Server sends a state hash; the client compares and starts coordinated recovery on mismatch.
-    ///    Strength: low bandwidth and responsiveness. Cost: deterministic inputs and scheduling.
-    ///
-    /// 3. Blackboard-Replicated (co-op, simple):
-    ///    Only replicate blackboard key changes over network.
-    ///    Each side runs the tree independently from synchronized inputs.
-    ///    Strength: minimal bandwidth. Cost: eventual rather than immediate consistency.
-    ///
-    /// This class provides tools for all three patterns.
-    /// </summary>
     public static class BTNetworkSync
     {
-        // "BTS2" in little-endian order. V2 hashes composite execution cursors.
+        // "BTS2" in little-endian order. The hash covers node state and composite execution cursors.
         private const uint SNAPSHOT_MAGIC = 0x32535442u;
 
         public readonly struct Limits
         {
             public const int DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024;
-            public const int DEFAULT_MAX_NODE_COUNT = 65536;
+            public const int DEFAULT_MAX_SNAPSHOT_NODE_COUNT = 65536;
             public const int DEFAULT_MAX_BLACKBOARD_BYTES = 512 * 1024;
 
             public Limits(
@@ -47,7 +25,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 RuntimeBlackboardSerializationLimits blackboardLimits)
             {
                 MaxSnapshotBytes = maxSnapshotBytes > 0 ? maxSnapshotBytes : DEFAULT_MAX_SNAPSHOT_BYTES;
-                MaxNodeCount = maxNodeCount > 0 ? maxNodeCount : DEFAULT_MAX_NODE_COUNT;
+                MaxNodeCount = maxNodeCount > 0 ? maxNodeCount : DEFAULT_MAX_SNAPSHOT_NODE_COUNT;
                 MaxBlackboardBytes = maxBlackboardBytes > 0 ? maxBlackboardBytes : DEFAULT_MAX_BLACKBOARD_BYTES;
                 BlackboardLimits = blackboardLimits;
             }
@@ -59,15 +37,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             public static Limits Default => new Limits(
                 DEFAULT_MAX_SNAPSHOT_BYTES,
-                DEFAULT_MAX_NODE_COUNT,
+                DEFAULT_MAX_SNAPSHOT_NODE_COUNT,
                 DEFAULT_MAX_BLACKBOARD_BYTES,
                 RuntimeBlackboardSerializationLimits.Default);
         }
 
-        /// <summary>
-        /// Capture a lightweight snapshot of a tree's execution state.
-        /// Contains: all node states + blackboard primitives + tree hash.
-        /// </summary>
         public static BTStateSnapshot CaptureSnapshot(RuntimeBehaviorTree tree)
         {
             if (tree?.Root == null)
@@ -132,19 +106,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             snapshot.TreeStateHash = ComputeTreeStateHash(snapshot);
-            snapshot.Timestamp = RuntimeBTTime.GetUnityTime(false);
+            snapshot.Timestamp = RuntimeBTTime.GetMonotonicTime();
             snapshot.IsValid = true;
 
             return snapshot;
         }
 
         /// <summary>
-        /// Applies the blackboard portion of a validated snapshot.
-        /// Managed node execution state is never restored by this method because
-        /// private node state cannot be reconstructed generically.
-        ///
-        /// For full execution-state restore, use the DOD BTTickScheduler execution path,
-        /// where mutable agent state has an explicit native-memory owner.
+        /// Applies the blackboard portion of a validated snapshot. Managed node execution state is
+        /// not restored because private node state cannot be reconstructed generically.
         /// </summary>
         public static void ApplyBlackboardSnapshot(RuntimeBehaviorTree tree, BTStateSnapshot snapshot)
         {
@@ -180,10 +150,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
         }
 
-        /// <summary>
-        /// Quick desync check: compare local tree hash with server hash.
-        /// If mismatch, caller should request full snapshot resync.
-        /// </summary>
         public static bool CheckDesync(RuntimeBehaviorTree localTree, ulong serverHash)
         {
             return CheckDesync(localTree, serverHash, RuntimeBlackboardNetworkScope.Networked);
@@ -205,9 +171,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
         }
 
-        /// <summary>
-        /// Serialize a snapshot to a byte buffer for network transmission.
-        /// </summary>
         public static byte[] SerializeSnapshot(BTStateSnapshot snapshot)
         {
             using (var ms = new MemoryStream(512))
@@ -251,9 +214,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             return new ArraySegment<byte>(buffer.SnapshotStream.GetBuffer(), 0, (int)buffer.SnapshotStream.Length);
         }
 
-        /// <summary>
-        /// Deserialize a snapshot from a network byte buffer.
-        /// </summary>
         public static BTStateSnapshot DeserializeSnapshot(byte[] data)
         {
             return DeserializeSnapshot(data, Limits.Default);
@@ -384,10 +344,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             return bytes;
         }
 
-        /// <summary>
-        /// Recomputes the deterministic tree-state hash carried by a snapshot.
-        /// Call this before accepting snapshot data from an untrusted boundary.
-        /// </summary>
         public static ulong ComputeTreeStateHash(BTStateSnapshot snapshot)
         {
             const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
@@ -414,10 +370,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             return hash;
         }
 
-        /// <summary>
-        /// Computes the current node-state and blackboard hash without serializing a snapshot.
-        /// The caller selects the blackboard visibility scope explicitly.
-        /// </summary>
         public static ulong ComputeTreeStateHash(
             RuntimeBehaviorTree tree,
             RuntimeBlackboardNetworkScope blackboardScope,
@@ -640,10 +592,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         }
     }
 
-    /// <summary>
-    /// Immutable snapshot of a BehaviorTree's execution state at a point in time.
-    /// Used for network synchronization, replay recording, and state validation.
-    /// </summary>
     public struct BTStateSnapshot
     {
         public bool IsValid;

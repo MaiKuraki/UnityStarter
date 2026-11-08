@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
     /// Selects one child per activation using validated non-negative weights.

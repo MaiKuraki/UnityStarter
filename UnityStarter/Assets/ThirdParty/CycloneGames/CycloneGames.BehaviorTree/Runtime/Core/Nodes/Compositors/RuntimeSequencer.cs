@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     public class RuntimeSequencer : RuntimeCompositeNode
     {
@@ -8,7 +8,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _current = 0;
-            // Reset children states from previous iteration so editor doesn't show stale results
             RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
                 children[i].PrepareForActivation();
@@ -18,8 +17,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         {
             RuntimeNode[] children = ChildArray;
 
-            // Self / Both: re-evaluate conditions of previously completed children
-            if (_current > 0 && (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both))
+            bool reevaluate = ShouldReevaluate();
+
+            if (reevaluate && _current > 0 &&
+                (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both))
             {
                 for (int i = 0; i < _current; i++)
                 {

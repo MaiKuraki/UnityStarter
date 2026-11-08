@@ -1,16 +1,10 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
-    /// Utility AI selector: scores each child via blackboard keys and executes the highest-scoring one.
-    /// 
-    /// Each child has a corresponding BB key (int hash) whose float value is used as the score.
-    /// On each activation, all scores are read from the blackboard and the child with the
-    /// highest score is selected. Ties are broken by index (first wins).
-    /// 
-    /// Score keys are copied during setup so caller-owned arrays cannot mutate an owned tree.
-    /// Runtime selection reads directly from the blackboard without per-activation allocations.
+    /// Selects the highest-scoring child on each activation. Score keys are copied at setup;
+    /// ties resolve to the lowest child index, and selection reads the blackboard without allocation.
     /// </summary>
     public class RuntimeUtilitySelector : RuntimeCompositeNode
     {
@@ -67,7 +61,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             for (int i = 0; i < children.Length; i++)
                 children[i].PrepareForActivation();
 
-            // Read scores from BB and pick highest
             float bestScore = float.MinValue;
             int keyCount = _scoreKeys.Length;
 

@@ -2,7 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
     "rootNamespace": "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
     "references": [
-        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Core",
         "CycloneGames.DeterministicMath.Core"
     ],
     "includePlatforms": [],

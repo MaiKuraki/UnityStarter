@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public enum RuntimeState
     {
@@ -17,9 +17,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         Faulted
     }
 
-    /// <summary>
-    /// Defines the result produced when a pre-condition or post-condition returns false.
-    /// </summary>
     public enum ConditionPolicy : byte
     {
         /// <summary>Return Failure without executing, or abort a running activation and return Failure.</summary>
@@ -40,7 +37,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     }
 
     /// <summary>
-    /// Base class for managed behavior-tree nodes.
     /// A node activation has exactly one exit: Completed, Aborted, or Faulted.
     /// Reset is explicit and is not implied by normal completion or abort.
     /// </summary>
@@ -176,7 +172,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
                 State = nextState;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 if (State != previousState && OwnerTree?.StatusObserver != null)
                 {
                     OwnerTree.StatusObserver.NotifyStatusChanged(
@@ -241,9 +237,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
-        /// <summary>
-        /// Aborts an active activation, clears persistent node state, and recursively resets descendants.
-        /// </summary>
         public void Reset(RuntimeBlackboard blackboard)
         {
             ThrowIfDisposed();
@@ -328,7 +321,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// </summary>
         protected void EmitWakeUpSignal()
         {
-            OwnerTree?.RequestWakeUp(2);
+            OwnerTree?.RequestReevaluation(2);
         }
 
         protected virtual void OnStart(RuntimeBlackboard blackboard) { }
@@ -446,9 +439,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
     }
 
-    /// <summary>
-    /// Base class for asynchronous or polling actions with explicit start, running, halt, and fault hooks.
-    /// </summary>
     public abstract class RuntimeStatefulActionNode : RuntimeNode
     {
         private bool _wasRunning;

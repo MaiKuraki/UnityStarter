@@ -9,7 +9,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// Lightweight handle for perceptibles. Avoids GC by using ID + generation instead of references.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public readonly struct PerceptibleHandle : IEquatable<PerceptibleHandle>
+    public readonly struct PerceptibleHandle : IEquatable<PerceptibleHandle>, IComparable<PerceptibleHandle>
     {
         public readonly int RegistryId;
         public readonly int Id;
@@ -30,6 +30,19 @@ namespace CycloneGames.AIPerception.Runtime
             RegistryId == other.RegistryId && Id == other.Id && Generation == other.Generation;
         public override bool Equals(object obj) => obj is PerceptibleHandle other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(RegistryId, Id, Generation);
+
+        /// <summary>Total order by registry, id and generation, used for deterministic sorting.</summary>
+        public int CompareTo(PerceptibleHandle other)
+        {
+            int registry = RegistryId.CompareTo(other.RegistryId);
+            if (registry != 0)
+            {
+                return registry;
+            }
+
+            int id = Id.CompareTo(other.Id);
+            return id != 0 ? id : Generation.CompareTo(other.Generation);
+        }
 
         public static bool operator ==(PerceptibleHandle left, PerceptibleHandle right) => left.Equals(right);
         public static bool operator !=(PerceptibleHandle left, PerceptibleHandle right) => !left.Equals(right);

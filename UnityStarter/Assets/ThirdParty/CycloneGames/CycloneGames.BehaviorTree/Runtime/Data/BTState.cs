@@ -1,4 +1,4 @@
-﻿namespace CycloneGames.BehaviorTree.Runtime.Data
+namespace CycloneGames.BehaviorTree.Runtime.Data
 {
     public enum BTState
     {

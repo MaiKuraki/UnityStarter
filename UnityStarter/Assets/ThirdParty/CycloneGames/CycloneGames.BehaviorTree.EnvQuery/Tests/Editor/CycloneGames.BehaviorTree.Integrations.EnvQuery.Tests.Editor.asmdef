@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.BehaviorTree.Integrations.EnvQuery.Tests.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Integrations.EnvQuery.Tests.Editor",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
+        "CycloneGames.AIEnvQuery.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

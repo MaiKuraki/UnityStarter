@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes
+namespace CycloneGames.BehaviorTree.Core.Nodes
 {
     public class RuntimeRootNode : RuntimeNode
     {

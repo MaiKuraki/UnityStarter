@@ -1,0 +1,14 @@
+{
+    "name": "CycloneGames.AIEnvQuery.Core",
+    "rootNamespace": "CycloneGames.AIEnvQuery.Core",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

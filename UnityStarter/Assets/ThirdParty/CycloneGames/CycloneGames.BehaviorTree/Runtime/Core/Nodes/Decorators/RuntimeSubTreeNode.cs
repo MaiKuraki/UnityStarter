@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
     [Flags]
     public enum RuntimeSubTreePortDirection : byte
@@ -66,11 +66,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         }
 
         /// <summary>
-        /// Configures typed, directional port mappings. A null direction array preserves the legacy
-        /// overload as InOut: capture parent input once at activation start and commit local output on
-        /// normal completion. Use Input for values that must refresh before every child step, and
-        /// Output when the mapped parent value must not be copied into the local key. Normal scoped
-        /// blackboard parent fallback still applies to any absent local key with the same hash.
+        /// Configures typed, directional port mappings. A null direction array selects InOut:
+        /// capture parent input once at activation start and commit local output on normal
+        /// completion. Input refreshes before every child step; Output does not copy the parent
+        /// value into the local key. Scoped parent fallback applies to any absent local key with
+        /// the same hash.
         /// </summary>
         public void SetPortRemapping(
             int[] localKeys,

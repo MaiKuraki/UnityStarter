@@ -51,7 +51,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// Main-thread-owned continuous-emission hearing sensor. Only perceptibles that explicitly
     /// expose IsSoundSource participate; event-like sounds should use a dedicated product adapter.
     /// </summary>
-    public sealed class HearingSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner
+    public sealed class HearingSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner, IPerceptionEventSource
     {
         private readonly int _sensorId;
         private readonly SensorManager _owner;
@@ -469,6 +469,7 @@ namespace CycloneGames.AIPerception.Runtime
                 candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
                 output = new NativeArray<float>(capacity.InitialCandidateCapacity, Allocator.Persistent);
                 resultBuffer = new SensorResultBuffer(in capacity, _memoryCounters);
+                resultBuffer.BindSensorId(SensorId);
             }
             catch
             {
@@ -530,6 +531,8 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         int IAIPerceptionSensorMemoryOwner.LastUpdateWorkload => _memoryCounters.LastUpdateWorkload;
+
+        SensorResultBuffer IPerceptionEventSource.EventBuffer => _resultBuffer;
 
         AIPerceptionSensorMemoryStats IAIPerceptionSensorMemoryOwner.GetMemoryStats()
         {

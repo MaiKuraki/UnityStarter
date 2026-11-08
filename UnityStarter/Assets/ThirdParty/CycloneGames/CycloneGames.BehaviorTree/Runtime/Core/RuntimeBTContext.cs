@@ -1,7 +1,7 @@
 using System;
-using UnityEngine;
+using System.Diagnostics;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public class RuntimeBTContext : IRuntimeBTContext
     {
@@ -14,31 +14,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             ServiceResolver = serviceResolver;
         }
 
-        public T GetOwner<T>() where T : class
+        /// <summary>
+        /// Returns the owner when it is directly assignable to <typeparamref name="T"/>.
+        /// The Unity layer overrides this to resolve components from a GameObject owner.
+        /// </summary>
+        public virtual T GetOwner<T>() where T : class
         {
-            if (Owner is T ownerAsT)
-                return ownerAsT;
-
-            if (Owner is GameObject ownerGameObject &&
-                ownerGameObject != null &&
-                typeof(Component).IsAssignableFrom(typeof(T)))
-            {
-                return ownerGameObject.GetComponent(typeof(T)) as T;
-            }
-
-            return null;
+            return Owner as T;
         }
 
-        public T GetService<T>() where T : class
+        public virtual T GetService<T>() where T : class
         {
             return ServiceResolver?.Resolve<T>();
         }
 
-        /// <summary>
-        /// Convenience wrapper for <see cref="IServiceProvider"/>-based containers.
-        /// Use: <c>new ServiceProviderResolver(myServiceProvider)</c> as the
-        /// <see cref="IRuntimeBTServiceResolver"/> argument.
-        /// </summary>
         public sealed class ServiceProviderResolver : IRuntimeBTServiceResolver
         {
             private readonly IServiceProvider _provider;
@@ -57,35 +46,29 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
     public static class RuntimeBTTime
     {
+        private static readonly double OriginSeconds =
+            Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+
+        /// <summary>
+        /// Reads time from the blackboard service when one is bound, otherwise from a
+        /// monotonic stopwatch. The Unity layer binds <c>UnityBTTimeProvider</c>
+        /// so nodes follow <c>Time.time</c> and <c>Time.unscaledTime</c>.
+        /// </summary>
         public static double GetTime(RuntimeBlackboard blackboard, bool useUnscaledTime)
         {
-            var timeProvider = blackboard?.GetService<IRuntimeBTTimeProvider>();
+            IRuntimeBTTimeProvider timeProvider = blackboard?.GetService<IRuntimeBTTimeProvider>();
             if (timeProvider != null)
             {
                 return useUnscaledTime ? timeProvider.UnscaledTimeAsDouble : timeProvider.TimeAsDouble;
             }
 
-            return GetUnityTime(useUnscaledTime);
+            return GetMonotonicTime();
         }
 
-        public static double GetUnityTime(bool useUnscaledTime)
+        /// <summary>Monotonic seconds since process start. Never affected by time scale.</summary>
+        public static double GetMonotonicTime()
         {
-#if UNITY_2020_2_OR_NEWER
-            return useUnscaledTime ? Time.unscaledTimeAsDouble : Time.timeAsDouble;
-#elif UNITY_5_3_OR_NEWER
-            return useUnscaledTime ? Time.unscaledTime : Time.time;
-#else
-            return DateTime.UtcNow.Ticks / (double)TimeSpan.TicksPerSecond;
-#endif
-        }
-
-        public static double GetUnityDeltaTime(bool useUnscaledTime)
-        {
-#if UNITY_5_3_OR_NEWER
-            return useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
-#else
-            return 0d;
-#endif
+            return Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency - OriginSeconds;
         }
     }
 }

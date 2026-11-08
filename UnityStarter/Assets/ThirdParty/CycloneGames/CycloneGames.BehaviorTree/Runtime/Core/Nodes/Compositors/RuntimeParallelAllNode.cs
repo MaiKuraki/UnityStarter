@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
+namespace CycloneGames.BehaviorTree.Core.Nodes.Compositors
 {
     /// <summary>
     /// Ticks every unfinished child once per step and completes when a configured threshold is met.

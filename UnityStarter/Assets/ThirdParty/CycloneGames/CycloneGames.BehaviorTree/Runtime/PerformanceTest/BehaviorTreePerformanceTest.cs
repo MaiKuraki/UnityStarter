@@ -1,5 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -11,14 +11,13 @@ using UnityEngine.Profiling;
 
 public class BehaviorTreePerformanceTest : MonoBehaviour
 {
-#if UNITY_EDITOR // Full class just run in Editor
+#if UNITY_EDITOR
 
         [SerializeField] private BehaviorTree Tree;
         private RuntimeBehaviorTree _runtimeTree;
 
         private void Start()
         {
-                // Create a simple tree programmatically if not assigned
                 if (Tree == null)
                 {
                         Tree = ScriptableObject.CreateInstance<BehaviorTree>();
@@ -29,7 +28,6 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
                         Tree.AddNode(selector);
                         Tree.AddChild(root, selector);
 
-                        // Add some dummy nodes
                         for (int i = 0; i < 10; i++)
                         {
                                 var action = ScriptableObject.CreateInstance<WaitNode>();
@@ -41,7 +39,6 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
 
                 _runtimeTree = Tree.Compile(gameObject);
 
-                // Pre-warm
                 _runtimeTree?.Tick();
         }
 
@@ -53,7 +50,6 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
                 _runtimeTree.Tick();
                 Profiler.EndSample();
 
-                // Test Runtime Blackboard Access
                 Profiler.BeginSample("RuntimeBlackboard.TypedAccess");
                 int testKey = Animator.StringToHash("TestInt");
                 _runtimeTree.Blackboard.SetInt(testKey, Time.frameCount);

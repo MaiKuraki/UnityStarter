@@ -2,16 +2,18 @@
 
 面向 Unity agent 的感知模块：注册可被察觉的目标，用 Burst job 一次性为多个观察者求值，并在读取结果时不产生分配。
 
-- [解决什么问题](#解决什么问题)
-- [工作原理](#工作原理)
-- [快速开始](#快速开始)
-- [教程](#教程)
-- [参数与代价](#参数与代价)
-- [性能与内存](#性能与内存)
-- [调试](#调试)
-- [API 速查](#api-速查)
+- [解决什么问题](#what-it-is-for)
+- [提供什么](#what-it-provides)
+- [为什么这样设计](#why-this-design)
+- [工作原理](#how-it-works)
+- [快速开始](#getting-started)
+- [教程](#tutorials)
+- [参数与代价](#parameters)
+- [性能与内存](#performance)
+- [调试](#debugging)
+- [API 速查](#api)
 
-## 解决什么问题
+## <a id="what-it-is-for"></a>解决什么问题
 
 三个问题，都不需要改动你的玩法代码：
 
@@ -23,7 +25,48 @@
 
 模块不负责潜行修正、威胁评分、掩体判断与行为选择。这些是感知的消费者，留在外面才能让数据模型保持小。
 
-## 工作原理
+## <a id="what-it-provides"></a>提供什么
+
+- 视觉、听觉、接近与伤害传感器，全部对同一组已注册目标求值。
+- 结果按距离排序，携带位置、时间戳与 `IsFromMemory` 标记。
+- 每传感器独立的记忆，按你提供的时钟老化；目标离开后仍会在配置时长内保留。
+- 团队态度来自资产，支持每传感器独立的阵营过滤。
+- 调试用场景 gizmo、实时计数与团队矩阵窗口。
+- 手动时钟，可让感知跟随服务器 tick，而不是 `Update`。
+
+它不提供寻路、威胁评分、掩体选择或行为决策。这些读取感知结果，属于玩法代码。
+
+## <a id="why-this-design"></a>为什么这样设计
+
+感知系统有几种常见做法。agent 数量上来之后，选择才开始有区别。
+
+| 做法 | 运行方式 | 问题 |
+| --- | --- | --- |
+| 每个 agent 调 `Physics.OverlapSphere` | 每帧查询物理场景 | 成本随 agent × collider 增长；结果受物理状态影响 |
+| 每个 agent 对自己维护的目标列表做射线 | 各自测试自己的列表 | 多个 agent 看同一批目标时重复计算；单帧成本难以界定 |
+| 一份注册表 + 批量 job | 目标注册一次，每帧取一份快照，传感器在 job 中求值，结果在主线程提交 | 需要帧边界与 owner 线程提交步骤 |
+
+本包采用第三种。注册是显式的，job 运行期间快照只读，结果每帧提交一次。成本因此可预测，给定快照下的输出也可重复。
+
+代价是真实的：感知不能在任意线程查询，每个可感知对象都必须注册。换来的是每帧一次快照加每传感器一个 job，与读取结果的 agent 数量无关。
+
+### 注册表为什么自带网格
+
+注册表把可感知对象放在一个稠密数组里，每次更新由它重建内部 `SpatialGrid`。这里没有复用 `CycloneGames.Spatial`，原因在于工作形态，而非代码量。
+
+| 原因 | 具体差异 |
+| --- | --- |
+| 数据形态 | 注册表本来就持有一份稠密 `PerceptibleData[]`，每次更新整体重建。`SpatialHashGrid` 维护的是句柄，走增量插入、更新与移除。 |
+| 交付方式 | 传感器 job 从 `NativeList<int>` 读取候选。`CycloneGames.Spatial` 是纯托管实现，没有 native 路径。 |
+| 排序语义 | 候选按格键与 tie-breaker 排序，同一份快照永远得到同一顺序。最近邻索引按距离排序。 |
+
+复用共享索引，要么每帧把稠密数组拷进去，要么为每个可感知对象维护句柄并逐次更新。两种做法都比被替换掉的重建更贵，前者还要在每次 job 之前多做一次拷贝。
+
+这个网格属于注册表内部：它不是公开 API，也不是游戏层的第二个宽相。项目自己的查询仍然用 `CycloneGames.Spatial`。
+
+如果共享索引将来支持 job，这个决定应当用两种布局的实测数据重新评估，而不是按对称性改。
+
+## <a id="how-it-works"></a>工作原理
 
 ```mermaid
 flowchart LR
@@ -39,7 +82,7 @@ flowchart LR
 1. 快照每帧在主线程写一次，之后在 job 读取期间不再变动。
 2. 结果与记忆只在 job 完成后、由主线程更新。
 
-## 快速开始
+## <a id="getting-started"></a>快速开始
 
 ### 1. 添加管理器
 
@@ -108,7 +151,7 @@ public sealed class ChaseNearestSightTarget : MonoBehaviour
 
 数量一直为 0 时，按顺序检查：有没有管理器、目标是否 `Is Detectable`、类型过滤、阵营掩码。
 
-## 教程
+## <a id="tutorials"></a>教程
 
 ### 按类型过滤
 
@@ -154,11 +197,50 @@ manager.ReportStimulus(attackerHandle, hitPoint, damageAmount);
 序号语义：
 
 - 从 1 开始（`0` 表示"无刺激"），每次上报加一，永不复用；
-- **每个管理器独立计数**，不是全局唯一——两个管理器的序号都从 1 开始，不能互相比较；
+- 每个管理器的计数独立，不是全局唯一：两个管理器的序号都从 1 开始，不能互相比较；
 - 环形缓冲保留 256 条，因此只有 `[最新 − 255, 最新]` 这一段是有效的，`TryGetStimulus` 在这之外返回 false；
 - 落后的感知会漏掉最旧的事件，而不是让内存增长；传感器创建之前上报的刺激不会补播。
 
 `long` 计数器在每秒 1000 次上报下需要约 2.92 亿年才会回绕，因此溢出不是实际风险。
+
+### 目标出现或消失时做出反应
+
+只有一个消费方时，轮询 `HasSightDetection` 就够了。当多个系统都需要同一个变化时，每帧各自扫一遍结果列表就是浪费。监听器只收到一次变化。
+
+```csharp
+public sealed class AlertOnSight : MonoBehaviour, IPerceptionEventListener
+{
+    [SerializeField] private AIPerceptionComponent _perception;
+
+    private void Start() => _perception.AddListener(this);
+    private void OnDisable() => _perception.RemoveListener(this);
+
+    public void OnPerceptionEvent(in PerceptionEvent transition)
+    {
+        if (transition.SensorType != SensorType.Sight ||
+            transition.Kind != PerceptionEventKind.Acquired)
+        {
+            return;
+        }
+
+        // 在这里响应新出现的目标。
+    }
+}
+```
+
+| 类型 | 触发时机 |
+| --- | --- |
+| `Acquired` | 该句柄第一次进入传感器的结果集。 |
+| `Lost` | 该句柄离开结果集：记忆过期、可见度衰减到阈值、容量驱逐，或者这个感知不保留记忆而目标当帧就消失。 |
+
+注册要放在管理器存在之后，例如 `Start` 或 composition root；`OnEnable` 可能早于组件解析出管理器。
+
+几条保持零分配与可预测性的约束：
+
+- 事件在 owner 线程上、`SensorManager.Update` 期间同步派发。
+- 没有注册监听器时，传感器完全跳过差异计算。
+- 监听器不允许在回调里增删监听器；管理器会抛异常，而不是静默跳过。
+- 自定义传感器可以用 `SensorManager.PublishEvent` 直接推送，不必走内置记忆。
 
 ### 用你自己的时钟驱动
 
@@ -183,7 +265,7 @@ sensor.UpdateSensor(0f);
 
 按相反顺序释放：传感器 → 管理器 → 注册表。
 
-## 参数与代价
+## <a id="parameters"></a>参数与代价
 
 | 设置 | 代价 |
 | --- | --- |
@@ -194,7 +276,7 @@ sensor.UpdateSensor(0f);
 | Maximum Results | 每传感器预分配；溢出会丢弃最远的结果 |
 | Spatial Cell Size | 太小则格子数量暴涨，太大退化为线性扫描 |
 
-## 性能与内存
+## <a id="performance"></a>性能与内存
 
 - 无论多少传感器，每帧只做一次快照，成本随注册的感知体数量增长。
 - 每个传感器对候选跑一个 job。候选数低于 `InlineExecutionThreshold` 时改为内联执行，比调度更便宜。
@@ -203,7 +285,7 @@ sensor.UpdateSensor(0f);
 
 用 `SensorManager.GetMemoryStats()` 观测：候选峰值、结果容量、淘汰次数与每个传感器的单次工作量。
 
-## 调试
+## <a id="debugging"></a>调试
 
 | 工具 | 显示 |
 | --- | --- |
@@ -221,7 +303,7 @@ sensor.UpdateSensor(0f);
 | 所有目标都被检测 | `Affiliation = All` 且未设类型过滤 |
 | 运行时编辑器卡顿 | 候选过多时的 LOS 射线，调低 Max LOS Checks |
 
-## API 速查
+## <a id="api"></a>API 速查
 
 ```csharp
 // 注册表
@@ -236,6 +318,11 @@ void Manager.SetTeamAttitude(int observerTeam, int targetTeam, PerceptionTeamAtt
 void Manager.SetSameTeamFriendly();
 void Manager.CopyTeamAttitudes(NativeArray<byte> source);
 AIPerceptionMemoryStats Manager.GetMemoryStats();
+
+// 变化事件
+void Manager.AddListener(IPerceptionEventListener listener);
+void Manager.RemoveListener(IPerceptionEventListener listener);
+void Manager.PublishEvent(in PerceptionEvent transition);
 
 // 观察者
 bool Perception.HasSightDetection;

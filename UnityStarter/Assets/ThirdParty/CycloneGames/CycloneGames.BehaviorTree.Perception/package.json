@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.behavior-tree-perception",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.BehaviorTree.Perception",
+  "description": "Perception integration for CycloneGames.BehaviorTree: reads one sensor and publishes the nearest target, its distance and its last known position into blackboard slots.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.behavior-tree": "1.0.0",
+    "com.cyclone-games.ai-perception": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "BehaviorTree",
+    "Perception",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

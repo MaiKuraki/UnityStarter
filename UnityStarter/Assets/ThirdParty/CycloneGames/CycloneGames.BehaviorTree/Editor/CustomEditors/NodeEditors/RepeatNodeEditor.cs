@@ -9,7 +9,6 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
         public override void OnInspectorGUI()
         {
             var repeatNode = (RepeatNode)target;
-            //show script field
             serializedObject.Update();
             EditorGUILayout.PropertyField(serializedObject.FindProperty("_repeatForever"));
             if (repeatNode.RepeatForever)

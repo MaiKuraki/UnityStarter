@@ -1,4 +1,4 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
+namespace CycloneGames.BehaviorTree.Core.Networking
 {
     public readonly struct BTStateSnapshotBufferMemoryStats
     {
