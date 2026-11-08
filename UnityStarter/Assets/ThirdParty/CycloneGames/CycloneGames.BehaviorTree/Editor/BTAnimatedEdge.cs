@@ -4,11 +4,6 @@ using UnityEngine.UIElements;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
-    /// <summary>
-    /// Custom edge with animated flowing dot particles along a cubic bezier path.
-    /// Renders glowing dots with halos and a breathing pulse effect.
-    /// Supports per-state colors and optional child-index badge.
-    /// </summary>
     public class BTAnimatedEdge : Edge
     {
         private bool _isAnimating;
@@ -29,7 +24,6 @@ namespace CycloneGames.BehaviorTree.Editor
         private IVisualElementScheduledItem _scheduledAnimation;
         private Label _indexLabel;
 
-        // Cached bezier samples — avoids per-frame allocation
         private readonly Vector2[] _bezierPoints = new Vector2[BEZIER_SAMPLES + 1];
         private readonly float[] _bezierLengths = new float[BEZIER_SAMPLES + 1];
 
@@ -57,7 +51,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
             if (_isAnimating)
             {
-                _scheduledAnimation = schedule.Execute(UpdateAnimation).Every(16); // ~60fps
+                _scheduledAnimation = schedule.Execute(UpdateAnimation).Every(16);
             }
             else
             {
@@ -68,14 +62,12 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>Sets dot and glow colors for state-specific rendering.</summary>
         public void SetColors(Color dotColor, Color glowColor)
         {
             _dotColor = dotColor;
             _glowColor = glowColor;
         }
 
-        /// <summary>Shows a child-index badge near the child end of the edge.</summary>
         public void SetChildIndex(int index)
         {
             if (index <= 0) return;
@@ -109,7 +101,6 @@ namespace CycloneGames.BehaviorTree.Editor
             Vector2 end = GetInputPosition();
             if (start == Vector2.zero || end == Vector2.zero) return;
 
-            // Position at 65% along the edge (closer to child input)
             Vector2 pos = Vector2.Lerp(start, end, 0.65f);
             _indexLabel.style.left = pos.x + 6;
             _indexLabel.style.top = pos.y - 7;
@@ -143,7 +134,6 @@ namespace CycloneGames.BehaviorTree.Editor
             Vector2 endPos = GetInputPosition();
             if (startPos == Vector2.zero || endPos == Vector2.zero) return;
 
-            // Build cubic bezier with vertical tangents (top-to-bottom tree layout)
             float dy = Mathf.Abs(endPos.y - startPos.y);
             float tangentStrength = Mathf.Clamp(dy * 0.4f, 20f, 80f);
             Vector2 cp1 = startPos + new Vector2(0, tangentStrength);
@@ -152,7 +142,6 @@ namespace CycloneGames.BehaviorTree.Editor
             float totalLength = SampleBezier(startPos, cp1, cp2, endPos);
             if (totalLength < DOT_SPACING * 0.5f) return;
 
-            // Breathing pulse
             float pulse = 0.75f + 0.25f * Mathf.Sin(_pulsePhase);
 
             bool isFirst = true;
@@ -162,19 +151,16 @@ namespace CycloneGames.BehaviorTree.Editor
                 float radius = isFirst ? DOT_LEAD_RADIUS : DOT_RADIUS;
                 float alpha = isFirst ? pulse : pulse * 0.75f;
 
-                // Outer glow halo
                 Color glow = _glowColor;
                 glow.a *= alpha * 0.5f;
                 painter.fillColor = glow;
                 DrawCircle(painter, pos, radius * 2.5f);
 
-                // Main dot
                 Color dot = _dotColor;
                 dot.a *= alpha;
                 painter.fillColor = dot;
                 DrawCircle(painter, pos, radius);
 
-                // Bright center highlight
                 Color center = Color.white;
                 center.a = alpha * 0.5f;
                 painter.fillColor = center;
@@ -192,7 +178,6 @@ namespace CycloneGames.BehaviorTree.Editor
             painter.Fill();
         }
 
-        /// <summary>Samples a cubic bezier into cached arrays. Returns total arc length.</summary>
         private float SampleBezier(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3)
         {
             float totalLength = 0f;
@@ -213,7 +198,6 @@ namespace CycloneGames.BehaviorTree.Editor
             return totalLength;
         }
 
-        /// <summary>Gets a point at a given arc-length distance along the sampled bezier.</summary>
         private Vector2 GetPointAtDistance(float distance)
         {
             if (distance <= 0) return _bezierPoints[0];

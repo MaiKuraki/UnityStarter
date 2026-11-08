@@ -4,9 +4,7 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 {
     /// <summary>
-    /// Unreal-style Service node (ScriptableObject layer).
-    /// Attaches to any branch and periodically runs side-effect logic
-    /// (perception updates, target selection, etc.) while the child is active.
+    /// Service decorator that periodically runs side-effect logic while its child is active.
     /// </summary>
     [BTInfo("Service", "Periodically executes side-effect logic (perception updates, target selection, etc.) while the child node is active. Configurable interval with optional random deviation.")]
     public class ServiceNode : DecoratorNode

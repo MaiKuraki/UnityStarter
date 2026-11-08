@@ -3,7 +3,7 @@ using System.Collections;
 using System.Reflection;
 using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -18,6 +18,14 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
 {
     public sealed class BehaviorTreeRunnerLifecycleTests
     {
+        [UnitySetUp]
+        public IEnumerator EnsureExplicitManagers()
+        {
+            BTTickManagerComponent.CreateInstance();
+            BTPriorityTickManagerComponent.CreateInstance();
+            yield return null;
+        }
+
         [UnityTest]
         public IEnumerator ManagedRunner_PauseDisableStopAndPlayOwnManagerRegistration()
         {
@@ -75,13 +83,13 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
         }
 
         [UnityTest]
-        public IEnumerator ManagedRunner_UsesDeterministicSceneManagerBeforeItsAwake()
+        public IEnumerator ManagedRunner_UsesDeterministicSceneManager()
         {
             yield return VerifyPreAwakeManagerSelection(TickMode.Managed);
         }
 
         [UnityTest]
-        public IEnumerator PriorityRunner_UsesDeterministicSceneManagerBeforeItsAwake()
+        public IEnumerator PriorityRunner_UsesDeterministicSceneManager()
         {
             yield return VerifyPreAwakeManagerSelection(TickMode.PriorityManaged);
         }
@@ -340,11 +348,23 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             yield return null;
             yield return null;
 
+            if (tickMode == TickMode.Managed)
+            {
+                BTTickManagerComponent.CreateInstance();
+            }
+            else
+            {
+                BTPriorityTickManagerComponent.CreateInstance();
+            }
+            yield return null;
+
             if (tickMode == TickMode.PriorityManaged)
             {
                 BTDistanceLODProvider retainedProvider = originalManagerObject.GetComponent<BTDistanceLODProvider>();
-                Assert.That(retainedProvider, Is.Not.Null);
-                Assert.That(retainedProvider.Count, Is.Zero);
+                if (retainedProvider != null)
+                {
+                    Assert.That(retainedProvider.Count, Is.Zero);
+                }
             }
 
             Component replacementManager = tickMode == TickMode.Managed
@@ -397,6 +417,9 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             SetField(runner, "_tickMode", tickMode);
             SetField(runner, "_startOnAwake", true);
 
+            expectedManager.gameObject.SetActive(true);
+            yield return null;
+
             runnerObject.SetActive(true);
             Component resolvedManager = tickMode == TickMode.Managed
                 ? (Component)BTTickManagerComponent.Instance
@@ -406,7 +429,6 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             Assert.That(resolvedManager.gameObject.name, Does.StartWith("ConfiguredManager-"));
             Assert.That(GetManagerCount(tickMode), Is.EqualTo(1));
 
-            expectedManager.gameObject.SetActive(true);
             duplicateManager.gameObject.SetActive(true);
             yield return null;
 

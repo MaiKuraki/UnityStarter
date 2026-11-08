@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.AIEnvQuery.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

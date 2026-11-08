@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.Spatial.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

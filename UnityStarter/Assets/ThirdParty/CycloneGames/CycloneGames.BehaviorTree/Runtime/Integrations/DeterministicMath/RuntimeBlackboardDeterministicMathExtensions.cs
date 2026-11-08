@@ -1,6 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.DeterministicMath;
 
 namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
@@ -191,7 +191,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
         public static RuntimeBlackboardSchemaBuilder AddFPInt64(
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong(key, syncFlags);
@@ -202,7 +202,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
             FPInt64 defaultValue,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong(key, defaultValue.RawValue, syncFlags);
@@ -212,7 +212,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
         public static RuntimeBlackboardSchemaBuilder AddFPVector2(
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong2(key, syncFlags);
@@ -223,7 +223,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
             FPVector2 defaultValue,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong2(
@@ -236,7 +236,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
         public static RuntimeBlackboardSchemaBuilder AddFPVector3(
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong3(key, syncFlags);
@@ -247,7 +247,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
             this RuntimeBlackboardSchemaBuilder builder,
             string key,
             FPVector3 defaultValue,
-            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+            RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             EnsureBuilder(builder);
             return builder.AddLong3(

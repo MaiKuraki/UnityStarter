@@ -41,7 +41,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// The sensor holds no candidates and schedules no job: a frame usually carries a handful of
     /// stimuli, so the whole path stays on the owner thread.
     /// </summary>
-    public sealed class DamageSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner
+    public sealed class DamageSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner, IPerceptionEventSource
     {
         private readonly int _sensorId;
         private readonly SensorManager _owner;
@@ -111,6 +111,7 @@ namespace CycloneGames.AIPerception.Runtime
 
             _capacity = _config.Capacity.Normalize();
             _resultBuffer = new SensorResultBuffer(in _capacity, _memoryCounters);
+            _resultBuffer.BindSensorId(SensorId);
             // Only stimuli reported after initialization are relevant; replaying history would make
             // the sensor fire on events it was never meant to observe.
             _consumedSequence = _owner.LatestStimulusSequence;
@@ -265,6 +266,8 @@ namespace CycloneGames.AIPerception.Runtime
             ThrowIfDisposed();
             _resultBuffer?.CopyHandlesTo(ref results);
         }
+
+        SensorResultBuffer IPerceptionEventSource.EventBuffer => _resultBuffer;
 
         AIPerceptionSensorMemoryStats IAIPerceptionSensorMemoryOwner.GetMemoryStats()
         {

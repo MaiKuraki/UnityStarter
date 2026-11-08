@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Logging.Core",
         "CycloneGames.BehaviorTree.Runtime",
-        "CycloneGames.BehaviorTree.Benchmarks"
+        "CycloneGames.BehaviorTree.Benchmarks",
+        "CycloneGames.BehaviorTree.Core"
     ],
     "includePlatforms": [
         "Editor"

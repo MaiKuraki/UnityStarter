@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Conditions;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public sealed class RuntimeBehaviorTreeBuilder
     {

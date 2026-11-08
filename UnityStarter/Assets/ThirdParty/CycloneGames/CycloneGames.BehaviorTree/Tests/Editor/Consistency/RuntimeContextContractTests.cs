@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -34,7 +35,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         public void RuntimeContext_ResolvesPlainOwnerAndGameObjectComponents()
         {
             var plainOwner = new OwnerToken();
-            var context = new RuntimeBTContext(plainOwner);
+            var context = new UnityBTContext(plainOwner);
 
             Assert.That(context.Owner, Is.SameAs(plainOwner));
             Assert.That(context.GetOwner<OwnerToken>(), Is.SameAs(plainOwner));
@@ -64,7 +65,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             try
             {
                 var runner = ownerGameObject.AddComponent<BTRunnerComponent>();
-                var context = new RuntimeBTContext(new OwnerToken());
+                var context = new UnityBTContext(new OwnerToken());
 
                 runner.SetContext(context);
 

@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.BehaviorTree.Core",
+    "rootNamespace": "CycloneGames.BehaviorTree.Core",
+    "references": [
+        "CycloneGames.Hash.Core",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

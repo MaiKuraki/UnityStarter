@@ -92,7 +92,7 @@ Create, use, and dispose the bridge on the managed tree's owner thread. Keep one
 ```csharp
 using System;
 using CycloneGames.BehaviorTree.Networking;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 public sealed class BehaviorTreeReplicationSession : IDisposable
 {
@@ -161,7 +161,7 @@ The transport adapter serializes the DTO, selects the profile channel, sends it,
 
 ## Protocol Contract
 
-The package reserves message range `14000-14999`. Protocol version 2, with minimum supported version 2:
+The package reserves message range `14000-14999`. Protocol version 2; a peer is accepted only when its fingerprint matches exactly:
 
 | Constant | ID | Contract identity | Frozen schema hash | Default channel |
 | --- | ---: | --- | --- | --- |

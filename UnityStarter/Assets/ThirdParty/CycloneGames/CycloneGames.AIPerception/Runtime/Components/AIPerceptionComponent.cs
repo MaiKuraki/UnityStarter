@@ -72,6 +72,18 @@ namespace CycloneGames.AIPerception.Runtime
         /// Binds an explicit sensor manager. Use this from a composition root or DI container instead
         /// of relying on the process-wide default world. Rebinds live sensors when already enabled.
         /// </summary>
+        /// <summary>Registers a transition listener on the manager this component uses.</summary>
+        public void AddListener(IPerceptionEventListener listener)
+        {
+            _sensorManager?.AddListener(listener);
+        }
+
+        /// <summary>Removes a transition listener from the manager this component uses.</summary>
+        public void RemoveListener(IPerceptionEventListener listener)
+        {
+            _sensorManager?.RemoveListener(listener);
+        }
+
         public void SetSensorManager(SensorManager manager, bool rebuild = true)
         {
             if (_sensorManager == manager)

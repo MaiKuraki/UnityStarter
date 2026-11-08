@@ -9,14 +9,14 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
     {
         private static readonly Color[] PriorityColors = new Color[]
         {
-            new Color(0.2f, 0.8f, 0.2f),  // P0 - Green (high priority)
-            new Color(0.4f, 0.8f, 0.4f),  // P1
-            new Color(0.8f, 0.8f, 0.2f),  // P2 - Yellow
-            new Color(0.8f, 0.6f, 0.2f),  // P3 - Orange
-            new Color(0.8f, 0.4f, 0.2f),  // P4
-            new Color(0.6f, 0.3f, 0.2f),  // P5
-            new Color(0.5f, 0.5f, 0.5f),  // P6 - Gray
-            new Color(0.3f, 0.3f, 0.3f),  // P7
+            new Color(0.2f, 0.8f, 0.2f),
+            new Color(0.4f, 0.8f, 0.4f),
+            new Color(0.8f, 0.8f, 0.2f),
+            new Color(0.8f, 0.6f, 0.2f),
+            new Color(0.8f, 0.4f, 0.2f),
+            new Color(0.6f, 0.3f, 0.2f),
+            new Color(0.5f, 0.5f, 0.5f),
+            new Color(0.3f, 0.3f, 0.3f),
         };
 
         private SerializedProperty _config;
@@ -98,7 +98,6 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
             EditorGUILayout.Space(4);
 
-            // Priority distribution bar
             if (total > 0)
             {
                 DrawPriorityDistribution(total);
@@ -144,7 +143,6 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
                 xOffset += width;
             }
 
-            // Legend
             EditorGUILayout.Space(4);
             EditorGUILayout.BeginHorizontal();
             for (int i = 0; i < 4; i++)

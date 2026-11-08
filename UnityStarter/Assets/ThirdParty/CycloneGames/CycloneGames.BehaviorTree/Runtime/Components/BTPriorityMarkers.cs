@@ -1,12 +1,8 @@
 using UnityEngine;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
-    /// <summary>
-    /// Base class for AI priority markers. Attach to GameObjects with BTRunnerComponent
-    /// to override distance-based LOD with fixed priority.
-    /// </summary>
     public abstract class BTPriorityMarkerBase : MonoBehaviour, IBTPriorityMarker
     {
         [SerializeField] protected int _priority = 0;
@@ -16,9 +12,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public int TickInterval => _tickInterval;
     }
 
-    /// <summary>
-    /// Boss AI marker: Always uses highest priority (P0), ticks every frame.
-    /// </summary>
     public class BossAIMarker : BTPriorityMarkerBase
     {
         private void Reset()
@@ -28,9 +21,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         }
     }
 
-    /// <summary>
-    /// Elite AI marker: Uses high priority (P0), ticks every frame.
-    /// </summary>
     public class EliteAIMarker : BTPriorityMarkerBase
     {
         private void Reset()
@@ -40,9 +30,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         }
     }
 
-    /// <summary>
-    /// VIP NPC marker: Uses medium-high priority (P1), ticks every 2 frames.
-    /// </summary>
     public class VIPNPCMarker : BTPriorityMarkerBase
     {
         private void Reset()

@@ -1,6 +1,6 @@
 using CycloneGames.Logging;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
+namespace CycloneGames.BehaviorTree.Core.Nodes.Actions
 {
     public class RuntimeDebugLogNode : RuntimeNode
     {
@@ -16,7 +16,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (!string.IsNullOrEmpty(Message))
             {
                 Log.Debug(Message);

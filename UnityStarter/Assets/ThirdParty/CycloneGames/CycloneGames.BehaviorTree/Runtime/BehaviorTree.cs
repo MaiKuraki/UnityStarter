@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -17,6 +17,10 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime
 {
     [CreateAssetMenu(fileName = "BehaviorTree", menuName = "CycloneGames/AI/BehaviorTree")]
+    /// <summary>
+    /// Authoring asset. Compiles into a RuntimeBehaviorTree; editor mutators are
+    /// invalid while a compiled runtime is active.
+    /// </summary>
     public class BehaviorTree : ScriptableObject, ISerializationCallbackReceiver
     {
         private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
@@ -108,9 +112,6 @@ namespace CycloneGames.BehaviorTree.Runtime
             _cachedBlackboardSchemaError = null;
         }
 
-        /// <summary>
-        /// Calls OnDrawGizmos on all nodes for scene view visualization.
-        /// </summary>
         public void OnDrawGizmos()
         {
             if (Nodes == null)
@@ -126,17 +127,13 @@ namespace CycloneGames.BehaviorTree.Runtime
 
         /// <summary>
         /// Compiles the ScriptableObject-based behavior tree into a pure C# runtime instance.
-        /// Compilation allocates the runtime graph. Measure steady-state execution separately for the selected tree and target platform.
+        /// Compilation allocates the runtime graph.
         /// </summary>
-        /// <returns>A new RuntimeBehaviorTree instance</returns>
         public RuntimeBehaviorTree Compile()
         {
-            return Compile(new RuntimeBTContext());
+            return Compile(new UnityBTContext());
         }
 
-        /// <summary>
-        /// Compiles using a strongly-typed runtime context (owner + services).
-        /// </summary>
         public RuntimeBehaviorTree Compile(RuntimeBTContext context)
         {
             try
@@ -150,10 +147,9 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
-        // Convenience overload: compile with a GameObject owner and no service resolver.
         public RuntimeBehaviorTree Compile(UnityEngine.GameObject owner)
         {
-            return Compile(new RuntimeBTContext(owner));
+            return Compile(new UnityBTContext(owner));
         }
 
         #region Editor Methods

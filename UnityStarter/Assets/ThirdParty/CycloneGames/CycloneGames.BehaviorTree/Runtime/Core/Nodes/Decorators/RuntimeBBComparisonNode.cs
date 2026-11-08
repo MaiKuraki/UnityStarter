@@ -1,8 +1,5 @@
-namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
+namespace CycloneGames.BehaviorTree.Core.Nodes.Decorators
 {
-    /// <summary>
-    /// Comparison operator for blackboard condition checks.
-    /// </summary>
     public enum BBComparisonOp : byte
     {
         Equal = 0,
@@ -15,10 +12,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         IsNotSet = 7    // key does not exist
     }
 
-    /// <summary>
-    /// Value type stored in the blackboard key being compared.
-    /// </summary>
-    public enum BBValueType : byte
+    public enum BehaviorTreeComparisonValueType : byte
     {
         Int = 0,
         Float = 1,
@@ -27,20 +21,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     }
 
     /// <summary>
-    /// Typed blackboard condition decorator with comparison operators.
-    /// Supports int/float/bool comparisons and existence checks.
-    ///
-    /// Can be used with BB Observer for reactive abort:
-    ///   - Set AbortMode to trigger re-evaluation when tracked key changes
-    ///   - Integrates with AIPerception by observing perception result keys
-    ///
-    /// Example: "If BB[TargetDistance] < 10.0 → execute child, else Failure"
+    /// Typed blackboard condition decorator. A non-None AbortMode subscribes to tracked keys
+    /// and requests tree reevaluation whenever one changes.
     /// </summary>
-    public class RuntimeBBComparisonNode : RuntimeDecoratorNode
+    public class RuntimeBBComparisonNode : RuntimeDecoratorNode, IRuntimeBTObserverNode
     {
+        private RuntimeAbortType _abortMode = RuntimeAbortType.None;
+        private BlackboardObserverCallback _observerCallback;
+        private RuntimeBlackboard _boundBlackboard;
+        private int _boundPrimaryKey;
+        private int _boundReferenceKey;
+        private bool _boundUsesReferenceKey;
+
         private int _keyHash;
         private BBComparisonOp _operator = BBComparisonOp.IsSet;
-        private BBValueType _valueType = BBValueType.Int;
+        private BehaviorTreeComparisonValueType _valueType = BehaviorTreeComparisonValueType.Int;
         private int _refInt;
         private float _refFloat;
         private bool _refBool;
@@ -68,13 +63,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             }
         }
 
-        public BBValueType ValueType
+        public BehaviorTreeComparisonValueType ValueType
         {
             get => _valueType;
             set
             {
                 ThrowIfSetupFrozen();
-                if ((uint)(int)value > (uint)BBValueType.Object)
+                if ((uint)(int)value > (uint)BehaviorTreeComparisonValueType.Object)
                 {
                     throw new System.ArgumentOutOfRangeException(nameof(ValueType), value, "Unsupported blackboard value type.");
                 }
@@ -82,7 +77,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             }
         }
 
-        // Typed reference values for comparison (set the one matching ValueType)
         public int RefInt
         {
             get => _refInt;
@@ -109,9 +103,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             set => SetSetupValue(ref _refBool, value);
         }
 
-        /// <summary>
-        /// Optional key used when UseRefKey is true. Hash values may be negative.
-        /// </summary>
+        /// <summary>Reference key used when UseRefKey is true; hash values may be negative.</summary>
         public int RefKeyHash
         {
             get => _refKeyHash;
@@ -138,6 +130,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             }
         }
 
+        /// <summary>
+        /// Selects whether this node registers blackboard observers. A non-None value enables
+        /// event-driven reevaluation; composites decide the abort outcome on the next tick.
+        /// </summary>
+        public RuntimeAbortType AbortMode
+        {
+            get => _abortMode;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if ((uint)(int)value > (uint)RuntimeAbortType.Both)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(AbortMode), value, "Unsupported abort mode.");
+                }
+                _abortMode = value;
+            }
+        }
+
         public override bool CanEvaluate => true;
 
         public override void OnAwake()
@@ -146,9 +156,60 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             ValidateSetup();
         }
 
+        void IRuntimeBTObserverNode.BindObservers(RuntimeBlackboard blackboard, RuntimeBehaviorTree tree)
+        {
+            if (_abortMode == RuntimeAbortType.None || _boundBlackboard != null || blackboard == null)
+            {
+                return;
+            }
+
+            _boundBlackboard = blackboard;
+            _boundPrimaryKey = _keyHash;
+            _boundReferenceKey = _refKeyHash;
+            _boundUsesReferenceKey = _useRefKey;
+            _observerCallback = OnObservedKeyChanged;
+            blackboard.AddObserver(_boundPrimaryKey, _observerCallback);
+            if (_boundUsesReferenceKey && _boundReferenceKey != _boundPrimaryKey)
+            {
+                blackboard.AddObserver(_boundReferenceKey, _observerCallback);
+            }
+        }
+
+        void IRuntimeBTObserverNode.UnbindObservers()
+        {
+            if (_boundBlackboard == null)
+            {
+                return;
+            }
+
+            _boundBlackboard.RemoveObserver(_boundPrimaryKey, _observerCallback);
+            if (_boundUsesReferenceKey && _boundReferenceKey != _boundPrimaryKey)
+            {
+                _boundBlackboard.RemoveObserver(_boundReferenceKey, _observerCallback);
+            }
+
+            _boundBlackboard = null;
+            _observerCallback = null;
+        }
+
+        private void OnObservedKeyChanged(int keyHash, RuntimeBlackboard blackboard)
+        {
+            RuntimeBehaviorTree tree = OwnerTree;
+            if (tree != null)
+            {
+                tree.RequestReevaluation();
+            }
+        }
+
+        protected override void OnDispose(RuntimeBlackboard blackboard)
+        {
+            ((IRuntimeBTObserverNode)this).UnbindObservers();
+            base.OnDispose(blackboard);
+        }
+
         protected override void ValidateSetup()
         {
-            if (ValueType == BBValueType.Bool
+            if (ValueType == BehaviorTreeComparisonValueType.Bool
                 && Operator != BBComparisonOp.Equal
                 && Operator != BBComparisonOp.NotEqual
                 && Operator != BBComparisonOp.IsSet
@@ -158,7 +219,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
                     "Bool comparisons only support Equal, NotEqual, IsSet, or IsNotSet.");
             }
 
-            if (ValueType == BBValueType.Object
+            if (ValueType == BehaviorTreeComparisonValueType.Object
                 && Operator != BBComparisonOp.IsSet
                 && Operator != BBComparisonOp.IsNotSet)
             {
@@ -181,7 +242,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 
         private bool EvaluateCondition(RuntimeBlackboard bb)
         {
-            // Existence checks don't need typed comparison
             if (Operator == BBComparisonOp.IsSet)
                 return bb.HasKey(KeyHash);
             if (Operator == BBComparisonOp.IsNotSet)
@@ -189,13 +249,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 
             switch (ValueType)
             {
-                case BBValueType.Int:
+                case BehaviorTreeComparisonValueType.Int:
                     return CompareInt(bb);
-                case BBValueType.Float:
+                case BehaviorTreeComparisonValueType.Float:
                     return CompareFloat(bb);
-                case BBValueType.Bool:
+                case BehaviorTreeComparisonValueType.Bool:
                     return CompareBool(bb);
-                case BBValueType.Object:
+                case BehaviorTreeComparisonValueType.Object:
                     return bb.HasKey(KeyHash);
                 default:
                     return false;

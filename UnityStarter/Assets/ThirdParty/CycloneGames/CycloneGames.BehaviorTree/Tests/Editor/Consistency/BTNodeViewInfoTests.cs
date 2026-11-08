@@ -4,7 +4,7 @@ using System.Linq;
 using System.Reflection;
 using CycloneGames.BehaviorTree.Editor;
 using CycloneGames.BehaviorTree.Runtime.Conditions.BlackBoards;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards;
@@ -52,7 +52,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 var comparison = CreateNode<BBComparisonNode>(nodes);
                 ConfigureNode(comparison, "_key", property => property.stringValue = "TargetDistance");
                 ConfigureNode(comparison, "_operator", property => property.enumValueIndex = (int)BBComparisonOp.LessThan);
-                ConfigureNode(comparison, "_valueType", property => property.enumValueIndex = (int)BBValueType.Float);
+                ConfigureNode(comparison, "_valueType", property => property.enumValueIndex = (int)BehaviorTreeComparisonValueType.Float);
                 Assert.That(GetEditorModeInfo(comparison), Is.EqualTo("[TargetDistance] LessThan (Float)"));
 
                 var service = CreateNode<ServiceNode>(nodes);

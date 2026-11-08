@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
-namespace CycloneGames.BehaviorTree.Runtime.Core
+namespace CycloneGames.BehaviorTree.Core
 {
     public enum RuntimeBlackboardValueType : byte
     {
@@ -22,7 +21,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         LocalOnly = 0,
         Snapshot = 1,
         Delta = 2,
-        Networked = Snapshot | Delta
+        SnapshotAndDelta = Snapshot | Delta
     }
 
     public readonly struct RuntimeBlackboardValue
@@ -30,7 +29,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private readonly int _intValue;
         private readonly float _floatValue;
         private readonly bool _boolValue;
-        private readonly Vector3 _vector3Value;
+        private readonly BTFloat3 _vector3Value;
         private readonly long _longValue;
         private readonly RuntimeBlackboardLong2 _long2Value;
         private readonly RuntimeBlackboardLong3 _long3Value;
@@ -41,7 +40,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             int intValue,
             float floatValue,
             bool boolValue,
-            Vector3 vector3Value,
+            BTFloat3 vector3Value,
             long longValue,
             RuntimeBlackboardLong2 long2Value,
             RuntimeBlackboardLong3 long3Value,
@@ -62,7 +61,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public int IntValue => ValueType == RuntimeBlackboardValueType.Int ? _intValue : throw new InvalidOperationException("Blackboard value is not an int.");
         public float FloatValue => ValueType == RuntimeBlackboardValueType.Float ? _floatValue : throw new InvalidOperationException("Blackboard value is not a float.");
         public bool BoolValue => ValueType == RuntimeBlackboardValueType.Bool ? _boolValue : throw new InvalidOperationException("Blackboard value is not a bool.");
-        public Vector3 Vector3Value => ValueType == RuntimeBlackboardValueType.Vector3 ? _vector3Value : throw new InvalidOperationException("Blackboard value is not a Vector3.");
+        public BTFloat3 Vector3Value => ValueType == RuntimeBlackboardValueType.Vector3 ? _vector3Value : throw new InvalidOperationException("Blackboard value is not a Vector3.");
         public long LongValue => ValueType == RuntimeBlackboardValueType.Long ? _longValue : throw new InvalidOperationException("Blackboard value is not a long.");
         public RuntimeBlackboardLong2 Long2Value => ValueType == RuntimeBlackboardValueType.Long2 ? _long2Value : throw new InvalidOperationException("Blackboard value is not a long2.");
         public RuntimeBlackboardLong3 Long3Value => ValueType == RuntimeBlackboardValueType.Long3 ? _long3Value : throw new InvalidOperationException("Blackboard value is not a long3.");
@@ -83,7 +82,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return new RuntimeBlackboardValue(RuntimeBlackboardValueType.Bool, default, default, value, default, default, default, default, default);
         }
 
-        public static RuntimeBlackboardValue Vector3(Vector3 value)
+        public static RuntimeBlackboardValue Vector3(BTFloat3 value)
         {
             return new RuntimeBlackboardValue(RuntimeBlackboardValueType.Vector3, default, default, default, value, default, default, default, default);
         }
@@ -357,72 +356,72 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _hashFunction = hashFunction ?? RuntimeBlackboard.DefaultStringHashFunc;
         }
 
-        public RuntimeBlackboardSchemaBuilder AddInt(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddInt(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Int, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddInt(string key, int defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddInt(string key, int defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Int, syncFlags, true, RuntimeBlackboardValue.Int(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddFloat(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddFloat(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Float, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddFloat(string key, float defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddFloat(string key, float defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Float, syncFlags, true, RuntimeBlackboardValue.Float(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddBool(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddBool(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Bool, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddBool(string key, bool defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddBool(string key, bool defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Bool, syncFlags, true, RuntimeBlackboardValue.Bool(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddVector3(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddFloat3(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Vector3, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddVector3(string key, Vector3 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddFloat3(string key, BTFloat3 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Vector3, syncFlags, true, RuntimeBlackboardValue.Vector3(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong(string key, long defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong(string key, long defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long, syncFlags, true, RuntimeBlackboardValue.Long(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong2(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong2(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long2, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong2(string key, RuntimeBlackboardLong2 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong2(string key, RuntimeBlackboardLong2 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long2, syncFlags, true, RuntimeBlackboardValue.Long2(defaultValue));
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong3(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong3(string key, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long3, syncFlags, false, default);
         }
 
-        public RuntimeBlackboardSchemaBuilder AddLong3(string key, RuntimeBlackboardLong3 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.Networked)
+        public RuntimeBlackboardSchemaBuilder AddLong3(string key, RuntimeBlackboardLong3 defaultValue, RuntimeBlackboardSyncFlags syncFlags = RuntimeBlackboardSyncFlags.SnapshotAndDelta)
         {
             return Add(key, RuntimeBlackboardValueType.Long3, syncFlags, true, RuntimeBlackboardValue.Long3(defaultValue));
         }

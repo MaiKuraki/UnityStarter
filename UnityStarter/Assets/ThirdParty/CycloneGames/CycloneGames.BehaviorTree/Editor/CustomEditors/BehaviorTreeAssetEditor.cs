@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
-using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Core;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
@@ -138,7 +138,7 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             if (!_schemaEnabled.boolValue)
             {
                 EditorGUILayout.HelpBox(
-                    "Legacy Open mode preserves existing dynamic blackboard behavior. Enable Strict Schema explicitly when the key contract is ready.",
+                    "Open Schema mode preserves existing dynamic blackboard behavior. Enable Strict Schema explicitly when the key contract is ready.",
                     MessageType.Info);
                 EditorGUILayout.EndVertical();
                 return;
@@ -387,7 +387,7 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
             if (!tree.BlackboardSchemaEnabled)
             {
-                _schemaStatus = "Legacy Open mode: runtime writes are not restricted by an authoring schema.";
+                _schemaStatus = "Open Schema mode: runtime writes are not restricted by an authoring schema.";
                 _schemaStatusType = MessageType.Info;
                 return;
             }

@@ -1,0 +1,19 @@
+{
+  "name": "com.cyclone-games.ai-resources",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.AIResources",
+  "description": "Claim table for shared world resources: one owner per cover point, patrol slot or work station, with lease expiry so a dead agent cannot hold a slot forever.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "AI",
+    "Reservation"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

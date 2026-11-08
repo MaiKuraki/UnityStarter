@@ -1,5 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -12,7 +12,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 
         [Header("Comparison")]
         [SerializeField] private BBComparisonOp _operator = BBComparisonOp.IsSet;
-        [SerializeField] private BBValueType _valueType = BBValueType.Int;
+        [SerializeField] private BehaviorTreeComparisonValueType _valueType = BehaviorTreeComparisonValueType.Int;
 
         [Header("Reference Value (used when Reference Key is empty)")]
         [SerializeField] private int _refInt;
@@ -28,7 +28,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 
         public string Key => _key;
         public BBComparisonOp Operator => _operator;
-        public BBValueType ValueType => _valueType;
+        public BehaviorTreeComparisonValueType ValueType => _valueType;
         public int ReferenceInt => _refInt;
         public float ReferenceFloat => _refFloat;
         public bool ReferenceBool => _refBool;

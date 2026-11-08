@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
+    "references": [
+        "CycloneGames.BehaviorTree.Core",
+        "CycloneGames.AIPerception",
+        "Unity.Collections",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

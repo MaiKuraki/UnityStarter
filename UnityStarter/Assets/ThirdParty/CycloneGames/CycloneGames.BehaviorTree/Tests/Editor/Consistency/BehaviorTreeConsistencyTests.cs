@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
+using CycloneGames.BehaviorTree.Core;
+using CycloneGames.BehaviorTree.Runtime;
+using CycloneGames.BehaviorTree.Core.Nodes;
+using CycloneGames.BehaviorTree.Core.Networking;
+using CycloneGames.BehaviorTree.Core.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Core.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Tests.Editor.Framework;
 using NUnit.Framework;
 using UnityEngine;
@@ -368,7 +369,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                     1,
                     "Target",
                     RuntimeBlackboardValueType.Object,
-                    RuntimeBlackboardSyncFlags.Networked,
+                    RuntimeBlackboardSyncFlags.SnapshotAndDelta,
                     false,
                     default));
         }
@@ -536,7 +537,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         public void RuntimeBlackboard_SchemaSnapshotOnlySerializesSnapshotKeysAndPreservesLocalState()
         {
             RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-                .AddInt("Health", RuntimeBlackboardSyncFlags.Networked)
+                .AddInt("Health", RuntimeBlackboardSyncFlags.SnapshotAndDelta)
                 .AddInt("DeltaOnly", RuntimeBlackboardSyncFlags.Delta)
                 .AddBool("LocalFlag", RuntimeBlackboardSyncFlags.LocalOnly)
                 .Build();
@@ -913,7 +914,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
                 .AddInt("SnapshotOnly", RuntimeBlackboardSyncFlags.Snapshot)
                 .AddInt("DeltaOnly", RuntimeBlackboardSyncFlags.Delta)
-                .AddInt("Networked", RuntimeBlackboardSyncFlags.Networked)
+                .AddInt("Networked", RuntimeBlackboardSyncFlags.SnapshotAndDelta)
                 .Build();
 
             int snapshotOnlyKey = RuntimeBlackboard.DefaultStringHashFunc("SnapshotOnly");
@@ -1038,7 +1039,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void NetworkSnapshot_RejectsLegacyV1FormatMarker()
+        public void NetworkSnapshot_RejectsV1FormatMarker()
         {
             var sourceTree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));
 
