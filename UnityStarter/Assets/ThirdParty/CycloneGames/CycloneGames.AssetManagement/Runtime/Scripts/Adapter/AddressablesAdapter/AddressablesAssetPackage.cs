@@ -900,7 +900,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 Addressables.LoadResourceLocationsAsync(tag, typeof(UnityEngine.Object));
             try
             {
-                // The provider operation is intentionally non-cancellable. Cancelling a UniTask view does not
+                // The provider operation is non-cancellable. Cancelling the UniTask view does not
                 // abort Addressables and must not allow late writes into the caller-owned result list.
                 await operation.ToUniTask();
                 if (operation.Status != AsyncOperationStatus.Succeeded)

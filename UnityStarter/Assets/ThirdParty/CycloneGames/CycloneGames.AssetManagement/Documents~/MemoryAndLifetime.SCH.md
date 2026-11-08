@@ -340,7 +340,7 @@ Handle tracking 默认关闭。启用 stack capture 时，可恢复捕获失败�
 
 | 现象 | 可能原因 | 解决方法 |
 | --- | --- | --- |
-| 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目被有意保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
+| 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目由 retention policy 保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
 | Handle 看起来泄漏 | 某条路径未 Dispose lease | 启用 handle tracking，确认每条成功/异常/取消路径都 Dispose 调用方 lease；取消 `handle.Task` 不会 Dispose 它 |
 | Shutdown 失败后业务 API 拒绝调用 | Shutdown 请求是 sticky 的 | 修复清理原因并重试 `DestroyAsync`；新业务需创建新的 module/package generation |
 | Addressables shutdown 重复同一个 indeterminate-release 失败 | Provider cleanup 在引用计数 mutation 可能开始后抛出 | 不要再次调用 `Addressables.Release`；保留诊断，并使用产品外层 teardown 或进程重启恢复 policy |

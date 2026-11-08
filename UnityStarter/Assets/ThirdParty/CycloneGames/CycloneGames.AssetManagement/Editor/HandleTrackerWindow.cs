@@ -88,14 +88,14 @@ namespace CycloneGames.AssetManagement.Editor
 
         private const string LeakTooltip =
             "Handle alive >5 min and not found in any AssetCacheService idle pool.\n" +
-            "This may indicate a missing Dispose() call.\nIf this is intentional, right-click and choose Mark Persistent.";
+            "This may indicate a missing Dispose() call.\nIf the handle should stay alive, right-click and choose Mark Persistent.";
 
         private const string CachedTooltip =
-            "Handle is long-lived because AssetCacheService is intentionally keeping this\n" +
-            "asset in its Probation/Protected idle cache for fast reuse. Not a leak.";
+            "Handle is long-lived because AssetCacheService holds this asset\n" +
+            "in its Probation/Protected idle cache for fast reuse. Not a leak.";
 
         private const string PersistentTooltip =
-            "This exact tracked handle is marked intentionally long-lived for the current runtime session.\n" +
+            "This tracked handle is marked persistent for the current runtime session.\n" +
             "It is excluded from leak heuristics until unmarked or the subsystem resets.";
 
         private const string IndeterminateTooltip =

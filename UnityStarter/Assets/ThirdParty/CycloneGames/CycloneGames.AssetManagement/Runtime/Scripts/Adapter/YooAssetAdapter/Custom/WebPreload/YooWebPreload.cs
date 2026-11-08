@@ -7,7 +7,7 @@ using YooAsset;
 namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary>
-    /// Entry point for YooAsset 3.0.6 Web preload support.
+    /// Entry point for YooAsset Web preload support.
     /// </summary>
     /// <remarks>
     /// <para>

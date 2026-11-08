@@ -178,9 +178,25 @@ namespace CycloneGames.AssetManagement.Tests.Editor
 
         private static void AssertRequiresMainThread(Action getter)
         {
-            InvalidOperationException exception = Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await Task.Run(getter));
-            Assert.That(exception.Message, Does.Contain("Unity main thread"));
+            // Running the getter through an async lambda deadlocks in the Editor: the await captures the
+            // Unity main-thread synchronization context, while NUnit's ThrowsAsync blocks that same thread
+            // waiting for the task. Observe the pool-thread task directly instead.
+            Task task = Task.Run(getter);
+            try
+            {
+                task.GetAwaiter().GetResult();
+            }
+            catch (InvalidOperationException exception)
+            {
+                Assert.That(exception.Message, Does.Contain("Unity main thread"));
+                return;
+            }
+            finally
+            {
+                task.Dispose();
+            }
+
+            Assert.Fail("The getter must reject calls from a non-Unity thread.");
         }
 
         private static int GetProviderReferenceCount(AsyncOperationHandle<GameObject> handle)

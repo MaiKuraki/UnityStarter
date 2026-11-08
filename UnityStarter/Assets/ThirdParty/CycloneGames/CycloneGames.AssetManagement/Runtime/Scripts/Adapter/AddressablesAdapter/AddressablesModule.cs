@@ -107,9 +107,9 @@ namespace CycloneGames.AssetManagement.Runtime
                     Addressables.Release(initializationHandle);
                 }
 
-                // ToUniTask resumes from Addressables' completion callback. Let that callback unwind after our
-                // external handle is released so the provider can drop its internal running reference. The module
-                // does not publish successful initialization or release failed initialization ownership earlier.
+                // ToUniTask resumes from Addressables' completion callback. The yield lets that callback unwind
+                // after the external handle is released, so the provider can drop its internal running reference.
+                // Initialization is not published as successful before that unwind.
                 await UniTask.Yield();
                 if (!initializationSucceeded)
                 {

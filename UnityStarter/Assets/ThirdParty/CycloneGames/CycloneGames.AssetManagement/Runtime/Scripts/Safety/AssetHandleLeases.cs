@@ -14,8 +14,8 @@ namespace CycloneGames.AssetManagement.Runtime
     }
 
     /// <summary>
-    /// Creates caller-owned leases around shared provider handles. Lease objects are intentionally never pooled:
-    /// a stale reference must never become capable of observing or releasing a later provider operation.
+    /// Creates caller-owned leases around shared provider handles. Lease objects are never pooled:
+    /// a stale reference must not be able to observe or release a later provider operation.
     /// </summary>
     internal static class AssetHandleLeases
     {

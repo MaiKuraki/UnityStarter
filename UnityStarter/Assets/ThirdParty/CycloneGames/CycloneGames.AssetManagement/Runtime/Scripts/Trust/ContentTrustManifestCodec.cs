@@ -14,7 +14,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         private const string ENTRIES_PREFIX = ",\"entries\":[";
 
-        // Wire tokens are string literals by design; enum renames must not silently change persisted manifests.
+        // Wire tokens are string literals; renaming enum members must not change persisted manifests.
         private static readonly HashAlgorithmToken[] HashAlgorithmTokens =
         {
             new HashAlgorithmToken(ContentTrustHashAlgorithm.None, "None"),

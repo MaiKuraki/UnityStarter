@@ -84,9 +84,7 @@ AssetManagement emits diagnostics through stable `LogChannel` categories under `
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
-YooAsset 3.0.6 is the minimum stable release. The asmdef range enables the provider for versions below 4.0.0; activation tests reject prerelease packages. The product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
-
-The YooAsset provider needs 3.0.6 specifically: it consumes `UnloadAllAssetsOptions.ShouldWaitUnloadUnused` and relies on the `YooAsset.Custom` friend assembly that 3.0.6 introduced to reach Web preload. YooAsset 3.0.5 is no longer supported and no compatibility branch is retained.
+YooAsset 3.0.6 is the minimum stable release, and the supported range is `[3.0.6,4.0.0)` (matching the asmdef `versionDefines`). Activation tests reject prerelease packages, and the product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release. The provider consumes `UnloadAllAssetsOptions.ShouldWaitUnloadUnused` and relies on a friend assembly named `YooAsset.Custom` to reach Web preload.
 
 ## Quick Start
 
@@ -140,11 +138,11 @@ Asset, all-assets, and raw-file load calls return non-pooled caller leases. A le
 
 `WaitForAsyncComplete` is not a portable replacement for async flow. Addressables and YooAsset reject it for every pending operation; terminal calls are no-ops. Await `Task`. Synchronous single-asset access is an optional `IAssetSyncOperations` capability; scenes only expose the asynchronous lifecycle.
 
-This is a behavior migration for YooAsset wrappers: a pending call that previously asked the provider to advance synchronously now throws `NotSupportedException`. Existing callers must await `IOperation.Task`; the separate `IAssetSyncOperations` capability is unchanged.
+Pending YooAsset operations fail with `NotSupportedException` when asked to advance synchronously; await `IOperation.Task`. `IAssetSyncOperations` is a separate capability for synchronous single-asset access.
 
 Caller cancellation cancels that caller's wait, not a shared backend load that may be used by other callers. The caller must still dispose its lease. This separates request cancellation from shared-resource ownership.
 
-A caller-visible cancellation is not proof of physical provider termination. When package or module retirement cancels a pending owned operation, the adapter continues observing its provider/adapter tail. Successful package destruction does not complete until every retained tail has drained, including a late success, cancellation, or observed failure. A later provider outcome cannot replace the already-published public cancellation. Ordinary `ISceneHandle.Dispose` is deliberately excluded from authoritative retirement: it releases only caller wrapper ownership and neither cancels the load nor unloads the scene.
+A caller-visible cancellation is not proof of physical provider termination. When package or module retirement cancels a pending owned operation, the adapter continues observing its provider/adapter tail. Successful package destruction does not complete until every retained tail has drained, including a late success, cancellation, or observed failure. A later provider outcome cannot replace the already-published public cancellation. Ordinary `ISceneHandle.Dispose` is not part of authoritative retirement: it releases only caller wrapper ownership and neither cancels the load nor unloads the scene.
 
 Unity objects, provider APIs, cache mutation, handle disposal, scene operations, module/package lifecycle, and maintenance orchestration are main-thread-affine. Permitted worker-thread work is narrow: completed `IRawFileHandle.ReadText` and `ReadBytes` reads, telemetry ring-buffer operations, and product-scheduled pure file hashing on supported platforms. Each successful `ReadBytes()` call returns a caller-owned mutable snapshot that remains valid after handle disposal; retain it instead of requesting another full copy. Never call Unity object properties, provider handles, `Dispose`, or cache mutation from a background task.
 
@@ -177,9 +175,9 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
 
-`IAssetPackage` deliberately has no generic unload-unused operation because the providers cannot implement one meaning. Use `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)` for common framework-cache eviction, `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync` for the Resources process-wide Unity pass, and `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync` for YooAsset's package-local operation. Addressables has no equivalent beyond framework-cache trimming. This is the direct migration from the removed `IAssetPackage.UnloadUnusedAssetsAsync`; no compatibility shim is retained.
+`IAssetPackage` has no generic unload-unused operation: the providers cannot implement one meaning. Use `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)` for common framework-cache eviction, `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync` for the Resources process-wide Unity pass, and `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync` for YooAsset's package-local operation. Addressables has no equivalent beyond framework-cache trimming.
 
-`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` is the deterministic escape hatch: it releases every provider-owned asset in one package, including assets the provider still counts as in use. Pass `waitForEngineUnload: true` when the caller must observe native memory actually reclaimed — for example before a memory-gated scene transition or when capturing a Memory Profiler baseline — and `false` on frame-time sensitive paths, where the provider reports terminal state before the engine's native unload pass finishes.
+`IAssetProviderMemoryReclamation.UnloadAllProviderAssetsAsync(waitForEngineUnload)` is the deterministic escape hatch: it releases every provider-owned asset in one package, including assets the provider still counts as in use. Pass `waitForEngineUnload: true` when the caller must observe native memory actually reclaimed, for example before a memory-gated scene transition or when capturing a Memory Profiler baseline, and `false` on frame-time sensitive paths, where the provider reports terminal state before the engine's native unload pass finishes.
 
 Addressables and YooAsset cannot be active through these adapters at the same time. The module-level AssetBundle runtime guard establishes one framework-controlled provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
 
@@ -353,7 +351,7 @@ Required sequence:
 
 ### Provider options pass-through: decryption and file systems (YooAsset)
 
-`AssetPackageInitOptions.ProviderOptions` carries the provider-native options object verbatim — the adapter forwards it without copying or filtering. For YooAsset this is `YooAsset.InitializePackageOptions` and its derived option types (`EditorSimulateModeOptions`, `OfflinePlayModeOptions`, `HostPlayModeOptions`, `WebPlayModeOptions`, `CustomPlayModeOptions`), so every provider capability is reachable without an adapter change. Custom decryption and custom file systems ride the same seam:
+`AssetPackageInitOptions.ProviderOptions` carries the provider-native options object verbatim. The adapter forwards it without copying or filtering. For YooAsset this is `YooAsset.InitializePackageOptions` and its derived option types (`EditorSimulateModeOptions`, `OfflinePlayModeOptions`, `HostPlayModeOptions`, `WebPlayModeOptions`, `CustomPlayModeOptions`), so every provider capability is reachable without an adapter change. Custom decryption and custom file systems ride the same seam:
 
 ```csharp
 var hostOptions = new HostPlayModeOptions
@@ -370,9 +368,9 @@ hostOptions.CacheFileSystemParameters.AddParameter(
 
 A custom file system is declared with `new FileSystemParameters("Namespace.TypeName,Assembly", packageRoot)`; the provider instantiates it by reflection and hands it every value added through `AddParameter`. Bundle-level policies (`DownloadUrlPolicy`, `DownloadRetryPolicy`, `WebPlatformStrategy`, `BundleUnpackPolicy`, `BuiltinFileAccessor`) use the same parameter keys. Because the adapter forwards the options object as-is, new provider play modes and parameters keep working across adapter upgrades as long as the referenced YooAsset version contains the type. The `EnsureBundleFileAsync` detail's `IsEncrypted` flag lets products detect encrypted content before handing a path to a native consumer.
 
-### Web preload for mini-game platform caches (YooAsset 3.0.6)
+### Web preload for mini-game platform caches
 
-YooAsset 3.0.6 lets the Web network file system pre-download bundles into a platform-managed cache. The strategy interface is `internal` to YooAsset and reachable only from an assembly named `YooAsset.Custom`, so the provider ships a friend assembly under that name and exposes a public contract:
+The Web network file system pre-downloads bundles into a platform-managed cache across the supported YooAsset range (minimum stable release 3.0.6, `[3.0.6,4.0.0)`). The strategy interface is `internal` to YooAsset and reachable only from an assembly named `YooAsset.Custom`, so the provider ships a friend assembly under that name and exposes a public contract:
 
 ```csharp
 // Implement once per platform (WeChat, Douyin, ...). Both members run on the main thread
@@ -397,7 +395,7 @@ YooWebPreload.AttachPreloadStrategy(
 
 Preload is read only by YooAsset's Web network file system; attaching it to a sandbox or builtin parameter set has no effect. `WebPreloadBundleQuery` is reused across queries by its owning strategy, so read it synchronously and never retain it.
 
-Custom providers such as xasset adapters implement `IAssetPackage` plus the optional capability interfaces; they are exempt from CG0014 by design and receive the same cache, lease, tracker, and telemetry plumbing.
+Custom providers such as xasset adapters implement `IAssetPackage` plus the optional capability interfaces; they are exempt from CG0014 and receive the same cache, lease, tracker, and telemetry plumbing.
 
 ### Bundle-file provisioning for native consumers
 
@@ -565,7 +563,7 @@ Operational warnings, provider failures, cache-retention events, and Editor vali
 | Provider state may have changed after failure | Operation crossed the mutation boundary | Quarantine dependent content, preserve recovery evidence, require an explicit owner decision before retry |
 | Storage insufficient after a successful check | Preflight is not a reservation | Recompute `RequiredFreeBytes` from measured peak amplification and retry |
 | Signature verification fails before file hashing | Missing verifier, missing signature, or rejected signature | Verify canonical payload generation, key selection, signature encoding; do not switch to `IntegrityOnly` to bypass |
-| Asset remains in memory after all callers dispose | Idle cache entry retained intentionally | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
+| Asset remains in memory after all callers dispose | Idle cache entry held by the retention policy | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
 | Handle appears leaked | Lease not disposed on some path | Enable handle tracking, confirm every success/exception/cancellation path disposes the caller lease; cancelling `handle.Task` does not dispose it |
 | YooAsset raw read returns empty value | Provider load not yet complete or failed | Await `IRawFileHandle.Task`; inspect `Error`; retain `ReadBytes()` result instead of calling repeatedly |
 | Scene unload was cancelled | Cancellation accepted only before mutation starts | Join the non-cancellable provider completion; a failed unload remains retryable |

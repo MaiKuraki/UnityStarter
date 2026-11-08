@@ -6,7 +6,7 @@ using Cysharp.Threading.Tasks;
 namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary>
-    /// Addressables-specific maintenance that deliberately does not model a catalog as a version-addressable,
+    /// Addressables-specific maintenance that does not model a catalog as a version-addressable,
     /// isolated, or atomic candidate. The composition root must quiesce loads and validate its release policy
     /// before activating the latest catalogs reported by Addressables. Catalog and cache mutations are
     /// main-thread-affine and fail fast when another mutation is already in progress on the same package.
