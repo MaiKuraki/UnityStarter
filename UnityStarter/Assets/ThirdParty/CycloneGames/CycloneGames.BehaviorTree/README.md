@@ -882,6 +882,24 @@ public static class Step10
 
 Node `0` must be the unique `FlatNodeType.Root`, and composite children are referenced by a flattened `ChildIndices` array. `BTAgentHandle` carries a slot index plus a generation, so a recycled slot rejects a stale handle. `TryAddAgent` is the admission-safe form; `AddAgent` throws `InvalidOperationException` at effective capacity. Terminal agents remain terminal until `ResetAgent(handle, clearBlackboard)`. External actions use `BTActionRequestHandle` through `TryGetActionRequest` and `TrySetActionStatus`. Every public state access completes the outstanding scheduled job before touching NativeArrays, and the scheduler has creator/owner-thread affinity. Dispose every scheduler before disposing the shared `FlatBehaviorTree`; the nested `using` order above does that. `BTCapacityLimits.MaxTreeDepth` also bounds flat-tree depth validation.
 
+### Blackboard in this path
+
+The DOD runtime does not read `RuntimeBlackboard` schemas. Each agent owns a fixed slot space, allocated with the scheduler.
+
+| Aspect | Behaviour |
+| --- | --- |
+| Storage | Three arrays per agent: `int`, `float`, and a byte-backed `bool`. |
+| Addressing | Slot index in `0 .. bbSlotCount - 1`. There are no key names and no schema. |
+| Value types | `int`, `float`, `bool` only. `Float3`, `Long`, `Long2`, `Long3` and `object` have no slot. |
+| Conditions | `FlatNodeType.BlackboardCondition` reads the int array and compares it with `CompareValue` using `CompareOp`. Float and bool slots can be read by actions, but that node cannot compare them. |
+| Out-of-range access | `SetBBInt`, `GetBBInt` and the float and bool pairs throw `ArgumentOutOfRangeException` for a slot outside the range and `InvalidOperationException` for a stale or inactive agent. A node whose `BBKey` is outside the slot count fails its condition instead of reading adjacent memory. |
+| Persistence | Values belong to the agent and survive ticks until `ResetAgent(handle, clearBlackboard: true)`. |
+| Observers | None. Observers, abort modes and network scopes of the managed blackboard do not exist here. |
+| Capacity | `bbSlotCount` is fixed at scheduler construction and applies to every agent. |
+| Thread | Creator and owner-thread affinity; every access completes the outstanding job before touching the arrays. |
+
+There is no bridge between the two blackboards. A tree that needs `Float3` or `object` values runs on the managed runtime; one that needs thousands of homogeneous agents runs here with the reduced value set.
+
 ## <a id="composite-example"></a>12. Composite example: a multi-layer tree
 
 This example assembles one tree that uses a strict schema, observer abort, `Hybrid` reevaluation, a Service, a Parallel finish policy, explicit scheduling, optional LOD, and event wake-up together. It is a single compilable `MonoBehaviour` composition root.

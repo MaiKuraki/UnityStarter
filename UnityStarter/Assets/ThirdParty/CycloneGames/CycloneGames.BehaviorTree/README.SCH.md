@@ -882,6 +882,24 @@ public static class Step10
 
 节点 `0` 必须是唯一的 `FlatNodeType.Root`，组合节点的 child 通过扁平化的 `ChildIndices` 数组引用。`BTAgentHandle` 携带 slot index 与 generation，被回收的 slot 会拒绝 stale handle。`TryAddAgent` 是带 admission 的形式；`AddAgent` 在 effective capacity 处抛出 `InvalidOperationException`。终态 agent 会保持终态，直到调用 `ResetAgent(handle, clearBlackboard)`。外部 action 通过 `TryGetActionRequest` 与 `TrySetActionStatus` 使用 `BTActionRequestHandle`。每个公开状态访问都会先完成尚未结束的 scheduled job，再访问 NativeArray，且 scheduler 具有 creator/owner-thread affinity。必须先释放所有 scheduler，再释放共享 `FlatBehaviorTree`；上面嵌套的 `using` 顺序正是如此。平面树深度校验同样使用 `BTCapacityLimits.MaxTreeDepth`。
 
+### 这条路径上的黑板
+
+数据导向运行时**不读** `RuntimeBlackboard` 的 schema。每个 agent 拥有一段由调度器分配的固定槽位。
+
+| 方面 | 行为 |
+| --- | --- |
+| 存储 | 每个 agent 三条数组：`int`、`float`、以字节存储的 `bool`。 |
+| 寻址 | 槽位下标 `0 .. bbSlotCount - 1`；没有键名，也没有 schema。 |
+| 值类型 | 只有 `int`、`float`、`bool`。`Float3`、`Long`、`Long2`、`Long3` 与 `object` 没有槽位。 |
+| 条件节点 | `FlatNodeType.BlackboardCondition` 读取 **int** 数组并与 `CompareValue` 按 `CompareOp` 比较。float 与 bool 槽位可以被动作读取，但该节点无法比较它们。 |
+| 越界访问 | `SetBBInt`、`GetBBInt` 及 float、bool 的对应方法在槽位越界时抛 `ArgumentOutOfRangeException`，agent 失效或过期时抛 `InvalidOperationException`。节点的 `BBKey` 超出槽位数时条件直接失败，而不是读到相邻内存。 |
+| 生命周期 | 值属于该 agent，跨 tick 保留，直到 `ResetAgent(handle, clearBlackboard: true)`。 |
+| 观察者 | 没有。托管黑板的观察者、中止模式与网络 scope 在这条路径上不存在。 |
+| 容量 | `bbSlotCount` 在调度器构造时固定，对所有 agent 生效。 |
+| 线程 | 创建者与 owner 线程亲和；每次访问都会先完成未完成的 job 再触碰数组。 |
+
+两套黑板之间没有桥接。需要 `Float3` 或 `object` 的树走托管运行时；需要成千上万个同构 agent 的树走这条路径，使用缩减后的值类型集合。
+
 ## <a id="composite-example"></a>12. 综合示例：一棵多层树
 
 本示例把严格 schema、observer abort、`Hybrid` 重评估、Service、Parallel 完成策略、显式调度、可选 LOD 与事件唤醒组装进同一棵树。它是一个完整可编译的 `MonoBehaviour` composition root。

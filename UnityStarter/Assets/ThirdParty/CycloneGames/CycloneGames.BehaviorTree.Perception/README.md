@@ -113,6 +113,11 @@ if (bridge.IsTruncated)
 {
     // More targets were reported than the buffer holds; raise the capacity or accept the nearest N.
 }
+
+if (aggregator.IsTruncated)
+{
+    // More distinct targets survived the merge than the aggregator keeps.
+}
 ```
 
 ## <a id="semantics"></a>Semantics
@@ -122,6 +127,10 @@ if (bridge.IsTruncated)
 - `Update` reads the sensor only; it does not advance the sensor or touch the registry.
 - One bridge serves one sensor and one thread. Two bridges on the same sensor are allowed and read the same results.
 - `Dispose` clears the buffer and releases nothing else; the sensor lifetime stays with the caller.
+- The handle slot holds `(registry, id, generation)`. All zeros mean no target; `TryUnpackHandle` returns false for that triple and for any component outside `int` range.
+- `PublishNearestFromMemory` writes false when nothing was detected, so it never reports a remembered target that no longer exists.
+- `PerceptionAggregator.Update` calls `Update` on every registered bridge. A bridge registered with an aggregator should not also be updated by the caller in the same frame; the second call repeats the sensor read.
+- The aggregator carries its own owner-thread check. Every registered bridge must belong to the same thread.
 
 ## <a id="cost"></a>Cost
 
@@ -129,9 +138,13 @@ if (bridge.IsTruncated)
 | --- | --- |
 | `Update` | Linear in `min(sensor results, capacity)`. |
 | `Publish*` | Constant time each, dominated by the blackboard write. |
-| Memory | One `PerceptionTarget` array of `capacity` entries, allocated once. |
+| `PerceptionAggregator.Update` | Linear in the staged targets for collection, quadratic for deduplication and ordering over the distinct count. |
+| Bridge memory | One `PerceptionTarget` array of `capacity` entries, allocated once. |
+| Aggregator memory | One merged array of `capacity`, one staging array sized to the sum of the bridge capacities. Both are allocated by `Add`, never by `Update`. |
 
-Nothing allocates after the constructor. A `PerceptionTarget` is a readonly struct of a handle, a position, two floats and a flag, so the array is contiguous and iteration stays in cache for the capacities this adapter is used with.
+Nothing allocates after the constructor and the `Add` calls. A `PerceptionTarget` is a readonly struct of a handle, a position, two floats and a flag, so the arrays are contiguous and iteration stays in cache at these sizes.
+
+With the default capacities the aggregator stages at most `4 × 8 = 32` targets and keeps 8, so the quadratic passes operate on tens of elements.
 
 ## <a id="api"></a>API
 
@@ -175,3 +188,6 @@ ReadOnlySpan<PerceptionTarget> Targets { get; }
 - Nearest only. Selecting by team, threat or visibility is left to the caller, because those rules differ per project.
 - Pull only. The adapter reads results when `Update` runs; the perception event layer exists for consumers that need to react to a change rather than to a state.
 - No distance conversion. The published value is the sensor's number, not a squared or normalised variant.
+- Aggregator ordering is by distance only. Priority by team, threat or visibility is a caller concern applied after the merge.
+- The aggregator stages every target before merging, so its buffer is sized to the sum of the registered bridge capacities. Registering more bridges or larger bridges raises memory once, at `Add`.
+- Identity is opt-in. The base publish writes a flag and a distance; a tree that never needs the handle pays nothing for it.
