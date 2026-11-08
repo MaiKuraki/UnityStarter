@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.ai-env-query",
   "version": "1.0.0",
   "displayName": "CycloneGames.AIEnvQuery",
-  "description": "Candidate generation plus weighted scoring for spatial decisions: where to take cover, which position has line of sight, which spot is closest to a target. Engine-free core, allocation-free runs.",
+  "description": "Candidate generation plus weighted scoring for choosing a position among candidates. Engine-free core, allocation-free runs.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},
