@@ -262,6 +262,8 @@ namespace CycloneGames.AnimationRuntime
 
             // AnimationTick treats a negative step index as invalid, so wrap before the signed limit.
             _stepIndex = _stepIndex == long.MaxValue ? 0L : _stepIndex + 1L;
+            bool fixedPhase = _commitPhase == AnimationCommitPhase.FixedUpdate;
+
             AnimationTimeSource source;
             switch (_commitPhase)
             {
@@ -276,12 +278,13 @@ namespace CycloneGames.AnimationRuntime
                     break;
             }
 
+            // Time.time is constant across the fixed steps of one frame.
             var tick = new AnimationTick(
-                Time.timeAsDouble,
+                fixedPhase ? Time.fixedTimeAsDouble : Time.timeAsDouble,
                 _stepIndex,
                 source,
                 false,
-                _commitPhase == AnimationCommitPhase.FixedUpdate ? Time.fixedDeltaTime : Time.deltaTime);
+                fixedPhase ? Time.fixedDeltaTime : Time.deltaTime);
 
             _graph.Commit(tick);
         }

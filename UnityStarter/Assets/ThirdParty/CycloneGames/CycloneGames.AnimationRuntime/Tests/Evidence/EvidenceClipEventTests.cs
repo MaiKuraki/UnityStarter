@@ -60,6 +60,26 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             return clip;
         }
 
+        /// <summary>Clip with one marker per supplied time, in the order given.</summary>
+        private AnimationClip CreateEventClipAt(string name, float length, params float[] times)
+        {
+            AnimationClip clip = CreateClip(name, length);
+            clip.wrapMode = WrapMode.ClampForever;
+            for (int i = 0; i < times.Length; i++)
+            {
+                clip.AddEvent(new AnimationEvent
+                {
+                    time = times[i],
+                    functionName = "Marker" + i,
+                    stringParameter = "Stone",
+                    intParameter = i,
+                    floatParameter = 0.5f
+                });
+            }
+
+            return clip;
+        }
+
         [Test]
         public void E1_ClipEvent_FiresWhenTimeCrossesIt()
         {
@@ -390,6 +410,182 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 NoteEvidence("E10", "10000 event crossings: heap delta " + FormatBytes(heapDelta)
                     + ", events=" + sink.Count);
                 Assert.Less(heapDelta, 64L * 1024L, "event dispatch must not allocate per crossing");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void E12_ZeroDurationFadeMidPlayback_DoesNotReplayMarkers()
+        {
+            CreateActor("E12Actor", out Animator animator);
+            AnimationClip clip = CreateEventClipAt("E12Clip", 1f, 0.2f, 0.5f, 0.8f);
+            var sink = new RecordingSink();
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+            graph.SetClipEventSink(sink);
+            var key = new AnimationPlaybackKey(1, 0, 0, 0);
+            var buffer = new AnimationPlaybackSnapshot[4];
+
+            try
+            {
+                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(TickWithDelta(0L, 0.016f));
+                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.4d, 1f));
+                graph.Commit(TickWithDelta(1L, 0.016f));
+                Assert.AreEqual(1, sink.Count, "only the 0.2 marker has been crossed");
+
+                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.Commit(TickWithDelta(2L, 0.016f));
+                int before = sink.Count;
+                Assert.AreEqual(3, before, "all three markers have been crossed");
+
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0f, 0.5f)));
+                graph.Commit(TickWithDelta(3L, 0.016f));
+
+                NoteEvidence("E12", "markers before the zero-duration fade = " + before
+                    + ", after = " + sink.Count);
+
+                Assert.AreEqual(before, sink.Count, "a zero-duration fade must not replay passed markers");
+                Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
+                Assert.AreEqual(0.5f, buffer[0].Weight, 1e-4f, "the fade still applies its target weight");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void E13_ZeroDurationFadeOnSpawn_StillFiresTheMarkerAtZero()
+        {
+            CreateActor("E13Actor", out Animator animator);
+            AnimationClip clip = CreateEventClip("E13Clip", 1f, 0f);
+            var sink = new RecordingSink();
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+            graph.SetClipEventSink(sink);
+
+            try
+            {
+                graph.BeginClip(
+                    new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
+                    new AnimationFade(0f, 1f));
+                graph.Commit(TickWithDelta(0L, 0.016f));
+
+                NoteEvidence("E13", "marker at t=0 with a zero-duration fade = " + sink.Count);
+                Assert.AreEqual(1, sink.Count, "spawning with a fade must not change which markers fire");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void E14_LoopedBackwardSeek_SuppressesEvents()
+        {
+            CreateActor("E14Actor", out Animator animator);
+            AnimationClip clip = CreateEventClipAt("E14Clip", 1f, 0.05f, 0.5f, 0.95f);
+            var sink = new RecordingSink();
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+            graph.SetClipEventSink(sink);
+
+            try
+            {
+                // Loop is ignored under the external policy but still stored in the clock; the markers sit in the
+                // tail and head bands a wrap would report.
+                graph.BeginClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(TickWithDelta(0L, 0.016f));
+                graph.UpdateClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.9d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(TickWithDelta(1L, 0.016f));
+                int before = sink.Count;
+                Assert.AreEqual(2, before, "the 0.05 and 0.5 markers have been crossed");
+
+                graph.UpdateClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.1d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(TickWithDelta(2L, 0.016f));
+
+                NoteEvidence("E14", "markers before the backward seek = " + before
+                    + ", after = " + sink.Count);
+                Assert.AreEqual(before, sink.Count, "a backward host write is a discontinuity, not a wrap");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void E14b_LoopedSeekBack_DoesNotReplayTheExitPoint()
+        {
+            CreateActor("E14bActor", out Animator animator);
+            AnimationClip clip = CreateClip("E14bClip", 1f);
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+            var key = new AnimationPlaybackKey(1, 0, 0, 0);
+            int exitCount = 0;
+
+            graph.TransitionCompleted += (handle, reason) =>
+            {
+                if (reason == AnimationTransitionReason.ExitTime)
+                {
+                    exitCount++;
+                }
+            };
+
+            try
+            {
+                graph.BeginClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryLoop));
+                graph.Commit(TickWithDelta(0L, 0.016f));
+
+                graph.UpdateClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.9d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(TickWithDelta(1L, 0.016f));
+                Assert.AreEqual(1, exitCount);
+
+                graph.UpdateClip(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.6d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(TickWithDelta(2L, 0.016f));
+
+                NoteEvidence("E14b", "exit reports after seeking back to 0.6 = " + exitCount);
+                Assert.AreEqual(1, exitCount, "seeking back past the exit point is not a loop crossing");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void E15_HitchLargerThanTheClip_DoesNotReplayPassedMarkers()
+        {
+            CreateActor("E15Actor", out Animator animator);
+            AnimationClip clip = CreateEventClipAt("E15Clip", 1f, 0.2f, 0.5f, 0.8f);
+            var sink = new RecordingSink();
+            var graph = new AnimationRuntimeGraph(
+                animator,
+                new[] { AnimationLayerDescriptor.Default },
+                null,
+                AnimationTimePolicy.TickDriven);
+            graph.SetClipEventSink(sink);
+
+            try
+            {
+                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0f));
+                graph.Commit(new AnimationTick(0.3d, 1L, AnimationTimeSource.Update, false, 0.3f));
+                Assert.AreEqual(1, sink.Count, "only the 0.2 marker has been crossed");
+
+                // 2.5 s of elapsed time on a 1 s clip: the clip clamps at its end, a 0.7 L displacement.
+                graph.Commit(new AnimationTick(2.5d, 2L, AnimationTimeSource.Update, false, 2.5f));
+
+                NoteEvidence("E15", "markers after a 2.5 s hitch on a 1 s clip = " + sink.Count
+                    + " (expected 3: 0.2, then 0.5 and 0.8, never 0.2 again)");
+                Assert.AreEqual(3, sink.Count, "a hitch reports the markers the clip actually crossed");
             }
             finally
             {

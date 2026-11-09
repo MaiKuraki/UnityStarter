@@ -79,6 +79,10 @@ namespace CycloneGames.AnimationRuntime
             public float Elapsed;
             public byte Easing;
             public byte ExitFlags;
+
+            /// <summary>Set by <c>UpdateClip</c> and <c>SeekClip</c>; cleared by the commit that consumes it.</summary>
+            public byte Seeked;
+
             public float ExitNormalized;
             public float ExitLastNormalized;
             public double LastClipTime;
@@ -165,8 +169,13 @@ namespace CycloneGames.AnimationRuntime
         private IAnimationClipEventSink _clipEventSink;
         private readonly Dictionary<AnimationClip, AnimationClipEvent[]> _clipEventCache =
             new Dictionary<AnimationClip, AnimationClipEvent[]>();
-        private readonly ClipEventDispatch[] _pendingClipEvents = new ClipEventDispatch[128];
+
+        /// <summary>Markers queued per commit. The excess is dropped and reported once.</summary>
+        private const int PendingClipEventCapacity = 128;
+
+        private readonly ClipEventDispatch[] _pendingClipEvents = new ClipEventDispatch[PendingClipEventCapacity];
         private int _pendingClipEventCount;
+        private bool _warnedClipEventOverflow;
         private readonly TransitionEvent[] _pendingTransitions;
         private int _pendingTransitionCount;
 
@@ -593,6 +602,7 @@ namespace CycloneGames.AnimationRuntime
                 if (playback.Time != time)
                 {
                     playback.Time = time;
+                    layer.Transitions[slot].Seeked = 1;
                     changed = true;
                 }
             }
@@ -657,6 +667,7 @@ namespace CycloneGames.AnimationRuntime
             ref Playback playback = ref layer.Playbacks[slot];
             ref PlaybackClock clock = ref layer.Clocks[slot];
             playback.Time = ClampTime(localTime, playback.Length);
+            layer.Transitions[slot].Seeked = 1;
             clock.StartTickTime = _lastTickTime;
             clock.StartLocalTime = playback.Time;
             clock.Started = 0;
@@ -1049,8 +1060,12 @@ namespace CycloneGames.AnimationRuntime
                     playback.Time = EvaluateClock(ref clock, playback.Length, tickTime);
                 }
 
-                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, delta);
-                CheckExitTime(ref layer, ref playback, layerIndex, slot);
+                // Consumed once per commit by both event channels below.
+                bool seeked = layer.Transitions[slot].Seeked != 0;
+                layer.Transitions[slot].Seeked = 0;
+
+                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, seeked);
+                CheckExitTime(ref layer, ref playback, layerIndex, slot, seeked);
 
                 if ((playback.Flags & PlaybackTransitionActive) != 0)
                 {
@@ -1311,7 +1326,15 @@ namespace CycloneGames.AnimationRuntime
 
                 playback.Flags &= unchecked((byte)~(PlaybackTransitionActive | PlaybackReleaseAfterFade));
                 playback.Weight = fade.TargetWeight;
-                layer.Transitions[slot] = default;
+
+                // Reset the ramp only; LastClipTime, the exit point and ClipEvents are preserved.
+                ref PlaybackTransition instant = ref layer.Transitions[slot];
+                instant.FromWeight = 0f;
+                instant.TargetWeight = 0f;
+                instant.Duration = 0f;
+                instant.Elapsed = 0f;
+                instant.Easing = 0;
+
                 if (releaseAfterFade)
                 {
                     playback.Flags |= PlaybackPendingRelease;
@@ -1515,20 +1538,25 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
+        /// <summary>
+        /// Reports clip markers crossed since the previous commit. The first commit sweeps [0, current]; a backward
+        /// step sweeps the clip tail plus head, unless it came from a host clock write, which sweeps nothing.
+        /// </summary>
         private void DispatchClipEventsForPlayback(
             ref Layer layer,
             ref Playback playback,
             int layerIndex,
             int slot,
-            float delta)
+            bool seeked)
         {
+            ref PlaybackTransition transition = ref layer.Transitions[slot];
+
             if (!_dispatchClipEvents || _clipEventSink == null || playback.Clip == null
                 || playback.Length <= AnimationRuntimeLimits.MinClipLength)
             {
                 return;
             }
 
-            ref PlaybackTransition transition = ref layer.Transitions[slot];
             AnimationClipEvent[] events = transition.ClipEvents;
             if (events == null)
             {
@@ -1540,20 +1568,23 @@ namespace CycloneGames.AnimationRuntime
             {
                 return;
             }
+
             double previousTime = transition.LastClipTime;
             double currentTime = playback.Time;
             bool firstCommit = previousTime < 0d;
+            bool backward = !firstCommit && currentTime < previousTime;
 
-            if (!firstCommit && currentTime < previousTime && !IsLooped(layer.Clocks[slot].Loop))
+            if (backward && (seeked || !IsLooped(layer.Clocks[slot].Loop)))
             {
-                // Backward seek: events are suppressed by contract.
                 return;
             }
 
-            bool looped = !firstCommit && currentTime < previousTime && IsLooped(layer.Clocks[slot].Loop);
+            bool looped = backward;
             float previous = firstCommit ? 0f : NormalizeTime(previousTime, playback.Length);
             float current = NormalizeTime(currentTime, playback.Length);
-            bool wholeClipJump = delta >= playback.Length;
+
+            // The first commit must not report markers ahead of the playhead.
+            bool wholeClipJump = !firstCommit && Math.Abs(currentTime - previousTime) >= playback.Length;
 
             for (int i = 0; i < events.Length; i++)
             {
@@ -1584,7 +1615,7 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private void CheckExitTime(ref Layer layer, ref Playback playback, int layerIndex, int slot)
+        private void CheckExitTime(ref Layer layer, ref Playback playback, int layerIndex, int slot, bool seeked)
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             if ((transition.ExitFlags & ExitArmed) == 0)
@@ -1602,10 +1633,10 @@ namespace CycloneGames.AnimationRuntime
             float previous = transition.ExitLastNormalized;
             transition.ExitLastNormalized = current;
 
-            bool looped = current < previous && IsLooped(layer.Clocks[slot].Loop);
+            bool looped = !seeked && current < previous && IsLooped(layer.Clocks[slot].Loop);
             if (current < previous && !looped)
             {
-                // A backward seek re-arms a once-only exit if the pose is now before the target.
+                // A backward jump re-arms a once-only exit if the pose is now before the target.
                 if (current < transition.ExitNormalized)
                 {
                     transition.ExitFlags &= unchecked((byte)~ExitFired);
@@ -1637,6 +1668,16 @@ namespace CycloneGames.AnimationRuntime
         {
             if (_pendingClipEventCount >= _pendingClipEvents.Length)
             {
+                if (!_warnedClipEventOverflow)
+                {
+                    _warnedClipEventOverflow = true;
+                    if (_diagnostics.IsEnabled(AnimationDiagnosticLevel.Warning))
+                    {
+                        Warn("Clip-event queue overflowed (" + PendingClipEventCapacity
+                            + " markers in one commit); the excess was dropped. This warning is reported once per graph.");
+                    }
+                }
+
                 return;
             }
 

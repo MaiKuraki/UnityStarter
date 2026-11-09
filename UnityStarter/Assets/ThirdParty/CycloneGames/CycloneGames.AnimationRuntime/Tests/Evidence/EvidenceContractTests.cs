@@ -18,7 +18,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H01
 
         [Test]
-        public void H01_PlaybackHandle_IsEightBytesAsDocumented()
+        public void H01_PlaybackHandle_IsTwelveBytesAsDocumented()
         {
             int handleSize = LayoutSize(typeof(AnimationPlaybackHandle), out string layout);
             int marshalled = Marshal.SizeOf(typeof(AnimationPlaybackHandle));
