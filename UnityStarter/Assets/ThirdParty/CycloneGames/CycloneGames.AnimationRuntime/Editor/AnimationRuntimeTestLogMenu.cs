@@ -10,7 +10,7 @@ namespace CycloneGames.AnimationRuntime.Editor
     /// </summary>
     internal static class AnimationRuntimeTestLogMenu
     {
-        private const string LogRelativePath = "Temp/AnimationRuntimeTestLog.md";
+        private const string LogRelativePath = "Logs/AnimationRuntimeTestLog.md";
 
         private static string LogPath
         {

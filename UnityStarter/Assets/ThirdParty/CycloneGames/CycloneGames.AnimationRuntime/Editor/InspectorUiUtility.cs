@@ -20,11 +20,14 @@ namespace CycloneGames.AnimationRuntime.Editor
         private const float TitleHeight = 34f;
         private const float SectionHeight = 22f;
         private const float BarHeight = 14f;
+        private const float HeaderHorizontalPadding = 4f;
+        private const float HeaderArrowWidth = 13f;
 
         private static GUIStyle _titleStyle;
         private static GUIStyle _subtitleStyle;
         private static GUIStyle _sectionStyle;
         private static GUIStyle _valueStyle;
+        private static readonly Vector3[] _trianglePoints = new Vector3[3];
 
         internal static void DrawTitle(string title, string subtitle, Color accent)
         {
@@ -49,16 +52,30 @@ namespace CycloneGames.AnimationRuntime.Editor
             EnsureStyles();
 
             Rect rect = GUILayoutUtility.GetRect(0f, SectionHeight, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(rect, new Color(accent.r, accent.g, accent.b, 0.08f));
+            float shade = foldout ? 0.12f : 0.06f;
+            EditorGUI.DrawRect(rect, new Color(accent.r, accent.g, accent.b, shade));
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), new Color(0f, 0f, 0f, 0.12f));
 
-            var arrowRect = new Rect(rect.x + 4f, rect.y + 6f, 12f, 12f);
-            if (GUI.Button(arrowRect, foldout ? "\u25BC" : "\u25B6", EditorStyles.label))
+            var arrowRect = new Rect(
+                rect.x + HeaderHorizontalPadding,
+                rect.y + 2f,
+                HeaderArrowWidth,
+                rect.height - 4f);
+
+            var labelRect = new Rect(
+                arrowRect.xMax + 1f,
+                rect.y,
+                rect.width - (arrowRect.xMax - rect.x) - HeaderHorizontalPadding - 1f,
+                rect.height);
+
+            DrawFoldoutTriangle(arrowRect, foldout);
+            EditorGUI.LabelField(labelRect, label, _sectionStyle);
+
+            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
             {
                 foldout = !foldout;
+                Event.current.Use();
             }
-
-            var labelRect = new Rect(rect.x + 20f, rect.y + 2f, rect.width - 24f, 18f);
-            GUI.Label(labelRect, label, _sectionStyle);
 
             if (foldout && !string.IsNullOrEmpty(hint))
             {
@@ -66,6 +83,37 @@ namespace CycloneGames.AnimationRuntime.Editor
             }
 
             return foldout;
+        }
+
+        /// <summary>
+        /// Vector triangle, matching the section headers used by the other CycloneGames inspectors. A glyph in a
+        /// small button clips against the label style's line height; a polygon has no font metrics to fight.
+        /// </summary>
+        private static void DrawFoldoutTriangle(Rect rect, bool expanded)
+        {
+            Vector2 center = rect.center;
+
+            if (expanded)
+            {
+                _trianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
+                _trianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
+                _trianglePoints[2] = new Vector3(center.x, center.y + 3f);
+            }
+            else
+            {
+                _trianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
+                _trianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
+                _trianglePoints[2] = new Vector3(center.x + 3f, center.y);
+            }
+
+            Handles.BeginGUI();
+            Color previousColor = Handles.color;
+            Handles.color = EditorGUIUtility.isProSkin
+                ? new Color(0.90f, 0.90f, 0.90f, 0.95f)
+                : new Color(0.16f, 0.16f, 0.18f, 0.90f);
+            Handles.DrawAAConvexPolygon(_trianglePoints);
+            Handles.color = previousColor;
+            Handles.EndGUI();
         }
 
         internal static void BeginPanel()
@@ -91,7 +139,7 @@ namespace CycloneGames.AnimationRuntime.Editor
             EditorGUILayout.EndHorizontal();
         }
 
-        /// <summary>Draws a thin weight bar. Used for layer weight and per-voice weight.</summary>
+        /// <summary>Draws a thin weight bar. Used for layer weight and per-playback weight.</summary>
         internal static void DrawBar(float value, Color color)
         {
             Rect rect = GUILayoutUtility.GetRect(0f, BarHeight, GUILayout.ExpandWidth(true));

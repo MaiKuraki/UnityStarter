@@ -50,7 +50,7 @@ namespace CycloneGames.AnimationRuntime.Tests
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0d, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
         }
 
         // ------------------------------------------------------------------ fuzz
@@ -67,7 +67,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             }
 
             var rng = new System.Random(20261109);
-            var keys = new List<AnimationVoiceKey>(16);
+            var keys = new List<AnimationPlaybackKey>(16);
             long step = 0;
 
             try
@@ -86,7 +86,7 @@ namespace CycloneGames.AnimationRuntime.Tests
                             var request = new AnimationClipRequest(
                                 instance, channel, layer, clips[rng.Next(0, clips.Length)],
                                 rng.NextDouble() * 2d, (float)rng.NextDouble());
-                            AnimationVoiceHandle handle = graph.BeginClip(request);
+                            AnimationPlaybackHandle handle = graph.BeginClip(request);
                             if (handle.IsValid)
                             {
                                 keys.Add(request.Key);
@@ -127,8 +127,8 @@ namespace CycloneGames.AnimationRuntime.Tests
                     }
 
                     AnimationRuntimeStats stats = graph.GetStats();
-                    Assert.LessOrEqual(stats.ActiveVoices, 8, "active voices never exceed total capacity");
-                    Assert.GreaterOrEqual(stats.ActiveVoices, 0);
+                    Assert.LessOrEqual(stats.ActivePlaybacks, 8, "active playbacks never exceed total capacity");
+                    Assert.GreaterOrEqual(stats.ActivePlaybacks, 0);
                     Assert.GreaterOrEqual(stats.PlayableCount, 0);
                 }
             }
@@ -185,10 +185,10 @@ namespace CycloneGames.AnimationRuntime.Tests
                 double ms = elapsed * 1000.0 / Stopwatch.Frequency;
                 TestRunLog.Note("soak", "200000 commits in " + ms.ToString("0") + " ms ("
                     + (ms / 200000.0).ToString("0.0000") + " ms/commit), heap delta "
-                    + (memoryAfter - memoryBefore) + " B, voices=" + stats.ActiveVoices
+                    + (memoryAfter - memoryBefore) + " B, playbacks=" + stats.ActivePlaybacks
                     + ", recreated=" + stats.RecreatedPlayables);
 
-                Assert.AreEqual(4, stats.ActiveVoices, "voices stay alive across 200k commits");
+                Assert.AreEqual(4, stats.ActivePlaybacks, "playbacks stay alive across 200k commits");
                 Assert.Less(memoryAfter - memoryBefore, 4L * 1024 * 1024, "managed heap does not grow during the soak");
                 Assert.Less(stats.RecreatedPlayables, 8L, "no per-commit playable churn");
             }
@@ -246,11 +246,11 @@ namespace CycloneGames.AnimationRuntime.Tests
                     "churn",
                     switches + " clip switches in " + ms.ToString("0.0") + " ms ("
                     + (ms / switches).ToString("0.0000") + " ms/switch), recreated=" + recreated
-                    + ", dropped=" + graph.GetStats().DroppedVoices);
+                    + ", dropped=" + graph.GetStats().DroppedPlaybacks);
 
                 Assert.AreEqual((int)switches, (int)recreated,
                     "every switch to a different clip recreates exactly one playable");
-                Assert.AreEqual(0L, graph.GetStats().DroppedVoices);
+                Assert.AreEqual(0L, graph.GetStats().DroppedPlaybacks);
             }
             finally
             {
@@ -333,7 +333,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0));
-                Assert.AreEqual(1, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
 
                 Object.DestroyImmediate(clip);
 
@@ -343,8 +343,8 @@ namespace CycloneGames.AnimationRuntime.Tests
                     graph.Commit(Tick(step++));
                 }
 
-                Assert.AreEqual(0, graph.GetStats().ActiveVoices,
-                    "the dev watchdog terminates a voice whose clip was destroyed");
+                Assert.AreEqual(0, graph.GetStats().ActivePlaybacks,
+                    "the dev watchdog terminates a playback whose clip was destroyed");
             }
             finally
             {
@@ -364,15 +364,15 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0));
-                int before = graph.GetStats().ActiveVoices;
+                int before = graph.GetStats().ActivePlaybacks;
 
                 root.SetActive(false);
                 graph.Commit(Tick(1));
-                Assert.AreEqual(before, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(before, graph.GetStats().ActivePlaybacks);
 
                 root.SetActive(true);
                 graph.Commit(Tick(2));
-                Assert.AreEqual(before, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(before, graph.GetStats().ActivePlaybacks);
             }
             finally
             {

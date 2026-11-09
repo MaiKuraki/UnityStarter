@@ -30,9 +30,17 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void NegativeDelta_IsClampedToZero()
         {
-            var tick = new AnimationTick(1d, 1L, AnimationTimeSource.FixedUpdate, false, 0d, -0.5f);
+            var tick = new AnimationTick(1d, 1L, AnimationTimeSource.FixedUpdate, false, -0.5f);
 
-            Assert.AreEqual(0f, tick.DiagnosticDelta);
+            Assert.AreEqual(0f, tick.Delta);
+        }
+
+        [Test]
+        public void NonFiniteDelta_IsClampedToZero()
+        {
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NaN).Delta);
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.PositiveInfinity).Delta);
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NegativeInfinity).Delta);
         }
 
         [Test]
@@ -43,7 +51,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             Assert.AreEqual(12.5d, tick.Time);
             Assert.AreEqual(42L, tick.StepIndex);
             Assert.AreEqual(AnimationTimeSource.LateUpdate, tick.Source);
-            Assert.AreEqual(0.016f, tick.DiagnosticDelta, 1e-6f);
+            Assert.AreEqual(0.016f, tick.Delta, 1e-6f);
             Assert.IsFalse(tick.IsBackward);
         }
     }
@@ -51,12 +59,12 @@ namespace CycloneGames.AnimationRuntime.Tests
     public sealed class AnimationRuntimeLimitsTests : LoggedTestBase
     {
         [Test]
-        public void VoiceStruct_FitsInOneCacheLine()
+        public void PlaybackStruct_FitsInOneCacheLine()
         {
             Assert.LessOrEqual(
-                AnimationRuntimeGraph.VoiceStructSize,
+                AnimationRuntimeGraph.PlaybackStructSize,
                 64,
-                "The voice struct must stay within one 64-byte cache line. Adding a field is a layout regression.");
+                "The playback struct must stay within one 64-byte cache line. Adding a field is a layout regression.");
         }
 
         [Test]
@@ -68,17 +76,19 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void VoiceKey_EqualityUsesInstanceChannelAndLayer()
+        public void PlaybackKey_EqualityUsesInstanceChannelClipAndLayer()
         {
-            var a = new AnimationVoiceKey(3, 1, 2);
-            var b = new AnimationVoiceKey(3, 1, 2);
-            var differentInstance = new AnimationVoiceKey(4, 1, 2);
-            var differentChannel = new AnimationVoiceKey(3, 2, 2);
+            var a = new AnimationPlaybackKey(3, 1, 2);
+            var b = new AnimationPlaybackKey(3, 1, 2);
+            var differentInstance = new AnimationPlaybackKey(4, 1, 2);
+            var differentChannel = new AnimationPlaybackKey(3, 2, 2);
+            var differentClip = new AnimationPlaybackKey(3, 1, 2, 1);
 
             Assert.AreEqual(a, b);
             Assert.AreEqual(a.GetHashCode(), b.GetHashCode());
             Assert.AreNotEqual(a, differentInstance);
             Assert.AreNotEqual(a, differentChannel);
+            Assert.AreNotEqual(a, differentClip);
         }
     }
 }

@@ -42,7 +42,7 @@ namespace CycloneGames.AnimationRuntime.Tests
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0d, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
         }
 
         [Test]
@@ -55,11 +55,11 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void BeginClip_NullClip_IsRejectedWithoutCounting()
         {
-            AnimationVoiceHandle handle = _graph.BeginClip(new AnimationClipRequest(1, 0, 0, null, 0d, 1f));
+            AnimationPlaybackHandle handle = _graph.BeginClip(new AnimationClipRequest(1, 0, 0, null, 0d, 1f));
 
             Assert.IsFalse(handle.IsValid);
-            Assert.AreEqual(0, _graph.GetStats().ActiveVoices);
-            Assert.AreEqual(0, _graph.GetStats().DroppedVoices);
+            Assert.AreEqual(0, _graph.GetStats().ActivePlaybacks);
+            Assert.AreEqual(0, _graph.GetStats().DroppedPlaybacks);
         }
 
         [Test]
@@ -97,13 +97,13 @@ namespace CycloneGames.AnimationRuntime.Tests
                 _graph.BeginClip(request);
                 _graph.Commit(Tick(0));
 
-                Assert.AreEqual(1, _graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks);
 
                 _graph.EndClip(request.Key);
-                Assert.AreEqual(1, _graph.GetStats().ActiveVoices, "release is deferred to the next commit");
+                Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks, "release is deferred to the next commit");
 
                 _graph.Commit(Tick(1));
-                Assert.AreEqual(0, _graph.GetStats().ActiveVoices);
+                Assert.AreEqual(0, _graph.GetStats().ActivePlaybacks);
             }
             finally
             {
@@ -127,8 +127,8 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
                 Assert.IsFalse(graph.BeginClip(new AnimationClipRequest(2, 0, 0, second, 0d, 1f)).IsValid);
-                Assert.AreEqual(1L, graph.GetStats().DroppedVoices);
-                Assert.AreEqual(1, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1L, graph.GetStats().DroppedPlaybacks);
+                Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
             }
             finally
             {
@@ -147,7 +147,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void Rebind_MovesOwnershipAndEndsVoices()
+        public void Rebind_MovesOwnershipAndEndsPlaybacks()
         {
             var go = new GameObject("AnimationRuntimeRebindTarget");
             var animator = go.AddComponent<Animator>();
@@ -157,13 +157,13 @@ namespace CycloneGames.AnimationRuntime.Tests
                 _graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 _graph.Commit(Tick(0));
 
-                Assert.AreEqual(1, _graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks);
                 Assert.IsTrue(AnimationRuntimeRegistry.IsAnimatorOwned(_animator));
 
-                _graph.Rebind(animator);
+                Assert.IsTrue(_graph.TryRebind(animator));
 
                 Assert.AreSame(animator, _graph.TargetAnimator);
-                Assert.AreEqual(0, _graph.GetStats().ActiveVoices);
+                Assert.AreEqual(0, _graph.GetStats().ActivePlaybacks);
                 Assert.IsFalse(AnimationRuntimeRegistry.IsAnimatorOwned(_animator));
                 Assert.IsTrue(AnimationRuntimeRegistry.IsAnimatorOwned(animator));
             }
@@ -180,7 +180,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         public void Dispose_ReturnsRegistryCountersToTheirPreviousValue()
         {
             int graphsBefore = AnimationRuntimeRegistry.LiveGraphCount;
-            int voicesBefore = AnimationRuntimeRegistry.LiveVoiceCount;
+            int playbacksBefore = AnimationRuntimeRegistry.LivePlaybackCount;
 
             var go = new GameObject("AnimationRuntimeRegistryActor");
             var animator = go.AddComponent<Animator>();
@@ -192,12 +192,12 @@ namespace CycloneGames.AnimationRuntime.Tests
                 graph.Commit(Tick(0));
 
                 Assert.AreEqual(graphsBefore + 1, AnimationRuntimeRegistry.LiveGraphCount);
-                Assert.AreEqual(voicesBefore + 1, AnimationRuntimeRegistry.LiveVoiceCount);
+                Assert.AreEqual(playbacksBefore + 1, AnimationRuntimeRegistry.LivePlaybackCount);
 
                 graph.Dispose();
 
                 Assert.AreEqual(graphsBefore, AnimationRuntimeRegistry.LiveGraphCount);
-                Assert.AreEqual(voicesBefore, AnimationRuntimeRegistry.LiveVoiceCount);
+                Assert.AreEqual(playbacksBefore, AnimationRuntimeRegistry.LivePlaybackCount);
             }
             finally
             {
@@ -225,15 +225,15 @@ namespace CycloneGames.AnimationRuntime.Tests
             try
             {
                 var request = new AnimationClipRequest(5, 0, 0, clip, 0d, 1f);
-                AnimationVoiceHandle handle = _graph.BeginClip(request);
+                AnimationPlaybackHandle handle = _graph.BeginClip(request);
 
-                Assert.IsTrue(_graph.IsVoiceAlive(handle));
+                Assert.IsTrue(_graph.IsPlaybackAlive(handle));
 
                 _graph.EndClip(request.Key);
-                Assert.IsTrue(_graph.IsVoiceAlive(handle), "the voice survives until the release commit");
+                Assert.IsTrue(_graph.IsPlaybackAlive(handle), "the playback survives until the release commit");
 
                 _graph.Commit(Tick(0));
-                Assert.IsFalse(_graph.IsVoiceAlive(handle));
+                Assert.IsFalse(_graph.IsPlaybackAlive(handle));
             }
             finally
             {

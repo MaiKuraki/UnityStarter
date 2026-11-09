@@ -137,7 +137,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void BlendNode_TakesOverLayer_AndRejectsClipVoices()
+        public void BlendNode_TakesOverLayer_AndRejectsClipPlaybacks()
         {
             using (LinearBlendNode node = LinearBlendNode.Create(
                 _graph.PlayableGraph,
@@ -147,10 +147,10 @@ namespace CycloneGames.AnimationRuntime.Tests
                 Assert.IsTrue(_graph.SetLayerSource(0, node.Playable));
                 Assert.IsTrue(_graph.IsLayerExternallySourced(0));
 
-                AnimationVoiceHandle handle = _graph.BeginClip(
+                AnimationPlaybackHandle handle = _graph.BeginClip(
                     new AnimationClipRequest(1, 0, 0, _clips[0], 0d, 1f));
 
-                Assert.IsFalse(handle.IsValid, "a layer driven by an external node must reject clip voices");
+                Assert.IsFalse(handle.IsValid, "a layer driven by an external node must reject clip playbacks");
             }
         }
 
@@ -165,7 +165,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             Assert.IsTrue(_graph.SetLayerSource(0, node.Playable));
             node.Dispose();
 
-            _graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0d, 0.016f));
+            _graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
 
             Assert.IsFalse(_graph.IsLayerExternallySourced(0), "the layer must self-heal when its source dies");
         }

@@ -4,13 +4,13 @@ using UnityEngine;
 namespace CycloneGames.AnimationRuntime
 {
     /// <summary>
-    /// Process-wide counters for live graphs and voices, plus the one-graph-per-Animator ownership table.
+    /// Process-wide counters for live graphs and playbacks, plus the one-graph-per-Animator ownership table.
     /// Diagnostics only; it never owns or frees animation state. Main-thread only.
     /// </summary>
     public static class AnimationRuntimeRegistry
     {
         private static int _liveGraphs;
-        private static int _liveVoices;
+        private static int _livePlaybacks;
 
         // Weak keys: a destroyed Animator must not keep its graph alive through this table.
         private static ConditionalWeakTable<Animator, AnimationRuntimeGraph> _owners =
@@ -19,8 +19,8 @@ namespace CycloneGames.AnimationRuntime
         /// <summary>Graphs that have been initialized and not yet disposed.</summary>
         public static int LiveGraphCount => _liveGraphs;
 
-        /// <summary>Voices currently in use across every live graph.</summary>
-        public static int LiveVoiceCount => _liveVoices;
+        /// <summary>Playbacks currently in use across every live graph.</summary>
+        public static int LivePlaybackCount => _livePlaybacks;
 
         /// <summary>Whether an Animator is already driven by a graph. One Animator supports one animation output.</summary>
         public static bool IsAnimatorOwned(Animator animator)
@@ -70,24 +70,24 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        internal static void OnVoiceCountChanged(int delta)
+        internal static void OnPlaybackCountChanged(int delta)
         {
-            _liveVoices += delta;
-            if (_liveVoices < 0)
+            _livePlaybacks += delta;
+            if (_livePlaybacks < 0)
             {
-                _liveVoices = 0;
+                _livePlaybacks = 0;
             }
         }
 
         /// <summary>
-        /// Zeroes the counters on every play session. Without this, disabling Domain Reload leaves stale counts
-        /// from the previous session and every leak assertion fails for the wrong reason.
+        /// Zeroes the counters on every play session. Required when Domain Reload is disabled; otherwise counts
+        /// from the previous session survive into the next one.
         /// </summary>
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetForSession()
         {
             _liveGraphs = 0;
-            _liveVoices = 0;
+            _livePlaybacks = 0;
             _owners = new ConditionalWeakTable<Animator, AnimationRuntimeGraph>();
         }
     }

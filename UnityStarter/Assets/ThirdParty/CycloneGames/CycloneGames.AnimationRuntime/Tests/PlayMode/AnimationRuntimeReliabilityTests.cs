@@ -7,7 +7,7 @@ using Object = UnityEngine.Object;
 namespace CycloneGames.AnimationRuntime.Tests
 {
     /// <summary>
-    /// Paths the stress suite does not reach: voice reuse under a full layer, handle ABA, external-source
+    /// Paths the stress suite does not reach: playback reuse under a full layer, handle ABA, external-source
     /// hand-over, multi-actor isolation and blend-node connection churn.
     /// </summary>
     public sealed class AnimationRuntimeReliabilityTests : LoggedTestBase
@@ -57,7 +57,7 @@ namespace CycloneGames.AnimationRuntime.Tests
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0d, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
         }
 
         [Test]
@@ -72,13 +72,13 @@ namespace CycloneGames.AnimationRuntime.Tests
                 Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
                 graph.Commit(Tick(0));
 
-                AnimationVoiceHandle replaced = graph.BeginClip(new AnimationClipRequest(1, 0, 0, second, 0d, 1f));
+                AnimationPlaybackHandle replaced = graph.BeginClip(new AnimationClipRequest(1, 0, 0, second, 0d, 1f));
 
                 Assert.IsTrue(replaced.IsValid, "re-begin of the same key must reuse its slot, not be dropped");
                 graph.Commit(Tick(1));
 
-                Assert.AreEqual(1, graph.GetStats().ActiveVoices);
-                Assert.AreEqual(0L, graph.GetStats().DroppedVoices);
+                Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
+                Assert.AreEqual(0L, graph.GetStats().DroppedPlaybacks);
             }
             finally
             {
@@ -95,18 +95,18 @@ namespace CycloneGames.AnimationRuntime.Tests
             try
             {
                 var request = new AnimationClipRequest(7, 0, 0, clip, 0d, 1f);
-                AnimationVoiceHandle first = graph.BeginClip(request);
+                AnimationPlaybackHandle first = graph.BeginClip(request);
                 graph.Commit(Tick(0));
 
                 graph.EndClip(request.Key);
                 graph.Commit(Tick(1));
 
-                AnimationVoiceHandle second = graph.BeginClip(request);
+                AnimationPlaybackHandle second = graph.BeginClip(request);
                 graph.Commit(Tick(2));
 
                 Assert.IsTrue(second.IsValid);
-                Assert.IsFalse(graph.IsVoiceAlive(first), "a handle from the previous generation must be dead");
-                Assert.IsTrue(graph.IsVoiceAlive(second));
+                Assert.IsFalse(graph.IsPlaybackAlive(first), "a handle from the previous generation must be dead");
+                Assert.IsTrue(graph.IsPlaybackAlive(second));
                 Assert.AreNotEqual(first.Generation, second.Generation);
             }
             finally
@@ -116,7 +116,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void ClearLayerSource_ReturnsTheLayerToClipVoices()
+        public void ClearLayerSource_ReturnsTheLayerToClipPlaybacks()
         {
             AnimationRuntimeGraph graph = CreateGraph("SourceHandoverActor");
             AnimationClip a = CreateClip("HandA");
@@ -131,12 +131,12 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 Assert.IsTrue(graph.SetLayerSource(0, node.Playable));
                 Assert.IsFalse(graph.BeginClip(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
-                    "a layer driven by an external node must reject clip voices");
+                    "a layer driven by an external node must reject clip playbacks");
 
                 graph.ClearLayerSource(0);
 
                 Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
-                    "after clearing the source the layer must accept clip voices again");
+                    "after clearing the source the layer must accept clip playbacks again");
             }
             finally
             {
@@ -181,18 +181,18 @@ namespace CycloneGames.AnimationRuntime.Tests
 
             try
             {
-                AnimationVoiceHandle a = first.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
-                AnimationVoiceHandle b = second.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle a = first.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle b = second.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 first.Commit(Tick(0));
                 second.Commit(Tick(0));
 
                 first.Dispose();
 
-                Assert.IsTrue(second.IsVoiceAlive(b), "disposing one actor must not touch another");
-                Assert.IsFalse(first.IsVoiceAlive(a));
+                Assert.IsTrue(second.IsPlaybackAlive(b), "disposing one actor must not touch another");
+                Assert.IsFalse(first.IsPlaybackAlive(a));
 
                 second.Commit(Tick(1));
-                Assert.AreEqual(1, second.GetStats().ActiveVoices);
+                Assert.AreEqual(1, second.GetStats().ActivePlaybacks);
             }
             finally
             {
@@ -249,17 +249,17 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0));
-                Assert.AreEqual(1, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
 
                 graph.StopAll();
                 graph.Commit(Tick(1));
-                Assert.AreEqual(0, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(0, graph.GetStats().ActivePlaybacks);
 
-                AnimationVoiceHandle replay = graph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle replay = graph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(2));
 
                 Assert.IsTrue(replay.IsValid);
-                Assert.AreEqual(1, graph.GetStats().ActiveVoices);
+                Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
             }
             finally
             {

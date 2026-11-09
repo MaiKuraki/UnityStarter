@@ -64,7 +64,7 @@ namespace CycloneGames.AnimationRuntime
         /// <summary>
         /// Mode actually in effect. Mirrors the audio reference behaviour: if the asset is set to
         /// <see cref="AnimationClipReferenceMode.Embedded"/> but the clip is missing while a location exists,
-        /// the location wins so a half-migrated asset still plays.
+        /// the location wins so a reference whose embedded clip is missing but has a location still resolves.
         /// </summary>
         public AnimationClipReferenceMode EffectiveMode
         {

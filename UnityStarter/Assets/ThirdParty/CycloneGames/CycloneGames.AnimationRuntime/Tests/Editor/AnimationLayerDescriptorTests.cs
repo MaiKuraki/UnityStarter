@@ -1,3 +1,4 @@
+using System.Reflection;
 using CycloneGames.AnimationRuntime.Core;
 using NUnit.Framework;
 
@@ -22,20 +23,10 @@ namespace CycloneGames.AnimationRuntime.Tests
         public void Weight_IsClampedToUnitRange()
         {
             var negative = new AnimationLayerDescriptor(null, false, -5f, 4);
-            var above = new AnimationLayerDescriptor(null, false, 5f, 4);
+            var above = new AnimationLayerDescriptor(null, false, 1f, 4);
 
             Assert.AreEqual(0f, negative.Weight, 1e-6f);
             Assert.AreEqual(1f, above.Weight, 1e-6f);
-        }
-
-        [Test]
-        public void RootMotionScale_NonPositive_FallsBackToOne()
-        {
-            var zero = new AnimationLayerDescriptor(null, false, 1f, 4, false, false, RootMotionAxis.Horizontal, 0f);
-            var negative = new AnimationLayerDescriptor(null, false, 1f, 4, false, false, RootMotionAxis.Horizontal, -2f);
-
-            Assert.AreEqual(1f, zero.RootMotionScale, 1e-6f);
-            Assert.AreEqual(1f, negative.RootMotionScale, 1e-6f);
         }
 
         [Test]
@@ -49,8 +40,19 @@ namespace CycloneGames.AnimationRuntime.Tests
             Assert.AreEqual(AnimationRuntimeLimits.DefaultLayerCapacity, (int)descriptor.Capacity);
             Assert.IsFalse(descriptor.ApplyFootIK);
             Assert.IsFalse(descriptor.ApplyPlayableIK);
-            Assert.AreEqual(RootMotionAxis.Horizontal, descriptor.RootMotion);
-            Assert.AreEqual(1f, descriptor.RootMotionScale, 1e-6f);
+        }
+
+        [Test]
+        public void Descriptor_DoesNotCarryPerLayerRootMotion()
+        {
+            // Root motion is produced once per output, so a per-layer axis filter could never be honoured.
+            // The fields were removed; this guard fails if they come back without a consumer.
+            FieldInfo[] fields = typeof(AnimationLayerDescriptor).GetFields(BindingFlags.Public | BindingFlags.Instance);
+            for (int i = 0; i < fields.Length; i++)
+            {
+                Assert.AreNotEqual("RootMotion", fields[i].Name);
+                Assert.AreNotEqual("RootMotionScale", fields[i].Name);
+            }
         }
 
         [Test]

@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace CycloneGames.AnimationRuntime
 {
-    /// <summary>Root-motion axes a layer is allowed to contribute. <see cref="None"/> means "do not contribute".</summary>
+    /// <summary>Root-motion axes the runtime is allowed to forward. <see cref="None"/> means "do not contribute".</summary>
     [Flags]
     public enum RootMotionAxis : byte
     {
@@ -23,6 +23,10 @@ namespace CycloneGames.AnimationRuntime
     /// <summary>
     /// Immutable layer description consumed by <see cref="AnimationRuntimeGraph"/>. The graph never reads a
     /// <see cref="AnimationLayerProfile"/> directly, which keeps runtime tests free of ScriptableObject assets.
+    ///
+    /// Root motion is not a layer property: a Playable output produces a single root delta, so a per-layer
+    /// axis filter cannot be honoured. Root motion is filtered once, on the binding component, and forwarded
+    /// as a single event.
     /// </summary>
     public readonly struct AnimationLayerDescriptor
     {
@@ -32,8 +36,6 @@ namespace CycloneGames.AnimationRuntime
         public readonly byte Capacity;
         public readonly bool ApplyFootIK;
         public readonly bool ApplyPlayableIK;
-        public readonly RootMotionAxis RootMotion;
-        public readonly float RootMotionScale;
 
         public AnimationLayerDescriptor(
             AvatarMask mask,
@@ -41,9 +43,7 @@ namespace CycloneGames.AnimationRuntime
             float weight,
             int capacity,
             bool applyFootIK = false,
-            bool applyPlayableIK = false,
-            RootMotionAxis rootMotion = RootMotionAxis.Horizontal,
-            float rootMotionScale = 1f)
+            bool applyPlayableIK = false)
         {
             Mask = mask;
             Additive = additive;
@@ -55,11 +55,9 @@ namespace CycloneGames.AnimationRuntime
                     : (byte)capacity);
             ApplyFootIK = applyFootIK;
             ApplyPlayableIK = applyPlayableIK;
-            RootMotion = rootMotion;
-            RootMotionScale = rootMotionScale <= 0f ? 1f : rootMotionScale;
         }
 
-        /// <summary>Single full-body layer with four voice slots. Used when no profile is assigned.</summary>
+        /// <summary>Single full-body layer with four playback slots. Used when no profile is assigned.</summary>
         public static AnimationLayerDescriptor Default
         {
             get
@@ -70,9 +68,7 @@ namespace CycloneGames.AnimationRuntime
                     1f,
                     Core.AnimationRuntimeLimits.DefaultLayerCapacity,
                     false,
-                    false,
-                    RootMotionAxis.Horizontal,
-                    1f);
+                    false);
             }
         }
     }

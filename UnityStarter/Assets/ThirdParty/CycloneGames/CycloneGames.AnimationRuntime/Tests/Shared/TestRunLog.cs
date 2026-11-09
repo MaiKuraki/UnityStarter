@@ -23,9 +23,10 @@ namespace CycloneGames.AnimationRuntime.Tests
                 if (_logPath == null)
                 {
 #if UNITY_EDITOR
-                    // Project Temp folder, so tooling can read it without knowing a platform path.
+                    // Project Logs folder: Temp is deleted when a batch-mode run exits, which would drop every
+                    // measurement the stress suites publish.
                     _logPath = System.IO.Path.GetFullPath(
-                        System.IO.Path.Combine(Application.dataPath, "..", "Temp", "AnimationRuntimeTestLog.md"));
+                        System.IO.Path.Combine(Application.dataPath, "..", "Logs", "AnimationRuntimeTestLog.md"));
 #else
                     // A built player cannot reliably write next to its data folder; persistentDataPath is the
                     // only location guaranteed writable on every platform.
@@ -49,6 +50,12 @@ namespace CycloneGames.AnimationRuntime.Tests
             {
                 lock (Gate)
                 {
+                    string directory = System.IO.Path.GetDirectoryName(Path);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        System.IO.Directory.CreateDirectory(directory);
+                    }
+
                     File.AppendAllText(Path, line + "\n", new UTF8Encoding(false));
                 }
             }

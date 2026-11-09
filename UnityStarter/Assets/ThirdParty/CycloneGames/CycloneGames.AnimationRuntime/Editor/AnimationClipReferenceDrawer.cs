@@ -4,8 +4,7 @@ using UnityEngine;
 namespace CycloneGames.AnimationRuntime.Editor
 {
     /// <summary>
-    /// Draws an <see cref="AnimationClipReference"/> as a mode popup plus only the field that mode needs,
-    /// matching how the audio and UI authoring references are presented in this repository.
+    /// Draws an <see cref="AnimationClipReference"/> as a mode popup plus only the field that mode needs.
     /// The editor-only GUID is serialized but not drawn: it is relocation metadata, not authoring input.
     /// </summary>
     [CustomPropertyDrawer(typeof(AnimationClipReference))]

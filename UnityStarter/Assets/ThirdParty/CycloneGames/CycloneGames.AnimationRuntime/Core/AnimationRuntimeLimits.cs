@@ -6,10 +6,10 @@ namespace CycloneGames.AnimationRuntime.Core
         /// <summary>Maximum number of layers a graph can build. Layer count is fixed at initialization.</summary>
         public const int MaxLayers = 8;
 
-        /// <summary>Minimum voice slots per layer.</summary>
+        /// <summary>Minimum playback slots per layer.</summary>
         public const int MinLayerCapacity = 1;
 
-        /// <summary>Maximum voice slots per layer. Capacity is fixed at initialization.</summary>
+        /// <summary>Maximum playback slots per layer. Capacity is fixed at initialization.</summary>
         public const int MaxLayerCapacity = 8;
 
         /// <summary>Default capacity for a layer that does not specify one.</summary>

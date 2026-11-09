@@ -4,19 +4,20 @@ using UnityEngine;
 namespace CycloneGames.AnimationRuntime
 {
     /// <summary>
-    /// Authored layer stack for a character archetype. The schema is part of the contract: layer count and
-    /// per-layer capacity are fixed at graph initialization and cannot change at runtime.
+    /// Authored layer stack for a character archetype. Layer count and per-layer capacity are fixed at graph
+    /// initialization and cannot change at runtime.
+    ///
+    /// A layer weight of 0 means "unset" and projects to 1. Runtime <c>SetLayerWeight(0)</c> mutes a layer.
     /// </summary>
     [CreateAssetMenu(menuName = "CycloneGames/Animation/Layer Profile", fileName = "AnimationLayerProfile")]
     public sealed class AnimationLayerProfile : ScriptableObject
     {
-        /// <summary>Schema version. Bump when a field default changes in a way that needs migration.</summary>
-        public const int CurrentVersion = 1;
-
         [Serializable]
         public struct Layer
         {
+            /// <summary>Authoring label shown by the default Inspector. Never read at runtime.</summary>
             public string Name;
+
             public AvatarMask Mask;
             public bool Additive;
 
@@ -28,14 +29,9 @@ namespace CycloneGames.AnimationRuntime
 
             public bool ApplyFootIK;
             public bool ApplyPlayableIK;
-            public RootMotionAxis RootMotion;
-            public float RootMotionScale;
         }
 
-        [SerializeField] private int _version = CurrentVersion;
         [SerializeField] private Layer[] _layers = Array.Empty<Layer>();
-
-        public int Version => _version;
 
         public int LayerCount => _layers != null ? _layers.Length : 0;
 
@@ -70,9 +66,7 @@ namespace CycloneGames.AnimationRuntime
                     weight,
                     layer.Capacity,
                     layer.ApplyFootIK,
-                    layer.ApplyPlayableIK,
-                    layer.RootMotion,
-                    layer.RootMotionScale);
+                    layer.ApplyPlayableIK);
             }
 
             return descriptors;
@@ -80,11 +74,6 @@ namespace CycloneGames.AnimationRuntime
 
         private void OnValidate()
         {
-            if (_version <= 0)
-            {
-                _version = CurrentVersion;
-            }
-
             if (_layers == null)
             {
                 return;
@@ -94,12 +83,11 @@ namespace CycloneGames.AnimationRuntime
             {
                 if (_layers[i].Capacity < Core.AnimationRuntimeLimits.MinLayerCapacity)
                 {
-                    _layers[i].Capacity = (byte)Core.AnimationRuntimeLimits.DefaultLayerCapacity;
+                    _layers[i].Capacity = (byte)Core.AnimationRuntimeLimits.MinLayerCapacity;
                 }
-
-                if (_layers[i].RootMotionScale <= 0f)
+                else if (_layers[i].Capacity > Core.AnimationRuntimeLimits.MaxLayerCapacity)
                 {
-                    _layers[i].RootMotionScale = 1f;
+                    _layers[i].Capacity = (byte)Core.AnimationRuntimeLimits.MaxLayerCapacity;
                 }
             }
         }

@@ -66,7 +66,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void EmbeddedModeWithMissingClip_FallsBackToLocation()
         {
-            var reference = new AnimationClipReference(AnimationClipReferenceMode.Embedded, null, "anim/legacy");
+            var reference = new AnimationClipReference(AnimationClipReferenceMode.Embedded, null, "anim/moved");
 
             Assert.AreEqual(AnimationClipReferenceMode.Location, reference.EffectiveMode);
             Assert.IsTrue(reference.IsValid);

@@ -1,3 +1,4 @@
+using CycloneGames.AnimationRuntime.Core;
 using UnityEditor;
 using UnityEngine;
 
@@ -5,7 +6,7 @@ namespace CycloneGames.AnimationRuntime.Editor
 {
     /// <summary>
     /// Inspector for <see cref="AnimationRuntimeBehaviour"/>.
-    /// Authoring fields first, then a throttled runtime block (layer weights, live voices, counters) fed by the
+    /// Authoring fields first, then a throttled runtime block (layer weights, live playbacks, counters) fed by the
     /// runtime's zero-allocation snapshot API. The graph is never touched outside the throttled block.
     /// </summary>
     [CanEditMultipleObjects]
@@ -14,6 +15,7 @@ namespace CycloneGames.AnimationRuntime.Editor
     {
         private SerializedProperty _animator;
         private SerializedProperty _profile;
+        private SerializedProperty _timePolicy;
         private SerializedProperty _commitPhase;
         private SerializedProperty _rootMotionOwnership;
         private SerializedProperty _rootMotionAxis;
@@ -32,12 +34,13 @@ namespace CycloneGames.AnimationRuntime.Editor
         private readonly int[] _layerCapacity = new int[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly bool[] _layerExternal = new bool[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly int[] _layerSnapshotCount = new int[Core.AnimationRuntimeLimits.MaxLayers];
-        private readonly AnimationVoiceSnapshot[][] _layerSnapshots = new AnimationVoiceSnapshot[Core.AnimationRuntimeLimits.MaxLayers][];
+        private readonly AnimationPlaybackSnapshot[][] _layerSnapshots = new AnimationPlaybackSnapshot[Core.AnimationRuntimeLimits.MaxLayers][];
 
         private void OnEnable()
         {
             _animator = serializedObject.FindProperty("_animator");
             _profile = serializedObject.FindProperty("_profile");
+            _timePolicy = serializedObject.FindProperty("_timePolicy");
             _commitPhase = serializedObject.FindProperty("_commitPhase");
             _rootMotionOwnership = serializedObject.FindProperty("_rootMotionOwnership");
             _rootMotionAxis = serializedObject.FindProperty("_rootMotionAxis");
@@ -47,7 +50,7 @@ namespace CycloneGames.AnimationRuntime.Editor
 
             for (int i = 0; i < _layerSnapshots.Length; i++)
             {
-                _layerSnapshots[i] = new AnimationVoiceSnapshot[Core.AnimationRuntimeLimits.MaxLayerCapacity];
+                _layerSnapshots[i] = new AnimationPlaybackSnapshot[Core.AnimationRuntimeLimits.MaxLayerCapacity];
             }
         }
 
@@ -57,7 +60,7 @@ namespace CycloneGames.AnimationRuntime.Editor
 
             InspectorUiUtility.DrawTitle(
                 "Animation Runtime",
-                "Pose backend: layers, pooled voices, absolute-time evaluation",
+                "Pose backend: layers, pooled playbacks, absolute-time evaluation",
                 InspectorUiUtility.RuntimeColor);
 
             DrawBinding();
@@ -92,6 +95,22 @@ namespace CycloneGames.AnimationRuntime.Editor
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
+                EditorGUILayout.PropertyField(_timePolicy);
+                var policy = (AnimationTimePolicy)_timePolicy.enumValueIndex;
+
+                if (policy == AnimationTimePolicy.External)
+                {
+                    EditorGUILayout.HelpBox(
+                        "External time: the host owns clip time. Clips advance only when it calls BeginClip/UpdateClip with an absolute local time; the commit tick is diagnostic.",
+                        MessageType.None);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "Tick-driven time: this component advances clips from its own clock. UpdateClip then changes weight/speed/loop only; use SeekClip for an explicit jump.",
+                        MessageType.Info);
+                }
+
                 EditorGUILayout.PropertyField(_commitPhase);
                 var phase = (AnimationCommitPhase)_commitPhase.enumValueIndex;
 
@@ -115,9 +134,27 @@ namespace CycloneGames.AnimationRuntime.Editor
                 {
                     EditorGUILayout.PropertyField(_rootMotionAxis);
                     EditorGUILayout.PropertyField(_rootMotionScale);
-                    EditorGUILayout.HelpBox(
-                        "The runtime implements OnAnimatorMove in this mode. Remove any other OnAnimatorMove handler on the same character or root motion is applied twice.",
-                        MessageType.Warning);
+
+                    var assignedAnimator = _animator.objectReferenceValue as Animator;
+                    var component = (Component)target;
+                    bool childAnimator = assignedAnimator != null
+                        && component != null
+                        && assignedAnimator.gameObject != component.gameObject;
+
+                    if (childAnimator)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Backend root motion needs the Animator on this GameObject. It is on '"
+                            + assignedAnimator.name
+                            + "', so the runtime will reject Backend ownership and log an error.",
+                            MessageType.Error);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox(
+                            "The runtime implements OnAnimatorMove in this mode. Remove any other OnAnimatorMove handler on the same character or root motion is applied twice.",
+                            MessageType.Warning);
+                    }
                 }
                 else if (ownership == RootMotionOwnership.External)
                 {
@@ -157,20 +194,29 @@ namespace CycloneGames.AnimationRuntime.Editor
             InspectorUiUtility.BeginPanel();
 
             InspectorUiUtility.DrawStatusRow("Layers", _layerCount.ToString(), InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow("Time policy", _stats.TimePolicy.ToString(), InspectorUiUtility.RuntimeColor);
             InspectorUiUtility.DrawStatusRow("Playables", _stats.PlayableCount.ToString(), InspectorUiUtility.NeutralColor);
             InspectorUiUtility.DrawStatusRow(
-                "Voices",
-                _stats.ActiveVoices + " / peak " + _stats.PeakVoices,
-                _stats.ActiveVoices > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
+                "Playbacks",
+                _stats.ActivePlaybacks + " / peak " + _stats.PeakPlaybacks,
+                _stats.ActivePlaybacks > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
             InspectorUiUtility.DrawStatusRow(
                 "Dropped",
-                _stats.DroppedVoices.ToString(),
-                _stats.DroppedVoices > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.NeutralColor);
+                _stats.DroppedPlaybacks.ToString(),
+                _stats.DroppedPlaybacks > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.NeutralColor);
             InspectorUiUtility.DrawStatusRow(
                 "Recreated playables",
                 _stats.RecreatedPlayables.ToString(),
                 _stats.RecreatedPlayables > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow(
+                "Reused playables",
+                _stats.ReusedPlayables.ToString(),
+                _stats.ReusedPlayables > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
             InspectorUiUtility.DrawStatusRow("Commits", _stats.Commits.ToString(), InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow(
+                "Evaluations",
+                _stats.Evaluations.ToString(),
+                _stats.Evaluations < _stats.Commits ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
             InspectorUiUtility.DrawStatusRow("Native writes", _stats.NativeWrites.ToString(), InspectorUiUtility.NeutralColor);
 
             InspectorUiUtility.EndPanel();
@@ -210,13 +256,14 @@ namespace CycloneGames.AnimationRuntime.Editor
             int count = _layerSnapshotCount[layer];
             for (int i = 0; i < count; i++)
             {
-                AnimationVoiceSnapshot voice = _layerSnapshots[layer][i];
+                AnimationPlaybackSnapshot playback = _layerSnapshots[layer][i];
                 EditorGUILayout.LabelField(
-                    "  #" + voice.InstanceId
-                    + " ch " + voice.PlaybackChannel
-                    + "  t " + voice.Time.ToString("0.000")
-                    + "  w " + voice.Weight.ToString("0.00")
-                    + (voice.Connected ? string.Empty : "  (pending)"),
+                    "  #" + playback.InstanceId
+                    + " ch " + playback.PlaybackChannel
+                    + " clip " + playback.ClipChannel
+                    + "  t " + playback.Time.ToString("0.000")
+                    + "  w " + playback.Weight.ToString("0.00")
+                    + (playback.Connected ? string.Empty : "  (pending)"),
                     EditorStyles.miniLabel);
             }
         }
@@ -230,10 +277,10 @@ namespace CycloneGames.AnimationRuntime.Editor
             for (int layer = 0; layer < layers; layer++)
             {
                 _layerWeights[layer] = graph.GetLayerWeight(layer);
-                _layerActive[layer] = graph.GetLayerActiveVoices(layer);
+                _layerActive[layer] = graph.GetLayerActivePlaybacks(layer);
                 _layerCapacity[layer] = graph.GetLayerCapacity(layer);
                 _layerExternal[layer] = graph.IsLayerExternallySourced(layer);
-                _layerSnapshotCount[layer] = graph.CopyVoiceSnapshots(layer, _layerSnapshots[layer]);
+                _layerSnapshotCount[layer] = graph.CopyPlaybackSnapshots(layer, _layerSnapshots[layer]);
             }
         }
     }

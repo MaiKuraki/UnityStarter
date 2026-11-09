@@ -1,8 +1,8 @@
 {
   "name": "com.cyclone-games.animation-runtime",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "displayName": "CycloneGames.AnimationRuntime",
-  "description": "Low-level animation pose runtime for Unity Playables: fixed layers, pooled clip voices, avatar masks, additive blending, blend nodes and deterministic absolute-time evaluation. It owns the PlayableGraph and nothing else; timelines, events and scheduling stay in CycloneGames.Choreography.",
+  "description": "Low-level animation runtime for Unity Playables: fixed layers, pooled clip playbacks, avatar masks, additive blending, weight fades, exit times, clip events, blend nodes and selectable external or tick-driven time. It owns one PlayableGraph; timelines and scheduling stay in CycloneGames.Choreography.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

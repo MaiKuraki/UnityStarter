@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.AnimationRuntime.Tests.Evidence",
+    "rootNamespace": "CycloneGames.AnimationRuntime.Tests.Evidence",
+    "references": [
+        "CycloneGames.AnimationRuntime.Core",
+        "CycloneGames.AnimationRuntime",
+        "CycloneGames.AnimationRuntime.Tests.Shared",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

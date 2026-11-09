@@ -8,10 +8,17 @@ namespace CycloneGames.AnimationRuntime
     /// <summary>Unity phase in which the graph is committed. Must match the actor's movement model.</summary>
     public enum AnimationCommitPhase : byte
     {
-        /// <summary>After gameplay Update. Use for visual-only actors and Update-driven controllers.</summary>
+        /// <summary>
+        /// Commits in Update. Unity runs this component at order -100 inside the phase, so other Update scripts
+        /// that keep the default order (0) run after it. Use it only when the pose does not need to see this
+        /// frame's gameplay writes, or when the host drives <c>Commit(tick)</c> from a later order.
+        /// </summary>
         Update = 0,
 
-        /// <summary>After gameplay LateUpdate. Default for visual-only actors.</summary>
+        /// <summary>
+        /// Commits in LateUpdate at order -100: after every Update script, before LateUpdate cameras at order 0.
+        /// Changing the attribute moves the pose relative to LateUpdate consumers.
+        /// </summary>
         LateUpdate = 1,
 
         /// <summary>Inside the physics step. Required when a movement component consumes root motion per fixed step.</summary>
@@ -32,8 +39,12 @@ namespace CycloneGames.AnimationRuntime
     }
 
     /// <summary>
-    /// Scene binding for <see cref="AnimationRuntimeGraph"/>. Coordinates lifecycle and the commit phase only;
-    /// produces absolute time ticks and contains no animation logic.
+    /// Scene binding for <see cref="AnimationRuntimeGraph"/>. Coordinates lifecycle, the commit phase and root
+    /// motion ownership only; it produces ticks and contains no animation logic.
+    ///
+    /// In <see cref="AnimationTimePolicy.External"/> the internal tick is diagnostic: clips advance only when the
+    /// host calls <c>BeginClip</c>/<c>UpdateClip</c>. In <see cref="AnimationTimePolicy.TickDriven"/> the
+    /// component's clock is authoritative and clips advance on their own.
     /// </summary>
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(-100)]
@@ -41,11 +52,15 @@ namespace CycloneGames.AnimationRuntime
     public sealed class AnimationRuntimeBehaviour : MonoBehaviour
     {
         [Header("Binding")]
-        [Tooltip("Animator sampled by the runtime graph. Falls back to a child Animator when empty.")]
+        [Tooltip("Animator sampled by the runtime graph. Falls back to a child Animator when empty. Backend root motion requires the Animator on this same GameObject.")]
         [SerializeField] private Animator _animator;
 
         [Tooltip("Layer stack for this character archetype. Empty falls back to one full-body layer with four slots.")]
         [SerializeField] private AnimationLayerProfile _profile;
+
+        [Header("Time")]
+        [Tooltip("External: the host supplies absolute clip time through UpdateClip. TickDriven: this component advances clips from its own clock.")]
+        [SerializeField] private AnimationTimePolicy _timePolicy = AnimationTimePolicy.External;
 
         [Header("Frame Model")]
         [Tooltip("Phase in which the graph is committed. FixedUpdate is required when a movement component consumes root motion per physics step.")]
@@ -68,12 +83,21 @@ namespace CycloneGames.AnimationRuntime
         [Tooltip("Forward runtime warnings and errors to the Console.")]
         [SerializeField] private bool _logDiagnostics = true;
 
+        [Tooltip("Dispatch AnimationClip events. Disable when a timeline (Choreography) owns event dispatch.")]
+        [SerializeField] private bool _dispatchClipEvents = true;
+
         private AnimationRuntimeGraph _graph;
         private ILogWriter _logWriter;
         private long _stepIndex = -1;
+        private bool _rootMotionActive;
+        private bool _disabledByMissingAnimator;
+        private IAnimationClipEventSink _clipEventSink;
 
-        /// <summary>Raised once per frame when <see cref="RootMotionOwnership.Backend"/> is active.</summary>
+        /// <summary>Raised once per frame when root motion is actually forwarded by this component.</summary>
         public event Action<Vector3, Quaternion> RootMotionApplied;
+
+        /// <summary>Raised after a commit when a fade completes. Mirrors <see cref="AnimationRuntimeGraph.TransitionCompleted"/>.</summary>
+        public event Action<AnimationPlaybackHandle, AnimationTransitionReason> TransitionCompleted;
 
         public AnimationRuntimeGraph Graph => _graph;
 
@@ -82,6 +106,14 @@ namespace CycloneGames.AnimationRuntime
         public Animator TargetAnimator => _animator;
 
         public AnimationCommitPhase CommitPhase => _commitPhase;
+
+        public AnimationTimePolicy TimePolicy => _graph != null ? _graph.TimePolicy : _timePolicy;
+
+        /// <summary>
+        /// True only when Backend ownership is configured, the Animator lives on this GameObject, and the graph
+        /// initialized. False means <see cref="RootMotionApplied"/> will never fire.
+        /// </summary>
+        public bool IsRootMotionActive => _rootMotionActive;
 
         // ------------------------------------------------------------------ lifecycle
 
@@ -108,11 +140,20 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
+            if (_graph != null)
+            {
+                // A previous initialization failed or was disposed; do not leave a half-live graph subscribed.
+                _graph.TransitionCompleted -= HandleGraphTransition;
+                _graph.Dispose();
+                _graph = null;
+            }
+
             Animator animator = _animator != null ? _animator : GetComponentInChildren<Animator>(true);
             if (animator == null)
             {
                 AnimationRuntimeLog.Channel.Error(
                     "[AnimationRuntime] No Animator assigned and none found in children; the component is disabled.");
+                _disabledByMissingAnimator = true;
                 enabled = false;
                 return;
             }
@@ -131,20 +172,34 @@ namespace CycloneGames.AnimationRuntime
                 ? (IAnimationDiagnostics)new LoggingAnimationDiagnostics(channel)
                 : NullAnimationDiagnostics.Instance;
 
-            _graph = new AnimationRuntimeGraph(animator, descriptors, diagnostics);
+            _graph = new AnimationRuntimeGraph(animator, descriptors, diagnostics, _timePolicy, _dispatchClipEvents);
+            _graph.SetClipEventSink(_clipEventSink);
+            _graph.TransitionCompleted += HandleGraphTransition;
 
-            if (_rootMotionOwnership == RootMotionOwnership.Backend)
-            {
-                animator.applyRootMotion = true;
-            }
-
+            RebuildRootMotionState(animator, true);
             _stepIndex = -1;
+
+            if (_disabledByMissingAnimator)
+            {
+                _disabledByMissingAnimator = false;
+                enabled = true;
+            }
+        }
+
+        private void OnEnable()
+        {
+            // A disabled interval leaves the tick clocks behind; re-anchor so re-enabling never jumps the clip.
+            if (_graph != null && _graph.IsInitialized)
+            {
+                _graph.RebaseTickClocks();
+            }
         }
 
         private void OnDestroy()
         {
             if (_graph != null)
             {
+                _graph.TransitionCompleted -= HandleGraphTransition;
                 _graph.Dispose();
                 _graph = null;
             }
@@ -188,7 +243,8 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-            _stepIndex++;
+            // AnimationTick treats a negative step index as invalid, so wrap before the signed limit.
+            _stepIndex = _stepIndex == long.MaxValue ? 0L : _stepIndex + 1L;
             AnimationTimeSource source;
             switch (_commitPhase)
             {
@@ -208,7 +264,6 @@ namespace CycloneGames.AnimationRuntime
                 _stepIndex,
                 source,
                 false,
-                0d,
                 _commitPhase == AnimationCommitPhase.FixedUpdate ? Time.fixedDeltaTime : Time.deltaTime);
 
             _graph.Commit(tick);
@@ -228,9 +283,58 @@ namespace CycloneGames.AnimationRuntime
 
         // ------------------------------------------------------------------ playback facade
 
-        public AnimationVoiceHandle BeginClip(in AnimationClipRequest request)
+        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request)
         {
-            return _graph != null && _graph.IsInitialized ? _graph.BeginClip(request) : AnimationVoiceHandle.Invalid;
+            return _graph != null && _graph.IsInitialized ? _graph.BeginClip(request) : AnimationPlaybackHandle.Invalid;
+        }
+
+        /// <summary>Starts or replaces a playback and ramps its weight to the fade target.</summary>
+        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request, in AnimationFade fade)
+        {
+            return _graph != null && _graph.IsInitialized ? _graph.BeginClip(request, fade) : AnimationPlaybackHandle.Invalid;
+        }
+
+        /// <summary>Ramps a live playback from its current weight to the fade target.</summary>
+        public bool FadePlayback(in AnimationPlaybackKey key, in AnimationFade fade)
+        {
+            return _graph != null && _graph.IsInitialized && _graph.FadePlayback(key, fade);
+        }
+
+        /// <summary>Arms a normalized exit point; the completion arrives through <see cref="TransitionCompleted"/>.</summary>
+        public bool SetExitTime(in AnimationPlaybackKey key, in AnimationExitTime exit)
+        {
+            return _graph != null && _graph.IsInitialized && _graph.SetExitTime(key, exit);
+        }
+
+        public void ClearExitTime(in AnimationPlaybackKey key)
+        {
+            if (_graph != null && _graph.IsInitialized)
+            {
+                _graph.ClearExitTime(key);
+            }
+        }
+
+        /// <summary>Registers the clip-event receiver; applied to the current and any later graph.</summary>
+        public void SetClipEventSink(IAnimationClipEventSink sink)
+        {
+            _clipEventSink = sink;
+            if (_graph != null)
+            {
+                _graph.SetClipEventSink(sink);
+            }
+        }
+
+        public bool DispatchClipEvents
+        {
+            get => _graph != null ? _graph.DispatchClipEvents : _dispatchClipEvents;
+            set
+            {
+                _dispatchClipEvents = value;
+                if (_graph != null)
+                {
+                    _graph.DispatchClipEvents = value;
+                }
+            }
         }
 
         public void UpdateClip(in AnimationClipRequest request)
@@ -241,12 +345,31 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        public void EndClip(in AnimationVoiceKey key)
+        public bool SeekClip(in AnimationPlaybackKey key, double localTime)
+        {
+            return _graph != null && _graph.IsInitialized && _graph.SeekClip(key, localTime);
+        }
+
+        public void EndClip(in AnimationPlaybackKey key)
         {
             if (_graph != null && _graph.IsInitialized)
             {
                 _graph.EndClip(key);
             }
+        }
+
+        /// <summary>Fades a playback out and releases it when the ramp completes.</summary>
+        public void EndClip(in AnimationPlaybackKey key, in AnimationFade fade)
+        {
+            if (_graph != null && _graph.IsInitialized)
+            {
+                _graph.EndClip(key, fade);
+            }
+        }
+
+        private void HandleGraphTransition(AnimationPlaybackHandle handle, AnimationTransitionReason reason)
+        {
+            TransitionCompleted?.Invoke(handle, reason);
         }
 
         public void StopAll()
@@ -258,10 +381,10 @@ namespace CycloneGames.AnimationRuntime
         }
 
         /// <summary>
-        /// Rebinds to another Animator, rebuilding the graph. Every voice and handle is invalidated. Use this for
-        /// pooled actors that swap models, or after replacing the Animator component.
+        /// Rebinds to another Animator, rebuilding the graph. Every playback and handle is invalidated. Returns false
+        /// and leaves the current binding untouched when the target is already driven by another graph.
         /// </summary>
-        public void Rebind(Animator animator)
+        public bool TryRebind(Animator animator)
         {
             if (animator == null)
             {
@@ -272,18 +395,17 @@ namespace CycloneGames.AnimationRuntime
             {
                 _animator = animator;
                 Initialize();
-                return;
+                return IsInitialized;
             }
 
-            // Only adopt the new Animator once the swap succeeded; a failed rebind must leave the component
-            // pointing at the Animator it is actually driving.
-            _graph.Rebind(animator);
-            _animator = animator;
-
-            if (_rootMotionOwnership == RootMotionOwnership.Backend)
+            if (!_graph.TryRebind(animator))
             {
-                animator.applyRootMotion = true;
+                return false;
             }
+
+            _animator = animator;
+            RebuildRootMotionState(animator, true);
+            return true;
         }
 
         public void SetLayerWeight(int layerIndex, float weight)
@@ -312,9 +434,41 @@ namespace CycloneGames.AnimationRuntime
 
         // ------------------------------------------------------------------ root motion
 
+        /// <summary>
+        /// OnAnimatorMove is delivered to the GameObject that owns the Animator. A child-rig setup therefore
+        /// cannot forward root motion from this component, so Backend ownership is rejected instead of silently
+        /// doing nothing.
+        /// </summary>
+        private void RebuildRootMotionState(Animator animator, bool report)
+        {
+            bool sameObject = animator != null && animator.gameObject == gameObject;
+            _rootMotionActive = _rootMotionOwnership == RootMotionOwnership.Backend && sameObject;
+
+            if (_rootMotionOwnership != RootMotionOwnership.Backend || animator == null)
+            {
+                return;
+            }
+
+            if (!sameObject)
+            {
+                if (report && _logDiagnostics)
+                {
+                    AnimationRuntimeLog.Channel.Error(
+                        "[AnimationRuntime] Backend root motion requires the Animator on the same GameObject as "
+                        + "AnimationRuntimeBehaviour. The Animator is on '" + animator.name
+                        + "', this component is on '" + name
+                        + "'; root motion is disabled. Move the component, or use RootMotionOwnership.External.");
+                }
+
+                return;
+            }
+
+            animator.applyRootMotion = true;
+        }
+
         private void OnAnimatorMove()
         {
-            if (_rootMotionOwnership != RootMotionOwnership.Backend || _animator == null)
+            if (!_rootMotionActive || _animator == null)
             {
                 return;
             }
@@ -345,10 +499,12 @@ namespace CycloneGames.AnimationRuntime
             AnimationRuntimeLog.Channel.Info(
                 "[AnimationRuntime] layers=" + stats.LayerCount
                 + " playables=" + stats.PlayableCount
-                + " voices=" + stats.ActiveVoices + "/" + stats.PeakVoices
-                + " dropped=" + stats.DroppedVoices
+                + " playbacks=" + stats.ActivePlaybacks + "/" + stats.PeakPlaybacks
+                + " dropped=" + stats.DroppedPlaybacks
                 + " recreated=" + stats.RecreatedPlayables
+                + " reused=" + stats.ReusedPlayables
                 + " commits=" + stats.Commits
+                + " evaluations=" + stats.Evaluations
                 + " writes=" + stats.NativeWrites);
         }
     }

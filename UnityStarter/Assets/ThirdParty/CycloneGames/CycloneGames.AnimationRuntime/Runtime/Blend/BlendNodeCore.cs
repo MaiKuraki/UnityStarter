@@ -118,17 +118,45 @@ namespace CycloneGames.AnimationRuntime
             return index >= 0 && index < _count && _connected[index];
         }
 
-        /// <summary>Absolute seconds, or normalized phase when the node is in <see cref="BlendTimeMode.Normalized"/>.</summary>
+        /// <summary>
+        /// Absolute seconds, or normalized phase when the node is in <see cref="BlendTimeMode.Normalized"/>.
+        /// This is the path every frame takes, so it also advances the idle counters: a child that stays at zero
+        /// weight is disconnected even when the host never re-applies weights.
+        /// </summary>
         internal void SetTime(double value)
         {
             _time = value;
             for (int i = 0; i < _count; i++)
             {
-                if (_connected[i])
+                if (!_connected[i])
                 {
-                    ApplyTime(i);
+                    continue;
                 }
+
+                ApplyTime(i);
+                AdvanceIdle(i);
             }
+        }
+
+        /// <summary>
+        /// Counts consecutive zero-weight updates for one connected child and disconnects it once the threshold
+        /// is reached. Called from both <see cref="SetTime"/> and <see cref="ApplyWeights"/>.
+        /// </summary>
+        private void AdvanceIdle(int index)
+        {
+            if (_applied[index] > 0f)
+            {
+                _idle[index] = 0;
+                return;
+            }
+
+            if (_idle[index] < IdleUpdatesBeforeDisconnect)
+            {
+                _idle[index]++;
+                return;
+            }
+
+            Disconnect(index);
         }
 
         internal void ApplyWeights(ReadOnlySpan<float> weights)
@@ -154,13 +182,15 @@ namespace CycloneGames.AnimationRuntime
                         continue;
                     }
 
-                    if (_idle[i] < IdleUpdatesBeforeDisconnect)
+                    // Publish the zero weight once, otherwise _applied keeps the previous non-zero value and
+                    // the idle counter would be reset on every later update.
+                    if (_applied[i] > 0f)
                     {
-                        _idle[i]++;
-                        continue;
+                        _mixer.SetInputWeight(i, 0f);
+                        _applied[i] = 0f;
                     }
 
-                    Disconnect(i);
+                    AdvanceIdle(i);
                     continue;
                 }
 
