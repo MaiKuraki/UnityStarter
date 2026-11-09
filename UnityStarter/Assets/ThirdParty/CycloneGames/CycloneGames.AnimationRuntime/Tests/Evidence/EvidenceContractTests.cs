@@ -18,7 +18,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H01
 
         [Test]
-        public void H01_PlaybackHandle_IsEightBytesAsDocumented()
+        public void H01_PlaybackHandle_IsTwelveBytesAsDocumented()
         {
             int handleSize = LayoutSize(typeof(AnimationPlaybackHandle), out string layout);
             int marshalled = Marshal.SizeOf(typeof(AnimationPlaybackHandle));
@@ -229,15 +229,15 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             NoteEvidence(
                 "H10",
-                "Delta: NaN -> " + nanTick.Delta
-                + ", +Inf -> " + infiniteTick.Delta
-                + ", -1 -> " + negativeTick.Delta);
+                "TransitionDelta: NaN -> " + nanTick.TransitionDelta
+                + ", +Inf -> " + infiniteTick.TransitionDelta
+                + ", -1 -> " + negativeTick.TransitionDelta);
 
-            Assert.AreEqual(0f, nanTick.Delta);
-            Assert.AreEqual(0f, infiniteTick.Delta);
-            Assert.AreEqual(0f, negativeTick.Delta);
+            Assert.AreEqual(0f, nanTick.TransitionDelta);
+            Assert.AreEqual(0f, infiniteTick.TransitionDelta);
+            Assert.AreEqual(0f, negativeTick.TransitionDelta);
 
-            Assert.AreEqual(0d, new AnimationTick(double.NaN, 0L, AnimationTimeSource.Update).Time);
+            Assert.AreEqual(0d, new AnimationTick(double.NaN, 0L, AnimationTimeSource.Update).ClipTime);
         }
 
         // ---------------------------------------------------------------- H06, H08, H20 (static only)

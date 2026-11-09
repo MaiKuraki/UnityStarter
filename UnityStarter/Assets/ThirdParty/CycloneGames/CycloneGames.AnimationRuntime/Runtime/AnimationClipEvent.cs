@@ -47,8 +47,8 @@ namespace CycloneGames.AnimationRuntime
         /// <summary>Once per playback, at the first crossing.</summary>
         Once = 0,
 
-        /// <summary>Every time the normalized position crosses the target, including loop wraps.</summary>
-        EveryLoop = 1
+        /// <summary>Every time the normalized position crosses the target, including loop wraps and ping-pong reverse legs.</summary>
+        EveryCrossing = 1
     }
 
     /// <summary>
@@ -66,7 +66,7 @@ namespace CycloneGames.AnimationRuntime
             NormalizedTime = float.IsNaN(normalizedTime) || normalizedTime < 0f
                 ? 0f
                 : (normalizedTime > 1f ? 1f : normalizedTime);
-            Mode = mode == AnimationExitMode.EveryLoop ? AnimationExitMode.EveryLoop : AnimationExitMode.Once;
+            Mode = mode == AnimationExitMode.EveryCrossing ? AnimationExitMode.EveryCrossing : AnimationExitMode.Once;
         }
     }
 }

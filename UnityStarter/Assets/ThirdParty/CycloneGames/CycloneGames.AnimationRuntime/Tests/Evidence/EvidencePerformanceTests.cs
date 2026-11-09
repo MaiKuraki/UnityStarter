@@ -17,7 +17,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H05
 
         [Test]
-        public void H05_RejectedBeginClip_DoesNotAllocate_WhenDiagnosticsAreDisabled()
+        public void H05_RejectedBeginPlayback_DoesNotAllocate_WhenDiagnosticsAreDisabled()
         {
             CreateActor("H05Actor", out Animator animator);
             AnimationClip clip = CreateClip("H05Clip", 1f);
@@ -29,13 +29,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                nullGraph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                nullGraph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 nullGraph.Commit(Tick(0L, 0d));
 
                 int rejected = 0;
                 long delta = MeasureAllocationDelta(WarmupIterations, MeasuredIterations, () =>
                 {
-                    if (!nullGraph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f)).IsValid)
+                    if (!nullGraph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f)).IsValid)
                     {
                         rejected++;
                     }
@@ -43,7 +43,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 NoteEvidence(
                     "H05",
-                    MeasuredIterations + " rejected BeginClip calls with NullAnimationDiagnostics: heap delta "
+                    MeasuredIterations + " rejected BeginPlayback calls with NullAnimationDiagnostics: heap delta "
                     + FormatBytes(delta) + ", dropped counter=" + nullGraph.GetStats().DroppedPlaybacks);
 
                 Assert.AreEqual(WarmupIterations + MeasuredIterations, rejected,
@@ -60,7 +60,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [Test]
-        public void H05b_RejectedBeginClip_ReportsOnlyWhenTheChannelIsEnabled()
+        public void H05b_RejectedBeginPlayback_ReportsOnlyWhenTheChannelIsEnabled()
         {
             CreateActor("H05bActor", out Animator animator);
             AnimationClip clip = CreateClip("H05bClip", 1f);
@@ -75,13 +75,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                quietGraph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                quietGraph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 quietGraph.Commit(Tick(0L, 0d));
 
                 const int drops = 10000;
                 for (int i = 0; i < drops; i++)
                 {
-                    quietGraph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
+                    quietGraph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
                 }
 
                 NoteEvidence(
@@ -104,12 +104,12 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                loudGraph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                loudGraph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 loudGraph.Commit(Tick(0L, 0d));
 
                 long delta = MeasureAllocationDelta(0, 10000, () =>
                 {
-                    loudGraph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
+                    loudGraph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
                 });
 
                 NoteEvidence(
@@ -138,7 +138,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0.25d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0.25d, 1f));
                 graph.Commit(Tick(0L, 0d));
 
                 const int commits = 100000;
@@ -160,7 +160,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 long startDirty = System.Diagnostics.Stopwatch.GetTimestamp();
                 for (int i = 0; i < commits; i++)
                 {
-                    graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, (i % 60) * 0.016d, 1f));
+                    graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, (i % 60) * 0.016d, 1f));
                     graph.Commit(Tick(step++, 0d));
                 }
 
@@ -235,7 +235,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 {
                     for (int slot = 0; slot < capacity; slot++)
                     {
-                        graph.BeginClip(new AnimationClipRequest(slot + 1, 0, layer, clips[slot], 0d, 1f / capacity));
+                        graph.BeginPlayback(new AnimationClipRequest(slot + 1, 0, layer, clips[slot], 0d, 1f / capacity));
                     }
                 }
 
@@ -249,7 +249,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     {
                         for (int slot = 0; slot < capacity; slot++)
                         {
-                            graph.UpdateClip(new AnimationClipRequest(
+                            graph.UpdatePlayback(new AnimationClipRequest(
                                 slot + 1, 0, layer, clips[slot], time, 1f / capacity));
                         }
                     }
@@ -278,7 +278,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
                 graph.Commit(Tick(0L, 0d));
 
                 long step = 1;
