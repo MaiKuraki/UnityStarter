@@ -69,7 +69,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                                     double startTick = StartTicks[startIndex];
                                     double delta = Deltas[deltaIndex];
 
-                                    graph.BeginClip(new AnimationClipRequest(
+                                    graph.BeginPlayback(new AnimationClipRequest(
                                         1, 0, 0, clips[lengthIndex], 0d, 1f, false, 0, speed, loop));
 
                                     graph.Commit(Tick(step++, startTick));          // anchor
@@ -171,7 +171,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                         {
                             for (int slot = 0; slot <= capacity; slot++)
                             {
-                                graph.BeginClip(new AnimationClipRequest(
+                                graph.BeginPlayback(new AnimationClipRequest(
                                     layer * 100 + slot, 0, layer, clip, 0d, 1f));
                             }
                         }
@@ -193,7 +193,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                         for (int layer = 0; layer < layers; layer++)
                         {
-                            graph.EndClip(new AnimationPlaybackKey(layer * 100, 0, layer));
+                            graph.EndPlayback(new AnimationPlaybackKey(layer * 100, 0, layer));
                         }
 
                         graph.Commit(Tick(1L, 0.016d));
@@ -235,9 +235,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                             int instanceB = sameInstance == 1 ? 1 : 2;
                             int clipChannel = clipChannels[channelIndex];
 
-                            graph.BeginClip(new AnimationClipRequest(
+                            graph.BeginPlayback(new AnimationClipRequest(
                                 instanceA, playbackA, 0, clip, 0d, 0.5f, false, 0));
-                            graph.BeginClip(new AnimationClipRequest(
+                            graph.BeginPlayback(new AnimationClipRequest(
                                 instanceB, playbackB, 0, clip, 0d, 0.5f, false, clipChannel));
                             graph.Commit(Tick(0L, 0d));
 
@@ -308,19 +308,19 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                             switch (kind)
                             {
                                 case 0:
-                                    graph.BeginClip(new AnimationClipRequest(
+                                    graph.BeginPlayback(new AnimationClipRequest(
                                         instance, playback, layer, clip, time, weight, false, clipChannel));
                                     break;
                                 case 1:
-                                    graph.UpdateClip(new AnimationClipRequest(
+                                    graph.UpdatePlayback(new AnimationClipRequest(
                                         instance, playback, layer, clip, time, weight, false, clipChannel));
                                     break;
                                 case 2:
-                                    graph.EndClip(new AnimationPlaybackKey(
+                                    graph.EndPlayback(new AnimationPlaybackKey(
                                         instance, playback, layer, clipChannel));
                                     break;
                                 case 3:
-                                    graph.SeekClip(new AnimationPlaybackKey(
+                                    graph.SeekPlayback(new AnimationPlaybackKey(
                                         instance, playback, layer, clipChannel), time);
                                     break;
                                 case 4:
@@ -421,7 +421,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                         {
                             for (int slot = 0; slot < capacity && started < playbacks; slot++)
                             {
-                                graph.BeginClip(new AnimationClipRequest(
+                                graph.BeginPlayback(new AnimationClipRequest(
                                     started + 1, 0, layer, clip, 0d, 1f));
                                 started++;
                             }
@@ -432,7 +432,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                         for (int i = 1; i <= commits; i++)
                         {
-                            graph.UpdateClip(new AnimationClipRequest(
+                            graph.UpdatePlayback(new AnimationClipRequest(
                                 1, 0, 0, clip, (i % 60) * 0.016d, 1f));
                             graph.Commit(Tick(i, i * 0.016d));
                         }
@@ -478,7 +478,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
 
                 graph.Commit(Tick(0L, 0d));

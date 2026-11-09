@@ -215,7 +215,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 var curve = new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
                 clip.SetCurve(string.Empty, typeof(Animator), "RootT.x", curve);
 
-                behaviour.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                behaviour.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 for (int i = 0; i < 5; i++)
                 {
                     yield return null;
@@ -329,7 +329,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [UnityTest]
-        public IEnumerator H26_TickDrivenBehaviour_PlaysWithoutUpdateClip()
+        public IEnumerator H26_TickDrivenBehaviour_PlaysWithoutUpdatePlayback()
         {
             if (!Application.isPlaying)
             {
@@ -352,7 +352,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 Assert.AreEqual(AnimationTimePolicy.TickDriven, behaviour.TimePolicy);
-                Assert.IsTrue(behaviour.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f)).IsValid);
+                Assert.IsTrue(behaviour.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f)).IsValid);
 
                 for (int i = 0; i < 5; i++)
                 {
@@ -363,7 +363,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(1, count);
                 NoteEvidence(
                     "H26",
-                    "TickDriven behaviour after 5 frames without UpdateClip: playback time = "
+                    "TickDriven behaviour after 5 frames without UpdatePlayback: playback time = "
                     + buffer[0].Time.ToString("0.000") + " s");
 
                 Assert.Greater(buffer[0].Time, 0d,
@@ -499,6 +499,62 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 LogRuntime.TryReplaceWriter(writer, previous);
                 UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator H30_FixedUpdateCommit_UsesFixedTime()
+        {
+            if (!Application.isPlaying)
+            {
+                Assert.Ignore("Component lifecycle evidence needs play mode; run under PlayMode.");
+            }
+
+            float previousScale = Time.timeScale;
+            Time.timeScale = 10f;
+
+            var root = new GameObject("H30Root");
+            root.SetActive(false);
+            root.AddComponent<Animator>();
+            var behaviour = root.AddComponent<AnimationRuntimeBehaviour>();
+            SetPrivateField(behaviour, "_timePolicy", AnimationTimePolicy.TickDriven);
+            SetPrivateField(behaviour, "_commitPhase", AnimationCommitPhase.FixedUpdate);
+            root.SetActive(true);
+
+            AnimationClip clip = new AnimationClip { name = "H30Clip" };
+            clip.SetCurve(string.Empty, typeof(Transform), "localPosition.x",
+                new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(10f, 1f)));
+            var buffer = new AnimationPlaybackSnapshot[4];
+
+            try
+            {
+                Assert.IsTrue(behaviour.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f)).IsValid);
+                yield return new WaitForFixedUpdate();
+                Assert.AreEqual(1, behaviour.Graph.CopyPlaybackSnapshots(0, buffer));
+                double t1 = buffer[0].Time;
+
+                yield return new WaitForFixedUpdate();
+                Assert.AreEqual(1, behaviour.Graph.CopyPlaybackSnapshots(0, buffer));
+                double t2 = buffer[0].Time;
+
+                yield return new WaitForFixedUpdate();
+                Assert.AreEqual(1, behaviour.Graph.CopyPlaybackSnapshots(0, buffer));
+                double t3 = buffer[0].Time;
+
+                float fixedDelta = Time.fixedDeltaTime;
+                NoteEvidence("H30", "fixed steps: " + t1.ToString("0.000") + " -> " + t2.ToString("0.000")
+                    + " -> " + t3.ToString("0.000") + " (fixedDelta=" + fixedDelta.ToString("0.000") + ")");
+
+                Assert.Greater(t2, t1, "the first fixed step must advance clip time");
+                Assert.Greater(t3, t2, "the next fixed step must advance clip time again");
+                Assert.AreEqual(fixedDelta, t2 - t1, fixedDelta * 0.5, "time advances by the fixed step");
+                Assert.AreEqual(fixedDelta, t3 - t2, fixedDelta * 0.5, "time advances by the fixed step");
+            }
+            finally
+            {
+                Time.timeScale = previousScale;
+                UnityEngine.Object.DestroyImmediate(root);
+                UnityEngine.Object.DestroyImmediate(clip);
             }
         }
 
