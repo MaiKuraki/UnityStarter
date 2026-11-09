@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.AnimationRuntime.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.AnimationRuntime.Tests",
+    "references": [
+        "CycloneGames.AnimationRuntime.Tests.Shared",
+        "CycloneGames.AnimationRuntime.Core",
+        "CycloneGames.AnimationRuntime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
