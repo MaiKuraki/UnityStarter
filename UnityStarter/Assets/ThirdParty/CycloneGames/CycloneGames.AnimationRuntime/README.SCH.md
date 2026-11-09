@@ -221,6 +221,8 @@ graph.Dispose();
 
 同一 Animator 上的第二个 graph 会抛异常，消息含 Animator 名。Rebind 到已被占用的 Animator 返回 false。构造期间异常会释放归属。播放中 clip 被销毁时，开发看门狗终止 playback，并报告 instance 与 channel。缺少 Animator 时组件自动禁用，找到后 `Initialize` 会重新启用。
 
+`Animator` 字段为空且组件下面有多个 Animator 时，使用层级顺序里的第一个。Editor 和开发构建会记录一条警告；发布构建仍走单次查找。角色有多套 rig 时，显式赋值。
+
 ## 诊断
 
 ```csharp

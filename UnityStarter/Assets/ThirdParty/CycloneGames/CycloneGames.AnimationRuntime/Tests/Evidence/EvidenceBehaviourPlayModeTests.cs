@@ -1,5 +1,8 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
+using CycloneGames.Logging;
 using CycloneGames.AnimationRuntime.Core;
 using NUnit.Framework;
 using UnityEngine;
@@ -400,6 +403,101 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             }
             finally
             {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        private sealed class RecordingLogWriter : ILogWriter
+        {
+            public readonly List<string> Messages = new List<string>();
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                return true;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Messages.Add(message);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                var builder = new StringBuilder();
+                messageBuilder(builder);
+                Messages.Add(builder.ToString());
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                var builder = new StringBuilder();
+                messageBuilder(state, builder);
+                Messages.Add(builder.ToString());
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Messages.Add(message ?? exception.Message);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator H29_MultipleChildAnimators_ReportWhichOneIsUsed()
+        {
+            var root = new GameObject("H29Root");
+            var body = new GameObject("Body");
+            body.transform.SetParent(root.transform);
+            var bodyAnimator = body.AddComponent<Animator>();
+
+            var weapon = new GameObject("Weapon");
+            weapon.transform.SetParent(root.transform);
+            weapon.AddComponent<Animator>();
+
+            ILogWriter previous = LogRuntime.Writer;
+            var writer = new RecordingLogWriter();
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previous, writer));
+
+            try
+            {
+                var behaviour = root.AddComponent<AnimationRuntimeBehaviour>();
+                yield return null;
+
+                Assert.IsTrue(behaviour.IsInitialized);
+                Assert.AreEqual(bodyAnimator, behaviour.TargetAnimator,
+                    "the fallback uses the first Animator in hierarchy order");
+                Assert.IsTrue(
+                    writer.Messages.Exists(message => message.Contains("Multiple Animators") && message.Contains("Body")),
+                    "the fallback reports which Animator it chose");
+            }
+            finally
+            {
+                LogRuntime.TryReplaceWriter(writer, previous);
                 UnityEngine.Object.DestroyImmediate(root);
             }
         }

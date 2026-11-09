@@ -221,6 +221,8 @@ graph.Dispose();
 
 A second graph on one Animator throws with the Animator name. A rebind to an owned Animator returns false. An exception during construction releases the claim. A clip destroyed while playing is caught by the development watchdog, which terminates the playback and reports instance and channel. A missing Animator disables the component; `Initialize` re-enables it once one is found.
 
+If the Animator field is empty and several Animators exist below the component, the first in hierarchy order is used. Editor and development builds log a warning; release builds keep the single-search path. Assign the field explicitly when a character has more than one rig.
+
 ## Diagnostics
 
 ```csharp

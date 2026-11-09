@@ -148,7 +148,24 @@ namespace CycloneGames.AnimationRuntime
                 _graph = null;
             }
 
-            Animator animator = _animator != null ? _animator : GetComponentInChildren<Animator>(true);
+            Animator animator = _animator;
+            if (animator == null)
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Animator[] animators = GetComponentsInChildren<Animator>(true);
+                if (animators.Length > 1)
+                {
+                    AnimationRuntimeLog.Channel.Warning(
+                        "[AnimationRuntime] Multiple Animators found under '" + name + "'; using '"
+                        + animators[0].name + "'. Assign the Animator field explicitly to avoid driving the wrong rig.");
+                }
+
+                animator = animators.Length > 0 ? animators[0] : null;
+#else
+                animator = GetComponentInChildren<Animator>(true);
+#endif
+            }
+
             if (animator == null)
             {
                 AnimationRuntimeLog.Channel.Error(
