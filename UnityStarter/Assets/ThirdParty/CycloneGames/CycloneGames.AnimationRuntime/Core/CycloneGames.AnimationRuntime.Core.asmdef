@@ -1,0 +1,14 @@
+{
+    "name": "CycloneGames.AnimationRuntime.Core",
+    "rootNamespace": "CycloneGames.AnimationRuntime.Core",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

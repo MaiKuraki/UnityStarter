@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.AnimationRuntime.Tests.Editor",
+    "rootNamespace": "CycloneGames.AnimationRuntime.Tests",
+    "references": [
+        "CycloneGames.AnimationRuntime.Tests.Shared",
+        "CycloneGames.AnimationRuntime.Core",
+        "CycloneGames.AnimationRuntime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
