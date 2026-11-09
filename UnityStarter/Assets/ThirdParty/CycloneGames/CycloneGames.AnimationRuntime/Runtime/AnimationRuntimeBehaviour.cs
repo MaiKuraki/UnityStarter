@@ -43,7 +43,7 @@ namespace CycloneGames.AnimationRuntime
     /// motion ownership only; it produces ticks and contains no animation logic.
     ///
     /// In <see cref="AnimationTimePolicy.External"/> the internal tick is diagnostic: clips advance only when the
-    /// host calls <c>BeginClip</c>/<c>UpdateClip</c>. In <see cref="AnimationTimePolicy.TickDriven"/> the
+    /// host calls <c>BeginPlayback</c>/<c>UpdatePlayback</c>. In <see cref="AnimationTimePolicy.TickDriven"/> the
     /// component's clock is authoritative and clips advance on their own.
     /// </summary>
     [DisallowMultipleComponent]
@@ -59,7 +59,7 @@ namespace CycloneGames.AnimationRuntime
         [SerializeField] private AnimationLayerProfile _profile;
 
         [Header("Time")]
-        [Tooltip("External: the host supplies absolute clip time through UpdateClip. TickDriven: this component advances clips from its own clock.")]
+        [Tooltip("External: the host supplies absolute clip time through UpdatePlayback. TickDriven: this component advances clips from its own clock.")]
         [SerializeField] private AnimationTimePolicy _timePolicy = AnimationTimePolicy.External;
 
         [Header("Frame Model")]
@@ -303,15 +303,15 @@ namespace CycloneGames.AnimationRuntime
 
         // ------------------------------------------------------------------ playback facade
 
-        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request)
+        public AnimationPlaybackHandle BeginPlayback(in AnimationClipRequest request)
         {
-            return _graph != null && _graph.IsInitialized ? _graph.BeginClip(request) : AnimationPlaybackHandle.Invalid;
+            return _graph != null && _graph.IsInitialized ? _graph.BeginPlayback(request) : AnimationPlaybackHandle.Invalid;
         }
 
         /// <summary>Starts or replaces a playback and ramps its weight to the fade target.</summary>
-        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request, in AnimationFade fade)
+        public AnimationPlaybackHandle BeginPlayback(in AnimationClipRequest request, in AnimationFade fade)
         {
-            return _graph != null && _graph.IsInitialized ? _graph.BeginClip(request, fade) : AnimationPlaybackHandle.Invalid;
+            return _graph != null && _graph.IsInitialized ? _graph.BeginPlayback(request, fade) : AnimationPlaybackHandle.Invalid;
         }
 
         /// <summary>Ramps a live playback from its current weight to the fade target.</summary>
@@ -357,33 +357,33 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        public void UpdateClip(in AnimationClipRequest request)
+        public void UpdatePlayback(in AnimationClipRequest request)
         {
             if (_graph != null && _graph.IsInitialized)
             {
-                _graph.UpdateClip(request);
+                _graph.UpdatePlayback(request);
             }
         }
 
-        public bool SeekClip(in AnimationPlaybackKey key, double localTime)
+        public bool SeekPlayback(in AnimationPlaybackKey key, double localTime)
         {
-            return _graph != null && _graph.IsInitialized && _graph.SeekClip(key, localTime);
+            return _graph != null && _graph.IsInitialized && _graph.SeekPlayback(key, localTime);
         }
 
-        public void EndClip(in AnimationPlaybackKey key)
+        public void EndPlayback(in AnimationPlaybackKey key)
         {
             if (_graph != null && _graph.IsInitialized)
             {
-                _graph.EndClip(key);
+                _graph.EndPlayback(key);
             }
         }
 
         /// <summary>Fades a playback out and releases it when the ramp completes.</summary>
-        public void EndClip(in AnimationPlaybackKey key, in AnimationFade fade)
+        public void EndPlayback(in AnimationPlaybackKey key, in AnimationFade fade)
         {
             if (_graph != null && _graph.IsInitialized)
             {
-                _graph.EndClip(key, fade);
+                _graph.EndPlayback(key, fade);
             }
         }
 

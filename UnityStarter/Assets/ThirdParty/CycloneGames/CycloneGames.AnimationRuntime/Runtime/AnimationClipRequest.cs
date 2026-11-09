@@ -9,7 +9,7 @@ namespace CycloneGames.AnimationRuntime
     /// Under <see cref="AnimationTimePolicy.External"/> <see cref="LocalTime"/> is the absolute local clip time
     /// and the runtime never advances it. Under <see cref="AnimationTimePolicy.TickDriven"/> the runtime derives
     /// time from commit ticks; <see cref="LocalTime"/> is the initial offset, <see cref="Speed"/> and
-    /// <see cref="Loop"/> describe how that clock advances, and a later <c>SeekClip</c> is the explicit way to
+    /// <see cref="Loop"/> describe how that clock advances, and a later <c>SeekPlayback</c> is the explicit way to
     /// jump. Produced by a timeline adapter (Choreography) or by gameplay code.
     /// </summary>
     public readonly struct AnimationClipRequest

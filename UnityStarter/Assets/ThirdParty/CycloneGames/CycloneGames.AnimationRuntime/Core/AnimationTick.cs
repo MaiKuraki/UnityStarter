@@ -20,14 +20,14 @@ namespace CycloneGames.AnimationRuntime.Core
     public enum AnimationTimePolicy : byte
     {
         /// <summary>
-        /// The host owns clip time. <c>BeginClip</c>/<c>UpdateClip</c> carry absolute local seconds and
-        /// <see cref="AnimationTick.Time"/> is diagnostic only. This is the contract a timeline or replay system wants.
+        /// The host owns clip time. <c>BeginPlayback</c>/<c>UpdatePlayback</c> carry absolute local seconds and
+        /// <see cref="AnimationTick.ClipTime"/> is diagnostic only. This is the contract a timeline or replay system wants.
         /// </summary>
         External = 0,
 
         /// <summary>
         /// The runtime derives clip time from consecutive tick times, using the start clock captured when a playback
-        /// began. <c>UpdateClip</c> then only changes weight/speed; use <c>SeekClip</c> for an explicit seek.
+        /// began. <c>UpdatePlayback</c> then only changes weight/speed; use <c>SeekPlayback</c> for an explicit seek.
         /// This is the contract a self-driven actor wants.
         /// </summary>
         TickDriven = 1
@@ -49,11 +49,11 @@ namespace CycloneGames.AnimationRuntime.Core
     /// <summary>
     /// One commit tick. <see cref="StepIndex"/> always drives commit idempotency.
     ///
-    /// <see cref="Time"/> is the clip clock: authoritative only when the graph was constructed with
+    /// <see cref="ClipTime"/> is the clip clock: authoritative only when the graph was constructed with
     /// <see cref="AnimationTimePolicy.TickDriven"/>. Under <see cref="AnimationTimePolicy.External"/> it is a
     /// diagnostic value, because the host already supplied absolute local time through its clip requests.
     ///
-    /// <see cref="Delta"/> is the transition clock and is always authoritative: it advances weight fades and
+    /// <see cref="TransitionDelta"/> is the transition clock and is always authoritative: it advances weight fades and
     /// exit timers regardless of the clip time policy.
     /// </summary>
     public readonly struct AnimationTick
@@ -62,7 +62,7 @@ namespace CycloneGames.AnimationRuntime.Core
         public static readonly AnimationTick None = new AnimationTick(0d, -1L, AnimationTimeSource.Update);
 
         /// <summary>Clip clock reading for this commit. Authoritative only under TickDriven.</summary>
-        public readonly double Time;
+        public readonly double ClipTime;
 
         /// <summary>Monotonic step index. Two commits with the same index evaluate once.</summary>
         public readonly long StepIndex;
@@ -70,11 +70,11 @@ namespace CycloneGames.AnimationRuntime.Core
         /// <summary>Whether the host clock moved backwards (scrub, rewind). Tick-driven graphs re-base their clocks.</summary>
         public readonly bool IsBackward;
 
-        /// <summary>Where <see cref="Time"/> came from. Diagnostics only.</summary>
+        /// <summary>Where <see cref="ClipTime"/> came from. Diagnostics only.</summary>
         public readonly AnimationTimeSource Source;
 
         /// <summary>Transition delta in seconds, clamped to a non-negative finite value. Advances fades and exit timers.</summary>
-        public readonly float Delta;
+        public readonly float TransitionDelta;
 
         public AnimationTick(
             double time,
@@ -83,11 +83,11 @@ namespace CycloneGames.AnimationRuntime.Core
             bool isBackward = false,
             float delta = 0f)
         {
-            Time = Sanitize(time);
+            ClipTime = Sanitize(time);
             StepIndex = stepIndex;
             Source = source;
             IsBackward = isBackward;
-            Delta = SanitizeDelta(delta);
+            TransitionDelta = SanitizeDelta(delta);
         }
 
         /// <summary>Whether this tick carries a usable step index. Index 0 is a valid first step.</summary>
@@ -111,7 +111,7 @@ namespace CycloneGames.AnimationRuntime.Core
 
         public override string ToString()
         {
-            return "Tick(t=" + Time + ", step=" + StepIndex + ", " + Source + (IsBackward ? ", backward" : string.Empty) + ")";
+            return "Tick(t=" + ClipTime + ", step=" + StepIndex + ", " + Source + (IsBackward ? ", backward" : string.Empty) + ")";
         }
     }
 }

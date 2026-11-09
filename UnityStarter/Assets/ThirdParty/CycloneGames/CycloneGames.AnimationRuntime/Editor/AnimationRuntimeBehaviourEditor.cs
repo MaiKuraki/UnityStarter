@@ -101,13 +101,13 @@ namespace CycloneGames.AnimationRuntime.Editor
                 if (policy == AnimationTimePolicy.External)
                 {
                     EditorGUILayout.HelpBox(
-                        "External time: the host owns clip time. Clips advance only when it calls BeginClip/UpdateClip with an absolute local time; the commit tick is diagnostic.",
+                        "External time: the host owns clip time. Clips advance only when it calls BeginPlayback/UpdatePlayback with an absolute local time; the commit tick is diagnostic.",
                         MessageType.None);
                 }
                 else
                 {
                     EditorGUILayout.HelpBox(
-                        "Tick-driven time: this component advances clips from its own clock. UpdateClip then changes weight/speed/loop only; use SeekClip for an explicit jump.",
+                        "Tick-driven time: this component advances clips from its own clock. UpdatePlayback then changes weight/speed/loop only; use SeekPlayback for an explicit jump.",
                         MessageType.Info);
                 }
 

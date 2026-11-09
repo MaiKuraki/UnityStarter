@@ -6,7 +6,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 {
     /// <summary>
     /// Weight-fade contract: trajectory, easing, replacement, completion events, release-after-fade and
-    /// allocation. Time comes from <see cref="AnimationTick.Delta"/>, so the tests are independent of
+    /// allocation. Time comes from <see cref="AnimationTick.TransitionDelta"/>, so the tests are independent of
     /// <c>Time.deltaTime</c> and can run in batch mode deterministically.
     /// </summary>
     public sealed class EvidenceTransitionTests : EvidenceTestBase
@@ -28,7 +28,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 const float duration = 0.2f;
                 const float delta = 0.05f;
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(duration, 1f, AnimationFadeEasing.Linear));
 
@@ -90,7 +90,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.016f));
 
                 graph.FadePlayback(
@@ -100,7 +100,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(0.75f, buffer[0].Weight, 1e-4f);
 
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(0.2f, 1f, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(2L, 0.1f));
@@ -132,7 +132,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     Assert.AreEqual(AnimationTransitionReason.FadeCompleted, reason);
                 };
 
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(0.1f, 1f, AnimationFadeEasing.Linear));
 
@@ -163,7 +163,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 graph.TransitionCompleted += (handle, reason) => events++;
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(0f, 0.3f, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(0L, 0.016f));
@@ -180,7 +180,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [Test]
-        public void F6_EndClipWithFade_ReleasesOnlyAfterTheRamp()
+        public void F6_EndPlaybackWithFade_ReleasesOnlyAfterTheRamp()
         {
             CreateActor("F6Actor", out Animator animator);
             AnimationClip clip = CreateClip("F6Clip", 10f);
@@ -192,10 +192,10 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.TransitionCompleted += (handle, reason) => events++;
                 var key = new AnimationPlaybackKey(1, 0, 0, 0);
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.016f));
 
-                graph.EndClip(key, new AnimationFade(0.1f, 0f, AnimationFadeEasing.Linear));
+                graph.EndPlayback(key, new AnimationFade(0.1f, 0f, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(1L, 0.05f));
                 Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
@@ -230,7 +230,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 graph.TransitionCompleted += (handle, reason) => events++;
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(1f, 1f, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(0L, 0.1f));
@@ -261,7 +261,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 long heapDelta = MeasureAllocationDelta(1000, 10000, () =>
                 {
-                    graph.BeginClip(
+                    graph.BeginPlayback(
                         new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                         new AnimationFade(1f, 1f, AnimationFadeEasing.Linear));
                     graph.Commit(TickWithDelta(0L, 0.016f));
@@ -309,7 +309,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                             graph.StopAll();
                             graph.Commit(TickWithDelta(step++, 0.016f));
 
-                            graph.BeginClip(
+                            graph.BeginPlayback(
                                 new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                                 new AnimationFade(durations[durationIndex], 1f, curves[curveIndex]));
 
@@ -337,7 +337,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [Test]
-        public void F10_UpdateClipWeight_IsIgnoredWhileAFadeIsActive()
+        public void F10_UpdatePlaybackWeight_IsIgnoredWhileAFadeIsActive()
         {
             CreateActor("F10Actor", out Animator animator);
             AnimationClip clip = CreateClip("F10Clip", 10f);
@@ -347,18 +347,18 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(1f, 1f, AnimationFadeEasing.Linear));
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.1d, 0.1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.1d, 0.1f));
                 graph.Commit(TickWithDelta(0L, 0.1f));
 
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
-                Assert.AreEqual(0.1f, buffer[0].Weight, 1e-4f, "the fade, not UpdateClip, owns the weight");
+                Assert.AreEqual(0.1f, buffer[0].Weight, 1e-4f, "the fade, not UpdatePlayback, owns the weight");
                 Assert.AreEqual(1, diagnostics.WarningCount);
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.2d, 0.2f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.2d, 0.2f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
                 Assert.AreEqual(1, diagnostics.WarningCount, "the conflict warning is reported once per graph");
 

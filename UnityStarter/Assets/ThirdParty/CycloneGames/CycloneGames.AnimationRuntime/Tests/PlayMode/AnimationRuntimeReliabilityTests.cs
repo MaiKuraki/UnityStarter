@@ -69,10 +69,10 @@ namespace CycloneGames.AnimationRuntime.Tests
 
             try
             {
-                Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
+                Assert.IsTrue(graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
                 graph.Commit(Tick(0));
 
-                AnimationPlaybackHandle replaced = graph.BeginClip(new AnimationClipRequest(1, 0, 0, second, 0d, 1f));
+                AnimationPlaybackHandle replaced = graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, second, 0d, 1f));
 
                 Assert.IsTrue(replaced.IsValid, "re-begin of the same key must reuse its slot, not be dropped");
                 graph.Commit(Tick(1));
@@ -95,13 +95,13 @@ namespace CycloneGames.AnimationRuntime.Tests
             try
             {
                 var request = new AnimationClipRequest(7, 0, 0, clip, 0d, 1f);
-                AnimationPlaybackHandle first = graph.BeginClip(request);
+                AnimationPlaybackHandle first = graph.BeginPlayback(request);
                 graph.Commit(Tick(0));
 
-                graph.EndClip(request.Key);
+                graph.EndPlayback(request.Key);
                 graph.Commit(Tick(1));
 
-                AnimationPlaybackHandle second = graph.BeginClip(request);
+                AnimationPlaybackHandle second = graph.BeginPlayback(request);
                 graph.Commit(Tick(2));
 
                 Assert.IsTrue(second.IsValid);
@@ -130,12 +130,12 @@ namespace CycloneGames.AnimationRuntime.Tests
             try
             {
                 Assert.IsTrue(graph.SetLayerSource(0, node.Playable));
-                Assert.IsFalse(graph.BeginClip(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
+                Assert.IsFalse(graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
                     "a layer driven by an external node must reject clip playbacks");
 
                 graph.ClearLayerSource(0);
 
-                Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
+                Assert.IsTrue(graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, a, 0d, 1f)).IsValid,
                     "after clearing the source the layer must accept clip playbacks again");
             }
             finally
@@ -181,8 +181,8 @@ namespace CycloneGames.AnimationRuntime.Tests
 
             try
             {
-                AnimationPlaybackHandle a = first.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
-                AnimationPlaybackHandle b = second.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle a = first.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle b = second.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 first.Commit(Tick(0));
                 second.Commit(Tick(0));
 
@@ -247,7 +247,7 @@ namespace CycloneGames.AnimationRuntime.Tests
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0));
                 Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
 
@@ -255,7 +255,7 @@ namespace CycloneGames.AnimationRuntime.Tests
                 graph.Commit(Tick(1));
                 Assert.AreEqual(0, graph.GetStats().ActivePlaybacks);
 
-                AnimationPlaybackHandle replay = graph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle replay = graph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(2));
 
                 Assert.IsTrue(replay.IsValid);

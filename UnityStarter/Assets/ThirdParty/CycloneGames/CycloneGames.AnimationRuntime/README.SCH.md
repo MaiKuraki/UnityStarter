@@ -36,9 +36,9 @@ Layer 上限为 8，每层 playback 槽位上限为 8。Playback 是占用一个
 
 ## 时间策略
 
-策略在构造期选定，之后不变。`External` 由宿主拥有 clip 时间；`TickDriven` 由运行时用 tick 时间推进 clip。两种模式下，`AnimationTick.Delta` 都用来推进 fade 和 exit 计时。
+策略在构造期选定，之后不变。`External` 由宿主拥有 clip 时间；`TickDriven` 由运行时用 tick 时间推进 clip。两种模式下，`AnimationTick.TransitionDelta` 都用来推进 fade 和 exit 计时。
 
-时间轴、回放、编辑器拖拽用 External。`BeginClip` 与 `UpdateClip` 携带绝对本地秒数。
+时间轴、回放、编辑器拖拽用 External。`BeginPlayback` 与 `UpdatePlayback` 携带绝对本地秒数。
 
 ```csharp
 using CycloneGames.AnimationRuntime;
@@ -56,13 +56,13 @@ public sealed class ExternalAnimationDriver : MonoBehaviour
     private void Awake()
     {
         _graph = new AnimationRuntimeGraph(_animator, new[] { AnimationLayerDescriptor.Default });
-        _graph.BeginClip(new AnimationClipRequest(1, 0, 0, _clip, 0d, 1f));
+        _graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, _clip, 0d, 1f));
     }
 
     private void Update()
     {
         double localTime = Time.timeAsDouble % _clip.length;
-        _graph.UpdateClip(new AnimationClipRequest(1, 0, 0, _clip, localTime, 1f));
+        _graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, _clip, localTime, 1f));
 
         _step = _step == long.MaxValue ? 0L : _step + 1L;
         _graph.Commit(new AnimationTick(
@@ -90,7 +90,7 @@ _graph = new AnimationRuntimeGraph(
     diagnostics: null,
     timePolicy: AnimationTimePolicy.TickDriven);
 
-_graph.BeginClip(new AnimationClipRequest(
+_graph.BeginPlayback(new AnimationClipRequest(
     instanceId: 1,
     playbackChannel: 0,
     layer: 0,
@@ -150,9 +150,9 @@ gait.SetTime(phase01);
 `AnimationFade` 让一个 playback 从当前权重过渡到目标权重。
 
 ```csharp
-graph.BeginClip(request, new AnimationFade(0.2f, 1f, AnimationFadeEasing.SmoothStep));
+graph.BeginPlayback(request, new AnimationFade(0.2f, 1f, AnimationFadeEasing.SmoothStep));
 graph.FadePlayback(key, new AnimationFade(0.15f, 0f));
-graph.EndClip(key, new AnimationFade(0.1f, 0f));
+graph.EndPlayback(key, new AnimationFade(0.1f, 0f));
 
 graph.TransitionCompleted += (handle, reason) =>
 {
@@ -163,7 +163,7 @@ graph.TransitionCompleted += (handle, reason) =>
 };
 ```
 
-新 playback 带 fade 时从 0 开始。同 key 替换时从当前权重开始。时长为 0 立即应用目标，不发完成事件。fade 激活期间由它拥有权重；`UpdateClip` 的权重修改会被忽略，开发构建提示一次。`EndClip` 带 fade 时，斜坡完成后的下一次 commit 释放槽位。`StopAll` 和 `Dispose` 取消 fade，不发事件。
+新 playback 带 fade 时从 0 开始。同 key 替换时从当前权重开始。时长为 0 立即应用目标，不发完成事件。fade 激活期间由它拥有权重；`UpdatePlayback` 的权重修改会被忽略，开发构建提示一次。`EndPlayback` 带 fade 时，斜坡完成后的下一次 commit 释放槽位。`StopAll` 和 `Dispose` 取消 fade，不发事件。
 
 `AnimationExitTime` 是 clip 上的归一化时间点，通过 `TransitionCompleted` 以 `ExitTime` 报告，不会停止 playback。
 
@@ -171,7 +171,7 @@ graph.TransitionCompleted += (handle, reason) =>
 graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
 ```
 
-`Once` 首次越过目标时触发，回退到目标之前会重新武装。`EveryLoop` 每次越过目标都触发，包括循环绕回。
+`Once` 首次越过目标时触发，回退到目标之前会重新武装。`EveryCrossing` 每次越过目标都触发，包括循环绕回和 PingPong 反向段。
 
 ## Clip 事件
 

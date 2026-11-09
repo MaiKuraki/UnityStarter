@@ -147,7 +147,7 @@ namespace CycloneGames.AnimationRuntime.Tests
                 Assert.IsTrue(_graph.SetLayerSource(0, node.Playable));
                 Assert.IsTrue(_graph.IsLayerExternallySourced(0));
 
-                AnimationPlaybackHandle handle = _graph.BeginClip(
+                AnimationPlaybackHandle handle = _graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, _clips[0], 0d, 1f));
 
                 Assert.IsFalse(handle.IsValid, "a layer driven by an external node must reject clip playbacks");

@@ -92,11 +92,11 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             var request = new AnimationClipRequest(1, 0, 0, clip, 0d, 1f);
             try
             {
-                graph.BeginClip(request);
+                graph.BeginPlayback(request);
                 graph.Commit(TickWithDelta(0L, 0.1f));
                 Assert.AreEqual(0, sink.Count, "the marker is ahead of the first sample");
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
 
                 NoteEvidence("E1", "events=" + sink.Count + " name=" + sink.LastName
@@ -127,7 +127,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(0L, 0f));            // anchor at t=0
                 graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update, false, 0.016f));
@@ -155,13 +155,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.1f));
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
                 Assert.AreEqual(1, sink.Count);
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.1d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.1d, 1f));
                 graph.Commit(TickWithDelta(2L, 0.1f));
                 Assert.AreEqual(1, sink.Count, "a backward seek does not replay history");
 
@@ -184,7 +184,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.1f));
                 Assert.AreEqual(1, sink.Count, "an event authored at time 0 fires on the first sample");
                 NoteEvidence("E4", "event at t=0 count = " + sink.Count);
@@ -213,15 +213,15 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 var key = new AnimationPlaybackKey(1, 0, 0, 0);
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
                 graph.Commit(TickWithDelta(0L, 0.1f));
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
                 Assert.AreEqual(1, exitCount);
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
                 graph.Commit(TickWithDelta(2L, 0.1f));
                 Assert.AreEqual(1, exitCount, "Once fires at the first crossing only");
 
@@ -234,7 +234,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [Test]
-        public void E6_ExitTimeEveryLoop_FiresOncePerLoop()
+        public void E6_ExitTimeEveryCrossing_FiresOncePerLoop()
         {
             CreateActor("E6Actor", out Animator animator);
             AnimationClip clip = CreateClip("E6Clip", 1f);
@@ -255,9 +255,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 var key = new AnimationPlaybackKey(1, 0, 0, 0);
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
-                graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryLoop));
+                graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
                 graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
 
                 graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update, false, 0.016f));
@@ -266,7 +266,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.Commit(new AnimationTick(3.4d, 4L, AnimationTimeSource.Update, false, 0.016f));
                 graph.Commit(new AnimationTick(3.6d, 5L, AnimationTimeSource.Update, false, 0.016f));
 
-                Assert.AreEqual(3, exitCount, "EveryLoop fires on each crossing");
+                Assert.AreEqual(3, exitCount, "EveryCrossing fires on each crossing");
                 NoteEvidence("E6", "every-loop exit events = " + exitCount);
             }
             finally
@@ -288,10 +288,10 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 var key = new AnimationPlaybackKey(1, 0, 0, 0);
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
                 graph.Commit(TickWithDelta(0L, 0.1f));
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
 
                 NoteEvidence("E7", "order=" + string.Join(",", sink.Order));
@@ -316,11 +316,11 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0));
-                graph.BeginClip(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f, false, 1));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0));
+                graph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f, false, 1));
                 graph.Commit(TickWithDelta(0L, 0.1f));
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f, false, 0));
-                graph.UpdateClip(new AnimationClipRequest(2, 0, 0, clip, 0.6d, 1f, false, 1));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f, false, 0));
+                graph.UpdatePlayback(new AnimationClipRequest(2, 0, 0, clip, 0.6d, 1f, false, 1));
                 graph.Commit(TickWithDelta(1L, 0.1f));
 
                 Assert.AreEqual(2, sink.Count, "one event per playback, even when the clip is shared");
@@ -348,9 +348,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.1f));
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.1f));
 
                 Assert.AreEqual(0, sink.Count, "a timeline-owned graph can suppress clip events");
@@ -396,14 +396,14 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.1f));
 
                 long heapDelta = MeasureAllocationDelta(1000, 10000, () =>
                 {
-                    graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.4d, 1f));
+                    graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.4d, 1f));
                     graph.Commit(TickWithDelta(1L, 0.1f));
-                    graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                    graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
                     graph.Commit(TickWithDelta(2L, 0.1f));
                 });
 
@@ -430,13 +430,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.016f));
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.4d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.4d, 1f));
                 graph.Commit(TickWithDelta(1L, 0.016f));
                 Assert.AreEqual(1, sink.Count, "only the 0.2 marker has been crossed");
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
                 graph.Commit(TickWithDelta(2L, 0.016f));
                 int before = sink.Count;
                 Assert.AreEqual(3, before, "all three markers have been crossed");
@@ -468,7 +468,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(
+                graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                     new AnimationFade(0f, 1f));
                 graph.Commit(TickWithDelta(0L, 0.016f));
@@ -495,16 +495,16 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 // Loop is ignored under the external policy but still stored in the clock; the markers sit in the
                 // tail and head bands a wrap would report.
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(0L, 0.016f));
-                graph.UpdateClip(new AnimationClipRequest(
+                graph.UpdatePlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0.9d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(1L, 0.016f));
                 int before = sink.Count;
                 Assert.AreEqual(2, before, "the 0.05 and 0.5 markers have been crossed");
 
-                graph.UpdateClip(new AnimationClipRequest(
+                graph.UpdatePlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0.1d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(2L, 0.016f));
 
@@ -537,17 +537,17 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
-                graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryLoop));
+                graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
                 graph.Commit(TickWithDelta(0L, 0.016f));
 
-                graph.UpdateClip(new AnimationClipRequest(
+                graph.UpdatePlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0.9d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(1L, 0.016f));
                 Assert.AreEqual(1, exitCount);
 
-                graph.UpdateClip(new AnimationClipRequest(
+                graph.UpdatePlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0.6d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(2L, 0.016f));
 
@@ -575,7 +575,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0f));
                 graph.Commit(new AnimationTick(0.3d, 1L, AnimationTimeSource.Update, false, 0.3f));
                 Assert.AreEqual(1, sink.Count, "only the 0.2 marker has been crossed");
