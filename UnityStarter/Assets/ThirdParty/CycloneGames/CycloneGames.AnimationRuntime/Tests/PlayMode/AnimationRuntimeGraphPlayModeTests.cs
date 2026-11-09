@@ -53,9 +53,9 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void BeginClip_NullClip_IsRejectedWithoutCounting()
+        public void BeginPlayback_NullClip_IsRejectedWithoutCounting()
         {
-            AnimationPlaybackHandle handle = _graph.BeginClip(new AnimationClipRequest(1, 0, 0, null, 0d, 1f));
+            AnimationPlaybackHandle handle = _graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, null, 0d, 1f));
 
             Assert.IsFalse(handle.IsValid);
             Assert.AreEqual(0, _graph.GetStats().ActivePlaybacks);
@@ -68,7 +68,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             var clip = new AnimationClip();
             try
             {
-                _graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
+                _graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
 
                 AnimationTick tick = Tick(0);
                 _graph.Commit(tick);
@@ -88,18 +88,18 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void EndClip_ReleasesOnlyAtTheNextCommit()
+        public void EndPlayback_ReleasesOnlyAtTheNextCommit()
         {
             var clip = new AnimationClip();
             try
             {
                 var request = new AnimationClipRequest(7, 0, 0, clip, 0d, 1f);
-                _graph.BeginClip(request);
+                _graph.BeginPlayback(request);
                 _graph.Commit(Tick(0));
 
                 Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks);
 
-                _graph.EndClip(request.Key);
+                _graph.EndPlayback(request.Key);
                 Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks, "release is deferred to the next commit");
 
                 _graph.Commit(Tick(1));
@@ -112,7 +112,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         }
 
         [Test]
-        public void BeginClip_BeyondCapacity_DropsAndCounts()
+        public void BeginPlayback_BeyondCapacity_DropsAndCounts()
         {
             var go = new GameObject("AnimationRuntimeCapacityActor");
             var animator = go.AddComponent<Animator>();
@@ -125,8 +125,8 @@ namespace CycloneGames.AnimationRuntime.Tests
             var second = new AnimationClip();
             try
             {
-                Assert.IsTrue(graph.BeginClip(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
-                Assert.IsFalse(graph.BeginClip(new AnimationClipRequest(2, 0, 0, second, 0d, 1f)).IsValid);
+                Assert.IsTrue(graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, first, 0d, 1f)).IsValid);
+                Assert.IsFalse(graph.BeginPlayback(new AnimationClipRequest(2, 0, 0, second, 0d, 1f)).IsValid);
                 Assert.AreEqual(1L, graph.GetStats().DroppedPlaybacks);
                 Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
             }
@@ -154,7 +154,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             var clip = new AnimationClip();
             try
             {
-                _graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                _graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 _graph.Commit(Tick(0));
 
                 Assert.AreEqual(1, _graph.GetStats().ActivePlaybacks);
@@ -188,7 +188,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0));
 
                 Assert.AreEqual(graphsBefore + 1, AnimationRuntimeRegistry.LiveGraphCount);
@@ -225,11 +225,11 @@ namespace CycloneGames.AnimationRuntime.Tests
             try
             {
                 var request = new AnimationClipRequest(5, 0, 0, clip, 0d, 1f);
-                AnimationPlaybackHandle handle = _graph.BeginClip(request);
+                AnimationPlaybackHandle handle = _graph.BeginPlayback(request);
 
                 Assert.IsTrue(_graph.IsPlaybackAlive(handle));
 
-                _graph.EndClip(request.Key);
+                _graph.EndPlayback(request.Key);
                 Assert.IsTrue(_graph.IsPlaybackAlive(handle), "the playback survives until the release commit");
 
                 _graph.Commit(Tick(0));

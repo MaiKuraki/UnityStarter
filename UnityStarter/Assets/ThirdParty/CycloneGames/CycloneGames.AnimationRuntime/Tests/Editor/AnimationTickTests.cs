@@ -24,7 +24,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         {
             var tick = new AnimationTick(double.NaN, 1L, AnimationTimeSource.External);
 
-            Assert.AreEqual(0d, tick.Time);
+            Assert.AreEqual(0d, tick.ClipTime);
         }
 
         [Test]
@@ -32,15 +32,15 @@ namespace CycloneGames.AnimationRuntime.Tests
         {
             var tick = new AnimationTick(1d, 1L, AnimationTimeSource.FixedUpdate, false, -0.5f);
 
-            Assert.AreEqual(0f, tick.Delta);
+            Assert.AreEqual(0f, tick.TransitionDelta);
         }
 
         [Test]
         public void NonFiniteDelta_IsClampedToZero()
         {
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NaN).Delta);
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.PositiveInfinity).Delta);
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NegativeInfinity).Delta);
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NaN).TransitionDelta);
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.PositiveInfinity).TransitionDelta);
+            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NegativeInfinity).TransitionDelta);
         }
 
         [Test]
@@ -48,10 +48,10 @@ namespace CycloneGames.AnimationRuntime.Tests
         {
             var tick = AnimationTick.Create(12.5d, 42L, AnimationTimeSource.LateUpdate, 0.016f);
 
-            Assert.AreEqual(12.5d, tick.Time);
+            Assert.AreEqual(12.5d, tick.ClipTime);
             Assert.AreEqual(42L, tick.StepIndex);
             Assert.AreEqual(AnimationTimeSource.LateUpdate, tick.Source);
-            Assert.AreEqual(0.016f, tick.Delta, 1e-6f);
+            Assert.AreEqual(0.016f, tick.TransitionDelta, 1e-6f);
             Assert.IsFalse(tick.IsBackward);
         }
     }

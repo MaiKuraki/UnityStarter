@@ -84,7 +84,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 for (int slot = 0; slot < capacity && started < playbacks; slot++)
                 {
                     int instance = started + 1;
-                    graph.BeginClip(new AnimationClipRequest(
+                    graph.BeginPlayback(new AnimationClipRequest(
                         instance, 0, layer, clip, 0d, 1f, false, 0));
                     keys[started] = new AnimationPlaybackKey(instance, 0, layer, 0);
                     started++;
@@ -212,7 +212,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     int instance = i + 1;
                     graph.SetExitTime(
                         new AnimationPlaybackKey(instance, 0, layer, 0),
-                        new AnimationExitTime(0.5f, AnimationExitMode.EveryLoop));
+                        new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
                 }
             });
 
@@ -222,7 +222,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         }
 
         [Test]
-        public void D6_UpdateClipCost()
+        public void D6_UpdatePlaybackCost()
         {
             AnimationClip clip = CreateClip("D6Clip", 10f);
             CreateActor("D6Actor", out Animator animator);
@@ -238,7 +238,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 int instance = i + 1;
                 int layer = i / 8;
-                graph.BeginClip(new AnimationClipRequest(instance, 0, layer, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(instance, 0, layer, clip, 0d, 1f));
                 keys[i] = new AnimationPlaybackKey(instance, 0, layer, 0);
             }
 
@@ -249,7 +249,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 for (int i = 0; i < 64; i++)
                 {
-                    graph.UpdateClip(new AnimationClipRequest(
+                    graph.UpdatePlayback(new AnimationClipRequest(
                         keys[i].InstanceId, 0, keys[i].Layer, clip, (step % 60) * 0.016d, 1f));
                 }
 
@@ -258,7 +258,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                NoteEvidence("D6", "64 UpdateClip + 1 Commit: " + us.ToString("0.000") + " us/frame");
+                NoteEvidence("D6", "64 UpdatePlayback + 1 Commit: " + us.ToString("0.000") + " us/frame");
                 Assert.Less(us, 500.0);
             }
             finally
@@ -277,16 +277,16 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             graph.SetClipEventSink(sink);
 
             var key = new AnimationPlaybackKey(1, 0, 0, 0);
-            graph.BeginClip(
+            graph.BeginPlayback(
                 new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
                 new AnimationFade(1e6f, 1f, AnimationFadeEasing.Linear));
-            graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryLoop));
+            graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
             graph.Commit(TickWithDelta(0L, 0.016f));
 
             long step = 1;
             long heapDelta = MeasureAllocationDelta(1000, 50000, () =>
             {
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, (step % 60) * 0.016d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, (step % 60) * 0.016d, 1f));
                 graph.Commit(TickWithDelta(step++, 0.016f));
             });
 
@@ -348,7 +348,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 {
                     for (int i = 0; i < keys.Length; i++)
                     {
-                        graph.UpdateClip(new AnimationClipRequest(
+                        graph.UpdatePlayback(new AnimationClipRequest(
                             keys[i].InstanceId, 0, keys[i].Layer, clip, (step % 60) * 0.016d, 1f));
                     }
 

@@ -17,7 +17,7 @@ namespace CycloneGames.AnimationRuntime
     /// <item><see cref="AnimationTimePolicy.External"/>: the host supplies absolute local seconds on every
     /// request; the runtime never advances a clip from a tick. This is what a timeline or replay system wants.</item>
     /// <item><see cref="AnimationTimePolicy.TickDriven"/>: the runtime advances each playback from consecutive tick
-    /// times, using the start clock captured at <see cref="BeginClip"/>. Speed and wrap mode come from the request.</item>
+    /// times, using the start clock captured at <see cref="BeginPlayback"/>. Speed and wrap mode come from the request.</item>
     /// </list>
     ///
     /// Topology is fixed at construction: <c>layerCount</c> layers, each with a fixed playback capacity and one
@@ -34,7 +34,7 @@ namespace CycloneGames.AnimationRuntime
         private const byte PlaybackTransitionActive = 1 << 4;
         private const byte ExitArmed = 1 << 0;
         private const byte ExitFired = 1 << 1;
-        private const byte ExitEveryLoop = 1 << 2;
+        private const byte ExitEveryCrossing = 1 << 2;
 
         // Profiler markers are free when no profiler is attached, and answer "where did the frame go" without
         // adding temporary instrumentation to shipping code.
@@ -79,10 +79,35 @@ namespace CycloneGames.AnimationRuntime
             public float Elapsed;
             public byte Easing;
             public byte ExitFlags;
+
+            /// <summary>Set by <c>UpdatePlayback</c> and <c>SeekPlayback</c>; cleared by the commit that consumes it.</summary>
+            public byte Seeked;
+
             public float ExitNormalized;
             public float ExitLastNormalized;
             public double LastClipTime;
+
+            /// <summary>Unfolded clock at the previous commit; stays zero under the external policy.</summary>
+            public double LastUnwrapped;
+
             public AnimationClipEvent[] ClipEvents;
+        }
+
+        /// <summary>The unfolded clock advance since the previous commit, with the turning point it crossed.</summary>
+        private readonly struct SweepWindow
+        {
+            public readonly bool ClockDriven;
+            public readonly double Advance;
+            public readonly int TurnsCrossed;
+            public readonly bool TurnAtTop;
+
+            public SweepWindow(bool clockDriven, double advance, int turnsCrossed, bool turnAtTop)
+            {
+                ClockDriven = clockDriven;
+                Advance = advance;
+                TurnsCrossed = turnsCrossed;
+                TurnAtTop = turnAtTop;
+            }
         }
 
         private struct ClipEventDispatch
@@ -163,10 +188,17 @@ namespace CycloneGames.AnimationRuntime
         private bool _hasPendingRelease;
         private bool _dispatchClipEvents;
         private IAnimationClipEventSink _clipEventSink;
-        private readonly Dictionary<AnimationClip, AnimationClipEvent[]> _clipEventCache =
-            new Dictionary<AnimationClip, AnimationClipEvent[]>();
-        private readonly ClipEventDispatch[] _pendingClipEvents = new ClipEventDispatch[128];
+        private readonly ConditionalWeakTable<AnimationClip, AnimationClipEvent[]> _clipEventCache =
+            new ConditionalWeakTable<AnimationClip, AnimationClipEvent[]>();
+
+        /// <summary>Initial marker queue; the array doubles when one commit exceeds it.</summary>
+        private const int InitialPendingClipEventCapacity = 256;
+
+        private ClipEventDispatch[] _pendingClipEvents = new ClipEventDispatch[InitialPendingClipEventCapacity];
         private int _pendingClipEventCount;
+        private bool _dispatchingEvents;
+        private bool _warnedEventSinkError;
+        private bool _warnedReentrantCommit;
         private readonly TransitionEvent[] _pendingTransitions;
         private int _pendingTransitionCount;
 
@@ -245,7 +277,7 @@ namespace CycloneGames.AnimationRuntime
         public PlayableGraph PlayableGraph => _graph;
 
         /// <summary>Size of the internal playback struct. Guarded by a test so layout regressions fail CI.</summary>
-        public static int PlaybackStructSize => Unsafe.SizeOf<Playback>();
+        internal static int PlaybackStructSize => Unsafe.SizeOf<Playback>();
 
         // ------------------------------------------------------------------ lifecycle
 
@@ -435,21 +467,21 @@ namespace CycloneGames.AnimationRuntime
         /// Starts or replaces a playback at its requested weight. Native work happens at <see cref="Commit"/>, so
         /// this is safe to call from gameplay code without touching the Playable graph.
         /// </summary>
-        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request)
+        public AnimationPlaybackHandle BeginPlayback(in AnimationClipRequest request)
         {
-            return BeginClipCore(request, default, false);
+            return BeginPlaybackCore(request, default, false);
         }
 
         /// <summary>
         /// Starts or replaces a playback and ramps its weight from the current value to
         /// <see cref="AnimationFade.TargetWeight"/>. When a fade is supplied, the request's weight is ignored.
         /// </summary>
-        public AnimationPlaybackHandle BeginClip(in AnimationClipRequest request, in AnimationFade fade)
+        public AnimationPlaybackHandle BeginPlayback(in AnimationClipRequest request, in AnimationFade fade)
         {
-            return BeginClipCore(request, fade, true);
+            return BeginPlaybackCore(request, fade, true);
         }
 
-        private AnimationPlaybackHandle BeginClipCore(in AnimationClipRequest request, in AnimationFade fade, bool hasFade)
+        private AnimationPlaybackHandle BeginPlaybackCore(in AnimationClipRequest request, in AnimationFade fade, bool hasFade)
         {
             if (!_initialized)
             {
@@ -458,7 +490,7 @@ namespace CycloneGames.AnimationRuntime
 
             if (request.Clip == null)
             {
-                Warn("BeginClip rejected: clip is null.");
+                Warn("BeginPlayback rejected: clip is null.");
                 return AnimationPlaybackHandle.Invalid;
             }
 
@@ -471,7 +503,7 @@ namespace CycloneGames.AnimationRuntime
 
             if (layer.HasExternalSource)
             {
-                Warn("BeginClip rejected: layer is owned by an external source.");
+                Warn("BeginPlayback rejected: layer is owned by an external source.");
                 return AnimationPlaybackHandle.Invalid;
             }
 
@@ -485,7 +517,7 @@ namespace CycloneGames.AnimationRuntime
             if (slot < 0)
             {
                 _droppedPlaybacks++;
-                Warn("BeginClip dropped: layer playback capacity exhausted.");
+                Warn("BeginPlayback dropped: layer playback capacity exhausted.");
                 return AnimationPlaybackHandle.Invalid;
             }
 
@@ -552,9 +584,9 @@ namespace CycloneGames.AnimationRuntime
         /// <summary>
         /// Updates an existing playback. In <see cref="AnimationTimePolicy.External"/> the request carries the new
         /// absolute time; in <see cref="AnimationTimePolicy.TickDriven"/> time comes from ticks and this method
-        /// only applies weight/speed/loop. <c>Clip</c> is never changed here; use <see cref="BeginClip"/>.
+        /// only applies weight/speed/loop. <c>Clip</c> is never changed here; use <see cref="BeginPlayback"/>.
         /// </summary>
-        public void UpdateClip(in AnimationClipRequest request)
+        public void UpdatePlayback(in AnimationClipRequest request)
         {
             if (!_initialized)
             {
@@ -579,8 +611,8 @@ namespace CycloneGames.AnimationRuntime
             if (request.Clip != null && !ReferenceEquals(request.Clip, playback.Clip) && !_warnedClipMismatch)
             {
                 _warnedClipMismatch = true;
-                Warn("UpdateClip cannot change the clip of a live playback; the request's Clip was ignored. "
-                    + "Call BeginClip for the same key to replace the clip.");
+                Warn("UpdatePlayback cannot change the clip of a live playback; the request's Clip was ignored. "
+                    + "Call BeginPlayback for the same key to replace the clip.");
             }
 #endif
 
@@ -593,6 +625,7 @@ namespace CycloneGames.AnimationRuntime
                 if (playback.Time != time)
                 {
                     playback.Time = time;
+                    layer.Transitions[slot].Seeked = 1;
                     changed = true;
                 }
             }
@@ -618,7 +651,7 @@ namespace CycloneGames.AnimationRuntime
                     if (!_warnedWeightConflict)
                     {
                         _warnedWeightConflict = true;
-                        Warn("UpdateClip weight ignored while a fade is active; the fade owns the weight "
+                        Warn("UpdatePlayback weight ignored while a fade is active; the fade owns the weight "
                             + "until it completes. This warning is reported once per graph.");
                     }
                 }
@@ -639,7 +672,7 @@ namespace CycloneGames.AnimationRuntime
         /// Moves a live playback to an explicit local time. In tick-driven mode this re-bases the playback clock, which
         /// is the supported way to scrub without fighting the tick accumulator.
         /// </summary>
-        public bool SeekClip(in AnimationPlaybackKey key, double localTime)
+        public bool SeekPlayback(in AnimationPlaybackKey key, double localTime)
         {
             if (!_initialized)
             {
@@ -657,6 +690,7 @@ namespace CycloneGames.AnimationRuntime
             ref Playback playback = ref layer.Playbacks[slot];
             ref PlaybackClock clock = ref layer.Clocks[slot];
             playback.Time = ClampTime(localTime, playback.Length);
+            layer.Transitions[slot].Seeked = 1;
             clock.StartTickTime = _lastTickTime;
             clock.StartLocalTime = playback.Time;
             clock.Started = 0;
@@ -666,7 +700,7 @@ namespace CycloneGames.AnimationRuntime
 
         /// <summary>
         /// Ramps a live playback from its current weight to <see cref="AnimationFade.TargetWeight"/>. While the ramp
-        /// is active, <see cref="UpdateClip"/> cannot change the weight.
+        /// is active, <see cref="UpdatePlayback"/> cannot change the weight.
         /// </summary>
         public bool FadePlayback(in AnimationPlaybackKey key, in AnimationFade fade)
         {
@@ -725,7 +759,7 @@ namespace CycloneGames.AnimationRuntime
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             transition.ExitNormalized = exit.NormalizedTime;
             transition.ExitFlags = (byte)(ExitArmed
-                | (exit.Mode == AnimationExitMode.EveryLoop ? ExitEveryLoop : 0));
+                | (exit.Mode == AnimationExitMode.EveryCrossing ? ExitEveryCrossing : 0));
             transition.ExitLastNormalized = NormalizeTime(playback.Time, playback.Length);
             _dirty = true;
             return true;
@@ -777,7 +811,7 @@ namespace CycloneGames.AnimationRuntime
         }
 
         /// <summary>Requests a playback to stop. The slot is released at the next commit.</summary>
-        public void EndClip(in AnimationPlaybackKey key)
+        public void EndPlayback(in AnimationPlaybackKey key)
         {
             if (!_initialized)
             {
@@ -807,9 +841,9 @@ namespace CycloneGames.AnimationRuntime
 
         /// <summary>
         /// Fades a playback out and releases its slot after the ramp completes. A zero duration behaves like
-        /// <see cref="EndClip(in AnimationPlaybackKey)"/>.
+        /// <see cref="EndPlayback(in AnimationPlaybackKey)"/>.
         /// </summary>
-        public void EndClip(in AnimationPlaybackKey key, in AnimationFade fade)
+        public void EndPlayback(in AnimationPlaybackKey key, in AnimationFade fade)
         {
             if (!_initialized)
             {
@@ -818,7 +852,7 @@ namespace CycloneGames.AnimationRuntime
 
             if (fade.Duration <= 0f)
             {
-                EndClip(key);
+                EndPlayback(key);
                 return;
             }
 
@@ -901,6 +935,17 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
+            if (_dispatchingEvents)
+            {
+                if (!_warnedReentrantCommit)
+                {
+                    _warnedReentrantCommit = true;
+                    Warn("Commit was called from an event handler and was ignored. Event handlers must not re-enter Commit.");
+                }
+
+                return;
+            }
+
             if (tick.IsValid && tick.StepIndex == _lastStepIndex)
             {
                 return;
@@ -909,7 +954,7 @@ namespace CycloneGames.AnimationRuntime
             if (tick.IsValid)
             {
                 _lastStepIndex = tick.StepIndex;
-                _lastTickTime = tick.Time;
+                _lastTickTime = tick.ClipTime;
             }
 
             _commits++;
@@ -932,7 +977,7 @@ namespace CycloneGames.AnimationRuntime
             {
                 for (int i = 0; i < _layerCount; i++)
                 {
-                    ApplyLayer(i, tick.Time, tick.IsBackward, tick.Delta);
+                    ApplyLayer(i, tick.ClipTime, tick.IsBackward, tick.TransitionDelta);
                 }
 
                 _graph.Evaluate(0f);
@@ -948,8 +993,16 @@ namespace CycloneGames.AnimationRuntime
                 CommitMarker.End();
             }
 
-            DrainClipEvents();
-            DrainTransitionEvents();
+            _dispatchingEvents = true;
+            try
+            {
+                DrainClipEvents();
+                DrainTransitionEvents();
+            }
+            finally
+            {
+                _dispatchingEvents = false;
+            }
         }
 
         private bool HasExternalSource()
@@ -1030,7 +1083,10 @@ namespace CycloneGames.AnimationRuntime
                     continue;
                 }
 
-                if (_timePolicy == AnimationTimePolicy.TickDriven)
+                double unwrapped = 0d;
+                bool clockDriven = _timePolicy == AnimationTimePolicy.TickDriven;
+
+                if (clockDriven)
                 {
                     ref PlaybackClock clock = ref layer.Clocks[slot];
                     if (clock.Started == 0)
@@ -1046,11 +1102,20 @@ namespace CycloneGames.AnimationRuntime
                         clock.StartLocalTime = playback.Time;
                     }
 
-                    playback.Time = EvaluateClock(ref clock, playback.Length, tickTime);
+                    playback.Time = EvaluateClock(ref clock, playback.Length, tickTime, out unwrapped);
                 }
 
-                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, delta);
-                CheckExitTime(ref layer, ref playback, layerIndex, slot);
+                // Consumed once per commit by both event channels below.
+                ref PlaybackTransition transition = ref layer.Transitions[slot];
+                bool seeked = transition.Seeked != 0;
+                transition.Seeked = 0;
+
+                SweepWindow window = BuildWindow(clockDriven, ref transition, unwrapped, playback.Length, seeked);
+
+                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, seeked, in window);
+                CheckExitTime(ref layer, ref playback, layerIndex, slot, seeked, in window);
+
+                transition.LastUnwrapped = unwrapped;
 
                 if ((playback.Flags & PlaybackTransitionActive) != 0)
                 {
@@ -1103,14 +1168,17 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private static double EvaluateClock(ref PlaybackClock clock, float length, double tickTime)
+        private static double EvaluateClock(ref PlaybackClock clock, float length, double tickTime, out double unwrapped)
         {
+            unwrapped = 0d;
+
             if (length <= AnimationRuntimeLimits.MinClipLength)
             {
                 return 0d;
             }
 
             double time = clock.StartLocalTime + ((tickTime - clock.StartTickTime) * clock.Speed);
+            unwrapped = time;
 
             switch ((AnimationLoopMode)clock.Loop)
             {
@@ -1143,6 +1211,32 @@ namespace CycloneGames.AnimationRuntime
 
                     return time > length ? length : time;
             }
+        }
+
+        /// <summary>Builds the sweep window from the unfolded clock and the previous commit's reading.</summary>
+        private static SweepWindow BuildWindow(
+            bool clockDriven, ref PlaybackTransition transition, double unwrapped, float length, bool seeked)
+        {
+            if (!clockDriven || seeked || transition.LastClipTime < 0d
+                || length <= AnimationRuntimeLimits.MinClipLength)
+            {
+                return new SweepWindow(clockDriven, 0d, 0, false);
+            }
+
+            double advance = unwrapped - transition.LastUnwrapped;
+            if (advance <= 0d || advance >= length)
+            {
+                return new SweepWindow(true, advance, 0, false);
+            }
+
+            // First multiple of the clip length strictly above the previous position.
+            long turn = (long)Math.Floor(transition.LastUnwrapped / length) + 1L;
+            if (turn * length > unwrapped)
+            {
+                return new SweepWindow(true, advance, 0, false);
+            }
+
+            return new SweepWindow(true, advance, 1, (turn & 1L) == 1L);
         }
 
         private void EnsurePlayable(ref Layer layer, ref Playback playback, int slot)
@@ -1311,7 +1405,15 @@ namespace CycloneGames.AnimationRuntime
 
                 playback.Flags &= unchecked((byte)~(PlaybackTransitionActive | PlaybackReleaseAfterFade));
                 playback.Weight = fade.TargetWeight;
-                layer.Transitions[slot] = default;
+
+                // Reset the ramp only; LastClipTime, the exit point and ClipEvents are preserved.
+                ref PlaybackTransition instant = ref layer.Transitions[slot];
+                instant.FromWeight = 0f;
+                instant.TargetWeight = 0f;
+                instant.Duration = 0f;
+                instant.Elapsed = 0f;
+                instant.Easing = 0;
+
                 if (releaseAfterFade)
                 {
                     playback.Flags |= PlaybackPendingRelease;
@@ -1421,8 +1523,27 @@ namespace CycloneGames.AnimationRuntime
 
             for (int i = 0; i < count; i++)
             {
-                handler(_pendingTransitions[i].Handle, _pendingTransitions[i].Reason);
+                try
+                {
+                    handler(_pendingTransitions[i].Handle, _pendingTransitions[i].Reason);
+                }
+                catch (Exception exception)
+                {
+                    ReportEventSinkException(exception);
+                }
             }
+        }
+
+        private void ReportEventSinkException(Exception exception)
+        {
+            if (_warnedEventSinkError)
+            {
+                return;
+            }
+
+            _warnedEventSinkError = true;
+            Error("An event handler threw; the exception was contained and the remaining events were delivered. "
+                + exception);
         }
 
         // ------------------------------------------------------------------ clip events / exit time
@@ -1436,11 +1557,6 @@ namespace CycloneGames.AnimationRuntime
 
             double normalized = time / length;
             return normalized <= 0d ? 0f : (normalized >= 1d ? 1f : (float)normalized);
-        }
-
-        private static bool IsLooped(byte loop)
-        {
-            return loop != (byte)AnimationLoopMode.Clamp;
         }
 
         private AnimationClipEvent[] GetClipEvents(AnimationClip clip)
@@ -1492,7 +1608,7 @@ namespace CycloneGames.AnimationRuntime
                 result[j + 1] = key;
             }
 
-            _clipEventCache[clip] = result;
+            _clipEventCache.Add(clip, result);
             return result;
         }
 
@@ -1515,20 +1631,26 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
+        /// <summary>
+        /// Reports clip markers crossed since the previous commit. The first commit sweeps [0, current]; a backward
+        /// step sweeps the clip tail plus head, unless it came from a host clock write, which sweeps nothing.
+        /// </summary>
         private void DispatchClipEventsForPlayback(
             ref Layer layer,
             ref Playback playback,
             int layerIndex,
             int slot,
-            float delta)
+            bool seeked,
+            in SweepWindow window)
         {
+            ref PlaybackTransition transition = ref layer.Transitions[slot];
+
             if (!_dispatchClipEvents || _clipEventSink == null || playback.Clip == null
                 || playback.Length <= AnimationRuntimeLimits.MinClipLength)
             {
                 return;
             }
 
-            ref PlaybackTransition transition = ref layer.Transitions[slot];
             AnimationClipEvent[] events = transition.ClipEvents;
             if (events == null)
             {
@@ -1540,42 +1662,108 @@ namespace CycloneGames.AnimationRuntime
             {
                 return;
             }
+
             double previousTime = transition.LastClipTime;
             double currentTime = playback.Time;
             bool firstCommit = previousTime < 0d;
+            bool backward = !firstCommit && currentTime < previousTime;
 
-            if (!firstCommit && currentTime < previousTime && !IsLooped(layer.Clocks[slot].Loop))
+            byte loop = layer.Clocks[slot].Loop;
+            bool loopMode = loop == (byte)AnimationLoopMode.Loop;
+            bool pingPong = loop == (byte)AnimationLoopMode.PingPong;
+
+            if (backward && (seeked || (!loopMode && !pingPong)))
             {
-                // Backward seek: events are suppressed by contract.
                 return;
             }
 
-            bool looped = !firstCommit && currentTime < previousTime && IsLooped(layer.Clocks[slot].Loop);
+            bool looped = backward && loopMode;
+            bool reverse = backward && pingPong;
             float previous = firstCommit ? 0f : NormalizeTime(previousTime, playback.Length);
             float current = NormalizeTime(currentTime, playback.Length);
-            bool wholeClipJump = delta >= playback.Length;
+
+            // A cyclic step of one clip length or more visits every position.
+            if ((loopMode || pingPong) && window.ClockDriven && !firstCommit && !seeked
+                && window.Advance >= playback.Length)
+            {
+                // A Loop step revisits its start; a PingPong leg does not unless it completed a full round trip.
+                bool includeStart = loopMode
+                    || (pingPong && window.Advance >= playback.Length * 2d);
+                for (int i = 0; i < events.Length; i++)
+                {
+                    if (!includeStart && Math.Abs(events[i].NormalizedTime - previous) <= 1e-6f)
+                    {
+                        continue;
+                    }
+
+                    QueueClipEvent(layerIndex, slot, events[i]);
+                }
+
+                return;
+            }
+
+            bool band = pingPong && window.TurnsCrossed == 1;
+
+            if (band)
+            {
+                // A turning commit contains two legs; each is swept in its own direction.
+                if (window.TurnAtTop)
+                {
+                    QueueAscending(layerIndex, slot, events, previous, 1f);
+                    QueueDescending(layerIndex, slot, events, 1f, current);
+                }
+                else
+                {
+                    QueueDescending(layerIndex, slot, events, previous, 0f);
+                    QueueAscending(layerIndex, slot, events, 0f, current);
+                }
+
+                return;
+            }
+
+            if (reverse)
+            {
+                // Ping-pong walks from previous down to current, so markers are reported high to low.
+                for (int i = events.Length - 1; i >= 0; i--)
+                {
+                    float at = events[i].NormalizedTime;
+                    if (at < previous && at >= current)
+                    {
+                        QueueClipEvent(layerIndex, slot, events[i]);
+                    }
+                }
+
+                return;
+            }
+
+            if (looped)
+            {
+                // A loop wrap walks the tail first, then the head.
+                for (int i = 0; i < events.Length; i++)
+                {
+                    if (events[i].NormalizedTime > previous)
+                    {
+                        QueueClipEvent(layerIndex, slot, events[i]);
+                    }
+                }
+
+                for (int i = 0; i < events.Length; i++)
+                {
+                    if (events[i].NormalizedTime <= current)
+                    {
+                        QueueClipEvent(layerIndex, slot, events[i]);
+                    }
+                }
+
+                return;
+            }
 
             for (int i = 0; i < events.Length; i++)
             {
                 float at = events[i].NormalizedTime;
-                bool crossed;
-
-                if (wholeClipJump)
-                {
-                    crossed = true;
-                }
-                else if (firstCommit)
-                {
-                    crossed = at >= previous && at <= current;
-                }
-                else if (looped)
-                {
-                    crossed = at > previous || at <= current;
-                }
-                else
-                {
-                    crossed = at > previous && at <= current;
-                }
+                bool crossed = firstCommit
+                    ? at >= previous && at <= current
+                    : at > previous && at <= current;
 
                 if (crossed)
                 {
@@ -1584,7 +1772,34 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private void CheckExitTime(ref Layer layer, ref Playback playback, int layerIndex, int slot)
+        /// <summary>Reports markers in (low, high], in the order the playhead meets them.</summary>
+        private void QueueAscending(int layerIndex, int slot, AnimationClipEvent[] events, float low, float high)
+        {
+            for (int i = 0; i < events.Length; i++)
+            {
+                float at = events[i].NormalizedTime;
+                if (at > low && at <= high)
+                {
+                    QueueClipEvent(layerIndex, slot, events[i]);
+                }
+            }
+        }
+
+        /// <summary>Reports markers in [low, high), in the order the playhead meets them.</summary>
+        private void QueueDescending(int layerIndex, int slot, AnimationClipEvent[] events, float high, float low)
+        {
+            for (int i = events.Length - 1; i >= 0; i--)
+            {
+                float at = events[i].NormalizedTime;
+                if (at >= low && at < high)
+                {
+                    QueueClipEvent(layerIndex, slot, events[i]);
+                }
+            }
+        }
+
+        private void CheckExitTime(
+            ref Layer layer, ref Playback playback, int layerIndex, int slot, bool seeked, in SweepWindow window)
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             if ((transition.ExitFlags & ExitArmed) == 0)
@@ -1592,7 +1807,7 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-            bool everyLoop = (transition.ExitFlags & ExitEveryLoop) != 0;
+            bool everyLoop = (transition.ExitFlags & ExitEveryCrossing) != 0;
             if (!everyLoop && (transition.ExitFlags & ExitFired) != 0)
             {
                 return;
@@ -1602,10 +1817,14 @@ namespace CycloneGames.AnimationRuntime
             float previous = transition.ExitLastNormalized;
             transition.ExitLastNormalized = current;
 
-            bool looped = current < previous && IsLooped(layer.Clocks[slot].Loop);
-            if (current < previous && !looped)
+            byte loop = layer.Clocks[slot].Loop;
+            bool backward = current < previous;
+            bool looped = !seeked && backward && loop == (byte)AnimationLoopMode.Loop;
+            bool reverse = !seeked && backward && loop == (byte)AnimationLoopMode.PingPong;
+
+            if (backward && !looped && !reverse)
             {
-                // A backward seek re-arms a once-only exit if the pose is now before the target.
+                // A backward jump re-arms a once-only exit if the pose is now before the target.
                 if (current < transition.ExitNormalized)
                 {
                     transition.ExitFlags &= unchecked((byte)~ExitFired);
@@ -1614,11 +1833,40 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-            bool crossed = looped
-                ? transition.ExitNormalized > previous || transition.ExitNormalized <= current
-                : transition.ExitNormalized <= 0f
+            bool crossed;
+            if (reverse)
+            {
+                crossed = transition.ExitNormalized < previous && transition.ExitNormalized >= current;
+            }
+            else if (looped)
+            {
+                crossed = transition.ExitNormalized > previous || transition.ExitNormalized <= current;
+            }
+            else
+            {
+                crossed = transition.ExitNormalized <= 0f
                     ? previous <= 0f
                     : previous < transition.ExitNormalized && current >= transition.ExitNormalized;
+            }
+
+            if (!crossed && window.ClockDriven && window.TurnsCrossed == 1
+                && loop == (byte)AnimationLoopMode.PingPong)
+            {
+                // The exit point can lie outside the folded interval when the step turned.
+                float low = previous <= current ? previous : current;
+                float high = previous >= current ? previous : current;
+                crossed = window.TurnAtTop ? transition.ExitNormalized > low && transition.ExitNormalized <= 1f
+                    : transition.ExitNormalized < high;
+            }
+
+            if (!crossed && window.ClockDriven && window.Advance >= playback.Length
+                && (loop == (byte)AnimationLoopMode.Loop
+                    || (loop == (byte)AnimationLoopMode.PingPong
+                        && window.Advance >= playback.Length * 2d)))
+            {
+                // Loop revisits its start every cycle; PingPong only after a full round trip.
+                crossed = true;
+            }
 
             if (!crossed)
             {
@@ -1635,9 +1883,9 @@ namespace CycloneGames.AnimationRuntime
 
         private void QueueClipEvent(int layerIndex, int slot, in AnimationClipEvent clipEvent)
         {
-            if (_pendingClipEventCount >= _pendingClipEvents.Length)
+            if (_pendingClipEventCount == _pendingClipEvents.Length)
             {
-                return;
+                Array.Resize(ref _pendingClipEvents, _pendingClipEvents.Length * 2);
             }
 
             _pendingClipEvents[_pendingClipEventCount++] = new ClipEventDispatch(
@@ -1663,7 +1911,14 @@ namespace CycloneGames.AnimationRuntime
             for (int i = 0; i < count; i++)
             {
                 ClipEventDispatch dispatch = _pendingClipEvents[i];
-                sink.OnClipEvent(dispatch.Handle, dispatch.Event);
+                try
+                {
+                    sink.OnClipEvent(dispatch.Handle, dispatch.Event);
+                }
+                catch (Exception exception)
+                {
+                    ReportEventSinkException(exception);
+                }
             }
         }
 
@@ -2031,7 +2286,7 @@ namespace CycloneGames.AnimationRuntime
 
         private static double ClampTime(double time, float length)
         {
-            if (time < 0d)
+            if (double.IsNaN(time) || time < 0d)
             {
                 return 0d;
             }

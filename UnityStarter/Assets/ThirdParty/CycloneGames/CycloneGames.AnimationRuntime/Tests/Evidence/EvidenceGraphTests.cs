@@ -30,7 +30,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0L, 0d));
 
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
@@ -39,7 +39,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 long writesBefore = graph.GetStats().NativeWrites;
                 long evaluationsBefore = graph.GetStats().Evaluations;
 
-                // Ten commits whose tick time advances by 100 ms each. Nothing calls UpdateClip.
+                // Ten commits whose tick time advances by 100 ms each. Nothing calls UpdatePlayback.
                 for (int i = 1; i <= 10; i++)
                 {
                     graph.Commit(Tick(i, i * 0.1d));
@@ -60,7 +60,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(0L, graph.GetStats().Evaluations - evaluationsBefore);
 
                 // The only path that moves the pose is the request payload.
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
                 graph.Commit(Tick(11L, 1.1d));
 
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
@@ -95,7 +95,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 var request = new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp);
-                graph.BeginClip(request);
+                graph.BeginPlayback(request);
 
                 // The first commit that sees the playback anchors the clock at its requested local time.
                 graph.Commit(Tick(1L, 10.5d));
@@ -115,7 +115,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     "TickDriven: tick 10.5 -> 11.0 -> 11.5 produced playback time 0.000 -> 0.500 -> 1.000 s (clamp)");
 
                 // Loop wraps instead of clamping.
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     2, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(Tick(4L, 11.75d)); // anchor instance 2
                 graph.Commit(Tick(5L, 12.0d));
@@ -123,15 +123,15 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(0.25d, looped.Time, 1e-6, "0.25 s into a 1 s loop");
 
                 // Speed scales elapsed time.
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     3, 0, 0, clip, 0d, 1f, false, 0, 2f, AnimationLoopMode.Loop));
                 graph.Commit(Tick(6L, 12.1d)); // anchor instance 3
                 graph.Commit(Tick(7L, 12.2d));
                 AnimationPlaybackSnapshot fastest = FindSnapshot(buffer, 3, graph);
                 Assert.AreEqual(0.2d, fastest.Time, 1e-6, "0.1 s at speed 2 wraps to 0.2 s");
 
-                // SeekClip re-anchors the clock explicitly; the next commit starts from the seek target.
-                Assert.IsTrue(graph.SeekClip(new AnimationPlaybackKey(1, 0, 0, 0), 0.25d));
+                // SeekPlayback re-anchors the clock explicitly; the next commit starts from the seek target.
+                Assert.IsTrue(graph.SeekPlayback(new AnimationPlaybackKey(1, 0, 0, 0), 0.25d));
                 graph.Commit(Tick(8L, 12.3d));
                 AnimationPlaybackSnapshot seeked = FindSnapshot(buffer, 1, graph);
                 Assert.AreEqual(0.25d, seeked.Time, 1e-6, "seek re-anchors at 0.25 s");
@@ -163,7 +163,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H07
 
         [Test]
-        public void H07_UpdateClip_WithADifferentClip_IsRejectedAndWarned()
+        public void H07_UpdatePlayback_WithADifferentClip_IsRejectedAndWarned()
         {
             CreateActor("H07Actor", out Animator animator);
             AnimationClip shortClip = CreateClip("H07Short", 1f);
@@ -174,20 +174,20 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, shortClip, 0.5d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, shortClip, 0.5d, 1f));
                 graph.Commit(Tick(0L, 0d));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(1f, buffer[0].Length, 1e-3f);
 
                 long recreatedBefore = graph.GetStats().RecreatedPlayables;
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, longClip, 2d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, longClip, 2d, 1f));
                 graph.Commit(Tick(1L, 0.016d));
 
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 NoteEvidence(
                     "H07",
-                    "UpdateClip with a different clip: length=" + buffer[0].Length.ToString("0.00")
+                    "UpdatePlayback with a different clip: length=" + buffer[0].Length.ToString("0.00")
                     + " s, time=" + buffer[0].Time.ToString("0.00")
                     + " s, recreated=" + (graph.GetStats().RecreatedPlayables - recreatedBefore)
                     + ", warnings=" + diagnostics.WarningCount);
@@ -198,7 +198,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     "the ignored clip change is reported once instead of silently swallowed");
 
                 // Re-beginning with the same key is the supported way to change the clip.
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, longClip, 2d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, longClip, 2d, 1f));
                 graph.Commit(Tick(2L, 0.032d));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(3f, buffer[0].Length, 1e-3f);
@@ -238,7 +238,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0.5d, 1f));
                 graph.Commit(Tick(0L, 0d));
 
                 long writesBefore = graph.GetStats().NativeWrites;
@@ -253,7 +253,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 Assert.AreEqual(0L, delta, "the dirty gate skips both the write and the evaluation");
 
-                graph.UpdateClip(new AnimationClipRequest(1, 0, 0, clip, 0.75d, 1f));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.75d, 1f));
                 graph.Commit(Tick(commits + 1, 2d));
                 Assert.AreEqual(1L, graph.GetStats().NativeWrites - writesBefore,
                     "one changed time produces one SetTime write");
@@ -276,7 +276,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, a, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, a, 0d, 1f));
                 graph.Commit(Tick(0L, 0d));
                 long recreatedBefore = graph.GetStats().RecreatedPlayables;
 
@@ -284,7 +284,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 long start = System.Diagnostics.Stopwatch.GetTimestamp();
                 for (int i = 1; i <= switches; i++)
                 {
-                    graph.BeginClip(new AnimationClipRequest(1, 0, 0, (i & 1) == 0 ? a : b, 0d, 1f));
+                    graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, (i & 1) == 0 ? a : b, 0d, 1f));
                     graph.Commit(Tick(i, i * 0.016d));
                 }
 
@@ -318,7 +318,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(0L, 0d));
 
                 int before = graph.PlayableCount;
@@ -331,7 +331,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(before, after,
                     "StopAll releases with destroy:false, so the clip playable stays in the graph for reuse");
 
-                AnimationPlaybackHandle again = graph.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                AnimationPlaybackHandle again = graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(Tick(1L, 0.016d));
 
                 Assert.IsTrue(again.IsValid, "the pooled slot is reusable");
@@ -441,7 +441,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             AnimationClip clip = CreateClip("H20Clip", 1f);
 
             var abandoned = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
-            abandoned.BeginClip(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+            abandoned.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
             abandoned.Commit(Tick(0L, 0d));
 
             GC.Collect();
@@ -476,8 +476,8 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                AnimationPlaybackHandle tooHigh = graph.BeginClip(new AnimationClipRequest(1, 0, 5, clip, 0d, 1f));
-                AnimationPlaybackHandle tooLow = graph.BeginClip(new AnimationClipRequest(2, 0, -7, clip, 0d, 1f));
+                AnimationPlaybackHandle tooHigh = graph.BeginPlayback(new AnimationClipRequest(1, 0, 5, clip, 0d, 1f));
+                AnimationPlaybackHandle tooLow = graph.BeginPlayback(new AnimationClipRequest(2, 0, -7, clip, 0d, 1f));
 
                 NoteEvidence(
                     "H22",
@@ -508,7 +508,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                graph.BeginClip(new AnimationClipRequest(
+                graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
 
                 graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
@@ -545,9 +545,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             try
             {
-                AnimationPlaybackHandle first = graph.BeginClip(
+                AnimationPlaybackHandle first = graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, a, 0d, 0.5f, false, 0));
-                AnimationPlaybackHandle second = graph.BeginClip(
+                AnimationPlaybackHandle second = graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, b, 0d, 0.5f, false, 1));
                 graph.Commit(Tick(0L, 0d));
 
@@ -562,7 +562,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 Assert.AreEqual(2, graph.GetStats().ActivePlaybacks,
                     "clip channel is part of playback identity, which is what a cross-fade needs");
 
-                graph.EndClip(new AnimationPlaybackKey(1, 0, 0, 1));
+                graph.EndPlayback(new AnimationPlaybackKey(1, 0, 0, 1));
                 graph.Commit(Tick(1L, 0.016d));
                 Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
             }

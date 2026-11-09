@@ -23,7 +23,7 @@ namespace CycloneGames.AnimationRuntime
 
     /// <summary>
     /// A weight ramp for one playback. <see cref="Duration"/> is in seconds and is advanced by
-    /// <see cref="AnimationTick.Delta"/>; a duration of zero applies the target weight immediately and produces
+    /// <see cref="AnimationTick.TransitionDelta"/>; a duration of zero applies the target weight immediately and produces
     /// no completion event.
     /// </summary>
     public readonly struct AnimationFade

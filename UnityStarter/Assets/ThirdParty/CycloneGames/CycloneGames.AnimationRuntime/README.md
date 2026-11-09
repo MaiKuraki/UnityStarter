@@ -36,9 +36,9 @@ Layer count is capped at 8 and each layer at 8 playback slots. A playback is one
 
 ## Time policies
 
-The policy is chosen at construction and does not change. `External` lets the host own clip time; `TickDriven` lets the runtime advance clips from tick times. `AnimationTick.Delta` advances fades and exit timers in both modes.
+The policy is chosen at construction and does not change. `External` lets the host own clip time; `TickDriven` lets the runtime advance clips from tick times. `AnimationTick.TransitionDelta` advances fades and exit timers in both modes.
 
-External time is the right choice for a timeline, replay or editor scrub. `BeginClip` and `UpdateClip` carry absolute local seconds.
+External time is the right choice for a timeline, replay or editor scrub. `BeginPlayback` and `UpdatePlayback` carry absolute local seconds.
 
 ```csharp
 using CycloneGames.AnimationRuntime;
@@ -56,13 +56,13 @@ public sealed class ExternalAnimationDriver : MonoBehaviour
     private void Awake()
     {
         _graph = new AnimationRuntimeGraph(_animator, new[] { AnimationLayerDescriptor.Default });
-        _graph.BeginClip(new AnimationClipRequest(1, 0, 0, _clip, 0d, 1f));
+        _graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, _clip, 0d, 1f));
     }
 
     private void Update()
     {
         double localTime = Time.timeAsDouble % _clip.length;
-        _graph.UpdateClip(new AnimationClipRequest(1, 0, 0, _clip, localTime, 1f));
+        _graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, _clip, localTime, 1f));
 
         _step = _step == long.MaxValue ? 0L : _step + 1L;
         _graph.Commit(new AnimationTick(
@@ -90,7 +90,7 @@ _graph = new AnimationRuntimeGraph(
     diagnostics: null,
     timePolicy: AnimationTimePolicy.TickDriven);
 
-_graph.BeginClip(new AnimationClipRequest(
+_graph.BeginPlayback(new AnimationClipRequest(
     instanceId: 1,
     playbackChannel: 0,
     layer: 0,
@@ -150,9 +150,9 @@ gait.SetTime(phase01);
 `AnimationFade` ramps one playback from its current weight to a target.
 
 ```csharp
-graph.BeginClip(request, new AnimationFade(0.2f, 1f, AnimationFadeEasing.SmoothStep));
+graph.BeginPlayback(request, new AnimationFade(0.2f, 1f, AnimationFadeEasing.SmoothStep));
 graph.FadePlayback(key, new AnimationFade(0.15f, 0f));
-graph.EndClip(key, new AnimationFade(0.1f, 0f));
+graph.EndPlayback(key, new AnimationFade(0.1f, 0f));
 
 graph.TransitionCompleted += (handle, reason) =>
 {
@@ -163,7 +163,7 @@ graph.TransitionCompleted += (handle, reason) =>
 };
 ```
 
-A new playback with a fade starts at 0. Replacing the same key starts from the current weight. A zero duration applies the target immediately and raises no completion event. While a fade is active it owns the weight; `UpdateClip` weight changes are ignored and reported once in development builds. `EndClip` with a fade releases the slot on the commit after the ramp completes. `StopAll` and `Dispose` cancel fades without events.
+A new playback with a fade starts at 0. Replacing the same key starts from the current weight. A zero duration applies the target immediately and raises no completion event. While a fade is active it owns the weight; `UpdatePlayback` weight changes are ignored and reported once in development builds. `EndPlayback` with a fade releases the slot on the commit after the ramp completes. `StopAll` and `Dispose` cancel fades without events.
 
 `AnimationExitTime` is a normalized point on the clip. It reports through `TransitionCompleted` with `ExitTime` and does not stop the playback.
 
@@ -171,7 +171,7 @@ A new playback with a fade starts at 0. Replacing the same key starts from the c
 graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
 ```
 
-`Once` fires on the first crossing and re-arms after a backward seek before the target. `EveryLoop` fires on every crossing, including loop wraps.
+`Once` fires on the first crossing and re-arms after a backward seek before the target. `EveryCrossing` fires on every crossing, including loop wraps and ping-pong reverse legs.
 
 ## Clip events
 
