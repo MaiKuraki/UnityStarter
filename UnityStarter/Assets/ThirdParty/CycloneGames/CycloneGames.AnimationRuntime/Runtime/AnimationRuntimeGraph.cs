@@ -1686,13 +1686,17 @@ namespace CycloneGames.AnimationRuntime
             if ((loopMode || pingPong) && window.ClockDriven && !firstCommit && !seeked
                 && window.Advance >= playback.Length)
             {
+                // A Loop step revisits its start; a PingPong leg does not unless it completed a full round trip.
+                bool includeStart = loopMode
+                    || (pingPong && window.Advance >= playback.Length * 2d);
                 for (int i = 0; i < events.Length; i++)
                 {
-                    // The start position was already reported by the previous commit.
-                    if (Math.Abs(events[i].NormalizedTime - previous) > 1e-6f)
+                    if (!includeStart && Math.Abs(events[i].NormalizedTime - previous) <= 1e-6f)
                     {
-                        QueueClipEvent(layerIndex, slot, events[i]);
+                        continue;
                     }
+
+                    QueueClipEvent(layerIndex, slot, events[i]);
                 }
 
                 return;
@@ -1853,6 +1857,15 @@ namespace CycloneGames.AnimationRuntime
                 float high = previous >= current ? previous : current;
                 crossed = window.TurnAtTop ? transition.ExitNormalized > low && transition.ExitNormalized <= 1f
                     : transition.ExitNormalized < high;
+            }
+
+            if (!crossed && window.ClockDriven && window.Advance >= playback.Length
+                && (loop == (byte)AnimationLoopMode.Loop
+                    || (loop == (byte)AnimationLoopMode.PingPong
+                        && window.Advance >= playback.Length * 2d)))
+            {
+                // Loop revisits its start every cycle; PingPong only after a full round trip.
+                crossed = true;
             }
 
             if (!crossed)
