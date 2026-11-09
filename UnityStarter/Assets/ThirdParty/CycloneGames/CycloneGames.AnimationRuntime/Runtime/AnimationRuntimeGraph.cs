@@ -86,7 +86,28 @@ namespace CycloneGames.AnimationRuntime
             public float ExitNormalized;
             public float ExitLastNormalized;
             public double LastClipTime;
+
+            /// <summary>Unfolded clock at the previous commit; stays zero under the external policy.</summary>
+            public double LastUnwrapped;
+
             public AnimationClipEvent[] ClipEvents;
+        }
+
+        /// <summary>The unfolded clock advance since the previous commit, with the turning point it crossed.</summary>
+        private readonly struct SweepWindow
+        {
+            public readonly bool ClockDriven;
+            public readonly double Advance;
+            public readonly int TurnsCrossed;
+            public readonly bool TurnAtTop;
+
+            public SweepWindow(bool clockDriven, double advance, int turnsCrossed, bool turnAtTop)
+            {
+                ClockDriven = clockDriven;
+                Advance = advance;
+                TurnsCrossed = turnsCrossed;
+                TurnAtTop = turnAtTop;
+            }
         }
 
         private struct ClipEventDispatch
@@ -1062,7 +1083,10 @@ namespace CycloneGames.AnimationRuntime
                     continue;
                 }
 
-                if (_timePolicy == AnimationTimePolicy.TickDriven)
+                double unwrapped = 0d;
+                bool clockDriven = _timePolicy == AnimationTimePolicy.TickDriven;
+
+                if (clockDriven)
                 {
                     ref PlaybackClock clock = ref layer.Clocks[slot];
                     if (clock.Started == 0)
@@ -1078,15 +1102,20 @@ namespace CycloneGames.AnimationRuntime
                         clock.StartLocalTime = playback.Time;
                     }
 
-                    playback.Time = EvaluateClock(ref clock, playback.Length, tickTime);
+                    playback.Time = EvaluateClock(ref clock, playback.Length, tickTime, out unwrapped);
                 }
 
                 // Consumed once per commit by both event channels below.
-                bool seeked = layer.Transitions[slot].Seeked != 0;
-                layer.Transitions[slot].Seeked = 0;
+                ref PlaybackTransition transition = ref layer.Transitions[slot];
+                bool seeked = transition.Seeked != 0;
+                transition.Seeked = 0;
 
-                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, seeked);
-                CheckExitTime(ref layer, ref playback, layerIndex, slot, seeked);
+                SweepWindow window = BuildWindow(clockDriven, ref transition, unwrapped, playback.Length, seeked);
+
+                DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, seeked, in window);
+                CheckExitTime(ref layer, ref playback, layerIndex, slot, seeked, in window);
+
+                transition.LastUnwrapped = unwrapped;
 
                 if ((playback.Flags & PlaybackTransitionActive) != 0)
                 {
@@ -1139,14 +1168,17 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private static double EvaluateClock(ref PlaybackClock clock, float length, double tickTime)
+        private static double EvaluateClock(ref PlaybackClock clock, float length, double tickTime, out double unwrapped)
         {
+            unwrapped = 0d;
+
             if (length <= AnimationRuntimeLimits.MinClipLength)
             {
                 return 0d;
             }
 
             double time = clock.StartLocalTime + ((tickTime - clock.StartTickTime) * clock.Speed);
+            unwrapped = time;
 
             switch ((AnimationLoopMode)clock.Loop)
             {
@@ -1179,6 +1211,32 @@ namespace CycloneGames.AnimationRuntime
 
                     return time > length ? length : time;
             }
+        }
+
+        /// <summary>Builds the sweep window from the unfolded clock and the previous commit's reading.</summary>
+        private static SweepWindow BuildWindow(
+            bool clockDriven, ref PlaybackTransition transition, double unwrapped, float length, bool seeked)
+        {
+            if (!clockDriven || seeked || transition.LastClipTime < 0d
+                || length <= AnimationRuntimeLimits.MinClipLength)
+            {
+                return new SweepWindow(clockDriven, 0d, 0, false);
+            }
+
+            double advance = unwrapped - transition.LastUnwrapped;
+            if (advance <= 0d || advance >= length)
+            {
+                return new SweepWindow(true, advance, 0, false);
+            }
+
+            // First multiple of the clip length strictly above the previous position.
+            long turn = (long)Math.Floor(transition.LastUnwrapped / length) + 1L;
+            if (turn * length > unwrapped)
+            {
+                return new SweepWindow(true, advance, 0, false);
+            }
+
+            return new SweepWindow(true, advance, 1, (turn & 1L) == 1L);
         }
 
         private void EnsurePlayable(ref Layer layer, ref Playback playback, int slot)
@@ -1582,7 +1640,8 @@ namespace CycloneGames.AnimationRuntime
             ref Playback playback,
             int layerIndex,
             int slot,
-            bool seeked)
+            bool seeked,
+            in SweepWindow window)
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
 
@@ -1623,9 +1682,40 @@ namespace CycloneGames.AnimationRuntime
             float previous = firstCommit ? 0f : NormalizeTime(previousTime, playback.Length);
             float current = NormalizeTime(currentTime, playback.Length);
 
-            // Only a loop wrap can cross a whole clip without a usable interval; a clamp hitch is still an interval.
-            bool wholeClipJump = !firstCommit && looped
-                && Math.Abs(currentTime - previousTime) >= playback.Length;
+            // A cyclic step of one clip length or more visits every position.
+            if ((loopMode || pingPong) && window.ClockDriven && !firstCommit && !seeked
+                && window.Advance >= playback.Length)
+            {
+                for (int i = 0; i < events.Length; i++)
+                {
+                    // The start position was already reported by the previous commit.
+                    if (Math.Abs(events[i].NormalizedTime - previous) > 1e-6f)
+                    {
+                        QueueClipEvent(layerIndex, slot, events[i]);
+                    }
+                }
+
+                return;
+            }
+
+            bool band = pingPong && window.TurnsCrossed == 1;
+
+            if (band)
+            {
+                // A turning commit contains two legs; each is swept in its own direction.
+                if (window.TurnAtTop)
+                {
+                    QueueAscending(layerIndex, slot, events, previous, 1f);
+                    QueueDescending(layerIndex, slot, events, 1f, current);
+                }
+                else
+                {
+                    QueueDescending(layerIndex, slot, events, previous, 0f);
+                    QueueAscending(layerIndex, slot, events, 0f, current);
+                }
+
+                return;
+            }
 
             if (reverse)
             {
@@ -1637,16 +1727,6 @@ namespace CycloneGames.AnimationRuntime
                     {
                         QueueClipEvent(layerIndex, slot, events[i]);
                     }
-                }
-
-                return;
-            }
-
-            if (wholeClipJump)
-            {
-                for (int i = 0; i < events.Length; i++)
-                {
-                    QueueClipEvent(layerIndex, slot, events[i]);
                 }
 
                 return;
@@ -1688,7 +1768,34 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private void CheckExitTime(ref Layer layer, ref Playback playback, int layerIndex, int slot, bool seeked)
+        /// <summary>Reports markers in (low, high], in the order the playhead meets them.</summary>
+        private void QueueAscending(int layerIndex, int slot, AnimationClipEvent[] events, float low, float high)
+        {
+            for (int i = 0; i < events.Length; i++)
+            {
+                float at = events[i].NormalizedTime;
+                if (at > low && at <= high)
+                {
+                    QueueClipEvent(layerIndex, slot, events[i]);
+                }
+            }
+        }
+
+        /// <summary>Reports markers in [low, high), in the order the playhead meets them.</summary>
+        private void QueueDescending(int layerIndex, int slot, AnimationClipEvent[] events, float high, float low)
+        {
+            for (int i = events.Length - 1; i >= 0; i--)
+            {
+                float at = events[i].NormalizedTime;
+                if (at >= low && at < high)
+                {
+                    QueueClipEvent(layerIndex, slot, events[i]);
+                }
+            }
+        }
+
+        private void CheckExitTime(
+            ref Layer layer, ref Playback playback, int layerIndex, int slot, bool seeked, in SweepWindow window)
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             if ((transition.ExitFlags & ExitArmed) == 0)
@@ -1736,6 +1843,16 @@ namespace CycloneGames.AnimationRuntime
                 crossed = transition.ExitNormalized <= 0f
                     ? previous <= 0f
                     : previous < transition.ExitNormalized && current >= transition.ExitNormalized;
+            }
+
+            if (!crossed && window.ClockDriven && window.TurnsCrossed == 1
+                && loop == (byte)AnimationLoopMode.PingPong)
+            {
+                // The exit point can lie outside the folded interval when the step turned.
+                float low = previous <= current ? previous : current;
+                float high = previous >= current ? previous : current;
+                crossed = window.TurnAtTop ? transition.ExitNormalized > low && transition.ExitNormalized <= 1f
+                    : transition.ExitNormalized < high;
             }
 
             if (!crossed)
