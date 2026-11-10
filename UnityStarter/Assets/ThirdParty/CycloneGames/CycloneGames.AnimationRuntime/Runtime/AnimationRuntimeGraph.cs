@@ -93,20 +93,18 @@ namespace CycloneGames.AnimationRuntime
             public AnimationClipEvent[] ClipEvents;
         }
 
-        /// <summary>The unfolded clock advance since the previous commit, with the turning point it crossed.</summary>
+        /// <summary>The unfolded clock readings of two consecutive commits.</summary>
         private readonly struct SweepWindow
         {
             public readonly bool ClockDriven;
-            public readonly double Advance;
-            public readonly int TurnsCrossed;
-            public readonly bool TurnAtTop;
+            public readonly double From;
+            public readonly double To;
 
-            public SweepWindow(bool clockDriven, double advance, int turnsCrossed, bool turnAtTop)
+            public SweepWindow(bool clockDriven, double from, double to)
             {
                 ClockDriven = clockDriven;
-                Advance = advance;
-                TurnsCrossed = turnsCrossed;
-                TurnAtTop = turnAtTop;
+                From = from;
+                To = to;
             }
         }
 
@@ -1110,7 +1108,7 @@ namespace CycloneGames.AnimationRuntime
                 bool seeked = transition.Seeked != 0;
                 transition.Seeked = 0;
 
-                SweepWindow window = BuildWindow(clockDriven, ref transition, unwrapped, playback.Length, seeked);
+                SweepWindow window = BuildWindow(clockDriven, ref transition, unwrapped, playback.Length, seeked, backward);
 
                 DispatchClipEventsForPlayback(ref layer, ref playback, layerIndex, slot, seeked, in window);
                 CheckExitTime(ref layer, ref playback, layerIndex, slot, seeked, in window);
@@ -1215,28 +1213,16 @@ namespace CycloneGames.AnimationRuntime
 
         /// <summary>Builds the sweep window from the unfolded clock and the previous commit's reading.</summary>
         private static SweepWindow BuildWindow(
-            bool clockDriven, ref PlaybackTransition transition, double unwrapped, float length, bool seeked)
+            bool clockDriven, ref PlaybackTransition transition, double unwrapped, float length, bool seeked,
+            bool rewind)
         {
-            if (!clockDriven || seeked || transition.LastClipTime < 0d
+            if (!clockDriven || seeked || rewind || transition.LastClipTime < 0d
                 || length <= AnimationRuntimeLimits.MinClipLength)
             {
-                return new SweepWindow(clockDriven, 0d, 0, false);
+                return new SweepWindow(false, 0d, 0d);
             }
 
-            double advance = unwrapped - transition.LastUnwrapped;
-            if (advance <= 0d || advance >= length)
-            {
-                return new SweepWindow(true, advance, 0, false);
-            }
-
-            // First multiple of the clip length strictly above the previous position.
-            long turn = (long)Math.Floor(transition.LastUnwrapped / length) + 1L;
-            if (turn * length > unwrapped)
-            {
-                return new SweepWindow(true, advance, 0, false);
-            }
-
-            return new SweepWindow(true, advance, 1, (turn & 1L) == 1L);
+            return new SweepWindow(true, transition.LastUnwrapped, unwrapped);
         }
 
         private void EnsurePlayable(ref Layer layer, ref Playback playback, int slot)
@@ -1651,6 +1637,15 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
+            // A silent playback reports nothing: a fade-out or a zero-weight request owns no audible pose.
+            float target = (playback.Flags & PlaybackTransitionActive) != 0
+                ? transition.TargetWeight
+                : playback.Weight;
+            if (target <= 0f && playback.Weight <= 0f)
+            {
+                return;
+            }
+
             AnimationClipEvent[] events = transition.ClipEvents;
             if (events == null)
             {
@@ -1672,6 +1667,13 @@ namespace CycloneGames.AnimationRuntime
             bool loopMode = loop == (byte)AnimationLoopMode.Loop;
             bool pingPong = loop == (byte)AnimationLoopMode.PingPong;
 
+            if (window.ClockDriven)
+            {
+                QueueClockSpan(layerIndex, slot, events, playback.Length, window.From, window.To, loop);
+                return;
+            }
+
+            // External policy or a host clock write: only the folded endpoints are available.
             if (backward && (seeked || (!loopMode && !pingPong)))
             {
                 return;
@@ -1681,45 +1683,6 @@ namespace CycloneGames.AnimationRuntime
             bool reverse = backward && pingPong;
             float previous = firstCommit ? 0f : NormalizeTime(previousTime, playback.Length);
             float current = NormalizeTime(currentTime, playback.Length);
-
-            // A cyclic step of one clip length or more visits every position.
-            if ((loopMode || pingPong) && window.ClockDriven && !firstCommit && !seeked
-                && window.Advance >= playback.Length)
-            {
-                // A Loop step revisits its start; a PingPong leg does not unless it completed a full round trip.
-                bool includeStart = loopMode
-                    || (pingPong && window.Advance >= playback.Length * 2d);
-                for (int i = 0; i < events.Length; i++)
-                {
-                    if (!includeStart && Math.Abs(events[i].NormalizedTime - previous) <= 1e-6f)
-                    {
-                        continue;
-                    }
-
-                    QueueClipEvent(layerIndex, slot, events[i]);
-                }
-
-                return;
-            }
-
-            bool band = pingPong && window.TurnsCrossed == 1;
-
-            if (band)
-            {
-                // A turning commit contains two legs; each is swept in its own direction.
-                if (window.TurnAtTop)
-                {
-                    QueueAscending(layerIndex, slot, events, previous, 1f);
-                    QueueDescending(layerIndex, slot, events, 1f, current);
-                }
-                else
-                {
-                    QueueDescending(layerIndex, slot, events, previous, 0f);
-                    QueueAscending(layerIndex, slot, events, 0f, current);
-                }
-
-                return;
-            }
 
             if (reverse)
             {
@@ -1758,43 +1721,255 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
+            if (firstCommit)
+            {
+                // A reverse playback has no history to pre-roll, and the clip end folds to zero on a loop.
+                bool fromEnd = _timePolicy == AnimationTimePolicy.TickDriven && layer.Clocks[slot].Speed < 0f;
+                if (!fromEnd)
+                {
+                    for (int i = 0; i < events.Length; i++)
+                    {
+                        if (events[i].NormalizedTime <= current)
+                        {
+                            QueueClipEvent(layerIndex, slot, events[i]);
+                        }
+                    }
+                }
+
+                return;
+            }
+
             for (int i = 0; i < events.Length; i++)
             {
                 float at = events[i].NormalizedTime;
-                bool crossed = firstCommit
-                    ? at >= previous && at <= current
-                    : at > previous && at <= current;
-
-                if (crossed)
+                if (at > previous && at <= current)
                 {
                     QueueClipEvent(layerIndex, slot, events[i]);
                 }
             }
         }
 
-        /// <summary>Reports markers in (low, high], in the order the playhead meets them.</summary>
-        private void QueueAscending(int layerIndex, int slot, AnimationClipEvent[] events, float low, float high)
+        /// <summary>
+        /// Walks the unfolded clock across one commit, splitting the interval at every clip-length multiple. A step that
+        /// covers a whole cycle on a looping mode reports each marker once.
+        /// </summary>
+        private void QueueClockSpan(
+            int layerIndex, int slot, AnimationClipEvent[] events, float length, double from, double to, byte loop)
         {
-            for (int i = 0; i < events.Length; i++)
+            double delta = to - from;
+            if (delta == 0d)
             {
-                float at = events[i].NormalizedTime;
-                if (at > low && at <= high)
+                return;
+            }
+
+            if (loop != (byte)AnimationLoopMode.Clamp)
+            {
+                double period = loop == (byte)AnimationLoopMode.Loop ? length : length * 2d;
+                if (Math.Abs(delta) >= period)
                 {
-                    QueueClipEvent(layerIndex, slot, events[i]);
+                    for (int i = 0; i < events.Length; i++)
+                    {
+                        QueueClipEvent(layerIndex, slot, events[i]);
+                    }
+
+                    return;
                 }
+            }
+
+            int direction = delta > 0d ? 1 : -1;
+            double cursor = from;
+
+            while (true)
+            {
+                // Clamp pins the pose at a bound, so every remaining segment would be empty.
+                if (loop == (byte)AnimationLoopMode.Clamp
+                    && (direction > 0 ? cursor >= length : cursor <= 0d))
+                {
+                    return;
+                }
+
+                double boundary = direction > 0
+                    ? (Math.Floor(cursor / length) + 1d) * length
+                    : (Math.Ceiling(cursor / length) - 1d) * length;
+
+                bool last = direction > 0 ? boundary >= to : boundary <= to;
+                double end = last ? to : boundary;
+
+                // A boundary that does not advance the cursor would spin: 3 * 1.6 rounds past 4.8 / 1.6.
+                if (direction > 0 ? end <= cursor : end >= cursor)
+                {
+                    end = cursor + (direction * length);
+                    last = direction > 0 ? end >= to : end <= to;
+                    if (last)
+                    {
+                        end = to;
+                    }
+                }
+
+                if (TryLegBounds(length, cursor, end, direction, loop, out float start, out float finish))
+                {
+                    if (finish > start)
+                    {
+                        for (int i = 0; i < events.Length; i++)
+                        {
+                            float at = events[i].NormalizedTime;
+                            if (at > start && at <= finish)
+                            {
+                                QueueClipEvent(layerIndex, slot, events[i]);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = events.Length - 1; i >= 0; i--)
+                        {
+                            float at = events[i].NormalizedTime;
+                            if (at < start && at >= finish)
+                            {
+                                QueueClipEvent(layerIndex, slot, events[i]);
+                            }
+                        }
+                    }
+                }
+
+                if (last)
+                {
+                    return;
+                }
+
+                cursor = end;
             }
         }
 
-        /// <summary>Reports markers in [low, high), in the order the playhead meets them.</summary>
-        private void QueueDescending(int layerIndex, int slot, AnimationClipEvent[] events, float high, float low)
+        /// <summary>The same walk as <see cref="QueueClockSpan"/>, answering whether one position was crossed.</summary>
+        private static bool SpanCrosses(float length, double from, double to, byte loop, float position)
         {
-            for (int i = events.Length - 1; i >= 0; i--)
+            double delta = to - from;
+            if (delta == 0d)
             {
-                float at = events[i].NormalizedTime;
-                if (at >= low && at < high)
+                return false;
+            }
+
+            if (loop != (byte)AnimationLoopMode.Clamp)
+            {
+                double period = loop == (byte)AnimationLoopMode.Loop ? length : length * 2d;
+                if (Math.Abs(delta) >= period)
                 {
-                    QueueClipEvent(layerIndex, slot, events[i]);
+                    return true;
                 }
+            }
+
+            int direction = delta > 0d ? 1 : -1;
+            double cursor = from;
+
+            while (true)
+            {
+                // Clamp pins the pose at a bound, so every remaining segment would be empty.
+                if (loop == (byte)AnimationLoopMode.Clamp
+                    && (direction > 0 ? cursor >= length : cursor <= 0d))
+                {
+                    return false;
+                }
+
+                double boundary = direction > 0
+                    ? (Math.Floor(cursor / length) + 1d) * length
+                    : (Math.Ceiling(cursor / length) - 1d) * length;
+
+                bool last = direction > 0 ? boundary >= to : boundary <= to;
+                double end = last ? to : boundary;
+
+                // A boundary that does not advance the cursor would spin: 3 * 1.6 rounds past 4.8 / 1.6.
+                if (direction > 0 ? end <= cursor : end >= cursor)
+                {
+                    end = cursor + (direction * length);
+                    last = direction > 0 ? end >= to : end <= to;
+                    if (last)
+                    {
+                        end = to;
+                    }
+                }
+
+                if (TryLegBounds(length, cursor, end, direction, loop, out float start, out float finish))
+                {
+                    bool inside = finish > start
+                        ? position > start && position <= finish
+                        : position < start && position >= finish;
+
+                    if (inside)
+                    {
+                        return true;
+                    }
+                }
+
+                if (last)
+                {
+                    return false;
+                }
+
+                cursor = end;
+            }
+        }
+
+        /// <summary>Normalized endpoints of one leg, or false when the leg does not move the pose.</summary>
+        private static bool TryLegBounds(
+            float length, double a, double b, int direction, byte loop, out float start, out float finish)
+        {
+            start = 0f;
+            finish = 0f;
+
+            double low = Math.Min(a, b);
+            double high = Math.Max(a, b);
+            if (high <= low)
+            {
+                return false;
+            }
+
+            start = (float)(SideValue(direction > 0 ? low : high, direction > 0 ? 0d : length, length, loop) / length);
+            finish = (float)(SideValue(direction > 0 ? high : low, direction > 0 ? length : 0d, length, loop) / length);
+            return start != finish;
+        }
+
+        /// <summary>Folded clock, with the side a Loop wrap is approached from made explicit.</summary>
+        private static double SideValue(double u, double atWrap, float length, byte loop)
+        {
+            if (loop != (byte)AnimationLoopMode.Loop)
+            {
+                return FoldTime(u, length, loop);
+            }
+
+            double turns = u / length;
+            if (Math.Abs(turns - Math.Round(turns)) <= 1e-9d)
+            {
+                return atWrap;
+            }
+
+            return u - (Math.Floor(turns) * length);
+        }
+
+        private static double FoldTime(double u, float length, byte loop)
+        {
+            switch ((AnimationLoopMode)loop)
+            {
+                case AnimationLoopMode.Loop:
+                {
+                    double m = u % length;
+                    return m < 0d ? m + length : m;
+                }
+
+                case AnimationLoopMode.PingPong:
+                {
+                    double span = length * 2d;
+                    double m = u % span;
+                    if (m < 0d)
+                    {
+                        m += span;
+                    }
+
+                    return m > length ? span - m : m;
+                }
+
+                default:
+                    return u <= 0d ? 0d : (u > length ? length : u);
             }
         }
 
@@ -1803,6 +1978,14 @@ namespace CycloneGames.AnimationRuntime
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             if ((transition.ExitFlags & ExitArmed) == 0)
+            {
+                return;
+            }
+
+            float target = (playback.Flags & PlaybackTransitionActive) != 0
+                ? transition.TargetWeight
+                : playback.Weight;
+            if (target <= 0f && playback.Weight <= 0f)
             {
                 return;
             }
@@ -1849,23 +2032,9 @@ namespace CycloneGames.AnimationRuntime
                     : previous < transition.ExitNormalized && current >= transition.ExitNormalized;
             }
 
-            if (!crossed && window.ClockDriven && window.TurnsCrossed == 1
-                && loop == (byte)AnimationLoopMode.PingPong)
+            if (!crossed && window.ClockDriven)
             {
-                // The exit point can lie outside the folded interval when the step turned.
-                float low = previous <= current ? previous : current;
-                float high = previous >= current ? previous : current;
-                crossed = window.TurnAtTop ? transition.ExitNormalized > low && transition.ExitNormalized <= 1f
-                    : transition.ExitNormalized < high;
-            }
-
-            if (!crossed && window.ClockDriven && window.Advance >= playback.Length
-                && (loop == (byte)AnimationLoopMode.Loop
-                    || (loop == (byte)AnimationLoopMode.PingPong
-                        && window.Advance >= playback.Length * 2d)))
-            {
-                // Loop revisits its start every cycle; PingPong only after a full round trip.
-                crossed = true;
+                crossed = SpanCrosses(playback.Length, window.From, window.To, loop, transition.ExitNormalized);
             }
 
             if (!crossed)

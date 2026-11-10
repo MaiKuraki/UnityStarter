@@ -50,6 +50,17 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             return new AnimationTick(time, step, AnimationTimeSource.Update, true, 0.016f);
         }
 
+        private AnimationRuntimeGraph ExternalGraph(Animator animator, Sink sink)
+        {
+            var graph = new AnimationRuntimeGraph(
+                animator,
+                new[] { AnimationLayerDescriptor.Default },
+                null,
+                AnimationTimePolicy.External);
+            graph.SetClipEventSink(sink);
+            return graph;
+        }
+
         private AnimationRuntimeGraph Graph(Animator animator, Sink sink)
         {
             var graph = new AnimationRuntimeGraph(
@@ -303,6 +314,359 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     + " (expected 1 and 1)");
                 Assert.AreEqual(1, sink.Get("M0"), "a seek is a discontinuity, not a crossing");
                 Assert.AreEqual(1, sink.Get("M1"), "the turn band must not fire on a backward seek");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void PingPongHalfCycle_ReportsTheMarkerAtTheEnd()
+        {
+            CreateActor("CycleHalfActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.5f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.PingPong));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.5d, 1L));
+                graph.Commit(At(1.5d, 2L));
+
+                NoteEvidence("cycle-half-marker", "0.5=" + sink.Get("M0") + " (expected 2)");
+                Assert.AreEqual(2, sink.Get("M0"), "a half round trip returns to 0.5, so it is crossed twice");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void PingPongHalfCycle_ExitTimeFires()
+        {
+            CreateActor("CycleHalfExitActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f);
+            var graph = new AnimationRuntimeGraph(
+                animator,
+                new[] { AnimationLayerDescriptor.Default },
+                null,
+                AnimationTimePolicy.TickDriven);
+            var key = new AnimationPlaybackKey(1, 0, 0, 0);
+            int exits = 0;
+
+            graph.TransitionCompleted += (handle, reason) =>
+            {
+                if (reason == AnimationTransitionReason.ExitTime)
+                {
+                    exits++;
+                }
+            };
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.PingPong));
+                graph.SetExitTime(key, new AnimationExitTime(0.83f, AnimationExitMode.EveryCrossing));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(1.2d, 1L));
+
+                NoteEvidence("cycle-half-exit", "exit reports = " + exits + " (expected 1)");
+                Assert.AreEqual(1, exits, "0.83 lies inside the up leg of a half round trip");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void NegativeSpeed_Clamp_ReportsMarkersInReverse()
+        {
+            CreateActor("CycleNegativeClampActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.25f, 0.5f, 0.75f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 1d, 1f, false, 0, -1f, AnimationLoopMode.Clamp));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(1d, 1L));
+
+                NoteEvidence("cycle-negative-clamp", "order=" + string.Join(",", sink.Order)
+                    + " 0.25=" + sink.Get("M0") + " 0.5=" + sink.Get("M1") + " 0.75=" + sink.Get("M2"));
+                Assert.AreEqual(1, sink.Get("M0"), "the reverse pass crosses every marker once");
+                Assert.AreEqual(1, sink.Get("M1"));
+                Assert.AreEqual(1, sink.Get("M2"));
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void NegativeSpeed_Loop_ReportsTheWholeDescent()
+        {
+            CreateActor("CycleNegativeLoopActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.25f, 0.75f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.9d, 1f, false, 0, -1f, AnimationLoopMode.Loop));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.8d, 1L));
+
+                NoteEvidence("cycle-negative-loop", "0.25=" + sink.Get("M0") + " 0.75=" + sink.Get("M1"));
+                Assert.AreEqual(1, sink.Get("M0"), "the descent covers 0.1 to 0.9, so both markers fire");
+                Assert.AreEqual(1, sink.Get("M1"));
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+        [Test]
+        public void ClampHugeJump_ReportsEveryMarkerOnce()
+        {
+            CreateActor("CycleHugeJumpActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.25f, 0.5f, 0.75f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(5000d, 1L));
+
+                NoteEvidence("cycle-huge-jump", "0.25=" + sink.Get("M0") + " 0.5=" + sink.Get("M1")
+                    + " 0.75=" + sink.Get("M2"));
+                Assert.AreEqual(1, sink.Get("M0"), "a clamped jump past the end still reports each marker once");
+                Assert.AreEqual(1, sink.Get("M1"));
+                Assert.AreEqual(1, sink.Get("M2"));
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+        [Test]
+        public void ReverseStart_ReportsEachMarkerOnce()
+        {
+            CreateActor("CycleReverseStartActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.2f, 0.5f, 0.8f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0.9d, 1f, false, 0, -1f, AnimationLoopMode.Clamp));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.9d, 1L));
+
+                NoteEvidence("cycle-reverse-start", "0.2=" + sink.Get("M0") + " 0.5=" + sink.Get("M1")
+                    + " 0.8=" + sink.Get("M2"));
+                Assert.AreEqual(1, sink.Get("M0"), "a reverse run from 0.9 to 0 crosses every marker once");
+                Assert.AreEqual(1, sink.Get("M1"));
+                Assert.AreEqual(1, sink.Get("M2"));
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+        [Test]
+        public void ExternalForwardWrite_SweepsTheInterval()
+        {
+            CreateActor("CycleExternalActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.25f, 0.5f, 0.75f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = ExternalGraph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(At(0d, 0L));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.Commit(At(0.1d, 1L));
+
+                NoteEvidence("external-forward", "0.25=" + sink.Get("M0") + " 0.5=" + sink.Get("M1")
+                    + " 0.75=" + sink.Get("M2"));
+                Assert.AreEqual(1, sink.Get("M0"));
+                Assert.AreEqual(1, sink.Get("M1"));
+                Assert.AreEqual(0, sink.Get("M2"), "0.75 is ahead of the write");
+
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.Commit(At(0.2d, 2L));
+                Assert.AreEqual(1, sink.Get("M2"));
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void ExternalBackwardWrite_Suppresses()
+        {
+            CreateActor("CycleExternalBackActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.25f, 0.5f, 0.75f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = ExternalGraph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(At(0d, 0L));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.9d, 1f));
+                graph.Commit(At(0.1d, 1L));
+                int before = sink.Get("M0") + sink.Get("M1") + sink.Get("M2");
+
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.1d, 1f));
+                graph.Commit(At(0.2d, 2L));
+
+                NoteEvidence("external-backward", "before=" + before + " after="
+                    + (sink.Get("M0") + sink.Get("M1") + sink.Get("M2")));
+                Assert.AreEqual(before, sink.Get("M0") + sink.Get("M1") + sink.Get("M2"),
+                    "a backward host write is a discontinuity");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void ExternalRepeatedWrite_ReportsNothing()
+        {
+            CreateActor("CycleExternalRepeatActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.5f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = ExternalGraph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(At(0d, 0L));
+                graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                graph.Commit(At(0.1d, 1L));
+                Assert.AreEqual(1, sink.Get("M0"));
+
+                for (int i = 0; i < 5; i++)
+                {
+                    graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 1f));
+                    graph.Commit(At(0.2d + (i * 0.01d), 2L + i));
+                }
+
+                NoteEvidence("external-repeat", "0.5=" + sink.Get("M0"));
+                Assert.AreEqual(1, sink.Get("M0"), "a write that does not move reports nothing");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void ReplaceClip_StopsReportingTheOldClip()
+        {
+            CreateActor("CycleReplaceActor", out Animator animator);
+            AnimationClip first = ClipWith(1f, 0.1f, 0.9f);
+            AnimationClip second = CreateClip("ReplaceSecondClip", 1f);
+            second.AddEvent(new AnimationEvent { time = 0.5f, functionName = "New" });
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, first, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.5d, 1L));
+                Assert.AreEqual(1, sink.Get("M0"), "0.1 was crossed on the old clip");
+
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, second, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
+                graph.Commit(At(1.4d, 2L));
+                graph.Commit(At(2d, 3L));
+
+                NoteEvidence("cycle-replace", "old 0.1=" + sink.Get("M0") + " old 0.9=" + sink.Get("M1")
+                    + " new 0.5=" + sink.Get("New"));
+                Assert.AreEqual(1, sink.Get("M0"), "the old clip reports nothing after the replacement");
+                Assert.AreEqual(0, sink.Get("M1"), "0.9 of the old clip was never reached");
+                Assert.AreEqual(1, sink.Get("New"), "the new clip reports its own marker");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void EndPlaybackBeforeTheTurningCommit_EmitsNothing()
+        {
+            CreateActor("CycleEndTurnActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.95f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+            var key = new AnimationPlaybackKey(1, 0, 0, 0);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.PingPong));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.9d, 1L));
+                Assert.AreEqual(0, sink.Get("M0"), "0.95 is only reachable through the turn");
+
+                graph.EndPlayback(key);
+                graph.Commit(At(1.1d, 2L));
+
+                NoteEvidence("cycle-end-turn", "0.95=" + sink.Get("M0"));
+                Assert.AreEqual(0, sink.Get("M0"), "an ended playback does not report the turn it never committed");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void CommittedTurnThenEnd_KeepsTheMarkers()
+        {
+            CreateActor("CycleCommitThenEndActor", out Animator animator);
+            AnimationClip clip = ClipWith(1f, 0.95f);
+            var sink = new Sink();
+            AnimationRuntimeGraph graph = Graph(animator, sink);
+            var key = new AnimationPlaybackKey(1, 0, 0, 0);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(
+                    1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.PingPong));
+                graph.Commit(At(0d, 0L));
+                graph.Commit(At(0.9d, 1L));
+                graph.Commit(At(1.1d, 2L));
+                int afterTurn = sink.Get("M0");
+
+                graph.EndPlayback(key);
+                graph.Commit(At(1.2d, 3L));
+
+                NoteEvidence("cycle-commit-end", "after turn=" + afterTurn + " final=" + sink.Get("M0"));
+                Assert.GreaterOrEqual(afterTurn, 1, "the committed turn reports 0.95");
+                Assert.AreEqual(afterTurn, sink.Get("M0"), "ending after the commit does not add or drop markers");
             }
             finally
             {
