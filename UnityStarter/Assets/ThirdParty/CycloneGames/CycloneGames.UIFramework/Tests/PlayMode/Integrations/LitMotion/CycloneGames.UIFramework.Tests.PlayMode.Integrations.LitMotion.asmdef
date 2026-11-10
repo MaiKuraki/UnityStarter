@@ -1,0 +1,30 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.PlayMode.Integrations.LitMotion",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.PlayMode",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Runtime.Integrations.LitMotion",
+        "LitMotion",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_LITMOTION"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.annulusgames.lit-motion",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_LITMOTION"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
