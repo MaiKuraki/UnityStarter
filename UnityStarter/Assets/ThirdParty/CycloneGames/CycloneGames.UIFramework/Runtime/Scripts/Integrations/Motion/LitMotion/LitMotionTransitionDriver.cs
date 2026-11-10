@@ -92,7 +92,10 @@ namespace CycloneGames.UIFramework.Runtime
 
             await PlayCloseCoreAsync(context, CloseConfig, ct);
 
-            context.CanvasGroup.alpha = 0f;
+            if (!ct.IsCancellationRequested)
+            {
+                context.CanvasGroup.alpha = 0f;
+            }
         }
 
         /// <summary>
@@ -144,6 +147,7 @@ namespace CycloneGames.UIFramework.Runtime
             float from = ctx.CanvasGroup.alpha;
             float to = isOpen ? 1f : 0f;
             var handle = LMotion.Create(from, to, duration)
+                .WithScheduler(MotionScheduler.UpdateIgnoreTimeScale)
                 .WithEase(ease)
                 .BindToAlpha(ctx.CanvasGroup)
                 .AddTo(ctx.GameObject);
@@ -159,6 +163,7 @@ namespace CycloneGames.UIFramework.Runtime
                 ? ctx.OriginalScale
                 : ctx.OriginalScale * config.ScaleFrom;
             var handle = LMotion.Create(from, to, config.Duration)
+                .WithScheduler(MotionScheduler.UpdateIgnoreTimeScale)
                 .WithEase(ease)
                 .BindToLocalScale(ctx.Transform)
                 .AddTo(ctx.GameObject);
@@ -177,6 +182,7 @@ namespace CycloneGames.UIFramework.Runtime
             Vector2 from = ctx.RectTransform.anchoredPosition;
             Vector2 to = isOpen ? ctx.OriginalPosition : offset;
             var handle = LMotion.Create(from, to, config.Duration)
+                .WithScheduler(MotionScheduler.UpdateIgnoreTimeScale)
                 .WithEase(ease)
                 .BindToAnchoredPosition(ctx.RectTransform)
                 .AddTo(ctx.GameObject);
