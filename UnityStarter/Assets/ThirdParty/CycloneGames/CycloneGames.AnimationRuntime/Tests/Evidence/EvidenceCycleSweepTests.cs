@@ -45,15 +45,34 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static int Expected(double advance, double marker, double length, AnimationLoopMode loop)
         {
+            return Expected(0d, advance, marker, length, loop);
+        }
+
+        /// <summary>Crossings between two unfolded readings, both directions.</summary>
+        private static int Expected(double start, double end, double marker, double length, AnimationLoopMode loop)
+        {
+            double low = Math.Min(start, end);
+            double high = Math.Max(start, end);
+            if (high <= low)
+            {
+                return 0;
+            }
+
             double absolute = marker * length;
+            int closed;
 
             if (loop == AnimationLoopMode.Loop)
             {
-                return (int)CountBetween(0d, advance, absolute, length);
+                closed = (int)CountBetween(low, high, absolute, length);
+            }
+            else
+            {
+                double cycle = length * 2d;
+                closed = (int)(CountBetween(low, high, absolute, cycle)
+                    + CountBetween(low, high, -absolute, cycle));
             }
 
-            double cycle = length * 2d;
-            return (int)(CountBetween(0d, advance, absolute, cycle) + CountBetween(0d, advance, -absolute, cycle));
+            return closed;
         }
 
         private AnimationClip ClipWith(float requestedLength)
@@ -145,6 +164,81 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             NoteEvidence("sweep-total", "marker checks = " + checks + ", mismatches = " + failures);
             Assert.AreEqual(0, failures, "every marker must match its analytic crossing count");
+        }
+        [Test]
+        public void CycleGrid_ReversePlayback_MatchesTheAnalyticCrossingCount()
+        {
+            long checks = 0;
+            int failures = 0;
+
+            foreach (float requestedLength in Lengths)
+            {
+                foreach (AnimationLoopMode loop in new[] { AnimationLoopMode.Loop, AnimationLoopMode.PingPong })
+                {
+                    foreach (int cycles in Cycles)
+                    {
+                        CreateActor("ReverseSweepActor_" + requestedLength + "_" + loop + "_" + cycles, out Animator animator);
+                        AnimationClip clip = ClipWith(requestedLength);
+                        double length = clip.length;
+                        double cycleLength = loop == AnimationLoopMode.Loop ? length : length * 2d;
+                        double total = cycles * cycleLength;
+                        int commits = (8 * cycles) + 3;
+                        double step = total / commits;
+                        double start = length;
+
+                        var sink = new Sink();
+                        var graph = new AnimationRuntimeGraph(
+                            animator,
+                            new[] { AnimationLayerDescriptor.Default },
+                            null,
+                            AnimationTimePolicy.TickDriven);
+
+                        graph.SetClipEventSink(sink);
+
+                        try
+                        {
+                            graph.BeginPlayback(new AnimationClipRequest(
+                                1, 0, 0, clip, start, 1f, false, 0, -1f, loop));
+
+                            for (int i = 0; i <= commits; i++)
+                            {
+                                graph.Commit(new AnimationTick(i * step, i, AnimationTimeSource.Update, false, 0.016f));
+                            }
+
+                            double end = start - total;
+                            var actual = new List<int>(Markers.Length);
+                            var expected = new List<int>(Markers.Length);
+
+                            for (int i = 0; i < Markers.Length; i++)
+                            {
+                                int want = Expected(start, end, Markers[i], length, loop);
+                                actual.Add(sink.Counts[i]);
+                                expected.Add(want);
+                                checks++;
+
+                                if (sink.Counts[i] != want)
+                                {
+                                    failures++;
+                                }
+                            }
+
+                            NoteEvidence(
+                                "reverse-sweep",
+                                "length=" + length.ToString("0.####", CultureInfo.InvariantCulture)
+                                + " loop=" + loop + " cycles=" + cycles + " commits=" + commits
+                                + " expected=[" + string.Join(",", expected) + "]"
+                                + " actual=[" + string.Join(",", actual) + "]");
+                        }
+                        finally
+                        {
+                            graph.Dispose();
+                        }
+                    }
+                }
+            }
+
+            NoteEvidence("reverse-sweep-total", "marker checks = " + checks + ", mismatches = " + failures);
+            Assert.AreEqual(0, failures, "a reverse run must match the analytic crossing count");
         }
     }
 }
