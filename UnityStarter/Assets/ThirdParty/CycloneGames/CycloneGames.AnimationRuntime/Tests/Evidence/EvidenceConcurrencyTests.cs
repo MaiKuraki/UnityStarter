@@ -62,9 +62,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             return clip;
         }
 
-        private static AnimationTick At(double time, long step)
+        private static AnimationTick At(double time, long step, float delta = 0.016f)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update, false, delta);
         }
 
         private AnimationRuntimeGraph Graph(Animator animator, Sink sink, int layers = 1)
@@ -108,7 +108,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         public void FadeOutToZero_StopsReporting()
         {
             CreateActor("ConcurrencyFadeActor", out Animator animator);
-            AnimationClip clip = ClipWith("FadeClip", 1f, 0.1f, 0.5f);
+            AnimationClip clip = ClipWith("FadeClip", 1f, 0.1f, 0.25f, 0.5f);
             var sink = new Sink();
             AnimationRuntimeGraph graph = Graph(animator, sink);
             var key = new AnimationPlaybackKey(1, 0, 0, 0);
@@ -121,13 +121,14 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.Commit(At(0.2d, 1L));
 
                 Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 0f)));
-                graph.Commit(At(0.35d, 2L));   // the ramp completes, target weight is zero
+                graph.Commit(At(0.3d, 2L, 0.05f));  // weight 0.5, crosses 0.25
+                graph.Commit(At(0.4d, 3L, 0.05f));  // weight 0, fade complete
                 int afterFade = sink.Total();
 
-                graph.Commit(At(0.9d, 3L));
+                graph.Commit(At(0.9d, 4L, 0.01f));
 
                 NoteEvidence("concurrency-fade", "after fade = " + afterFade + ", later = " + sink.Total());
-                Assert.AreEqual(1, afterFade, "the marker before the fade was reported");
+                Assert.AreEqual(2, afterFade, "0.1 and 0.25 are reported while the playback is still audible");
                 Assert.AreEqual(afterFade, sink.Total(), "a completed fade-out silences the playback");
             }
             finally

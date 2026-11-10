@@ -1641,7 +1641,7 @@ namespace CycloneGames.AnimationRuntime
             float target = (playback.Flags & PlaybackTransitionActive) != 0
                 ? transition.TargetWeight
                 : playback.Weight;
-            if (target <= 0f)
+            if (target <= 0f && playback.Weight <= 0f)
             {
                 return;
             }
@@ -1985,7 +1985,7 @@ namespace CycloneGames.AnimationRuntime
             float target = (playback.Flags & PlaybackTransitionActive) != 0
                 ? transition.TargetWeight
                 : playback.Weight;
-            if (target <= 0f)
+            if (target <= 0f && playback.Weight <= 0f)
             {
                 return;
             }

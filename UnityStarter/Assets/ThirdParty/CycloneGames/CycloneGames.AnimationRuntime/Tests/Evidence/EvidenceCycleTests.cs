@@ -584,7 +584,8 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         {
             CreateActor("CycleReplaceActor", out Animator animator);
             AnimationClip first = ClipWith(1f, 0.1f, 0.9f);
-            AnimationClip second = ClipWith(1f, 0.5f);
+            AnimationClip second = CreateClip("ReplaceSecondClip", 1f);
+            second.AddEvent(new AnimationEvent { time = 0.5f, functionName = "New" });
             var sink = new Sink();
             AnimationRuntimeGraph graph = Graph(animator, sink);
 
@@ -601,11 +602,11 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.Commit(At(1.4d, 2L));
                 graph.Commit(At(2d, 3L));
 
-                NoteEvidence("cycle-replace", "0.1=" + sink.Get("M0") + " 0.9=" + sink.Get("M1")
-                    + " 0.5=" + sink.Get("M2"));
+                NoteEvidence("cycle-replace", "old 0.1=" + sink.Get("M0") + " old 0.9=" + sink.Get("M1")
+                    + " new 0.5=" + sink.Get("New"));
                 Assert.AreEqual(1, sink.Get("M0"), "the old clip reports nothing after the replacement");
                 Assert.AreEqual(0, sink.Get("M1"), "0.9 of the old clip was never reached");
-                Assert.AreEqual(1, sink.Get("M2"), "the new clip reports its own marker");
+                Assert.AreEqual(1, sink.Get("New"), "the new clip reports its own marker");
             }
             finally
             {
