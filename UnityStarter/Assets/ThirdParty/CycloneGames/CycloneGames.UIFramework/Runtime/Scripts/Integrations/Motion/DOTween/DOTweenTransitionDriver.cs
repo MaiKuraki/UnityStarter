@@ -91,7 +91,10 @@ namespace CycloneGames.UIFramework.Runtime
 
             await PlayCloseCoreAsync(context, CloseConfig, ct);
 
-            context.CanvasGroup.alpha = 0f;
+            if (!ct.IsCancellationRequested)
+            {
+                context.CanvasGroup.alpha = 0f;
+            }
         }
 
         /// <summary>

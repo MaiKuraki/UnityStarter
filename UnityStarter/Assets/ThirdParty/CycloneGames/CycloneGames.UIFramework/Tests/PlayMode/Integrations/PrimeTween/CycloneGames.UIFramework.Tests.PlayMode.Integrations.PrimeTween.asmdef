@@ -1,0 +1,30 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.PlayMode.Integrations.PrimeTween",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.PlayMode",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Runtime.Integrations.PrimeTween",
+        "PrimeTween.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_PRIMETWEEN"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.kyrylokuzyk.primetween",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_PRIMETWEEN"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
