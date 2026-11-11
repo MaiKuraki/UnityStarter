@@ -266,10 +266,12 @@ Do not initialize a disposed manager. Construct a new manager for a new session.
 | --- | --- | --- |
 | Player creation returns `null` | No device matches the declared scheme, or device is already paired/reserved | Check Input Debugger for paired users and device availability. |
 | Context commands don't fire | Context not pushed, case mismatch in identity, or context blocked by higher priority | Verify `ActiveContextName` and context push order. |
-| `ActiveDeviceKind` shows `Unknown` consistently | No action has received meaningful device input yet | Trigger a configured action; `ActiveDeviceKind` reflects observed activity. |
+| `ActiveDeviceKind` shows `Unknown` consistently | No action has received meaningful device input yet | Trigger a configured action, or subscribe to `InputPlayer.DeviceActivity` for button-level activity with full device identity. |
 | Rebind doesn't take effect | Wrong binding path used as `oldBinding`, or action identity mismatch | Use context-qualified overloads and the original configured path. |
 | Binding profile import fails | Schema mismatch, identity selectors outdated, or budget exceeded | Keep defaults active, preserve the profile, and provide a product-owned reset. |
 | Manager disposed unexpectedly | Subsystem registration triggered during domain-reload-disabled play | Dispose the manager explicitly during teardown; construct a new one for the next session. |
+| `action.controls` resolves but nothing ever fires | No context was pushed, so the action map stays disabled | Push a context after join. `controls` resolves independently of `enabled`, so it cannot be used to decide whether input is live. |
+| Input goes silent after `ReassignPlayerDevices` | Reassignment builds a new `InputPlayer`; the old subscriptions and context stack are not carried over | Re-push the context and re-subscribe on the returned instance. |
 
 ### Production Checklist
 
@@ -280,3 +282,4 @@ Do not initialize a disposed manager. Construct a new manager for a new session.
 - Configuration and profile stores have finite budgets.
 - Logs contain status and bounded diagnostics, not raw user configuration.
 - Target Player builds verify device layouts, AOT/stripping, storage, suspend/resume, and reconnect behavior.
+- `Tests/PlayMode/InputSystemEndToEndPlayModeTests.cs` passes in the editor. It is the only coverage that observes a `performed` callback; EditMode assertions only prove graph shape.

@@ -110,7 +110,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 "ThirdParty",
                 "CycloneGames",
                 "CycloneGames.InputSystem");
-            string fixturePath = Path.Combine(packageRoot, "Samples", "Fixtures", "input_config.yaml");
+            string fixturePath = Path.Combine(packageRoot, "Samples", "Fixtures", "input_config.txt");
             string generatedPath = Path.Combine(packageRoot, "Samples", "Generated", "InputActions.cs");
             InputConfiguration configuration =
                 YamlSerializer.Deserialize<InputConfiguration>(File.ReadAllBytes(fixturePath));

@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.InputSystem.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.InputSystem.Tests.PlayMode",
+    "references": [
+        "CycloneGames.InputSystem.Runtime",
+        "R3.Unity",
+        "Unity.InputSystem",
+        "UniTask",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "R3.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

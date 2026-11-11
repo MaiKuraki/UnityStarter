@@ -50,6 +50,15 @@ namespace CycloneGames.InputSystem.Runtime
         public const int AbsoluteMaxActionsPerContext = 2048;
         public const int AbsoluteMaxBindingsPerAction = 256;
         public const int AbsoluteMaxTotalActionsPerPlayer = 8192;
+
+        /// <summary>
+        /// Approximate ceiling on the total number of actions, summed across every player, that a
+        /// serialized YAML configuration can express. The YAML preflight enforces a 16,384-line budget
+        /// and one action serializes to roughly twelve lines, so the reachable total stays far below
+        /// <see cref="AbsoluteMaxTotalActionsPerPlayer"/>. Budget authored YAML against this value; the
+        /// per-player limits bound configurations built programmatically instead of parsed from YAML.
+        /// </summary>
+        public const int ApproximateMaxSerializedTotalActions = 1300;
         public const int AbsoluteMaxStringLength = 4096;
         public const int AbsoluteMaxControlSchemesPerPlayer = 128;
         public const int AbsoluteMaxDeviceRequirementsPerScheme = 64;
@@ -194,6 +203,12 @@ namespace CycloneGames.InputSystem.Runtime
             PlayerId = source.PlayerId;
             JoinAction = source.JoinAction == null ? null : new RuntimeActionBindingConfig(source.JoinAction);
             DefaultControlScheme = source.DefaultControlScheme;
+            PairAllMatchingDevices = source.PairAllMatchingDevices;
+            // Both values arrive from an untrusted YAML boundary. Clamp instead of rejecting so that legacy
+            // configurations that omit the keys (zero) keep their previous behaviour, and a hostile value
+            // cannot widen the per-layout scan or the device-switch window.
+            MaxDevicesPerLayout = Math.Min(8, Math.Max(1, source.MaxDevicesPerLayout));
+            DeviceSwitchDebounceMs = Math.Min(5000, Math.Max(0, source.DeviceSwitchDebounceMs));
 
             var contexts = new RuntimeContextDefinitionConfig[source.Contexts.Count];
             for (int i = 0; i < contexts.Length; i++)
@@ -218,6 +233,9 @@ namespace CycloneGames.InputSystem.Runtime
         public IReadOnlyList<RuntimeContextDefinitionConfig> Contexts { get; }
         public IReadOnlyList<RuntimeControlSchemeConfig> ControlSchemes { get; }
         public string DefaultControlScheme { get; }
+        public bool PairAllMatchingDevices { get; }
+        public int MaxDevicesPerLayout { get; }
+        public int DeviceSwitchDebounceMs { get; }
     }
 
     internal sealed class RuntimeContextDefinitionConfig
@@ -262,6 +280,11 @@ namespace CycloneGames.InputSystem.Runtime
             var paths = source.DeviceBindings == null ? Array.Empty<string>() : source.DeviceBindings.ToArray();
             DeviceBindings = Array.AsReadOnly(paths);
 
+            var perBindingGroups = source.DeviceBindingGroups == null
+                ? Array.Empty<string>()
+                : source.DeviceBindingGroups.ToArray();
+            DeviceBindingGroups = Array.AsReadOnly(perBindingGroups);
+
             int compositeCount = source.CompositeBindings == null ? 0 : source.CompositeBindings.Count;
             var composites = new RuntimeCompositeBindingConfig[compositeCount];
             for (int i = 0; i < compositeCount; i++)
@@ -275,6 +298,7 @@ namespace CycloneGames.InputSystem.Runtime
         public ActionValueType Type { get; }
         public string ActionName { get; }
         public IReadOnlyList<string> DeviceBindings { get; }
+        public IReadOnlyList<string> DeviceBindingGroups { get; }
         public IReadOnlyList<RuntimeCompositeBindingConfig> CompositeBindings { get; }
         public string ExpectedControlType { get; }
         public string Interactions { get; }
@@ -1063,6 +1087,26 @@ namespace CycloneGames.InputSystem.Runtime
                 ValidateBindingGroups(action.BindingGroups, $"{path}.bindingGroups", declaredBindingGroups, issues);
             }
 
+            if (action.DeviceBindingGroups != null && action.DeviceBindingGroups.Count > 0)
+            {
+                int perBindingCount = action.DeviceBindings == null ? 0 : action.DeviceBindings.Count;
+                if (action.DeviceBindingGroups.Count != perBindingCount)
+                {
+                    Add(issues, InputConfigurationIssueCode.InvalidValue, $"{path}.deviceBindingGroups",
+                        "deviceBindingGroups must contain exactly one entry per deviceBindings entry.");
+                }
+
+                for (int i = 0; i < action.DeviceBindingGroups.Count; i++)
+                {
+                    string perBinding = action.DeviceBindingGroups[i];
+                    // An empty entry explicitly falls back to the action-level bindingGroups.
+                    if (string.IsNullOrEmpty(perBinding)) continue;
+                    ValidateOptionalString(perBinding, $"{path}.deviceBindingGroups[{i}]", limits, issues);
+                    ValidateBindingGroups(
+                        perBinding, $"{path}.deviceBindingGroups[{i}]", declaredBindingGroups, issues);
+                }
+            }
+
             if (!IsValidActionValueType(action.Type))
             {
                 Add(issues, InputConfigurationIssueCode.InvalidValue, $"{path}.type", "Action value type is invalid.");
@@ -1467,7 +1511,10 @@ namespace CycloneGames.InputSystem.Runtime
                         JoinAction = CloneAction(player.JoinAction),
                         Contexts = CloneContexts(player.Contexts),
                         ControlSchemes = CloneControlSchemes(player.ControlSchemes),
-                        DefaultControlScheme = player.DefaultControlScheme
+                        DefaultControlScheme = player.DefaultControlScheme,
+                        PairAllMatchingDevices = player.PairAllMatchingDevices,
+                        MaxDevicesPerLayout = player.MaxDevicesPerLayout,
+                        DeviceSwitchDebounceMs = player.DeviceSwitchDebounceMs
                     });
             }
 
@@ -1516,6 +1563,9 @@ namespace CycloneGames.InputSystem.Runtime
                 Type = source.Type,
                 ActionName = source.ActionName,
                 DeviceBindings = source.DeviceBindings == null ? null : new List<string>(source.DeviceBindings),
+                DeviceBindingGroups = source.DeviceBindingGroups == null
+                    ? null
+                    : new List<string>(source.DeviceBindingGroups),
                 CompositeBindings = CloneCompositeBindings(source.CompositeBindings),
                 ExpectedControlType = source.ExpectedControlType,
                 Interactions = source.Interactions,
@@ -1726,7 +1776,10 @@ namespace CycloneGames.InputSystem.Runtime
             new SchemaKeyDefinition("joinAction", SchemaValueKind.Object, SchemaMappingType.Action),
             new SchemaKeyDefinition("contexts", SchemaValueKind.MappingSequence, SchemaMappingType.Context),
             new SchemaKeyDefinition("controlSchemes", SchemaValueKind.MappingSequence, SchemaMappingType.ControlScheme),
-            new SchemaKeyDefinition("defaultControlScheme")
+            new SchemaKeyDefinition("defaultControlScheme"),
+            new SchemaKeyDefinition("pairAllMatchingDevices"),
+            new SchemaKeyDefinition("maxDevicesPerLayout"),
+            new SchemaKeyDefinition("deviceSwitchDebounceMs")
         };
 
         private static readonly SchemaKeyDefinition[] ContextKeys =
@@ -1743,6 +1796,7 @@ namespace CycloneGames.InputSystem.Runtime
             new SchemaKeyDefinition("type"),
             new SchemaKeyDefinition("action"),
             new SchemaKeyDefinition("deviceBindings", SchemaValueKind.ScalarSequence),
+            new SchemaKeyDefinition("deviceBindingGroups", SchemaValueKind.ScalarSequence),
             new SchemaKeyDefinition("compositeBindings", SchemaValueKind.MappingSequence, SchemaMappingType.Composite),
             new SchemaKeyDefinition("expectedControlType"),
             new SchemaKeyDefinition("interactions"),

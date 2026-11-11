@@ -238,10 +238,19 @@ Context stack/capture mutations commit the model before rebuilding the Unity act
 | `JoinSinglePlayer` / `JoinSinglePlayerAsync` | Matches the preferred then remaining control schemes from unclaimed devices. | Standard local player creation. |
 | `JoinPlayerAndLockDevice` | Requires the supplied device to participate in a valid declared scheme; claims all matched scheme devices. | A user joined from a known gamepad. |
 | `JoinPlayerOnSharedDevice` | Pairs current keyboard and, when present, mouse without exclusive claiming. | Deliberate shared-keyboard modes. |
-| `StartListeningForPlayers` | Combines configured join paths. In locking mode, the device that performs a join binding creates the primary player or may be paired to that existing player only when its layout is declared for the slot. | Lobby join flow. |
+| `StartListeningForPlayers` | Combines configured join paths. A join binding creates a new player from the first unregistered slot; only when every declared slot is occupied does it extend the primary player's device set. | Lobby join flow. |
+| `PairAdditionalDevice` | Explicitly pairs one more declared-layout device to an already joined player. Never creates a player. Fails closed for an unclaimable device or an undeclared layout. | Single-player hot-plug of a second device. |
 | `RemovePlayer` | Disposes the player, unpairs its `InputUser`, and releases claims. | Leave, slot reset, or pre-reinitialize shutdown. |
 
+**Device whitelist and the locked-versus-mixed distinction.** Every player associates its action asset with its `InputUser`, so `InputActionAsset.devices` is always the player's own paired-device whitelist. A locked slot additionally activates a control scheme, which narrows the binding mask to that scheme's group. A slot with `pairAllMatchingDevices: true` leaves the scheme unset: every binding stays live, but only on that player's whitelisted devices. This is what allows a single player to move seamlessly between keyboard/mouse and gamepad without re-joining, while a second local player can still claim the remaining devices.
+
+`maxDevicesPerLayout` (default `1`, clamped to `1..8`) bounds how many devices of each referenced layout such a slot may claim; without it one player would consume every attached keyboard, mouse and gamepad. `deviceSwitchDebounceMs` (default `0`, clamped to `0..5000`) sets a minimum dwell time before `ActiveDeviceKind` may switch again, collapsing rapid device alternation into one presentation update. `InputPlayer.NotifyDeviceActivity(InputDevice)` is an optional explicit hook for product code that observes device activity outside action callbacks.
+
 Async overloads accept a `CancellationToken`. A single-player timeout returns `null`; caller cancellation is propagated. Batch aggregate timeout or manager shutdown returns the successfully joined prefix. Caller cancellation rolls back only players created by that batch, preserves pre-existing registrations, and then throws. Join methods are idempotent for an already registered player ID and return that player.
+
+`JoinPlayersBatchAsync` spreads the batch across frames: it yields after each player except the last, so a batch of *N* players spans up to *N* frames with one player's construction cost per frame. The frame spread bounds how much of a batch lands in a single frame, but each player's construction still costs tens of milliseconds at the reference configuration of eight players, three contexts and 32 actions per context (the EditMode benchmark measured 739.9 ms total, 92.5 ms per player and a 114.8 ms worst frame). Run the batch during a loading screen and measure on the target platform. The last player adds no trailing frame. The returned list is only complete when the task completes, so a caller must not read the result on the frame the call was made.
+
+Timeout, cancellation, and shutdown semantics are unchanged by the frame spread: a batch aggregate timeout or manager shutdown returns the successfully joined prefix, and caller cancellation rolls back only the players that batch created before it throws. `JoinPlayersBatch`, the synchronous counterpart, is unchanged and still completes inside the calling frame; use it only where the whole batch cost is acceptable within one frame, such as during a loading screen.
 
 Control-scheme matching is driven by `deviceRequirements`. `isOptional` permits a missing device. `isOr` expresses an alternative requirement in Unity Input System scheme order. Bindings should use groups declared by the same player slot. If no schemes are declared, layouts derived from configured direct and composite-part paths are alternatives: the first claimable matching device is selected. When that selected device is a keyboard or mouse, the other claimable keyboard/mouse device is added as its companion. Explicit schemes are preferred because they make ownership reviewable.
 
@@ -269,7 +278,26 @@ private void ObserveDevices(IInputPlayer player)
 }
 ```
 
-`ActiveDeviceKind` changes when meaningful action activity is observed; use it for glyph presentation.
+`ActiveDeviceKind` changes when meaningful action activity is observed; use it for glyph presentation. A non-zero `deviceSwitchDebounceMs` suppresses rapid alternation, so product UI does not need its own debounce.
+
+### Device Activity and Prompt Replacement
+
+`ActiveDeviceKind` is a coarse, debounced presentation state. For precise prompt replacement, `InputPlayer.DeviceActivity` publishes an `InputDeviceActivity` for every observed activity on that player's own devices:
+
+| Field | Meaning |
+| --- | --- |
+| `PlayerId`, `DeviceId` | Owning slot and concrete Unity device id. |
+| `DeviceLayout` | Concrete layout, for example `DualShockGamepad` or `XInputController`. |
+| `Family` | Fine-grained `InputDeviceFamily`: `Keyboard`, `Mouse`, `Gamepad`, `Touchscreen`, `Joystick`, `Other`. |
+| `PromptKind` | Legacy coarse `InputDeviceKind`, so existing consumers keep working. |
+| `ControlPath` | Full control path of the originating control when known. |
+| `Timestamp` | Player frame timestamp, advanced by `UpdateRuntimeState`. |
+
+The stream is driven automatically by Unity's `onAnyButtonPress` and filtered to the player's own device whitelist, so another local player cannot hijack prompts. Continuous activity (mouse movement, analog drift) can be reported explicitly with `NotifyDeviceActivity(device)` or `NotifyDeviceActivity(device, control)`. `InputDeviceIconSet.GetIcon(kind, deviceLayout)` resolves a per-layout sprite first (Xbox versus PlayStation glyphs) and falls back to the coarse kind; `GetIcon(InputDeviceActivity)` is a convenience overload. `DeviceActivity` is a raw stream and is not debounced — deduplicate by `Family` or `DeviceLayout` in product UI; `ActiveDeviceKind` remains the debounced coarse state. Neither `IInputPlayer` nor `InputDeviceKind` was changed, so this is an additive capability.
+
+### Device Loss Recovery
+
+A control scheme is selected once at join time. If all of a player's paired devices are disconnected, the player stays registered but its whitelist becomes empty, every action resolves zero controls, and the scheme and binding mask remain unchanged. Call `InputManager.ReassignPlayerDevices(playerId)` to remove and re-join that player with the currently available devices — scheme, binding mask and whitelist are refreshed together. Products typically call it from `OnDeviceStatusChanged` when `ChangeKind` is `Lost`/`Unpaired` and `User.pairedDevices.Count == 0`, deferring by one frame so the player is not disposed inside its own callback. `InputManager.AutoReassignOnDeviceLoss` (default `false`) performs the same recovery automatically on a topology change; keep it off when `OnPlayerInputReady` notifications need explicit product-controlled timing.
 
 ### Interactions, Processors, Long Press, and Chords
 
@@ -435,6 +463,9 @@ Changing configuration requires a lifecycle decision. `ReinitializeWithResult` r
 | Root | `playerSlots` | Validated player templates identified by unique non-negative `playerId` values. |
 | Player | `controlSchemes` | Optional deterministic device-matching schemes. |
 | Player | `defaultControlScheme` | Preferred scheme; other declared schemes are tried if it cannot match. |
+| Player | `pairAllMatchingDevices` | Claims devices for every referenced layout and leaves the control scheme unset. The action asset stays confined to that player's device whitelist. |
+| Player | `maxDevicesPerLayout` | Upper bound on devices claimed per referenced layout when `pairAllMatchingDevices` is enabled. Default `1`, clamped to `1..8`. |
+| Player | `deviceSwitchDebounceMs` | Minimum dwell time before `ActiveDeviceKind` may switch again. Default `0` (legacy immediate switching), clamped to `0..5000`. |
 | Player | `contexts` | Named mapping contexts for that player. |
 | Context | `name`, `actionMap` | Context identity and public action-map identity. |
 | Context | `priority` | Higher values are considered first. Default limits accept `-100000..100000`. |
@@ -443,8 +474,11 @@ Changing configuration requires a lifecycle decision. `ReinitializeWithResult` r
 | Action | `action` | Logical action name. Context, map, and action form the stable identity. |
 | Action | `expectedControlType` | Unity expected control layout (`Button`, `Vector2`, `Axis`). |
 | Action | `deviceBindings` | Direct Unity control paths. |
+| Action | `deviceBindingGroups` | Optional per-binding control-scheme groups, positionally aligned with `deviceBindings`. An omitted list or an empty entry falls back to `bindingGroups`, so existing configurations are unchanged. |
 | Action | `compositeBindings` | Structured composite name, parameters, groups, and parts. |
-| Action | `bindingGroups` | Semicolon-separated control-scheme binding groups. |
+| Action | `bindingGroups` | Semicolon-separated action-level control-scheme binding groups. |
+
+`deviceBindingGroups` is the precise form. Unity Input System binding groups are a binding-level concept: when one action has both a keyboard and a gamepad binding, assigning each binding its own scheme group makes the active control scheme's `bindingMask` an independent second line of defence alongside the `InputUser` device whitelist. Without it, a gamepad binding carrying `KeyboardMouse;Gamepad` still resolves under a `KeyboardMouse` scheme as soon as the whitelist widens (for example after `PairAdditionalDevice`), and device isolation relies on the whitelist alone. The list must have exactly one entry per `deviceBindings` entry; each non-empty entry must name declared scheme groups; an empty entry explicitly falls back to the action-level value.
 | Action | `interactions`, `processors` | Unity Input System expressions applied to the action. |
 | Composite part | `name`, `path`, `processors` | Named part control path with optional part-local processors. A non-empty part `interactions` value is rejected. |
 | Action | `updateMode` | `EventDriven` or `Polling`. Delta paths are treated as polling. |
@@ -458,6 +492,8 @@ Changing configuration requires a lifecycle decision. `ReinitializeWithResult` r
 Default validation budgets: 8 players, 32 contexts per player, 128 actions per context, 1,024 total actions per player, 16 total direct/composite-part binding entries per action, 16 composites per action, 16 parts per composite, 16 control schemes per player, 16 device requirements per scheme, and 256 characters per technical string. Inject stricter `InputConfigurationLimits` into the `InputManager` constructor.
 
 Before VYaml materialization, runtime and Editor YAML entry points also limit input to 1 MiB strict UTF-8 without BOM, 16,384 lines, 4,096 characters per line, 64 indentation spaces, 65,536 structural tokens, and nesting depth 64. YAML anchors, aliases, explicit tags, directives/document markers, block scalars, tab indentation, forbidden control/format/private-use characters, and non-CR/LF line separators are outside this strict subset.
+
+One action serializes to roughly twelve YAML lines, so the 16,384-line budget caps a serialized configuration at about 1,300 total actions across all players (`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`). The per-player action limits above bound programmatically constructed configuration; at multiplayer scale they are not reachable through the YAML source. Exceeding the line budget is rejected during preflight with a message naming the line limit, so budget authored configuration against the serialized total rather than against the per-player ceiling.
 
 ### Editor Workflow and Code Generation
 
