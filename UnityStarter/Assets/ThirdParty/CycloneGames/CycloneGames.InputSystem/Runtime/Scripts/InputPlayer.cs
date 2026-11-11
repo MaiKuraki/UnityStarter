@@ -26,6 +26,8 @@ namespace CycloneGames.InputSystem.Runtime
         private const int MaxContextRefreshPasses = 16;
         public const int MaximumContextCaptureDepth = 1024;
         private static readonly ProfilerMarker BuildAssetMarker = new ProfilerMarker("CycloneGames.Input.BuildAsset");
+        private static readonly ProfilerMarker RequestContextRefreshMarker = new ProfilerMarker("CycloneGames.Input.RequestContextRefresh");
+        private static readonly ProfilerMarker ActivateTopContextMarker = new ProfilerMarker("CycloneGames.Input.ActivateTopContext");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         [Serializable]
@@ -52,7 +54,9 @@ namespace CycloneGames.InputSystem.Runtime
             public string overrideProcessors;
         }
 
-        private readonly struct BindingOverrideApplication
+        // Reference type on purpose: this record embeds Unity's InputBinding and measured 104 bytes as a
+        // struct, which made every List<T> copy and every foreach iteration copy the whole value.
+        private sealed class BindingOverrideApplication
         {
             public BindingOverrideApplication(InputAction action, int bindingIndex, InputBinding binding)
             {
@@ -95,6 +99,23 @@ namespace CycloneGames.InputSystem.Runtime
 
             public InputContext Context { get; }
             public bool IsActive { get; set; }
+        }
+
+        /// <summary>
+        /// Plain IObserver so the subscription does not depend on any reactive extension overload.
+        /// </summary>
+        private sealed class AnyButtonObserver : IObserver<InputControl>
+        {
+            private readonly InputPlayer _owner;
+
+            internal AnyButtonObserver(InputPlayer owner)
+            {
+                _owner = owner;
+            }
+
+            public void OnCompleted() { }
+            public void OnError(Exception error) { }
+            public void OnNext(InputControl value) { _owner.OnAnyButtonPressed(value); }
         }
 
         private sealed class SafeSubscription : IDisposable
@@ -176,6 +197,15 @@ namespace CycloneGames.InputSystem.Runtime
 
         public ReadOnlyReactiveProperty<string> ActiveContextName { get; private set; }
         public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
+
+        /// <summary>
+        /// Raw stream of observed activity on this player's own devices. Every activity is published with
+        /// device identity, fine-grained family and control path; product UI can deduplicate by
+        /// <see cref="InputDeviceActivity.Family"/> or <see cref="InputDeviceActivity.DeviceLayout"/>.
+        /// Unlike <see cref="ActiveDeviceKind"/> this stream is not debounced.
+        /// </summary>
+        public Observable<InputDeviceActivity> DeviceActivity => _deviceActivity;
+
         public event Action<string> OnContextChanged;
         public event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged;
 
@@ -246,6 +276,13 @@ namespace CycloneGames.InputSystem.Runtime
         private bool _contextRefreshPending;
         private bool _isDisposed;
         private bool _userChangeSubscribed;
+        private IDisposable _anyButtonSubscription;
+        private readonly Subject<InputDeviceActivity> _deviceActivity = new Subject<InputDeviceActivity>();
+        private double _frameTimestamp;
+        private double _lastDeviceKindChangeTimestamp = double.NegativeInfinity;
+        private double _deviceSwitchDebounceSeconds;
+        private InputDeviceKind _pendingDeviceKind;
+        private bool _hasPendingDeviceKind;
 
         /// <summary>
         /// Compatibility constructor. Ownership of a valid InputUser transfers to this instance.
@@ -277,9 +314,23 @@ namespace CycloneGames.InputSystem.Runtime
             try
             {
                 _inputActionAsset = BuildAssetFromConfig(config);
+
+                // The InputUser always owns the device whitelist. Associating the asset applies that whitelist
+                // to every action map, so a player answering to several devices at once still cannot read
+                // devices claimed by another local player. InputManager activates a control scheme after
+                // construction only for locked slots; a slot without a selected scheme keeps every binding
+                // live on its own devices, which is what enables seamless keyboard/mouse/gamepad switching.
                 User.AssociateActionsWithUser(_inputActionAsset);
+                _deviceSwitchDebounceSeconds = config.DeviceSwitchDebounceMs / 1000d;
+
                 InputUser.onChange += OnInputUserChanged;
                 _userChangeSubscribed = true;
+
+                // Drive prompt switching from any button-level activity, not only from configured action
+                // callbacks. OnAnyButtonPressed filters to this player's own devices so another local
+                // player's input cannot hijack this player's prompts.
+                _anyButtonSubscription = UnityEngine.InputSystem.InputSystem.onAnyButtonPress
+                    .Subscribe(new AnyButtonObserver(this));
                 if (initialDevice != null)
                 {
                     UpdateActiveDeviceKind(initialDevice);
@@ -1176,6 +1227,12 @@ namespace CycloneGames.InputSystem.Runtime
                 _userChangeSubscribed = false;
             }
 
+            if (_anyButtonSubscription != null)
+            {
+                CleanupSafely(_anyButtonSubscription.Dispose, "dispose any-button subscription");
+                _anyButtonSubscription = null;
+            }
+
             CleanupSafely(_cancellation.Cancel, "cancel runtime work");
             CleanupSafely(_subscriptions.Dispose, "dispose context subscriptions");
             CleanupSafely(_actionWiringSubscriptions.Dispose, "dispose action subscriptions");
@@ -1188,6 +1245,7 @@ namespace CycloneGames.InputSystem.Runtime
             DisposeSubjects();
             CleanupSafely(_activeContextName.Dispose, "dispose active-context state");
             CleanupSafely(_activeDeviceKind.Dispose, "dispose active-device state");
+            CleanupSafely(_deviceActivity.Dispose, "dispose device activity stream");
             OnContextChanged = null;
             OnDeviceStatusChanged = null;
 
@@ -1393,6 +1451,13 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_isDisposed) return;
             double now = timestamp ?? Time.realtimeSinceStartupAsDouble;
+            _frameTimestamp = now;
+            if (_hasPendingDeviceKind &&
+                now - _lastDeviceKindChangeTimestamp >= _deviceSwitchDebounceSeconds)
+            {
+                ApplyDeviceKind(_pendingDeviceKind, now);
+            }
+
             int pollingCount = _pollingActions.Count;
             for (int i = 0; i < pollingCount; i++)
             {
@@ -1415,6 +1480,14 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         private void ActivateTopContext()
+        {
+            using (ActivateTopContextMarker.Auto())
+            {
+                ActivateTopContextCore();
+            }
+        }
+
+        private void ActivateTopContextCore()
         {
             long activationVersion = unchecked(++_contextActivationVersion);
             CompositeDisposable previousSubscriptions = _subscriptions;
@@ -1465,35 +1538,38 @@ namespace CycloneGames.InputSystem.Runtime
             _contextRefreshPending = true;
             if (_isContextTransitioning) return;
 
-            _isContextTransitioning = true;
-            try
+            using (RequestContextRefreshMarker.Auto())
             {
-                int passCount = 0;
-                while (_contextRefreshPending && !_isDisposed)
+                _isContextTransitioning = true;
+                try
                 {
-                    if (passCount++ >= MaxContextRefreshPasses)
+                    int passCount = 0;
+                    while (_contextRefreshPending && !_isDisposed)
                     {
-                        FailContextProjection(
-                            $"Context refresh exceeded {MaxContextRefreshPasses} synchronous passes and was disabled.");
-                        return;
-                    }
+                        if (passCount++ >= MaxContextRefreshPasses)
+                        {
+                            FailContextProjection(
+                                $"Context refresh exceeded {MaxContextRefreshPasses} synchronous passes and was disabled.");
+                            return;
+                        }
 
-                    _contextRefreshPending = false;
-                    try
-                    {
-                        ActivateTopContext();
-                    }
-                    catch (Exception exception) when (IsRecoverableException(exception))
-                    {
-                        FailContextProjection(
-                            $"Context activation failed ({exception.GetType().Name}); input was disabled until an explicit refresh.");
-                        throw;
+                        _contextRefreshPending = false;
+                        try
+                        {
+                            ActivateTopContext();
+                        }
+                        catch (Exception exception) when (IsRecoverableException(exception))
+                        {
+                            FailContextProjection(
+                                $"Context activation failed ({exception.GetType().Name}); input was disabled until an explicit refresh.");
+                            throw;
+                        }
                     }
                 }
-            }
-            finally
-            {
-                _isContextTransitioning = false;
+                finally
+                {
+                    _isContextTransitioning = false;
+                }
             }
         }
 
@@ -1848,6 +1924,8 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _activeDevice = null;
                 _activeDeviceKind.Value = InputDeviceKind.Unknown;
+                _hasPendingDeviceKind = false;
+                _lastDeviceKindChangeTimestamp = _frameTimestamp;
             }
             else if (kind.Value == InputPlayerDeviceChangeKind.Regained)
             {
@@ -1909,11 +1987,104 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
+        /// <summary>
+        /// Optional explicit hook for product code that observes continuous activity (mouse movement,
+        /// analog drift) outside button and action callbacks. Publishes <see cref="DeviceActivity"/> and
+        /// feeds the debounced <see cref="ActiveDeviceKind"/>.
+        /// </summary>
+        public void NotifyDeviceActivity(InputDevice device)
+        {
+            NotifyDeviceActivity(device, null);
+        }
+
+        /// <summary>
+        /// Explicit activity hook with the originating control, used to populate
+        /// <see cref="InputDeviceActivity.ControlPath"/> for precise prompt selection.
+        /// </summary>
+        public void NotifyDeviceActivity(InputDevice device, InputControl control)
+        {
+            EnsureUsable();
+            if (device == null) return;
+
+            var activity = new InputDeviceActivity(
+                PlayerId,
+                device.deviceId,
+                device.layout,
+                GetDeviceFamily(device),
+                GetDeviceKind(device),
+                control != null ? control.path : string.Empty,
+                _frameTimestamp);
+            _deviceActivity.OnNext(activity);
+            UpdateActiveDeviceKind(device);
+        }
+
+        private void OnAnyButtonPressed(InputControl control)
+        {
+            if (_isDisposed) return;
+            InputDevice device = control?.device;
+            if (device == null || !IsOwnDevice(device)) return;
+            NotifyDeviceActivity(device, control);
+        }
+
+        private bool IsOwnDevice(InputDevice device)
+        {
+            if (!User.valid) return false;
+            var paired = User.pairedDevices;
+            for (int i = 0; i < paired.Count; i++)
+            {
+                if (ReferenceEquals(paired[i], device)) return true;
+            }
+
+            return false;
+        }
+
+        private static InputDeviceFamily GetDeviceFamily(InputDevice device)
+        {
+            if (device == null) return InputDeviceFamily.Unknown;
+            if (device is Touchscreen) return InputDeviceFamily.Touchscreen;
+            if (device is Keyboard) return InputDeviceFamily.Keyboard;
+            if (device is Mouse) return InputDeviceFamily.Mouse;
+            if (device is Gamepad) return InputDeviceFamily.Gamepad;
+            if (device is Joystick) return InputDeviceFamily.Joystick;
+            return InputDeviceFamily.Other;
+        }
+
         private void UpdateActiveDeviceKind(InputDevice device)
         {
-            if (device == null) return;
+            if (device == null || _isDisposed) return;
             _activeDevice = device;
-            _activeDeviceKind.Value = GetDeviceKind(device);
+            InputDeviceKind kind = GetDeviceKind(device);
+
+            if (_deviceSwitchDebounceSeconds <= 0d)
+            {
+                ApplyDeviceKind(kind, _frameTimestamp);
+                return;
+            }
+
+            if (kind == _activeDeviceKind.Value)
+            {
+                _hasPendingDeviceKind = false;
+                return;
+            }
+
+            double now = _frameTimestamp;
+            if (now - _lastDeviceKindChangeTimestamp < _deviceSwitchDebounceSeconds)
+            {
+                // Rapid alternation collapses to the last requested kind. UpdateRuntimeState applies it
+                // once the dwell time expires, so noisy hardware cannot drive one UI update per event.
+                _pendingDeviceKind = kind;
+                _hasPendingDeviceKind = true;
+                return;
+            }
+
+            ApplyDeviceKind(kind, now);
+        }
+
+        private void ApplyDeviceKind(InputDeviceKind kind, double now)
+        {
+            if (_activeDeviceKind.Value != kind) _activeDeviceKind.Value = kind;
+            _lastDeviceKindChangeTimestamp = now;
+            _hasPendingDeviceKind = false;
         }
 
         private static InputDeviceKind GetDeviceKind(InputDevice device)
@@ -2136,6 +2307,13 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_userChangeSubscribed) InputUser.onChange -= OnInputUserChanged;
             _userChangeSubscribed = false;
+            if (_anyButtonSubscription != null)
+            {
+                CleanupSafely(_anyButtonSubscription.Dispose, "dispose construction any-button subscription");
+                _anyButtonSubscription = null;
+            }
+
+            CleanupSafely(_deviceActivity.Dispose, "dispose construction device activity stream");
             CleanupSafely(_cancellation.Cancel, "cancel construction work");
             CleanupSafely(_subscriptions.Dispose, "dispose construction context subscriptions");
             CleanupSafely(_actionWiringSubscriptions.Dispose, "dispose construction action subscriptions");

@@ -170,7 +170,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 "CycloneGames.InputSystem",
                 "Samples",
                 "Fixtures",
-                "input_config.yaml");
+                "input_config.txt");
             EditorWindow window = CreateEditorWindow();
             try
             {
@@ -219,7 +219,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 "CycloneGames.InputSystem",
                 "Samples",
                 "Fixtures",
-                "input_config.yaml");
+                "input_config.txt");
             Assert.That(File.Exists(fixturePath), Is.True, "The sample fixture must remain discoverable.");
 
             EditorWindow window = CreateEditorWindow();

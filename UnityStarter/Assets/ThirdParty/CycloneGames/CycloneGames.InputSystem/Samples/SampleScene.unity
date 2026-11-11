@@ -182,7 +182,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 295cedbf9aa63354c83f6d125a55ae9b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  startupMode: 0
+  startupMode: 4
   _playerPrefab: {fileID: 1286180711}
   _spawnPoints:
   - {fileID: 1895289247}
@@ -190,7 +190,8 @@ MonoBehaviour:
   _playerColors:
   - {r: 0.2813344, g: 0.735849, b: 0.17354919, a: 1}
   - {r: 1, g: 0, b: 0.0031104088, a: 1}
-  _defaultConfigName: input_config.yaml
+  _configuration: {fileID: 4900000, guid: fcba76e773d16a647a9bca9fa1d8f523, type: 3}
+  _mixedConfiguration: {fileID: 4900000, guid: 9bbfa40d56b2a1a4cb1f174e9063f9a2, type: 3}
   _userConfigName: user_input_settings.yaml
 --- !u!4 &834448829
 Transform:

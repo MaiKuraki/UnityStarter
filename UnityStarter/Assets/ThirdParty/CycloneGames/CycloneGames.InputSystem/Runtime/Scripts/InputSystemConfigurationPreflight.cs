@@ -377,6 +377,18 @@ namespace CycloneGames.InputSystem.Runtime
                 object instance = Activator.CreateInstance(type);
                 foreach (NamedValue parameter in item.parameters) parameter.ApplyToObject(instance);
             }
+            catch (MissingMethodException)
+            {
+                // The type resolved but its parameterless constructor is gone. In a player build that is a
+                // managed-code-stripping artifact, not an authoring mistake, so it must not be reported as
+                // invalid parameters: that sends integrators to inspect YAML that is actually correct.
+                AddIssue(
+                    issues,
+                    ref wasTruncated,
+                    unknownCode,
+                    path,
+                    "The registered Input System type cannot be constructed; its constructor may have been removed by managed code stripping. Preserve the type or list it in link.xml.");
+            }
             catch (Exception exception) when (!IsCritical(exception))
             {
                 AddIssue(

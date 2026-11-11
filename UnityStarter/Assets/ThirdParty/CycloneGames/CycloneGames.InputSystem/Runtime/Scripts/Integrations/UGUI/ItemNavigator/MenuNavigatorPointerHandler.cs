@@ -6,18 +6,14 @@ using R3;
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
-    /// Handles pointer events for menu navigation items (Button, Toggle, Slider, CustomTransform, etc.)
-    /// - For Button: OnPointerEnter sets focus, OnPointerClick triggers OnConfirm via Button's OnClickAsObservable subscription
-    /// - For Toggle: OnPointerEnter sets focus, click triggers OnConfirm via onValueChanged subscription
-    ///   The Toggle's isOn value is preserved; user manually controls it in OnConfirm callback
-    /// - For CustomTransform: OnPointerEnter sets focus, OnPointerClick triggers OnConfirm directly
-    ///   This enables click-to-confirm for non-Selectable navigable items like SelectionSwitcher
-    ///
-    /// Touch Confirmation Gate:
-    /// When transitioning from Gamepad to Touchscreen input, the first touch only focuses the element.
-    /// A second touch is required to confirm the action. This prevents accidental triggers when
-    /// the cursor position jumps from (-1,-1) to the touch location.
+    /// Routes pointer events to a menu item. Pointer enter moves focus; pointer click confirms through the
+    /// subscription the navigator owns, except for custom transforms where it confirms directly.
     /// </summary>
+    /// <remarks>
+    /// Touch confirmation gate: after switching from gamepad to touch, the first touch only moves focus and the
+    /// second confirms. Without it, the pointer position jumping from (-1,-1) to the touch location would trigger
+    /// an unintended action.
+    /// </remarks>
     public class MenuNavigatorPointerHandler : MonoBehaviour, IPointerEnterHandler, IPointerDownHandler, IPointerClickHandler
     {
         private MenuNavigatorHorizontal _horizontalNavigator;
@@ -129,7 +125,6 @@ namespace CycloneGames.InputSystem.Runtime
                 // Restore the cached value to prevent automatic isOn change
                 _toggle.SetIsOnWithoutNotify(_cachedToggleValue);
 
-                // Check touch confirmation gate
                 if (ShouldBlockTouchConfirmation())
                 {
                     // First touch after gamepad-to-touch transition: focus only, do not confirm.
@@ -292,7 +287,6 @@ namespace CycloneGames.InputSystem.Runtime
             // For Toggles, confirmation is handled via onValueChanged subscription in SetupComponents()
             if (_isCustomTransformItem)
             {
-                // Check touch confirmation gate
                 if (ShouldBlockTouchConfirmation())
                 {
                     // First touch after gamepad-to-touch transition: focus only, do not confirm.
