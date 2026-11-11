@@ -236,6 +236,16 @@ playerSlots:
         [Test]
         public void TwoPlayers_SameKeyboard_SecondPlayerJoinsOrIsRejected()
         {
+            // The host may already have a physical keyboard, so counting the devices before adding a test
+            // one is required for a reproducible assertion. The invariant under test is that a single
+            // physical device is never paired to two players, not that a second player is always refused.
+            int hostKeyboardCount = 0;
+            var attached = UIS.devices;
+            for (int i = 0; i < attached.Count; i++)
+            {
+                if (attached[i] is Keyboard) hostKeyboardCount++;
+            }
+
             Keyboard keyboard = UIS.AddDevice<Keyboard>();
             var manager = new InputManager();
             try
@@ -245,12 +255,30 @@ playerSlots:
                 IInputPlayer first = manager.JoinSinglePlayer(0);
                 IInputPlayer second = manager.JoinSinglePlayer(1);
 
-                Assert.That(first, Is.Not.Null, "Player 0 must claim the keyboard.");
-                Assert.That(
-                    second,
-                    Is.Null,
-                    "Two players cannot share one physical keyboard; the second join must be refused. " +
-                    "Second pairing: " + (second == null ? "null" : PairedSummary(second)));
+                Assert.That(first, Is.Not.Null, "Player 0 must claim a keyboard.");
+                if (hostKeyboardCount + 1 < 2)
+                {
+                    Assert.That(
+                        second,
+                        Is.Null,
+                        "Two players cannot share one physical keyboard; the second join must be refused. " +
+                        "Second pairing: " + (second == null ? "null" : PairedSummary(second)));
+                    return;
+                }
+
+                Assert.That(second, Is.Not.Null, "A second physical keyboard may host player 1.");
+                var firstDevices = ((InputPlayer)first).User.pairedDevices;
+                var secondDevices = ((InputPlayer)second).User.pairedDevices;
+                for (int i = 0; i < firstDevices.Count; i++)
+                {
+                    for (int j = 0; j < secondDevices.Count; j++)
+                    {
+                        Assert.That(
+                            ReferenceEquals(firstDevices[i], secondDevices[j]),
+                            Is.False,
+                            "A physical device must not be paired to two players: " + firstDevices[i].displayName);
+                    }
+                }
             }
             finally
             {

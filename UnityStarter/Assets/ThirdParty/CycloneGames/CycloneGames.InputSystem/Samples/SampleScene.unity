@@ -182,7 +182,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 295cedbf9aa63354c83f6d125a55ae9b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  startupMode: 0
+  startupMode: 4
   _playerPrefab: {fileID: 1286180711}
   _spawnPoints:
   - {fileID: 1895289247}

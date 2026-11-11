@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 
 using UnityEngine;
@@ -23,7 +24,9 @@ namespace CycloneGames.InputSystem.Sample
             AutoJoinSharedKeyboard,
             LobbyWithDeviceLocking,
             LobbyWithSharedDevices,
-            AutoJoinMixedDevices
+            AutoJoinMixedDevices,
+            // Append-only: existing serialized integer values must keep their meaning.
+            AutoJoinKeyboardMouseVsGamepad
         }
 
         [Header("Game Mode")]
@@ -88,7 +91,7 @@ namespace CycloneGames.InputSystem.Sample
             _ownsInputManager = true;
             try
             {
-                TextAsset configurationAsset = startupMode == StartupMode.AutoJoinMixedDevices
+                TextAsset configurationAsset = UsesMixedConfiguration()
                     ? _mixedConfiguration
                     : _configuration;
                 if (configurationAsset == null)
@@ -97,13 +100,21 @@ namespace CycloneGames.InputSystem.Sample
                         "Assign a configuration TextAsset on the InputManagerSample component.");
                 }
 
+                // Every startup mode gets its own user key and never persists the authored fixture. A shared
+                // key plus implicit persistence made a previously saved mixed configuration override the
+                // locked fixture on the next run, so SingleLock and Mixed appeared identical.
+                string userKey = BuildUserKey();
                 var userStore = new FileInputConfigurationStore(
                     Application.persistentDataPath);
-                InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
+                var options = new InputSystemBootstrapOptions(
+                    InputSystemBootstrapMode.Required,
                     new TextAssetInputConfigurationSource(configurationAsset),
                     configurationAsset.name,
                     userStore,
-                    _userConfigName,
+                    userKey,
+                    persistDefaultToUser: false);
+                InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
+                    options,
                     InputManager.Instance,
                     false,
                     cancellationToken);
@@ -112,6 +123,15 @@ namespace CycloneGames.InputSystem.Sample
                     throw new InvalidOperationException(
                         $"Input initialization failed with status {loadResult.Status}: {loadResult.Error}");
                 }
+
+                Log.Info(
+                    (Mode: startupMode.ToString(), Fixture: configurationAsset.name, Key: userKey,
+                        Source: loadResult.Status.ToString()),
+                    static (state, builder) => builder
+                        .Append("[GameInitializer_Sample] mode=").Append(state.Mode)
+                        .Append(" fixture=").Append(state.Fixture)
+                        .Append(" userKey=").Append(state.Key)
+                        .Append(" source=").Append(state.Source));
 
                 cancellationToken.ThrowIfCancellationRequested();
                 await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
@@ -174,9 +194,41 @@ namespace CycloneGames.InputSystem.Sample
                     InputManager.Instance.StartListeningForPlayers(false);
                     break;
 
+                case StartupMode.AutoJoinKeyboardMouseVsGamepad:
+                    // Player 0 naturally claims keyboard/mouse with the first matching control scheme;
+                    // with those devices unavailable, player 1 falls through to the Gamepad scheme.
+                    EnsurePlayerJoined(InputManager.Instance.JoinSinglePlayer(0), 0);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    IInputPlayer secondPlayer = InputManager.Instance.JoinSinglePlayer(1);
+                    if (secondPlayer == null)
+                    {
+                        Log.Warning(
+                            "[GameInitializer_Sample] Player 1 could not join with a gamepad; " +
+                            "connect a gamepad and restart the scene for this mode.");
+                    }
+
+                    break;
+
                 default:
                     throw new ArgumentOutOfRangeException();
             }
+        }
+
+        private bool UsesMixedConfiguration()
+        {
+            return startupMode == StartupMode.AutoJoinMixedDevices;
+        }
+
+        private string BuildUserKey()
+        {
+            string configured = string.IsNullOrWhiteSpace(_userConfigName)
+                ? "user_input_settings.yaml"
+                : _userConfigName;
+            string extension = Path.GetExtension(configured);
+            if (string.IsNullOrEmpty(extension)) extension = ".yaml";
+            string stem = Path.GetFileNameWithoutExtension(configured);
+            if (string.IsNullOrEmpty(stem)) stem = "user_input_settings";
+            return stem + "_" + startupMode + extension;
         }
 
         private static void EnsurePlayerJoined(IInputPlayer inputPlayer, int playerId)

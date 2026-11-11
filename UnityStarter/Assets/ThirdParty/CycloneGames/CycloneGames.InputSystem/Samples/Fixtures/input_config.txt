@@ -8,6 +8,9 @@ joinAction:
   deviceBindings:
     - "<Keyboard>/enter"
     - "<Gamepad>/start"
+  deviceBindingGroups:
+    - KeyboardMouse
+    - Gamepad
   updateMode: EventDriven
   longPressMs: 0
   longPressValueThreshold: 0.5
@@ -21,6 +24,9 @@ playerSlots:
       deviceBindings:
         - "<Keyboard>/enter"
         - "<Gamepad>/start"
+      deviceBindingGroups:
+        - KeyboardMouse
+        - Gamepad
       updateMode: EventDriven
       longPressMs: 0
       longPressValueThreshold: 0.5
@@ -75,6 +81,9 @@ playerSlots:
             deviceBindings:
               - "<Gamepad>/buttonSouth"
               - "<Keyboard>/space"
+            deviceBindingGroups:
+              - Gamepad
+              - KeyboardMouse
             updateMode: EventDriven
             longPressMs: 500
             longPressValueThreshold: 0.5
@@ -87,6 +96,9 @@ playerSlots:
       deviceBindings:
         - "<Keyboard>/numpadEnter"
         - "<Gamepad>/start"
+      deviceBindingGroups:
+        - KeyboardMouse
+        - Gamepad
       updateMode: EventDriven
       longPressMs: 0
       longPressValueThreshold: 0.5
@@ -119,6 +131,9 @@ playerSlots:
             deviceBindings:
               - "<Gamepad>/leftStick"
               - "<Mouse>/delta"
+            deviceBindingGroups:
+              - Gamepad
+              - KeyboardMouse
             compositeBindings:
               - name: 2DVector
                 parameters: mode=2
@@ -143,6 +158,10 @@ playerSlots:
               - "<Gamepad>/buttonSouth"
               - "<Keyboard>/numpadEnter"
               - "<Mouse>/leftButton"
+            deviceBindingGroups:
+              - Gamepad
+              - KeyboardMouse
+              - KeyboardMouse
             updateMode: EventDriven
             longPressMs: 500
             longPressValueThreshold: 0.5

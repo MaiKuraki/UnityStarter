@@ -42,9 +42,14 @@ flowchart TD
 | `joinAction` | No | Join action specific to this slot. |
 | `defaultControlScheme` | No | Preferred declared scheme. Leave empty to select the best scheme supported by available devices. |
 | `controlSchemes` | Usually | Named device requirement sets used during join and device assignment. |
+| `pairAllMatchingDevices` | No | Claims devices for every layout referenced by this slot's bindings and leaves the control scheme unset. All bindings stay live on that player's paired-device whitelist. |
+| `maxDevicesPerLayout` | No | Devices claimed per referenced layout when `pairAllMatchingDevices` is enabled. Default `1`, clamped to `1..8`. |
+| `deviceSwitchDebounceMs` | No | Minimum dwell time before `ActiveDeviceKind` may switch again. Default `0` (immediate), clamped to `0..5000`. |
 | `contexts` | Yes | Context definitions and their action bindings. |
 
 Player IDs are configuration identities, not list positions. Sparse IDs are accepted when they remain within configured limits.
+
+A locked slot (one that selects a control scheme) narrows both the device whitelist and the binding mask to that scheme. A `pairAllMatchingDevices` slot widens the device whitelist to every referenced layout but keeps the binding mask open, which is how one player answers to a keyboard, a mouse and a gamepad without re-joining. Keep `maxDevicesPerLayout` small in local-multiplayer sessions so spare devices remain claimable by other players. Values outside the documented ranges are clamped, not rejected, so legacy files that omit these keys keep their previous behaviour.
 
 ### Control Scheme
 
@@ -95,11 +100,14 @@ Runtime `InputContext` instances refer to configured context/action-map identiti
 | `Action Name` | Yes | Stable action identity. | `Confirm`, `Move` |
 | `Update Mode` | Yes | `EventDriven` publishes changes; `Polling` samples from the frame provider. | `EventDriven` |
 | `Device Bindings` | One binding source | Direct Unity Input System control paths. | `<Keyboard>/enter` |
+| `Device Binding Groups` | No | Per-binding control-scheme groups, positionally aligned with `Device Bindings`. An omitted list or an empty entry falls back to the action-level `Binding Groups`. | `Gamepad`, `KeyboardMouse` |
 | `Composite Bindings` | One binding source | Structured composites such as keyboard movement. | `2DVector` |
 | `Long Press Ms` | No | Module-level long-press duration. Zero disables it. | `500` |
 | `Press Threshold` | No | Actuation threshold used by long-press timing. | `0.5` |
 
 Direct and composite bindings may coexist. Each direct path must be unique inside one action.
+
+`Device Binding Groups` is optional and additive. When present it must contain exactly one entry per `Device Bindings` entry; each non-empty entry must reference a declared control-scheme `bindingGroup`. Giving each device its own group makes the scheme's `bindingMask` a second, independent defence: a gamepad binding tagged only `Gamepad` stays masked out under a `KeyboardMouse` scheme even if that player's device whitelist is later widened. Configurations that omit the key keep their previous behaviour unchanged.
 
 #### Choosing `Type`
 

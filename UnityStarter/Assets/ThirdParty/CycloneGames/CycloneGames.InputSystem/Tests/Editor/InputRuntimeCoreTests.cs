@@ -1798,7 +1798,18 @@ namespace CycloneGames.InputSystem.Runtime.Tests
             const int MeasuredFrames = 90;
             const int PumpsPerFrame = 8;
             const int ControlAllocationBytes = 64 * 1024;
-            const long AllocationBudgetBytes = 8 * MeasuredFrames;
+
+            // The budget is derived from the frame recorder's own differential noise, not from a
+            // per-call allocation target. The residue for identical work measures +772 B in the
+            // interactive editor and -264 B under -batchmode. A negative residue cannot be a real
+            // allocation, so the estimator carries roughly +/-1 KB of symmetric error and any budget
+            // below that is unsatisfiable by construction.
+            //
+            // 4 KiB keeps ~5x margin over the worst observed residue and still catches any real
+            // steady-state allocation: one boxed struct or array header is >= 24 B per pump, which is
+            // >= 17 KiB across the 720 pumps below. The 64 B/pump mutation probe was measured at
+            // 67747 B, so the detection path is intact at this budget.
+            const long AllocationBudgetBytes = 4 * 1024;
 
             Gamepad gamepad = UnityEngine.InputSystem.InputSystem.AddDevice<Gamepad>();
             InputPlayer player = null;
@@ -1861,6 +1872,12 @@ namespace CycloneGames.InputSystem.Runtime.Tests
 
                 long measured = AllocationInstrument.FrameRecorderSampleSum() - measuredStart;
                 long moduleBytes = measured - baseline;
+
+                // Emitted on every run so the noise floor stays observable instead of only surfacing on
+                // failure. Compare across runs before tightening the budget.
+                TestContext.WriteLine(
+                    $"input-alloc-probe moduleBytes={moduleBytes} baseline={baseline} measured={measured} " +
+                    $"pumps={MeasuredFrames * PumpsPerFrame}");
 
                 // Control frame: identical pump work plus a known 64 KiB allocation. A dead recorder would
                 // otherwise report zero and silently satisfy the budget assertion.

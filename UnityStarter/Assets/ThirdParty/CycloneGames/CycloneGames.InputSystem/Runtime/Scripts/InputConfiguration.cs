@@ -94,6 +94,23 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         [YamlMember("pairAllMatchingDevices")]
         public bool PairAllMatchingDevices { get; set; }
+
+        /// <summary>
+        /// Upper bound on devices claimed for each referenced layout when <see cref="PairAllMatchingDevices"/>
+        /// is enabled. Values below one are clamped to one during validation. Limiting this keeps a single
+        /// player from consuming every attached keyboard, mouse or gamepad, which would otherwise prevent
+        /// other local players from joining.
+        /// </summary>
+        [YamlMember("maxDevicesPerLayout")]
+        public int MaxDevicesPerLayout { get; set; } = 1;
+
+        /// <summary>
+        /// Minimum dwell time in milliseconds before <c>ActiveDeviceKind</c> may switch again. Zero preserves
+        /// the legacy immediate-switch behaviour. A non-zero value suppresses rapid device jitter without
+        /// delaying the first switch of a session.
+        /// </summary>
+        [YamlMember("deviceSwitchDebounceMs")]
+        public int DeviceSwitchDebounceMs { get; set; }
     }
 
     [YamlObject]
@@ -133,6 +150,17 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("deviceBindings")]
         public List<string> DeviceBindings { get; set; }
+
+        /// <summary>
+        /// Optional Unity Input System binding groups, positionally aligned with <see cref="DeviceBindings"/>.
+        /// Each entry may be a semicolon-separated group list. An omitted list or an empty entry falls back
+        /// to the action-level <see cref="BindingGroups"/>, so existing configurations keep their exact
+        /// behaviour. Use this to give a keyboard binding and a gamepad binding of the same action
+        /// different groups, which makes the control-scheme binding mask an independent second line of
+        /// defence alongside the InputUser device whitelist.
+        /// </summary>
+        [YamlMember("deviceBindingGroups")]
+        public List<string> DeviceBindingGroups { get; set; }
 
         /// <summary>
         /// Explicit Unity Input System composite bindings. Direct bindings remain available through deviceBindings.

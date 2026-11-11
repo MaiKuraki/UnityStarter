@@ -238,12 +238,17 @@ Context stack/capture 变更先提交 model，再重建 Unity action-map project
 | `JoinSinglePlayer` / `JoinSinglePlayerAsync` | 从 unclaimed device 匹配首选再剩余 control scheme。 | 标准本地 player 创建。 |
 | `JoinPlayerAndLockDevice` | 要求提供设备参与有效 declared scheme；声明所有匹配 scheme device。 | 用户从已知 gamepad 加入。 |
 | `JoinPlayerOnSharedDevice` | 配对当前键盘，存在 mouse 时配对 mouse，不独占声明。 | 明确的共享键盘模式。 |
-| `StartListeningForPlayers` | 合并配置的 join path。在 locking mode 中，执行 join binding 的设备创建 primary player 或仅在其 layout 为该 slot 声明时配对到已有 player。 | Lobby join flow。 |
+| `StartListeningForPlayers` | 合并配置的 join path。Join binding 从第一个未注册的 slot 创建新 player；只有当所有 slot 都已占用时，才把设备扩展到 primary player 的设备集合。 | Lobby join flow。 |
+| `PairAdditionalDevice` | 显式为已加入的 player 再配对一台声明过 layout 的设备，绝不创建新 player。设备不可声明或 layout 未声明时 fail closed。 | 单人热插拔第二台设备。 |
 | `RemovePlayer` | Dispose player、unpair 其 `InputUser`、释放声明。 | 离开、slot reset 或重新初始化前关闭。 |
+
+**设备白名单与 locked / mixed 的区别。** 每个 player 都会把 action asset 关联到自己的 `InputUser`，因此 `InputActionAsset.devices` 始终是该 player 自己的配对设备白名单。锁定 slot 会额外激活 control scheme，把 binding mask 收窄到该 scheme 的 group。设置 `pairAllMatchingDevices: true` 的 slot 保持 scheme 未激活：所有 binding 都保持可用，但只作用于该 player 白名单内的设备。这既让单个 player 在键鼠与手柄之间无缝切换而无需重新 join，也让第二个本地 player 仍能认领剩余设备。
+
+`maxDevicesPerLayout`（默认 `1`，钳制到 `1..8`）限制此类 slot 对每个被引用 layout 可认领的设备数量；没有它，一个 player 会吃光所有键盘、鼠标和手柄。`deviceSwitchDebounceMs`（默认 `0`，钳制到 `0..5000`）设置 `ActiveDeviceKind` 再次切换前的最小驻留时间，把快速设备交替合并成一次呈现更新。`InputPlayer.NotifyDeviceActivity(InputDevice)` 是可选显式入口，供在 action callback 之外观察设备活动的产品代码使用。
 
 Async 重载接受 `CancellationToken`。单 player 超时返回 `null`；caller cancellation 被传播。Batch aggregate timeout 或 manager shutdown 返回成功 joined 前缀。Caller cancellation 仅回滚该 batch 创建的 player，保留已有 registration，然后抛出。Join 方法对已注册 player ID 幂等，返回该 player。
 
-`JoinPlayersBatchAsync` 把 batch 分摊到多帧：除最后一个 player 外，每完成一个就 yield 一次，因此 *N* 个 player 的 batch 最多跨 *N* 帧，每帧承担一个 player 的构造成本。在参考配置（8 player、3 context、每 context 32 action）下，约 44 ms 的构造工作分摊到 8 帧，而不是压在 1 帧内。最后一个 player 不额外多等一帧。返回的列表只在 task 完成时才完整，因此调用方不能在自己发起调用的那一帧读取结果。
+`JoinPlayersBatchAsync` 把 batch 分摊到多帧：除最后一个 player 外，每完成一个就 yield 一次，因此 *N* 个 player 的 batch 最多跨 *N* 帧，每帧承担一个 player 的构造成本。分帧限制的是单帧内落下多少工作，但在参考配置（8 player、3 context、每 context 32 action）下，每个 player 的构造仍需几十毫秒（EditMode 基准实测总计 739.9 ms、每 player 92.5 ms、最差单帧 114.8 ms）。应在加载画面期间执行 batch，并在目标平台上实测。最后一个 player 不额外多等一帧。返回的列表只在 task 完成时才完整，因此调用方不能在自己发起调用的那一帧读取结果。
 
 分帧不改变超时、取消与关闭语义：batch aggregate timeout 或 manager shutdown 仍返回成功 joined 的前缀；caller cancellation 仍只回滚该 batch 创建的 player，然后抛出。同步版本 `JoinPlayersBatch` 未变，仍在发起调用的那一帧内完成；只在整批成本可接受于单帧时使用它，例如加载画面期间。
 
@@ -273,7 +278,26 @@ private void ObserveDevices(IInputPlayer player)
 }
 ```
 
-`ActiveDeviceKind` 在观察到有意义 action 活动时变化；用于 glyph 展示。
+`ActiveDeviceKind` 在观察到有意义 action 活动时变化；用于 glyph 展示。非零的 `deviceSwitchDebounceMs` 会抑制快速交替，产品 UI 无需再自己做去抖。
+
+### 设备活动与提示替换
+
+`ActiveDeviceKind` 是粗粒度、带去抖的呈现状态。要做精确的提示替换，`InputPlayer.DeviceActivity` 会为该 player 自己设备上的每次可观察活动发布一个 `InputDeviceActivity`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `PlayerId`、`DeviceId` | 所属 slot 与具体 Unity device id。 |
+| `DeviceLayout` | 具体 layout，例如 `DualShockGamepad`、`XInputController`。 |
+| `Family` | 细粒度 `InputDeviceFamily`：`Keyboard`、`Mouse`、`Gamepad`、`Touchscreen`、`Joystick`、`Other`。 |
+| `PromptKind` | 旧的粗粒度 `InputDeviceKind`，保证现有消费者不受影响。 |
+| `ControlPath` | 已知时给出来源 control 的完整 path。 |
+| `Timestamp` | Player 帧时间戳，由 `UpdateRuntimeState` 推进。 |
+
+该流由 Unity 的 `onAnyButtonPress` 自动驱动，并过滤到该 player 自己的设备白名单，因此其他本地 player 无法劫持提示。连续量活动（鼠标移动、摇杆漂移）可通过 `NotifyDeviceActivity(device)` 或 `NotifyDeviceActivity(device, control)` 显式上报。`InputDeviceIconSet.GetIcon(kind, deviceLayout)` 优先按 layout 解析 sprite（Xbox 与 PlayStation 图标），未命中再回退到粗粒度 kind；`GetIcon(InputDeviceActivity)` 是便捷重载。`DeviceActivity` 是原始流、不去抖——产品 UI 应按 `Family` 或 `DeviceLayout` 自行去重；`ActiveDeviceKind` 仍是带去抖的粗粒度状态。`IInputPlayer` 与 `InputDeviceKind` 均未改动，因此这是 additive 能力。
+
+### 设备断连恢复
+
+Control scheme 只在 join 时选择一次。若某 player 的配对设备全部断开，该 player 仍保持注册，但白名单变空、所有 action 解析到 0 个 control，且 scheme 与 binding mask 保持不变。调用 `InputManager.ReassignPlayerDevices(playerId)` 会移除并按当前可用设备重新 join 该 player，同时刷新 scheme、binding mask 与白名单。产品通常在 `OnDeviceStatusChanged` 收到 `Lost`/`Unpaired` 且 `User.pairedDevices.Count == 0` 时调用它，并延迟一帧以避免在自己的回调里 dispose player。`InputManager.AutoReassignOnDeviceLoss`（默认 `false`）会在拓扑变化时自动执行同样的恢复；当 `OnPlayerInputReady` 通知时机需要由产品显式控制时请保持关闭。
 
 ### Interaction、processor、long press 和 chord
 
@@ -439,6 +463,9 @@ if (!load.IsBootstrapComplete)
 | Root | `playerSlots` | 经过验证的 player template，由唯一非负 `playerId` 标识。 |
 | Player | `controlSchemes` | 可选确定性设备匹配 scheme。 |
 | Player | `defaultControlScheme` | 首选 scheme；无法匹配时尝试其他声明的 scheme。 |
+| Player | `pairAllMatchingDevices` | 为每个被引用的 layout 认领设备并保持 control scheme 未激活。Action asset 仍受该 player 设备白名单约束。 |
+| Player | `maxDevicesPerLayout` | 启用 `pairAllMatchingDevices` 时，每个被引用 layout 可认领设备的上限。默认 `1`，钳制到 `1..8`。 |
+| Player | `deviceSwitchDebounceMs` | `ActiveDeviceKind` 再次切换前的最小驻留时间。默认 `0`（沿用旧的立即切换行为），钳制到 `0..5000`。 |
 | Player | `contexts` | 该 player 的命名 mapping context。 |
 | Context | `name`、`actionMap` | Context identity 和公开 action-map identity。 |
 | Context | `priority` | 值越高优先考虑。默认限制接受 `-100000..100000`。 |
@@ -447,8 +474,11 @@ if (!load.IsBootstrapComplete)
 | Action | `action` | 逻辑 action 名称。Context、map 和 action 构成稳定 identity。 |
 | Action | `expectedControlType` | Unity 预期 control layout（`Button`、`Vector2`、`Axis`）。 |
 | Action | `deviceBindings` | 直接 Unity control path。 |
+| Action | `deviceBindingGroups` | 可选逐 binding 的 control-scheme group，与 `deviceBindings` 按位置对齐。省略列表或某项为空时回退到 `bindingGroups`，因此旧配置行为不变。 |
 | Action | `compositeBindings` | 结构化 composite name、parameters、groups 和 parts。 |
-| Action | `bindingGroups` | 分号分隔的 control-scheme binding group。 |
+| Action | `bindingGroups` | 分号分隔的 action 级 control-scheme binding group。 |
+
+`deviceBindingGroups` 是精确形式。Unity Input System 的 binding group 是 binding 级概念：当一个 action 同时存在键盘和手柄 binding 时，为每条 binding 指定各自的 scheme group，能让激活 scheme 的 `bindingMask` 成为独立于 `InputUser` 设备白名单的第二道防线。若缺少它，携带 `KeyboardMouse;Gamepad` 的手柄 binding 在白名单放宽（例如调用 `PairAdditionalDevice` 后）仍会在 `KeyboardMouse` scheme 下被解析，设备隔离就只剩白名单一层。该列表必须与 `deviceBindings` 条目数完全一致；非空条目必须引用已声明的 scheme group；空条目显式回退到 action 级值。
 | Action | `interactions`、`processors` | 应用于 action 的 Unity Input System 表达式。 |
 | Composite part | `name`、`path`、`processors` | Named part control path，可选 part-local processor。非空 part `interactions` 值被拒绝。 |
 | Action | `updateMode` | `EventDriven` 或 `Polling`。Delta path 视为 polling。 |

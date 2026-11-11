@@ -112,7 +112,19 @@ namespace CycloneGames.InputSystem.Runtime
     [Serializable]
     public sealed class InputBindingOverrideProfile
     {
+        /// <summary>
+        /// Schema version of the serialized binding-override profile. This is an independent contract
+        /// from <see cref="InputConfiguration.CurrentSchemaVersion"/> (the authored YAML configuration
+        /// schema). The two values must not be assumed to move together.
+        /// </summary>
         public const int CurrentSchemaVersion = 1;
+
+        /// <summary>
+        /// Unambiguous alias for <see cref="CurrentSchemaVersion"/>. Prefer this name in new code so the
+        /// profile contract is not confused with the configuration schema version.
+        /// </summary>
+        public const int ProfileSchemaVersion = CurrentSchemaVersion;
+
         public int SchemaVersion = CurrentSchemaVersion;
         public List<InputBindingOverrideEntry> Players = new List<InputBindingOverrideEntry>();
     }

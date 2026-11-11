@@ -2,8 +2,12 @@ schemaVersion: 1
 schemaFingerprint: ""
 playerSlots:
   - playerId: 0
-    # Pairs keyboard, mouse and gamepad at once so any of them can drive player 0 without re-joining.
+    # Pairs one keyboard, one mouse and one gamepad at once so any of them can drive player 0
+    # without re-joining. The per-layout bound leaves spare devices for other local players.
     pairAllMatchingDevices: true
+    maxDevicesPerLayout: 1
+    # Suppress prompt/icon jitter when the player alternates rapidly between devices.
+    deviceSwitchDebounceMs: 120
     joinAction:
       type: Button
       action: JoinGame
