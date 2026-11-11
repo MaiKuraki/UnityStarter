@@ -85,6 +85,15 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         [YamlMember("defaultControlScheme")]
         public string DefaultControlScheme { get; set; }
+
+        /// <summary>
+        /// Pairs every claimable device whose layout the configuration references instead of locking onto the
+        /// first matching control scheme. Use it for a single local player that should keep responding to a gamepad
+        /// and to keyboard/mouse without re-joining. The join then claims all of those devices, so no other player
+        /// in the same session can be assigned them.
+        /// </summary>
+        [YamlMember("pairAllMatchingDevices")]
+        public bool PairAllMatchingDevices { get; set; }
     }
 
     [YamlObject]

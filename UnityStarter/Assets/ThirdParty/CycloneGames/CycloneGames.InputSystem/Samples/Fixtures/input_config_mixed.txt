@@ -1,0 +1,53 @@
+schemaVersion: 1
+schemaFingerprint: ""
+playerSlots:
+  - playerId: 0
+    # Pairs keyboard, mouse and gamepad at once so any of them can drive player 0 without re-joining.
+    pairAllMatchingDevices: true
+    joinAction:
+      type: Button
+      action: JoinGame
+      expectedControlType: Button
+      deviceBindings:
+        - "<Keyboard>/enter"
+        - "<Gamepad>/start"
+      updateMode: EventDriven
+      longPressMs: 0
+      longPressValueThreshold: 0.5
+    contexts:
+      - name: Gameplay
+        actionMap: PlayerActions
+        priority: 0
+        blocksLowerPriority: true
+        bindings:
+          - type: Vector2
+            action: Move
+            expectedControlType: Vector2
+            deviceBindings:
+              - "<Gamepad>/leftStick"
+              - "<Mouse>/delta"
+            compositeBindings:
+              - name: 2DVector
+                parameters: mode=2
+                parts:
+                  - name: up
+                    path: "<Keyboard>/w"
+                  - name: down
+                    path: "<Keyboard>/s"
+                  - name: left
+                    path: "<Keyboard>/a"
+                  - name: right
+                    path: "<Keyboard>/d"
+            updateMode: Polling
+            longPressMs: 0
+            longPressValueThreshold: 0.5
+          - type: Button
+            action: Confirm
+            expectedControlType: Button
+            deviceBindings:
+              - "<Gamepad>/buttonSouth"
+              - "<Keyboard>/space"
+              - "<Mouse>/leftButton"
+            updateMode: EventDriven
+            longPressMs: 500
+            longPressValueThreshold: 0.5

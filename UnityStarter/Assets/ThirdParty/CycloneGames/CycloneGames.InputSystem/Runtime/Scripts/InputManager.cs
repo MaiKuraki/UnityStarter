@@ -1004,6 +1004,11 @@ namespace CycloneGames.InputSystem.Runtime
             selected = null;
             schemeName = null;
             List<InputDevice> available = GetClaimableDevices(mustInclude);
+            if (config.PairAllMatchingDevices)
+            {
+                return TryCollectEveryMatchingDevice(config, available, mustInclude, out selected);
+            }
+
             if (config.ControlSchemes.Count > 0)
             {
                 if (!string.IsNullOrEmpty(config.DefaultControlScheme) &&
@@ -1040,6 +1045,37 @@ namespace CycloneGames.InputSystem.Runtime
             if (selected.Count == 0) return false;
             AddKeyboardMouseCompanion(available, selected);
             return true;
+        }
+
+        /// <summary>
+        /// Selects every claimable device whose layout the configuration references and leaves the control scheme
+        /// unset, so bindings on all of them stay active. Used when one local player must keep responding to both a
+        /// gamepad and keyboard/mouse without re-joining.
+        /// </summary>
+        private bool TryCollectEveryMatchingDevice(
+            RuntimePlayerSlotConfig config,
+            List<InputDevice> available,
+            InputDevice mustInclude,
+            out List<InputDevice> selected)
+        {
+            selected = new List<InputDevice>(4);
+            if (mustInclude != null)
+            {
+                if (!IsDeviceClaimable(mustInclude)) return false;
+                selected.Add(mustInclude);
+            }
+
+            List<string> layouts = GetCandidateLayouts(config);
+            for (int i = 0; i < available.Count; i++)
+            {
+                InputDevice device = available[i];
+                if (device == null || ContainsDevice(selected, device)) continue;
+                if (!IsDeviceClaimable(device)) continue;
+                if (!MatchesAnyLayout(device, layouts)) continue;
+                selected.Add(device);
+            }
+
+            return selected.Count > 0;
         }
 
         private static bool TryMatchControlScheme(

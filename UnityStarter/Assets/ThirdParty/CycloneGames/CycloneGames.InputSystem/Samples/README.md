@@ -13,6 +13,7 @@ Work through the sample in this order:
 3. Follow `OnPlayerInputReady` from input player to spawned GameObject.
 4. Bind generated action identities to commands in a gameplay context.
 5. Verify cancellation, subscription cleanup, context disposal, and manager shutdown.
+6. Switch one player between keyboard/mouse and a gamepad without re-joining.
 
 ## Contents
 
@@ -22,18 +23,18 @@ Work through the sample in this order:
 | `GameInitializer_Sample.cs` | Owns initialization, join policy, subscriptions, spawned players, and shutdown. |
 | `SimplePlayerController.cs` | Receives commands and owns its runtime material instance. |
 | `Generated/InputActions.cs` | Deterministic constants generated from the sample configuration. |
-| `Fixtures/input_config.yaml` | Versioned authoring fixture used only when running this sample. |
+| `Fixtures/input_config.txt` | Versioned authoring fixture used only when running this sample. |
+| `Fixtures/input_config_mixed.txt` | Single-player fixture that pairs keyboard, mouse, and gamepad at once. |
 
 ## Run the sample
 
-1. Create `Assets/StreamingAssets` only for this sample run if the folder does not exist.
-2. Copy `Samples/Fixtures/input_config.yaml` to `Assets/StreamingAssets/input_config.yaml`.
-3. Open `Samples/SampleScene.unity`.
-4. Select `InputManagerSample` and choose a `Startup Mode`.
-5. Confirm that the player prefab, spawn points, and colors are assigned.
-6. Enter Play Mode with devices appropriate for the selected mode.
+1. Open `Samples/SampleScene.unity`.
+2. Select `InputManagerSample` and confirm that `Configuration` and `Mixed Configuration` reference the fixtures in `Samples/Fixtures`.
+3. Choose a `Startup Mode`.
+4. Confirm that the player prefab, spawn points, and colors are assigned.
+5. Enter Play Mode with devices appropriate for the selected mode.
 
-The foundation project does not require a configuration in `StreamingAssets`. This sample selects that adapter to make its data flow visible. A product may instead use a `TextAsset`, Addressables-backed source, remote source, or another bounded `IInputConfigurationSource`.
+The scene carries its configuration as `TextAsset` references, so nothing has to be copied into `StreamingAssets`. A product may instead use a `StreamingAssets` file, Addressables, a remote source, or another bounded `IInputConfigurationSource`. User overrides still go through `FileInputConfigurationStore`, which writes to `persistentDataPath`.
 
 ## Stage 1: Read the configuration
 
@@ -52,19 +53,15 @@ Regenerate `InputActions.cs` after changing a context name, action-map name, or 
 
 ## Stage 2: Load and initialize
 
-`GameInitializer_Sample` creates an explicit default source and user store:
+`GameInitializer_Sample` reads the authored configuration from a `TextAsset` reference and keeps user overrides in a store on `persistentDataPath`:
 
 ```csharp
-string defaultConfigUri = UnityFileUri.Create(
-    "input_config.yaml",
-    UnityFileLocation.StreamingAssets);
-
 var userStore = new FileInputConfigurationStore(
     Application.persistentDataPath);
 
 InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
-    new UriInputConfigurationSource(),
-    defaultConfigUri,
+    new TextAssetInputConfigurationSource(_configuration),
+    _configuration.name,
     userStore,
     "user_input_settings.yaml",
     InputManager.Instance,
@@ -87,6 +84,7 @@ The bootstrap continues only after a successful load. Its cancellation token bel
 | `AutoJoinSharedKeyboard` | Creates players `0` and `1` on shared devices. | Two-player keyboard test. |
 | `LobbyWithDeviceLocking` | Listens for join actions and locks participating devices. | Local multiplayer lobby. |
 | `LobbyWithSharedDevices` | Listens for join actions while allowing shared devices. | Shared-device party controls. |
+| `AutoJoinMixedDevices` | Creates player `0` and pairs every referenced device. | One player switching between gamepad and keyboard/mouse. |
 
 Join failure is handled as initialization failure in the sample. A product can instead show a bounded retry UI, a device-selection screen, or an explicit cancel action.
 
@@ -145,6 +143,14 @@ inputPlayer.ActiveDeviceKind
     .Subscribe(kind => UpdatePromptSet(kind))
     .AddTo(controller.destroyCancellationToken);
 ```
+
+The sample tints the player object instead of swapping prompt sets, so a takeover is visible in the scene:
+
+```csharp
+if (controller != null) controller.ApplyDeviceTint(kind);
+```
+
+A takeover only reaches the player if the device is paired. Under a locked control scheme only that scheme's devices are paired, so the other device cannot drive anything regardless of its bindings. `pairAllMatchingDevices: true` on the player slot pairs every device the configuration references and leaves the scheme unset, which is what `Fixtures/input_config_mixed.txt` uses. It claims those devices for that player, so it is a single-player setting.
 
 Treat this as presentation state. Device ownership and join policy remain the manager's responsibility.
 

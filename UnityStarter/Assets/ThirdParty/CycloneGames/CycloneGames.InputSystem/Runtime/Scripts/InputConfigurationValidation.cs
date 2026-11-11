@@ -203,6 +203,7 @@ namespace CycloneGames.InputSystem.Runtime
             PlayerId = source.PlayerId;
             JoinAction = source.JoinAction == null ? null : new RuntimeActionBindingConfig(source.JoinAction);
             DefaultControlScheme = source.DefaultControlScheme;
+            PairAllMatchingDevices = source.PairAllMatchingDevices;
 
             var contexts = new RuntimeContextDefinitionConfig[source.Contexts.Count];
             for (int i = 0; i < contexts.Length; i++)
@@ -227,6 +228,7 @@ namespace CycloneGames.InputSystem.Runtime
         public IReadOnlyList<RuntimeContextDefinitionConfig> Contexts { get; }
         public IReadOnlyList<RuntimeControlSchemeConfig> ControlSchemes { get; }
         public string DefaultControlScheme { get; }
+        public bool PairAllMatchingDevices { get; }
     }
 
     internal sealed class RuntimeContextDefinitionConfig
@@ -1476,7 +1478,8 @@ namespace CycloneGames.InputSystem.Runtime
                         JoinAction = CloneAction(player.JoinAction),
                         Contexts = CloneContexts(player.Contexts),
                         ControlSchemes = CloneControlSchemes(player.ControlSchemes),
-                        DefaultControlScheme = player.DefaultControlScheme
+                        DefaultControlScheme = player.DefaultControlScheme,
+                        PairAllMatchingDevices = player.PairAllMatchingDevices
                     });
             }
 
@@ -1735,7 +1738,8 @@ namespace CycloneGames.InputSystem.Runtime
             new SchemaKeyDefinition("joinAction", SchemaValueKind.Object, SchemaMappingType.Action),
             new SchemaKeyDefinition("contexts", SchemaValueKind.MappingSequence, SchemaMappingType.Context),
             new SchemaKeyDefinition("controlSchemes", SchemaValueKind.MappingSequence, SchemaMappingType.ControlScheme),
-            new SchemaKeyDefinition("defaultControlScheme")
+            new SchemaKeyDefinition("defaultControlScheme"),
+            new SchemaKeyDefinition("pairAllMatchingDevices")
         };
 
         private static readonly SchemaKeyDefinition[] ContextKeys =

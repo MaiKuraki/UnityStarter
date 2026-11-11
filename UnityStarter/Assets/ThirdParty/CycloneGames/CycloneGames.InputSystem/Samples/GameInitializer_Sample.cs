@@ -9,7 +9,6 @@ using R3;
 
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.InputSystem.Runtime.Generated;
-using CycloneGames.IO.Unity;
 using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Sample
@@ -23,7 +22,8 @@ namespace CycloneGames.InputSystem.Sample
             AutoJoinLockedSinglePlayer,
             AutoJoinSharedKeyboard,
             LobbyWithDeviceLocking,
-            LobbyWithSharedDevices
+            LobbyWithSharedDevices,
+            AutoJoinMixedDevices
         }
 
         [Header("Game Mode")]
@@ -35,7 +35,8 @@ namespace CycloneGames.InputSystem.Sample
         [SerializeField] private Color[] _playerColors;
 
         [Header("Input Configuration")]
-        [SerializeField] private string _defaultConfigName = "input_config.yaml";
+        [SerializeField] private TextAsset _configuration;
+        [SerializeField] private TextAsset _mixedConfiguration;
         [SerializeField] private string _userConfigName = "user_input_settings.yaml";
 
         private static GameInitializer_Sample _owner;
@@ -87,14 +88,20 @@ namespace CycloneGames.InputSystem.Sample
             _ownsInputManager = true;
             try
             {
-                string defaultConfigUri = UnityFileUri.Create(
-                    _defaultConfigName,
-                    UnityFileLocation.StreamingAssets);
+                TextAsset configurationAsset = startupMode == StartupMode.AutoJoinMixedDevices
+                    ? _mixedConfiguration
+                    : _configuration;
+                if (configurationAsset == null)
+                {
+                    throw new InvalidOperationException(
+                        "Assign a configuration TextAsset on the InputManagerSample component.");
+                }
+
                 var userStore = new FileInputConfigurationStore(
                     Application.persistentDataPath);
                 InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
-                    new UriInputConfigurationSource(),
-                    defaultConfigUri,
+                    new TextAssetInputConfigurationSource(configurationAsset),
+                    configurationAsset.name,
                     userStore,
                     _userConfigName,
                     InputManager.Instance,
@@ -138,6 +145,7 @@ namespace CycloneGames.InputSystem.Sample
             switch (startupMode)
             {
                 case StartupMode.AutoJoinLockedSinglePlayer:
+                case StartupMode.AutoJoinMixedDevices:
                     EnsurePlayerJoined(
                         await InputManager.Instance.JoinSinglePlayerAsync(
                             0,
@@ -238,6 +246,26 @@ namespace CycloneGames.InputSystem.Sample
                 : Color.white;
             controller.Initialize(playerId, playerColor);
 
+            if (inputPlayer is InputPlayer concretePlayer)
+            {
+                var pairedBuilder = new System.Text.StringBuilder();
+                var pairedDevices = concretePlayer.User.pairedDevices;
+                for (int i = 0; i < pairedDevices.Count; i++)
+                {
+                    if (i > 0) pairedBuilder.Append(", ");
+                    pairedBuilder.Append(pairedDevices[i].layout);
+                }
+
+                string pairedText = pairedBuilder.Length == 0 ? "<none>" : pairedBuilder.ToString();
+                Log.Info(
+                    (PlayerId: playerId, Paired: pairedText),
+                    static (state, builder) => builder
+                        .Append("[Sample] Player ")
+                        .Append(state.PlayerId)
+                        .Append(" paired devices: ")
+                        .Append(state.Paired));
+            }
+
             var gameplayContext = new InputContext(
                     InputActions.ActionMaps.PlayerActions,
                     InputActions.Contexts.Gameplay)
@@ -254,13 +282,17 @@ namespace CycloneGames.InputSystem.Sample
             gameplayContext.AddTo(controller.destroyCancellationToken);
             inputPlayer.PushContext(gameplayContext);
             inputPlayer.ActiveDeviceKind
-                .Subscribe(kind => Log.Info(
-                    (PlayerId: playerId, Kind: kind),
-                    static (state, builder) => builder
-                        .Append("Player ")
-                        .Append(state.PlayerId)
-                        .Append(" active device changed to: ")
-                        .Append(state.Kind)))
+                .Subscribe(kind =>
+                {
+                    Log.Info(
+                        (PlayerId: playerId, Kind: kind),
+                        static (state, builder) => builder
+                            .Append("Player ")
+                            .Append(state.PlayerId)
+                            .Append(" active device changed to: ")
+                            .Append(state.Kind));
+                    if (controller != null) controller.ApplyDeviceTint(kind);
+                })
                 .AddTo(controller.destroyCancellationToken);
         }
 

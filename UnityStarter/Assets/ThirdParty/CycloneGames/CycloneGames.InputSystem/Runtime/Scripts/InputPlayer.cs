@@ -279,7 +279,15 @@ namespace CycloneGames.InputSystem.Runtime
             try
             {
                 _inputActionAsset = BuildAssetFromConfig(config);
-                User.AssociateActionsWithUser(_inputActionAsset);
+
+                // Associating an asset with a user routes input through that user's scheme bindings, which assign
+                // exactly one device per requirement. A player that should answer to several devices at once must
+                // stay unassociated so the actions read every attached device directly.
+                if (!config.PairAllMatchingDevices)
+                {
+                    User.AssociateActionsWithUser(_inputActionAsset);
+                }
+
                 InputUser.onChange += OnInputUserChanged;
                 _userChangeSubscribed = true;
                 if (initialDevice != null)

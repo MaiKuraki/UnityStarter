@@ -13,6 +13,7 @@
 3. 从 `OnPlayerInputReady` 跟踪 input player 到场景 GameObject 的创建过程。
 4. 在 gameplay context 中把 generated action identity 绑定到 command。
 5. 验证 cancellation、subscription cleanup、context disposal 与 manager shutdown。
+6. 让单个 player 在键鼠与手柄之间切换，无需重新 join。
 
 ## 文件内容
 
@@ -22,18 +23,18 @@
 | `GameInitializer_Sample.cs` | 持有 initialization、join policy、subscription、spawned player 与 shutdown。 |
 | `SimplePlayerController.cs` | 接收 command，并持有自己的 runtime material instance。 |
 | `Generated/InputActions.cs` | 从示例配置生成的确定性常量。 |
-| `Fixtures/input_config.yaml` | 仅供运行示例时使用的 versioned authoring fixture。 |
+| `Fixtures/input_config.txt` | 仅供运行示例时使用的 versioned authoring fixture。 |
+| `Fixtures/input_config_mixed.txt` | 单人 fixture，同时配对键盘、鼠标与手柄。 |
 
 ## 运行示例
 
-1. 仅在运行此示例时创建 `Assets/StreamingAssets`，如果目录已经存在则直接使用。
-2. 将 `Samples/Fixtures/input_config.yaml` 复制到 `Assets/StreamingAssets/input_config.yaml`。
-3. 打开 `Samples/SampleScene.unity`。
-4. 选中 `InputManagerSample`，选择一个 `Startup Mode`。
-5. 确认 player prefab、spawn point 与 color 已赋值。
-6. 连接所选模式需要的设备并进入 Play Mode。
+1. 打开 `Samples/SampleScene.unity`。
+2. 选中 `InputManagerSample`，确认 `Configuration` 与 `Mixed Configuration` 已引用 `Samples/Fixtures` 下的 fixture。
+3. 选择一个 `Startup Mode`。
+4. 确认 player prefab、spawn point 与 color 已赋值。
+5. 连接所选模式需要的设备并进入 Play Mode。
 
-底层工程不要求 `StreamingAssets` 中存在输入配置。此示例选择该 adapter，是为了让数据流容易观察。产品也可以采用 `TextAsset`、Addressables-backed source、remote source，或其他有预算边界的 `IInputConfigurationSource`。
+场景通过 `TextAsset` 引用携带配置，不需要往 `StreamingAssets` 复制任何文件。产品也可以改用 `StreamingAssets` 文件、Addressables、remote source，或其他有预算边界的 `IInputConfigurationSource`。用户覆盖设置仍走 `FileInputConfigurationStore`，写入 `persistentDataPath`。
 
 ## 阶段 1：阅读配置
 
@@ -52,19 +53,15 @@ InputActions.Actions.Gameplay_Confirm
 
 ## 阶段 2：加载并初始化
 
-`GameInitializer_Sample` 显式创建 default source 与 user store：
+`GameInitializer_Sample` 从 `TextAsset` 引用读取 authoring 配置，用户覆盖设置则由 `persistentDataPath` 上的 store 管理：
 
 ```csharp
-string defaultConfigUri = UnityFileUri.Create(
-    "input_config.yaml",
-    UnityFileLocation.StreamingAssets);
-
 var userStore = new FileInputConfigurationStore(
     Application.persistentDataPath);
 
 InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
-    new UriInputConfigurationSource(),
-    defaultConfigUri,
+    new TextAssetInputConfigurationSource(_configuration),
+    _configuration.name,
     userStore,
     "user_input_settings.yaml",
     InputManager.Instance,
@@ -87,6 +84,7 @@ if (!result.IsSuccess)
 | `AutoJoinSharedKeyboard` | 在共享设备上创建 player `0` 与 `1`。 | 双人键盘测试。 |
 | `LobbyWithDeviceLocking` | 监听 join action，并锁定参与设备。 | 本地多人 lobby。 |
 | `LobbyWithSharedDevices` | 监听 join action，同时允许共享设备。 | 共享设备的聚会控制。 |
+| `AutoJoinMixedDevices` | 创建 player `0`，并配对配置引用的全部设备。 | 单个 player 在手柄与键鼠之间切换。 |
 
 示例把 join failure 视为 initialization failure。产品可以提供有次数限制的重试 UI、设备选择界面或显式取消操作。
 
@@ -145,6 +143,14 @@ inputPlayer.ActiveDeviceKind
     .Subscribe(kind => UpdatePromptSet(kind))
     .AddTo(controller.destroyCancellationToken);
 ```
+
+示例改为给 player 对象染色而不是切换提示集，这样接管在场景里就能看到：
+
+```csharp
+if (controller != null) controller.ApplyDeviceTint(kind);
+```
+
+只有设备被配对，接管才能生效。锁定 scheme 时只配对该 scheme 需要的设备，另一台设备无论 binding 怎么写都驱动不了任何 action。在 player slot 上设置 `pairAllMatchingDevices: true` 会配对配置引用的全部设备并保持 scheme 未激活，`Fixtures/input_config_mixed.txt` 用的就是这种方式。它会把那些设备占为该 player 专用，因此只适用于单人。
 
 它属于 presentation state。设备所有权与 join policy 仍由 manager 负责。
 
