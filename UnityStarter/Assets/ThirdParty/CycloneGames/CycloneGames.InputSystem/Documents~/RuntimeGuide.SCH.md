@@ -266,10 +266,12 @@ manager.Dispose();
 | --- | --- | --- |
 | Player 创建返回 `null` | 没有 device 匹配 declared scheme，或 device 已配对/保留 | 检查 Input Debugger 中的 paired user 和 device availability。 |
 | Context command 不触发 | Context 未 push、identity 大小写不匹配或 context 被更高 priority 阻止 | 验证 `ActiveContextName` 和 context push 顺序。 |
-| `ActiveDeviceKind` 持续显示 `Unknown` | 尚无 action 收到有意义的 device input | 触发一个已配置的 action；`ActiveDeviceKind` 反映观察到的 activity。 |
+| `ActiveDeviceKind` 持续显示 `Unknown` | 尚无 action 收到有意义的 device input | 触发一个已配置的 action；或订阅 `InputPlayer.DeviceActivity`，获取带完整设备身份的按钮级活动。 |
 | Rebind 不生效 | `oldBinding` 使用错误路径或 action identity 不匹配 | 使用 context-qualified 重载和原始配置路径。 |
 | Binding profile import 失败 | Schema 不匹配、identity selector 过时或 budget 超出 | 保持 defaults active、保留 profile、提供产品自有 reset。 |
 | Manager 意外 disposed | Domain-reload-disabled play 时触发 subsystem registration | 在 teardown 时显式 dispose manager；下一 session 构造新实例。 |
+| `action.controls` 能解析但永不触发 | 未 push context，action map 一直处于 disabled | join 后 push context。`controls` 的解析与 `enabled` 相互独立，不能用它判断输入是否可用。 |
+| `ReassignPlayerDevices` 后输入静默失效 | 重分配会构造新的 `InputPlayer`，旧订阅与 context 栈不会迁移 | 在返回的新实例上重新 push context 并重新订阅。 |
 
 ### 生产检查清单
 
@@ -280,3 +282,4 @@ manager.Dispose();
 - Configuration 与 profile store 有有限 budget。
 - Log 记录 status 与有界 diagnostic，不记录 raw user configuration。
 - Target Player build 验证 device layout、AOT/stripping、storage、suspend/resume 与 reconnect behavior。
+- `Tests/PlayMode/InputSystemEndToEndPlayModeTests.cs` 在编辑器中通过。它是唯一能观测到 `performed` 回调的覆盖；EditMode 断言只证明 graph 形状。

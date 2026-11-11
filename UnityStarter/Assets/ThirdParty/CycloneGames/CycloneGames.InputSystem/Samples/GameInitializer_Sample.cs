@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 
 using UnityEngine;
@@ -9,7 +10,6 @@ using R3;
 
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.InputSystem.Runtime.Generated;
-using CycloneGames.IO.Unity;
 using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Sample
@@ -23,7 +23,10 @@ namespace CycloneGames.InputSystem.Sample
             AutoJoinLockedSinglePlayer,
             AutoJoinSharedKeyboard,
             LobbyWithDeviceLocking,
-            LobbyWithSharedDevices
+            LobbyWithSharedDevices,
+            AutoJoinMixedDevices,
+            // Append-only: existing serialized integer values must keep their meaning.
+            AutoJoinKeyboardMouseVsGamepad
         }
 
         [Header("Game Mode")]
@@ -35,7 +38,8 @@ namespace CycloneGames.InputSystem.Sample
         [SerializeField] private Color[] _playerColors;
 
         [Header("Input Configuration")]
-        [SerializeField] private string _defaultConfigName = "input_config.yaml";
+        [SerializeField] private TextAsset _configuration;
+        [SerializeField] private TextAsset _mixedConfiguration;
         [SerializeField] private string _userConfigName = "user_input_settings.yaml";
 
         private static GameInitializer_Sample _owner;
@@ -87,16 +91,30 @@ namespace CycloneGames.InputSystem.Sample
             _ownsInputManager = true;
             try
             {
-                string defaultConfigUri = UnityFileUri.Create(
-                    _defaultConfigName,
-                    UnityFileLocation.StreamingAssets);
+                TextAsset configurationAsset = UsesMixedConfiguration()
+                    ? _mixedConfiguration
+                    : _configuration;
+                if (configurationAsset == null)
+                {
+                    throw new InvalidOperationException(
+                        "Assign a configuration TextAsset on the InputManagerSample component.");
+                }
+
+                // Every startup mode gets its own user key and never persists the authored fixture. A shared
+                // key plus implicit persistence made a previously saved mixed configuration override the
+                // locked fixture on the next run, so SingleLock and Mixed appeared identical.
+                string userKey = BuildUserKey();
                 var userStore = new FileInputConfigurationStore(
                     Application.persistentDataPath);
-                InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
-                    new UriInputConfigurationSource(),
-                    defaultConfigUri,
+                var options = new InputSystemBootstrapOptions(
+                    InputSystemBootstrapMode.Required,
+                    new TextAssetInputConfigurationSource(configurationAsset),
+                    configurationAsset.name,
                     userStore,
-                    _userConfigName,
+                    userKey,
+                    persistDefaultToUser: false);
+                InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
+                    options,
                     InputManager.Instance,
                     false,
                     cancellationToken);
@@ -105,6 +123,15 @@ namespace CycloneGames.InputSystem.Sample
                     throw new InvalidOperationException(
                         $"Input initialization failed with status {loadResult.Status}: {loadResult.Error}");
                 }
+
+                Log.Info(
+                    (Mode: startupMode.ToString(), Fixture: configurationAsset.name, Key: userKey,
+                        Source: loadResult.Status.ToString()),
+                    static (state, builder) => builder
+                        .Append("[GameInitializer_Sample] mode=").Append(state.Mode)
+                        .Append(" fixture=").Append(state.Fixture)
+                        .Append(" userKey=").Append(state.Key)
+                        .Append(" source=").Append(state.Source));
 
                 cancellationToken.ThrowIfCancellationRequested();
                 await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
@@ -138,6 +165,7 @@ namespace CycloneGames.InputSystem.Sample
             switch (startupMode)
             {
                 case StartupMode.AutoJoinLockedSinglePlayer:
+                case StartupMode.AutoJoinMixedDevices:
                     EnsurePlayerJoined(
                         await InputManager.Instance.JoinSinglePlayerAsync(
                             0,
@@ -166,9 +194,41 @@ namespace CycloneGames.InputSystem.Sample
                     InputManager.Instance.StartListeningForPlayers(false);
                     break;
 
+                case StartupMode.AutoJoinKeyboardMouseVsGamepad:
+                    // Player 0 naturally claims keyboard/mouse with the first matching control scheme;
+                    // with those devices unavailable, player 1 falls through to the Gamepad scheme.
+                    EnsurePlayerJoined(InputManager.Instance.JoinSinglePlayer(0), 0);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    IInputPlayer secondPlayer = InputManager.Instance.JoinSinglePlayer(1);
+                    if (secondPlayer == null)
+                    {
+                        Log.Warning(
+                            "[GameInitializer_Sample] Player 1 could not join with a gamepad; " +
+                            "connect a gamepad and restart the scene for this mode.");
+                    }
+
+                    break;
+
                 default:
                     throw new ArgumentOutOfRangeException();
             }
+        }
+
+        private bool UsesMixedConfiguration()
+        {
+            return startupMode == StartupMode.AutoJoinMixedDevices;
+        }
+
+        private string BuildUserKey()
+        {
+            string configured = string.IsNullOrWhiteSpace(_userConfigName)
+                ? "user_input_settings.yaml"
+                : _userConfigName;
+            string extension = Path.GetExtension(configured);
+            if (string.IsNullOrEmpty(extension)) extension = ".yaml";
+            string stem = Path.GetFileNameWithoutExtension(configured);
+            if (string.IsNullOrEmpty(stem)) stem = "user_input_settings";
+            return stem + "_" + startupMode + extension;
         }
 
         private static void EnsurePlayerJoined(IInputPlayer inputPlayer, int playerId)
@@ -238,6 +298,26 @@ namespace CycloneGames.InputSystem.Sample
                 : Color.white;
             controller.Initialize(playerId, playerColor);
 
+            if (inputPlayer is InputPlayer concretePlayer)
+            {
+                var pairedBuilder = new System.Text.StringBuilder();
+                var pairedDevices = concretePlayer.User.pairedDevices;
+                for (int i = 0; i < pairedDevices.Count; i++)
+                {
+                    if (i > 0) pairedBuilder.Append(", ");
+                    pairedBuilder.Append(pairedDevices[i].layout);
+                }
+
+                string pairedText = pairedBuilder.Length == 0 ? "<none>" : pairedBuilder.ToString();
+                Log.Info(
+                    (PlayerId: playerId, Paired: pairedText),
+                    static (state, builder) => builder
+                        .Append("[Sample] Player ")
+                        .Append(state.PlayerId)
+                        .Append(" paired devices: ")
+                        .Append(state.Paired));
+            }
+
             var gameplayContext = new InputContext(
                     InputActions.ActionMaps.PlayerActions,
                     InputActions.Contexts.Gameplay)
@@ -254,13 +334,17 @@ namespace CycloneGames.InputSystem.Sample
             gameplayContext.AddTo(controller.destroyCancellationToken);
             inputPlayer.PushContext(gameplayContext);
             inputPlayer.ActiveDeviceKind
-                .Subscribe(kind => Log.Info(
-                    (PlayerId: playerId, Kind: kind),
-                    static (state, builder) => builder
-                        .Append("Player ")
-                        .Append(state.PlayerId)
-                        .Append(" active device changed to: ")
-                        .Append(state.Kind)))
+                .Subscribe(kind =>
+                {
+                    Log.Info(
+                        (PlayerId: playerId, Kind: kind),
+                        static (state, builder) => builder
+                            .Append("Player ")
+                            .Append(state.PlayerId)
+                            .Append(" active device changed to: ")
+                            .Append(state.Kind));
+                    if (controller != null) controller.ApplyDeviceTint(kind);
+                })
                 .AddTo(controller.destroyCancellationToken);
         }
 

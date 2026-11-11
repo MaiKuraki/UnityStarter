@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.InputSystem.Runtime;
 using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Sample
@@ -75,6 +76,26 @@ namespace CycloneGames.InputSystem.Sample
                     .Append(playerId)
                     .Append(": Confirm LONG-PRESSED!"));
             transform.localScale *= 1.1f;
+        }
+
+        /// <summary>
+        /// Tints the player with the kind of device that last produced input, so a takeover is visible without
+        /// reading the console. The authored colour returns when the kind is unknown.
+        /// </summary>
+        public void ApplyDeviceTint(InputDeviceKind kind)
+        {
+            if (_runtimeMaterial == null)
+            {
+                return;
+            }
+
+            _runtimeMaterial.color = kind switch
+            {
+                InputDeviceKind.Gamepad => Color.Lerp(_playerColor, new Color(1f, 0.35f, 0.2f), 0.6f),
+                InputDeviceKind.KeyboardMouse => Color.Lerp(_playerColor, new Color(0.2f, 0.8f, 1f), 0.6f),
+                InputDeviceKind.Touchscreen => Color.Lerp(_playerColor, new Color(1f, 0.9f, 0.3f), 0.6f),
+                _ => _playerColor
+            };
         }
     }
 }

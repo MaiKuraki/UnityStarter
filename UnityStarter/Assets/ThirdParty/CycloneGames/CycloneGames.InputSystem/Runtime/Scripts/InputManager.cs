@@ -1,3 +1,4 @@
+using CycloneGames.Hash.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using R3;
@@ -28,6 +29,12 @@ namespace CycloneGames.InputSystem.Runtime
         private static readonly ProfilerMarker InitializeMarker = new ProfilerMarker("CycloneGames.Input.Initialize");
         private static readonly ProfilerMarker JoinMarker = new ProfilerMarker("CycloneGames.Input.JoinPlayer");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+        private static readonly InputConfigurationPreflightResult CachedPreflightSuccess =
+            new InputConfigurationPreflightResult(InputConfigurationPreflightStatus.Success, null);
+
+        private ulong _cachedPreflightContentHash;
+        private bool _hasCachedPreflightSuccess;
 
         private static InputManager _compatibilityInstance;
         private static int _listeningManagerCount;
@@ -96,6 +103,11 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<int, IInputPlayer> _registeredPlayers = new Dictionary<int, IInputPlayer>();
         private readonly HashSet<int> _joinsInProgress = new HashSet<int>();
         private readonly HashSet<int> _reservedDeviceIds = new HashSet<int>();
+        // Snapshot of device IDs already paired to any InputUser. Rebuilt once per device-topology revision
+        // so IsDeviceClaimable stays O(1) instead of scanning every user and every paired device.
+        private readonly HashSet<int> _claimedDeviceIds = new HashSet<int>();
+        private bool _claimedDeviceIdsValid;
+        private bool _isReassigning;
         private readonly Dictionary<int, string> _bindingOverridesByPlayer = new Dictionary<int, string>();
         private readonly InputConfigurationLimits _limits;
         private InputConfiguration _configuration;
@@ -141,6 +153,13 @@ namespace CycloneGames.InputSystem.Runtime
         {
             get { EnsureMainThread(); return _registeredPlayers.Count; }
         }
+
+        /// <summary>
+        /// When enabled, a device-topology change re-joins any registered player whose InputUser has lost
+        /// all paired devices, using the devices that are still available. Disabled by default so products
+        /// keep explicit control over rejoin timing and player-ready notifications.
+        /// </summary>
+        public bool AutoReassignOnDeviceLoss { get; set; }
 
         public InputManagerMemoryStats GetMemoryStats()
         {
@@ -296,10 +315,12 @@ namespace CycloneGames.InputSystem.Runtime
                 }
 
                 InputConfiguration parsed;
+                byte[] configurationBytes = null;
                 try
                 {
                     string normalized = NormalizeLineEndings(yamlContent);
-                    parsed = YamlSerializer.Deserialize<InputConfiguration>(StrictUtf8.GetBytes(normalized));
+                    configurationBytes = StrictUtf8.GetBytes(normalized);
+                    parsed = YamlSerializer.Deserialize<InputConfiguration>(configurationBytes);
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
@@ -321,7 +342,7 @@ namespace CycloneGames.InputSystem.Runtime
                 }
 
                 InputConfigurationPreflightResult preflight =
-                    InputSystemConfigurationPreflight.Run(validation.RuntimeConfiguration);
+                    RunOrReusePreflight(configurationBytes, validation.RuntimeConfiguration);
                 if (!preflight.IsSuccess)
                 {
                     string message = preflight.Issues.Count == 0
@@ -410,6 +431,33 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
+        /// <summary>
+        /// Reuses the verdict of an identical configuration. Only successful verdicts are cached: a rejected
+        /// configuration has to be re-validated because the Input System registry can gain new interaction,
+        /// processor or composite types between attempts, whereas a successful verdict stays valid because the
+        /// registry never loses types while the process runs.
+        /// </summary>
+        private InputConfigurationPreflightResult RunOrReusePreflight(
+            byte[] configurationBytes,
+            RuntimeInputConfiguration runtimeConfiguration)
+        {
+            ulong contentHash = configurationBytes == null ? 0UL : Fnv1a64.Compute(configurationBytes);
+            if (configurationBytes != null && _hasCachedPreflightSuccess && contentHash == _cachedPreflightContentHash)
+            {
+                return CachedPreflightSuccess;
+            }
+
+            InputConfigurationPreflightResult result =
+                InputSystemConfigurationPreflight.Run(runtimeConfiguration);
+            if (result.IsSuccess && configurationBytes != null)
+            {
+                _cachedPreflightContentHash = contentHash;
+                _hasCachedPreflightSuccess = true;
+            }
+
+            return result;
+        }
+
         private InputManagerInitializationResult SetInitializationFailure(InputManagerInitializationStatus status, string message)
         {
             LastInitializationResult = new InputManagerInitializationResult(status, message, null);
@@ -475,6 +523,13 @@ namespace CycloneGames.InputSystem.Runtime
                     }
 
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    // Yield between players so a batch join does not spend every player's construction cost inside
+                    // one frame. The last player needs no trailing wait, otherwise every batch pays one extra frame.
+                    if (i + 1 < playerIdSnapshot.Length)
+                    {
+                        await UniTask.Yield(PlayerLoopTiming.Update, linked.Token);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -607,6 +662,7 @@ namespace CycloneGames.InputSystem.Runtime
             finally
             {
                 _joinsInProgress.Remove(playerIdToJoin);
+                InvalidateClaimedDeviceIds();
             }
         }
 
@@ -771,32 +827,14 @@ namespace CycloneGames.InputSystem.Runtime
         private void OnJoinAction(InputAction.CallbackContext context)
         {
             if (_isConfigurationTransitioning || _isDisposed) return;
+            InvalidateClaimedDeviceIds();
             InputDevice device = context.control?.device;
             if (device == null || !IsDeviceClaimable(device)) return;
-            if (_isDeviceLockingOnJoinEnabled)
-            {
-                int playerId = GetPrimaryPlayerId();
-                if (_registeredPlayers.TryGetValue(playerId, out IInputPlayer existing) && existing is InputPlayer inputPlayer)
-                {
-                    RuntimePlayerSlotConfig playerConfig = GetRuntimePlayerConfig(playerId, false);
-                    if (playerConfig == null || !CanPairAdditionalDevice(playerConfig, device)) return;
-                    try
-                    {
-                        InputUser.PerformPairingWithDevice(device, inputPlayer.User);
-                    }
-                    catch (Exception exception) when (IsRecoverableException(exception))
-                    {
-                        Log.Error(
-                            exception,
-                            $"{DEBUG_FLAG} Additional join device could not be paired.");
-                    }
-                    return;
-                }
 
-                JoinPlayerAndLockDevice(playerId, device);
-                return;
-            }
-
+            // A join key always creates a player while unregistered slots remain. Only when every declared
+            // slot is occupied does it extend the primary player's device set, which is the single-player
+            // hot-plug case. Previously the locking branch always paired the device to player zero, so a
+            // second local player could never register from a gamepad.
             RuntimePlayerSlotConfig fallback = null;
             for (int i = 0; i < _runtimeConfiguration.PlayerSlots.Count; i++)
             {
@@ -805,12 +843,56 @@ namespace CycloneGames.InputSystem.Runtime
                 fallback ??= slot;
                 if (slot.JoinAction != null && MatchesAnyJoinBinding(slot.JoinAction.DeviceBindings, device))
                 {
-                    TryJoinFromDevice(slot, device);
+                    JoinFromDevice(slot, device);
                     return;
                 }
             }
 
-            if (fallback != null) TryJoinFromDevice(fallback, device);
+            if (fallback != null)
+            {
+                JoinFromDevice(fallback, device);
+                return;
+            }
+
+            PairAdditionalDevice(GetPrimaryPlayerId(), device);
+        }
+
+        private void JoinFromDevice(RuntimePlayerSlotConfig slot, InputDevice device)
+        {
+            if (_isDeviceLockingOnJoinEnabled) JoinPlayerAndLockDevice(slot.PlayerId, device);
+            else TryJoinFromDevice(slot, device);
+        }
+
+        /// <summary>
+        /// Explicitly pairs one more device to an already joined player. This never creates a player, so a
+        /// single-player session can hot-plug a second device without changing local-multiplayer registration.
+        /// Returns false for a disposed player, an unclaimable device, or a layout the slot does not declare.
+        /// </summary>
+        public bool PairAdditionalDevice(int playerId, InputDevice device)
+        {
+            if (!ValidateMainThread(nameof(PairAdditionalDevice)) || device == null) return false;
+            if (_isDisposed || !_isInitialized || _isConfigurationTransitioning) return false;
+            if (!_registeredPlayers.TryGetValue(playerId, out IInputPlayer player) ||
+                player is not InputPlayer inputPlayer) return false;
+
+            RuntimePlayerSlotConfig config = GetRuntimePlayerConfig(playerId, false);
+            if (config == null || !CanPairAdditionalDevice(config, device)) return false;
+            InvalidateClaimedDeviceIds();
+            if (!IsDeviceClaimable(device)) return false;
+
+            try
+            {
+                InputUser.PerformPairingWithDevice(device, inputPlayer.User);
+                InvalidateClaimedDeviceIds();
+                return true;
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Additional join device could not be paired.");
+                return false;
+            }
         }
 
         private void TryJoinFromDevice(RuntimePlayerSlotConfig config, InputDevice device)
@@ -876,6 +958,7 @@ namespace CycloneGames.InputSystem.Runtime
                 finally
                 {
                     ReleaseReservedDevices(devices);
+                    InvalidateClaimedDeviceIds();
                 }
             }
         }
@@ -960,7 +1043,13 @@ namespace CycloneGames.InputSystem.Runtime
         {
             selected = null;
             schemeName = null;
+            InvalidateClaimedDeviceIds();
             List<InputDevice> available = GetClaimableDevices(mustInclude);
+            if (config.PairAllMatchingDevices)
+            {
+                return TryCollectEveryMatchingDevice(config, available, mustInclude, out selected);
+            }
+
             if (config.ControlSchemes.Count > 0)
             {
                 if (!string.IsNullOrEmpty(config.DefaultControlScheme) &&
@@ -997,6 +1086,51 @@ namespace CycloneGames.InputSystem.Runtime
             if (selected.Count == 0) return false;
             AddKeyboardMouseCompanion(available, selected);
             return true;
+        }
+
+        /// <summary>
+        /// Selects every claimable device whose layout the configuration references and leaves the control scheme
+        /// unset, so bindings on all of them stay active. Used when one local player must keep responding to both a
+        /// gamepad and keyboard/mouse without re-joining.
+        /// </summary>
+        private bool TryCollectEveryMatchingDevice(
+            RuntimePlayerSlotConfig config,
+            List<InputDevice> available,
+            InputDevice mustInclude,
+            out List<InputDevice> selected)
+        {
+            selected = new List<InputDevice>(4);
+            if (mustInclude != null)
+            {
+                if (!IsDeviceClaimable(mustInclude)) return false;
+                selected.Add(mustInclude);
+            }
+
+            List<string> layouts = GetCandidateLayouts(config);
+            int perLayoutLimit = Math.Max(1, config.MaxDevicesPerLayout);
+            // One budget per referenced layout. A device counts against the first candidate layout it derives
+            // from, so derived layouts (for example DualShockGamepad) share the Gamepad budget. Without this
+            // bound a single player would claim every attached keyboard, mouse and gamepad and no other
+            // local player could join.
+            var claimedPerLayout = new int[layouts.Count];
+            for (int i = 0; i < selected.Count; i++)
+            {
+                int layoutIndex = FindMatchingLayoutIndex(selected[i], layouts);
+                if (layoutIndex >= 0) claimedPerLayout[layoutIndex]++;
+            }
+
+            for (int i = 0; i < available.Count; i++)
+            {
+                InputDevice device = available[i];
+                if (device == null || ContainsDevice(selected, device)) continue;
+                if (!IsDeviceClaimable(device)) continue;
+                int layoutIndex = FindMatchingLayoutIndex(device, layouts);
+                if (layoutIndex < 0 || claimedPerLayout[layoutIndex] >= perLayoutLimit) continue;
+                claimedPerLayout[layoutIndex]++;
+                selected.Add(device);
+            }
+
+            return selected.Count > 0;
         }
 
         private static bool TryMatchControlScheme(
@@ -1065,16 +1199,39 @@ namespace CycloneGames.InputSystem.Runtime
             return result;
         }
 
-        private bool IsDeviceClaimable(InputDevice device)
+        private void InvalidateClaimedDeviceIds()
         {
-            if (device == null || _reservedDeviceIds.Contains(device.deviceId)) return false;
+            _claimedDeviceIdsValid = false;
+        }
+
+        /// <summary>
+        /// Rebuilds the device-ownership snapshot once per topology revision. Without this index every
+        /// claimability probe walked all InputUsers and all of their paired devices, making a join
+        /// O(users x pairedDevices) per attached device.
+        /// </summary>
+        private void EnsureClaimedDeviceIds()
+        {
+            if (_claimedDeviceIdsValid) return;
+            _claimedDeviceIds.Clear();
             var users = InputUser.all;
             for (int i = 0; i < users.Count; i++)
             {
-                if (IsDevicePairedToUser(users[i], device)) return false;
+                var paired = users[i].pairedDevices;
+                for (int j = 0; j < paired.Count; j++)
+                {
+                    InputDevice device = paired[j];
+                    if (device != null) _claimedDeviceIds.Add(device.deviceId);
+                }
             }
 
-            return true;
+            _claimedDeviceIdsValid = true;
+        }
+
+        private bool IsDeviceClaimable(InputDevice device)
+        {
+            if (device == null || _reservedDeviceIds.Contains(device.deviceId)) return false;
+            EnsureClaimedDeviceIds();
+            return !_claimedDeviceIds.Contains(device.deviceId);
         }
 
         private bool TryReserveDevices(List<InputDevice> devices)
@@ -1128,14 +1285,19 @@ namespace CycloneGames.InputSystem.Runtime
             layouts.Add(layout);
         }
 
-        private static bool MatchesAnyLayout(InputDevice device, List<string> layouts)
+        private static int FindMatchingLayoutIndex(InputDevice device, List<string> layouts)
         {
             for (int i = 0; i < layouts.Count; i++)
             {
-                if (UnityEngine.InputSystem.InputSystem.IsFirstLayoutBasedOnSecond(device.layout, layouts[i])) return true;
+                if (UnityEngine.InputSystem.InputSystem.IsFirstLayoutBasedOnSecond(device.layout, layouts[i])) return i;
             }
 
-            return false;
+            return -1;
+        }
+
+        private static bool MatchesAnyLayout(InputDevice device, List<string> layouts)
+        {
+            return FindMatchingLayoutIndex(device, layouts) >= 0;
         }
 
         private static InputDevice FindAvailableDeviceByLayout(
@@ -1286,6 +1448,84 @@ namespace CycloneGames.InputSystem.Runtime
         private void OnDeviceTopologyChanged(InputDevice _, InputDeviceChange __)
         {
             _deviceRevision++;
+            InvalidateClaimedDeviceIds();
+            if (AutoReassignOnDeviceLoss && !_isReassigning && !_isDisposed &&
+                !_isConfigurationTransitioning && _isInitialized)
+            {
+                ReassignPlayersWithoutDevices();
+            }
+        }
+
+        /// <summary>
+        /// Re-joins one registered player with the devices currently available, refreshing the control
+        /// scheme, binding mask and device whitelist together. A device loss otherwise leaves the player
+        /// registered but with an empty whitelist and a stale scheme, so every action resolves zero controls.
+        /// Returns false when the player is unknown, no device can satisfy a declared scheme, or the
+        /// manager is not in a state where a rejoin is safe.
+        /// </summary>
+        public bool ReassignPlayerDevices(int playerId)
+        {
+            if (!ValidateMainThread(nameof(ReassignPlayerDevices))) return false;
+            if (_isDisposed || !_isInitialized || _isConfigurationTransitioning || _isReassigning) return false;
+            if (!_registeredPlayers.ContainsKey(playerId)) return false;
+
+            RuntimePlayerSlotConfig config = GetRuntimePlayerConfig(playerId, false);
+            if (config == null) return false;
+
+            // Probe before destroying anything. Removing the player is destructive: when no unclaimed
+            // device can satisfy a declared scheme (all spares belong to other players), keep the current
+            // registration instead of leaving the product with a vanished player.
+            if (!TrySelectDevices(config, null, out _, out _)) return false;
+
+            _isReassigning = true;
+            try
+            {
+                if (!RemovePlayer(playerId)) return false;
+                InvalidateClaimedDeviceIds();
+                return JoinSinglePlayer(playerId) != null;
+            }
+            finally
+            {
+                _isReassigning = false;
+            }
+        }
+
+        /// <summary>
+        /// Counts the paired devices that still exist in the system. <c>InputSystem.onDeviceChange</c> is
+        /// raised <em>before</em> <c>InputUser</c> drops the removed device from
+        /// <c>pairedDevices</c> - measured: on the <c>Removed</c> notification for the second of two paired
+        /// devices the list still reports one entry. A plain <c>pairedDevices.Count</c> check inside the
+        /// notification therefore never sees an orphaned player, and auto-reassignment silently degrades to
+        /// "wait for some unrelated later topology event". Filtering on <c>Device.added</c> makes the check
+        /// correct both inside and outside the notification.
+        /// </summary>
+        private static int CountLivePairedDevices(InputUser user)
+        {
+            var devices = user.pairedDevices;
+            int count = 0;
+            for (int i = 0; i < devices.Count; i++)
+            {
+                InputDevice device = devices[i];
+                if (device != null && device.added) count++;
+            }
+
+            return count;
+        }
+
+        private void ReassignPlayersWithoutDevices()
+        {
+            List<int> orphaned = null;
+            foreach (KeyValuePair<int, IInputPlayer> pair in _registeredPlayers)
+            {
+                if (pair.Value is InputPlayer player && CountLivePairedDevices(player.User) == 0)
+                {
+                    orphaned ??= new List<int>(_registeredPlayers.Count);
+                    orphaned.Add(pair.Key);
+                }
+            }
+
+            if (orphaned == null) return;
+            for (int i = 0; i < orphaned.Count; i++) ReassignPlayerDevices(orphaned[i]);
         }
 
         public IInputPlayer GetInputPlayer(int playerId)
@@ -1317,6 +1557,7 @@ namespace CycloneGames.InputSystem.Runtime
             _registeredPlayers.Remove(playerId);
             if (player is IDisposable disposable)
                 CleanupSafely(disposable.Dispose, $"dispose player {playerId}");
+            InvalidateClaimedDeviceIds();
             return true;
         }
 

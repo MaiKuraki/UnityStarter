@@ -3,8 +3,10 @@
     "rootNamespace": "CycloneGames.InputSystem.Tests.Editor",
     "references": [
         "CycloneGames.InputSystem.Runtime",
+        "CycloneGames.InputSystem.Runtime.Integrations.UGUI",
         "CycloneGames.InputSystem.Editor",
         "CycloneGames.InputSystem.Tools.Runtime",
+        "CycloneGames.Hash.Core",
         "R3.Unity",
         "Unity.InputSystem",
         "UniTask",
