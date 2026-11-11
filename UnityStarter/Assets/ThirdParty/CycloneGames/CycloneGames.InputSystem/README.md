@@ -243,6 +243,10 @@ Context stack/capture mutations commit the model before rebuilding the Unity act
 
 Async overloads accept a `CancellationToken`. A single-player timeout returns `null`; caller cancellation is propagated. Batch aggregate timeout or manager shutdown returns the successfully joined prefix. Caller cancellation rolls back only players created by that batch, preserves pre-existing registrations, and then throws. Join methods are idempotent for an already registered player ID and return that player.
 
+`JoinPlayersBatchAsync` spreads the batch across frames: it yields after each player except the last, so a batch of *N* players spans up to *N* frames with one player's construction cost per frame. At the reference configuration of eight players, three contexts and 32 actions per context, that is roughly 44 ms of construction work distributed over eight frames instead of held inside one. The last player adds no trailing frame. The returned list is only complete when the task completes, so a caller must not read the result on the frame the call was made.
+
+Timeout, cancellation, and shutdown semantics are unchanged by the frame spread: a batch aggregate timeout or manager shutdown returns the successfully joined prefix, and caller cancellation rolls back only the players that batch created before it throws. `JoinPlayersBatch`, the synchronous counterpart, is unchanged and still completes inside the calling frame; use it only where the whole batch cost is acceptable within one frame, such as during a loading screen.
+
 Control-scheme matching is driven by `deviceRequirements`. `isOptional` permits a missing device. `isOr` expresses an alternative requirement in Unity Input System scheme order. Bindings should use groups declared by the same player slot. If no schemes are declared, layouts derived from configured direct and composite-part paths are alternatives: the first claimable matching device is selected. When that selected device is a keyboard or mouse, the other claimable keyboard/mouse device is added as its companion. Explicit schemes are preferred because they make ownership reviewable.
 
 Each player exposes paired-device lifecycle changes:
@@ -458,6 +462,8 @@ Changing configuration requires a lifecycle decision. `ReinitializeWithResult` r
 Default validation budgets: 8 players, 32 contexts per player, 128 actions per context, 1,024 total actions per player, 16 total direct/composite-part binding entries per action, 16 composites per action, 16 parts per composite, 16 control schemes per player, 16 device requirements per scheme, and 256 characters per technical string. Inject stricter `InputConfigurationLimits` into the `InputManager` constructor.
 
 Before VYaml materialization, runtime and Editor YAML entry points also limit input to 1 MiB strict UTF-8 without BOM, 16,384 lines, 4,096 characters per line, 64 indentation spaces, 65,536 structural tokens, and nesting depth 64. YAML anchors, aliases, explicit tags, directives/document markers, block scalars, tab indentation, forbidden control/format/private-use characters, and non-CR/LF line separators are outside this strict subset.
+
+One action serializes to roughly twelve YAML lines, so the 16,384-line budget caps a serialized configuration at about 1,300 total actions across all players (`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`). The per-player action limits above bound programmatically constructed configuration; at multiplayer scale they are not reachable through the YAML source. Exceeding the line budget is rejected during preflight with a message naming the line limit, so budget authored configuration against the serialized total rather than against the per-player ceiling.
 
 ### Editor Workflow and Code Generation
 

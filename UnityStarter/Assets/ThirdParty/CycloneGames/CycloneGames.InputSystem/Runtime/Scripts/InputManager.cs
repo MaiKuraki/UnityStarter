@@ -1,3 +1,4 @@
+using CycloneGames.Hash.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using R3;
@@ -28,6 +29,12 @@ namespace CycloneGames.InputSystem.Runtime
         private static readonly ProfilerMarker InitializeMarker = new ProfilerMarker("CycloneGames.Input.Initialize");
         private static readonly ProfilerMarker JoinMarker = new ProfilerMarker("CycloneGames.Input.JoinPlayer");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+        private static readonly InputConfigurationPreflightResult CachedPreflightSuccess =
+            new InputConfigurationPreflightResult(InputConfigurationPreflightStatus.Success, null);
+
+        private ulong _cachedPreflightContentHash;
+        private bool _hasCachedPreflightSuccess;
 
         private static InputManager _compatibilityInstance;
         private static int _listeningManagerCount;
@@ -296,10 +303,12 @@ namespace CycloneGames.InputSystem.Runtime
                 }
 
                 InputConfiguration parsed;
+                byte[] configurationBytes = null;
                 try
                 {
                     string normalized = NormalizeLineEndings(yamlContent);
-                    parsed = YamlSerializer.Deserialize<InputConfiguration>(StrictUtf8.GetBytes(normalized));
+                    configurationBytes = StrictUtf8.GetBytes(normalized);
+                    parsed = YamlSerializer.Deserialize<InputConfiguration>(configurationBytes);
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
@@ -321,7 +330,7 @@ namespace CycloneGames.InputSystem.Runtime
                 }
 
                 InputConfigurationPreflightResult preflight =
-                    InputSystemConfigurationPreflight.Run(validation.RuntimeConfiguration);
+                    RunOrReusePreflight(configurationBytes, validation.RuntimeConfiguration);
                 if (!preflight.IsSuccess)
                 {
                     string message = preflight.Issues.Count == 0
@@ -410,6 +419,33 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
+        /// <summary>
+        /// Reuses the verdict of an identical configuration. Only successful verdicts are cached: a rejected
+        /// configuration has to be re-validated because the Input System registry can gain new interaction,
+        /// processor or composite types between attempts, whereas a successful verdict stays valid because the
+        /// registry never loses types while the process runs.
+        /// </summary>
+        private InputConfigurationPreflightResult RunOrReusePreflight(
+            byte[] configurationBytes,
+            RuntimeInputConfiguration runtimeConfiguration)
+        {
+            ulong contentHash = configurationBytes == null ? 0UL : Fnv1a64.Compute(configurationBytes);
+            if (configurationBytes != null && _hasCachedPreflightSuccess && contentHash == _cachedPreflightContentHash)
+            {
+                return CachedPreflightSuccess;
+            }
+
+            InputConfigurationPreflightResult result =
+                InputSystemConfigurationPreflight.Run(runtimeConfiguration);
+            if (result.IsSuccess && configurationBytes != null)
+            {
+                _cachedPreflightContentHash = contentHash;
+                _hasCachedPreflightSuccess = true;
+            }
+
+            return result;
+        }
+
         private InputManagerInitializationResult SetInitializationFailure(InputManagerInitializationStatus status, string message)
         {
             LastInitializationResult = new InputManagerInitializationResult(status, message, null);
@@ -475,6 +511,13 @@ namespace CycloneGames.InputSystem.Runtime
                     }
 
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    // Yield between players so a batch join does not spend every player's construction cost inside
+                    // one frame. The last player needs no trailing wait, otherwise every batch pays one extra frame.
+                    if (i + 1 < playerIdSnapshot.Length)
+                    {
+                        await UniTask.Yield(PlayerLoopTiming.Update, linked.Token);
+                    }
                 }
             }
             catch (OperationCanceledException)

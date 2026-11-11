@@ -50,6 +50,15 @@ namespace CycloneGames.InputSystem.Runtime
         public const int AbsoluteMaxActionsPerContext = 2048;
         public const int AbsoluteMaxBindingsPerAction = 256;
         public const int AbsoluteMaxTotalActionsPerPlayer = 8192;
+
+        /// <summary>
+        /// Approximate ceiling on the total number of actions, summed across every player, that a
+        /// serialized YAML configuration can express. The YAML preflight enforces a 16,384-line budget
+        /// and one action serializes to roughly twelve lines, so the reachable total stays far below
+        /// <see cref="AbsoluteMaxTotalActionsPerPlayer"/>. Budget authored YAML against this value; the
+        /// per-player limits bound configurations built programmatically instead of parsed from YAML.
+        /// </summary>
+        public const int ApproximateMaxSerializedTotalActions = 1300;
         public const int AbsoluteMaxStringLength = 4096;
         public const int AbsoluteMaxControlSchemesPerPlayer = 128;
         public const int AbsoluteMaxDeviceRequirementsPerScheme = 64;

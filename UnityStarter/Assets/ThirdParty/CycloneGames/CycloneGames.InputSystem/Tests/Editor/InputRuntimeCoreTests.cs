@@ -1,16 +1,19 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CycloneGames.InputSystem.Tests.Editor;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using R3;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
+using UnityEngine.TestTools;
 using VYaml.Serialization;
 
 namespace CycloneGames.InputSystem.Runtime.Tests
@@ -1788,15 +1791,20 @@ namespace CycloneGames.InputSystem.Runtime.Tests
             Assert.That(provider.GetFrameCount(), Is.Zero);
         }
 
-        [Test]
-        public void UpdateRuntimeState_AfterWarmup_StaysInsideManagedAllocationBudget()
+        [UnityTest]
+        public IEnumerator UpdateRuntimeState_AfterWarmup_StaysInsideManagedAllocationBudget()
         {
-            const int IterationCount = 10_000;
-            const long AllocationBudgetBytes = 64;
+            const int WarmupFrames = 32;
+            const int MeasuredFrames = 90;
+            const int PumpsPerFrame = 8;
+            const int ControlAllocationBytes = 64 * 1024;
+            const long AllocationBudgetBytes = 8 * MeasuredFrames;
+
             Gamepad gamepad = UnityEngine.InputSystem.InputSystem.AddDevice<Gamepad>();
             InputPlayer player = null;
             InputContext context = null;
             IDisposable subscription = null;
+            bool recorderStarted = false;
             try
             {
                 PlayerSlotConfig config = CreateValidConfiguration().PlayerSlots[0];
@@ -1813,25 +1821,76 @@ namespace CycloneGames.InputSystem.Runtime.Tests
                 player = new InputPlayer(0, user, config, gamepad);
                 context = new InputContext("Player", "Gameplay");
                 player.PushContext(context);
+
+                // The subscription keeps the observable path live so its steady-state cost is included.
+                // Control values cannot be driven from this host, so what this measures is the pump loop
+                // itself, not the upstream action resolution inside Unity Input System.
                 float sink = 0f;
                 subscription = player
                     .GetVector2Observable("Gameplay", "Player", "Move")
                     .Subscribe(value => sink += value.x);
 
-                for (int i = 0; i < 64; i++) player.UpdateRuntimeState(i / 60d);
-                GC.Collect();
-                long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < IterationCount; i++) player.UpdateRuntimeState(i / 60d);
-                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                for (int i = 0; i < WarmupFrames; i++)
+                {
+                    player.UpdateRuntimeState(i / 60d);
+                    yield return null;
+                }
 
-                Assert.That(sink, Is.Zero);
+                recorderStarted = AllocationInstrument.TryStartFrameRecorder();
                 Assert.That(
-                    allocated,
+                    recorderStarted,
+                    Is.True,
+                    "The GC Allocated In Frame recorder must be available to measure steady-state allocation.");
+
+                // Idle baseline: frames that pump nothing. Subtracting it removes editor and test-runner
+                // allocation that has nothing to do with the module.
+                long baselineStart = AllocationInstrument.FrameRecorderSampleSum();
+                for (int frame = 0; frame < MeasuredFrames; frame++) yield return null;
+                long baseline = AllocationInstrument.FrameRecorderSampleSum() - baselineStart;
+
+                long measuredStart = AllocationInstrument.FrameRecorderSampleSum();
+                for (int frame = 0; frame < MeasuredFrames; frame++)
+                {
+                    for (int pump = 0; pump < PumpsPerFrame; pump++)
+                    {
+                        player.UpdateRuntimeState((WarmupFrames + frame * PumpsPerFrame + pump) / 60d);
+                    }
+
+                    yield return null;
+                }
+
+                long measured = AllocationInstrument.FrameRecorderSampleSum() - measuredStart;
+                long moduleBytes = measured - baseline;
+
+                // Control frame: identical pump work plus a known 64 KiB allocation. A dead recorder would
+                // otherwise report zero and silently satisfy the budget assertion.
+                long controlStart = AllocationInstrument.FrameRecorderSampleSum();
+                for (int pump = 0; pump < PumpsPerFrame; pump++)
+                {
+                    player.UpdateRuntimeState((WarmupFrames + MeasuredFrames * PumpsPerFrame + pump) / 60d);
+                }
+
+                var control = new byte[ControlAllocationBytes];
+                control[0] = 1;
+                yield return null;
+                yield return null;
+                long controlBytes = AllocationInstrument.FrameRecorderSampleSum() - controlStart;
+                GC.KeepAlive(control);
+
+                Assert.That(
+                    controlBytes,
+                    Is.GreaterThanOrEqualTo(ControlAllocationBytes),
+                    "The recorder window did not observe the control allocation, so the measurement is not trustworthy.");
+
+                Assert.That(
+                    moduleBytes,
                     Is.LessThanOrEqualTo(AllocationBudgetBytes),
-                    $"Polling allocated {allocated} bytes across {IterationCount} warmed calls.");
+                    $"Polling allocated {moduleBytes} bytes across {MeasuredFrames} pumped frames above the idle " +
+                    $"baseline ({baseline} B baseline, {measured} B measured).");
             }
             finally
             {
+                if (recorderStarted) AllocationInstrument.StopFrameRecorder();
                 subscription?.Dispose();
                 context?.Dispose();
                 player?.Dispose();

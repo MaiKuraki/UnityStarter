@@ -5,6 +5,7 @@
         "CycloneGames.InputSystem.Runtime",
         "CycloneGames.InputSystem.Editor",
         "CycloneGames.InputSystem.Tools.Runtime",
+        "CycloneGames.Hash.Core",
         "R3.Unity",
         "Unity.InputSystem",
         "UniTask",

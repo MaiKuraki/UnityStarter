@@ -26,6 +26,8 @@ namespace CycloneGames.InputSystem.Runtime
         private const int MaxContextRefreshPasses = 16;
         public const int MaximumContextCaptureDepth = 1024;
         private static readonly ProfilerMarker BuildAssetMarker = new ProfilerMarker("CycloneGames.Input.BuildAsset");
+        private static readonly ProfilerMarker RequestContextRefreshMarker = new ProfilerMarker("CycloneGames.Input.RequestContextRefresh");
+        private static readonly ProfilerMarker ActivateTopContextMarker = new ProfilerMarker("CycloneGames.Input.ActivateTopContext");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         [Serializable]
@@ -1416,6 +1418,14 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void ActivateTopContext()
         {
+            using (ActivateTopContextMarker.Auto())
+            {
+                ActivateTopContextCore();
+            }
+        }
+
+        private void ActivateTopContextCore()
+        {
             long activationVersion = unchecked(++_contextActivationVersion);
             CompositeDisposable previousSubscriptions = _subscriptions;
             var activationSubscriptions = new CompositeDisposable();
@@ -1465,35 +1475,38 @@ namespace CycloneGames.InputSystem.Runtime
             _contextRefreshPending = true;
             if (_isContextTransitioning) return;
 
-            _isContextTransitioning = true;
-            try
+            using (RequestContextRefreshMarker.Auto())
             {
-                int passCount = 0;
-                while (_contextRefreshPending && !_isDisposed)
+                _isContextTransitioning = true;
+                try
                 {
-                    if (passCount++ >= MaxContextRefreshPasses)
+                    int passCount = 0;
+                    while (_contextRefreshPending && !_isDisposed)
                     {
-                        FailContextProjection(
-                            $"Context refresh exceeded {MaxContextRefreshPasses} synchronous passes and was disabled.");
-                        return;
-                    }
+                        if (passCount++ >= MaxContextRefreshPasses)
+                        {
+                            FailContextProjection(
+                                $"Context refresh exceeded {MaxContextRefreshPasses} synchronous passes and was disabled.");
+                            return;
+                        }
 
-                    _contextRefreshPending = false;
-                    try
-                    {
-                        ActivateTopContext();
-                    }
-                    catch (Exception exception) when (IsRecoverableException(exception))
-                    {
-                        FailContextProjection(
-                            $"Context activation failed ({exception.GetType().Name}); input was disabled until an explicit refresh.");
-                        throw;
+                        _contextRefreshPending = false;
+                        try
+                        {
+                            ActivateTopContext();
+                        }
+                        catch (Exception exception) when (IsRecoverableException(exception))
+                        {
+                            FailContextProjection(
+                                $"Context activation failed ({exception.GetType().Name}); input was disabled until an explicit refresh.");
+                            throw;
+                        }
                     }
                 }
-            }
-            finally
-            {
-                _isContextTransitioning = false;
+                finally
+                {
+                    _isContextTransitioning = false;
+                }
             }
         }
 

@@ -243,6 +243,10 @@ Context stack/capture 变更先提交 model，再重建 Unity action-map project
 
 Async 重载接受 `CancellationToken`。单 player 超时返回 `null`；caller cancellation 被传播。Batch aggregate timeout 或 manager shutdown 返回成功 joined 前缀。Caller cancellation 仅回滚该 batch 创建的 player，保留已有 registration，然后抛出。Join 方法对已注册 player ID 幂等，返回该 player。
 
+`JoinPlayersBatchAsync` 把 batch 分摊到多帧：除最后一个 player 外，每完成一个就 yield 一次，因此 *N* 个 player 的 batch 最多跨 *N* 帧，每帧承担一个 player 的构造成本。在参考配置（8 player、3 context、每 context 32 action）下，约 44 ms 的构造工作分摊到 8 帧，而不是压在 1 帧内。最后一个 player 不额外多等一帧。返回的列表只在 task 完成时才完整，因此调用方不能在自己发起调用的那一帧读取结果。
+
+分帧不改变超时、取消与关闭语义：batch aggregate timeout 或 manager shutdown 仍返回成功 joined 的前缀；caller cancellation 仍只回滚该 batch 创建的 player，然后抛出。同步版本 `JoinPlayersBatch` 未变，仍在发起调用的那一帧内完成；只在整批成本可接受于单帧时使用它，例如加载画面期间。
+
 Control-scheme 匹配由 `deviceRequirements` 驱动。`isOptional` 允许缺失设备。`isOr` 按 Unity Input System scheme 顺序表达替代要求。Binding 应使用同一 player slot 声明的 group。如未声明 scheme，从 configured direct 和 composite-part path 派生的 layout 作为替代：选择首个可声明的匹配 device。当选中的 device 是 keyboard 或 mouse 时，另一个可声明的 keyboard/mouse 设备作为 companion 加入。推荐使用显式 scheme，因为可审计。
 
 每个 player 暴露配对设备生命周期变化：
@@ -458,6 +462,8 @@ if (!load.IsBootstrapComplete)
 默认 validation budget：8 players、每 player 32 contexts、每 context 128 actions、每 player 1,024 total actions、每 action 16 total direct/composite-part binding entries、每 action 16 composites、每 composite 16 parts、每 player 16 control schemes、每 scheme 16 device requirements、每技术字符串 256 字符。可在 `InputManager` 构造注入更严格的 `InputConfigurationLimits`。
 
 VYaml materialization 前，runtime 和 Editor YAML 入口还将输入限制为 1 MiB strict UTF-8 without BOM、16,384 lines、4,096 characters/line、64 indentation spaces、65,536 structural tokens、nesting depth 64。YAML anchor、alias、explicit tag、directive/document marker、block scalar、tab indentation、禁止的 control/format/private-use character、以及非 CR/LF 行分隔符不在此严格子集中。
+
+一个动作序列化后约占十二行 YAML，因此 16,384 行预算把「所有玩家合计」的动作总数限制在约 1,300 个（`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`）。上文的「每玩家动作上限」约束的是以编程方式构造的配置；在多人规模下，该上限无法通过 YAML 源达到。超出行业预算会在 preflight 阶段被拒绝，并返回指明行数上限的消息；因此编排配置时应按序列化后的动作总数做预算，而不是按每玩家上限。
 
 ### Editor 工作流和代码生成
 
