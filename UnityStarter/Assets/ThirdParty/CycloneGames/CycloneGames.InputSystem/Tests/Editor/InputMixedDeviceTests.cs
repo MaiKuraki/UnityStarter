@@ -11,7 +11,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
     /// The default selection path locks onto one control scheme and therefore pairs one device group; enabling
     /// <c>pairAllMatchingDevices</c> pairs every device the configuration references so all bindings stay live.
     /// </summary>
-    public sealed class InputMixedDeviceTests
+    public sealed class InputMixedDeviceTests : InputDeviceTestBase
     {
         private const string SchemeConfiguration = @"
 schemaVersion: 1

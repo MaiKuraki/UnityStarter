@@ -18,7 +18,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
     /// isolation, device-switch debounce and the new configuration fields. Every assertion reads the
     /// synchronous Input System graph state, so it is deterministic in EditMode where callbacks do not fire.
     /// </summary>
-    public sealed class InputDevicePolicyRegressionTests
+    public sealed class InputDevicePolicyRegressionTests : InputDeviceTestBase
     {
         private const string LockedFixture = "input_config.txt";
         private const string MixedFixture = "input_config_mixed.txt";
@@ -354,6 +354,34 @@ namespace CycloneGames.InputSystem.Tests.Editor
             }
         }
 
+        private static string KeyboardMouseSlotYaml()
+        {
+            var b = new StringBuilder(1200);
+            b.AppendLine("schemaVersion: 1");
+            b.AppendLine("playerSlots:");
+            b.AppendLine("  - playerId: 0");
+            b.AppendLine("    pairAllMatchingDevices: true");
+            b.AppendLine("    maxDevicesPerLayout: 1");
+            b.AppendLine("    contexts:");
+            b.AppendLine("      - name: Gameplay");
+            b.AppendLine("        actionMap: Map0");
+            b.AppendLine("        priority: 0");
+            b.AppendLine("        blocksLowerPriority: true");
+            b.AppendLine("        bindings:");
+            b.AppendLine("          - type: Button");
+            b.AppendLine("            action: Confirm");
+            b.AppendLine("            expectedControlType: Button");
+            b.AppendLine("            bindingGroups: \"\"");
+            b.AppendLine("            deviceBindings:");
+            b.AppendLine("              - \"<Keyboard>/enter\"");
+            b.AppendLine("              - \"<Mouse>/leftButton\"");
+            b.AppendLine("            compositeBindings: []");
+            b.AppendLine("            updateMode: EventDriven");
+            b.AppendLine("            longPressMs: 0");
+            b.AppendLine("            longPressValueThreshold: 0.5");
+            return b.ToString();
+        }
+
         private static string SingleSlotYaml(int debounceMs, int maxPerLayout = 1)
         {
             var b = new StringBuilder(1200);
@@ -470,7 +498,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
             var manager = new InputManager();
             try
             {
-                Assert.That(manager.InitializeWithResult(SingleSlotYaml(0)).IsSuccess, Is.True);
+                Assert.That(manager.InitializeWithResult(KeyboardMouseSlotYaml()).IsSuccess, Is.True);
                 var player = manager.JoinSinglePlayer(0) as InputPlayer;
                 Assert.That(player, Is.Not.Null);
 

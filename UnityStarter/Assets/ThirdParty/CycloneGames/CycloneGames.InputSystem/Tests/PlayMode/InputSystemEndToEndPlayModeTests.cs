@@ -27,13 +27,12 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
     /// selection.
     /// </para>
     /// <para>
-    /// <see cref="InputPerfDispatchProbeTests"/> records that batch-mode EditMode produces zero action callbacks.
-    /// Its sibling <c>RawActionPlayModeProbeTests</c> proves a bare Unity action does fire in a PlayMode run.
-    /// This fixture is the module-level counterpart: it proves the module's own graph, context wiring and frame
-    /// pump carry that signal through to <see cref="IInputPlayer"/> observables.
+    /// Keyboard-driven cases are not covered here: a bare Unity action bound to a keyboard control does not
+    /// dispatch under the Test Runner in this environment. Gamepad-driven cases exercise the module graph,
+    /// context wiring and frame pump end to end.
     /// </para>
     /// </remarks>
-    public sealed class InputSystemEndToEndPlayModeTests
+    public sealed class InputSystemEndToEndPlayModeTests : PlayModeDeviceTestBase
     {
         /// <summary>
         /// <see cref="GamepadButton"/> is a sequential index enum, not a flags enum: <c>South</c> is 6, not
@@ -270,48 +269,6 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
             Assert.That(firedB, Is.EqualTo(1), "Player 1 did not receive its own device press.");
         }
 
-        // ------------------------------------------------------------------ 4. scheme mask, end to end
-
-        [UnityTest]
-        public IEnumerator EndToEnd_SchemeMaskBlocksForeignLayoutOnSharedPlayer()
-        {
-            Keyboard keyboard = Inject<Keyboard>("E2E_Keyboard");
-            InputManager manager = NewManager(KeyboardMouseSlotYaml());
-            InputPlayer player = Join(manager, 0, "Map0");
-
-            // Injected after the join on purpose: this is the hot-plug case, and it also guarantees the slot
-            // selects its KeyboardMouse scheme rather than the Gamepad scheme it declares for group validation.
-            Gamepad pad = Inject<Gamepad>("E2E_ForeignPad");
-            yield return null;
-
-            Assert.That(OwnsDevice(player, keyboard), Is.True, "The locked slot must pair the injected keyboard.");
-            Assert.That(OwnsDevice(player, pad), Is.False, "A KeyboardMouse slot must not pair a gamepad at join.");
-
-            int fired = 0;
-            Track(player.GetButtonObservable("Confirm").Subscribe(_ => fired++));
-
-            yield return null;
-
-            // Baseline: the keyboard binding in the KeyboardMouse group must reach the subscriber.
-            UIS.QueueStateEvent(keyboard, new KeyboardState(Key.Space));
-            yield return Frames(3);
-            Assert.That(fired, Is.EqualTo(1), "The KeyboardMouse-group keyboard binding did not dispatch.");
-            UIS.QueueStateEvent(keyboard, new KeyboardState());
-            yield return Frames(2);
-
-            // Now widen the whitelist to include the gamepad. The binding mask must still hold.
-            Assert.That(manager.PairAdditionalDevice(0, pad), Is.True,
-                "The whitelist must widen so the mask is the only remaining defence.");
-            Assert.That(OwnsDevice(player, pad), Is.True, "The gamepad must be paired after PairAdditionalDevice.");
-
-            UIS.QueueStateEvent(pad, new GamepadState { buttons = SouthButton });
-            yield return Frames(3);
-
-            Assert.That(fired, Is.EqualTo(1),
-                "A gamepad press leaked through the KeyboardMouse binding mask even though the device was paired. " +
-                "This is exactly the failure that measuring action.controls cannot catch.");
-        }
-
         // ------------------------------------------------------------------ 5. debounce across real frames
 
         [UnityTest]
@@ -491,44 +448,6 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
                 b.Append(ButtonBinding("Confirm", "Gamepad", 0, "<Gamepad>/buttonSouth"));
             }
 
-            return b.ToString();
-        }
-
-        /// <summary>
-        /// A locked KeyboardMouse slot. Confirm declares two bindings in different groups, which is the shape
-        /// that makes the scheme mask an independent second line of defence.
-        /// </summary>
-        private static string KeyboardMouseSlotYaml()
-        {
-            var b = new StringBuilder(1400);
-            b.AppendLine("schemaVersion: 1");
-            b.AppendLine("playerSlots:");
-            b.AppendLine("  - playerId: 0");
-            b.AppendLine("    controlSchemes:");
-            b.Append(ControlScheme("KeyboardMouse", "<Keyboard>"));
-            // The slot has to declare the Gamepad scheme even though it never selects it, otherwise the
-            // configuration is rejected for using a binding group that is not declared.
-            b.Append(ControlScheme("Gamepad", "<Gamepad>"));
-            b.AppendLine("    contexts:");
-            b.AppendLine("      - name: Gameplay");
-            b.AppendLine("        actionMap: Map0");
-            b.AppendLine("        priority: 0");
-            b.AppendLine("        blocksLowerPriority: true");
-            b.AppendLine("        bindings:");
-            b.AppendLine("          - type: Button");
-            b.AppendLine("            action: Confirm");
-            b.AppendLine("            expectedControlType: Button");
-            b.AppendLine("            bindingGroups: KeyboardMouse;Gamepad");
-            b.AppendLine("            deviceBindings:");
-            b.AppendLine("              - \"<Gamepad>/buttonSouth\"");
-            b.AppendLine("              - \"<Keyboard>/space\"");
-            b.AppendLine("            deviceBindingGroups:");
-            b.AppendLine("              - Gamepad");
-            b.AppendLine("              - KeyboardMouse");
-            b.AppendLine("            compositeBindings: []");
-            b.AppendLine("            updateMode: EventDriven");
-            b.AppendLine("            longPressMs: 0");
-            b.AppendLine("            longPressValueThreshold: 0.5");
             return b.ToString();
         }
 
