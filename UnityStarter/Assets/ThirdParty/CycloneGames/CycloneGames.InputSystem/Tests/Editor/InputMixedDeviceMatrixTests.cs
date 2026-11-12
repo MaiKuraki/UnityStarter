@@ -16,7 +16,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
     /// The matrix deliberately includes a configuration that references fewer devices than are attached: pairing
     /// must follow the referenced layouts, not every device in the process.
     /// </remarks>
-    public sealed class InputMixedDeviceMatrixTests
+    public sealed class InputMixedDeviceMatrixTests : InputDeviceTestBase
     {
         private enum Attachment
         {
