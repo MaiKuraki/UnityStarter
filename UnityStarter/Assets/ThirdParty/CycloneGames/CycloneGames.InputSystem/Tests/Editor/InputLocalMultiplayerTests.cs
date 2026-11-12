@@ -11,7 +11,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
     /// when several players compete for the attached devices, which is the behaviour any change to single-player
     /// device pairing must not disturb.
     /// </summary>
-    public sealed class InputLocalMultiplayerTests
+    public sealed class InputLocalMultiplayerTests : InputDeviceTestBase
     {
         private const string KeyboardAndMousePlayers = @"
 schemaVersion: 1

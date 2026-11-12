@@ -1999,12 +1999,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Explicit activity hook with the originating control, used to populate
-        /// <see cref="InputDeviceActivity.ControlPath"/> for precise prompt selection.
+        /// <see cref="InputDeviceActivity.ControlPath"/>. Devices outside the player's whitelist are ignored.
         /// </summary>
         public void NotifyDeviceActivity(InputDevice device, InputControl control)
         {
             EnsureUsable();
-            if (device == null) return;
+            if (device == null || !IsOwnDevice(device)) return;
 
             var activity = new InputDeviceActivity(
                 PlayerId,

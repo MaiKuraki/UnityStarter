@@ -242,7 +242,7 @@ Context stack/capture 变更先提交 model，再重建 Unity action-map project
 | `PairAdditionalDevice` | 显式为已加入的 player 再配对一台声明过 layout 的设备，绝不创建新 player。设备不可声明或 layout 未声明时 fail closed。 | 单人热插拔第二台设备。 |
 | `RemovePlayer` | Dispose player、unpair 其 `InputUser`、释放声明。 | 离开、slot reset 或重新初始化前关闭。 |
 
-**设备白名单与 locked / mixed 的区别。** 每个 player 都会把 action asset 关联到自己的 `InputUser`，因此 `InputActionAsset.devices` 始终是该 player 自己的配对设备白名单。锁定 slot 会额外激活 control scheme，把 binding mask 收窄到该 scheme 的 group。设置 `pairAllMatchingDevices: true` 的 slot 保持 scheme 未激活：所有 binding 都保持可用，但只作用于该 player 白名单内的设备。这既让单个 player 在键鼠与手柄之间无缝切换而无需重新 join，也让第二个本地 player 仍能认领剩余设备。
+**设备白名单与 locked / mixed 的区别。** 每个 player 都会把 action asset 关联到自己的 `InputUser`，因此 `InputActionAsset.devices` 始终是该 player 自己的配对设备白名单。锁定 slot 会额外激活 control scheme，把 binding mask 收窄到该 scheme 的 group。设置 `pairAllMatchingDevices: true` 的 slot 保持 scheme 未激活：所有 binding 都保持可用，但只作用于该 player 白名单内的设备。这既让单个 player 在键鼠与手柄之间无缝切换而无需重新 join，也让第二个本地 player 仍能认领剩余设备。per-binding `deviceBindingGroups` 与该 slot 自身的 `controlSchemes` 都依赖一个已激活的 scheme，因此该模式按设计忽略它们；此时设备白名单是唯一边界。
 
 `maxDevicesPerLayout`（默认 `1`，钳制到 `1..8`）限制此类 slot 对每个被引用 layout 可认领的设备数量；没有它，一个 player 会吃光所有键盘、鼠标和手柄。`deviceSwitchDebounceMs`（默认 `0`，钳制到 `0..5000`）设置 `ActiveDeviceKind` 再次切换前的最小驻留时间，把快速设备交替合并成一次呈现更新。`InputPlayer.NotifyDeviceActivity(InputDevice)` 是可选显式入口，供在 action callback 之外观察设备活动的产品代码使用。
 
