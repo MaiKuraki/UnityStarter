@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"math"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -25,31 +24,83 @@ import (
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/term"
+	"cyclonegames.tools/scripts/internal/toolenv"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 const (
-	defaultAudioBitrate  = "128k"
-	defaultAudioRate     = "44100"
-	defaultFFmpegTimeout = 2 * time.Hour
-	loudnessTolerance    = 0.5
-	peakTolerance        = 0.5
-	shortAudioThreshold  = 3.0
+	defaultAudioBitrate    = "128k"
+	defaultAudioRate       = "44100"
+	defaultFFmpegTimeout   = 2 * time.Hour
+	loudnessTolerance      = 0.5
+	peakTolerance          = 0.5
+	shortAudioThreshold    = 3.0
+	progressReportInterval = 2 * time.Second
+	maxParallelWorkers     = 64
 )
 
-// ffmpegTimeout bounds every per-invocation FFmpeg call. It is configurable via
-// the -ffmpeg-timeout flag so very long encodes can extend the bounded default.
-var ffmpegTimeout = defaultFFmpegTimeout
+// Options holds the resolved executables and every per-run setting. It is built
+// once in Run and passed down by value, so consecutive in-process runs never
+// share mutable configuration and workers observe a consistent snapshot.
+type Options struct {
+	FFmpegPath    string
+	FFprobePath   string
+	FFmpegTimeout time.Duration
+	Workers       int
+	AlphaOutput   bool
+}
 
-// ffmpegBinary is the ffmpeg executable used by every invocation. It defaults
-// to PATH lookup and can be overridden with the -ffmpeg flag (CI-friendly for
-// pinned toolchain installations).
-var ffmpegBinary = "ffmpeg"
+// weightedLimiter bounds concurrent encodes by source size so a batch of large
+// files cannot all start at once and exhaust memory or I/O bandwidth. Each job
+// occupies a number of slots proportional to its size.
+type weightedLimiter struct {
+	slots chan struct{}
+}
 
-// progressReportInterval throttles per-file encode progress lines so long
-// cutscene encodes stay observable without flooding the console.
-const progressReportInterval = 2 * time.Second
+func newWeightedLimiter(capacity int) *weightedLimiter {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &weightedLimiter{slots: make(chan struct{}, capacity)}
+}
+
+// weightForSize maps a source file to the number of slots it occupies, capped at
+// the pool capacity so one job can never deadlock against itself.
+func weightForSize(size int64, capacity int) int {
+	weight := 1
+	switch {
+	case size >= 1<<30:
+		weight = 3
+	case size >= 256<<20:
+		weight = 2
+	}
+	if weight > capacity {
+		weight = capacity
+	}
+	return weight
+}
+
+func (l *weightedLimiter) acquire(ctx context.Context, weight int) error {
+	for i := 0; i < weight; i++ {
+		select {
+		case l.slots <- struct{}{}:
+		case <-ctx.Done():
+			for j := 0; j < i; j++ {
+				<-l.slots
+			}
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (l *weightedLimiter) release(weight int) {
+	for i := 0; i < weight; i++ {
+		<-l.slots
+	}
+}
 
 type preset struct {
 	Key          string
@@ -149,49 +200,16 @@ var presets = []preset{
 }
 
 var resolutionOptions = []resolutionOption{
-	{
-		Key:         "1",
-		Name:        "Original",
-		Description: "Default. Keep the source resolution unchanged.",
-		MaxWidth:    0,
-		MaxHeight:   0,
-	},
-	{
-		Key:         "2",
-		Name:        "1080p Cap",
-		Description: "Downscale only when the source is larger than 1920x1080.",
-		MaxWidth:    1920,
-		MaxHeight:   1080,
-	},
-	{
-		Key:         "3",
-		Name:        "720p Cap",
-		Description: "Downscale only when the source is larger than 1280x720.",
-		MaxWidth:    1280,
-		MaxHeight:   720,
-	},
-	{
-		Key:         "4",
-		Name:        "540p Cap",
-		Description: "Downscale only when the source is larger than 960x540.",
-		MaxWidth:    960,
-		MaxHeight:   540,
-	},
+	{Key: "1", Name: "Original", Description: "Default. Keep the source resolution unchanged.", MaxWidth: 0, MaxHeight: 0},
+	{Key: "2", Name: "1080p Cap", Description: "Downscale only when the source is larger than 1920x1080.", MaxWidth: 1920, MaxHeight: 1080},
+	{Key: "3", Name: "720p Cap", Description: "Downscale only when the source is larger than 1280x720.", MaxWidth: 1280, MaxHeight: 720},
+	{Key: "4", Name: "540p Cap", Description: "Downscale only when the source is larger than 960x540.", MaxWidth: 960, MaxHeight: 540},
 }
 
 var videoExtensions = map[string]bool{
-	".mp4":  true,
-	".mov":  true,
-	".m4v":  true,
-	".avi":  true,
-	".mkv":  true,
-	".webm": true,
-	".wmv":  true,
-	".mpg":  true,
-	".mpeg": true,
-	".ts":   true,
-	".m2ts": true,
-	".flv":  true,
+	".mp4": true, ".mov": true, ".m4v": true, ".avi": true, ".mkv": true,
+	".webm": true, ".wmv": true, ".mpg": true, ".mpeg": true, ".ts": true,
+	".m2ts": true, ".flv": true,
 }
 
 var (
@@ -239,67 +257,71 @@ func Run(args []string) int {
 	var presetKey string
 	var overwrite bool
 	var jobs int
-	var ffmpegPath string
 	var alphaOutput bool
+	var timeout time.Duration
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode (requires --input and --output)")
 	flags.StringVar(&inputPath, "input", "", "Source video file or folder (CI mode)")
 	flags.StringVar(&outputRoot, "output", "", "Output root directory (CI mode)")
 	flags.StringVar(&presetKey, "preset", "2", "Quality preset 1/2/3 (CI mode, default 2)")
 	flags.BoolVar(&overwrite, "overwrite", false, "Overwrite existing outputs (CI mode)")
 	flags.IntVar(&jobs, "jobs", 0, "Parallel conversion workers (default: CPU count, clamped 1..64)")
-	flags.DurationVar(&ffmpegTimeout, "ffmpeg-timeout", defaultFFmpegTimeout, "Per-invocation FFmpeg timeout (for example 45m or 2h)")
-	flags.StringVar(&ffmpegPath, "ffmpeg", "", "Custom ffmpeg executable path (default: ffmpeg on PATH)")
+	flags.DurationVar(&timeout, "ffmpeg-timeout", defaultFFmpegTimeout, "Per-invocation FFmpeg timeout (for example 45m or 2h)")
 	flags.BoolVar(&alphaOutput, "alpha", false, "Preserve transparency: encode VP8 with the yuva420p alpha channel (UI/VFX videos)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return toolkit.ExitSuccess
 		}
-		return 2
+		return toolkit.ExitUsage
 	}
-	if ffmpegTimeout <= 0 {
+	if timeout <= 0 {
 		logging.Error("--ffmpeg-timeout must be a positive duration")
-		return 2
+		return toolkit.ExitUsage
 	}
-	if ffmpegPath != "" {
-		resolved, resolveErr := resolveCustomFFmpeg(ffmpegPath)
-		if resolveErr != nil {
-			logging.Error("ffmpeg path not usable", "path", ffmpegPath, "error", resolveErr)
-			return 2
-		}
-		ffmpegBinary = resolved
-	}
-	if ciMode {
-		return runCi(ctx, inputPath, outputRoot, presetKey, overwrite, alphaOutput, jobs)
-	}
-	return runInteractiveFlow(ctx, jobs, alphaOutput)
-}
 
-// resolveCustomFFmpeg validates a user-provided ffmpeg path and returns its
-// cleaned absolute form.
-func resolveCustomFFmpeg(path string) (string, error) {
-	cleaned := normalizePath(path)
-	if cleaned == "" {
-		return "", fmt.Errorf("empty path")
-	}
-	info, err := os.Stat(cleaned)
+	resolution, err := toolenv.Resolve("ffmpeg")
 	if err != nil {
-		return "", err
+		fmt.Fprintln(os.Stderr, err)
+		if !ciMode {
+			toolkit.WaitForExit()
+		}
+		return toolkit.ExitFailure
 	}
-	if info.IsDir() {
-		return "", fmt.Errorf("path is a directory")
+
+	workerCount := jobs
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
 	}
-	return cleaned, nil
+	if workerCount > maxParallelWorkers {
+		workerCount = maxParallelWorkers
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+
+	opts := Options{
+		FFmpegPath:    resolution.Path,
+		FFmpegTimeout: timeout,
+		Workers:       workerCount,
+		AlphaOutput:   alphaOutput,
+	}
+	if probeRes, probeErr := toolenv.Resolve("ffprobe"); probeErr == nil {
+		opts.FFprobePath = probeRes.Path
+	} else {
+		fmt.Fprintln(os.Stderr, probeErr)
+		fmt.Fprintln(os.Stderr, "ffprobe is unavailable; falling back to ffmpeg header inspection.")
+	}
+
+	if ciMode {
+		return runCi(ctx, opts, inputPath, outputRoot, presetKey, overwrite)
+	}
+	return runInteractiveFlow(ctx, opts)
 }
 
 // runInteractiveFlow is the guided interactive conversion.
-func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
+func runInteractiveFlow(ctx context.Context, opts Options) int {
 	printIntro()
 
-	if !commandExists("ffmpeg") {
-		return failWithMessage("Error: ffmpeg was not found in PATH. Please install ffmpeg and make sure the command is available in your system environment.")
-	}
-
-	reader := bufio.NewReader(os.Stdin)
+	reader := toolkit.Input()
 
 	sourcePath, err := chooseSourcePath(reader)
 	if err != nil {
@@ -319,7 +341,7 @@ func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
 	if err != nil {
 		return cancelledWithMessage(err)
 	}
-	settings, err := chooseVideoBitrate(reader, selectedPreset, selectedResolution, alphaOutput)
+	settings, err := chooseVideoBitrate(reader, selectedPreset, selectedResolution, opts.AlphaOutput)
 	if err != nil {
 		return cancelledWithMessage(err)
 	}
@@ -346,7 +368,7 @@ func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
 	fmt.Printf("  Files:    %d\n", len(conversionJobs))
 	fmt.Printf("  Overwrite:%t\n", overwrite)
 	fmt.Println()
-	fmt.Println("Audio note: WebM does not support AAC in the standard container, so this tool uses Vorbis audio plus loudness normalization for broad Unity/WebM compatibility.")
+	fmt.Println("Audio note: WebM does not support AAC in the standard container, so this tool uses Vorbis audio plus loudness normalization for broad WebM compatibility.")
 
 	confirmed, err := confirm(reader, "Start conversion now? (Y/N) [default: Y]: ", true)
 	if err != nil {
@@ -356,7 +378,7 @@ func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
 		return failWithMessage("Operation cancelled by user.")
 	}
 
-	successCount, skipCount, failCount := runConversion(ctx, conversionJobs, overwrite, settings, jobs)
+	successCount, skipCount, failCount := runConversion(ctx, opts, conversionJobs, overwrite, settings)
 
 	fmt.Println()
 	fmt.Println("Finished")
@@ -377,43 +399,39 @@ func runInteractiveFlow(ctx context.Context, jobs int, alphaOutput bool) int {
 }
 
 // runCi executes the non-interactive conversion path.
-func runCi(ctx context.Context, inputPath, outputRoot, presetKey string, overwrite bool, alphaOutput bool, workerCount int) int {
+func runCi(ctx context.Context, opts Options, inputPath, outputRoot, presetKey string, overwrite bool) int {
 	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputRoot) == "" {
 		logging.Error("--ci requires --input and --output")
-		return 2
-	}
-	if !commandExists("ffmpeg") {
-		logging.Error("ffmpeg not found in PATH")
-		return 1
+		return toolkit.ExitUsage
 	}
 	selectedPreset, ok := findPreset(presetKey)
 	if !ok {
 		logging.Error("unknown preset", "preset", presetKey)
-		return 2
+		return toolkit.ExitUsage
 	}
 	sourcePath := normalizePath(inputPath)
 	if sourcePath == "" {
 		logging.Error("invalid input path", "input", inputPath)
-		return 2
+		return toolkit.ExitUsage
 	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		logging.Error("input not found", "path", sourcePath)
-		return 1
+		return toolkit.ExitFailure
 	}
-	settings := buildEncodeSettings(selectedPreset, resolutionOptions[0], selectedPreset.VideoBitrate, alphaOutput)
+	settings := buildEncodeSettings(selectedPreset, resolutionOptions[0], selectedPreset.VideoBitrate, opts.AlphaOutput)
 	conversionJobs, err := buildJobs(sourcePath, info, outputRoot, selectedPreset)
 	if err != nil {
 		logging.Error("failed to build conversion list", "error", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	if len(conversionJobs) == 0 {
 		logging.Error("no supported video files found")
-		return 1
+		return toolkit.ExitFailure
 	}
-	logging.Info("conversion started", "files", len(conversionJobs), "workers", workerCount, "preset", selectedPreset.Key)
+	logging.Info("conversion started", "files", len(conversionJobs), "workers", opts.Workers, "preset", selectedPreset.Key)
 
-	successCount, skipCount, failCount := runConversion(ctx, conversionJobs, overwrite, settings, workerCount)
+	successCount, skipCount, failCount := runConversion(ctx, opts, conversionJobs, overwrite, settings)
 
 	fmt.Println()
 	fmt.Println("Finished")
@@ -442,14 +460,14 @@ func findPreset(key string) (preset, bool) {
 	return preset{}, false
 }
 
-// runConversion converts jobs over a bounded worker pool and returns outcome counts.
-func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, settings encodeSettings, requestedWorkers int) (int, int, int) {
-	workerCount := requestedWorkers
+// runConversion converts jobs over a bounded, size-weighted worker pool.
+func runConversion(ctx context.Context, opts Options, conversionJobs []job, overwrite bool, settings encodeSettings) (int, int, int) {
+	workerCount := opts.Workers
 	if workerCount <= 0 {
 		workerCount = runtime.NumCPU()
 	}
-	if workerCount > 64 {
-		workerCount = 64
+	if workerCount > maxParallelWorkers {
+		workerCount = maxParallelWorkers
 	}
 	if workerCount < 1 {
 		workerCount = 1
@@ -457,6 +475,7 @@ func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, se
 	// Share the machine's cores across the parallel encodes instead of letting
 	// every libvpx process grab all of them at once.
 	encodeThreads := computeThreadsPerEncode(runtime.NumCPU(), workerCount)
+	limiter := newWeightedLimiter(workerCount)
 
 	type outcome struct {
 		skip bool
@@ -486,11 +505,22 @@ func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, se
 					outcomes <- outcome{fail: true}
 					continue
 				}
-				if err := convertVideo(ctx, item.InputPath, item.OutputPath, settings, encodeThreads); err != nil {
+				size := int64(0)
+				if st, statErr := os.Stat(item.InputPath); statErr == nil {
+					size = st.Size()
+				}
+				weight := weightForSize(size, workerCount)
+				if acquireErr := limiter.acquire(ctx, weight); acquireErr != nil {
+					outcomes <- outcome{fail: true}
+					continue
+				}
+				convertErr := convertVideo(ctx, opts, item.InputPath, item.OutputPath, settings, encodeThreads)
+				limiter.release(weight)
+				if convertErr != nil {
 					if ctx.Err() != nil {
 						fmt.Printf("  Cancelled: %s\n", filepath.Base(item.InputPath))
 					} else {
-						fmt.Printf("  Failed: %v\n", err)
+						fmt.Printf("  Failed: %v\n", convertErr)
 					}
 					outcomes <- outcome{fail: true}
 					continue
@@ -531,10 +561,10 @@ func runConversion(ctx context.Context, conversionJobs []job, overwrite bool, se
 }
 
 func printIntro() {
-	fmt.Println("--- Unity Video WebM Converter ---")
+	fmt.Println("--- Video WebM Converter ---")
 	fmt.Println()
-	fmt.Println("This tool calls the system ffmpeg to convert video files into Unity-friendly")
-	fmt.Println("VP8 WebM outputs suitable for Android, iOS, WebGL, Windows, and macOS builds.")
+	fmt.Println("This tool converts video files into VP8 WebM outputs suitable for")
+	fmt.Println("Android, iOS, WebGL, Windows, and macOS builds.")
 	fmt.Println()
 	fmt.Println("Defaults")
 	fmt.Println("  Video: VP8 / yuv420p / default target bitrate 9M")
@@ -702,7 +732,7 @@ func buildJobs(sourcePath string, info os.FileInfo, outputRoot string, selectedP
 		if !isVideoFile(sourcePath) {
 			return nil, fmt.Errorf("input file is not a supported video type: %s", sourcePath)
 		}
-		if hasGeneratedSuffix(sourcePath, selectedPreset.Suffix) {
+		if hasGeneratedSuffix(sourcePath) {
 			return nil, fmt.Errorf("input file already looks like a generated output: %s", sourcePath)
 		}
 
@@ -729,7 +759,7 @@ func buildJobs(sourcePath string, info os.FileInfo, outputRoot string, selectedP
 		if !isVideoFile(path) {
 			return nil
 		}
-		if hasGeneratedSuffix(path, selectedPreset.Suffix) {
+		if hasGeneratedSuffix(path) {
 			return nil
 		}
 
@@ -780,10 +810,43 @@ func findOutputCollisions(jobs []job) []string {
 	return collisions
 }
 
-func convertVideo(ctx context.Context, inputPath string, outputPath string, settings encodeSettings, encodeThreads int) error {
-	// A unique per-run temporary name (same directory, same extension) keeps concurrent
-	// conversions from clobbering each other and makes the final rename atomic.
-	tempFile, err := os.CreateTemp(filepath.Dir(outputPath), "."+filepath.Base(outputPath)+".partial-*"+filepath.Ext(outputPath))
+// prepareOutputTarget validates the destination before any file is created and
+// returns an absolute path plus a CreateTemp pattern. The staging-name budget
+// uses a representative longest random suffix so a long source name cannot
+// produce an unusable temporary path.
+func prepareOutputTarget(outputPath string) (string, string, error) {
+	policy := safefs.HostPathPolicy()
+	abs, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot resolve output path %s: %w", outputPath, err)
+	}
+	if err := policy.ValidateAbsolute(abs); err != nil {
+		return "", "", err
+	}
+	base := filepath.Base(abs)
+	if err := policy.ValidateComponent(base); err != nil {
+		return "", "", err
+	}
+	dir := filepath.Dir(abs)
+	if err := policy.EnsureWritable(dir); err != nil {
+		return "", "", err
+	}
+	pattern := "." + base + ".partial-*"
+	budgetName := "." + base + ".partial-123456789012"
+	if err := policy.Budget(dir, budgetName); err != nil {
+		return "", "", err
+	}
+	return abs, pattern, nil
+}
+
+func convertVideo(ctx context.Context, opts Options, inputPath string, outputPath string, settings encodeSettings, encodeThreads int) error {
+	absOutput, pattern, err := prepareOutputTarget(outputPath)
+	if err != nil {
+		return err
+	}
+	// A unique per-run temporary name (same directory, same extension) keeps
+	// concurrent conversions from clobbering each other.
+	tempFile, err := os.CreateTemp(filepath.Dir(absOutput), pattern)
 	if err != nil {
 		return fmt.Errorf("failed to create temporary output file: %w", err)
 	}
@@ -793,19 +856,21 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 		return fmt.Errorf("failed to close temporary output file: %w", err)
 	}
 
-	info, err := probeMediaInfo(ctx, inputPath)
+	info, err := probeMediaInfo(ctx, opts, inputPath)
 	if err != nil {
 		_ = os.Remove(tempOutput)
 		return err
 	}
 
-	audioArgs, err := buildAudioArgs(ctx, inputPath, info, settings.Preset)
+	audioArgs, err := buildAudioArgs(ctx, opts, inputPath, info, settings.Preset)
 	if err != nil {
 		_ = os.Remove(tempOutput)
 		return err
 	}
 
-	args := []string{"-y", "-hide_banner", "-i", inputPath}
+	// Progress is emitted on stdout through -progress so stderr stays a bounded
+	// diagnostic stream; -nostats suppresses the duplicate carriage-return stats.
+	args := []string{"-y", "-hide_banner", "-nostats", "-progress", "pipe:1", "-i", inputPath}
 	args = append(args, buildVideoEncodeArgs(settings, encodeThreads)...)
 	if scaleFilter := buildScaleFilter(settings.SelectedResolution); scaleFilter != "" {
 		args = append(args, "-vf", scaleFilter)
@@ -813,19 +878,7 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 	args = append(args, audioArgs...)
 	args = append(args, tempOutput)
 
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, ffmpegBinary, args...)
-	var stderrBuf bytes.Buffer
 	progress := newFFmpegProgressWriter()
-	cmd.Stderr = io.MultiWriter(&stderrBuf, progress)
-
-	if startErr := cmd.Start(); startErr != nil {
-		_ = os.Remove(tempOutput)
-		return fmt.Errorf("failed to start ffmpeg: %w", startErr)
-	}
-
 	progressDone := make(chan struct{})
 	var progressPrinted atomic.Bool
 	if term.IsTerminal(os.Stdout.Fd()) && info.DurationSec > 0 {
@@ -856,22 +909,23 @@ func convertVideo(ctx context.Context, inputPath string, outputPath string, sett
 		}()
 	}
 
-	waitErr := cmd.Wait()
+	outcome, runErr := toolenv.Run(ctx, toolenv.Invocation{
+		Binary:      opts.FFmpegPath,
+		Args:        args,
+		Timeout:     opts.FFmpegTimeout,
+		Stdout:      progress,
+		StderrLimit: toolenv.DefaultStderrLimit,
+	})
 	close(progressDone)
 	if progressPrinted.Load() {
 		fmt.Println()
 	}
 
-	if ctx.Err() == context.DeadlineExceeded {
+	if runErr != nil {
 		_ = os.Remove(tempOutput)
-		return fmt.Errorf("ffmpeg timed out after %s", ffmpegTimeout)
+		return fmt.Errorf("ffmpeg error: %s", toolenv.FormatFailure(runErr, outcome))
 	}
-	if waitErr != nil {
-		_ = os.Remove(tempOutput)
-		return fmt.Errorf("ffmpeg error: %w\n%s", waitErr, trimCommandOutput(stderrBuf.Bytes()))
-	}
-
-	if err := os.Rename(tempOutput, outputPath); err != nil {
+	if err := safefs.PublishReplace(tempOutput, absOutput); err != nil {
 		_ = os.Remove(tempOutput)
 		return fmt.Errorf("failed to finalize output file: %w", err)
 	}
@@ -916,8 +970,8 @@ func buildVideoEncodeArgs(settings encodeSettings, encodeThreads int) []string {
 	return args
 }
 
-// ffmpegProgressWriter consumes ffmpeg's carriage-return progress stream and
-// exposes the most recent encoded timestamp (in seconds) for throttled display.
+// ffmpegProgressWriter consumes ffmpeg's progress stream and exposes the most
+// recent encoded timestamp (in seconds) for throttled display.
 type ffmpegProgressWriter struct {
 	mutex          sync.Mutex
 	tail           string
@@ -1034,54 +1088,39 @@ func isVideoFile(path string) bool {
 	return videoExtensions[strings.ToLower(filepath.Ext(path))]
 }
 
-func hasGeneratedSuffix(path string, suffix string) bool {
+// hasGeneratedSuffix excludes any output from any known preset, so switching
+// presets and rerunning never feeds a prior conversion back in as a source.
+func hasGeneratedSuffix(path string) bool {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	return strings.HasSuffix(base, suffix)
-}
-
-// probeMediaInfo reads duration and stream layout from the container headers.
-// It prefers ffprobe (millisecond header reads) and falls back to an ffmpeg -i
-// header dump for ffmpeg-only installations. Neither path decodes the media
-// payload: the previous implementation mapped the whole file to null just to
-// learn the duration, which made every batch job pay a full decode upfront.
-func probeMediaInfo(ctx context.Context, inputPath string) (mediaInfo, error) {
-	if ffprobeBin, ok := resolveFFprobe(); ok {
-		return probeWithFFprobe(ctx, ffprobeBin, inputPath)
-	}
-	return probeWithFFmpegHeader(ctx, inputPath)
-}
-
-// resolveFFprobe locates an ffprobe executable matching the configured ffmpeg
-// binary (same directory when a custom path is given), falling back to the
-// system PATH. The second result reports whether a probe binary was found.
-func resolveFFprobe() (string, bool) {
-	if ffmpegBinary != "ffmpeg" {
-		probeName := "ffprobe"
-		if runtime.GOOS == "windows" {
-			probeName = "ffprobe.exe"
-		}
-		candidate := filepath.Join(filepath.Dir(ffmpegBinary), probeName)
-		if info, err := os.Lstat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate, true
+	for _, p := range presets {
+		if strings.HasSuffix(base, p.Suffix) {
+			return true
 		}
 	}
-	if _, err := exec.LookPath("ffprobe"); err == nil {
-		return "ffprobe", true
-	}
-	return "", false
+	return false
 }
 
-func probeWithFFprobe(ctx context.Context, ffprobeBin, inputPath string) (mediaInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
+// probeMediaInfo reads duration and stream layout from container headers. It
+// prefers ffprobe when resolved and falls back to an ffmpeg -i header dump for
+// ffmpeg-only installations. Neither path decodes the media payload.
+func probeMediaInfo(ctx context.Context, opts Options, inputPath string) (mediaInfo, error) {
+	if opts.FFprobePath != "" {
+		return probeWithFFprobe(ctx, opts, inputPath)
+	}
+	return probeWithFFmpegHeader(ctx, opts, inputPath)
+}
 
-	cmd := exec.CommandContext(ctx, ffprobeBin, "-v", "error", "-show_entries",
-		"format=duration:stream=codec_type", "-of", "json", inputPath)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return mediaInfo{}, fmt.Errorf("ffprobe failed for %s: %w\n%s", inputPath, err, trimCommandOutput(stderr.Bytes()))
+func probeWithFFprobe(ctx context.Context, opts Options, inputPath string) (mediaInfo, error) {
+	var stdout bytes.Buffer
+	outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+		Binary:      opts.FFprobePath,
+		Args:        []string{"-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", inputPath},
+		Timeout:     opts.FFmpegTimeout,
+		Stdout:      &stdout,
+		StderrLimit: toolenv.DefaultStderrLimit,
+	})
+	if err != nil {
+		return mediaInfo{}, fmt.Errorf("ffprobe failed for %s: %s", inputPath, toolenv.FormatFailure(err, outcome))
 	}
 
 	var probe struct {
@@ -1121,20 +1160,21 @@ func probeWithFFprobe(ctx context.Context, ffprobeBin, inputPath string) (mediaI
 // probeWithFFmpegHeader parses the input header dump from ffmpeg -i. It is the
 // fallback for ffmpeg-only installations and never decodes the payload; the
 // non-zero exit (no output was requested) is expected and ignored.
-func probeWithFFmpegHeader(ctx context.Context, inputPath string) (mediaInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, ffmpegBinary, "-hide_banner", "-i", inputPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	_ = cmd.Run()
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return mediaInfo{}, fmt.Errorf("ffmpeg media inspection timed out after %s", ffmpegTimeout)
+func probeWithFFmpegHeader(ctx context.Context, opts Options, inputPath string) (mediaInfo, error) {
+	outcome, runErr := toolenv.Run(ctx, toolenv.Invocation{
+		Binary:      opts.FFmpegPath,
+		Args:        []string{"-hide_banner", "-i", inputPath},
+		Timeout:     opts.FFmpegTimeout,
+		StderrLimit: toolenv.DefaultStderrLimit,
+	})
+	if toolenv.IsStartFailure(runErr) {
+		return mediaInfo{}, fmt.Errorf("ffmpeg media inspection failed: %s", toolenv.FormatFailure(runErr, outcome))
+	}
+	if errors.Is(runErr, toolenv.ErrTimeout) || errors.Is(runErr, toolenv.ErrCancelled) {
+		return mediaInfo{}, fmt.Errorf("ffmpeg media inspection failed: %s", toolenv.FormatFailure(runErr, outcome))
 	}
 
-	output := stderr.String()
+	output := outcome.Stderr
 	if !videoStreamLineRegex.MatchString(output) {
 		return mediaInfo{}, fmt.Errorf("no video stream found in %s", inputPath)
 	}
@@ -1145,12 +1185,12 @@ func probeWithFFmpegHeader(ctx context.Context, inputPath string) (mediaInfo, er
 	}, nil
 }
 
-func buildAudioArgs(ctx context.Context, inputPath string, info mediaInfo, selectedPreset preset) ([]string, error) {
+func buildAudioArgs(ctx context.Context, opts Options, inputPath string, info mediaInfo, selectedPreset preset) ([]string, error) {
 	if !info.HasAudio {
 		return []string{"-an"}, nil
 	}
 
-	audioFilter, err := buildNormalizedAudioFilter(ctx, inputPath, info)
+	audioFilter, err := buildNormalizedAudioFilter(ctx, opts, inputPath, info)
 	if err != nil {
 		return nil, err
 	}
@@ -1164,28 +1204,25 @@ func buildAudioArgs(ctx context.Context, inputPath string, info mediaInfo, selec
 	}, nil
 }
 
-func buildNormalizedAudioFilter(ctx context.Context, inputPath string, info mediaInfo) (string, error) {
+func buildNormalizedAudioFilter(ctx context.Context, opts Options, inputPath string, info mediaInfo) (string, error) {
 	if info.DurationSec >= 0 && info.DurationSec < shortAudioThreshold {
-		return buildPeakNormalizationFilter(ctx, inputPath, info.DetectedCategory)
+		return buildPeakNormalizationFilter(ctx, opts, inputPath, info.DetectedCategory)
 	}
-	return buildLoudnormFilter(ctx, inputPath, info.DetectedCategory)
+	return buildLoudnormFilter(ctx, opts, inputPath, info.DetectedCategory)
 }
 
-func buildPeakNormalizationFilter(ctx context.Context, inputPath string, category audioCategory) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-i", inputPath, "-vn", "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-")
-	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
-	cmd.Stderr = &stderr
-	_ = cmd.Run()
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("ffmpeg volumedetect timed out after %s", ffmpegTimeout)
+func buildPeakNormalizationFilter(ctx context.Context, opts Options, inputPath string, category audioCategory) (string, error) {
+	outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+		Binary:      opts.FFmpegPath,
+		Args:        []string{"-hide_banner", "-i", inputPath, "-vn", "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"},
+		Timeout:     opts.FFmpegTimeout,
+		StderrLimit: toolenv.DefaultStderrLimit,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg volumedetect failed: %s", toolenv.FormatFailure(err, outcome))
 	}
 
-	match := maxVolRegex.FindStringSubmatch(stderr.String())
+	match := maxVolRegex.FindStringSubmatch(outcome.Stderr)
 	if len(match) < 2 {
 		return "", fmt.Errorf("could not detect peak volume for audio track")
 	}
@@ -1207,23 +1244,20 @@ func buildPeakNormalizationFilter(ctx context.Context, inputPath string, categor
 	return fmt.Sprintf("volume=%.2fdB", gainNeeded), nil
 }
 
-func buildLoudnormFilter(ctx context.Context, inputPath string, category audioCategory) (string, error) {
+func buildLoudnormFilter(ctx context.Context, opts Options, inputPath string, category audioCategory) (string, error) {
 	pass1Filter := fmt.Sprintf("loudnorm=I=%.1f:TP=%.1f:LRA=11:print_format=json", category.TargetLUFS, category.TargetTP)
 
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-i", inputPath, "-vn", "-map", "0:a:0", "-af", pass1Filter, "-f", "null", "-")
-	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
-	cmd.Stderr = &stderr
-	_ = cmd.Run()
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("ffmpeg loudnorm analysis timed out after %s", ffmpegTimeout)
+	outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+		Binary:      opts.FFmpegPath,
+		Args:        []string{"-hide_banner", "-i", inputPath, "-vn", "-map", "0:a:0", "-af", pass1Filter, "-f", "null", "-"},
+		Timeout:     opts.FFmpegTimeout,
+		StderrLimit: toolenv.DefaultStderrLimit,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg loudnorm analysis failed: %s", toolenv.FormatFailure(err, outcome))
 	}
 
-	lnInfo, err := extractLoudnormInfo(stderr.String())
+	lnInfo, err := extractLoudnormInfo(outcome.Stderr)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract loudness info: %w", err)
 	}
@@ -1254,8 +1288,7 @@ func detectCategory(filePath string) audioCategory {
 	dir := filepath.Dir(filePath)
 	parts := strings.Split(filepath.ToSlash(dir), "/")
 	for i := len(parts) - 1; i >= 0; i-- {
-		folderLower := strings.ToLower(parts[i])
-		if category, ok := categoryKeywords[folderLower]; ok {
+		if category, ok := categoryKeywords[strings.ToLower(parts[i])]; ok {
 			return category
 		}
 	}
@@ -1362,11 +1395,6 @@ func normalizePath(text string) string {
 	return filepath.Clean(text)
 }
 
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
 func confirm(reader *bufio.Reader, prompt string, defaultYes bool) (bool, error) {
 	fmt.Print(prompt)
 	text, err := readLine(reader)
@@ -1398,13 +1426,5 @@ func readLine(reader *bufio.Reader) (string, error) {
 func failWithMessage(message string) int {
 	fmt.Println(message)
 	toolkit.WaitForExit()
-	return 1
-}
-
-func trimCommandOutput(output []byte) string {
-	text := strings.TrimSpace(string(output))
-	if len(text) <= 4000 {
-		return text
-	}
-	return text[len(text)-4000:]
+	return toolkit.ExitFailure
 }

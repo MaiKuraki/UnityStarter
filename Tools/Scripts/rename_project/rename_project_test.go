@@ -6,18 +6,101 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
+	"cyclonegames.tools/scripts/internal/projectlayout"
 	"cyclonegames.tools/scripts/internal/projectroot"
+	"cyclonegames.tools/scripts/internal/term"
+	"cyclonegames.tools/scripts/internal/toolenv"
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 func TestParseRenameOptionsAcceptsProjectFlag(t *testing.T) {
-	options, err := parseRenameOptions([]string{"--dry-run", "--project", "/repo/UnityStarter"})
+	options, err := parseRenameOptions([]string{"--dry-run", "--project", "project"})
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
-	if !options.dryRun || options.project != "/repo/UnityStarter" {
-		t.Fatalf("options = %+v, want dryRun=true project=/repo/UnityStarter", options)
+	if !options.dryRun || options.project != "project" {
+		t.Fatalf("options = %+v, want dryRun=true project=project", options)
+	}
+}
+
+func TestParseRenameOptionsAcceptsIdentityFlags(t *testing.T) {
+	options, err := parseRenameOptions([]string{
+		"--company", "NewCompany",
+		"--product", "NewProduct",
+		"--project-name", "NewGame",
+		"--app-id", "com.new.game",
+		"--yes",
+		"--layout", "layout.json",
+	})
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if options.company != "NewCompany" || options.product != "NewProduct" ||
+		options.projectName != "NewGame" || options.appID != "com.new.game" ||
+		!options.yes || options.layout != "layout.json" {
+		t.Fatalf("options = %+v, want all identity flags", options)
+	}
+}
+
+func TestNonInteractiveRequiresAllIdentityFlags(t *testing.T) {
+	if term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
+		t.Skip("the non-interactive guard does not apply to a terminal session")
+	}
+	if err := nonInteractiveInputError(renameOptions{}); err == nil {
+		t.Fatalf("missing identity flags must be rejected")
+	}
+	complete := renameOptions{
+		company: "NewCompany", product: "NewProduct",
+		projectName: "NewGame", appID: "com.new.game", yes: true,
+	}
+	if err := nonInteractiveInputError(complete); err != nil {
+		t.Fatalf("a fully specified non-interactive run must be accepted: %v", err)
+	}
+	preview := complete
+	preview.yes = false
+	preview.dryRun = true
+	if err := nonInteractiveInputError(preview); err != nil {
+		t.Fatalf("a non-interactive dry run does not need --yes: %v", err)
+	}
+	commit := complete
+	commit.yes = false
+	if err := nonInteractiveInputError(commit); err == nil {
+		t.Fatalf("a non-interactive commit needs --yes")
+	}
+}
+
+func TestLoadRenameLayoutReadsExplicitOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "layout.json")
+	if err := os.WriteFile(path, []byte(`{"identityRegistry":"ProjectSettings/custom-identity.json"}`), 0o644); err != nil {
+		t.Fatalf("cannot write layout override: %v", err)
+	}
+	layout, err := loadRenameLayout(path)
+	if err != nil {
+		t.Fatalf("explicit layout override rejected: %v", err)
+	}
+	if layout.IdentityRegistry != "ProjectSettings/custom-identity.json" {
+		t.Fatalf("identityRegistry = %q, want the overridden value", layout.IdentityRegistry)
+	}
+	if layout.LeaseFile != projectlayout.Default().LeaseFile {
+		t.Fatalf("unrelated layout entries must keep their defaults")
+	}
+}
+
+func TestIdentityValuesEqual(t *testing.T) {
+	same := RenameRequest{
+		OldProjectName: "Game", NewProjectName: "Game",
+		OldCompanyName: "C", NewCompanyName: "C",
+		OldAppName: "P", NewAppName: "P",
+		OldApplicationIdentifier: "com.c.p", NewApplicationIdentifier: "com.c.p",
+	}
+	if !identityValuesEqual(same) {
+		t.Fatalf("identical values must be reported as unchanged")
+	}
+	changed := same
+	changed.NewAppName = "Q"
+	if identityValuesEqual(changed) {
+		t.Fatalf("a changed value must not be reported as unchanged")
 	}
 }
 
@@ -127,9 +210,13 @@ func TestTransactionStatusRequiresRecovery(t *testing.T) {
 	}
 }
 
-func TestLockOwnerProbeTimeoutIsBounded(t *testing.T) {
-	if lockOwnerProbeTimeout <= 0 || lockOwnerProbeTimeout > time.Minute {
-		t.Fatalf("lockOwnerProbeTimeout = %v, want a small positive bound", lockOwnerProbeTimeout)
+func TestProcessLivenessProbeUsesKernel(t *testing.T) {
+	alive, err := toolenv.ProcessAlive(os.Getpid())
+	if err != nil || !alive {
+		t.Fatalf("the current process must be reported alive: %v %v", alive, err)
+	}
+	if alive, err := toolenv.ProcessAlive(0); err == nil || alive {
+		t.Fatalf("an invalid pid must fail closed: %v %v", alive, err)
 	}
 }
 
@@ -148,6 +235,8 @@ func writeEditorInstance(t *testing.T, projectRoot string, pid int) string {
 	return path
 }
 
+// writeBuildLease plants an idle lease lock and leftover metadata of the kind a
+// finished run may leave behind. Neither may block a rename.
 func writeBuildLease(t *testing.T, projectRoot string, pid int) {
 	t.Helper()
 	workspace := filepath.Join(projectRoot, "Temp", "BuildPipeline", "Workspace")
@@ -191,33 +280,32 @@ func TestAssessWorkspaceSafetyStaleEditorWarnsOnly(t *testing.T) {
 	}
 }
 
-// A held Build workspace lease means BuildData identity writes would race an
-// in-flight Build operation; an unprovable lease state fails closed.
-func TestAssessWorkspaceSafetyLiveLeaseBlocks(t *testing.T) {
-	projectRoot := t.TempDir()
-	writeBuildLease(t, projectRoot, os.Getpid())
-	report := assessWorkspaceSafety(projectRoot)
+// Only a lease currently held by a live process may refuse a rename.
+func TestAssessWorkspaceSafetyHeldLeaseBlocks(t *testing.T) {
+	original := buildLeaseHeld
+	t.Cleanup(func() { buildLeaseHeld = original })
+	buildLeaseHeld = func(string) (bool, error) { return true, nil }
+	report := assessWorkspaceSafety(t.TempDir())
 	if len(report.Blockers) == 0 {
 		t.Fatalf("a held Build workspace lease must block the rename: %+v", report)
 	}
-	if !strings.Contains(strings.Join(report.Blockers, " "), "Build workspace lease") {
-		t.Fatalf("blocker must name the Build workspace lease: %+v", report)
+	if !strings.Contains(strings.Join(report.Blockers, " "), "held by a live process") {
+		t.Fatalf("blocker must name the live lease holder: %+v", report)
 	}
 }
 
-func TestAssessWorkspaceSafetyStaleLeaseWarnsOnly(t *testing.T) {
+// An idle lock plus metadata left by another tool must never be misread as a
+// live holder; the tools stay independent.
+func TestAssessWorkspaceSafetyIdleLeaseDoesNotBlock(t *testing.T) {
 	projectRoot := t.TempDir()
 	writeBuildLease(t, projectRoot, stalePID)
 	report := assessWorkspaceSafety(projectRoot)
 	if len(report.Blockers) != 0 {
-		t.Fatalf("a stale Build workspace lease must not block: %+v", report)
-	}
-	if len(report.Warnings) == 0 {
-		t.Fatalf("a stale Build workspace lease must produce a warning: %+v", report)
+		t.Fatalf("an idle Build workspace lease must not block: %+v", report)
 	}
 }
 
-func TestAssessWorkspaceSafetyMalformedLeaseFailsClosed(t *testing.T) {
+func TestAssessWorkspaceSafetyLeftoverMetadataDoesNotBlock(t *testing.T) {
 	projectRoot := t.TempDir()
 	workspace := filepath.Join(projectRoot, "Temp", "BuildPipeline", "Workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -230,8 +318,28 @@ func TestAssessWorkspaceSafetyMalformedLeaseFailsClosed(t *testing.T) {
 		t.Fatalf("cannot write lease metadata fixture: %v", err)
 	}
 	report := assessWorkspaceSafety(projectRoot)
-	if len(report.Blockers) == 0 {
-		t.Fatalf("an unprovable lease state must fail closed: %+v", report)
+	if len(report.Blockers) != 0 {
+		t.Fatalf("leftover or malformed metadata must not block: %+v", report)
+	}
+}
+
+func TestAssessWorkspaceSafetyUsesLayoutOverride(t *testing.T) {
+	projectRoot := t.TempDir()
+	original := buildLeaseHeld
+	t.Cleanup(func() { buildLeaseHeld = original })
+	buildLeaseHeld = func(path string) (bool, error) {
+		return strings.Contains(filepath.ToSlash(path), "custom/workspace/lease.lock"), nil
+	}
+	custom := projectlayout.Default()
+	custom.WorkspaceDir = "custom/workspace"
+	custom.LeaseFile = "custom/workspace/lease.lock"
+	custom.LeaseMetadataFile = "custom/workspace/lease.json"
+	custom.QuarantineDir = "custom/workspace/cleanup-quarantine"
+	if report := assessWorkspaceSafetyWithLayout(projectRoot, custom); len(report.Blockers) == 0 {
+		t.Fatalf("the layout override must drive the probed lease path: %+v", report)
+	}
+	if report := assessWorkspaceSafety(projectRoot); len(report.Blockers) != 0 {
+		t.Fatalf("the default layout resolves a different lease path: %+v", report)
 	}
 }
 
@@ -239,5 +347,141 @@ func TestAssessWorkspaceSafetyIdleProjectPasses(t *testing.T) {
 	report := assessWorkspaceSafety(t.TempDir())
 	if len(report.Blockers) != 0 || len(report.Warnings) != 0 {
 		t.Fatalf("an idle project must pass clean: %+v", report)
+	}
+}
+
+func TestLoadTemplateIdentityRegistryIsOptional(t *testing.T) {
+	configureLayout(projectlayout.Default())
+	snapshot, err := loadTemplateIdentityRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("a missing identity registry must not be a startup prerequisite: %v", err)
+	}
+	if snapshot.Registry == nil || len(snapshot.Registry.Targets) != 0 {
+		t.Fatalf("a missing registry must yield no identity targets: %+v", snapshot.Registry)
+	}
+	if snapshot.ContentSHA256 != "" || len(snapshot.ExternalWriteTargets) != 0 ||
+		len(snapshot.DeclaredExternalTargets) != 0 {
+		t.Fatalf("a missing registry must be an empty snapshot: %+v", snapshot)
+	}
+}
+
+func TestReadBoundedFileRejectsSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "content.txt")
+	if err := os.WriteFile(target, []byte("content"), 0o644); err != nil {
+		t.Fatalf("cannot write fixture: %v", err)
+	}
+	data, err := readBoundedFile(target)
+	if err != nil || string(data) != "content" {
+		t.Fatalf("readBoundedFile failed on a regular file: %q, %v", data, err)
+	}
+	link := filepath.Join(directory, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+	if _, err := readBoundedFile(link); err == nil {
+		t.Fatalf("symbolic links must be rejected")
+	}
+	if _, err := readBoundedFile(directory); err == nil {
+		t.Fatalf("directories must be rejected")
+	}
+}
+
+// writeRenameFixture builds a minimal Unity project without an identity
+// registry so the core rename targets can be planned on their own.
+func writeRenameFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		filepath.Join("Assets", "OldGame.meta"): "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\nfolderAsset: yes\n",
+		filepath.Join("ProjectSettings", "ProjectSettings.asset"): strings.Join([]string{
+			"%YAML 1.1",
+			"--- !u!129 &1",
+			"PlayerSettings:",
+			"  companyName: OldCompany",
+			"  productName: OldProduct",
+			"  applicationIdentifier:",
+			"    Android: com.old.game",
+			"    iPhone: com.old.game",
+			"  metroApplicationDescription: OldProduct",
+			"",
+		}, "\n"),
+		filepath.Join("ProjectSettings", "EditorBuildSettings.asset"): strings.Join([]string{
+			"%YAML 1.1",
+			"--- !u!1045 &1",
+			"EditorBuildSettings:",
+			"  m_Scenes:",
+			"  - enabled: 1",
+			"    path: Assets/OldGame/Scenes/Main.unity",
+			"",
+		}, "\n"),
+	}
+	for relative, content := range files {
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("cannot create fixture directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("cannot write fixture file: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Assets", "OldGame"), 0o755); err != nil {
+		t.Fatalf("cannot create project folder: %v", err)
+	}
+	return root
+}
+
+func TestBuildRenamePlanWithoutIdentityRegistry(t *testing.T) {
+	configureLayout(projectlayout.Default())
+	root := writeRenameFixture(t)
+	request := RenameRequest{
+		OldProjectName: "OldGame", NewProjectName: "NewGame",
+		OldCompanyName: "OldCompany", NewCompanyName: "NewCompany",
+		OldAppName: "OldProduct", NewAppName: "NewProduct",
+		OldApplicationIdentifier: "com.old.game", NewApplicationIdentifier: "com.new.game",
+	}
+	plan, err := buildRenamePlan(root, request)
+	if err != nil {
+		t.Fatalf("a rename must be plannable without an identity registry: %v", err)
+	}
+	if len(plan.Operations) == 0 {
+		t.Fatalf("the plan must still contain the core rename operations")
+	}
+	if len(plan.SkippedTargets) != 0 {
+		t.Fatalf("no registry targets can be skipped when the registry is absent: %+v", plan.SkippedTargets)
+	}
+	hasSettingsWrite := false
+	for _, operation := range plan.Operations {
+		if operation.Kind == renameOperationWrite && filepath.Base(operation.Target) == "ProjectSettings.asset" {
+			hasSettingsWrite = true
+		}
+	}
+	if !hasSettingsWrite {
+		t.Fatalf("ProjectSettings must still be updated without the registry")
+	}
+}
+
+func TestRunRenameToolNonInteractiveRequiresFlags(t *testing.T) {
+	if term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
+		t.Skip("the non-interactive guard does not apply to a terminal session")
+	}
+	if code := runRenameTool(nil); code != toolkit.ExitUsage {
+		t.Fatalf("a non-interactive run without identity flags must fail with a usage error, got %d", code)
+	}
+}
+
+func TestRunRenameToolNonInteractiveDryRun(t *testing.T) {
+	configureLayout(projectlayout.Default())
+	root := writeRenameFixture(t)
+	code := runRenameTool([]string{
+		"--project", root,
+		"--company", "NewCompany",
+		"--product", "NewProduct",
+		"--project-name", "NewGame",
+		"--app-id", "com.new.game",
+		"--dry-run",
+	})
+	if code != toolkit.ExitSuccess {
+		t.Fatalf("a fully specified non-interactive dry run must succeed, got %d", code)
 	}
 }

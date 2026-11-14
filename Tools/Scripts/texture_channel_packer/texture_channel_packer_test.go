@@ -239,3 +239,31 @@ func TestExecutePackReplacesStaleOutputAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateOutputDimensionsRejectsOversize(t *testing.T) {
+	if err := validateOutputDimensions(maxOutputDimension, maxOutputDimension); err != nil {
+		t.Fatalf("the cap itself must be accepted: %v", err)
+	}
+	if err := validateOutputDimensions(maxOutputDimension+1, 1); err == nil {
+		t.Fatalf("over-limit width must be rejected")
+	}
+	if err := validateOutputDimensions(1, maxOutputDimension+1); err == nil {
+		t.Fatalf("over-limit height must be rejected")
+	}
+	if err := validateOutputDimensions(0, 10); err == nil {
+		t.Fatalf("non-positive dimension must be rejected")
+	}
+}
+
+func TestRunRejectsOversizeOutput(t *testing.T) {
+	inputPNG := writeTestPNG(t, t.TempDir())
+	code := Run([]string{
+		"-r", inputPNG,
+		"-o", filepath.Join(t.TempDir(), "packed.png"),
+		"-size", "16385x8",
+		"-ci",
+	})
+	if code != toolkit.ExitUsage {
+		t.Fatalf("exit code = %d, want %d for an over-limit size", code, toolkit.ExitUsage)
+	}
+}
