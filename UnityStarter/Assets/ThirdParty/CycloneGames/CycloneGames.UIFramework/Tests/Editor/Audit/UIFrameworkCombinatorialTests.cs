@@ -14,6 +14,8 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
     /// Pairwise combination of the open/close pipeline: each tuple is a separate test case and
     /// one sweep test runs the whole matrix. EditMode has no PlayerLoop tick, so providers and
     /// transitions complete synchronously and the per-frame instantiate budget is not exercised.
+    /// Precondition rejections are asserted with Assert.Throws: UIService validates on the
+    /// caller stack before returning a UniTask, so an await would also accept an async fault.
     /// </summary>
     [Category("UIFrameworkAudit")]
     public sealed class UIFrameworkCombinatorialTests
@@ -697,21 +699,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
 
                 await service.OpenAsync(firstConfiguration);
 
-                Exception observed = null;
-                try
-                {
-                    service.OpenAsync(secondConfiguration);
-                }
-                catch (Exception exception)
-                {
-                    observed = exception;
-                }
-
-                Assert.That(
-                    observed,
-                    Is.InstanceOf<InvalidOperationException>(),
-                    "A duplicate open from a different configuration instance must throw " +
-                    "InvalidOperationException, observed " + DescribeError(observed));
+                InvalidOperationException observed = Assert.Throws<InvalidOperationException>(
+                    () => service.OpenAsync(secondConfiguration),
+                    "A duplicate open from a different configuration instance must reject " +
+                    "synchronously on the caller stack with InvalidOperationException.");
                 Assert.That(
                     observed.Message.Contains("different configuration"),
                     Is.True,
@@ -738,21 +729,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
 
                 await service.OpenAsync(configuration, new UIOpenOptions(context: new object()));
 
-                Exception observed = null;
-                try
-                {
-                    service.OpenAsync(configuration, new UIOpenOptions(context: new object()));
-                }
-                catch (Exception exception)
-                {
-                    observed = exception;
-                }
-
-                Assert.That(
-                    observed,
-                    Is.InstanceOf<InvalidOperationException>(),
-                    "A duplicate open whose Context reference differs must throw, observed " +
-                    DescribeError(observed));
+                InvalidOperationException observed = Assert.Throws<InvalidOperationException>(
+                    () => service.OpenAsync(configuration, new UIOpenOptions(context: new object())),
+                    "A duplicate open whose Context reference differs must reject " +
+                    "synchronously on the caller stack with InvalidOperationException.");
                 Assert.That(
                     observed.Message.Contains("different options"),
                     Is.True,
@@ -777,20 +757,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
 
                 await service.OpenAsync(first);
 
-                Exception observed = null;
-                try
-                {
-                    service.OpenAsync(second);
-                }
-                catch (Exception exception)
-                {
-                    observed = exception;
-                }
-
-                Assert.That(
-                    observed,
-                    Is.InstanceOf<InvalidOperationException>(),
-                    "opening past MaxActiveWindows=1 must throw, observed " + DescribeError(observed));
+                Assert.Throws<InvalidOperationException>(
+                    () => service.OpenAsync(second),
+                    "opening past MaxActiveWindows=1 must reject synchronously " +
+                    "on the caller stack with InvalidOperationException.");
                 Assert.That(
                     service.ActiveWindowCount,
                     Is.EqualTo(1),
@@ -891,20 +861,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
                 await service.OpenAsync(configuration);
                 UniTask<bool> close = service.CloseAsync(ClosedWindowId);
 
-                Exception observed = null;
-                try
-                {
-                    service.OpenAsync(configuration);
-                }
-                catch (Exception exception)
-                {
-                    observed = exception;
-                }
-
-                Assert.That(
-                    observed,
-                    Is.InstanceOf<InvalidOperationException>(),
-                    "opening a window that is still closing must throw, observed " + DescribeError(observed));
+                InvalidOperationException observed = Assert.Throws<InvalidOperationException>(
+                    () => service.OpenAsync(configuration),
+                    "opening a window that is still closing must reject synchronously " +
+                    "on the caller stack with InvalidOperationException.");
                 Assert.That(
                     observed.Message.Contains("closing"),
                     Is.True,
@@ -1445,20 +1405,10 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
                     Is.EqualTo(UniTaskStatus.Pending),
                     "the gated coordinator must hold the navigation in flight");
 
-                Exception observed = null;
-                try
-                {
-                    service.NavigateAsync("NavLeaving", "NavEntering", new AuditCoordinator());
-                }
-                catch (Exception exception)
-                {
-                    observed = exception;
-                }
-
-                Assert.That(
-                    observed,
-                    Is.InstanceOf<InvalidOperationException>(),
-                    "a second coordinated navigation must be rejected, observed " + DescribeError(observed));
+                InvalidOperationException observed = Assert.Throws<InvalidOperationException>(
+                    () => service.NavigateAsync("NavLeaving", "NavEntering", new AuditCoordinator()),
+                    "a second coordinated navigation must be rejected synchronously " +
+                    "on the caller stack with InvalidOperationException.");
                 Assert.That(
                     observed.Message.Contains("already in progress"),
                     Is.True,
