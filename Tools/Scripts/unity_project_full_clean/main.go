@@ -991,9 +991,11 @@ func revalidateInventory(projectRoot string, items []cleanItem) error {
 			return err
 		}
 		info, err := os.Lstat(item.path)
-		if err != nil || item.identity == nil || !os.SameFile(item.identity, info) ||
-			info.Size() != item.identity.Size() || !info.ModTime().Equal(item.identity.ModTime()) {
-			return fmt.Errorf("target identity changed: %s", item.path)
+		if err != nil {
+			return fmt.Errorf("target identity changed: %s: %v", item.path, err)
+		}
+		if reason := targetIdentityDrift(item.identity, info); reason != "" {
+			return fmt.Errorf("target identity changed: %s: %s", item.path, reason)
 		}
 		relative, err := filepath.Rel(projectRoot, item.path)
 		if err != nil {
@@ -1834,11 +1836,39 @@ func inventoryItem(projectRoot, path, kind string) (cleanItem, error) {
 		return cleanItem{}, err
 	}
 	after, err := os.Lstat(path)
-	if err != nil || after.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, after) ||
-		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || before.Mode().Perm() != after.Mode().Perm() {
-		return cleanItem{}, fmt.Errorf("cleanup target root changed during inventory: %s", path)
+	if err != nil {
+		return cleanItem{}, fmt.Errorf("cleanup target root changed during inventory: %s: %v", path, err)
+	}
+	if reason := targetIdentityDrift(before, after); reason != "" {
+		return cleanItem{}, fmt.Errorf("cleanup target root changed during inventory: %s: %s", path, reason)
 	}
 	return cleanItem{path: path, kind: kind, size: size, identity: after}, nil
+}
+
+// targetIdentityDrift decides whether a path still denotes the object recorded
+// during the preview. Directory size, timestamps and permission bits are
+// intentionally excluded: cache roots are live while an editor, importer,
+// indexer or antivirus writes inside them, and those writes change parent
+// metadata without replacing the directory. Identity is the file-system object
+// plus its type; path containment and the per-segment reparse checks in
+// validateDeleteTarget provide the remaining TOCTOU protection.
+func targetIdentityDrift(before, after os.FileInfo) string {
+	if before == nil || after == nil {
+		return "target metadata is unavailable"
+	}
+	if !os.SameFile(before, after) {
+		return "target was replaced by a different object"
+	}
+	if before.IsDir() != after.IsDir() {
+		return "target type changed"
+	}
+	if after.Mode()&os.ModeSymlink != 0 {
+		return "target became a symlink or reparse point"
+	}
+	if !after.IsDir() && !after.Mode().IsRegular() {
+		return "target is no longer a regular file or directory"
+	}
+	return ""
 }
 
 func validateDeleteTarget(projectRoot, target string) error {
@@ -2063,7 +2093,11 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 			return failClaim(err)
 		}
 		claimedPath := journal.Entries[index].ClaimedPath
-		moveErr := safefs.MoveNoReplace(item.path, claimedPath)
+		// A live cache may briefly hold an open handle while a log or importer
+		// writes. Retry only sharing conflicts; every other error fails closed.
+		moveErr := safefs.RetryOnLock(ctx, 5, 60*time.Millisecond, func() error {
+			return safefs.MoveNoReplace(item.path, claimedPath)
+		})
 		claimedInfo, claimedErr := os.Lstat(claimedPath)
 		if claimedErr == nil && item.identity != nil && os.SameFile(item.identity, claimedInfo) {
 			claimed = append(claimed, claimedCleanItem{item: item, claimedPath: claimedPath, claimedIdentity: claimedInfo, entryIndex: index})
