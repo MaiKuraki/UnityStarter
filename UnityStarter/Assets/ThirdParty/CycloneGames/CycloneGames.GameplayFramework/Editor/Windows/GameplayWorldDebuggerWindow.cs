@@ -330,7 +330,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private void TryBindHost()
         {
-            GameplayWorldHost nextHost = UnityEngine.Object.FindFirstObjectByType<GameplayWorldHost>(
+            GameplayWorldHost nextHost = UnityEngine.Object.FindAnyObjectByType<GameplayWorldHost>(
                 FindObjectsInactive.Include);
             if (host != nextHost)
             {

@@ -8,6 +8,7 @@ using NUnit.Framework;
 using Unity.Mathematics;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+using CycloneGames.Compat;
 
 namespace CycloneGames.AIPerception.Tests.Editor
 {
@@ -1700,9 +1701,9 @@ namespace CycloneGames.AIPerception.Tests.Editor
         [Test]
         public void Fix_DriverResolution_DoesNotSpawnHiddenGameObjects()
         {
-            int before = UnityEngine.Object.FindObjectsOfType<PerceptionManagerComponent>(true).Length;
+            int before = UnityObjectQuery.FindAll<PerceptionManagerComponent>(true).Length;
             PerceptionManagerComponent instance = PerceptionManagerComponent.Instance;
-            int after = UnityEngine.Object.FindObjectsOfType<PerceptionManagerComponent>(true).Length;
+            int after = UnityObjectQuery.FindAll<PerceptionManagerComponent>(true).Length;
 
             EvidenceWriter.Write(
                 $"fix.noImplicitSpawn|before={before}|after={after}|created={after - before}|instanceNull={instance == null}");

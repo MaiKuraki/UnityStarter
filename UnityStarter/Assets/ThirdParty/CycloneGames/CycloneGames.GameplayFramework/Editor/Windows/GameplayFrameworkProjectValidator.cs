@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
@@ -35,6 +37,17 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
     internal static class GameplayFrameworkProjectValidator
     {
+        // Scene handles stay plain integers here because they key a per-scene counter dictionary and
+        // are only compared for equality. Unity 6.7 widened the native handle, so it is narrowed once.
+        private static int ToHandleValue(Scene scene)
+        {
+#if UNITY_6000_6_OR_NEWER
+            return unchecked((int)scene.handle.GetRawData());
+#else
+            return scene.handle;
+#endif
+        }
+
         public static void CollectProjectIssues(List<GameplayFrameworkValidationIssue> issues)
         {
             if (issues == null)
@@ -62,9 +75,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 ValidateWorldSettings(settings, issues, path);
             }
 
-            GameplayWorldHost[] hosts = UnityEngine.Object.FindObjectsByType<GameplayWorldHost>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None);
+            GameplayWorldHost[] hosts = UnityObjectQuery.FindAll<GameplayWorldHost>(true);
             ValidateHosts(hosts, issues);
         }
 
@@ -166,8 +177,9 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     continue;
                 }
 
-                enabledAutoStartCountByScene.TryGetValue(scene.handle, out int count);
-                enabledAutoStartCountByScene[scene.handle] = count + 1;
+                int sceneHandle = ToHandleValue(scene);
+                enabledAutoStartCountByScene.TryGetValue(sceneHandle, out int count);
+                enabledAutoStartCountByScene[sceneHandle] = count + 1;
             }
 
             for (int i = 0; i < hosts.Length; i++)
@@ -219,7 +231,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     data.AutoStart &&
                     hostScene.IsValid() &&
                     hostScene.isLoaded &&
-                    enabledAutoStartCountByScene.TryGetValue(hostScene.handle, out int autoStartCount) &&
+                    enabledAutoStartCountByScene.TryGetValue(ToHandleValue(hostScene), out int autoStartCount) &&
                     autoStartCount > 1)
                 {
                     issues.Add(new GameplayFrameworkValidationIssue(

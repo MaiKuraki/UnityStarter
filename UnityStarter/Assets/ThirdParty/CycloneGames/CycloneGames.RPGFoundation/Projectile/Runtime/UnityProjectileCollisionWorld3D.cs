@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.RPGFoundation.Projectile.Core;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Projectile.Runtime
 {
@@ -48,7 +49,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
 
                 results[written] = new ProjectileCollisionHit(
                     targetEntityId: 0UL,
-                    targetObjectId: hit.collider.GetInstanceID(),
+                    targetObjectId: UnityObjectId.Of(hit.collider),
                     hitLayerMask: 1 << hit.collider.gameObject.layer,
                     distance: hit.distance,
                     position: ToProjectileVector3(hit.point),

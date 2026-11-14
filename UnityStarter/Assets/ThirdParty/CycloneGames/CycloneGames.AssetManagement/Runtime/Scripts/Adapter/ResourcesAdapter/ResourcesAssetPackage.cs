@@ -207,7 +207,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 _operationTails);
             if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             handle = (ResourcesAssetHandle<TAsset>)_cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(handle, location);
 #endif
             return AssetHandleLeases.Create(handle, cancellationToken);
@@ -242,7 +242,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 _operationTails);
             _instantiateHandles.Add(id, wrapped);
             if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(wrapped, handle?.AssetObject?.name ?? "unknown");
 #endif
             return wrapped;

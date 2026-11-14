@@ -7,6 +7,7 @@ using CycloneGames.Factory.Runtime;
 using Unity.Profiling;
 using UnityEngine;
 using CycloneGames.Foundation2D.Runtime;
+using CycloneGames.Compat;
 
 namespace CycloneGames.Foundation2D.Sample.Runtime
 {
@@ -258,13 +259,8 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
         private static SpriteSequenceController[] FindControllers(bool ignoreInactive)
         {
-#if UNITY_2023_1_OR_NEWER
-        SpriteSequenceController[] controllers = FindObjectsByType<SpriteSequenceController>(
-            ignoreInactive ? FindObjectsInactive.Exclude : FindObjectsInactive.Include,
-            FindObjectsSortMode.None);
-#else
-            SpriteSequenceController[] controllers = FindObjectsOfType<SpriteSequenceController>(!ignoreInactive);
-#endif
+            SpriteSequenceController[] controllers =
+                UnityObjectQuery.FindAll<SpriteSequenceController>(!ignoreInactive);
             return controllers ?? Array.Empty<SpriteSequenceController>();
         }
 
@@ -769,7 +765,11 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 }
 
 #if UNITY_EDITOR
-                int batches = UnityEditor.UnityStats.batches;
+                // Unity 6.7 removed the aggregate UnityStats.batches counter; total batches is the sum of
+                // the three per-kind counters, which have existed since Unity 5.
+                int batches = UnityEditor.UnityStats.dynamicBatches
+                              + UnityEditor.UnityStats.staticBatches
+                              + UnityEditor.UnityStats.instancedBatches;
                 int setPass = UnityEditor.UnityStats.setPassCalls;
                 sumBatches += batches;
                 sumSetPass += setPass;

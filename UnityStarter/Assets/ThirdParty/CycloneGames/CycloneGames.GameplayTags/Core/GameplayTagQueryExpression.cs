@@ -14,6 +14,9 @@ namespace CycloneGames.GameplayTags.Core
       public EGameplayTagQueryExprOperator Operator;
         
       // The list of tags to evaluate with the operator. This is used if Expressions is empty.
+      // GameplayTagContainer is a runtime bitset bound to a registry and cannot be serialized by Unity;
+      // the persisted authoring shape is GameplayTagContainerPersisted.
+      [System.NonSerialized]
       public GameplayTagContainer Tags;
         
       // The list of sub-expressions to evaluate. This is used if Tags is empty.

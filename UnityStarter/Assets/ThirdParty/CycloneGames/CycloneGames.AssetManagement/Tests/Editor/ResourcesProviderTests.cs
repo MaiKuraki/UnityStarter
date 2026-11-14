@@ -12,6 +12,7 @@ using NUnit.Framework;
 
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.AssetManagement.Runtime.Cache;
+using CycloneGames.Compat;
 
 namespace CycloneGames.AssetManagement.Tests.Editor
 {
@@ -449,7 +450,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         {
             var owner = (ResourcesAssetPackage)package;
             AssetCacheKey key = AssetCacheService.BuildCacheKey(
-                $"Tests/Prefab/{sourceObject.GetInstanceID()}",
+                $"Tests/Prefab/{UnityObjectId.Of(sourceObject)}",
                 typeof(GameObject));
             ResourcesAssetHandle<GameObject> backend = ResourcesAssetHandle<GameObject>.Create(
                 AssetRuntimeGuard.NextHandleId(),

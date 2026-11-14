@@ -603,7 +603,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 tag,
                 owner,
                 backend);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(backend, location);
 #endif
             return AssetHandleLeases.Create(backend, cancellationToken);
@@ -651,7 +651,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 tag,
                 owner,
                 backend);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(backend, location);
 #endif
             return AssetHandleLeases.Create(backend, cancellationToken);
@@ -699,7 +699,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 HandleTracker.Register(id, _packageName, $"InstantiateAsync : {backend.Location}");
             }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(result, backend.Location);
 #endif
             return result;
@@ -770,7 +770,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 HandleTracker.Register(id, _packageName, $"SceneAsync : {sceneLocation}");
             }
             SceneTracker.Register(id, _packageName, "Addressables", sceneLocation, bucket, loadParameters, result);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(result, sceneLocation);
 #endif
             return result;

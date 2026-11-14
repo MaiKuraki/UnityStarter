@@ -1,5 +1,5 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
-    <Style src="project://database/Assets/Plugins/BehaviorTree/Editor/Nodes/BTNodeView.uss?fileID=7433441132597879392&amp;guid=58cd66f66a7c2b243b22592bb0975bf7&amp;type=3#BTNodeView" />
+    <Style src="BT_Node_View_Style.uss" />
     <ui:VisualElement name="node-state-border" picking-mode="Ignore" />
     <ui:VisualElement name="node-border">
         <ui:VisualElement name="contents">

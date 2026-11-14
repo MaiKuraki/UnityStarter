@@ -105,8 +105,14 @@ namespace CycloneGames.Networking.Editor.Diagnostics
                 return type;
             }
 
-            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            for (int i = 0; i < assemblies.Length; i++)
+#if UNITY_6000_7_OR_NEWER
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies =
+                UnityEngine.Assemblies.CurrentAssemblies.GetLoadedAssemblies();
+#else
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies =
+                AppDomain.CurrentDomain.GetAssemblies();
+#endif
+            for (int i = 0; i < assemblies.Count; i++)
             {
                 type = assemblies[i].GetType(fullName, false);
                 if (type != null)

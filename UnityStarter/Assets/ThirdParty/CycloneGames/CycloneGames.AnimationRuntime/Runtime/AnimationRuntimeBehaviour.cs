@@ -151,7 +151,7 @@ namespace CycloneGames.AnimationRuntime
             Animator animator = _animator;
             if (animator == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Animator[] animators = GetComponentsInChildren<Animator>(true);
                 if (animators.Length > 1)
                 {

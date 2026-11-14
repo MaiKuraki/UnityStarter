@@ -5,6 +5,7 @@ using CycloneGames.GameplayFramework.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
@@ -64,7 +65,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private int actorOwnerThreadId;
         private ActorLifecycleState lifecycleState = ActorLifecycleState.Constructed;
         private EndPlayReason endPlayReason;
-        private int stableInstanceId;
+        private ulong stableInstanceId;
         private bool worldUnboundNotified;
         private bool actorTickEnabled;
         private bool actorTickStateInitialized;
@@ -230,11 +231,11 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// bookkeeping uses the cached value because native Unity object access is no longer
         /// valid once OnDestroy has begun.
         /// </summary>
-        internal int GetStableInstanceId()
+        internal ulong GetStableInstanceId()
         {
             if (stableInstanceId == 0)
             {
-                stableInstanceId = GetInstanceID();
+                stableInstanceId = UnityObjectId.Of(this);
             }
 
             return stableInstanceId;

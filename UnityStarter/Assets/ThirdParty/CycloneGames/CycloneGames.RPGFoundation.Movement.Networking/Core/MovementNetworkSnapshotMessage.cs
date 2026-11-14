@@ -70,9 +70,9 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
         {
             return new MovementSnapshot
             {
-                Position = Position.ToFloat3(),
-                Velocity = Velocity.ToFloat3(),
-                WorldUp = WorldUp.ToFloat3(),
+                Position = Position.ToMovementVector3(),
+                Velocity = Velocity.ToMovementVector3(),
+                WorldUp = WorldUp.ToMovementVector3(),
                 StateType = (MovementStateType)StateId,
                 VerticalVelocity = VerticalVelocity,
                 IsGrounded = IsGrounded,

@@ -1,5 +1,6 @@
 using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
@@ -19,7 +20,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         public GameObject GameObject { get; }
 
-        public override int Id => GameObject != null ? GameObject.GetInstanceID() : 0;
+        public override int Id => GameObject != null ? unchecked((int)UnityObjectId.Of(GameObject)) : 0;
 
         public override ulong StableId => _stableId != InteractionStableId.None ? _stableId : base.StableId;
 

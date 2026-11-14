@@ -800,7 +800,7 @@ namespace CycloneGames.UIFramework.Runtime
             WindowSession session = new WindowSession(
                 windowId,
                 options,
-                SceneManager.GetActiveScene().handle,
+                ToSceneHandleValue(SceneManager.GetActiveScene()),
                 _lifetimeCancellation.Token)
             {
                 Configuration = configuration,
@@ -968,7 +968,7 @@ namespace CycloneGames.UIFramework.Runtime
                 layer.Attach(window);
                 ThrowIfOpenCannotContinue(session, cancellationToken);
 
-                if (sceneBound && session.RequestedSceneHandle != SceneManager.GetActiveScene().handle)
+                if (sceneBound && session.RequestedSceneHandle != ToSceneHandleValue(SceneManager.GetActiveScene()))
                 {
                     throw new OperationCanceledException(
                         $"Scene-bound window '{session.WindowId}' completed after its owner scene changed.");
@@ -2285,7 +2285,19 @@ namespace CycloneGames.UIFramework.Runtime
                 return;
             }
 
-            CloseSceneBoundWindowsAsync(nextScene.handle).Forget();
+            CloseSceneBoundWindowsAsync(ToSceneHandleValue(nextScene)).Forget();
+        }
+
+        // Scene handles are stored as plain integers because the window model uses -1 as an explicit
+        // "unbound" sentinel and the value is only ever compared for equality. Unity 6.7 replaced the
+        // int handle with a 64-bit SceneHandle, so the native value is narrowed at this boundary.
+        private static int ToSceneHandleValue(Scene scene)
+        {
+#if UNITY_6000_6_OR_NEWER
+            return unchecked((int)scene.handle.GetRawData());
+#else
+            return scene.handle;
+#endif
         }
 
         private async UniTask CloseSceneBoundWindowsAsync(int activeSceneHandle)

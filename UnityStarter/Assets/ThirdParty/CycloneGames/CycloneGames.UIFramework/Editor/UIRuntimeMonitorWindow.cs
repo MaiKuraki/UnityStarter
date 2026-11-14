@@ -208,7 +208,7 @@ namespace CycloneGames.UIFramework.Editor
 #pragma warning disable CG0011
         private static UIManager FindUIManagerInOpenScenes()
         {
-            return UnityEngine.Object.FindFirstObjectByType<UIManager>(FindObjectsInactive.Include);
+            return UnityEngine.Object.FindAnyObjectByType<UIManager>(FindObjectsInactive.Include);
         }
 #pragma warning restore CG0011
 

@@ -262,6 +262,17 @@ namespace CycloneGames.Foundation2D.Editor
             return material;
         }
 
+        // Unity 6 replaced the int asset identity with EntityId; the local cache still keys on an int,
+        // so only the loading query changes shape.
+        private static bool IsPreviewLoading(Material material)
+        {
+#if UNITY_6000_4_OR_NEWER
+            return AssetPreview.IsLoadingAssetPreview(material.GetEntityId());
+#else
+            return AssetPreview.IsLoadingAssetPreview(material.GetInstanceID());
+#endif
+        }
+
         private Texture GetMaterialPreview(Material material)
         {
             if (material == null)
@@ -271,7 +282,7 @@ namespace CycloneGames.Foundation2D.Editor
                 return null;
             }
 
-            int materialId = material.GetInstanceID();
+            int materialId = material.GetHashCode();
             if (_previewMaterialId != materialId)
             {
                 _previewMaterialId = materialId;
@@ -281,12 +292,12 @@ namespace CycloneGames.Foundation2D.Editor
             if (_previewTexture == null)
             {
                 _previewTexture = AssetPreview.GetAssetPreview(material);
-                if (_previewTexture == null && !AssetPreview.IsLoadingAssetPreview(materialId))
+                if (_previewTexture == null && !IsPreviewLoading(material))
                 {
                     _previewTexture = AssetPreview.GetMiniThumbnail(material);
                 }
 
-                if (_previewTexture == null && AssetPreview.IsLoadingAssetPreview(materialId))
+                if (_previewTexture == null && IsPreviewLoading(material))
                 {
                     Repaint();
                 }

@@ -77,7 +77,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             int remainingReflections = query.MaxReflectionCount;
             int remainingPierces = query.MaxPierceCount;
             ulong ignoredTargetEntityId = query.InitialIgnoredTargetEntityId;
-            int ignoredTargetObjectId = query.InitialIgnoredTargetObjectId;
+            ulong ignoredTargetObjectId = query.InitialIgnoredTargetObjectId;
 
             for (int iteration = 0; iteration < query.MaxIterationCount; iteration++)
             {

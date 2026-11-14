@@ -358,7 +358,7 @@ namespace CycloneGames.AIPerception.Editor
                 InspectorUiUtility.DrawSubsectionLabel("Selected Target");
                 using (new EditorGUI.DisabledScope(true))
                 {
-                    EditorGUILayout.IntField(RuntimeIdLabel, _runtimeId);
+                    EditorGUILayout.TextField(RuntimeIdLabel, _runtimeId.ToString());
                     EditorGUILayout.Vector3Field(RuntimePositionLabel.text, _runtimePosition);
                 }
             }

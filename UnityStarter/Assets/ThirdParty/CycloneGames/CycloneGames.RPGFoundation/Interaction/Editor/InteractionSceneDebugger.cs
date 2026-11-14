@@ -4,6 +4,7 @@ using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using Object = UnityEngine.Object;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Editor
 {
@@ -154,8 +155,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             }
 
             s_lastCacheTime = now;
-            s_cachedInteractables = Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None);
-            s_cachedDetectors = Object.FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            s_cachedInteractables = UnityObjectQuery.FindAll<Interactable>(false);
+            s_cachedDetectors = UnityObjectQuery.FindAll<InteractionDetector>(false);
         }
 
         private static void DrawEditModeVisualization()

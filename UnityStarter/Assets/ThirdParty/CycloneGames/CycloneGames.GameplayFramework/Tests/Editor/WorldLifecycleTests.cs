@@ -791,18 +791,24 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         [Test]
         public void LoginRejection_RollsBackWorldAndClearsCurrentWorld()
         {
+#if UNITY_6000_6_OR_NEWER
+            int controllersBefore = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include).Length;
+#else
             int controllersBefore = Object.FindObjectsByType<PlayerController>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None).Length;
+                FindObjectsInactive.Include, FindObjectsSortMode.None).Length;
+#endif
             using GameplayTestWorld testWorld = GameplayTestWorld.Create(localPlayerCount: 1);
 
             Assert.Throws<System.InvalidOperationException>(() =>
                 testWorld.StartWorld(session: new RejectAllSession()));
 
             Assert.IsNull(testWorld.Instance.CurrentWorld);
+#if UNITY_6000_6_OR_NEWER
+            int controllersAfter = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include).Length;
+#else
             int controllersAfter = Object.FindObjectsByType<PlayerController>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None).Length;
+                FindObjectsInactive.Include, FindObjectsSortMode.None).Length;
+#endif
             Assert.AreEqual(controllersBefore + 1, controllersAfter, "Only the authoring prefab object should remain.");
         }
 

@@ -479,8 +479,14 @@ namespace CycloneGames.UIFramework.Editor
             string fullName = string.IsNullOrEmpty(operation.namespaceName)
                 ? operation.scriptName
                 : operation.namespaceName + "." + operation.scriptName;
-            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            for (int i = 0; i < assemblies.Length; i++)
+#if UNITY_6000_7_OR_NEWER
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies =
+                UnityEngine.Assemblies.CurrentAssemblies.GetLoadedAssemblies();
+#else
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies =
+                AppDomain.CurrentDomain.GetAssemblies();
+#endif
+            for (int i = 0; i < assemblies.Count; i++)
             {
                 if (!string.Equals(
                         assemblies[i].GetName().Name,

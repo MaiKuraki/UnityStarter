@@ -7,6 +7,7 @@ using UnityEditor.Callbacks;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
+using CycloneGames.Compat;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
@@ -29,16 +30,48 @@ namespace CycloneGames.BehaviorTree.Editor
             BehaviorTreeEditor wnd = GetWindow<BehaviorTreeEditor>();
             wnd.titleContent = new GUIContent("Behavior Tree Editor");
         }
+#if UNITY_6000_6_OR_NEWER
         [OnOpenAsset]
-        public static bool OnOpenAsset(int instanceID, int line)
+        public static bool OnOpenAsset(EntityId entityId, int line)
         {
-            if (EditorUtility.InstanceIDToObject(instanceID) is Runtime.BehaviorTree tree)
+            if (EditorUtility.EntityIdToObject(entityId) is Runtime.BehaviorTree tree)
             {
                 Selection.activeObject = tree;
                 OpenWindow();
                 return true;
             }
             return false;
+        }
+#else
+        [OnOpenAsset]
+        public static bool OnOpenAsset(int instanceID, int line)
+        {
+            // Unity 6.0-6.5 only dispatch the documented int callback signature; the EntityId overload
+            // becomes the only option when the int identity APIs turn into errors.
+#pragma warning disable 0618
+            UnityEngine.Object asset = EditorUtility.InstanceIDToObject(instanceID);
+#pragma warning restore 0618
+            if (asset is Runtime.BehaviorTree tree)
+            {
+                Selection.activeObject = tree;
+                OpenWindow();
+                return true;
+            }
+            return false;
+        }
+#endif
+
+        private static bool CanOpenAssetInEditor(Runtime.BehaviorTree tree)
+        {
+#if UNITY_6000_4_OR_NEWER
+            return AssetDatabase.CanOpenAssetInEditor(tree.GetEntityId());
+#else
+            // Below 6.4 the int overload is the only shape this editor documents; it is deprecated from
+            // the version that added the EntityId overload, so the call is suppressed rather than routed.
+#pragma warning disable 0618
+            return AssetDatabase.CanOpenAssetInEditor(unchecked((int)UnityObjectId.Of(tree)));
+#pragma warning restore 0618
+#endif
         }
 
         public void CreateGUI()
@@ -286,7 +319,7 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             else
             {
-                if (_lastTree && AssetDatabase.CanOpenAssetInEditor(_lastTree.GetInstanceID()))
+                if (_lastTree && CanOpenAssetInEditor(_lastTree))
                 {
                     Log.Info("Open Tree: " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
