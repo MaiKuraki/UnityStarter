@@ -241,9 +241,9 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
         {
             var snapshot = new MovementSnapshot
             {
-                Position = new Unity.Mathematics.float3(x, 0f, 0f),
-                Velocity = new Unity.Mathematics.float3(0f, 0f, 0f),
-                WorldUp = new Unity.Mathematics.float3(0f, 1f, 0f),
+                Position = new MovementVector3(x, 0f, 0f),
+                Velocity = new MovementVector3(0f, 0f, 0f),
+                WorldUp = new MovementVector3(0f, 1f, 0f),
                 StateType = MovementStateType.Walk,
                 VerticalVelocity = 0f,
                 IsGrounded = true,

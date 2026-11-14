@@ -363,28 +363,27 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static int UnsafeSizeOf(Type type, out bool usedUnsafe)
         {
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            // Resolved by name instead of walking AppDomain.CurrentDomain.GetAssemblies(): the walk is
+            // O(loaded assemblies) and Unity 6.7 flags it because the result may contain unloaded
+            // assemblies. Type.GetType resolves the same type on every supported editor version.
+            Type unsafeType = Type.GetType(
+                "System.Runtime.CompilerServices.Unsafe, System.Runtime.CompilerServices.Unsafe",
+                throwOnError: false);
+
+            if (unsafeType != null)
             {
-                Type unsafeType = assembly.GetType("System.Runtime.CompilerServices.Unsafe");
-                if (unsafeType == null)
-                {
-                    continue;
-                }
-
                 MethodInfo method = unsafeType.GetMethod("SizeOf", BindingFlags.Public | BindingFlags.Static);
-                if (method == null)
+                if (method != null)
                 {
-                    continue;
-                }
-
-                try
-                {
-                    usedUnsafe = true;
-                    return (int)method.MakeGenericMethod(type).Invoke(null, null);
-                }
-                catch
-                {
-                    break;
+                    try
+                    {
+                        usedUnsafe = true;
+                        return (int)method.MakeGenericMethod(type).Invoke(null, null);
+                    }
+                    catch
+                    {
+                        // Fall through to the managed layout estimate below.
+                    }
                 }
             }
 

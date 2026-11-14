@@ -339,24 +339,24 @@ namespace CycloneGames.Networking.Lockstep
     /// </summary>
     internal readonly struct DevelopmentThreadGuard
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private readonly int _ownerThreadId;
         private readonly string _ownerName;
 #endif
 
         public DevelopmentThreadGuard(string ownerName)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
             _ownerName = ownerName;
 #endif
         }
 
         [Conditional("UNITY_EDITOR")]
-        [Conditional("DEVELOPMENT_BUILD")]
+        [Conditional("DEBUG")]
         public void AssertOwnerThread()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
             {
                 throw new InvalidOperationException(

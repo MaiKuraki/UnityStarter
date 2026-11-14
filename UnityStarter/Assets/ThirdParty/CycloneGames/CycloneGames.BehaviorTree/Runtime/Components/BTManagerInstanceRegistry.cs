@@ -2,6 +2,7 @@ using CycloneGames.BehaviorTree.Core;
 using CycloneGames.Logging;
 using System.Collections.Generic;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
@@ -42,7 +43,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             List<T> instances = Registry<T>.Instances;
             T selected = null;
             int selectedRank = int.MaxValue;
-            int selectedInstanceId = 0;
+            ulong selectedInstanceId = 0UL;
             int liveInstanceCount = 0;
 
             // Backward pass drops destroyed-but-not-yet-unregistered entries. Unity fake
@@ -58,7 +59,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 liveInstanceCount++;
                 int candidateRank = GetActivityRank(candidate);
-                int candidateInstanceId = candidate.GetInstanceID();
+                ulong candidateInstanceId = UnityObjectId.Of(candidate);
                 if (selected == null ||
                     candidateRank < selectedRank ||
                     (candidateRank == selectedRank && candidateInstanceId < selectedInstanceId))
@@ -89,6 +90,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             return candidate.enabled ? 1 : 2;
         }
 
+        // RuntimeInitializeOnLoadMethod cannot be declared on a generic type, so every closed
+        // Registry<T> registers its own reset delegate and the non-generic entry point below runs them.
+        private static readonly List<System.Action> ResetActions = new List<System.Action>(4);
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetRegistries()
+        {
+            for (int i = 0; i < ResetActions.Count; i++)
+            {
+                ResetActions[i]();
+            }
+        }
+
         // One storage instance per manager type. Reset on play-mode start so domain-reload and
         // disabled-domain-reload flows start from an empty registry.
         private static class Registry<T>
@@ -96,10 +110,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             internal static readonly List<T> Instances = new List<T>(InitialInstanceCapacity);
 
-            [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-            private static void Reset()
+            static Registry()
             {
-                Instances.Clear();
+                ResetActions.Add(Instances.Clear);
             }
         }
     }

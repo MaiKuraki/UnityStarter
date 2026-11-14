@@ -368,9 +368,15 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     : ReferenceValidationState.Invalid;
             }
 
+#if UNITY_6000_6_OR_NEWER
+            return directReferenceProp.objectReferenceEntityIdValue.IsValid()
+                ? ReferenceValidationState.Unresolved
+                : ReferenceValidationState.Missing;
+#else
             return directReferenceProp.objectReferenceInstanceIDValue != 0
                 ? ReferenceValidationState.Unresolved
                 : ReferenceValidationState.Missing;
+#endif
         }
 
         private static WorldSettingsReferenceSource GetSource(SerializedProperty sourceProp)

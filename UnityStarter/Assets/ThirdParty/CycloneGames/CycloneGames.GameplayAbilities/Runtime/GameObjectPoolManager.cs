@@ -5,6 +5,7 @@ using System.Threading;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -335,7 +336,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 GameObject instance = UnityEngine.Object.Instantiate(handle.Asset, position, rotation, parent);
                 poolData.TotalCreated++;
-                int instanceId = instance.GetInstanceID();
+                int instanceId = unchecked((int)UnityObjectId.Of(instance));
                 Vector3 initialLocalScale = instance.transform.localScale;
                 IGameObjectPoolLifecycle[] lifecycleHandlers;
                 try
@@ -580,7 +581,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     poolData.TotalCreated++;
                     try
                     {
-                        int instanceId = instance.GetInstanceID();
+                        int instanceId = unchecked((int)UnityObjectId.Of(instance));
                         Vector3 initialLocalScale = instance.transform.localScale;
                         IGameObjectPoolLifecycle[] lifecycleHandlers = DiscoverLifecycleHandlers(instance);
                         InvokeReturnLifecycle(lifecycleHandlers);
@@ -601,7 +602,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         if (instance != null)
                         {
-                            instanceOwners.Remove(instance.GetInstanceID());
+                            instanceOwners.Remove(unchecked((int)UnityObjectId.Of(instance)));
                             DestroyUnityObject(instance);
                             poolData.TotalDestroyed++;
                         }
@@ -720,7 +721,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return result;
         }
 
-        [System.Diagnostics.Conditional("UNITY_EDITOR"), System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        [System.Diagnostics.Conditional("UNITY_EDITOR"), System.Diagnostics.Conditional("DEBUG")]
         public void LogStatistics()
         {
             AssertMainThread();

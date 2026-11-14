@@ -1,16 +1,24 @@
 using System;
 using CycloneGames.RPGFoundation.Projectile.Core;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Projectile.Runtime
 {
     public sealed class UnityProjectileCollisionWorld2D : IProjectileCollisionWorld
     {
         private readonly RaycastHit2D[] _hits;
+        private ContactFilter2D _filter;
 
         public UnityProjectileCollisionWorld2D(int capacity)
         {
             _hits = new RaycastHit2D[Math.Max(1, capacity)];
+            _filter = new ContactFilter2D
+            {
+                useTriggers = Physics2D.queriesHitTriggers,
+                useLayerMask = true,
+                layerMask = 0
+            };
         }
 
         public int Cast(
@@ -29,13 +37,14 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
 
             Vector2 origin = new Vector2(query.From.X, query.From.Y);
             Vector2 direction = new Vector2(deltaX / distance, deltaY / distance);
-            int hitCount = Physics2D.CircleCastNonAlloc(
+            _filter.layerMask = query.CollisionLayerMask;
+            int hitCount = Physics2D.CircleCast(
                 origin,
                 query.Radius,
                 direction,
+                _filter,
                 _hits,
-                distance,
-                query.CollisionLayerMask);
+                distance);
 
             int written = 0;
             int limit = Math.Min(Math.Min(hitCount, _hits.Length), Math.Min(maxResults, results.Length));
@@ -49,7 +58,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
 
                 results[written] = new ProjectileCollisionHit(
                     targetEntityId: 0UL,
-                    targetObjectId: hit.collider.GetInstanceID(),
+                    targetObjectId: UnityObjectId.Of(hit.collider),
                     hitLayerMask: 1 << hit.collider.gameObject.layer,
                     distance: hit.distance,
                     position: new ProjectileVector3(hit.point.x, hit.point.y, query.To.Z),

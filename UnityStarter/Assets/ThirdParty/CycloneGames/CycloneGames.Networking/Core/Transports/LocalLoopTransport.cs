@@ -489,7 +489,7 @@ namespace CycloneGames.Networking.Transports
         {
             get
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 return true;
 #else
                 return false;

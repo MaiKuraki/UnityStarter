@@ -13,6 +13,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
+using CycloneGames.Compat;
 
 namespace CycloneGames.BehaviorTree.Tests.PlayMode
 {
@@ -399,7 +400,7 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
                 ? (Component)secondManagerObject.AddComponent<BTTickManagerComponent>()
                 : secondManagerObject.AddComponent<BTPriorityTickManagerComponent>();
 
-            Component expectedManager = firstManager.GetInstanceID() < secondManager.GetInstanceID()
+            Component expectedManager = UnityObjectId.Of(firstManager) < UnityObjectId.Of(secondManager)
                 ? firstManager
                 : secondManager;
             Component duplicateManager = ReferenceEquals(expectedManager, firstManager)
@@ -449,7 +450,7 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
         {
             if (tickMode == TickMode.Managed)
             {
-                BTTickManagerComponent[] managers = Object.FindObjectsOfType<BTTickManagerComponent>(true);
+                BTTickManagerComponent[] managers = UnityObjectQuery.FindAll<BTTickManagerComponent>(true);
                 for (int i = 0; i < managers.Length; i++)
                 {
                     if (managers[i] != null)
@@ -462,7 +463,7 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             }
 
             BTPriorityTickManagerComponent[] priorityManagers =
-                Object.FindObjectsOfType<BTPriorityTickManagerComponent>(true);
+                UnityObjectQuery.FindAll<BTPriorityTickManagerComponent>(true);
             for (int i = 0; i < priorityManagers.Length; i++)
             {
                 if (priorityManagers[i] != null)

@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.RPGFoundation.Trajectory.Core;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 {
@@ -57,7 +58,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
                     continue;
                 }
 
-                int objectId = hit.collider.GetInstanceID();
+                ulong objectId = UnityObjectId.Of(hit.collider);
                 if (objectId == query.IgnoredTargetObjectId)
                 {
                     continue;

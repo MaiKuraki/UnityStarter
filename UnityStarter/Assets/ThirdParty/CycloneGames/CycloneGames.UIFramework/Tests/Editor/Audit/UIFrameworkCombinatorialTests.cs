@@ -563,7 +563,11 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
                 opened.IsSceneBound,
                 Is.EqualTo(sceneBound),
                 context + " | D4 SceneBoundOverride must decide the scene-bound flag");
+#if UNITY_6000_6_OR_NEWER
+            int activeSceneHandle = unchecked((int)SceneManager.GetActiveScene().handle.GetRawData());
+#else
             int activeSceneHandle = SceneManager.GetActiveScene().handle;
+#endif
             Assert.That(
                 opened.BoundSceneHandle,
                 Is.EqualTo(sceneBound ? activeSceneHandle : -1),
@@ -1657,7 +1661,11 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
                     harness.CreateDirect("SceneBoundWindow", 0, false),
                     new UIOpenOptions(null, null, true, default, null, false));
 
+#if UNITY_6000_6_OR_NEWER
+                int activeHandle = unchecked((int)SceneManager.GetActiveScene().handle.GetRawData());
+#else
                 int activeHandle = SceneManager.GetActiveScene().handle;
+#endif
                 Assert.That(window.IsSceneBound, Is.True, "the override must mark the window as scene bound");
                 Assert.That(window.BoundSceneHandle, Is.EqualTo(activeHandle), "the window must capture the active handle");
 
@@ -1687,7 +1695,11 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
                 UIWindow window = await service.OpenAsync(
                     harness.CreateDirect("SceneBoundKeeper", 0, false),
                     new UIOpenOptions(null, null, true, default, null, false));
+#if UNITY_6000_6_OR_NEWER
+                int activeHandle = unchecked((int)SceneManager.GetActiveScene().handle.GetRawData());
+#else
                 int activeHandle = SceneManager.GetActiveScene().handle;
+#endif
 
                 await InvokeSceneSweepAsync(service, activeHandle);
 
@@ -1733,6 +1745,18 @@ namespace CycloneGames.UIFramework.Tests.Editor.Audit
         }
 
         // ------------------------------------------------------------------ helpers
+
+        /// <summary>
+        // Scene handles are plain integers in the window model; Unity 6.7 widened the native handle,
+        // so tests narrow it the same way the service does.
+        private static int ToHandleValue(Scene scene)
+        {
+#if UNITY_6000_6_OR_NEWER
+            return unchecked((int)scene.handle.GetRawData());
+#else
+            return scene.handle;
+#endif
+        }
 
         /// <summary>
         /// Invokes the private scene-bound sweep directly. EditMode cannot switch scenes without

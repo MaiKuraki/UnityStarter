@@ -321,7 +321,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Timeout(120000)]
         public void Lifecycle_DestroyedClip_IsTerminatedByTheWatchdog()
         {
-#if !UNITY_EDITOR && !DEVELOPMENT_BUILD
+#if !DEBUG
             // The liveness watchdog is compiled out of release players, so this expectation cannot hold there.
             // The watchdog is not compiled into release players.
             Assert.Ignore("The clip-liveness watchdog exists only in the editor and development builds.");

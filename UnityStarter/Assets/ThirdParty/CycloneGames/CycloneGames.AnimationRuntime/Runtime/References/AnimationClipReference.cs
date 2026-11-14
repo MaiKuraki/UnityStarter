@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.AnimationRuntime
 {
@@ -131,7 +132,7 @@ namespace CycloneGames.AnimationRuntime
             {
                 if (EffectiveMode == AnimationClipReferenceMode.Embedded)
                 {
-                    return _embeddedClip != null ? _embeddedClip.GetInstanceID() : 0;
+                    return _embeddedClip != null ? UnityObjectId.Of(_embeddedClip).GetHashCode() : 0;
                 }
 
                 return _location != null ? StringComparer.Ordinal.GetHashCode(_location) : 0;

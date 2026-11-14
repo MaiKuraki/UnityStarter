@@ -1,4 +1,4 @@
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
 using System.Diagnostics;
 using Cysharp.Threading.Tasks;
 using CycloneGames.Logging;

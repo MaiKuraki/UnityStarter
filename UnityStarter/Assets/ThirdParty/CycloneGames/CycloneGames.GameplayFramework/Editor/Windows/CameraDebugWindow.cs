@@ -1,6 +1,7 @@
 using System;
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
@@ -327,7 +328,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private int GetTargetManagerInstanceId()
         {
-            return targetManager != null ? targetManager.GetInstanceID() : 0;
+            return targetManager != null ? unchecked((int)UnityObjectId.Of(targetManager)) : 0;
         }
 
         private static int CalculateRuntimeStateFingerprint(CameraManager manager)
@@ -336,7 +337,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             unchecked
             {
-                int hash = manager.GetInstanceID();
+                int hash = unchecked((int)UnityObjectId.Of(manager));
                 hash = (hash * 31) + (manager.IsInitialized ? 1 : 0);
                 hash = (hash * 31) + (manager.CameraStateDirty ? 1 : 0);
 
@@ -389,7 +390,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.HelpBox("No CameraManager is currently bound.", MessageType.Warning);
                 if (GUILayout.Button("Find First CameraManager In Scene"))
                 {
-                    targetManager = FindFirstObjectByType<CameraManager>();
+                    targetManager = FindAnyObjectByType<CameraManager>();
                 }
                 EditorGUILayout.EndScrollView();
                 return;
@@ -458,7 +459,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Rebind Scene CameraManager"))
             {
-                targetManager = FindFirstObjectByType<CameraManager>();
+                targetManager = FindAnyObjectByType<CameraManager>();
             }
             if (GUILayout.Button("Clear Buffer"))
             {

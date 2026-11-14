@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
@@ -55,7 +56,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 // Use the centralized IsValidTarget method from the base class for all filtering.
                 if (col != null &&
                     IsValidTarget(col.gameObject) &&
-                    foundTargetIds.Add(col.gameObject.GetInstanceID()))
+                    foundTargetIds.Add(unchecked((int)UnityObjectId.Of(col.gameObject))))
                 {
                     foundTargets.Add(col.gameObject);
                 }

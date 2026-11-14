@@ -3,7 +3,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
     public readonly struct TrajectoryHit
     {
         public readonly ulong TargetEntityId;
-        public readonly int TargetObjectId;
+        public readonly ulong TargetObjectId;
         public readonly int HitLayerMask;
         public readonly float Distance;
         public readonly int SegmentIndex;
@@ -13,7 +13,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
 
         public TrajectoryHit(
             ulong targetEntityId,
-            int targetObjectId,
+            ulong targetObjectId,
             int hitLayerMask,
             float distance,
             TrajectoryVector3 position,

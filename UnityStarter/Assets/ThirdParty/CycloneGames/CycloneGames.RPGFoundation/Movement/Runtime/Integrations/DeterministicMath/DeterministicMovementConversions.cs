@@ -1,11 +1,10 @@
 using CycloneGames.DeterministicMath;
 using CycloneGames.RPGFoundation.Movement.Core;
-using Unity.Mathematics;
 
 namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
 {
     /// <summary>
-    /// Conversions between the float3 movement representation and the fixed-point deterministic one.
+    /// Conversions between the engine-independent float movement representation and the fixed-point one.
     /// </summary>
     /// <remarks>
     /// These helpers cross the float/fixed-point boundary and therefore are NOT part of the deterministic
@@ -15,17 +14,17 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
     /// </remarks>
     public static class DeterministicMovementConversions
     {
-        public static float3 ToFloat3(FPVector3 value)
+        public static MovementVector3 ToMovementVector3(FPVector3 value)
         {
-            return new float3(value.X.ToFloat(), value.Y.ToFloat(), value.Z.ToFloat());
+            return new MovementVector3(value.X.ToFloat(), value.Y.ToFloat(), value.Z.ToFloat());
         }
 
-        public static FPVector3 ToFPVector3(float3 value)
+        public static FPVector3 ToFPVector3(MovementVector3 value)
         {
             return new FPVector3(
-                FPInt64.FromFloat(value.x),
-                FPInt64.FromFloat(value.y),
-                FPInt64.FromFloat(value.z));
+                FPInt64.FromFloat(value.X),
+                FPInt64.FromFloat(value.Y),
+                FPInt64.FromFloat(value.Z));
         }
 
         /// <summary>
@@ -38,14 +37,14 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
             MovementStateType stateType = MovementStateType.Idle,
             float timestamp = 0f)
         {
-            float3 horizontal = ToFloat3(state.HorizontalVelocity);
+            MovementVector3 horizontal = ToMovementVector3(state.HorizontalVelocity);
             float verticalVelocity = state.VerticalVelocity.ToFloat();
 
             return new MovementSnapshot
             {
-                Position = ToFloat3(state.Position),
-                Velocity = new float3(horizontal.x, verticalVelocity, horizontal.z),
-                WorldUp = new float3(0f, 1f, 0f),
+                Position = ToMovementVector3(state.Position),
+                Velocity = new MovementVector3(horizontal.X, verticalVelocity, horizontal.Z),
+                WorldUp = new MovementVector3(0f, 1f, 0f),
                 StateType = stateType,
                 VerticalVelocity = verticalVelocity,
                 IsGrounded = state.IsGrounded,
@@ -62,9 +61,9 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
         public static DeterministicMovementState ToDeterministicState(in MovementSnapshot snapshot)
         {
             var horizontalVelocity = new FPVector3(
-                FPInt64.FromFloat(snapshot.Velocity.x),
+                FPInt64.FromFloat(snapshot.Velocity.X),
                 FPInt64.Zero,
-                FPInt64.FromFloat(snapshot.Velocity.z));
+                FPInt64.FromFloat(snapshot.Velocity.Z));
 
             return new DeterministicMovementState(
                 ToFPVector3(snapshot.Position),

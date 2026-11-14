@@ -301,7 +301,7 @@ namespace CycloneGames.GameplayAbilities.Tests.PlayMode
             // serialized reference to reach it from, and a per-test registry would only restate the
             // scene search this performs.
 #pragma warning disable CG0011
-            GASDebugOverlay overlay = Object.FindObjectOfType<GASDebugOverlay>();
+            GASDebugOverlay overlay = Object.FindAnyObjectByType<GASDebugOverlay>();
 #pragma warning restore CG0011
             Assert.That(overlay, Is.Not.Null);
 

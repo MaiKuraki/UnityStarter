@@ -8,6 +8,7 @@ using CycloneGames.Audio.Runtime;
 using NUnit.Framework;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using CycloneGames.Compat;
 
 namespace CycloneGames.Audio.Tests
 {
@@ -43,7 +44,7 @@ namespace CycloneGames.Audio.Tests
 
             try
             {
-                double instanceIdNs = MeasureBest(() => MeasureGetInstanceId(bank));
+                double objectIdNs = MeasureBest(() => MeasureUnityObjectId(bank));
                 double runtimeIdNs = MeasureBest(() => MeasureRuntimeId(bank));
                 double clipNs = MeasureBest(() => MeasureAudioSourceClip(source));
                 double timeNs = MeasureBest(() => MeasureAudioSourceTime(source));
@@ -56,7 +57,7 @@ namespace CycloneGames.Audio.Tests
                 double callbackListNs = MeasureBest(MeasureCallbackListIteration);
 
                 TestContext.WriteLine("audio-hotpath-cost (ns/op, best of " + Rounds + ", iterations=" + Iterations + ")");
-                TestContext.WriteLine("  Object.GetInstanceID           : " + instanceIdNs.ToString("F2"));
+                TestContext.WriteLine("  UnityObjectId.Of               : " + objectIdNs.ToString("F2"));
                 TestContext.WriteLine("  IAudioIdentified.RuntimeId     : " + runtimeIdNs.ToString("F2"));
                 TestContext.WriteLine("  AudioSource.clip               : " + clipNs.ToString("F2"));
                 TestContext.WriteLine("  AudioSource.time               : " + timeNs.ToString("F2"));
@@ -68,12 +69,12 @@ namespace CycloneGames.Audio.Tests
                 TestContext.WriteLine("  Delegate.GetInvocationList     : " + invocationListNs.ToString("F2"));
                 TestContext.WriteLine("  List<EventCompleted> iterate   : " + callbackListNs.ToString("F2"));
 
-                Assert.Greater(instanceIdNs, 0d);
+                Assert.Greater(objectIdNs, 0d);
                 Assert.Greater(runtimeIdNs, 0d);
                 Assert.Less(
                     runtimeIdNs,
-                    instanceIdNs,
-                    "The managed identity must be cheaper than the native instance ID call it replaced.");
+                    objectIdNs,
+                    "The managed identity must be cheaper than the native object identity call it replaced.");
             }
             finally
             {
@@ -151,17 +152,17 @@ namespace CycloneGames.Audio.Tests
             return best;
         }
 
-        private static long MeasureGetInstanceId(AudioBank bank)
+        private static long MeasureUnityObjectId(AudioBank bank)
         {
             var stopwatch = Stopwatch.StartNew();
-            int sum = 0;
+            ulong sum = 0UL;
             for (int i = 0; i < Iterations; i++)
             {
-                sum += bank.GetInstanceID();
+                sum += UnityObjectId.Of(bank);
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return stopwatch.ElapsedTicks;
         }
 
@@ -175,7 +176,7 @@ namespace CycloneGames.Audio.Tests
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return stopwatch.ElapsedTicks;
         }
 
@@ -189,7 +190,7 @@ namespace CycloneGames.Audio.Tests
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return stopwatch.ElapsedTicks;
         }
 
@@ -231,7 +232,7 @@ namespace CycloneGames.Audio.Tests
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return stopwatch.ElapsedTicks;
         }
 
@@ -276,7 +277,7 @@ namespace CycloneGames.Audio.Tests
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return stopwatch.ElapsedTicks;
         }
 
@@ -295,7 +296,7 @@ namespace CycloneGames.Audio.Tests
             }
 
             stopwatch.Stop();
-            intSink = sum;
+            intSink = unchecked((int)sum);
             return (long)(stopwatch.ElapsedTicks * (double)Iterations / iterations);
         }
 

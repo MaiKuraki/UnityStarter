@@ -1,7 +1,6 @@
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Movement.Core;
 using NUnit.Framework;
-using Unity.Mathematics;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 {
@@ -128,9 +127,9 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 
             Assert.That(message.IsValid, Is.True);
             Assert.That(message.IsGrounded, Is.True);
-            Assert.That(roundTrip.Position.x, Is.EqualTo(source.Position.x));
-            Assert.That(roundTrip.Position.y, Is.EqualTo(source.Position.y));
-            Assert.That(roundTrip.Position.z, Is.EqualTo(source.Position.z));
+            Assert.That(roundTrip.Position.X, Is.EqualTo(source.Position.X));
+            Assert.That(roundTrip.Position.Y, Is.EqualTo(source.Position.Y));
+            Assert.That(roundTrip.Position.Z, Is.EqualTo(source.Position.Z));
             Assert.That(roundTrip.StateType, Is.EqualTo(source.StateType));
             Assert.That(roundTrip.IsGrounded, Is.EqualTo(source.IsGrounded));
             Assert.That(roundTrip.Tick, Is.EqualTo(source.Tick));
@@ -156,7 +155,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
         {
             MovementSnapshot previous = CreateSnapshot(MovementStateType.Walk, isGrounded: true);
             MovementSnapshot next = CreateSnapshot(MovementStateType.Jump, isGrounded: false);
-            next.Position = previous.Position + new float3(2f, 0f, 0f);
+            next.Position = previous.Position + new MovementVector3(2f, 0f, 0f);
             var provider = new TestSnapshotProvider(previous);
             var validator = new TestMovementValidator(maxDistanceSqr: 4.1f, allowJump: true);
             var bridge = new MovementNetworkAuthorityBridge(provider, validator);
@@ -172,7 +171,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 
             Assert.That(bridge.ValidateTransition(previousMessage, nextMessage, deltaTime: 0.033f), Is.True);
 
-            next.Position = new float3(10f, 0f, 0f);
+            next.Position = new MovementVector3(10f, 0f, 0f);
             nextMessage = MovementNetworkSnapshotMessage.FromMovementSnapshot(ENTITY_ID, next, serverTick: 12);
 
             Assert.That(bridge.ValidateTransition(previousMessage, nextMessage, deltaTime: 0.033f), Is.False);
@@ -226,9 +225,9 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
         {
             return new MovementSnapshot
             {
-                Position = new float3(1f, 2f, 3f),
-                Velocity = new float3(0.5f, 0f, 0f),
-                WorldUp = new float3(0f, 1f, 0f),
+                Position = new MovementVector3(1f, 2f, 3f),
+                Velocity = new MovementVector3(0.5f, 0f, 0f),
+                WorldUp = new MovementVector3(0f, 1f, 0f),
                 StateType = stateType,
                 VerticalVelocity = -1.5f,
                 IsGrounded = isGrounded,
@@ -279,10 +278,10 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
                 _allowJump = allowJump;
             }
 
-            public bool ValidatePosition(float3 from, float3 to, float deltaTime)
+            public bool ValidatePosition(MovementVector3 from, MovementVector3 to, float deltaTime)
             {
-                float3 delta = to - from;
-                return math.lengthsq(delta) <= _maxDistanceSqr;
+                MovementVector3 delta = to - from;
+                return delta.SqrMagnitude <= _maxDistanceSqr;
             }
 
             public bool ValidateStateTransition(MovementStateType from, MovementStateType to)

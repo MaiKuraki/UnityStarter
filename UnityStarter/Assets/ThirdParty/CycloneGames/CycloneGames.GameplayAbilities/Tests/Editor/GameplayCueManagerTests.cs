@@ -194,6 +194,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         public bool FailOnWorker;
         public bool CancelOnWorker;
         public bool WorkerFailureWasMainThread;
+        // The lease is an opaque runtime ownership token; it must never be treated as authoring data.
+        [System.NonSerialized]
         public GameObjectLease LastLease;
         public IGameObjectPoolManager LastPoolManager;
         public readonly List<string> EventOrder = new List<string>();

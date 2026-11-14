@@ -62,8 +62,14 @@ namespace Build.Pipeline.Editor
                 return true;
             }
 
-            System.Reflection.Assembly[] loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
-            for (int index = 0; index < loadedAssemblies.Length; index++)
+#if UNITY_6000_7_OR_NEWER
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> loadedAssemblies =
+                UnityEngine.Assemblies.CurrentAssemblies.GetLoadedAssemblies();
+#else
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> loadedAssemblies =
+                AppDomain.CurrentDomain.GetAssemblies();
+#endif
+            for (int index = 0; index < loadedAssemblies.Count; index++)
             {
                 System.Reflection.Assembly loadedAssembly = loadedAssemblies[index];
                 if (string.Equals(

@@ -59,7 +59,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private sealed class WorldActorCollector : IWorldActorCollector
         {
             private readonly World world;
-            private readonly HashSet<int> candidateIds = new HashSet<int>();
+            private readonly HashSet<ulong> candidateIds = new HashSet<ulong>();
             private bool isActive;
             private bool capacityExceeded;
 
@@ -104,7 +104,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     return true;
                 }
 
-                int instanceId = actor.GetStableInstanceId();
+                ulong instanceId = actor.GetStableInstanceId();
                 if (world.actorIndices.ContainsKey(instanceId) || candidateIds.Contains(instanceId))
                 {
                     return true;
@@ -180,7 +180,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private readonly List<Actor> fixedUpdateTickActors;
         private readonly List<Actor> lateUpdateTickActors;
         private readonly List<Actor> tickScratch;
-        private readonly Dictionary<int, int> actorIndices;
+        private readonly Dictionary<ulong, int> actorIndices;
         private readonly List<PlayerController> playerControllers = new List<PlayerController>(8);
         private readonly List<PlayerState> participantPlayerStates = new List<PlayerState>(8);
         private readonly List<PlayerStart> playerStarts = new List<PlayerStart>(16);
@@ -251,7 +251,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 Math.Max(
                     runtimeLimits.InitialFixedUpdateTickCapacity,
                     runtimeLimits.InitialLateUpdateTickCapacity)));
-            actorIndices = new Dictionary<int, int>(runtimeLimits.InitialActorCapacity);
+            actorIndices = new Dictionary<ulong, int>(runtimeLimits.InitialActorCapacity);
             NetMode = netMode;
         }
 
@@ -958,7 +958,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                    actorIndices.ContainsKey(actor.GetStableInstanceId());
         }
 
-        public bool TryGetActor(int instanceId, out Actor actor)
+        public bool TryGetActor(ulong instanceId, out Actor actor)
         {
             EnsureOwnerThread();
             if (actorIndices.TryGetValue(instanceId, out int index))
@@ -1815,7 +1815,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
 
             actor.PrepareForWorldRegistration(this, allowReentry: !owned);
-            int instanceId = actor.GetStableInstanceId();
+            ulong instanceId = actor.GetStableInstanceId();
             if (actorIndices.TryGetValue(instanceId, out int existingIndex))
             {
                 if (owned)
@@ -1943,7 +1943,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return;
             }
 
-            int instanceId = actor.GetStableInstanceId();
+            ulong instanceId = actor.GetStableInstanceId();
             int index;
             if (!actorIndices.TryGetValue(instanceId, out index))
             {
@@ -2013,7 +2013,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             failure = null;
             ActorEntry entry = actors[index];
             Actor actor = entry.Actor;
-            int stableInstanceId = actor.GetStableInstanceId();
+            ulong stableInstanceId = actor.GetStableInstanceId();
 
             if (!entry.TeardownDetached &&
                 preparePlayerCameraContext &&
@@ -2170,7 +2170,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private bool TryResolveActorEntry(
             Actor actor,
-            int stableInstanceId,
+            ulong stableInstanceId,
             out int index,
             out ActorEntry entry)
         {
