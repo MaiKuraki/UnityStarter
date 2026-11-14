@@ -139,7 +139,10 @@ func TestLockContentionHintOnlyTargetsSharingErrors(t *testing.T) {
 }
 
 func TestDeletionWorkerLimitStaysBounded(t *testing.T) {
-	if limit := deletionWorkerLimit(); limit < 2 || limit > 8 {
-		t.Fatalf("deletionWorkerLimit = %d, want between 2 and 8", limit)
+	if globalDeletionWorkerLimit < 2 || globalDeletionWorkerLimit > 64 {
+		t.Fatalf("globalDeletionWorkerLimit = %d, want a bounded pool", globalDeletionWorkerLimit)
+	}
+	if cap(globalDeletionSlots) != globalDeletionWorkerLimit || len(globalDeletionSlots) != 0 {
+		t.Fatalf("global deletion semaphore is not an empty bounded channel")
 	}
 }

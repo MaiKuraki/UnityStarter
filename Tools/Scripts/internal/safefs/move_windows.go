@@ -17,11 +17,19 @@ var (
 )
 
 func moveNoReplace(source, target string) error {
-	sourcePointer, err := syscall.UTF16PtrFromString(source)
+	preparedSource, err := prepareWindowsPath(source)
 	if err != nil {
 		return err
 	}
-	targetPointer, err := syscall.UTF16PtrFromString(target)
+	preparedTarget, err := prepareWindowsPath(target)
+	if err != nil {
+		return err
+	}
+	sourcePointer, err := syscall.UTF16PtrFromString(preparedSource)
+	if err != nil {
+		return err
+	}
+	targetPointer, err := syscall.UTF16PtrFromString(preparedTarget)
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,6 @@
 package toolkit
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -38,7 +37,8 @@ type Command struct {
 }
 
 // Dispatch routes the command line to a registered command and returns its exit code.
-// Every tool executes in-process: there are no child processes, downloads, or temporary files.
+// Dispatch itself performs no I/O beyond writing usage text; a command may start
+// external processes or write temporary files, and owns their cancellation.
 func Dispatch(programName string, args []string, commands []Command, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		writeUsage(programName, stderr, commands)
@@ -88,7 +88,7 @@ func WaitForExit() {
 	pausedThisProcess = true
 	fmt.Println()
 	fmt.Print("Press Enter to exit...")
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	_, _ = Input().ReadString('\n')
 }
 
 // ProjectContext describes the Unity project an interactive command will act on.
@@ -132,7 +132,8 @@ func InteractiveMenu(programName string, commands []Command, stdin io.Reader, st
 	// Resolve the project context once: the working directory does not change
 	// while the menu is open, and a failed resolution walks the filesystem.
 	projectLines := projectContextLines(config.resolveProject)
-	reader := bufio.NewReader(stdin)
+	SetInput(stdin)
+	reader := Input()
 	firstCycle := true
 	for {
 		if firstCycle {

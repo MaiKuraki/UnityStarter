@@ -1,6 +1,5 @@
-// unity-project-tools is the cross-platform executable for the Unity project tools
-// (project rename, package removal, cache cleanup). General-purpose tools live in
-// the separate cmd/dev-tools binary.
+// unity-project-tools hosts the Unity project tools. General-purpose media and
+// file tools live in the separate dev-tools binary.
 //
 // Build:
 //
@@ -10,6 +9,7 @@ package main
 import (
 	"os"
 
+	"cyclonegames.tools/scripts/internal/projectlayout"
 	"cyclonegames.tools/scripts/internal/projectroot"
 	"cyclonegames.tools/scripts/internal/term"
 	"cyclonegames.tools/scripts/internal/toolkit"
@@ -22,19 +22,18 @@ const programName = "unity-project-tools"
 
 func main() {
 	commands := []toolkit.Command{
-		{Name: "rename_project", Summary: "Rename a UnityStarter-derived project transactionally.", Run: rename_project.Run},
+		{Name: "rename_project", Summary: "Rename a Unity project transactionally.", Run: rename_project.Run},
 		{Name: "remove_unity_packages", Summary: "Remove explicitly authorized Unity packages.", Run: remove_unity_packages.Run},
 		{Name: "unity_project_full_clean", Summary: "Clean verified Unity caches and owned build outputs.", Run: unity_project_full_clean.Run},
 	}
 	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	if len(args) == 0 && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
-		// Launched by double-click (or a plain no-argument run) on an interactive
-		// terminal: show the command menu instead of the usage error. The menu
-		// reports the project it resolved so a double-clicked binary (whose
-		// working directory is its own folder) explains what it will operate on.
 		os.Exit(toolkit.InteractiveMenu(programName, commands, os.Stdin, os.Stdout,
 			toolkit.WithProjectResolver(func() (toolkit.ProjectContext, error) {
-				result, err := projectroot.Locate("")
+				result, err := projectroot.Resolver{
+					Validate: projectroot.MarkerValidate,
+					Layout:   projectlayout.Default(),
+				}.Resolve("")
 				if err != nil {
 					return toolkit.ProjectContext{}, err
 				}
@@ -46,8 +45,6 @@ func main() {
 			})))
 	}
 	code := toolkit.Dispatch(programName, args, commands, os.Stdout, os.Stderr)
-	// Keep a double-clicked console window readable after the run; scripts and
-	// CI callers (pipes, shells, --no-pause, TOOLS_NO_PAUSE=1) are never paused.
 	toolkit.PauseAfterRun(noPause)
 	os.Exit(code)
 }

@@ -1,6 +1,6 @@
 // dev-tools is the cross-platform executable for the general-purpose repository tools
 // (audio normalization, video conversion, texture packing, directory trees).
-// Unity-project tools live in the separate cmd/unity-project-tools binary.
+// Project-specific tools live in a separate binary.
 package main
 
 import (
@@ -21,7 +21,7 @@ func main() {
 		{Name: "audio_volume_normalizer", Summary: "Normalize audio files with category-aware loudness targets.", Run: audio_volume_normalizer.Run},
 		{Name: "generate_file_tree", Summary: "Generate a Markdown directory tree.", Run: generate_file_tree.Run},
 		{Name: "texture_channel_packer", Summary: "Pack source images into RGBA texture channels.", Run: texture_channel_packer.Run},
-		{Name: "unity_video_webm_converter", Summary: "Convert videos to Unity-friendly WebM.", Run: unity_video_webm_converter.Run},
+		{Name: "unity_video_webm_converter", Summary: "Convert videos to VP8 WebM with normalized audio.", Run: unity_video_webm_converter.Run},
 	}
 	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	if len(args) == 0 && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
