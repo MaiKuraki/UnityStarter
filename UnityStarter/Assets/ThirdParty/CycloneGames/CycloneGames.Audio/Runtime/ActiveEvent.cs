@@ -528,7 +528,7 @@ namespace CycloneGames.Audio.Runtime
             if (status != EventStatus.Played && status != EventStatus.Preparing)
                 return;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AudioManager.TrackEventPlayed();
 #endif
         }

@@ -118,7 +118,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             }
 
             GameplayTagHost.Use(new GameplayTagUnityPlatform());
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             GameplayTagsDiagnostics.ThreadAffinityChecksEnabled = true;
 #endif
         }

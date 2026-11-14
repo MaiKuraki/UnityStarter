@@ -16,10 +16,16 @@ using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
 using CycloneGames.Logging;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
+#if UNITY_6000_0_OR_NEWER
+    [UxmlElement]
+    public partial class BehaviorTreeView : GraphView
+#else
     public class BehaviorTreeView : GraphView
+#endif
     {
         private static readonly LogChannel Log = BehaviorTreeEditorLog.Channel;
 
@@ -50,7 +56,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 if (_cachedRunners.Count == 0 && _runnerFallbackPending)
                 {
-                    var foundRunners = UnityEngine.Object.FindObjectsOfType<Runtime.Components.BTRunnerComponent>();
+                    var foundRunners = UnityObjectQuery.FindAll<Runtime.Components.BTRunnerComponent>(false);
                     for (int i = 0; i < foundRunners.Length; i++)
                     {
                         _cachedRunners.Add(foundRunners[i]);
@@ -79,7 +85,9 @@ namespace CycloneGames.BehaviorTree.Editor
             return !string.IsNullOrEmpty(pathA) && pathA == pathB;
         }
 
+#if !UNITY_6000_0_OR_NEWER
         public new class UxmlFactory : UxmlFactory<BehaviorTreeView, GraphView.UxmlTraits> { }
+#endif
         public Runtime.BehaviorTree Tree => _tree;
         public Action<BTNodeView> OnNodeSelectionChanged;
         private Runtime.BehaviorTree _tree;
@@ -247,7 +255,6 @@ namespace CycloneGames.BehaviorTree.Editor
                     {
                         DeleteElements(new[] { edge });
                         evt.StopPropagation();
-                        evt.PreventDefault();
                         return;
                     }
                     current = current.parent;
@@ -267,7 +274,6 @@ namespace CycloneGames.BehaviorTree.Editor
                         {
                             DeleteElements(new[] { edge });
                             evt.StopPropagation();
-                            evt.PreventDefault();
                             return;
                         }
                     }
@@ -1609,8 +1615,8 @@ namespace CycloneGames.BehaviorTree.Editor
             var root = GetNodeByGuid(_tree.Root.GUID) as BTNodeView;
             if (root != null)
             {
-                viewTransform.scale = Vector3.one;
-                viewTransform.position = -root.GetPosition().position;
+                Vector2 rootPosition = root.GetPosition().position;
+                UpdateViewTransform(new Vector3(-rootPosition.x, -rootPosition.y, 0f), Vector3.one);
             }
         }
         internal BTNodeView FindNodeView(BTNode node)

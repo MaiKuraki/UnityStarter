@@ -1,6 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
@@ -183,7 +184,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private static int GetObjectInstanceId(Object value)
         {
-            return value != null ? value.GetInstanceID() : 0;
+            return value != null ? unchecked((int)UnityObjectId.Of(value)) : 0;
         }
 
         private static int GetCameraModeTypeHash(CameraMode cameraMode)

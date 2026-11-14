@@ -719,7 +719,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 tag,
                 owner,
                 backend);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(backend, location);
 #endif
             return AssetHandleLeases.Create(backend, cancellationToken);
@@ -761,7 +761,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 tag,
                 owner,
                 backend);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(backend, location);
 #endif
             return AssetHandleLeases.Create(backend, cancellationToken);
@@ -838,7 +838,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 tag,
                 owner,
                 backend);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(backend, location);
 #endif
             return AssetHandleLeases.Create(backend, cancellationToken);
@@ -880,7 +880,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 HandleTracker.Register(id, Name, $"InstantiateAsync : {assetPath}");
             }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(result, assetPath);
 #endif
             return result;
@@ -954,7 +954,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
             }
             SceneTracker.Register(id, Name, "YooAsset", sceneLocation, bucket, loadParameters, result);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             AssetLoadProfiler.TrackAsync(result, sceneLocation);
 #endif
             return result;

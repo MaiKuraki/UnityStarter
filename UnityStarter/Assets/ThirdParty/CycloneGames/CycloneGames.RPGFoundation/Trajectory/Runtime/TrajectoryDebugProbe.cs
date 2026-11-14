@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.RPGFoundation.Trajectory.Core;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 {
@@ -124,7 +125,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             EnsureCollisionWorld();
 
             TrajectoryQuery query = QueryPreset.BuildQuery(
-                traceId: GetInstanceID(),
+                traceId: unchecked((int)UnityObjectId.Of(this)),
                 ownerEntityId: 0UL,
                 Origin,
                 Direction);

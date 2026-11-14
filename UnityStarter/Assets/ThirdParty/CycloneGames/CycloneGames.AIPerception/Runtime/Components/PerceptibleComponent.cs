@@ -1,5 +1,6 @@
 using Unity.Mathematics;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.AIPerception.Runtime
 {
@@ -73,7 +74,7 @@ namespace CycloneGames.AIPerception.Runtime
 
         private void OnEnable()
         {
-            _perceptibleId = GetInstanceID();
+            _perceptibleId = unchecked((int)UnityObjectId.Of(this));
             TryRegister();
         }
 

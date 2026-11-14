@@ -8,6 +8,7 @@ using VitalRouter;
 using Cysharp.Threading.Tasks;
 using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
@@ -80,6 +81,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         private Collider2D[] _colliderBuffer2D;
         private RaycastHit[] _raycastHits3D;
         private RaycastHit2D[] _raycastHits2D;
+        private ContactFilter2D _filter2D;
         private bool _detectionEnabled = true;
         private float _lastDetectionTime;
         private float _noTargetStartTime;
@@ -103,7 +105,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         public event Action<IReadOnlyList<InteractionCandidate>> OnNearbyInteractablesChanged;
 
         // Per-detector component cache (replaces static Copy-on-Write to eliminate GC at scale)
-        private Dictionary<int, IInteractable> _componentCache;
+        private Dictionary<ulong, IInteractable> _componentCache;
 
         // LOS optimization
         private struct LosCacheEntry
@@ -113,11 +115,11 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             public Vector3 CachedOrigin;
             public float CachedTime;
         }
-        private Dictionary<int, LosCacheEntry> _losCache;
-        private Dictionary<int, float> _autoInteractTimes;
+        private Dictionary<ulong, LosCacheEntry> _losCache;
+        private Dictionary<ulong, float> _autoInteractTimes;
         private int _losCheckCount;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private readonly System.Text.StringBuilder _debugSb = new(512);
         private string _debugStatus = string.Empty;
         [Header("Debug")]
@@ -141,9 +143,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             _colliderBuffer2D = new Collider2D[maxInteractables];
             _raycastHits3D = new RaycastHit[16];
             _raycastHits2D = new RaycastHit2D[16];
-            _componentCache = new Dictionary<int, IInteractable>(maxInteractables);
-            _losCache = new Dictionary<int, LosCacheEntry>(maxInteractables);
-            _autoInteractTimes = new Dictionary<int, float>(maxInteractables);
+            // Layer masks are assigned per query; useTriggers mirrors the legacy non-alloc 2D queries,
+            // which honoured Physics2D.queriesHitTriggers.
+            _filter2D = new ContactFilter2D
+            {
+                useTriggers = Physics2D.queriesHitTriggers,
+                useLayerMask = true,
+                layerMask = 0
+            };
+            _componentCache = new Dictionary<ulong, IInteractable>(maxInteractables);
+            _losCache = new Dictionary<ulong, LosCacheEntry>(maxInteractables);
+            _autoInteractTimes = new Dictionary<ulong, float>(maxInteractables);
             _nearbyCandidates.Capacity = Mathf.Max(_nearbyCandidates.Capacity, maxNearbyCandidates);
             _nearbySortBuffer = new InteractionCandidate[maxInteractables];
             _spatialQueryBuffer.Capacity = Mathf.Max(_spatialQueryBuffer.Capacity, maxInteractables);
@@ -324,7 +334,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void PerformSpatialHashDetection()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Clear();
 #endif
             bool is2D = _system.Is2DMode;
@@ -333,7 +343,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             _system.SpatialGrid.QueryRadiusNonAlloc(originPos, detectionRadius, _spatialQueryBuffer, is2D, maxInteractables, false);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Append("[SpatialHash] ").Append(_spatialQueryBuffer.Count).AppendLine(" candidates");
 #endif
 
@@ -375,7 +385,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 float dot = Vector3.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 string name = interactable is MonoBehaviour m ? m.name : "?";
                 _debugSb.Append("  [").Append(name).Append("] Score=").AppendLine(score.ToString("F1"));
 #endif
@@ -389,14 +399,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void PerformPhysics3DDetection()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Clear();
 #endif
             Vector3 originPos = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             int count = Physics.OverlapSphereNonAlloc(
                 originPos, detectionRadius, _colliderBuffer3D, interactableLayer);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Append("[3D Scan] ").Append(count).AppendLine(" colliders");
 #endif
 
@@ -436,7 +446,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
                 if (CheckLos3D(originPos, dir, dist, col.transform, interactable))
                 {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                     _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
 #endif
                     continue;
@@ -445,7 +455,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 float dot = Vector3.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 _debugSb.Append("  [").Append(col.name).Append("] Score=").AppendLine(score.ToString("F1"));
 #endif
 
@@ -458,13 +468,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void PerformPhysics2DDetection()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Clear();
 #endif
             Vector2 origin2D = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
-            int count = Physics2D.OverlapCircleNonAlloc(origin2D, detectionRadius, _colliderBuffer2D, interactableLayer);
+            _filter2D.layerMask = interactableLayer;
+            int count = Physics2D.OverlapCircle(origin2D, detectionRadius, _filter2D, _colliderBuffer2D);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugSb.Append("[2D Scan] ").Append(count).AppendLine(" colliders");
 #endif
 
@@ -504,7 +515,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
                 if (CheckLos2D(origin2D, dir, dist, col.transform, interactable))
                 {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                     _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
 #endif
                     continue;
@@ -513,7 +524,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 float dot = Vector2.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 _debugSb.Append("  [").Append(col.name).Append("] Score=").AppendLine(score.ToString("F1"));
 #endif
 
@@ -576,7 +587,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             OnNearbyInteractablesChanged?.Invoke(_nearbyCandidates);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _debugStatus = _debugSb.ToString();
 #endif
         }
@@ -599,7 +610,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsObstructed2D(Vector2 origin, Vector2 dir, float dist, Transform targetTransform)
         {
-            int hitCount = Physics2D.RaycastNonAlloc(origin, dir, _raycastHits2D, dist, obstructionLayer);
+            _filter2D.layerMask = obstructionLayer;
+            int hitCount = Physics2D.Raycast(origin, dir, _filter2D, _raycastHits2D, dist);
 
             for (int h = 0; h < hitCount; h++)
             {
@@ -618,7 +630,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb)
             {
-                int key = mb.GetInstanceID();
+                ulong key = UnityObjectId.Of(mb);
                 if (_losCache.TryGetValue(key, out var entry))
                 {
                     if ((entry.CachedPosition - interactable.Position).sqrMagnitude < 0.0001f
@@ -633,7 +645,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb2)
             {
-                int key = mb2.GetInstanceID();
+                ulong key = UnityObjectId.Of(mb2);
                 StoreLosCache(key, obstructed, interactable.Position, origin);
             }
 
@@ -647,7 +659,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb)
             {
-                int key = mb.GetInstanceID();
+                ulong key = UnityObjectId.Of(mb);
                 if (_losCache.TryGetValue(key, out var entry))
                 {
                     if ((entry.CachedPosition - (Vector3)interactable.Position).sqrMagnitude < 0.0001f
@@ -662,7 +674,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb2)
             {
-                int key = mb2.GetInstanceID();
+                ulong key = UnityObjectId.Of(mb2);
                 StoreLosCache(key, obstructed, interactable.Position, origin);
             }
 
@@ -670,7 +682,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void StoreLosCache(int key, bool obstructed, Vector3 position, Vector3 origin)
+        private void StoreLosCache(ulong key, bool obstructed, Vector3 position, Vector3 origin)
         {
             if (!_losCache.ContainsKey(key) && _losCache.Count >= maxInteractables)
                 return;
@@ -692,7 +704,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 return;
             }
 
-            int key = GetInteractableCacheKey(interactable);
+            ulong key = GetInteractableCacheKey(interactable);
             if (key != 0 && autoInteractMinIntervalMs > 0f)
             {
                 float currentTime = Time.time;
@@ -728,14 +740,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
         }
 
-        private static int GetInteractableCacheKey(IInteractable interactable)
+        private static ulong GetInteractableCacheKey(IInteractable interactable)
         {
             if (interactable is MonoBehaviour mb && mb != null)
             {
-                return mb.GetInstanceID();
+                return UnityObjectId.Of(mb);
             }
 
-            return interactable?.GetHashCode() ?? 0;
+            return unchecked((ulong)(interactable?.GetHashCode() ?? 0));
         }
 
         private static void QuickSortByScore(InteractionCandidate[] arr, int left, int right)
@@ -759,7 +771,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private IInteractable GetCachedInteractable3D(Collider col)
         {
-            int id = col.GetInstanceID();
+            ulong id = UnityObjectId.Of(col);
             if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
                 if (cached is UnityEngine.Object obj && obj == null)
@@ -777,7 +789,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private IInteractable GetCachedInteractable2D(Collider2D col)
         {
-            int id = col.GetInstanceID();
+            ulong id = UnityObjectId.Of(col);
             if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
                 if (cached is UnityEngine.Object obj && obj == null)
@@ -877,7 +889,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         }
 #endif
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private static readonly GUIContent s_windowTitle = new("Interaction Debug");
         private static GUIStyle s_boxStyle;
         private static GUIStyle s_labelStyle;
@@ -916,7 +928,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             InitStyles();
 
-            _guiRect = GUI.Window(GetInstanceID(), _guiRect, DrawDebugWindow, s_windowTitle, s_boxStyle);
+            _guiRect = GUI.Window(unchecked((int)UnityObjectId.Of(this)), _guiRect, DrawDebugWindow, s_windowTitle, s_boxStyle);
         }
 
         private void DrawDebugWindow(int windowId)

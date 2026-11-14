@@ -2287,9 +2287,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             return new MovementSnapshot
             {
-                Position = transform.position,
-                Velocity = _velocity,
-                WorldUp = WorldUp,
+                Position = transform.position.ToMovementVector3(),
+                Velocity = _velocity.ToMovementVector3(),
+                WorldUp = WorldUp.ToMovementVector3(),
                 StateType = CurrentState,
                 VerticalVelocity = _context.VerticalVelocity,
                 IsGrounded = _context.IsGrounded,
@@ -2301,15 +2301,16 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         public void ApplySnapshot(in MovementSnapshot snapshot)
         {
-            _updatedPosition = snapshot.Position;
-            _velocity = snapshot.Velocity;
-            WorldUp = snapshot.WorldUp;
+            _updatedPosition = snapshot.Position.ToVector3();
+            _velocity = snapshot.Velocity.ToFloat3();
+            WorldUp = snapshot.WorldUp.ToFloat3();
             _context.VerticalVelocity = snapshot.VerticalVelocity;
             _context.IsGrounded = snapshot.IsGrounded;
             _context.JumpCount = snapshot.JumpCount;
 
-            transform.position = snapshot.Position;
-            _rigidbody.position = snapshot.Position;
+            Vector3 snapshotPosition = snapshot.Position.ToVector3();
+            transform.position = snapshotPosition;
+            _rigidbody.position = snapshotPosition;
 
             if (_currentState?.StateType != snapshot.StateType)
             {

@@ -4,21 +4,53 @@ using CycloneGames.RPGFoundation.Movement.Core;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
+    /// <summary>
+    /// Authoring wrapper for an optional float override. Unity cannot serialize
+    /// <see cref="System.Nullable{T}"/>, so presence is an explicit flag; the implicit conversions keep
+    /// runtime call sites nullable-shaped, and an unset override still resolves to <see langword="null"/>.
+    /// </summary>
+    [System.Serializable]
+    public struct MovementFloatOverride
+    {
+        public bool Enabled;
+        public float Value;
+
+        public MovementFloatOverride(float value)
+        {
+            Enabled = true;
+            Value = value;
+        }
+
+        public static implicit operator float?(MovementFloatOverride value)
+        {
+            return value.Enabled ? value.Value : (float?)null;
+        }
+
+        public static implicit operator MovementFloatOverride(float? value)
+        {
+            return new MovementFloatOverride
+            {
+                Enabled = value.HasValue,
+                Value = value.GetValueOrDefault()
+            };
+        }
+    }
+
     public abstract class MovementAttributeAuthorityBase : MonoBehaviour, IMovementAuthority
     {
         [Header("Base Value Overrides")]
-        [SerializeField] protected float? walkSpeedOverride;
-        [SerializeField] protected float? runSpeedOverride;
-        [SerializeField] protected float? sprintSpeedOverride;
-        [SerializeField] protected float? crouchSpeedOverride;
-        [SerializeField] protected float? jumpForceOverride;
-        [SerializeField] protected float? maxJumpCountOverride;
-        [SerializeField] protected float? gravityOverride;
-        [SerializeField] protected float? airControlMultiplierOverride;
-        [SerializeField] protected float? rotationSpeedOverride;
-        [SerializeField] protected float? climbSpeedOverride;
-        [SerializeField] protected float? swimSpeedOverride;
-        [SerializeField] protected float? flySpeedOverride;
+        [SerializeField] protected MovementFloatOverride walkSpeedOverride;
+        [SerializeField] protected MovementFloatOverride runSpeedOverride;
+        [SerializeField] protected MovementFloatOverride sprintSpeedOverride;
+        [SerializeField] protected MovementFloatOverride crouchSpeedOverride;
+        [SerializeField] protected MovementFloatOverride jumpForceOverride;
+        [SerializeField] protected MovementFloatOverride maxJumpCountOverride;
+        [SerializeField] protected MovementFloatOverride gravityOverride;
+        [SerializeField] protected MovementFloatOverride airControlMultiplierOverride;
+        [SerializeField] protected MovementFloatOverride rotationSpeedOverride;
+        [SerializeField] protected MovementFloatOverride climbSpeedOverride;
+        [SerializeField] protected MovementFloatOverride swimSpeedOverride;
+        [SerializeField] protected MovementFloatOverride flySpeedOverride;
 
         [Header("Multipliers")]
         [SerializeField] protected float walkSpeedMultiplier = 1f;

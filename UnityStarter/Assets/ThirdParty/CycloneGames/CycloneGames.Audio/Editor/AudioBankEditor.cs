@@ -97,10 +97,11 @@ namespace CycloneGames.Audio.Editor
             GUI.EndScrollView();
         }
 
+#if UNITY_6000_6_OR_NEWER
         [OnOpenAsset]
-        public static bool OnOpen(int instanceID, int line)
+        public static bool OnOpen(EntityId entityId, int line)
         {
-            var asset = EditorUtility.InstanceIDToObject(instanceID) as AudioBank;
+            var asset = EditorUtility.EntityIdToObject(entityId) as AudioBank;
             if (asset != null)
             {
                 AudioGraph.OpenAudioGraph(asset);
@@ -108,6 +109,21 @@ namespace CycloneGames.Audio.Editor
             }
             return false;
         }
+#else
+        [OnOpenAsset]
+        public static bool OnOpen(int instanceID, int line)
+        {
+#pragma warning disable 0618 // Unity 6.0-6.5 only dispatch the documented int callback signature.
+            var asset = EditorUtility.InstanceIDToObject(instanceID) as AudioBank;
+#pragma warning restore 0618
+            if (asset != null)
+            {
+                AudioGraph.OpenAudioGraph(asset);
+                return true;
+            }
+            return false;
+        }
+#endif
 
         [MenuItem("Tools/CycloneGames/Audio/Validate All Audio Banks")]
         private static void ValidateAllAudioBanksMenu()

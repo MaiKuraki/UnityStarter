@@ -1,19 +1,18 @@
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Movement.Core;
-using Unity.Mathematics;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
     public static class MovementNetworkVectorExtensions
     {
-        public static NetworkVector3 ToNetworkVector3(this float3 value)
+        public static NetworkVector3 ToNetworkVector3(this MovementVector3 value)
         {
-            return new NetworkVector3(value.x, value.y, value.z);
+            return new NetworkVector3(value.X, value.Y, value.Z);
         }
 
-        public static float3 ToFloat3(this NetworkVector3 value)
+        public static MovementVector3 ToMovementVector3(this NetworkVector3 value)
         {
-            return new float3(value.X, value.Y, value.Z);
+            return new MovementVector3(value.X, value.Y, value.Z);
         }
 
         public static MovementNetworkSnapshotMessage ToMovementNetworkSnapshot(

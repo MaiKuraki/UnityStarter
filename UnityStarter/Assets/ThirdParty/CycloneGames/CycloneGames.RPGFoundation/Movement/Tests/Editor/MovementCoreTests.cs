@@ -1,5 +1,4 @@
 using NUnit.Framework;
-using Unity.Mathematics;
 
 using CycloneGames.RPGFoundation.Movement.Core;
 
@@ -61,9 +60,9 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             var provider = new TestSnapshotProvider();
             var first = new MovementSnapshot
             {
-                Position = new float3(1f, 2f, 3f),
-                Velocity = new float3(4f, 5f, 6f),
-                WorldUp = new float3(0f, 1f, 0f),
+                Position = new MovementVector3(1f, 2f, 3f),
+                Velocity = new MovementVector3(4f, 5f, 6f),
+                WorldUp = new MovementVector3(0f, 1f, 0f),
                 StateType = MovementStateType.Jump,
                 VerticalVelocity = 7f,
                 IsGrounded = false,
@@ -73,9 +72,9 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             };
             var second = new MovementSnapshot
             {
-                Position = new float3(8f, 9f, 10f),
-                Velocity = new float3(0f, 0f, 0f),
-                WorldUp = new float3(0f, 1f, 0f),
+                Position = new MovementVector3(8f, 9f, 10f),
+                Velocity = new MovementVector3(0f, 0f, 0f),
+                WorldUp = new MovementVector3(0f, 1f, 0f),
                 StateType = MovementStateType.Idle,
                 VerticalVelocity = 0f,
                 IsGrounded = true,
@@ -125,11 +124,19 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             Assert.That(context.Payload, Is.SameAs(this));
         }
 
+        private static float Distance(MovementVector3 left, MovementVector3 right)
+        {
+            float dx = left.X - right.X;
+            float dy = left.Y - right.Y;
+            float dz = left.Z - right.Z;
+            return (float)System.Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
         private static void AssertSnapshot(in MovementSnapshot expected, in MovementSnapshot actual)
         {
-            Assert.That(math.distance(expected.Position, actual.Position), Is.LessThan(0.0001f));
-            Assert.That(math.distance(expected.Velocity, actual.Velocity), Is.LessThan(0.0001f));
-            Assert.That(math.distance(expected.WorldUp, actual.WorldUp), Is.LessThan(0.0001f));
+            Assert.That(Distance(expected.Position, actual.Position), Is.LessThan(0.0001f));
+            Assert.That(Distance(expected.Velocity, actual.Velocity), Is.LessThan(0.0001f));
+            Assert.That(Distance(expected.WorldUp, actual.WorldUp), Is.LessThan(0.0001f));
             Assert.That(actual.StateType, Is.EqualTo(expected.StateType));
             Assert.That(actual.VerticalVelocity, Is.EqualTo(expected.VerticalVelocity));
             Assert.That(actual.IsGrounded, Is.EqualTo(expected.IsGrounded));

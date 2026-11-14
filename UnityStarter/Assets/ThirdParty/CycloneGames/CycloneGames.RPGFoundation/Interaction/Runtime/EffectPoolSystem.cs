@@ -4,12 +4,13 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
     public static class EffectPoolSystem
     {
-        private static readonly Dictionary<int, ObjectPool<PooledEffectSpawnData, PooledEffect>> s_pools = new();
+        private static readonly Dictionary<ulong, ObjectPool<PooledEffectSpawnData, PooledEffect>> s_pools = new();
         private static readonly DefaultUnityObjectSpawner s_spawner = new();
 
         private static Transform s_root;
@@ -83,7 +84,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             if (!prefab.TryGetComponent<PooledEffect>(out var template))
                 return null;
 
-            int key = prefab.GetInstanceID();
+            ulong key = UnityObjectId.Of(prefab);
             if (s_pools.TryGetValue(key, out var pool))
                 return pool;
 

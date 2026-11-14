@@ -3,6 +3,7 @@ using UnityEngine;
 using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Editor
 {
@@ -158,7 +159,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
         private void ApplyToAllDetectors()
         {
             var config = (InteractionSystemConfig)target;
-            var detectors = FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            var detectors = UnityObjectQuery.FindAll<InteractionDetector>(false);
 
             for (int i = 0; i < detectors.Length; i++)
             {

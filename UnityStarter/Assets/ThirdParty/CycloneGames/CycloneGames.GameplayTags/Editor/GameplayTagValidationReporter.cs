@@ -6,6 +6,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.Logging;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -212,7 +213,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             List<string> assetGuids = new List<string>(uniqueGuids);
             assetGuids.Sort(System.StringComparer.Ordinal);
-            HashSet<int> scannedInstanceIds = new HashSet<int>();
+            HashSet<ulong> scannedInstanceIds = new HashSet<ulong>();
             for (int assetIndex = 0; assetIndex < assetGuids.Count; assetIndex++)
             {
                 string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[assetIndex]);
@@ -228,21 +229,21 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         internal void ScanProjectAsset(string assetPath, bool canFix)
         {
-            ScanProjectAsset(assetPath, canFix, new HashSet<int>());
+            ScanProjectAsset(assetPath, canFix, new HashSet<ulong>());
         }
 
-        private void ScanProjectAsset(string assetPath, bool canFix, HashSet<int> scannedInstanceIds)
+        private void ScanProjectAsset(string assetPath, bool canFix, HashSet<ulong> scannedInstanceIds)
         {
             Object mainAsset = AssetDatabase.LoadMainAssetAtPath(assetPath);
             Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
 
-            if (mainAsset is GameObject mainPrefab && scannedInstanceIds.Add(mainPrefab.GetInstanceID()))
+            if (mainAsset is GameObject mainPrefab && scannedInstanceIds.Add(UnityObjectId.Of(mainPrefab)))
                 CheckObjectForInvalidTags(mainPrefab, assetPath, canFix);
 
             for (int i = 0; i < assets.Length; i++)
             {
                 if (assets[i] is ScriptableObject scriptableObject &&
-                    scannedInstanceIds.Add(scriptableObject.GetInstanceID()))
+                    scannedInstanceIds.Add(UnityObjectId.Of(scriptableObject)))
                 {
                     CheckObjectForInvalidTags(scriptableObject, assetPath, canFix);
                 }

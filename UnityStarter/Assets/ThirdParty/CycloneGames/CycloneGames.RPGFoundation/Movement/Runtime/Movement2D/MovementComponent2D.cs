@@ -1002,9 +1002,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             return new MovementSnapshot
             {
-                Position = transform.position,
-                Velocity = new float3(_context.CurrentVelocity.x, _context.CurrentVelocity.y, 0f),
-                WorldUp = new float3(_context.WorldUp.x, _context.WorldUp.y, 0f),
+                Position = transform.position.ToMovementVector3(),
+                Velocity = new MovementVector3(_context.CurrentVelocity.x, _context.CurrentVelocity.y, 0f),
+                WorldUp = new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f),
                 StateType = CurrentState,
                 VerticalVelocity = _context.VerticalVelocity,
                 IsGrounded = _context.IsGrounded,
@@ -1016,13 +1016,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
         public void ApplySnapshot(in MovementSnapshot snapshot)
         {
-            Vector3 position = snapshot.Position;
-            Vector2 velocity = new Vector2(snapshot.Velocity.x, snapshot.Velocity.y);
+            Vector3 position = snapshot.Position.ToVector3();
+            Vector2 velocity = new Vector2(snapshot.Velocity.X, snapshot.Velocity.Y);
 
             transform.position = position;
             _rigidbody.position = position;
             _context.CurrentVelocity = velocity;
-            _context.WorldUp = new float2(snapshot.WorldUp.x, snapshot.WorldUp.y);
+            _context.WorldUp = new float2(snapshot.WorldUp.X, snapshot.WorldUp.Y);
             _context.VerticalVelocity = snapshot.VerticalVelocity;
             _context.IsGrounded = snapshot.IsGrounded;
             _context.JumpCount = snapshot.JumpCount;

@@ -452,16 +452,16 @@ namespace CycloneGames.Foundation2D.Editor
             {
                 int hash = _rendererTarget != null ? EditorUtility.GetDirtyCount(_rendererTarget) : 0;
                 hash = hash * 397 ^ (_controller != null ? EditorUtility.GetDirtyCount(_controller) : 0);
-                hash = hash * 397 ^ (material != null ? material.GetInstanceID() : 0);
+                hash = hash * 397 ^ (material != null ? material.GetHashCode() : 0);
                 hash = hash * 397 ^ (material != null ? EditorUtility.GetDirtyCount(material) : 0);
                 Image image = _image.objectReferenceValue as Image;
                 image ??= _fallbackImage;
-                hash = hash * 397 ^ (image != null ? image.GetInstanceID() : 0);
+                hash = hash * 397 ^ (image != null ? image.GetHashCode() : 0);
                 hash = hash * 397 ^ (image != null ? EditorUtility.GetDirtyCount(image) : 0);
                 Canvas canvas = image != null ? image.canvas : null;
                 hash = hash * 397 ^ (canvas != null ? EditorUtility.GetDirtyCount(canvas) : 0);
                 UnityEngine.Object effect = _flipbookUvMeshEffect.objectReferenceValue;
-                hash = hash * 397 ^ (effect != null ? effect.GetInstanceID() : 0);
+                hash = hash * 397 ^ (effect != null ? effect.GetHashCode() : 0);
                 hash = hash * 397 ^ (effect != null ? EditorUtility.GetDirtyCount(effect) : 0);
                 hash = hash * 397 ^ (shaderName != null ? shaderName.GetHashCode() : 0);
                 hash = hash * 397 ^ (requiresShader ? 1 : 0);

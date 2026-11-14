@@ -492,7 +492,7 @@ namespace CycloneGames.AnimationRuntime
                 return AnimationPlaybackHandle.Invalid;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             ValidateClipForAnimator(request.Clip);
 #endif
 
@@ -605,7 +605,7 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (request.Clip != null && !ReferenceEquals(request.Clip, playback.Clip) && !_warnedClipMismatch)
             {
                 _warnedClipMismatch = true;
@@ -957,7 +957,7 @@ namespace CycloneGames.AnimationRuntime
 
             _commits++;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if ((_commits % LivenessCheckInterval) == 0)
             {
                 CheckClipLiveness();
@@ -2304,7 +2304,7 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         /// <summary>
         /// A humanoid clip on a generic rig (or the reverse) produces a wrong pose without throwing. This is the
         /// most common content error in mixed-rig projects, so it is reported once per clip start in dev builds.
@@ -2331,7 +2331,7 @@ namespace CycloneGames.AnimationRuntime
         }
 #endif
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         /// <summary>Commits between liveness scans. 30 commits is roughly half a second at 60 Hz.</summary>
         private const int LivenessCheckInterval = 30;
 
@@ -2410,7 +2410,7 @@ namespace CycloneGames.AnimationRuntime
                 return requested;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (!_warnedLayerClamp && _diagnostics.IsEnabled(AnimationDiagnosticLevel.Warning))
             {
                 _warnedLayerClamp = true;

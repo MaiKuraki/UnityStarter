@@ -143,9 +143,13 @@ namespace CycloneGames.Utility.Runtime
                 // rejects misconfigured duplicate scene instances. It runs at most once per type
                 // per session; afterwards Instance is served from the _instance cache.
 #pragma warning disable CG0011
+#if UNITY_6000_6_OR_NEWER
+                T[] candidates = UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include);
+#else
                 T[] candidates = UnityEngine.Object.FindObjectsByType<T>(
                     FindObjectsInactive.Include,
                     FindObjectsSortMode.None);
+#endif
 #pragma warning restore CG0011
 
                 if (candidates.Length > 1)
