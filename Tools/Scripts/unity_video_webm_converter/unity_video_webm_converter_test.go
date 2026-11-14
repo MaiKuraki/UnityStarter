@@ -2,6 +2,7 @@ package unity_video_webm_converter
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 func TestReadLineReturnsDataLine(t *testing.T) {
@@ -90,23 +93,19 @@ func TestChooseVideoBitrateTerminatesOnEOF(t *testing.T) {
 	}
 }
 
-func TestRunCiWithoutFfmpegFailsFast(t *testing.T) {
-	if commandExists("ffmpeg") {
-		t.Skip("real ffmpeg is installed; the missing-binary branch cannot be exercised")
-	}
+// A forced resolution failure must reach the user and abort the run.
+func TestRunReportsUnresolvedFFmpeg(t *testing.T) {
+	t.Setenv("FFMPEG", filepath.Join(t.TempDir(), "missing-ffmpeg"))
 	code := Run([]string{"--ci", "--input", t.TempDir(), "--output", t.TempDir()})
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1 when ffmpeg is absent", code)
+	if code == toolkit.ExitSuccess {
+		t.Fatalf("exit code = %d, want a failure when ffmpeg cannot be resolved", code)
 	}
 }
 
 func TestRunRejectsNonPositiveFFmpegTimeout(t *testing.T) {
-	// --ffmpeg-timeout must reject non-positive values with the usage code.
-	original := ffmpegTimeout
-	defer func() { ffmpegTimeout = original }()
 	code := Run([]string{"--ci", "--ffmpeg-timeout", "0s"})
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2 for --ffmpeg-timeout 0s", code)
+	if code != toolkit.ExitUsage {
+		t.Fatalf("exit code = %d, want %d for --ffmpeg-timeout 0s", code, toolkit.ExitUsage)
 	}
 }
 
@@ -152,6 +151,35 @@ func TestBuildJobsAcceptsDistinctBasenames(t *testing.T) {
 	}
 	if len(jobs) != 2 {
 		t.Fatalf("job count = %d, want 2", len(jobs))
+	}
+}
+
+// Outputs from every preset must be excluded, so switching preset and rerunning
+// never feeds a prior conversion back in as a source.
+func TestBuildJobsSkipsAllPresetSuffixes(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{"clip.mp4"}
+	for _, p := range presets {
+		names = append(names, "clip"+p.Suffix+".webm")
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("stub"), 0o644); err != nil {
+			t.Fatalf("cannot write fixture %s: %v", name, err)
+		}
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("cannot stat fixture dir: %v", err)
+	}
+	jobs, buildErr := buildJobs(dir, info, filepath.Join(dir, "out"), presets[2])
+	if buildErr != nil {
+		t.Fatalf("buildJobs failed: %v", buildErr)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("job count = %d, want 1 (all preset outputs must be skipped)", len(jobs))
+	}
+	if !strings.HasSuffix(jobs[0].InputPath, "clip.mp4") {
+		t.Fatalf("planned input = %s, want the original source", jobs[0].InputPath)
 	}
 }
 
@@ -201,6 +229,21 @@ func TestComputeThreadsPerEncodeBounds(t *testing.T) {
 	}
 }
 
+func TestWeightForSizeBounds(t *testing.T) {
+	if got := weightForSize(0, 4); got != 1 {
+		t.Fatalf("small file weight = %d, want 1", got)
+	}
+	if got := weightForSize(300<<20, 4); got != 2 {
+		t.Fatalf("medium file weight = %d, want 2", got)
+	}
+	if got := weightForSize(2<<30, 4); got != 3 {
+		t.Fatalf("large file weight = %d, want 3", got)
+	}
+	if got := weightForSize(2<<30, 2); got != 2 {
+		t.Fatalf("weight must be capped by pool capacity, got %d", got)
+	}
+}
+
 func TestFFmpegProgressWriterParsesCarriageReturnStream(t *testing.T) {
 	writer := newFFmpegProgressWriter()
 	// ffmpeg emits progress separated by \r, not \n; the writer must keep up.
@@ -223,5 +266,42 @@ func TestParseTimecodeSeconds(t *testing.T) {
 	}
 	if _, err := parseTimecodeSeconds("bad"); err == nil {
 		t.Fatalf("invalid timecode must be rejected")
+	}
+}
+
+func missingBinaryOptions() Options {
+	return Options{FFmpegPath: filepath.Join(os.TempDir(), "no-such-ffmpeg-binary-for-tests"), FFmpegTimeout: time.Second}
+}
+
+// A start failure during header inspection must not become a media conclusion.
+func TestProbeHeaderStartFailureNotRewrittenAsMediaConclusion(t *testing.T) {
+	_, err := probeWithFFmpegHeader(context.Background(), missingBinaryOptions(), "clip.mp4")
+	if err == nil || !strings.Contains(err.Error(), "cannot start external command") {
+		t.Fatalf("error must expose the start failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "no video stream found") {
+		t.Fatalf("start failure must not become a media conclusion, got: %v", err)
+	}
+}
+
+// A start failure during loudnorm analysis must not become a missing-JSON verdict.
+func TestLoudnormStartFailureNotRewrittenAsMediaConclusion(t *testing.T) {
+	_, err := buildLoudnormFilter(context.Background(), missingBinaryOptions(), "clip.mp4", categoryDefault)
+	if err == nil || !strings.Contains(err.Error(), "cannot start external command") {
+		t.Fatalf("error must expose the start failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not find loudnorm JSON block") {
+		t.Fatalf("start failure must not become a media conclusion, got: %v", err)
+	}
+}
+
+// A start failure during peak analysis must not become a peak-detection verdict.
+func TestPeakStartFailureNotRewrittenAsMediaConclusion(t *testing.T) {
+	_, err := buildPeakNormalizationFilter(context.Background(), missingBinaryOptions(), "clip.mp4", categoryDefault)
+	if err == nil || !strings.Contains(err.Error(), "cannot start external command") {
+		t.Fatalf("error must expose the start failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not detect peak volume") {
+		t.Fatalf("start failure must not become a media conclusion, got: %v", err)
 	}
 }

@@ -7,22 +7,54 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
-// TestProcessFileFailsClosedOnUnreadableAudio guards the pass-1 error-swallowing
-// regression: an analysis failure must surface as an error instead of falling
-// through to a confusing downstream message. The error path is identical with
-// or without ffmpeg installed (LookPath failure vs. decode failure), so the
-// test is meaningful on every machine; ffmpeg end-to-end behavior is not
-// asserted here.
+func testOptions() Options {
+	return Options{
+		FFmpegPath:    "no-binary-configured",
+		FFmpegTimeout: 2 * time.Second,
+		Format:        formatWAV,
+		Workers:       1,
+	}
+}
+
+// An analysis failure must surface as an error instead of falling through to a
+// downstream media conclusion. A missing executable is deterministic on every
+// machine and exercises the same fail-closed path as a decode failure.
 func TestProcessFileFailsClosedOnUnreadableAudio(t *testing.T) {
-	tempDir := t.TempDir()
-	garbage := filepath.Join(tempDir, "broken.wav")
+	dir := t.TempDir()
+	garbage := filepath.Join(dir, "broken.wav")
 	if err := os.WriteFile(garbage, []byte("this is not audio data"), 0o644); err != nil {
 		t.Fatalf("cannot write garbage audio file: %v", err)
 	}
-	if err := processFile(context.Background(), garbage, filepath.Join(tempDir, "broken_normalized.wav")); err == nil {
+	opts := testOptions()
+	opts.FFmpegPath = filepath.Join(dir, "no-such-ffmpeg")
+	if err := processFile(context.Background(), opts, garbage, filepath.Join(dir, "broken_normalized.wav")); err == nil {
 		t.Fatalf("processFile on unreadable audio must return an error")
+	}
+}
+
+// A start failure must never be rewritten into a media-analysis verdict.
+func TestProcessFileReportsStartFailureWithoutMediaConclusion(t *testing.T) {
+	dir := t.TempDir()
+	garbage := filepath.Join(dir, "broken.wav")
+	if err := os.WriteFile(garbage, []byte("this is not audio data"), 0o644); err != nil {
+		t.Fatalf("cannot write garbage audio file: %v", err)
+	}
+	opts := testOptions()
+	opts.FFmpegPath = filepath.Join(dir, "no-such-ffmpeg")
+	err := processFile(context.Background(), opts, garbage, filepath.Join(dir, "broken_normalized.wav"))
+	if err == nil {
+		t.Fatalf("processFile must report the start failure")
+	}
+	if !strings.Contains(err.Error(), "cannot start external command") {
+		t.Fatalf("error must expose the start failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not parse sample rate") {
+		t.Fatalf("start failure must not become a media conclusion, got: %v", err)
 	}
 }
 
@@ -36,11 +68,7 @@ func TestCollectAudioJobsDetectsCollisions(t *testing.T) {
 			t.Fatalf("cannot write fixture %s: %v", name, err)
 		}
 	}
-	originalFormat := selectedFormat
-	selectedFormat = formatWAV
-	defer func() { selectedFormat = originalFormat }()
-
-	_, err := collectAudioJobs(dir)
+	_, err := collectAudioJobs(dir, testOptions())
 	if err == nil {
 		t.Fatalf("collectAudioJobs must reject same-basename sources")
 	}
@@ -59,11 +87,7 @@ func TestCollectAudioJobsSkipsGeneratedSuffix(t *testing.T) {
 			t.Fatalf("cannot write fixture %s: %v", name, err)
 		}
 	}
-	originalFormat := selectedFormat
-	selectedFormat = formatWAV
-	defer func() { selectedFormat = originalFormat }()
-
-	jobs, err := collectAudioJobs(dir)
+	jobs, err := collectAudioJobs(dir, testOptions())
 	if err != nil {
 		t.Fatalf("collectAudioJobs failed: %v", err)
 	}
@@ -76,16 +100,8 @@ func TestCollectAudioJobsSkipsGeneratedSuffix(t *testing.T) {
 }
 
 func TestBuildAudioEncodeArgsMonoFold(t *testing.T) {
-	originalFormat := selectedFormat
-	originalMono := monoOutput
-	selectedFormat = formatWAV
-	defer func() {
-		selectedFormat = originalFormat
-		monoOutput = originalMono
-	}()
-
-	monoOutput = false
-	stereo := buildAudioEncodeArgs(48000)
+	opts := testOptions()
+	stereo := buildAudioEncodeArgs(opts, 48000)
 	if slices.Contains(stereo, "1") && slices.Contains(stereo, "-ac") {
 		t.Fatalf("default args must not fold channels: %v", stereo)
 	}
@@ -93,8 +109,8 @@ func TestBuildAudioEncodeArgsMonoFold(t *testing.T) {
 		t.Fatalf("default args must cap the sample rate: %v", stereo)
 	}
 
-	monoOutput = true
-	mono := buildAudioEncodeArgs(48000)
+	opts.Mono = true
+	mono := buildAudioEncodeArgs(opts, 48000)
 	if !slices.Contains(mono, "-ac") || !slices.Contains(mono, "1") {
 		t.Fatalf("mono fold must add -ac 1: %v", mono)
 	}
@@ -102,7 +118,16 @@ func TestBuildAudioEncodeArgsMonoFold(t *testing.T) {
 
 func TestRunRejectsNonPositiveFFmpegTimeout(t *testing.T) {
 	code := Run([]string{"--ci", "--ffmpeg-timeout", "0s"})
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2 for --ffmpeg-timeout 0s", code)
+	if code != toolkit.ExitUsage {
+		t.Fatalf("exit code = %d, want %d for --ffmpeg-timeout 0s", code, toolkit.ExitUsage)
+	}
+}
+
+// Resolution failures must reach the user verbatim and abort the run.
+func TestRunReportsUnresolvedFFmpeg(t *testing.T) {
+	t.Setenv("FFMPEG", filepath.Join(t.TempDir(), "missing-ffmpeg"))
+	code := Run([]string{"--ci", "--input", t.TempDir()})
+	if code == toolkit.ExitSuccess {
+		t.Fatalf("exit code = %d, want a failure when ffmpeg cannot be resolved", code)
 	}
 }

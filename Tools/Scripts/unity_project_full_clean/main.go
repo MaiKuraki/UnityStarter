@@ -13,10 +13,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,23 +25,21 @@ import (
 	"unicode/utf16"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectlayout"
 	"cyclonegames.tools/scripts/internal/projectroot"
+	"cyclonegames.tools/scripts/internal/recovery"
 	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/term"
+	"cyclonegames.tools/scripts/internal/toolenv"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
 const (
-	leaseRelativePath       = "Temp/BuildPipeline/Workspace/lease.lock"
-	leaseMetadataRelative   = "Temp/BuildPipeline/Workspace/lease.json"
-	transactionRelativePath = ".buildpipeline/transactions"
-	quarantineRelativePath  = "Temp/BuildPipeline/Workspace/cleanup-quarantine"
-	playerOwnerSuffix       = ".buildpipeline-player-owner.json"
-	maximumOwnerBytes       = 64 * 1024
-	maximumManifestBytes    = 64 * 1024 * 1024
-	maximumOwnerJSONDepth   = 64
-	maximumCleanEntries     = 500000
-	maximumCleanDepth       = 64
+	maximumOwnerBytes      = 64 * 1024
+	maximumManifestBytes   = 64 * 1024 * 1024
+	maximumOwnerJSONDepth  = 64
+	defaultMaxCleanEntries = 500000
+	defaultMaxCleanDepth   = 64
 	// progressReportInterval throttles deletion progress lines so multi-GB
 	// Library removals stay observable without flooding the console.
 	progressReportInterval = 2 * time.Second
@@ -56,51 +52,122 @@ const (
 	parallelDeletionDepth = 3
 )
 
-const (
-	// Windows reports these when another process still holds a handle inside a
-	// tree being moved or deleted.
-	windowsErrorAccessDenied     syscall.Errno = 5
-	windowsErrorSharingViolation syscall.Errno = 32
-)
+// runConfig is injected once per command run. An atomic pointer keeps the value
+// immutable after publication, so deletion workers can read it concurrently
+// without a mutex and repeated in-process runs never inherit stale settings.
+type runConfig struct {
+	layout         projectlayout.Layout
+	facts          safefs.Facts
+	policy         safefs.PathPolicy
+	maxEntries     int
+	maxDepth       int
+	strictRecovery bool
+}
+
+var activeConfig atomic.Pointer[runConfig]
+
+func configure(cfg runConfig) { activeConfig.Store(&cfg) }
+
+func currentConfig() runConfig {
+	if cfg := activeConfig.Load(); cfg != nil {
+		return *cfg
+	}
+	return runConfig{
+		layout:     projectlayout.Default(),
+		facts:      safefs.Fallback(),
+		policy:     safefs.HostPathPolicy(),
+		maxEntries: defaultMaxCleanEntries,
+		maxDepth:   defaultMaxCleanDepth,
+	}
+}
+
+func currentLayout() projectlayout.Layout { return currentConfig().layout }
+func currentFacts() safefs.Facts          { return currentConfig().facts }
+func currentPolicy() safefs.PathPolicy    { return currentConfig().policy }
+func maxCleanEntries() int                { return currentConfig().maxEntries }
+func maxCleanDepth() int                  { return currentConfig().maxDepth }
+
+// ensureFacts measures the volume once when a package-level helper is called
+// outside run(), so case comparisons do not depend on caller setup.
+func ensureFacts(projectRoot string) {
+	cfg := currentConfig()
+	if cfg.facts.Probed {
+		return
+	}
+	cfg.facts = safefs.FactsFor(projectRoot)
+	configure(cfg)
+}
+
+func layoutPath(root, relative string) (string, error) {
+	return currentLayout().Join(root, relative)
+}
 
 // lockContentionHint appends an actionable explanation when Windows refuses a
 // move or delete because some other process still holds a handle in the tree.
-// It returns an empty string for every other error so messages stay unchanged.
 func lockContentionHint(err error) string {
-	var errno syscall.Errno
-	if errors.As(err, &errno) && (errno == windowsErrorAccessDenied || errno == windowsErrorSharingViolation) {
-		return ". Another process is holding a file in this tree: close the Unity Editor, file explorers, antivirus or indexing activity, then retry"
+	return safefs.LockHint(err)
+}
+
+// globalDeletionSlots caps the total number of concurrent deletion goroutines
+// for the whole process, including nested tree levels. Tree deletion is IO
+// bound: too much fanout contends on directory metadata locks, so the ceiling
+// is small and can be tuned for a specific storage device.
+const defaultGlobalDeletionWorkerLimit = 8
+
+const maxGlobalDeletionWorkerLimit = 64
+
+var globalDeletionWorkerLimit = configuredDeletionWorkerLimit()
+
+var globalDeletionSlots = make(chan struct{}, globalDeletionWorkerLimit)
+
+func configuredDeletionWorkerLimit() int {
+	if value := strings.TrimSpace(os.Getenv("TOOLS_DELETION_WORKERS")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 1 && parsed <= maxGlobalDeletionWorkerLimit {
+			return parsed
+		}
+	}
+	return defaultGlobalDeletionWorkerLimit
+}
+
+func cacheDirectories() []string { return currentLayout().CacheRoots }
+func publicationRoots() []string { return currentLayout().PublicationRoots }
+func durableEvidenceRoots() []string {
+	return currentLayout().DurableRoots
+}
+
+func nameEqual(left, right string) bool {
+	if currentFacts().CaseSensitive {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
+}
+
+func isOwnerMarkerName(name string) bool {
+	return ownerMarkerKind(name) != ""
+}
+
+// ownerMarkerKind maps a sidecar name to its verification contract. The first
+// layout entry is the general publication marker, the second the YooAsset one.
+func ownerMarkerKind(name string) string {
+	names := currentLayout().OwnerMarkerNames
+	if len(names) > 0 && nameEqual(name, names[0]) {
+		return "general"
+	}
+	if len(names) > 1 && nameEqual(name, names[1]) {
+		return "yoo"
 	}
 	return ""
 }
 
-// deletionWorkerLimit bounds how many subtrees are deleted concurrently.
-// Tree deletion is metadata/IO bound rather than CPU bound, so a small multiple
-// of the core count keeps the device queue fed while leaving CPU, memory and
-// disk headroom for the rest of the machine.
-func deletionWorkerLimit() int {
-	limit := runtime.NumCPU()
-	if limit < 2 {
-		return 2
+// workspaceSegments derives the build-pipeline folder and workspace folder
+// names from the configured workspace path, so a project can relocate the whole
+// workspace without editing cleanup code.
+func workspaceSegments() (string, string) {
+	parts := strings.Split(filepath.ToSlash(currentLayout().WorkspaceDir), "/")
+	if len(parts) < 2 {
+		return parts[0], parts[0]
 	}
-	if limit > 8 {
-		return 8
-	}
-	return limit
-}
-
-// cacheDirectories are the regenerable Unity/IDE cache roots cleaned by default.
-// They are matched case-insensitively: Unity's generated folder casing differs
-// across versions and platforms (the assembly intermediates are `obj` on some
-// and `Obj` on others, which is why the project .gitignore uses `/[Oo]bj/`).
-// Windows hides the difference, so a case-sensitive lookup would silently skip
-// the folder on Linux/macOS and the three platforms would diverge.
-var cacheDirectories = []string{
-	".vs", ".utmp", "obj", "Logs", "Library",
-}
-
-var publicationRoots = []string{
-	"Build", "Bundles", "HybridCLRData", "yoo", "HotUpdateAssetsPreUpload",
+	return parts[len(parts)-2], parts[len(parts)-1]
 }
 
 type editorInstance struct {
@@ -204,9 +271,10 @@ type playerTreeEntry struct {
 }
 
 type buildWorkspaceLease struct {
-	file     *os.File
-	path     string
-	identity os.FileInfo
+	file         *os.File
+	path         string
+	metadataPath string
+	identity     os.FileInfo
 }
 
 type cleanItem struct {
@@ -274,12 +342,20 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var dryRun bool
 	var includeBuildOutputs bool
 	var resolveStaleQuarantine bool
+	var strictRecovery bool
 	var projectPath string
+	var layoutOverride string
+	var maxEntries int
+	var maxDepth int
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode")
-	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without deleting")
+	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without writing or deleting")
 	flags.BoolVar(&includeBuildOutputs, "include-build-outputs", false, "Delete only output trees proven to be Build-owned")
 	flags.BoolVar(&resolveStaleQuarantine, "resolve-stale-quarantine", false, "Complete interrupted cleanups by removing stale quarantine entries")
+	flags.BoolVar(&strictRecovery, "strict-recovery", false, "Treat unclassified Build transaction records as blocking")
 	flags.StringVar(&projectPath, "project", "", "Unity project root to clean (default: auto-detect from the working and executable directories)")
+	flags.StringVar(&layoutOverride, "layout", "", "Project layout document (default: <root>/Tools/project-layout.json)")
+	flags.IntVar(&maxEntries, "max-entries", defaultMaxCleanEntries, "Maximum inventory entries")
+	flags.IntVar(&maxDepth, "max-depth", defaultMaxCleanDepth, "Maximum inventory depth")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -290,22 +366,35 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Errorf("Unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
 		return toolkit.ExitUsage
 	}
+	if maxEntries < 1 || maxDepth < 1 {
+		logging.Error("--max-entries and --max-depth must be positive")
+		return toolkit.ExitUsage
+	}
 
-	resolution, err := resolveProjectRoot(projectPath)
+	resolution, err := resolveProjectRoot(projectPath, layoutOverride)
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
 	}
 	projectRoot := resolution.Root
-	// Make the resolved root and how it was found auditable before any mutation,
-	// including in --ci where there is no interactive confirmation.
-	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
 
-	// A root inferred from the executable's own directory is ambiguous: any
-	// invocation from an unrelated directory would resolve to the repository that
-	// shipped the binary. Destructive, non-interactive runs must refuse it; an
-	// interactive (double-click) session may proceed because it still asks for the
-	// CLEAN confirmation below.
+	layout, err := projectlayout.Load(projectRoot, layoutOverride)
+	if err != nil {
+		logging.Errorf("Cannot load project layout: %v", err)
+		return toolkit.ExitFailure
+	}
+	facts := safefs.FactsFor(projectRoot)
+	policy := safefs.HostPathPolicy()
+	if err := policy.ValidateAbsolute(projectRoot); err != nil {
+		logging.Errorf("Project root is not usable on this host: %v", err)
+		return toolkit.ExitFailure
+	}
+	configure(runConfig{
+		layout: layout, facts: facts, policy: policy,
+		maxEntries: maxEntries, maxDepth: maxDepth, strictRecovery: strictRecovery,
+	})
+
+	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
 	if err := guardDestructiveRun(resolution, dryRun, ciMode,
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd())); err != nil {
 		logging.Errorf("%v", err)
@@ -320,18 +409,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return runQuarantineResolution(ctx, projectRoot, dryRun, stdout)
 	}
 
-	lease, err := acquireBuildWorkspaceLease(projectRoot)
-	if err != nil {
-		logging.Errorf("Build workspace is busy or unsafe; cleanup refused: %v", err)
-		return toolkit.ExitFailure
-	}
-	defer func() {
-		if err := lease.release(); err != nil {
-			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
-		}
-	}()
-
-	logging.Info("validating Build workspace safety (Unity activity, recovery evidence)")
+	// All checks up to the preview are read-only: no lease file, diagnostic
+	// metadata, stage file or quarantine directory is created for --dry-run.
+	logging.Info("validating project safety (Unity activity, transaction state, recovery evidence)")
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil {
 		logging.Errorf("Unity activity cannot be proven idle: %v", err)
 		return toolkit.ExitFailure
@@ -339,13 +419,33 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Errorf("Unity Editor is active for this project (PID %d). Cleanup refused; there is no force mode.", pid)
 		return toolkit.ExitFailure
 	}
-	if err := ensureNoPendingRecovery(projectRoot); err != nil {
-		logging.Errorf("Pending or ambiguous Build recovery evidence blocks cleanup: %v", err)
+	transactions, err := layoutPath(projectRoot, layout.TransactionsDir)
+	if err != nil {
+		logging.Errorf("Invalid transaction path: %v", err)
 		return toolkit.ExitFailure
 	}
-	if err := ensureNoStaleCleanupQuarantine(projectRoot); err != nil {
-		logging.Errorf("Stale or ambiguous cleanup quarantine requires explicit recovery: %v", err)
+	report, err := recovery.EnsureReady(projectRoot, transactions, strictRecovery)
+	if err != nil {
+		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
+	}
+	if len(report.Unknown) != 0 {
+		logging.Warnf("%d unclassified Build record(s) were treated as durable state; use --strict-recovery to block them", len(report.Unknown))
+	}
+	if err := ensureNoStaleCleanupQuarantine(projectRoot); err != nil {
+		if dryRun {
+			logging.Warnf("Recovery evidence exists; a real run will attempt to resolve it: %v", err)
+		} else {
+			logging.Warnf("Resolving interrupted cleanup: %v", err)
+			if recoverErr := resolveStaleQuarantines(ctx, projectRoot, false, stdout); recoverErr != nil {
+				logging.Errorf("Cannot resolve recovery evidence automatically: %v. Run with --resolve-stale-quarantine after reviewing the journal.", recoverErr)
+				return toolkit.ExitFailure
+			}
+			if err := ensureNoStaleCleanupQuarantine(projectRoot); err != nil {
+				logging.Errorf("Recovery evidence remains after resolution: %v", err)
+				return toolkit.ExitFailure
+			}
+		}
 	}
 
 	logging.Info("inspecting Build-owned outputs")
@@ -358,7 +458,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Warnf("%d publication entr(ies) lack a verifiable Build ownership marker and will not be deleted; they are listed in the preview.", len(inspection.skipped))
 	}
 	ownedOutputs := inspection.owned
-	logging.Info("scanning cache inventory (Library/Temp/Obj/Build); large projects take a while")
+	logging.Info("scanning cache inventory")
 	items, err := collectCleanItems(projectRoot, ownedOutputs, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Cleanup inventory rejected: %v", err)
@@ -367,25 +467,38 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	printPreview(stdout, resolution, items, inspection, includeBuildOutputs)
 	if len(items) == 0 || dryRun {
 		if dryRun {
-			fmt.Fprintln(stdout, "[Dry Run] Lease and safety validation passed; no files were deleted.")
+			fmt.Fprintln(stdout, "[Dry Run] Validation passed; no files were written or deleted.")
 		}
 		return toolkit.ExitSuccess
 	}
 
 	if !ciMode {
-		fmt.Fprint(stdout, "Type CLEAN to delete the listed cache state")
+		prompt := "Type CLEAN to delete the listed cache state"
 		if includeBuildOutputs {
-			fmt.Fprint(stdout, " and Build-owned publications")
+			prompt += " and Build-owned publications"
 		}
-		fmt.Fprint(stdout, " (anything else cancels): ")
-		var confirmation string
-		if _, err := fmt.Fscan(os.Stdin, &confirmation); err != nil || !strings.EqualFold(confirmation, "CLEAN") {
+		prompt += " (anything else cancels): "
+		if !toolkit.Confirm(prompt, "CLEAN") {
 			fmt.Fprintln(stdout, "Cleanup cancelled.")
 			return toolkit.ExitSuccess
 		}
 	}
 
-	// Close the TOCTOU window as far as the EditorInstance contract permits.
+	// The lease is acquired only after the user has committed to a real delete.
+	lease, err := acquireBuildWorkspaceLease(projectRoot)
+	if err != nil {
+		logging.Errorf("Build workspace is busy or unsafe; cleanup refused: %v", err)
+		return toolkit.ExitFailure
+	}
+	defer func() {
+		if err := lease.release(); err != nil {
+			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
+		}
+	}()
+
+	// Close the TOCTOU window with targeted checks. The full tree walk is not
+	// repeated: only the recorded identities and the top-level target set are
+	// revalidated before quarantine claims are made.
 	if running, pid, err := checkUnityRunning(projectRoot); err != nil || running {
 		if err != nil {
 			logging.Errorf("Unity activity changed before deletion: %v", err)
@@ -394,38 +507,25 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		}
 		return toolkit.ExitFailure
 	}
-	if err := ensureNoPendingRecovery(projectRoot); err != nil {
+	if _, err := recovery.EnsureReady(projectRoot, transactions, strictRecovery); err != nil {
 		logging.Errorf("Build recovery state changed before deletion: %v", err)
 		return toolkit.ExitFailure
 	}
+	if err := revalidateInventory(projectRoot, items); err != nil {
+		logging.Errorf("Cleanup inventory changed before deletion: %v. Nothing was deleted.", err)
+		return toolkit.ExitFailure
+	}
+	// Publication roots are much smaller than a Library tree, so a second
+	// ownership pass closes the preview-to-claim window without restoring the
+	// cost of a full inventory rescan.
 	recheckedInspection, err := inspectPublicationOwnership(projectRoot, includeBuildOutputs)
 	if err != nil {
 		logging.Errorf("Build output ownership changed before deletion: %v", err)
 		return toolkit.ExitFailure
 	}
-	if !cleanItemInventoriesEqual(ownedOutputs, recheckedInspection.owned) {
+	if !cleanItemInventoriesEqual(ownedOutputs, recheckedInspection.owned) ||
+		!sameStringSet(inspection.skipped, recheckedInspection.skipped) {
 		logging.Errorf("Build output ownership targets changed after preview; nothing was deleted.")
-		return toolkit.ExitFailure
-	}
-	recheckedItems, err := collectCleanItems(projectRoot, recheckedInspection.owned, includeBuildOutputs)
-	if err != nil {
-		logging.Errorf("Cleanup inventory changed before deletion: %v", err)
-		return toolkit.ExitFailure
-	}
-	if !cleanItemInventoriesEqual(items, recheckedItems) {
-		logging.Errorf("Cleanup targets changed after preview; nothing was deleted.")
-		return toolkit.ExitFailure
-	}
-	if running, pid, err := checkUnityRunning(projectRoot); err != nil || running {
-		if err != nil {
-			logging.Errorf("Unity activity changed during final ownership validation: %v", err)
-		} else {
-			logging.Errorf("Unity Editor started during final ownership validation (PID %d). Nothing was deleted.", pid)
-		}
-		return toolkit.ExitFailure
-	}
-	if err := ensureNoPendingRecovery(projectRoot); err != nil {
-		logging.Errorf("Build recovery state changed during final ownership validation: %v", err)
 		return toolkit.ExitFailure
 	}
 	if err := lease.validate(); err != nil {
@@ -436,7 +536,6 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Errorf("Cleanup quarantine state changed before claim: %v", err)
 		return toolkit.ExitFailure
 	}
-	items = recheckedItems
 
 	start := time.Now()
 	deleted, failed, freed := executeQuarantinedCleanup(ctx, projectRoot, lease, items, stdout)
@@ -455,8 +554,25 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 // explicit --project path is validated strictly; otherwise the shared search
 // order covers a repository-root launch, a project-root launch, and a
 // double-clicked binary whose working directory is its own folder.
-func resolveProjectRoot(explicit string) (projectroot.Result, error) {
-	resolver := projectroot.Resolver{Validate: validateProjectRoot}
+func resolveProjectRoot(explicit, layoutOverride string) (projectroot.Result, error) {
+	layout := projectlayout.Default()
+	if strings.TrimSpace(layoutOverride) != "" {
+		loaded, err := projectlayout.Load("", layoutOverride)
+		if err != nil {
+			return projectroot.Result{}, err
+		}
+		layout = loaded
+	} else if strings.TrimSpace(explicit) != "" {
+		if loaded, err := projectlayout.Load(explicit, ""); err == nil {
+			layout = loaded
+		}
+	}
+	resolver := projectroot.Resolver{
+		Validate: func(directory string) (string, error) {
+			return validateProjectRootWith(directory, layout)
+		},
+		Layout: layout,
+	}
 	return resolver.Resolve(explicit)
 }
 
@@ -473,6 +589,10 @@ func guardDestructiveRun(resolution projectroot.Result, dryRun, ciMode, stdinTTY
 }
 
 func validateProjectRoot(path string) (string, error) {
+	return validateProjectRootWith(path, projectlayout.Default())
+}
+
+func validateProjectRootWith(path string, layout projectlayout.Layout) (string, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -500,28 +620,37 @@ func validateProjectRoot(path string) (string, error) {
 	if err != nil || !samePath(root, resolvedRoot) {
 		return "", errors.New("project root is reached through a symlink/reparse path")
 	}
-	for _, relative := range []string{"Assets", "ProjectSettings", "Packages"} {
-		markerPath := filepath.Join(root, relative)
+	for _, relative := range layout.Markers {
+		markerPath, err := layout.Join(root, relative)
+		if err != nil {
+			return "", err
+		}
 		if err := ensurePathSegmentsNotRedirected(root, markerPath); err != nil {
-			return "", fmt.Errorf("Unity project marker '%s' is redirected: %w", relative, err)
+			return "", fmt.Errorf("Unity project marker %q is redirected: %w", relative, err)
 		}
 		info, err := os.Lstat(markerPath)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("Unity project marker '%s' is unavailable, redirected, or not a directory", relative)
+			return "", fmt.Errorf("Unity project marker %q is unavailable, redirected, or not a directory", relative)
 		}
 	}
-	projectVersionPath := filepath.Join(root, "ProjectSettings", "ProjectVersion.txt")
+	projectVersionPath, err := layout.Join(root, layout.ProjectVersionFile)
+	if err != nil {
+		return "", err
+	}
 	projectVersion, _, err := readBoundedStableFile(root, projectVersionPath, 4*1024)
 	if err != nil || !bytes.Contains(projectVersion, []byte("m_EditorVersion:")) {
-		return "", fmt.Errorf("ProjectSettings/ProjectVersion.txt is invalid: %v", err)
+		return "", fmt.Errorf("%s is invalid: %v", layout.ProjectVersionFile, err)
 	}
-	manifestPath := filepath.Join(root, "Packages", "manifest.json")
+	manifestPath, err := layout.Join(root, layout.ManifestFile)
+	if err != nil {
+		return "", err
+	}
 	manifest, _, err := readBoundedStableFile(root, manifestPath, maximumManifestBytes)
 	if err != nil {
-		return "", fmt.Errorf("Packages/manifest.json is invalid: %w", err)
+		return "", fmt.Errorf("%s is invalid: %w", layout.ManifestFile, err)
 	}
 	if err := validateUnityManifest(manifest); err != nil {
-		return "", fmt.Errorf("Packages/manifest.json is not a structured Unity manifest: %w", err)
+		return "", fmt.Errorf("%s is not a structured Unity manifest: %w", layout.ManifestFile, err)
 	}
 	return root, nil
 }
@@ -677,18 +806,26 @@ func validateJSONValue(decoder *json.Decoder, depth int) error {
 }
 
 func acquireBuildWorkspaceLease(projectRoot string) (*buildWorkspaceLease, error) {
-	leasePath, err := safePath(projectRoot, leaseRelativePath, false)
+	leasePath, err := layoutPath(projectRoot, currentLayout().LeaseFile)
 	if err != nil {
 		return nil, err
 	}
-	metadataPath, err := safePath(projectRoot, leaseMetadataRelative, false)
+	metadataPath, err := layoutPath(projectRoot, currentLayout().LeaseMetadataFile)
 	if err != nil {
+		return nil, err
+	}
+	policy := currentPolicy()
+	if err := policy.Budget(filepath.Dir(leasePath), filepath.Base(leasePath),
+		"."+filepath.Base(metadataPath)+".stage-000000"); err != nil {
 		return nil, err
 	}
 	if err := ensurePathSegmentsNotRedirected(projectRoot, filepath.Dir(leasePath)); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(leasePath), 0700); err != nil {
+		return nil, err
+	}
+	if err := policy.EnsureWritable(filepath.Dir(leasePath)); err != nil {
 		return nil, err
 	}
 	if err := ensurePathSegmentsNotRedirected(projectRoot, leasePath); err != nil {
@@ -719,7 +856,7 @@ func acquireBuildWorkspaceLease(projectRoot string) (*buildWorkspaceLease, error
 		_ = file.Close()
 		return nil, fmt.Errorf("Build workspace lease path is redirected or unreadable")
 	}
-	lease := &buildWorkspaceLease{file: file, path: leasePath, identity: fileInfo}
+	lease := &buildWorkspaceLease{file: file, path: leasePath, metadataPath: metadataPath, identity: fileInfo}
 	metadata := leaseMetadata{
 		DocumentType: "build-workspace-lease",
 		RunID:        fmt.Sprintf("cleanup-%d-%d", os.Getpid(), time.Now().UTC().UnixNano()),
@@ -739,6 +876,9 @@ func acquireBuildWorkspaceLease(projectRoot string) (*buildWorkspaceLease, error
 	return lease, nil
 }
 
+// release drops the OS lock and removes the per-run metadata. The lock file
+// itself is shared by convention and stays on disk; without the metadata no
+// other tool can mistake a finished run for a live owner.
 func (lease *buildWorkspaceLease) release() error {
 	if lease == nil || lease.file == nil {
 		return nil
@@ -747,6 +887,11 @@ func (lease *buildWorkspaceLease) release() error {
 	lease.file = nil
 	unlockErr := unlockFile(file)
 	closeErr := file.Close()
+	if lease.metadataPath != "" {
+		if err := os.Remove(lease.metadataPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logging.Warnf("Cannot remove lease metadata %s: %v", lease.metadataPath, err)
+		}
+	}
 	if unlockErr != nil {
 		return unlockErr
 	}
@@ -800,14 +945,17 @@ func writeDiagnosticAtomically(target string, data []byte) error {
 	if err != nil || !bytes.Equal(readBack, data) {
 		return fmt.Errorf("diagnostic read-back mismatch; stage retained at %s", stage)
 	}
-	if err := replacePathAtomically(stage, target); err != nil {
-		return fmt.Errorf("diagnostic publish failed; stage may be retained at %s: %w", stage, err)
+	if err := safefs.PublishReplace(stage, target); err != nil {
+		return fmt.Errorf("diagnostic publish failed; stage may be retained at %s: %w%s", stage, err, safefs.LockHint(err))
 	}
 	return nil
 }
 
 func checkUnityRunning(projectRoot string) (bool, int, error) {
-	path := filepath.Join(projectRoot, "Library", "EditorInstance.json")
+	path, err := layoutPath(projectRoot, currentLayout().EditorInstanceFile)
+	if err != nil {
+		return false, 0, err
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, 0, nil
@@ -827,77 +975,48 @@ func checkUnityRunning(projectRoot string) (bool, int, error) {
 }
 
 // processProbeTimeout bounds the external process-liveness probe so a wedged
-// tasklist can never hang the whole tool.
-const processProbeTimeout = 10 * time.Second
-
 func processIsRunning(pid int) (bool, error) {
-	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
-		defer cancel()
-		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
-		output, err := command.Output()
-		if err != nil {
-			return false, err
-		}
-		return strings.Contains(string(output), strconv.Itoa(pid)), nil
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false, err
-	}
-	err = process.Signal(syscall.Signal(0))
-	if err == nil || errors.Is(err, syscall.EPERM) {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-		return false, nil
-	}
-	return false, err
+	return toolenv.ProcessAlive(pid)
 }
 
-func ensureNoPendingRecovery(projectRoot string) error {
-	root := filepath.Join(projectRoot, filepath.FromSlash(transactionRelativePath))
-	info, err := os.Lstat(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// revalidateInventory proves the previewed targets are unchanged without
+// walking their contents a second time. Only recorded root identities and the
+// set of top-level cache candidates are compared, which keeps large projects
+// responsive while still closing the preview-to-claim window.
+func revalidateInventory(projectRoot string, items []cleanItem) error {
+	expected := make(map[string]bool, len(items))
+	for i := range items {
+		item := items[i]
+		if err := validateDeleteTarget(projectRoot, item.path); err != nil {
+			return err
+		}
+		info, err := os.Lstat(item.path)
+		if err != nil || item.identity == nil || !os.SameFile(item.identity, info) ||
+			info.Size() != item.identity.Size() || !info.ModTime().Equal(item.identity.ModTime()) {
+			return fmt.Errorf("target identity changed: %s", item.path)
+		}
+		relative, err := filepath.Rel(projectRoot, item.path)
+		if err != nil {
+			return err
+		}
+		expected[filepath.ToSlash(relative)] = true
 	}
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("transaction root is unreadable or not a directory: %s", root)
-	}
-	if err := ensurePathSegmentsNotRedirected(projectRoot, root); err != nil {
-		return err
-	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, name := range cacheDirectories() {
+		matches, err := resolveCacheDirectories(projectRoot, name)
+		if err != nil {
+			return err
 		}
-		if samePath(path, root) {
-			return nil
-		}
-		if redirected, err := pathIsReparsePoint(path); err != nil || redirected {
-			return fmt.Errorf("transaction evidence is redirected or unreadable: %s", path)
-		}
-		if err := safefs.ValidateMountBoundary(projectRoot, path); err != nil {
-			return fmt.Errorf("transaction evidence crossed a mount boundary: %w", err)
-		}
-		relative, _ := filepath.Rel(root, path)
-		depth := len(strings.Split(filepath.ToSlash(relative), "/"))
-		if entry.IsDir() {
-			if depth == 1 {
-				return nil // Registered participant state root.
+		for _, path := range matches {
+			relative, err := filepath.Rel(projectRoot, path)
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("durable transaction directory requires explicit Build recovery: %s", path)
-		}
-		name := entry.Name()
-		if depth == 2 && (name == "build.lock" || name == "active.lock") {
-			info, err := entry.Info()
-			if err != nil || info.Size() > 4096 {
-				return fmt.Errorf("reusable transaction lock metadata is invalid: %s", path)
+			if !expected[filepath.ToSlash(relative)] {
+				return fmt.Errorf("new cache target appeared after the preview: %s", path)
 			}
-			return nil
 		}
-		return fmt.Errorf("durable transaction evidence requires explicit Build recovery: %s", path)
-	})
+	}
+	return nil
 }
 
 // publicationInspection is the reconciled view of the publication roots. owned
@@ -926,7 +1045,7 @@ type publicationInspection struct {
 // verify is skipped with a warning (the Build provider owns its recovery path).
 func inspectPublicationOwnership(projectRoot string, includeBuildOutputs bool) (publicationInspection, error) {
 	inspection := publicationInspection{}
-	for _, relativeRoot := range publicationRoots {
+	for _, relativeRoot := range publicationRoots() {
 		root, err := safePath(projectRoot, relativeRoot, true)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -958,8 +1077,8 @@ func inspectPublicationOwnership(projectRoot string, includeBuildOutputs bool) (
 				return walkErr
 			}
 			entries++
-			if entries > maximumCleanEntries {
-				return fmt.Errorf("publication inventory exceeds %d entries", maximumCleanEntries)
+			if entries > maxCleanEntries() {
+				return fmt.Errorf("publication inventory exceeds %d entries", maxCleanEntries())
 			}
 			if redirected, err := pathIsReparsePoint(path); err != nil || redirected {
 				return fmt.Errorf("publication contains a redirected or unreadable entry: %s", path)
@@ -973,32 +1092,28 @@ func inspectPublicationOwnership(projectRoot string, includeBuildOutputs bool) (
 			if entry.IsDir() {
 				return nil
 			}
-			switch entry.Name() {
-			case ".buildpipeline-owner.json", ".yoo-pub.json":
-				evidence, _, err := validateOwnerMarker(path, entry.Name(), "")
+			name := entry.Name()
+			if isOwnerMarkerName(name) {
+				evidence, _, err := validateOwnerMarker(path, name, "")
 				if err != nil {
-					// Present but malformed: fail closed.
 					return err
 				}
 				ownerEvidences[filepath.Dir(path)] = evidence
 				unverifiable[filepath.Dir(path)] = true
 				targets = append(targets, filepath.Dir(path))
-			default:
-				if strings.HasSuffix(entry.Name(), playerOwnerSuffix) {
-					target := strings.TrimSuffix(path, playerOwnerSuffix)
-					evidence, identity, err := validateOwnerMarker(path, entry.Name(), target)
-					if err != nil {
-						// Present but malformed: fail closed.
-						return err
-					}
-					playerIdentities[target] = identity
-					ownerEvidences[target] = evidence
-					ownerEvidences[path] = evidence
-					if _, err := os.Lstat(target); err != nil {
-						return fmt.Errorf("Player ownership sidecar has no output target: %s", path)
-					}
-					targets = append(targets, target, path)
+			} else if strings.HasSuffix(name, currentLayout().OwnerSuffix) {
+				target := strings.TrimSuffix(path, currentLayout().OwnerSuffix)
+				evidence, identity, err := validateOwnerMarker(path, name, target)
+				if err != nil {
+					return err
 				}
+				playerIdentities[target] = identity
+				ownerEvidences[target] = evidence
+				ownerEvidences[path] = evidence
+				if _, err := os.Lstat(target); err != nil {
+					return fmt.Errorf("Player ownership sidecar has no output target: %s", path)
+				}
+				targets = append(targets, target, path)
 			}
 			return nil
 		})
@@ -1102,7 +1217,8 @@ func validateOwnerMarker(path, name, target string) (*ownerMarkerEvidence, *play
 		return nil, nil, fmt.Errorf("ownership marker checksum shape is invalid: %s", path)
 	}
 	evidence := &ownerMarkerEvidence{Path: path, SHA256: fmt.Sprintf("%X", sha256.Sum256(data)), TransactionID: marker.TransactionID}
-	if name != ".buildpipeline-owner.json" && name != ".yoo-pub.json" {
+	kind := ownerMarkerKind(name)
+	if kind == "" {
 		if target == "" || marker.Kind != "published" || marker.Checksum == "" {
 			return nil, nil, fmt.Errorf("Player ownership marker is incomplete: %s", path)
 		}
@@ -1113,14 +1229,14 @@ func validateOwnerMarker(path, name, target string) (*ownerMarkerEvidence, *play
 		return evidence, identity, nil
 	}
 	expectedDocumentType := ""
-	switch name {
-	case ".buildpipeline-owner.json":
+	switch kind {
+	case "general":
 		if marker.Owner == "Build.Pipeline.AddressablesPublication" {
 			expectedDocumentType = "addressables-publication-owner"
 		} else if marker.Owner == "Build.Pipeline.Editor.HybridCLR" {
 			expectedDocumentType = "hybridclr-output-owner"
 		}
-	case ".yoo-pub.json":
+	case "yoo":
 		if marker.Owner == "Build.Pipeline.Editor.Integrations.YooAsset3" {
 			expectedDocumentType = "yooasset-publication-owner"
 		}
@@ -1128,8 +1244,8 @@ func validateOwnerMarker(path, name, target string) (*ownerMarkerEvidence, *play
 	if expectedDocumentType == "" || marker.DocumentType != expectedDocumentType {
 		return nil, nil, fmt.Errorf("ownership marker is invalid or unsupported: %s", path)
 	}
-	switch name {
-	case ".buildpipeline-owner.json":
+	switch kind {
+	case "general":
 		if marker.Owner == "Build.Pipeline.AddressablesPublication" {
 			if err := validateAddressablesOwner(path, data); err != nil {
 				return nil, nil, err
@@ -1141,7 +1257,7 @@ func validateOwnerMarker(path, name, target string) (*ownerMarkerEvidence, *play
 		} else {
 			return nil, nil, fmt.Errorf("ownership marker owner is not recognized: %s", path)
 		}
-	case ".yoo-pub.json":
+	case "yoo":
 		if marker.Owner != "Build.Pipeline.Editor.Integrations.YooAsset3" {
 			return nil, nil, fmt.Errorf("YooAsset ownership marker owner is not recognized: %s", path)
 		}
@@ -1430,8 +1546,8 @@ func computePlayerTreeIdentity(root string) (*playerTreeIdentity, error) {
 		if samePath(path, root) {
 			return nil
 		}
-		if len(entries) >= maximumCleanEntries {
-			return fmt.Errorf("Player identity exceeds %d entries", maximumCleanEntries)
+		if len(entries) >= maxCleanEntries() {
+			return fmt.Errorf("Player identity exceeds %d entries", maxCleanEntries())
 		}
 		if redirected, err := pathIsReparsePoint(path); err != nil || redirected {
 			return fmt.Errorf("Player output contains a redirected or unreadable entry: %s", path)
@@ -1555,8 +1671,9 @@ func utf16OrdinalLess(left, right string) bool {
 }
 
 func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuildOutputs bool) ([]cleanItem, error) {
+	ensureFacts(projectRoot)
 	var items []cleanItem
-	for _, relative := range cacheDirectories {
+	for _, relative := range cacheDirectories() {
 		matches, err := resolveCacheDirectories(projectRoot, relative)
 		if err != nil {
 			return nil, err
@@ -1571,22 +1688,26 @@ func collectCleanItems(projectRoot string, ownedOutputs []cleanItem, includeBuil
 		}
 	}
 
-	// Temp contains the authoritative lease. Delete only siblings outside the
-	// BuildPipeline workspace, then delete BuildPipeline children other than Workspace.
-	tempRoot := filepath.Join(projectRoot, "Temp")
+	// The workspace root holds durable state. Its siblings and its parent's
+	// siblings are regenerable and become cleanup targets.
+	tempRoot, err := layoutPath(projectRoot, currentLayout().TempRoot)
+	if err != nil {
+		return nil, err
+	}
+	buildPipelineName, workspaceName := workspaceSegments()
 	if entries, err := os.ReadDir(tempRoot); err == nil {
 		for _, entry := range entries {
-			if entry.Name() == "BuildPipeline" {
+			if nameEqual(entry.Name(), buildPipelineName) {
 				buildTemp := filepath.Join(tempRoot, entry.Name())
 				children, childErr := os.ReadDir(buildTemp)
 				if childErr != nil {
 					return nil, childErr
 				}
 				for _, child := range children {
-					if child.Name() == "Workspace" {
+					if nameEqual(child.Name(), workspaceName) {
 						continue
 					}
-					logging.Info("inventorying temporary cache", "path", "BuildPipeline/"+child.Name())
+					logging.Info("inventorying temporary cache", "path", buildPipelineName+"/"+child.Name())
 					item, err := inventoryItem(projectRoot, filepath.Join(buildTemp, child.Name()), "temporary cache")
 					if err != nil {
 						return nil, err
@@ -1628,7 +1749,7 @@ func resolveCacheDirectories(projectRoot, name string) ([]string, error) {
 	}
 	var matches []string
 	for _, entry := range entries {
-		if entry.IsDir() && strings.EqualFold(entry.Name(), name) {
+		if entry.IsDir() && nameEqual(entry.Name(), name) {
 			matches = append(matches, filepath.Join(projectRoot, entry.Name()))
 		}
 	}
@@ -1650,6 +1771,22 @@ func validateCleanItemInventory(projectRoot string, items []cleanItem) error {
 		}
 	}
 	return nil
+}
+
+func sameStringSet(expected, actual []string) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	left := append([]string(nil), expected...)
+	right := append([]string(nil), actual...)
+	sort.Strings(left)
+	sort.Strings(right)
+	for index := range left {
+		if !samePath(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanItemInventoriesEqual(expected, actual []cleanItem) bool {
@@ -1709,11 +1846,19 @@ func validateDeleteTarget(projectRoot, target string) error {
 	if samePath(projectRoot, target) || !isDescendant(projectRoot, target) {
 		return fmt.Errorf("delete target escapes or equals the project root: %s", target)
 	}
-	durableRoot := filepath.Join(projectRoot, ".buildpipeline")
-	if samePath(target, durableRoot) || isDescendant(target, durableRoot) || isDescendant(durableRoot, target) {
-		return fmt.Errorf("durable Build evidence is never a cleanup target: %s", target)
+	for _, relative := range durableEvidenceRoots() {
+		root, err := layoutPath(projectRoot, relative)
+		if err != nil {
+			return err
+		}
+		if samePath(target, root) || isDescendant(target, root) || isDescendant(root, target) {
+			return fmt.Errorf("durable Build evidence is never a cleanup target: %s", target)
+		}
 	}
-	workspaceRoot := filepath.Join(projectRoot, filepath.FromSlash("Temp/BuildPipeline/Workspace"))
+	workspaceRoot, err := layoutPath(projectRoot, currentLayout().WorkspaceDir)
+	if err != nil {
+		return err
+	}
 	if samePath(target, workspaceRoot) || isDescendant(target, workspaceRoot) || isDescendant(workspaceRoot, target) {
 		return fmt.Errorf("active Build workspace lease is never a cleanup target: %s", target)
 	}
@@ -1721,7 +1866,7 @@ func validateDeleteTarget(projectRoot, target string) error {
 }
 
 func ensureNoStaleCleanupQuarantine(projectRoot string) error {
-	root := filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath))
+	root := filepath.Join(projectRoot, filepath.FromSlash(currentLayout().QuarantineDir))
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -1771,7 +1916,7 @@ func runQuarantineResolution(ctx context.Context, projectRoot string, dryRun boo
 }
 
 func resolveStaleQuarantines(ctx context.Context, projectRoot string, dryRun bool, stdout io.Writer) error {
-	root := filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath))
+	root := filepath.Join(projectRoot, filepath.FromSlash(currentLayout().QuarantineDir))
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintln(stdout, "No cleanup quarantine exists; nothing to resolve.")
@@ -1863,7 +2008,7 @@ func validateStaleQuarantineJournal(entryPath string) error {
 	if journal.DocumentType != "build-cleanup-quarantine" {
 		return fmt.Errorf("transaction journal has unexpected documentType %q", journal.DocumentType)
 	}
-	if len(journal.Entries) == 0 || len(journal.Entries) > maximumCleanEntries {
+	if len(journal.Entries) == 0 || len(journal.Entries) > maxCleanEntries() {
 		return fmt.Errorf("transaction journal entry count %d is not plausible", len(journal.Entries))
 	}
 	return nil
@@ -1955,7 +2100,11 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 		}
 		return failClaim(fmt.Errorf("Unity Editor started before physical deletion (PID %d)", pid))
 	}
-	if err := ensureNoPendingRecovery(projectRoot); err != nil {
+	transactions, err := layoutPath(projectRoot, currentLayout().TransactionsDir)
+	if err != nil {
+		return failClaim(err)
+	}
+	if _, err := recovery.EnsureReady(projectRoot, transactions, currentConfig().strictRecovery); err != nil {
 		return failClaim(fmt.Errorf("Build recovery state changed before physical deletion: %w", err))
 	}
 	if err := quarantineRoot.validate(projectRoot); err != nil {
@@ -2125,12 +2274,12 @@ func removeRootedTree(ctx context.Context, root *os.Root, relative string, depth
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if depth > maximumCleanDepth {
-		return fmt.Errorf("rooted deletion exceeds depth %d: %s", maximumCleanDepth, relative)
+	if depth > maxCleanDepth() {
+		return fmt.Errorf("rooted deletion exceeds depth %d: %s", maxCleanDepth(), relative)
 	}
 	entries.Add(1)
-	if entries.Load() > maximumCleanEntries {
-		return fmt.Errorf("rooted deletion exceeds %d entries", maximumCleanEntries)
+	if entries.Load() > int64(maxCleanEntries()) {
+		return fmt.Errorf("rooted deletion exceeds %d entries", maxCleanEntries())
 	}
 	mode := entryType
 	if mode == 0 {
@@ -2226,19 +2375,21 @@ func removeChildren(ctx context.Context, root *os.Root, parent string, depth int
 		waitGroup sync.WaitGroup
 		mutex     sync.Mutex
 		firstErr  error
-		slots     = make(chan struct{}, deletionWorkerLimit())
 	)
 	for _, child := range directories {
-		if err := ctx.Err(); err != nil {
-			return err
+		// A single process-wide semaphore caps the total goroutine count even
+		// when several tree levels fan out concurrently. The acquisition is
+		// cancellable so a saturated pool cannot trap the caller after Ctrl+C.
+		select {
+		case globalDeletionSlots <- struct{}{}:
+		case <-ctx.Done():
+			waitGroup.Wait()
+			return ctx.Err()
 		}
-		// Acquire the slot before spawning so the goroutine count stays at the
-		// worker limit instead of one per directory.
-		slots <- struct{}{}
 		waitGroup.Add(1)
 		go func(entry fs.DirEntry) {
 			defer waitGroup.Done()
-			defer func() { <-slots }()
+			defer func() { <-globalDeletionSlots }()
 			if err := removeRootedTree(ctx, root, filepath.Join(parent, entry.Name()), depth+1, entry.Type(), entries, onProgress); err != nil {
 				mutex.Lock()
 				if firstErr == nil {
@@ -2261,11 +2412,22 @@ func (binding *boundQuarantineRoot) close() error {
 }
 
 func createQuarantineTransaction(projectRoot string, items []cleanItem) (string, string, *quarantineJournal, error) {
-	parent := filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath))
+	parent, err := layoutPath(projectRoot, currentLayout().QuarantineDir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	policy := currentPolicy()
+	if err := policy.Budget(parent, "cleanup-00000000000000000000000000000000",
+		"item-000000", "transaction.json"); err != nil {
+		return "", "", nil, err
+	}
 	if err := ensurePathSegmentsNotRedirected(projectRoot, filepath.Dir(parent)); err != nil {
 		return "", "", nil, err
 	}
 	if err := os.MkdirAll(parent, 0700); err != nil {
+		return "", "", nil, err
+	}
+	if err := policy.EnsureWritable(parent); err != nil {
 		return "", "", nil, err
 	}
 	if err := safefs.SyncParent(parent); err != nil {
@@ -2357,7 +2519,7 @@ func validateBoundCleanItem(projectRoot string, item cleanItem, path string, inQ
 		if err := validateDeleteTarget(projectRoot, path); err != nil {
 			return err
 		}
-	} else if !isDescendant(filepath.Join(projectRoot, filepath.FromSlash(quarantineRelativePath)), path) {
+	} else if !isDescendant(filepath.Join(projectRoot, filepath.FromSlash(currentLayout().QuarantineDir)), path) {
 		return fmt.Errorf("claimed path escapes cleanup quarantine: %s", path)
 	}
 	info, err := os.Lstat(path)
@@ -2510,26 +2672,30 @@ func pathSize(path string) (int64, error) {
 			return walkErr
 		}
 		entries++
-		if entries > maximumCleanEntries {
-			return fmt.Errorf("inventory exceeds %d entries: %s", maximumCleanEntries, path)
+		if entries > maxCleanEntries() {
+			return fmt.Errorf("inventory exceeds %d entries: %s", maxCleanEntries(), path)
 		}
 		depth := len(strings.Split(filepath.Clean(current), string(os.PathSeparator))) - baseDepth
-		if depth > maximumCleanDepth {
-			return fmt.Errorf("inventory exceeds depth %d: %s", maximumCleanDepth, path)
+		if depth > maxCleanDepth() {
+			return fmt.Errorf("inventory exceeds depth %d: %s", maxCleanDepth(), path)
 		}
-		if redirected, err := pathIsReparsePoint(current); err != nil || redirected {
+		// DirEntry already carries the type bits, so the common case costs no
+		// extra stat. Mount identity is checked per directory rather than per
+		// file, which keeps a large Library walk close to a single pass.
+		if entry.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("inventory contains redirected or unreadable path: %s", current)
 		}
-		if err := safefs.ValidateMountBoundary(path, current); err != nil {
-			return fmt.Errorf("inventory crossed a mount boundary: %w", err)
-		}
-		if !entry.IsDir() {
-			info, err := entry.Info()
-			if err != nil {
-				return err
+		if entry.IsDir() {
+			if err := safefs.ValidateMountBoundary(path, current); err != nil {
+				return fmt.Errorf("inventory crossed a mount boundary: %w", err)
 			}
-			size += info.Size()
+			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		size += info.Size()
 		return nil
 	})
 	return size, err
@@ -2598,16 +2764,6 @@ func printPreview(output io.Writer, resolution projectroot.Result, items []clean
 	}
 }
 
-// durableEvidenceRoots are directories this cleaner deliberately never deletes:
-// .buildpipeline carries Build transaction and recovery state that the safety
-// checks read, and Temp/BuildPipeline/Workspace carries the active lease plus
-// the cleanup quarantine. Their footprint is reported so slow growth stays
-// visible instead of silently consuming disk.
-var durableEvidenceRoots = []string{
-	".buildpipeline",
-	"Temp/BuildPipeline/Workspace",
-}
-
 // durableEvidenceScanCap bounds the advisory scan so an unexpected amount of
 // content under a protected root can never slow the preview down.
 const durableEvidenceScanCap = 50000
@@ -2621,8 +2777,9 @@ type durableFootprint struct {
 // durableEvidenceFootprint measures the protected Build directories. It is
 // advisory only: unreadable entries are skipped rather than reported.
 func durableEvidenceFootprint(projectRoot string) []durableFootprint {
-	results := make([]durableFootprint, 0, len(durableEvidenceRoots))
-	for _, relative := range durableEvidenceRoots {
+	roots := durableEvidenceRoots()
+	results := make([]durableFootprint, 0, len(roots))
+	for _, relative := range roots {
 		root := filepath.Join(projectRoot, filepath.FromSlash(relative))
 		info, err := os.Lstat(root)
 		if err != nil || !info.IsDir() {
@@ -2671,18 +2828,11 @@ func formatSize(value int64) string {
 }
 
 func isDescendant(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	if err != nil || relative == "." || relative == "" || filepath.IsAbs(relative) {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+	return safefs.IsWithin(root, candidate, currentFacts())
 }
 
 func samePath(left, right string) bool {
-	if os.PathSeparator == '\\' {
-		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
-	}
-	return filepath.Clean(left) == filepath.Clean(right)
+	return safefs.EqualPath(left, right, currentFacts())
 }
 
 func isHex(value string) bool {

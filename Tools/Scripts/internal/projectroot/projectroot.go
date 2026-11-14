@@ -1,12 +1,11 @@
-// Package projectroot locates the Unity project root a tool command should act
-// on. It centralizes the search order shared by every Unity-project tool so that
-// double-click launches, repository-root launches, and CI invocations all resolve
-// the same project instead of trusting the process working directory.
+// Package projectroot locates the Unity project a command should act on. It
+// centralizes discovery for every Unity-project tool so CLI runs, CI jobs and
+// double-click launches resolve the same root.
 //
-// Resolution is not silent: every result records the Origin it was found from,
-// because the executable-directory fallback (step 5) can infer an unrelated
-// project and must never be used to drive a destructive, non-interactive run
-// without the caller noticing.
+// A destructive operation is only permitted against a root the caller named
+// explicitly or the working directory itself. Inferred roots are reported with
+// their origin, and a directory containing more than one project is never
+// resolved implicitly: the caller must pass --project.
 package projectroot
 
 import (
@@ -14,35 +13,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strings"
+
+	"cyclonegames.tools/scripts/internal/projectlayout"
+	"cyclonegames.tools/scripts/internal/safefs"
 )
 
-// Validator confirms that a directory is a usable Unity project root and returns
-// its canonical absolute path. Each command supplies its own strictness: the
-// cleanup and package tools additionally validate the manifest and ProjectVersion
-// file, while the rename tool and the interactive menu only need the markers.
+const (
+	maxWalkLevels       = 32
+	maxDirectoryEntries = 4096
+	maxTriedListed      = 24
+)
+
+// Validator confirms that a directory is a usable Unity project root and
+// returns its canonical absolute path. Each command supplies its own strictness.
 type Validator func(directory string) (string, error)
 
-// Origin records which search step produced a resolved root. Callers use it to
-// distinguish a root the user clearly meant (the working directory, a project
-// subdirectory, or an explicit --project) from one merely inferred from where
-// the executable happens to live.
+// Origin records which discovery step produced a resolved root.
 type Origin int
 
 const (
-	// OriginExplicit is an explicit --project path. Unambiguous.
 	OriginExplicit Origin = iota
-	// OriginWorkingDirectory is the current working directory itself.
 	OriginWorkingDirectory
-	// OriginWorkingSubdirectory is an immediate subdirectory of the working directory.
 	OriginWorkingSubdirectory
-	// OriginAncestor is a project root found by walking up from the working directory.
 	OriginAncestor
-	// OriginExecutableFallback is a project root inferred from the executable's own
-	// directory (and its ancestors/subdirectories). It makes a double-clicked
-	// binary work, but it is ambiguous: any invocation from an unrelated directory
-	// would silently resolve to the project that shipped the binary.
 	OriginExecutableFallback
 )
 
@@ -63,85 +58,106 @@ func (o Origin) String() string {
 	}
 }
 
-// Result is a resolved Unity project root together with how it was found.
+// RejectedCandidate records a directory that looked like a project but failed
+// strict validation. It is diagnostic only and never blocks a healthy sibling.
+type RejectedCandidate struct {
+	Path string
+	Err  error
+}
+
+// Result is a resolved root together with how it was found.
 type Result struct {
-	Root   string
-	Origin Origin
+	Root       string
+	Origin     Origin
+	Candidates []string
+	Rejected   []RejectedCandidate
 }
 
-// Ambiguous reports whether the root was only inferred from the executable's
-// location, which is the case that must be treated with care.
 func (r Result) Ambiguous() bool {
-	return r.Origin == OriginExecutableFallback
+	return r.Origin == OriginExecutableFallback || len(r.Candidates) > 1
 }
 
-// Describe renders the root and its source for audit logs.
 func (r Result) Describe() string {
 	return fmt.Sprintf("%s [source: %s]", r.Root, r.Origin)
 }
 
-// GuardDestructive returns an actionable error when a destructive, non-interactive
-// operation would run against a root inferred only from the executable's own
-// directory. It returns nil for explicit/working-directory origins, for
-// non-destructive operations (the caller passes interactive), and for interactive
-// sessions (the double-click menu), which proceed after an explicit confirmation.
+// GuardDestructive refuses a destructive mutation unless the root was named by
+// the caller or is the working directory itself. A run with several candidates
+// is refused even in an interactive session: a menu cannot disambiguate safely.
 func GuardDestructive(result Result, interactive bool) error {
-	if result.Origin != OriginExecutableFallback || interactive {
+	if len(result.Candidates) > 1 {
+		return &AmbiguousRootsError{Roots: result.Candidates}
+	}
+	if result.Origin == OriginExplicit || result.Origin == OriginWorkingDirectory {
+		return nil
+	}
+	if interactive {
 		return nil
 	}
 	return fmt.Errorf(
-		"refusing to modify %s: the project was located by falling back to the executable's directory, which is ambiguous. Run from the project root or pass --project <path>.",
-		result.Root)
+		"refusing to modify %s: the project was inferred (%s). Run from the project root or pass --project <path>.",
+		result.Root, result.Origin)
 }
 
-// FallbackWarning returns a prominent warning for a non-destructive preview that
-// runs against an executable-directory fallback root, or "" for any other origin.
+// FallbackWarning explains why a preview should be treated as advisory.
 func (r Result) FallbackWarning() string {
+	if len(r.Candidates) > 1 {
+		return "several Unity project roots were found; pass --project <path> to select one explicitly."
+	}
 	if r.Origin != OriginExecutableFallback {
 		return ""
 	}
 	return fmt.Sprintf(
-		"the project root %s was inferred from the executable's own directory, not from the working directory or --project; pass --project <path> to be explicit.",
+		"the project root %s was inferred from the executable's own directory; pass --project <path> to be explicit.",
 		r.Root)
 }
 
-// Resolver applies the shared search order. The zero value is ready to use; the
-// Getwd and Executable hooks exist so tests can drive the search without touching
-// the real process state.
+// AmbiguousRootsError reports that discovery found more than one project.
+type AmbiguousRootsError struct {
+	Roots []string
+}
+
+func (e *AmbiguousRootsError) Error() string {
+	roots := append([]string(nil), e.Roots...)
+	sort.Strings(roots)
+	var b strings.Builder
+	b.WriteString("several Unity project roots were found; pass --project <path> to choose one:\n")
+	for _, root := range roots {
+		b.WriteString("  - ")
+		b.WriteString(root)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// Resolver applies the shared discovery order. The zero value is ready to use;
+// the hooks let callers drive discovery without touching process state.
 type Resolver struct {
 	Validate   Validator
 	Getwd      func() (string, error)
 	Executable func() (string, error)
+	Layout     projectlayout.Layout
 
-	// stop bounds the upward walk once it has processed this directory. It is an
-	// internal test seam: production resolvers leave it empty and walk to the
-	// filesystem root, while tests keep the walk inside their own fixture so an
-	// unrelated Unity project elsewhere on the machine cannot influence them.
+	// stop bounds the upward walk in tests. Production resolvers leave it empty.
 	stop string
 }
 
-// errNoCandidate marks a directory that is not a Unity project root at all, as
-// opposed to one that matched the markers but failed strict validation. It is an
-// internal sentinel and never escapes Resolve.
 var errNoCandidate = errors.New("not a Unity project root candidate")
 
-// Resolve locates the Unity project root using this order:
+type candidate struct {
+	root   string
+	origin Origin
+}
+
+// Resolve locates the project root using this order:
+//  1. an explicit --project path, validated strictly with no fallback;
+//  2. the working directory itself;
+//  3. the working directory's immediate subdirectories;
+//  4. ancestors of the working directory;
+//  5. ancestors of the executable's directory and their subdirectories.
 //
-//  1. an explicit --project path, which is validated strictly and never falls back
-//     (OriginExplicit);
-//  2. the current working directory, when it is a project root (OriginWorkingDirectory);
-//  3. a Unity project root among the working directory's immediate subdirectories
-//     (OriginWorkingSubdirectory);
-//  4. walking up from the working directory, checking each ancestor itself
-//     (OriginAncestor);
-//  5. walking up from the executable's directory, checking each ancestor and its
-//     immediate subdirectories (OriginExecutableFallback). This is what makes a
-//     double-clicked binary work, because Windows sets the working directory to
-//     the binary's own folder, whose ancestor is the repository root that holds
-//     the project as a subfolder.
-//
-// When every step fails it returns a *NotFoundError listing the inspected
-// directories so the caller can act on it (for example with --project).
+// Discovery stops at the first level that yields candidates. A level yielding
+// more than one candidate returns AmbiguousRootsError instead of picking one.
 func (r Resolver) Resolve(explicit string) (Result, error) {
 	validate := r.validator()
 	if trimmed := strings.TrimSpace(explicit); trimmed != "" {
@@ -149,57 +165,67 @@ func (r Resolver) Resolve(explicit string) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("the --project path %q is not a usable Unity project root: %w", trimmed, err)
 		}
-		return Result{Root: root, Origin: OriginExplicit}, nil
+		return Result{Root: root, Origin: OriginExplicit, Candidates: []string{root}}, nil
 	}
 
+	cwd, cwdErr := r.getwd()
+	facts := safefs.Fallback()
+	if cwdErr == nil && cwd != "" {
+		facts = safefs.FactsFor(cwd)
+	}
 	tried := make([]string, 0, 16)
-	if cwd, err := r.getwd(); err == nil && cwd != "" {
-		result, err := r.searchFrom(cwd, false, OriginWorkingDirectory, OriginWorkingSubdirectory, OriginAncestor, &tried)
+	rejected := make([]RejectedCandidate, 0, 4)
+
+	if cwdErr == nil && cwd != "" {
+		result, err := r.searchFrom(cwd, false, OriginWorkingDirectory,
+			OriginWorkingSubdirectory, OriginAncestor, facts, &tried, &rejected)
 		if err == nil {
 			return result, nil
-		} else if !errors.Is(err, errNoCandidate) {
+		}
+		if !errors.Is(err, errNoCandidate) {
 			return Result{}, err
 		}
 	}
 	if executable, err := r.executable(); err == nil && executable != "" {
-		result, err := r.searchFrom(filepath.Dir(executable), true, OriginExecutableFallback, OriginExecutableFallback, OriginExecutableFallback, &tried)
+		result, err := r.searchFrom(filepath.Dir(executable), true,
+			OriginExecutableFallback, OriginExecutableFallback, OriginExecutableFallback,
+			facts, &tried, &rejected)
 		if err == nil {
 			return result, nil
-		} else if !errors.Is(err, errNoCandidate) {
+		}
+		if !errors.Is(err, errNoCandidate) {
 			return Result{}, err
 		}
 	}
-	return Result{}, &NotFoundError{Tried: dedupe(tried)}
+	return Result{}, &NotFoundError{Tried: dedupe(tried), Rejected: rejected}
 }
 
-// searchFrom walks from base toward the filesystem root. Immediate
-// subdirectories are always scanned at base itself; scanSubdirectoriesEverywhere
-// additionally scans them at every ancestor (used for the executable directory,
-// whose ancestor is the repository root that holds the project as a subfolder).
-func (r Resolver) searchFrom(base string, scanSubdirectoriesEverywhere bool, selfOrigin, subdirectoryOrigin, ancestorOrigin Origin, tried *[]string) (Result, error) {
+func (r Resolver) searchFrom(base string, scanEverywhere bool, selfOrigin, subdirectoryOrigin,
+	ancestorOrigin Origin, facts safefs.Facts, tried *[]string, rejected *[]RejectedCandidate) (Result, error) {
 	current := filepath.Clean(base)
-	first := true
-	for {
+	for level := 0; ; level++ {
 		origin := ancestorOrigin
-		if first {
+		if level == 0 {
 			origin = selfOrigin
 		}
-		if result, err := r.matchCandidate(current, origin, tried); err == nil {
-			return result, nil
+		if found, err := r.matchCandidate(current, origin, tried); err == nil {
+			return r.result(*found, rejected), nil
 		} else if !errors.Is(err, errNoCandidate) {
 			return Result{}, err
 		}
-		if first || scanSubdirectoriesEverywhere {
-			if result, err := r.matchSubdirectories(current, subdirectoryOrigin, tried); err == nil {
-				return result, nil
+		if level == 0 || scanEverywhere {
+			if found, err := r.matchSubdirectories(current, subdirectoryOrigin, tried, rejected); err == nil {
+				return r.result(*found, rejected), nil
 			} else if !errors.Is(err, errNoCandidate) {
 				return Result{}, err
 			}
 		}
-		if r.stop != "" && sameDir(current, r.stop) {
+		if r.stop != "" && safefs.EqualPath(current, r.stop, facts) {
 			return Result{}, errNoCandidate
 		}
-		first = false
+		if level >= maxWalkLevels {
+			return Result{}, errNoCandidate
+		}
 		parent := filepath.Dir(current)
 		if parent == current {
 			return Result{}, errNoCandidate
@@ -208,50 +234,69 @@ func (r Resolver) searchFrom(base string, scanSubdirectoriesEverywhere bool, sel
 	}
 }
 
-// sameDir compares two directory paths the way the host filesystem does: Windows
-// is case-insensitive, every other platform is not.
-func sameDir(left, right string) bool {
-	left = filepath.Clean(left)
-	right = filepath.Clean(right)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(left, right)
+func (r Resolver) result(found candidate, rejected *[]RejectedCandidate) Result {
+	return Result{
+		Root:       found.root,
+		Origin:     found.origin,
+		Candidates: []string{found.root},
+		Rejected:   append([]RejectedCandidate(nil), (*rejected)...),
 	}
-	return left == right
 }
 
-// matchCandidate returns the validated result for directory with the given
-// origin, errNoCandidate when it merely lacks the markers, or the validator's own
-// error when it looks like a project but fails strict validation (which the caller
-// surfaces immediately, so a half-initialized project fails closed instead of
-// being silently skipped).
-func (r Resolver) matchCandidate(directory string, origin Origin, tried *[]string) (Result, error) {
+// matchCandidate fails closed when the directory itself looks like a project
+// but strict validation rejects it: the caller clearly pointed at this root.
+func (r Resolver) matchCandidate(directory string, origin Origin, tried *[]string) (*candidate, error) {
 	*tried = append(*tried, directory)
-	if !LooksLikeProjectRoot(directory) {
-		return Result{}, errNoCandidate
+	if !r.looksLike(directory) {
+		return nil, errNoCandidate
 	}
 	root, err := r.validator()(directory)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
-	return Result{Root: root, Origin: origin}, nil
+	return &candidate{root: root, origin: origin}, nil
 }
 
-func (r Resolver) matchSubdirectories(directory string, origin Origin, tried *[]string) (Result, error) {
+// matchSubdirectories collects every valid project in one directory. A sibling
+// that fails strict validation is recorded and skipped so a single malformed
+// project cannot hide a healthy one.
+func (r Resolver) matchSubdirectories(directory string, origin Origin, tried *[]string,
+	rejected *[]RejectedCandidate) (*candidate, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return Result{}, errNoCandidate
+		return nil, errNoCandidate
 	}
-	for _, entry := range entries {
+	found := make([]candidate, 0, 2)
+	for index, entry := range entries {
+		if index >= maxDirectoryEntries {
+			break
+		}
 		if !entry.IsDir() {
 			continue
 		}
-		if result, err := r.matchCandidate(filepath.Join(directory, entry.Name()), origin, tried); err == nil {
-			return result, nil
-		} else if !errors.Is(err, errNoCandidate) {
-			return Result{}, err
+		path := filepath.Join(directory, entry.Name())
+		*tried = append(*tried, path)
+		if !r.looksLike(path) {
+			continue
 		}
+		root, validateErr := r.validator()(path)
+		if validateErr != nil {
+			*rejected = append(*rejected, RejectedCandidate{Path: path, Err: validateErr})
+			continue
+		}
+		found = append(found, candidate{root: root, origin: origin})
 	}
-	return Result{}, errNoCandidate
+	if len(found) == 0 {
+		return nil, errNoCandidate
+	}
+	if len(found) > 1 {
+		roots := make([]string, 0, len(found))
+		for _, item := range found {
+			roots = append(roots, item.root)
+		}
+		return nil, &AmbiguousRootsError{Roots: roots}
+	}
+	return &found[0], nil
 }
 
 func (r Resolver) validator() Validator {
@@ -259,6 +304,17 @@ func (r Resolver) validator() Validator {
 		return r.Validate
 	}
 	return MarkerValidate
+}
+
+func (r Resolver) layout() projectlayout.Layout {
+	if len(r.Layout.Markers) != 0 {
+		return r.Layout
+	}
+	return projectlayout.Default()
+}
+
+func (r Resolver) looksLike(directory string) bool {
+	return r.layout().MatchesRoot(directory)
 }
 
 func (r Resolver) getwd() (string, error) {
@@ -275,27 +331,19 @@ func (r Resolver) executable() (string, error) {
 	return os.Executable()
 }
 
-// MarkerValidate is the loosest validator: it only requires the Assets and
-// ProjectSettings directory markers and returns the canonical absolute path.
+// MarkerValidate is the loosest validator: it requires the Unity structure
+// markers and returns the canonical absolute path.
 func MarkerValidate(directory string) (string, error) {
 	if !LooksLikeProjectRoot(directory) {
-		return "", fmt.Errorf("directory does not contain the Unity markers 'Assets' and 'ProjectSettings': %s", directory)
+		return "", fmt.Errorf("directory does not contain the Unity structure markers: %s", directory)
 	}
 	return canonical(directory)
 }
 
-// LooksLikeProjectRoot is the cheap pre-filter used while searching: both Unity
-// directory markers must exist as directories. It deliberately reads no files so
-// the search can probe many ancestors cheaply; strict validation happens once a
-// candidate is chosen.
+// LooksLikeProjectRoot is the cheap pre-filter used while searching. It reads
+// no files so many directories can be probed inexpensively.
 func LooksLikeProjectRoot(directory string) bool {
-	for _, marker := range []string{"Assets", "ProjectSettings"} {
-		info, err := os.Stat(filepath.Join(directory, marker))
-		if err != nil || !info.IsDir() {
-			return false
-		}
-	}
-	return true
+	return projectlayout.Default().MatchesRoot(directory)
 }
 
 func canonical(directory string) (string, error) {
@@ -306,29 +354,37 @@ func canonical(directory string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
-// Locate is the convenience entry point for callers that only need the marker
-// check (the interactive menu and the rename tool). It resolves the root from the
-// optional explicit path plus the shared search order and reports its origin.
+// Locate resolves a root using only the structure markers.
 func Locate(explicit string) (Result, error) {
-	return Resolver{Validate: MarkerValidate}.Resolve(explicit)
+	return Resolver{Validate: MarkerValidate, Layout: projectlayout.Default()}.Resolve(explicit)
 }
 
-// NotFoundError reports that no Unity project root could be located. It lists the
-// inspected directories and the actionable next step.
+// NotFoundError reports that no project root could be located.
 type NotFoundError struct {
-	Tried []string
+	Tried    []string
+	Rejected []RejectedCandidate
 }
 
 func (e *NotFoundError) Error() string {
-	var builder strings.Builder
-	builder.WriteString("could not locate a Unity project root. Inspected:\n")
-	for _, directory := range e.Tried {
-		builder.WriteString("  - ")
-		builder.WriteString(directory)
-		builder.WriteByte('\n')
+	var b strings.Builder
+	b.WriteString("could not locate a Unity project root. Inspected:\n")
+	listed := e.Tried
+	if len(listed) > maxTriedListed {
+		listed = listed[:maxTriedListed]
 	}
-	builder.WriteString("Run the tool from a Unity project root (a directory containing Assets, ProjectSettings and Packages), or pass --project <path> to name it explicitly.")
-	return builder.String()
+	for _, directory := range listed {
+		b.WriteString("  - ")
+		b.WriteString(directory)
+		b.WriteByte('\n')
+	}
+	if len(e.Tried) > len(listed) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(e.Tried)-len(listed))
+	}
+	for _, rejected := range e.Rejected {
+		fmt.Fprintf(&b, "  [invalid] %s: %v\n", rejected.Path, rejected.Err)
+	}
+	b.WriteString("Run the tool from a Unity project root (a directory containing Assets and ProjectSettings), or pass --project <path> to name it explicitly.")
+	return b.String()
 }
 
 func dedupe(values []string) []string {

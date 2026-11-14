@@ -4,6 +4,8 @@ import (
 	"os"
 	"runtime"
 	"testing"
+
+	"cyclonegames.tools/scripts/internal/safefs"
 )
 
 func TestIsHexVariants(t *testing.T) {
@@ -33,9 +35,15 @@ func TestIsHexVariants(t *testing.T) {
 }
 
 func TestSamePathAndDescendantSemantics(t *testing.T) {
-	if !samePath("E:\\Repo\\Project", "e:\\repo\\project") && os.PathSeparator == '\\' {
-		t.Fatalf("samePath must fold case on Windows")
+	configure(runConfig{facts: safefs.Facts{CaseSensitive: false, Probed: true}, maxEntries: 1000, maxDepth: 16})
+	if !samePath("E:\\Repo\\Project", "e:\\repo\\project") {
+		t.Fatalf("a case-insensitive volume must fold case")
 	}
+	configure(runConfig{facts: safefs.Facts{CaseSensitive: true, Probed: true}, maxEntries: 1000, maxDepth: 16})
+	if samePath("E:\\Repo\\Project", "e:\\repo\\project") {
+		t.Fatalf("a case-sensitive volume must distinguish case")
+	}
+	configure(runConfig{facts: safefs.Facts{CaseSensitive: false, Probed: true}, maxEntries: 1000, maxDepth: 16})
 	root := `E:\Repo\Project`
 	child := `E:\Repo\Project\Library\Cache`
 	if !isDescendant(root, child) {

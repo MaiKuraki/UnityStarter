@@ -9,6 +9,9 @@ import (
 // MoveNoReplace atomically moves source to an absent target on the same
 // filesystem. Platform implementations must never replace an existing target.
 func MoveNoReplace(source, target string) error {
+	if err := validatePublishPaths(source, target); err != nil {
+		return err
+	}
 	if err := moveNoReplace(source, target); err != nil {
 		return err
 	}

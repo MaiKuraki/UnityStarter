@@ -1,28 +1,18 @@
 package remove_unity_packages
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
+	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectlayout"
+	"cyclonegames.tools/scripts/internal/recovery"
 	"cyclonegames.tools/scripts/internal/safefs"
-)
-
-const (
-	buildLeaseRelativePath       = "Temp/BuildPipeline/Workspace/lease.lock"
-	buildLeaseMetadataRelative   = "Temp/BuildPipeline/Workspace/lease.json"
-	buildTransactionRelativePath = ".buildpipeline/transactions"
+	"cyclonegames.tools/scripts/internal/toolenv"
 )
 
 type buildWorkspaceLease struct {
@@ -31,23 +21,18 @@ type buildWorkspaceLease struct {
 	identity os.FileInfo
 }
 
-type buildLeaseMetadata struct {
-	DocumentType string `json:"documentType"`
-	RunID        string `json:"runId"`
-	Operation    string `json:"operation"`
-	PID          int    `json:"pid"`
-	StartedUTC   string `json:"startedUtc"`
-}
-
 type unityEditorInstance struct {
 	ProcessID int `json:"process_id"`
 }
 
-func acquireBuildWorkspaceLease(projectRoot string) (*buildWorkspaceLease, error) {
-	leasePath := filepath.Join(projectRoot, filepath.FromSlash(buildLeaseRelativePath))
-	metadataPath := filepath.Join(projectRoot, filepath.FromSlash(buildLeaseMetadataRelative))
-	if !pathIsDescendant(projectRoot, leasePath) || !pathIsDescendant(projectRoot, metadataPath) {
-		return nil, errors.New("Build workspace lease path escapes the project root")
+// acquireBuildWorkspaceLease claims the durable workspace lock through an OS
+// byte-range lease. It writes no metadata: other tools decide whether the
+// workspace is busy by probing this lock, so finishing a run leaves no shared
+// state that could be misread as a live holder.
+func acquireBuildWorkspaceLease(projectRoot string, layout projectlayout.Layout) (*buildWorkspaceLease, error) {
+	leasePath, err := layout.Join(projectRoot, layout.LeaseFile)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve the Build workspace lease path: %w", err)
 	}
 	if err := ensureWorkspaceSegmentsNotRedirected(projectRoot, filepath.Dir(leasePath)); err != nil {
 		return nil, err
@@ -83,24 +68,7 @@ func acquireBuildWorkspaceLease(projectRoot string) (*buildWorkspaceLease, error
 		_ = file.Close()
 		return nil, errors.New("Build workspace lease path is redirected or unreadable")
 	}
-	lease := &buildWorkspaceLease{file: file, path: leasePath, identity: fileInfo}
-	metadata := buildLeaseMetadata{
-		DocumentType: "build-workspace-lease",
-		RunID:        fmt.Sprintf("package-removal-%d-%d", os.Getpid(), time.Now().UTC().UnixNano()),
-		Operation:    "package-removal",
-		PID:          os.Getpid(),
-		StartedUTC:   time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	data, err := json.Marshal(metadata)
-	if err != nil {
-		_ = lease.release()
-		return nil, err
-	}
-	if err := writeLeaseMetadata(metadataPath, data); err != nil {
-		_ = lease.release()
-		return nil, err
-	}
-	return lease, nil
+	return &buildWorkspaceLease{file: file, path: leasePath, identity: fileInfo}, nil
 }
 
 func (lease *buildWorkspaceLease) release() error {
@@ -139,18 +107,36 @@ func (lease *buildWorkspaceLease) validate() error {
 	return nil
 }
 
-func ensurePackageMutationReady(projectRoot string) error {
-	if running, pid, err := checkUnityEditorRunning(projectRoot); err != nil {
+// ensurePackageMutationReady reconciles durable build records before a
+// destructive package mutation. Only an in-progress record or a lock held by a
+// live process blocks; completed journals, scratch folders and idle locks are
+// normal audit evidence. With strict enabled, unclassified evidence also blocks.
+func ensurePackageMutationReady(projectRoot string, layout projectlayout.Layout, strict bool) error {
+	if running, pid, err := checkUnityEditorRunning(projectRoot, layout); err != nil {
 		return fmt.Errorf("Unity activity cannot be proven idle: %w", err)
 	} else if running {
 		return fmt.Errorf("Unity Editor is active for this project (PID %d)", pid)
 	}
-	return ensureNoBuildRecoveryPending(projectRoot)
+	transactionsDir, err := layout.Join(projectRoot, layout.TransactionsDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve the build transaction directory: %w", err)
+	}
+	report, err := recovery.EnsureReady(projectRoot, transactionsDir, strict)
+	if err != nil {
+		return fmt.Errorf("%w. Wait for any live build process to finish, then review and remove the listed records from the configured transaction directory; without --strict-recovery, unclassified evidence is advisory", err)
+	}
+	if len(report.Unknown) > 0 {
+		logging.Warnf("Unclassified build transaction evidence is present but not blocking: %s", strings.Join(report.Unknown, ", "))
+	}
+	return nil
 }
 
-func checkUnityEditorRunning(projectRoot string) (bool, int, error) {
-	path := filepath.Join(projectRoot, "Library", "EditorInstance.json")
-	data, err := os.ReadFile(path)
+func checkUnityEditorRunning(projectRoot string, layout projectlayout.Layout) (bool, int, error) {
+	path, err := layout.Join(projectRoot, layout.EditorInstanceFile)
+	if err != nil {
+		return false, 0, err
+	}
+	data, err := readBoundedFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, 0, nil
 	}
@@ -168,105 +154,8 @@ func checkUnityEditorRunning(projectRoot string) (bool, int, error) {
 	return running, instance.ProcessID, err
 }
 
-// processProbeTimeout bounds the external process-liveness probe so a wedged
-// tasklist can never hang the whole tool.
-const processProbeTimeout = 10 * time.Second
-
 func packageToolProcessIsRunning(pid int) (bool, error) {
-	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
-		defer cancel()
-		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
-		output, err := command.Output()
-		if err != nil {
-			return false, err
-		}
-		return strings.Contains(string(output), strconv.Itoa(pid)), nil
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false, err
-	}
-	err = process.Signal(syscall.Signal(0))
-	if err == nil || errors.Is(err, syscall.EPERM) {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-		return false, nil
-	}
-	return false, err
-}
-
-func ensureNoBuildRecoveryPending(projectRoot string) error {
-	root := filepath.Join(projectRoot, filepath.FromSlash(buildTransactionRelativePath))
-	info, err := os.Lstat(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("Build transaction root is unreadable or not a directory: %s", root)
-	}
-	if err := ensureWorkspaceSegmentsNotRedirected(projectRoot, root); err != nil {
-		return err
-	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if samePath(path, root) {
-			return nil
-		}
-		if redirected, err := pathIsReparsePoint(path); err != nil || redirected {
-			return fmt.Errorf("Build transaction evidence is redirected or unreadable: %s", path)
-		}
-		relative, _ := filepath.Rel(root, path)
-		depth := len(strings.Split(filepath.ToSlash(relative), "/"))
-		if entry.IsDir() {
-			if depth == 1 {
-				return nil
-			}
-			return fmt.Errorf("durable Build transaction directory requires explicit recovery: %s", path)
-		}
-		if depth == 2 && (entry.Name() == "build.lock" || entry.Name() == "active.lock") {
-			info, err := entry.Info()
-			if err != nil || info.Size() > 4096 {
-				return fmt.Errorf("reusable Build lock metadata is invalid: %s", path)
-			}
-			return nil
-		}
-		return fmt.Errorf("durable Build transaction evidence requires explicit recovery: %s", path)
-	})
-}
-
-func writeLeaseMetadata(target string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(target), ".lease-metadata-*")
-	if err != nil {
-		return err
-	}
-	stage := file.Name()
-	if err := file.Chmod(0600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("lease metadata stage retained at %s: %w", stage, err)
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("lease metadata stage retained at %s: %w", stage, err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("lease metadata stage retained at %s: %w", stage, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("lease metadata stage retained at %s: %w", stage, err)
-	}
-	readBack, err := os.ReadFile(stage)
-	if err != nil || !bytes.Equal(readBack, data) {
-		return fmt.Errorf("lease metadata read-back mismatch; stage retained at %s", stage)
-	}
-	if err := replacePathAtomically(stage, target); err != nil {
-		return fmt.Errorf("lease metadata publish failed; stage may be retained at %s: %w", stage, err)
-	}
-	return nil
+	return toolenv.ProcessAlive(pid)
 }
 
 func ensureWorkspaceSegmentsNotRedirected(projectRoot, target string) error {
