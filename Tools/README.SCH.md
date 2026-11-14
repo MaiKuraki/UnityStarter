@@ -239,6 +239,7 @@ unity-project-tools unity_project_full_clean --ci
 - `durableRoots` 永不删除，预览中会报告其占用。
 - 删除前先把每个目标移入带日志的隔离区，再通过绑定的目录句柄移除；任何失败都会恢复已声明的路径。
 - 数 GB 的 `Library` 由有界工作池删除并定期报告进度；项目之间检查取消信号。
+- 缓存目录天然是活跃的：编辑器、导入器、索引器或杀毒软件可能在扫描期间写入 `Logs`、`Library`、`Temp/Burst`。因此目录大小与时间戳不作为身份判据；身份是文件系统对象本身及其类型，并在删除前与路径包含关系一起复核。隔离区移动遇到共享冲突会有限重试；若持续被占用，会给出可操作的提示。
 
 ```bash
 unity-project-tools unity_project_full_clean --project ./MyProject --dry-run --ci

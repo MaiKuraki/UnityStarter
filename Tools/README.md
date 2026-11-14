@@ -294,6 +294,12 @@ Behaviour:
   through a bound directory handle. On any failure the claims are restored.
 - A multi-gigabyte `Library` is removed with a bounded worker pool and periodic
   progress reporting; cancellation is checked between items.
+- Cache roots are live by nature: an editor, importer, indexer or antivirus may
+  write inside `Logs`, `Library` or `Temp/Burst` while the inventory runs.
+  Directory size and timestamps are therefore not identity. Identity is the
+  file-system object plus its type, rechecked together with path containment
+  before deletion. A sharing conflict during the quarantine move is retried a
+  few times; a persistent holder is reported with an actionable message.
 
 ```bash
 unity-project-tools unity_project_full_clean --project ./MyProject --dry-run --ci
