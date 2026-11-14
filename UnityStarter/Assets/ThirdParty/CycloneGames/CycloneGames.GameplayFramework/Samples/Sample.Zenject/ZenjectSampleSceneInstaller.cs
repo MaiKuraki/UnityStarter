@@ -11,16 +11,25 @@ namespace CycloneGames.GameplayFramework.Sample.Zenject
 
         public override void InstallBindings()
         {
-            Container.Bind<IUnityObjectSpawner>().To<ZenjectSampleObjectSpawner>().AsSingle().NonLazy();
-            Container.BindInstance<IWorldSettings>(worldSettings).AsSingle().NonLazy();
-            Container.Bind<IGameMode>().FromComponentInNewPrefab((ZenjectSampleGameMode)worldSettings.GameModeClass).AsSingle().NonLazy();
-            UnityEngine.Debug.Log($"Install bindings for Zenject");
+            if (worldSettings == null)
+            {
+                throw new System.InvalidOperationException(
+                    "ZenjectSampleSceneInstaller requires WorldSettings.");
+            }
 
-            //  Initialize GameMode
-            IWorldSettings zenjectWorldSettings = Container.Resolve<IWorldSettings>();
-            IUnityObjectSpawner objectSpawner = Container.Resolve<IUnityObjectSpawner>();
-            IGameMode gameMode = Container.Resolve<IGameMode>();
-            ((ZenjectSampleGameMode)gameMode).Initialize(objectSpawner, zenjectWorldSettings);
+            Container.BindInstance(worldSettings);
+            Container.Bind<IUnityObjectSpawner>().To<ZenjectSampleObjectSpawner>().AsSingle().NonLazy();
+            Container.Bind<IActorLifetime>().To<ZenjectSampleActorLifetime>().AsSingle().NonLazy();
+
+            // The World discovers scene Actors only through an explicit source, and creates them through an
+            // IActorLifetime. Both are wired here so the container stays the composition root without
+            // leaking Zenject types into the framework.
+            Container.Bind<GameInstance>()
+                .FromMethod(context => new GameInstance(
+                    context.Container.Resolve<IActorLifetime>(),
+                    actorSource: new SceneWorldActorSource(gameObject.scene)))
+                .AsSingle()
+                .NonLazy();
         }
     }
 }
