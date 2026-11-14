@@ -6,6 +6,7 @@ using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using Object = UnityEngine.Object;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Editor
 {
@@ -371,7 +372,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
         {
             _lastRefreshTime = EditorApplication.timeSinceStartup;
             _cachedInteractables.Clear();
-            _cachedInteractables.AddRange(Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None));
+            _cachedInteractables.AddRange(UnityObjectQuery.FindAll<Interactable>(false));
         }
 
         private static void ToggleInteractableGizmos()

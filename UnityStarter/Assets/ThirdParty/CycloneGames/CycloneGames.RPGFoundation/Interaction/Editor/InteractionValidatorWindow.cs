@@ -4,6 +4,7 @@ using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using Object = UnityEngine.Object;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Interaction.Editor
 {
@@ -242,7 +243,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             _componentRuleIssues.Clear();
             _validatedGameObjects.Clear();
 
-            MonoBehaviour[] behaviours = FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            MonoBehaviour[] behaviours = UnityObjectQuery.FindAll<MonoBehaviour>(false);
             for (int i = 0; i < behaviours.Length; i++)
             {
                 MonoBehaviour behaviour = behaviours[i];
@@ -274,7 +275,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
         private void ValidateInteractables()
         {
-            Interactable[] interactables = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+            Interactable[] interactables = UnityObjectQuery.FindAll<Interactable>(false);
             var stableIds = new Dictionary<string, Interactable>(interactables.Length);
 
             for (int i = 0; i < interactables.Length; i++)
@@ -361,7 +362,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
         private void ValidateDetectors()
         {
-            InteractionDetector[] detectors = FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            InteractionDetector[] detectors = UnityObjectQuery.FindAll<InteractionDetector>(false);
 
             if (detectors.Length == 0)
             {
@@ -434,7 +435,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
         private void ValidateEffectPool()
         {
-            PooledEffect[] pooledEffects = FindObjectsByType<PooledEffect>(FindObjectsSortMode.None);
+            PooledEffect[] pooledEffects = UnityObjectQuery.FindAll<PooledEffect>(false);
             for (int i = 0; i < pooledEffects.Length; i++)
             {
                 PooledEffect effect = pooledEffects[i];
@@ -468,7 +469,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
         private void ValidateTwoStateInteractions()
         {
-            TwoStateInteractionBase[] twoStates = FindObjectsByType<TwoStateInteractionBase>(FindObjectsSortMode.None);
+            TwoStateInteractionBase[] twoStates = UnityObjectQuery.FindAll<TwoStateInteractionBase>(false);
             for (int i = 0; i < twoStates.Length; i++)
             {
                 TwoStateInteractionBase twoState = twoStates[i];

@@ -3,9 +3,16 @@ using UnityEngine.UIElements;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
+#if UNITY_6000_0_OR_NEWER
+    [UxmlElement]
+    public partial class BTInspectorView : VisualElement
+#else
     public class BTInspectorView : VisualElement
+#endif
     {
+#if !UNITY_6000_0_OR_NEWER
         public new class UxmlFactory : UxmlFactory<BTInspectorView, VisualElement.UxmlTraits> { }
+#endif
 
         private UnityEditor.Editor _editor;
         private IMGUIContainer _currentContainer;

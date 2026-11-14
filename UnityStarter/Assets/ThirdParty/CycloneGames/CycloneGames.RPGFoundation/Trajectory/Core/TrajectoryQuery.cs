@@ -18,7 +18,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         public readonly int MaxIterationCount;
         public readonly float SurfaceOffset;
         public readonly ulong InitialIgnoredTargetEntityId;
-        public readonly int InitialIgnoredTargetObjectId;
+        public readonly ulong InitialIgnoredTargetObjectId;
 
         public TrajectoryQuery(
             int traceId,
@@ -34,7 +34,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             int maxIterationCount = DEFAULT_MAX_ITERATION_COUNT,
             float surfaceOffset = DEFAULT_SURFACE_OFFSET,
             ulong initialIgnoredTargetEntityId = 0UL,
-            int initialIgnoredTargetObjectId = 0)
+            ulong initialIgnoredTargetObjectId = 0UL)
         {
             TraceId = traceId;
             OwnerEntityId = ownerEntityId;

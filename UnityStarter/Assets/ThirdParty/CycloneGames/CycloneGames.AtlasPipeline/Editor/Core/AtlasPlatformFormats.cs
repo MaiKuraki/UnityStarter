@@ -238,10 +238,15 @@ namespace CycloneGames.AtlasPipeline
                     return TextureImporterFormat.ETC2_RGBA8;
                 case AtlasTextureFormat.Etc2Rgb4:
                     return TextureImporterFormat.ETC2_RGB4;
+                // PVRTC import is deprecated from Unity 6 onwards but still the only supported fallback
+                // for iOS GPUs below the ASTC line. The mapping is kept until the format is removed from
+                // the importer; AtlasTextureFormat keeps the matching enum values for saved rule assets.
+#pragma warning disable 0618
                 case AtlasTextureFormat.PvrtcRgba4:
                     return TextureImporterFormat.PVRTC_RGBA4;
                 case AtlasTextureFormat.PvrtcRgb4:
                     return TextureImporterFormat.PVRTC_RGB4;
+#pragma warning restore 0618
                 default:
                     return TextureImporterFormat.RGBA32;
             }

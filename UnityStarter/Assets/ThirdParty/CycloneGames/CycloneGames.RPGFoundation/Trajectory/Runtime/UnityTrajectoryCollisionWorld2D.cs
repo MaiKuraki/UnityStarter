@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.RPGFoundation.Trajectory.Core;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 {
@@ -11,8 +12,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
         private readonly RaycastHit2D[] _hits;
         private readonly int _reflectionLayerMask;
         private readonly int _pierceLayerMask;
-        private readonly float _minDepth;
-        private readonly float _maxDepth;
+        private ContactFilter2D _filter;
 
         public UnityTrajectoryCollisionWorld2D(
             int capacity,
@@ -24,8 +24,23 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             _hits = new RaycastHit2D[Math.Max(1, capacity)];
             _reflectionLayerMask = reflectionLayerMask;
             _pierceLayerMask = pierceLayerMask;
-            _minDepth = minDepth;
-            _maxDepth = maxDepth;
+
+            // The filter is rebuilt per cast only for the layer mask; trigger, depth and layer filtering
+            // are fixed for the lifetime of the world. useTriggers mirrors the legacy non-alloc queries,
+            // which honoured Physics2D.queriesHitTriggers instead of always including triggers.
+            _filter = new ContactFilter2D
+            {
+                useTriggers = Physics2D.queriesHitTriggers,
+                useLayerMask = true,
+                layerMask = 0
+            };
+
+            if (!float.IsNegativeInfinity(minDepth) || !float.IsPositiveInfinity(maxDepth))
+            {
+                _filter.useDepth = true;
+                _filter.minDepth = minDepth;
+                _filter.maxDepth = maxDepth;
+            }
         }
 
         public int Cast(
@@ -46,9 +61,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             }
 
             direction.Normalize();
+            _filter.layerMask = query.CollisionLayerMask;
             int hitCount = query.Radius > EPSILON
-                ? Physics2D.CircleCastNonAlloc(origin, query.Radius, direction, _hits, query.Distance, query.CollisionLayerMask, _minDepth, _maxDepth)
-                : Physics2D.RaycastNonAlloc(origin, direction, _hits, query.Distance, query.CollisionLayerMask, _minDepth, _maxDepth);
+                ? Physics2D.CircleCast(origin, query.Radius, direction, _filter, _hits, query.Distance)
+                : Physics2D.Raycast(origin, direction, _filter, _hits, query.Distance);
 
             int written = 0;
             int limit = Math.Min(Math.Min(hitCount, _hits.Length), Math.Min(maxResults, results.Length));
@@ -60,7 +76,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
                     continue;
                 }
 
-                int objectId = hit.collider.GetInstanceID();
+                ulong objectId = UnityObjectId.Of(hit.collider);
                 if (objectId == query.IgnoredTargetObjectId)
                 {
                     continue;

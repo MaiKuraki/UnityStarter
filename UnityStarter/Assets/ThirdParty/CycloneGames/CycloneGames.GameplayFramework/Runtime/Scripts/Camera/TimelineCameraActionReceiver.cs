@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.Playables;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
@@ -139,7 +140,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             UnityEngine.Object notifObject = notification as UnityEngine.Object;
             if (notifObject == null) return;
 
-            if (!signalLookup.TryGetValue(notifObject.GetInstanceID(), out int mappingIndex))
+            if (!signalLookup.TryGetValue(unchecked((int)UnityObjectId.Of(notifObject)), out int mappingIndex))
             {
                 return;
             }
@@ -183,7 +184,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                         exception);
                 }
 
-                int signalId = mapping.Signal.GetInstanceID();
+                int signalId = unchecked((int)UnityObjectId.Of(mapping.Signal));
                 if (localLookup.ContainsKey(signalId))
                 {
                     throw new InvalidOperationException(

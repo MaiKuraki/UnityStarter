@@ -139,7 +139,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         [Conditional("UNITY_EDITOR")]
-        [Conditional("DEVELOPMENT_BUILD")]
+        [Conditional("DEBUG")]
         [Conditional("GAS_TRACE")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Record(

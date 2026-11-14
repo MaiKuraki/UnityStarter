@@ -18,7 +18,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
         [SerializeField] private int MaxIterationCount = TrajectoryQuery.DEFAULT_MAX_ITERATION_COUNT;
         [SerializeField] private float SurfaceOffset = TrajectoryQuery.DEFAULT_SURFACE_OFFSET;
         [SerializeField] private ulong InitialIgnoredTargetEntityId;
-        [SerializeField] private int InitialIgnoredTargetObjectId;
+        [SerializeField] private ulong InitialIgnoredTargetObjectId;
 
         public int CollisionMask
         {

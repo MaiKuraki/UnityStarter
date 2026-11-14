@@ -97,7 +97,7 @@ namespace CycloneGames.Audio.Runtime
         public readonly int ExternalCacheAdmissionRejections;
         public readonly long TotalEventsPlayed;
         public readonly int PeakActiveEvents;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         public readonly long TotalMemoryUsage;
 #endif
 
@@ -127,7 +127,7 @@ namespace CycloneGames.Audio.Runtime
             ExternalAudioClipCacheStats externalCache,
             long totalEventsPlayed,
             int peakActiveEvents
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             , long totalMemoryUsage
 #endif
         )
@@ -169,7 +169,7 @@ namespace CycloneGames.Audio.Runtime
             ExternalCacheAdmissionRejections = externalCache.AdmissionRejectionCount;
             TotalEventsPlayed = totalEventsPlayed;
             PeakActiveEvents = peakActiveEvents;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             TotalMemoryUsage = totalMemoryUsage;
 #endif
         }
@@ -582,7 +582,7 @@ namespace CycloneGames.Audio.Runtime
                 ClearActiveEventCategoryCounts();
                 globalParametersCacheDirty = true;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 activeClipRefCount.Clear();
                 clipMemoryCache.Clear();
                 Array.Clear(reusableTrackMemoryClips, 0, reusableTrackMemoryClips.Length);
@@ -726,7 +726,7 @@ namespace CycloneGames.Audio.Runtime
         private static int activeDuckingRuleCount;
 
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         // Memory tracking - use struct-based approach for better cache coherence
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
@@ -785,7 +785,7 @@ namespace CycloneGames.Audio.Runtime
         private static readonly HashSet<int> reusableDeadParameterScopeIds = new HashSet<int>();
         private static int lastScopedParameterOwnerCleanupFrame = -1;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         public static long TotalMemoryUsage { get; private set; }
         public static IReadOnlyDictionary<AudioClip, int> ActiveClipRefCount => activeClipRefCount;
         public static IReadOnlyDictionary<AudioClip, long> ClipMemoryCache => clipMemoryCache;
@@ -819,7 +819,7 @@ namespace CycloneGames.Audio.Runtime
         public static bool DebugMode => debugMode;
         private const int MaxPreviousEvents = 300;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private static long totalEventsPlayed;
         private static int peakActiveEvents;
 #endif
@@ -850,7 +850,7 @@ namespace CycloneGames.Audio.Runtime
         {
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetRuntimeStats));
             ExternalAudioClipCacheStats externalCache = AudioClipResolver.GetExternalCacheStats();
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             long totalPlayed = Interlocked.Read(ref totalEventsPlayed);
             int peakEvents = peakActiveEvents;
             long totalMemory = TotalMemoryUsage;
@@ -885,7 +885,7 @@ namespace CycloneGames.Audio.Runtime
                 externalCache,
                 totalPlayed,
                 peakEvents
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 , totalMemory
 #endif
             );
@@ -1564,7 +1564,7 @@ namespace CycloneGames.Audio.Runtime
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
@@ -1583,7 +1583,7 @@ namespace CycloneGames.Audio.Runtime
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
@@ -1651,7 +1651,7 @@ namespace CycloneGames.Audio.Runtime
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
@@ -1753,7 +1753,7 @@ namespace CycloneGames.Audio.Runtime
             AudioEvent eventToStop = GetEventByName(eventName);
             if (eventToStop == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return;
@@ -1812,7 +1812,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (!activeEventIndices.TryGetValue(stoppedEvent, out int idx)) return false;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             // Track memory BEFORE clearing clips, so TrackMemory can read source.clip
             if (stoppedEvent.memoryTracked)
             {
@@ -2051,7 +2051,7 @@ namespace CycloneGames.Audio.Runtime
             debugMode = toggle;
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         internal static void TrackEventPlayed()
         {
             Interlocked.Increment(ref totalEventsPlayed);
@@ -2069,7 +2069,7 @@ namespace CycloneGames.Audio.Runtime
             public int SourcePoolSize;
             public long TotalEventsPlayed;
             public int PeakActiveEvents;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             public long TotalMemoryUsage;
 #endif
             public int LoadedBanksCount;
@@ -2086,7 +2086,7 @@ namespace CycloneGames.Audio.Runtime
                 SourcePoolSize = sourcePool.Count,
                 TotalEventsPlayed = Interlocked.Read(ref totalEventsPlayed),
                 PeakActiveEvents = peakActiveEvents,
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 TotalMemoryUsage = TotalMemoryUsage,
 #endif
                 LoadedBanksCount = loadedBanks.Count
@@ -2544,7 +2544,7 @@ namespace CycloneGames.Audio.Runtime
                 loadedBanksCacheDirty = true;
                 cachedLoadedBanksList.Clear();
                 cachedLoadedBanksReadOnly = null;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 activeClipRefCount.Clear();
                 clipMemoryCache.Clear();
                 TotalMemoryUsage = 0;
@@ -3064,7 +3064,7 @@ namespace CycloneGames.Audio.Runtime
             lastPoolExpansionTime = Time.time;
             totalExpansions++;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             Log.Info($"AudioManager: Pool expanded to {currentPoolSize}/{maxPoolSize} sources (expansion #{totalExpansions})");
 #endif
             return true;
@@ -3353,7 +3353,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (victim != null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 string victimName = victim.name;
                 AudioEventCategory victimCategory = victim.rootEvent != null ? victim.rootEvent.Category : AudioEventCategory.GameplaySFX;
 #endif
@@ -3363,7 +3363,7 @@ namespace CycloneGames.Audio.Runtime
                 // Invalidate victim cache since victim was consumed
                 cachedStealVictimFrame = -1;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"AudioManager: Voice stolen from '{victimName}' (category:{victimCategory}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
 #endif
                 return availableSources.Count > 0 ? availableSources.Dequeue() : null;
@@ -3419,7 +3419,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 lastShrinkTime = currentTime;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 if (currentPoolSize % 8 == 0 || currentPoolSize == initialPoolSize)
                 {
                     Log.Info($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
@@ -3490,7 +3490,7 @@ namespace CycloneGames.Audio.Runtime
                 return stolenSource;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             string requesterName = requestingEvent != null ? requestingEvent.name : "Unknown";
             Log.Warning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
 #endif
@@ -3510,7 +3510,7 @@ namespace CycloneGames.Audio.Runtime
             availableSources.Enqueue(source);
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private static long CalculateAudioClipMemoryUsage(AudioClip clip)
         {
             if (clip == null) return 0;
@@ -3594,7 +3594,7 @@ namespace CycloneGames.Audio.Runtime
 
         internal static void TrackActiveEventMemory(ActiveEvent activeEvent)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (activeEvent == null || activeEvent.memoryTracked) return;
             TrackMemory(activeEvent, true);
             activeEvent.memoryTracked = true;
@@ -3919,7 +3919,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 Log.Warning($"AudioManager: AudioBank '{bank.name}' contains no runtime audio objects.");
             }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             else
             {
                 Log.Info(
@@ -4029,7 +4029,7 @@ namespace CycloneGames.Audio.Runtime
                 globalParametersCacheDirty = true;
                 ApplyAllStateMixProfiles();
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Info($"AudioManager: Unloaded bank '{DescribeBank(bank)}'.");
 #endif
 
@@ -5163,7 +5163,7 @@ namespace CycloneGames.Audio.Runtime
                         AudioClipHandleRelease.Safe(pendingHandle);
                         pendingHandle = null;
                         failedCount++;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                         Log.Error(exception);
 #endif
                         continue;
@@ -5428,7 +5428,7 @@ namespace CycloneGames.Audio.Runtime
                 ExternalClipMemoryBudgetBytes,
                 ExternalAudioClipHandle.DefaultMaximumEntriesToScanPerCall);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             if (evicted > 0)
                 Log.Info($"AudioManager: Evicted {evicted} expired external clips from cache.");
 #endif

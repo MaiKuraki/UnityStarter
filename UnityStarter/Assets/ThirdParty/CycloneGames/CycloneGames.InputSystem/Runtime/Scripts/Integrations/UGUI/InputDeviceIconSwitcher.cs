@@ -38,7 +38,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (iconSet == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 Log.Warning($"[InputDeviceIconSwitcher] {name}: IconSet is not assigned.");
 #endif
                 return;

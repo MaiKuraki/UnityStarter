@@ -6,7 +6,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         public readonly ulong ProjectileEntityId;
         public readonly ulong OwnerEntityId;
         public readonly ulong TargetEntityId;
-        public readonly int TargetObjectId;
+        public readonly ulong TargetObjectId;
         public readonly ProjectileDefinitionId DefinitionId;
         public readonly int EffectPayloadId;
         public readonly int Tick;
@@ -21,7 +21,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             ulong projectileEntityId,
             ulong ownerEntityId,
             ulong targetEntityId,
-            int targetObjectId,
+            ulong targetObjectId,
             ProjectileDefinitionId definitionId,
             int effectPayloadId,
             int tick,

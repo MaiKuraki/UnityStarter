@@ -356,11 +356,11 @@ namespace CycloneGames.Foundation2D.Editor
             {
                 int hash = _rendererTarget != null ? EditorUtility.GetDirtyCount(_rendererTarget) : 0;
                 hash = hash * 397 ^ (_controller != null ? EditorUtility.GetDirtyCount(_controller) : 0);
-                hash = hash * 397 ^ (material != null ? material.GetInstanceID() : 0);
+                hash = hash * 397 ^ (material != null ? material.GetHashCode() : 0);
                 hash = hash * 397 ^ (material != null ? EditorUtility.GetDirtyCount(material) : 0);
                 SpriteRenderer renderer = _spriteRenderer.objectReferenceValue as SpriteRenderer;
                 renderer ??= _fallbackSpriteRenderer;
-                hash = hash * 397 ^ (renderer != null ? renderer.GetInstanceID() : 0);
+                hash = hash * 397 ^ (renderer != null ? renderer.GetHashCode() : 0);
                 hash = hash * 397 ^ (renderer != null ? EditorUtility.GetDirtyCount(renderer) : 0);
                 hash = hash * 397 ^ (shaderName != null ? shaderName.GetHashCode() : 0);
                 hash = hash * 397 ^ (requiresShader ? 1 : 0);

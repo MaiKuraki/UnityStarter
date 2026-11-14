@@ -36,7 +36,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
         private SerializedProperty _interactionSystem;
         private SerializedProperty _detectionOrigin;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private SerializedProperty _showDebugGUI;
 #endif
 
@@ -129,7 +129,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             _interactionSystem = serializedObject.FindProperty("interactionSystem");
             _detectionOrigin = serializedObject.FindProperty("detectionOrigin");
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _showDebugGUI = serializedObject.FindProperty("showDebugGUI");
 #endif
 
@@ -363,7 +363,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 EditorGUILayout.PropertyField(_showDebugGUI, new GUIContent("Show Runtime GUI"));
 #endif
                 DetectorGizmoSettings.ShowDetectionRange = EditorGUILayout.Toggle("Show Detection Range", DetectorGizmoSettings.ShowDetectionRange);

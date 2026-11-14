@@ -12,7 +12,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         public readonly TrajectoryVector3 To;
         public readonly TrajectoryVector3 Direction;
         public readonly ulong IgnoredTargetEntityId;
-        public readonly int IgnoredTargetObjectId;
+        public readonly ulong IgnoredTargetObjectId;
 
         public TrajectoryCastQuery(
             int traceId,
@@ -25,7 +25,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             TrajectoryVector3 to,
             TrajectoryVector3 direction,
             ulong ignoredTargetEntityId,
-            int ignoredTargetObjectId)
+            ulong ignoredTargetObjectId)
         {
             TraceId = traceId;
             SegmentIndex = segmentIndex;

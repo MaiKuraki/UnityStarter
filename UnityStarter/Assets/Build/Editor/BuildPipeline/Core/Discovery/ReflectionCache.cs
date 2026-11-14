@@ -43,8 +43,14 @@ namespace Build.Pipeline.Editor
 
         private static Type FindTypeInLoadedAssemblies(string typeName)
         {
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            #if UNITY_6000_7_OR_NEWER
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies = UnityEngine.Assemblies.CurrentAssemblies.GetLoadedAssemblies();
+            #else
+            System.Collections.Generic.IReadOnlyList<System.Reflection.Assembly> assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            #endif
+            for (int i = 0; i < assemblies.Count; i++)
             {
+                Assembly assembly = assemblies[i];
                 try
                 {
                     Type type = assembly.GetType(typeName, throwOnError: false, ignoreCase: false);

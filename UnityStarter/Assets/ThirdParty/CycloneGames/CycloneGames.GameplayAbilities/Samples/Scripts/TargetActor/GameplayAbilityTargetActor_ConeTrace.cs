@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
@@ -80,7 +81,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (sqrDistance <= 0f) continue;
 
                 float dot = Vector3.Dot(caster.transform.forward, offset / Mathf.Sqrt(sqrDistance));
-                if (dot >= minimumDot && foundTargetIds.Add(col.gameObject.GetInstanceID()))
+                if (dot >= minimumDot && foundTargetIds.Add(unchecked((int)UnityObjectId.Of(col.gameObject))))
                 {
                     foundTargets.Add(col.gameObject);
                 }

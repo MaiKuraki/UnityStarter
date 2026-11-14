@@ -1078,7 +1078,12 @@ namespace Build.Pipeline.Editor
             Append(builder, PlayerSettings.GetManagedStrippingLevel(request.NamedTarget).ToString());
             Append(builder, PlayerSettings.GetIl2CppCompilerConfiguration(request.NamedTarget).ToString());
             Append(builder, PlayerSettings.stripEngineCode ? "1" : "0");
+#if UNITY_6000_7_OR_NEWER
+            // Unsafe code is always enabled from 6.7 on, so the setting no longer exists.
+            Append(builder, "1");
+#else
             Append(builder, PlayerSettings.allowUnsafeCode ? "1" : "0");
+#endif
             Append(builder, normalizedDefines);
             return ComputeTextSha256(builder.ToString());
         }

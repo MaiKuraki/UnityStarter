@@ -84,7 +84,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             new List<WeakReference<DynamicAtlasService>>(8);
 #endif
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         private const string PackingFixGuidance =
             "Disable rotation and tight packing on the source SpriteAtlas, or mark its import rule for runtime extraction.";
         private const string FormatFixGuidance =
@@ -214,7 +214,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (IsUnsupportedPacking(source.packed, source.packingMode, source.packingRotation))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 WarnRejectionOnce(key, DescribePackingRejection(source), PackingFixGuidance);
 #endif
                 return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
@@ -228,7 +228,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             catch (UnityException)
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 WarnRejectionOnce(
                     key,
                     "the packed sprite texture rectangle could not be queried",
@@ -248,7 +248,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 !Mathf.Approximately(textureRect.height, sourceSpriteRect.height))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 WarnRejectionOnce(
                     key,
                     "the sprite rect does not match its packed texture rect, which indicates trimmed or rotated packing",
@@ -260,7 +260,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (!HasFullRectGeometry(source, sourceSpriteRect))
             {
                 RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 WarnRejectionOnce(
                     key,
                     "the sprite uses non-rectangular mesh geometry produced by tight packing",
@@ -755,7 +755,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (!IsSuccessful(insertStatus))
                 {
                     RecordRejection(insertStatus);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                     if (insertStatus == DynamicAtlasInsertStatus.CopyUnsupported)
                     {
                         WarnRejectionOnce(
@@ -990,7 +990,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                 sprite.hideFlags = HideFlags.DontSave;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                 sprite.name = key;
 #endif
                 if (_batchDepth == 0)
@@ -1254,7 +1254,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _oldestRetainedEntry = null;
             _newestRetainedEntry = null;
             _estimatedTextureBytes = _pendingDestructionBytes;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
             _rejectionWarningKeys.Clear();
 #endif
             _batchDepth = 0;
@@ -1484,7 +1484,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
         // Rejection paths are cold; the per-(key, reason) set bounds console noise without
         // touching hot paths.
         private void WarnRejectionOnce(string key, string reason, string guidance)

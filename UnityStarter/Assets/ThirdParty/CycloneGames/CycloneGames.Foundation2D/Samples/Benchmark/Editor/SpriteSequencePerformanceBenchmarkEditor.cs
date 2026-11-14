@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEngine;
 using CycloneGames.Foundation2D.Runtime;
 using CycloneGames.Foundation2D.Sample.Runtime;
+using CycloneGames.Compat;
 
 namespace CycloneGames.Foundation2D.Sample.Editor
 {
@@ -152,13 +153,8 @@ namespace CycloneGames.Foundation2D.Sample.Editor
 
         private void RefreshSceneValidation()
         {
-#if UNITY_2023_1_OR_NEWER
-            SpriteSequenceController[] controllers = Object.FindObjectsByType<SpriteSequenceController>(
-                _ignoreInactiveSceneControllers.boolValue ? FindObjectsInactive.Exclude : FindObjectsInactive.Include,
-                FindObjectsSortMode.None);
-#else
-            SpriteSequenceController[] controllers = Object.FindObjectsOfType<SpriteSequenceController>(!_ignoreInactiveSceneControllers.boolValue);
-#endif
+            SpriteSequenceController[] controllers =
+                UnityObjectQuery.FindAll<SpriteSequenceController>(!_ignoreInactiveSceneControllers.boolValue);
             _controllerCount = controllers?.Length ?? 0;
             _sceneValidationAvailable = true;
         }

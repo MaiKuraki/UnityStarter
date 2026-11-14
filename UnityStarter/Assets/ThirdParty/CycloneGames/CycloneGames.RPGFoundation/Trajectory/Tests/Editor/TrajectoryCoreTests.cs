@@ -171,7 +171,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Tests.Editor
         {
             private int _castCount;
 
-            public int SecondCastIgnoredObjectId { get; private set; }
+            public ulong SecondCastIgnoredObjectId { get; private set; }
 
             public int Cast(
                 in TrajectoryCastQuery query,

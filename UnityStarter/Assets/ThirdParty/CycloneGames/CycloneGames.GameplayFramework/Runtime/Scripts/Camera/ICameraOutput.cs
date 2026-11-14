@@ -1,5 +1,6 @@
 using System;
 using UnityObject = UnityEngine.Object;
+using CycloneGames.Compat;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
@@ -73,10 +74,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                 ValidateResource(resource3, nameof(resource3));
             }
 
-            int id0 = resource0.GetInstanceID();
-            int id1 = count > 1 ? resource1.GetInstanceID() : 0;
-            int id2 = count > 2 ? resource2.GetInstanceID() : 0;
-            int id3 = count > 3 ? resource3.GetInstanceID() : 0;
+            int id0 = unchecked((int)UnityObjectId.Of(resource0));
+            int id1 = count > 1 ? unchecked((int)UnityObjectId.Of(resource1)) : 0;
+            int id2 = count > 2 ? unchecked((int)UnityObjectId.Of(resource2)) : 0;
+            int id3 = count > 3 ? unchecked((int)UnityObjectId.Of(resource3)) : 0;
             if ((count > 1 && id1 == id0) ||
                 (count > 2 && (id2 == id0 || id2 == id1)) ||
                 (count > 3 && (id3 == id0 || id3 == id1 || id3 == id2)))
@@ -129,10 +130,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            int id0 = resource0.GetInstanceID();
-            int id1 = resourceCount > 1 ? resource1.GetInstanceID() : 0;
-            int id2 = resourceCount > 2 ? resource2.GetInstanceID() : 0;
-            int id3 = resourceCount > 3 ? resource3.GetInstanceID() : 0;
+            int id0 = unchecked((int)UnityObjectId.Of(resource0));
+            int id1 = resourceCount > 1 ? unchecked((int)UnityObjectId.Of(resource1)) : 0;
+            int id2 = resourceCount > 2 ? unchecked((int)UnityObjectId.Of(resource2)) : 0;
+            int id3 = resourceCount > 3 ? unchecked((int)UnityObjectId.Of(resource3)) : 0;
             if ((resourceCount > 1 && id1 == id0) ||
                 (resourceCount > 2 && (id2 == id0 || id2 == id1)) ||
                 (resourceCount > 3 && (id3 == id0 || id3 == id1 || id3 == id2)))
@@ -194,7 +195,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             for (int index = 0; index < count; index++)
             {
                 UnityObject resource = GetResource(index);
-                if (resource == null || resource.GetInstanceID() != GetResourceId(index))
+                if (resource == null || unchecked((int)UnityObjectId.Of(resource)) != GetResourceId(index))
                 {
                     error = $"Camera output resource {index} is missing, destroyed, or no longer matches its snapshot.";
                     return false;

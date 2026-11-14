@@ -9,6 +9,7 @@ using Nakama;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
+using CycloneGames.Compat;
 
 namespace CycloneGames.Networking.Adapter.Nakama.Tests.Editor
 {
@@ -34,7 +35,7 @@ namespace CycloneGames.Networking.Adapter.Nakama.Tests.Editor
             var preexistingSocketIds = new HashSet<int>();
             UnitySocket[] preexistingSockets = UnityEngine.Object.FindObjectsOfType<UnitySocket>(true);
             for (int i = 0; i < preexistingSockets.Length; i++)
-                preexistingSocketIds.Add(preexistingSockets[i].GetInstanceID());
+                preexistingSocketIds.Add(UnityObjectId.Of(preexistingSockets[i]));
 
             _gameObject = new GameObject(nameof(NakamaNetAdapterAsyncLifecycleTests));
             _adapter = _gameObject.AddComponent<NakamaNetAdapter>();
@@ -50,7 +51,7 @@ namespace CycloneGames.Networking.Adapter.Nakama.Tests.Editor
             for (int i = 0; i < socketsAfterAwake.Length; i++)
             {
                 UnitySocket candidate = socketsAfterAwake[i];
-                if (!preexistingSocketIds.Contains(candidate.GetInstanceID()))
+                if (!preexistingSocketIds.Contains(UnityObjectId.Of(candidate)))
                     _autoCreatedSocketObjects.Add(candidate.gameObject);
             }
 
@@ -311,7 +312,7 @@ namespace CycloneGames.Networking.Adapter.Nakama.Tests.Editor
             var preexistingSocketIds = new HashSet<int>();
             UnitySocket[] preexistingSockets = UnityEngine.Object.FindObjectsOfType<UnitySocket>(true);
             for (int i = 0; i < preexistingSockets.Length; i++)
-                preexistingSocketIds.Add(preexistingSockets[i].GetInstanceID());
+                preexistingSocketIds.Add(UnityObjectId.Of(preexistingSockets[i]));
 
             gameObject = new GameObject($"{nameof(NakamaNetAdapterAsyncLifecycleTests)}-Additional");
             NakamaNetAdapter adapter = gameObject.AddComponent<NakamaNetAdapter>();
@@ -328,7 +329,7 @@ namespace CycloneGames.Networking.Adapter.Nakama.Tests.Editor
             for (int i = 0; i < socketsAfterAwake.Length; i++)
             {
                 UnitySocket candidate = socketsAfterAwake[i];
-                if (!preexistingSocketIds.Contains(candidate.GetInstanceID()))
+                if (!preexistingSocketIds.Contains(UnityObjectId.Of(candidate)))
                     _autoCreatedSocketObjects.Add(candidate.gameObject);
             }
 

@@ -1,5 +1,3 @@
-using Unity.Mathematics;
-
 namespace CycloneGames.RPGFoundation.Movement.Core
 {
     /// <summary>
@@ -8,9 +6,9 @@ namespace CycloneGames.RPGFoundation.Movement.Core
     /// </summary>
     public struct MovementSnapshot
     {
-        public float3 Position;
-        public float3 Velocity;
-        public float3 WorldUp;
+        public MovementVector3 Position;
+        public MovementVector3 Velocity;
+        public MovementVector3 WorldUp;
         public MovementStateType StateType;
         public float VerticalVelocity;
         public bool IsGrounded;
@@ -48,7 +46,7 @@ namespace CycloneGames.RPGFoundation.Movement.Core
         /// <param name="to">Position after proposed movement.</param>
         /// <param name="deltaTime">Delta time of this tick.</param>
         /// <returns>True if the movement is valid and can be applied.</returns>
-        bool ValidatePosition(float3 from, float3 to, float deltaTime);
+        bool ValidatePosition(MovementVector3 from, MovementVector3 to, float deltaTime);
 
         /// <summary>
         /// Validate a proposed state transition.

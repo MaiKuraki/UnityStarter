@@ -3,7 +3,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
     public readonly struct ProjectileCollisionHit
     {
         public readonly ulong TargetEntityId;
-        public readonly int TargetObjectId;
+        public readonly ulong TargetObjectId;
         public readonly int HitLayerMask;
         public readonly float Distance;
         public readonly ProjectileVector3 Position;
@@ -11,7 +11,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 
         public ProjectileCollisionHit(
             ulong targetEntityId,
-            int targetObjectId,
+            ulong targetObjectId,
             int hitLayerMask,
             float distance,
             ProjectileVector3 position,
