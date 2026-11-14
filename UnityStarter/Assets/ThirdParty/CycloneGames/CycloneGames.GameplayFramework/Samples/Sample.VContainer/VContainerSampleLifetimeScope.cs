@@ -21,8 +21,14 @@ namespace CycloneGames.GameplayFramework.Sample.VContainer
 
             builder.RegisterInstance(worldSettings);
             builder.Register<IUnityObjectSpawner, VContainerSampleObjectSpawner>(Lifetime.Singleton);
+            builder.Register<IActorLifetime, VContainerActorLifetime>(Lifetime.Singleton);
+
+            // A World only discovers scene Actors through an explicit source; without one, PlayerStart is
+            // never registered and the default Pawn spawns at the world origin instead of the start spot.
             builder.Register(
-                resolver => new GameInstance(resolver.Resolve<IUnityObjectSpawner>()),
+                resolver => new GameInstance(
+                    resolver.Resolve<IActorLifetime>(),
+                    actorSource: new SceneWorldActorSource(gameObject.scene)),
                 Lifetime.Singleton);
 
             builder.UseEntryPoints(Lifetime.Singleton, entryPoints =>

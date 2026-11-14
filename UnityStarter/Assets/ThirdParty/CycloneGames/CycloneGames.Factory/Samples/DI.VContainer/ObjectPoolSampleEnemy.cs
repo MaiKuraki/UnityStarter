@@ -1,10 +1,16 @@
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using VContainer;
 
 namespace CycloneGames.Factory.Samples.VContainer
 {
-    public class ObjectPoolSampleScoreService { public void AddScore(int amount) => Debug.Log($"Added {amount} score!"); }
+    public class ObjectPoolSampleScoreService
+    {
+        private static readonly LogChannel Log = FactoryVContainerSamplesLog.Channel;
+
+        public void AddScore(int amount) => Log.Info($"Added {amount} score!");
+    }
 
     public struct ObjectPoolSampleEnemyData
     {
@@ -14,6 +20,8 @@ namespace CycloneGames.Factory.Samples.VContainer
 
     public class ObjectPoolSampleEnemy : MonoBehaviour, IPoolable<ObjectPoolSampleEnemyData, ObjectPoolSampleEnemy>, ITickable
     {
+        private static readonly LogChannel Log = FactoryVContainerSamplesLog.Channel;
+
         [Inject] private readonly ObjectPoolSampleScoreService _scoreService;
         private IDespawnableMemoryPool<ObjectPoolSampleEnemy> _pool;
 
@@ -22,7 +30,7 @@ namespace CycloneGames.Factory.Samples.VContainer
             _pool = pool;
             transform.position = data.SpawnPosition;
             gameObject.SetActive(true);
-            Debug.Log("Enemy spawned with DI-injected ScoreService!");
+            Log.Info("Enemy spawned with DI-injected ScoreService!");
         }
 
         public void OnDespawned() => gameObject.SetActive(false);
