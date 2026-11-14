@@ -53,11 +53,11 @@ func TestResolveProjectRootInvalidExplicitPathFailsClosed(t *testing.T) {
 	}
 }
 
-// P0 guard: --apply against an executable-directory fallback root must be refused
+// A destructive run against an executable-directory fallback root must refuse
 // when non-interactive, while a preview and the non-ambiguous origins pass.
 func TestGuardDestructiveRun(t *testing.T) {
-	fallback := projectroot.Result{Root: `/repo/UnityStarter`, Origin: projectroot.OriginExecutableFallback}
-	explicit := projectroot.Result{Root: `/repo/UnityStarter`, Origin: projectroot.OriginExplicit}
+	fallback := projectroot.Result{Root: "project", Origin: projectroot.OriginExecutableFallback}
+	explicit := projectroot.Result{Root: "project", Origin: projectroot.OriginExplicit}
 
 	if err := guardDestructiveRun(fallback, true, false, false, false); err == nil {
 		t.Fatalf("non-interactive --apply against a fallback root must be refused")

@@ -1,27 +1,39 @@
-// toolsbuild cross-compiles both tool binaries (unity-project-tools and dev-tools) plus
-// itself for every supported target into Tools/Executable/<OS>/<GOARCH>/. It is the only
-// supported way to produce release binaries and works identically in local shells and CI
-// runners - no PowerShell, no Makefiles.
+// toolsbuild cross-compiles the tool binaries into a platform bundle. The Go
+// toolchain is resolved through the host environment; the module root can be
+// supplied explicitly so a distributed binary works from any directory.
 //
 // Usage:
 //
-//	go run ./cmd/toolsbuild                       # all default targets
-//	go run ./cmd/toolsbuild --targets windows/amd64,darwin/arm64
-//	go run ./cmd/toolsbuild --verify              # also smoke-test the current platform binary
+//	go run ./cmd/toolsbuild
+//	go run ./cmd/toolsbuild --targets windows/amd64,linux/arm64 --output ./bundle
+//	go run ./cmd/toolsbuild --list
+//	toolsbuild --module-root /path/to/Scripts --verify
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/safefs"
+	"cyclonegames.tools/scripts/internal/toolenv"
 	"cyclonegames.tools/scripts/internal/toolkit"
+)
+
+const (
+	defaultTargets   = "windows/amd64,darwin/arm64,darwin/amd64,linux/amd64,linux/arm64"
+	moduleRootEnvVar = "TOOLS_MODULE_ROOT"
+	defaultTimeout   = 10 * time.Minute
 )
 
 type target struct {
@@ -29,11 +41,11 @@ type target struct {
 	goarch string
 }
 
+func (t target) String() string { return t.goos + "/" + t.goarch }
+
 func main() {
 	args, noPause := toolkit.ExtractNoPauseFlag(os.Args[1:])
 	code := run(args)
-	// Keep a double-clicked console window readable after the build; scripts and
-	// CI callers (pipes, shells, --no-pause, TOOLS_NO_PAUSE=1) are never paused.
 	toolkit.PauseAfterRun(noPause)
 	os.Exit(code)
 }
@@ -41,139 +53,238 @@ func main() {
 func run(args []string) int {
 	flags := flag.NewFlagSet("toolsbuild", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	var targetsCSV string
-	var outputDir string
-	var verify bool
-	flags.StringVar(&targetsCSV, "targets", "windows/amd64,darwin/arm64,darwin/amd64,linux/amd64,linux/arm64", "Comma-separated GOOS/GOARCH targets")
-	flags.StringVar(&outputDir, "output", "", "Output root (default: Tools/Executable beside the module root)")
-	flags.BoolVar(&verify, "verify", false, "Run the current-platform binary with --list after building")
+	var targetsCSV, outputDir, moduleRootFlag string
+	var verify, listTargets bool
+	var timeout time.Duration
+	flags.StringVar(&targetsCSV, "targets", defaultTargets, "Comma-separated GOOS/GOARCH targets")
+	flags.StringVar(&outputDir, "output", "", "Output root (default: Executable beside the module root)")
+	flags.StringVar(&moduleRootFlag, "module-root", "", "Go module root (overrides discovery and "+moduleRootEnvVar+")")
+	flags.BoolVar(&verify, "verify", false, "Run each current-platform binary after building")
+	flags.BoolVar(&listTargets, "list", false, "Print the supported GOOS/GOARCH targets and exit")
+	flags.DurationVar(&timeout, "timeout", defaultTimeout, "Timeout for each go build")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		return 2
+		return toolkit.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		logging.Error("unexpected positional arguments", "args", strings.Join(flags.Args(), " "))
+		return toolkit.ExitUsage
 	}
 
-	moduleRoot, err := findModuleRoot()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+
+	goBinary, err := toolenv.MustResolve("go")
+	if err != nil {
+		logging.Error("go toolchain is unavailable", "error", err)
+		return toolkit.ExitFailure
+	}
+	supported, err := supportedTargets(ctx, goBinary)
+	if err != nil {
+		logging.Error("cannot query the Go toolchain", "error", err)
+		return toolkit.ExitFailure
+	}
+	if listTargets {
+		for _, item := range supported {
+			fmt.Println(item)
+		}
+		return toolkit.ExitSuccess
+	}
+
+	targets, err := parseTargets(targetsCSV, supported)
+	if err != nil {
+		logging.Error("invalid targets", "error", err)
+		return toolkit.ExitUsage
+	}
+	moduleRoot, err := findModuleRoot(moduleRootFlag)
 	if err != nil {
 		logging.Error("cannot locate module root", "error", err)
-		return 1
+		return toolkit.ExitFailure
 	}
 	if outputDir == "" {
 		outputDir = filepath.Join(filepath.Dir(moduleRoot), "Executable")
 	}
-
-	targets, err := parseTargets(targetsCSV)
-	if err != nil {
-		logging.Error("invalid targets", "error", err)
-		return 2
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		logging.Error("cannot create output root", "path", outputDir, "error", err)
+		return toolkit.ExitFailure
+	}
+	policy := safefs.HostPathPolicy()
+	if err := policy.EnsureWritable(outputDir); err != nil {
+		logging.Error("output root is not usable", "path", outputDir, "error", err)
+		return toolkit.ExitFailure
 	}
 
-	var currentPlatformBinary string
-	var currentPlatformUtilsBinary string
-	for _, t := range targets {
-		platformDir := filepath.Join(outputDir, t.goos, t.goarch)
+	packages := []string{
+		"cmd/unity-project-tools",
+		"cmd/dev-tools",
+		"cmd/toolsbuild",
+	}
+	names := []string{"unity-project-tools", "dev-tools", "toolsbuild"}
+	var currentBinaries []string
+
+	for _, item := range targets {
+		platformDir := filepath.Join(outputDir, item.goos, item.goarch)
 		if err := os.MkdirAll(platformDir, 0o755); err != nil {
 			logging.Error("cannot create platform directory", "path", platformDir, "error", err)
-			return 1
+			return toolkit.ExitFailure
 		}
-		toolsBinary := filepath.Join(platformDir, "unity-project-tools"+suffix(t.goos))
-		utilsBinary := filepath.Join(platformDir, "dev-tools"+suffix(t.goos))
-		builderBinary := filepath.Join(platformDir, "toolsbuild"+suffix(t.goos))
-		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/unity-project-tools", toolsBinary, t); err != nil {
-			logging.Error("build failed", "target", t.goos+"/"+t.goarch, "error", err)
-			return 1
+		if err := policy.Budget(platformDir, "unity-project-tools.exe", ".build-stage-temp"); err != nil {
+			logging.Error("platform path exceeds host limits", "path", platformDir, "error", err)
+			return toolkit.ExitFailure
 		}
-		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/dev-tools", utilsBinary, t); err != nil {
-			logging.Error("build failed", "target", t.goos+"/"+t.goarch, "error", err)
-			return 1
-		}
-		if err := buildPackage(moduleRoot, "cyclonegames.tools/scripts/cmd/toolsbuild", builderBinary, t); err != nil {
-			logging.Error("build failed", "target", t.goos+"/"+t.goarch, "error", err)
-			return 1
-		}
-		logging.Info("built", "target", t.goos+"/"+t.goarch, "output", toolsBinary)
-		logging.Info("built", "target", t.goos+"/"+t.goarch, "output", utilsBinary)
-		if t.goos == runtime.GOOS && t.goarch == runtime.GOARCH {
-			currentPlatformBinary = toolsBinary
-			currentPlatformUtilsBinary = utilsBinary
+		for index, pkg := range packages {
+			outputPath := filepath.Join(platformDir, names[index]+suffix(item.goos))
+			if err := buildPackage(ctx, goBinary, moduleRoot, "./"+pkg, outputPath, item, timeout); err != nil {
+				logging.Error("build failed", "target", item.String(), "error", err)
+				return toolkit.ExitFailure
+			}
+			logging.Info("built", "target", item.String(), "output", outputPath)
+			if item.goos == runtime.GOOS && item.goarch == runtime.GOARCH {
+				currentBinaries = append(currentBinaries, outputPath)
+			}
 		}
 	}
 
 	if verify {
-		if currentPlatformBinary == "" {
+		if len(currentBinaries) == 0 {
 			logging.Error("--verify requires the current platform to be part of --targets")
-			return 2
+			return toolkit.ExitUsage
 		}
-		for _, binary := range []string{currentPlatformBinary, currentPlatformUtilsBinary} {
-			command := exec.Command(binary, "--list")
-			command.Stdout = os.Stdout
-			command.Stderr = os.Stderr
-			if err := command.Run(); err != nil {
-				logging.Error("verification failed", "binary", binary, "error", err)
-				return 1
+		for _, binary := range currentBinaries {
+			outcome, runErr := toolenv.Run(ctx, toolenv.Invocation{
+				Binary: binary, Args: []string{verifyArgument(binary)},
+				Timeout: 30 * time.Second, Stdout: os.Stdout,
+			})
+			if runErr != nil {
+				logging.Error("verification failed", "binary", binary,
+					"error", toolenv.FormatFailure(runErr, outcome))
+				return toolkit.ExitFailure
 			}
 		}
 	}
 
 	fmt.Printf("\nBuilt %d target(s) under %s\n", len(targets), outputDir)
-	return 0
+	return toolkit.ExitSuccess
 }
 
-func findModuleRoot() (string, error) {
-	// When run through `go run`, the compiled source path is absolute and points into the
-	// module; use it directly.
-	if _, sourceFile, _, ok := runtime.Caller(0); ok && filepath.IsAbs(sourceFile) {
-		root := filepath.Dir(filepath.Dir(filepath.Dir(sourceFile)))
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			return root, nil
-		}
+func verifyArgument(binary string) string {
+	base := filepath.Base(binary)
+	if base == "toolsbuild" || base == "toolsbuild.exe" {
+		return "--help"
 	}
+	return "--list"
+}
 
-	// The distributed binary is compiled with -trimpath, so the baked source path is
-	// module-relative and cannot locate the module. Fall back to the executable's own
-	// location: toolsbuild ships as <repo>/Tools/Executable/<OS>/<GOARCH>/toolsbuild and
-	// the module lives at <repo>/Tools/Scripts.
-	exePath, err := os.Executable()
+func buildPackage(ctx context.Context, goBinary, moduleRoot, packagePath, outputPath string,
+	item target, timeout time.Duration) error {
+	env := append(os.Environ(),
+		"GOOS="+item.goos,
+		"GOARCH="+item.goarch,
+		"CGO_ENABLED=0",
+	)
+	outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+		Binary: goBinary,
+		Args: []string{"build", "-mod=readonly", "-trimpath", "-buildvcs=false",
+			"-ldflags", "-s -w", "-o", outputPath, packagePath},
+		Timeout: timeout,
+		Dir:     moduleRoot,
+		Env:     env,
+	})
 	if err != nil {
-		return "", fmt.Errorf("cannot locate the toolsbuild executable: %w", err)
-	}
-	for dir := filepath.Dir(exePath); ; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		if _, err := os.Stat(filepath.Join(dir, "Tools", "Scripts", "go.mod")); err == nil {
-			return filepath.Join(dir, "Tools", "Scripts"), nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-	return "", errors.New("go.mod not found beside the toolsbuild executable or any parent directory")
-}
-
-func parseTargets(csv string) ([]target, error) {
-	parts := strings.Split(csv, ",")
-	targets := make([]target, 0, len(parts))
-	for _, part := range parts {
-		pair := strings.Split(strings.TrimSpace(part), "/")
-		if len(pair) != 2 || pair[0] == "" || pair[1] == "" {
-			return nil, fmt.Errorf("invalid target %q: expected GOOS/GOARCH", part)
-		}
-		targets = append(targets, target{goos: pair[0], goarch: pair[1]})
-	}
-	return targets, nil
-}
-
-func buildPackage(moduleRoot, packagePath, outputPath string, t target) error {
-	command := exec.Command("go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags", "-s -w", "-o", outputPath, packagePath)
-	command.Dir = moduleRoot
-	command.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED=0")
-	if combined, err := command.CombinedOutput(); err != nil {
-		return fmt.Errorf("build %s for %s/%s failed: %v\n%s", packagePath, t.goos, t.goarch, err, combined)
+		return fmt.Errorf("build %s for %s: %s", packagePath, item.String(),
+			toolenv.FormatFailure(err, outcome))
 	}
 	return nil
+}
+
+// supportedTargets asks the installed toolchain rather than embedding a list,
+// so a newer Go release automatically exposes its platforms.
+func supportedTargets(ctx context.Context, goBinary string) ([]string, error) {
+	var buffer strings.Builder
+	outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+		Binary: goBinary, Args: []string{"tool", "dist", "list"},
+		Timeout: 30 * time.Second, Stdout: &buffer,
+	})
+	if err != nil {
+		return nil, errors.New(toolenv.FormatFailure(err, outcome))
+	}
+	var result []string
+	for _, line := range strings.Split(buffer.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.Contains(line, "/") {
+			result = append(result, line)
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("the Go toolchain returned an empty target list")
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func parseTargets(csv string, supported []string) ([]target, error) {
+	valid := make(map[string]bool, len(supported))
+	for _, item := range supported {
+		valid[item] = true
+	}
+	seen := make(map[string]bool)
+	var result []target
+	for _, part := range strings.Split(csv, ",") {
+		value := strings.TrimSpace(part)
+		pair := strings.Split(value, "/")
+		if len(pair) != 2 || pair[0] == "" || pair[1] == "" {
+			return nil, fmt.Errorf("invalid target %q: expected GOOS/GOARCH", value)
+		}
+		if !valid[value] {
+			return nil, fmt.Errorf("target %q is not supported by the installed Go toolchain (use --list)", value)
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, target{goos: pair[0], goarch: pair[1]})
+	}
+	if len(result) == 0 {
+		return nil, errors.New("no targets were selected")
+	}
+	return result, nil
+}
+
+func findModuleRoot(explicit string) (string, error) {
+	candidates := make([]string, 0, 4)
+	if strings.TrimSpace(explicit) != "" {
+		candidates = append(candidates, strings.TrimSpace(explicit))
+	}
+	if value := strings.TrimSpace(os.Getenv(moduleRootEnvVar)); value != "" {
+		candidates = append(candidates, value)
+	}
+	if _, sourceFile, _, ok := runtime.Caller(0); ok && filepath.IsAbs(sourceFile) {
+		candidates = append(candidates, filepath.Dir(filepath.Dir(filepath.Dir(sourceFile))))
+	}
+	if exePath, err := os.Executable(); err == nil {
+		for dir := filepath.Dir(exePath); ; dir = filepath.Dir(dir) {
+			candidates = append(candidates, dir, filepath.Join(dir, "Tools", "Scripts"))
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(absolute, "go.mod")); err == nil && info.Mode().IsRegular() {
+			return absolute, nil
+		}
+	}
+	return "", fmt.Errorf("no go.mod found; pass --module-root or set %s", moduleRootEnvVar)
 }
 
 func suffix(goos string) string {

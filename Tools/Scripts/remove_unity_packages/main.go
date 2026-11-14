@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectlayout"
 	"cyclonegames.tools/scripts/internal/projectroot"
 	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/term"
@@ -137,15 +138,19 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var allowLockRegeneration bool
 	var listMode bool
 	var resolveStaleTransactions bool
+	var layoutPath string
+	var strictRecovery bool
 	flags.Var(&allowed, "allow-package", "Exact package ID authorized for removal; repeatable")
 	flags.Var(&allowReferenced, "allow-referenced-package", "Explicitly override detected source evidence; repeatable")
 	flags.StringVar(&profilePath, "profile", "", "Strict current-contract JSON removal policy")
 	flags.StringVar(&projectPath, "project", "", "Unity project root to modify (default: auto-detect from the working and executable directories)")
+	flags.StringVar(&layoutPath, "layout", "", "Explicit path to a project layout override document")
 	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without writing")
 	flags.BoolVar(&apply, "apply", false, "Commit the reviewed removal transaction")
 	flags.BoolVar(&allowLockRegeneration, "allow-lock-regeneration", false, "Back up then remove packages-lock.json so Unity must resolve again")
 	flags.BoolVar(&listMode, "list", false, "List packages with built-in source-reference signatures")
 	flags.BoolVar(&resolveStaleTransactions, "resolve-stale-transaction", false, "Complete interrupted transactions by removing stale staged evidence (copies only; canonical package files are never touched)")
+	flags.BoolVar(&strictRecovery, "strict-recovery", false, "Treat unclassified build transaction evidence as blocking")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -173,12 +178,26 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		return toolkit.ExitSuccess
 	}
 
-	resolution, err := resolveProjectRoot(projectPath)
+	layout, err := loadInitialLayout(layoutPath)
+	if err != nil {
+		logging.Errorf("Project layout rejected: %v", err)
+		return toolkit.ExitFailure
+	}
+
+	resolution, err := resolveProjectRootWithLayout(projectPath, layout)
 	if err != nil {
 		logging.Errorf("%v", err)
 		return toolkit.ExitFailure
 	}
 	projectRoot := resolution.Root
+	if layoutPath == "" {
+		layout, err = projectlayout.Load(projectRoot, "")
+		if err != nil {
+			logging.Errorf("Project layout rejected: %v", err)
+			return toolkit.ExitFailure
+		}
+	}
+	measureVolume(projectRoot)
 	// Make the resolved root and how it was found auditable before any mutation.
 	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
 	fmt.Fprintf(stdout, "Project root: %s (source: %s)\n", projectRoot, resolution.Origin)
@@ -202,11 +221,21 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 			logging.Errorf("-resolve-stale-transaction cannot be combined with package mutation flags.")
 			return toolkit.ExitUsage
 		}
-		return runStaleTransactionResolution(projectRoot, dryRun, stdout)
+		if !dryRun {
+			if err := assertWritableProject(projectRoot); err != nil {
+				logging.Errorf("Project is not writable; stale transaction resolution refused: %v", err)
+				return toolkit.ExitFailure
+			}
+		}
+		return runStaleTransactionResolution(projectRoot, layout, dryRun, stdout)
 	}
 	var workspaceLease *buildWorkspaceLease
 	if apply {
-		workspaceLease, err = acquireBuildWorkspaceLease(projectRoot)
+		if err := assertWritableProject(projectRoot); err != nil {
+			logging.Errorf("Project is not writable; package mutation refused: %v", err)
+			return toolkit.ExitFailure
+		}
+		workspaceLease, err = acquireBuildWorkspaceLease(projectRoot, layout)
 		if err != nil {
 			logging.Errorf("Build workspace is busy or unsafe; package mutation refused: %v", err)
 			return toolkit.ExitFailure
@@ -216,7 +245,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 				logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
 			}
 		}()
-		if err := ensurePackageMutationReady(projectRoot); err != nil {
+		if err := ensurePackageMutationReady(projectRoot, layout, strictRecovery); err != nil {
 			logging.Errorf("Package mutation safety check failed: %v", err)
 			return toolkit.ExitFailure
 		}
@@ -256,7 +285,11 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	manifestPath := filepath.Join(projectRoot, "Packages", "manifest.json")
+	manifestPath, err := layout.Join(projectRoot, layout.ManifestFile)
+	if err != nil {
+		logging.Errorf("Manifest path rejected: %v", err)
+		return toolkit.ExitFailure
+	}
 	if err := ensureProjectFileNotRedirected(projectRoot, manifestPath); err != nil {
 		logging.Errorf("Manifest path rejected: %v", err)
 		return toolkit.ExitFailure
@@ -286,12 +319,21 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	sort.Strings(removals)
 
-	lockPath := filepath.Join(projectRoot, "Packages", "packages-lock.json")
-	if err := ensureNoPackageTransactionEvidence(filepath.Dir(lockPath), lockPath); err != nil {
+	packagesDirectory, err := layout.Join(projectRoot, layout.PackageEvidenceDir)
+	if err != nil {
+		logging.Errorf("Package evidence directory rejected: %v", err)
+		return toolkit.ExitFailure
+	}
+	lockPath, err := layout.Join(projectRoot, layout.PackagesLockFile)
+	if err != nil {
+		logging.Errorf("Lock path rejected: %v", err)
+		return toolkit.ExitFailure
+	}
+	if err := ensureNoPackageTransactionEvidence(packagesDirectory, lockPath); err != nil {
 		logging.Errorf("Incomplete prior package-removal transaction requires recovery before another mutation: %v. Review the evidence, then run with -resolve-stale-transaction to complete the interrupted transaction.", err)
 		return toolkit.ExitFailure
 	}
-	if err := ensureNoStalePackageStages(filepath.Dir(lockPath)); err != nil {
+	if err := ensureNoStalePackageStages(packagesDirectory); err != nil {
 		logging.Errorf("Incomplete prior package stage requires recovery before another mutation: %v. Review the evidence, then run with -resolve-stale-transaction to complete the interrupted transaction.", err)
 		return toolkit.ExitFailure
 	}
@@ -347,7 +389,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "[Preview] Validation passed; no files were modified. Pass -apply to commit this exact policy.")
 		return toolkit.ExitSuccess
 	}
-	if err := ensurePackageMutationReady(projectRoot); err != nil {
+	if err := ensurePackageMutationReady(projectRoot, layout, strictRecovery); err != nil {
 		logging.Errorf("Project activity changed before package commit; no package target was modified: %v", err)
 		return toolkit.ExitFailure
 	}
@@ -365,7 +407,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 
 	validateMutationEvidence := func() error {
-		if err := ensurePackageMutationReady(projectRoot); err != nil {
+		if err := ensurePackageMutationReady(projectRoot, layout, strictRecovery); err != nil {
 			return fmt.Errorf("project activity changed: %w", err)
 		}
 		if err := workspaceLease.validate(); err != nil {
@@ -389,12 +431,30 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	return toolkit.ExitSuccess
 }
 
+// loadInitialLayout resolves the layout used for root discovery. An explicit
+// override is authoritative and needs no project root; otherwise the defaults
+// describe a standard Unity project until the root is known.
+func loadInitialLayout(explicit string) (projectlayout.Layout, error) {
+	if explicit != "" {
+		return projectlayout.Load("", explicit)
+	}
+	return projectlayout.Default(), nil
+}
+
 // resolveProjectRoot locates the Unity project root this run should modify. An
 // explicit --project path is validated strictly; otherwise the shared search
 // order covers a repository-root launch, a project-root launch, and a
 // double-clicked binary whose working directory is its own folder.
 func resolveProjectRoot(explicit string) (projectroot.Result, error) {
-	resolver := projectroot.Resolver{Validate: validateUnityProjectRoot}
+	return resolveProjectRootWithLayout(explicit, projectlayout.Default())
+}
+
+// resolveProjectRootWithLayout applies the shared search order with the markers
+// and file paths declared by the resolved layout.
+func resolveProjectRootWithLayout(explicit string, layout projectlayout.Layout) (projectroot.Result, error) {
+	resolver := projectroot.Resolver{Validate: func(directory string) (string, error) {
+		return validateUnityProjectRoot(directory, layout)
+	}}
 	return resolver.Resolve(explicit)
 }
 
@@ -409,12 +469,15 @@ func guardDestructiveRun(resolution projectroot.Result, apply, resolveStaleTrans
 	return projectroot.GuardDestructive(resolution, interactive)
 }
 
-func validateUnityProjectRoot(path string) (string, error) {
+func validateUnityProjectRoot(path string, layout projectlayout.Layout) (string, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
 	}
 	root = filepath.Clean(root)
+	if err := safefs.HostPathPolicy().ValidateAbsolute(root); err != nil {
+		return "", fmt.Errorf("project root path is invalid: %w", err)
+	}
 	volume := filepath.Clean(filepath.VolumeName(root) + string(os.PathSeparator))
 	if samePath(root, volume) {
 		return "", errors.New("filesystem roots cannot be Unity project roots")
@@ -437,31 +500,40 @@ func validateUnityProjectRoot(path string) (string, error) {
 	if err != nil || !samePath(root, resolvedRoot) {
 		return "", errors.New("project root is reached through a symlink/reparse path")
 	}
-	for _, relative := range []string{"Assets", "ProjectSettings", "Packages"} {
-		markerPath := filepath.Join(root, relative)
+	for _, relative := range layout.Markers {
+		markerPath, err := layout.Join(root, relative)
+		if err != nil {
+			return "", fmt.Errorf("Unity project marker %q is invalid: %w", relative, err)
+		}
 		if err := ensureProjectFileNotRedirected(root, markerPath); err != nil {
-			return "", fmt.Errorf("Unity project marker '%s' is redirected: %w", relative, err)
+			return "", fmt.Errorf("Unity project marker %q is redirected: %w", relative, err)
 		}
 		info, err := os.Lstat(markerPath)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("Unity project marker '%s' is unavailable, redirected, or not a directory", relative)
+			return "", fmt.Errorf("Unity project marker %q is unavailable, redirected, or not a directory", relative)
 		}
 	}
-	projectVersionPath := filepath.Join(root, "ProjectSettings", "ProjectVersion.txt")
+	projectVersionPath, err := layout.Join(root, layout.ProjectVersionFile)
+	if err != nil {
+		return "", fmt.Errorf("projectVersionFile is invalid: %w", err)
+	}
 	projectVersion, _, err := readBoundedStableProjectFile(root, projectVersionPath, 4*1024)
 	if err != nil {
-		return "", fmt.Errorf("ProjectSettings/ProjectVersion.txt is invalid: %w", err)
+		return "", fmt.Errorf("project version file is invalid: %w", err)
 	}
 	if !bytes.Contains(projectVersion, []byte("m_EditorVersion:")) {
-		return "", errors.New("ProjectSettings/ProjectVersion.txt does not contain m_EditorVersion")
+		return "", errors.New("project version file does not contain m_EditorVersion")
 	}
-	manifestPath := filepath.Join(root, "Packages", "manifest.json")
+	manifestPath, err := layout.Join(root, layout.ManifestFile)
+	if err != nil {
+		return "", fmt.Errorf("manifestFile is invalid: %w", err)
+	}
 	manifest, _, err := readBoundedStableProjectFile(root, manifestPath, maximumJSONBytes)
 	if err != nil {
-		return "", fmt.Errorf("Packages/manifest.json is invalid: %w", err)
+		return "", fmt.Errorf("packages manifest is invalid: %w", err)
 	}
 	if _, err := parseManifest(manifest); err != nil {
-		return "", fmt.Errorf("Packages/manifest.json is not a structured Unity manifest: %w", err)
+		return "", fmt.Errorf("packages manifest is not a structured Unity manifest: %w", err)
 	}
 	return root, nil
 }
@@ -974,12 +1046,11 @@ func ensureNoStalePackageStages(packagesDirectory string) error {
 const staleTransactionEntryBudget = 1024
 
 // runStaleTransactionResolution completes interrupted package-removal
-// transactions by deleting stale staged evidence under Packages/. It only ever
-// removes copies that were staged inside transaction directories or stage
-// files - never the canonical manifest or lock files - and fails closed on any
-// ambiguity, mirroring the full-clean quarantine resolution contract.
-func runStaleTransactionResolution(projectRoot string, dryRun bool, stdout io.Writer) int {
-	lease, err := acquireBuildWorkspaceLease(projectRoot)
+// transactions by deleting stale staged evidence inside the configured package
+// directory. It only removes copies staged in transaction directories or stage
+// files, never the canonical manifest or lock, and fails closed on ambiguity.
+func runStaleTransactionResolution(projectRoot string, layout projectlayout.Layout, dryRun bool, stdout io.Writer) int {
+	lease, err := acquireBuildWorkspaceLease(projectRoot, layout)
 	if err != nil {
 		logging.Errorf("Build workspace is busy or unsafe; stale transaction resolution refused: %v", err)
 		return toolkit.ExitFailure
@@ -989,14 +1060,18 @@ func runStaleTransactionResolution(projectRoot string, dryRun bool, stdout io.Wr
 			logging.Warnf("Failed to release Build workspace lease cleanly: %v", err)
 		}
 	}()
-	if running, pid, err := checkUnityEditorRunning(projectRoot); err != nil {
+	if running, pid, err := checkUnityEditorRunning(projectRoot, layout); err != nil {
 		logging.Errorf("Unity activity cannot be proven idle: %v", err)
 		return toolkit.ExitFailure
 	} else if running {
 		logging.Errorf("Unity Editor is active for this project (PID %d). Stale transaction resolution refused; there is no force mode.", pid)
 		return toolkit.ExitFailure
 	}
-	packagesDirectory := filepath.Join(projectRoot, "Packages")
+	packagesDirectory, err := layout.Join(projectRoot, layout.PackageEvidenceDir)
+	if err != nil {
+		logging.Errorf("Package evidence directory rejected: %v", err)
+		return toolkit.ExitFailure
+	}
 	if err := resolveStalePackageEvidence(projectRoot, packagesDirectory, dryRun, stdout); err != nil {
 		logging.Errorf("Stale package-removal transaction resolution failed: %v", err)
 		return toolkit.ExitFailure
@@ -1086,12 +1161,9 @@ func isHex(value string) bool {
 
 func validateStaleTransactionDirectory(transactionRoot string) error {
 	journalPath := filepath.Join(transactionRoot, "transaction.json")
-	data, err := os.ReadFile(journalPath)
+	data, err := readBoundedFile(journalPath)
 	if err != nil {
 		return fmt.Errorf("transaction journal unreadable: %w", err)
-	}
-	if len(data) > maximumJSONBytes {
-		return fmt.Errorf("transaction journal exceeds %d bytes", maximumJSONBytes)
 	}
 	var journal packageRemovalJournal
 	if err := json.Unmarshal(data, &journal); err != nil {
@@ -1316,7 +1388,7 @@ func commitManifestTransaction(projectRoot, manifestPath string, original, updat
 	if err := ensureExactRegularPreimage(projectRoot, lockPath, lockGuard); err != nil {
 		return rollback(fmt.Errorf("lock absence claim drifted during final evidence scan: %w", err))
 	}
-	if err := safefs.PublishFileNoReplace(stagePath, manifestPath); err != nil {
+	if err := safefs.PublishNoReplace(stagePath, manifestPath); err != nil {
 		if current, statErr := os.Lstat(manifestPath); statErr == nil && os.SameFile(stageIdentity, current) {
 			publishedClaim = &claimedPackageFile{
 				canonicalPath:    manifestPath,
@@ -1430,7 +1502,7 @@ func writePackageRemovalJournal(path string, journal *packageRemovalJournal, ini
 		return err
 	}
 	if initial {
-		return safefs.PublishFileNoReplace(stage, path)
+		return safefs.PublishNoReplace(stage, path)
 	}
 	return replaceFile(stage, path)
 }
@@ -1625,7 +1697,7 @@ func publishExclusiveFile(path string, data []byte, permission fs.FileMode) erro
 		return fmt.Errorf("exclusive publish stage handle identity cannot be proven; evidence retained at %s", stage)
 	}
 	stageIdentity = stageHandleIdentity
-	if err := safefs.PublishFileNoReplace(stage, path); err != nil {
+	if err := safefs.PublishNoReplace(stage, path); err != nil {
 		return fmt.Errorf("exclusive no-replace file publish failed; stage or target evidence retained at %s and %s: %w", stage, path, err)
 	}
 	publishedIdentity, err := os.Lstat(path)
@@ -1641,7 +1713,17 @@ func publishExclusiveFile(path string, data []byte, permission fs.FileMode) erro
 }
 
 func stageDurableFile(target string, data []byte, permission fs.FileMode) (string, error) {
+	policy := safefs.HostPathPolicy()
+	if err := policy.ValidateAbsolute(target); err != nil {
+		return "", fmt.Errorf("stage target path is invalid: %w", err)
+	}
 	directory := filepath.Dir(target)
+	if err := policy.Budget(directory, "."+filepath.Base(target)+".stage-00000000"); err != nil {
+		return "", fmt.Errorf("generated stage path would exceed the host limit: %w", err)
+	}
+	if err := policy.EnsureWritable(directory); err != nil {
+		return "", fmt.Errorf("stage directory is not writable: %w", err)
+	}
 	file, err := os.CreateTemp(directory, "."+filepath.Base(target)+".stage-*")
 	if err != nil {
 		return "", err
@@ -1677,11 +1759,11 @@ func replaceFile(stagePath, targetPath string) error {
 }
 
 func readBoundedFile(path string) ([]byte, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() < 2 || info.Size() > maximumJSONBytes {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 2 || info.Size() > maximumJSONBytes {
 		return nil, fmt.Errorf("file size/type is outside policy: %s", path)
 	}
 	return os.ReadFile(path)
@@ -1695,19 +1777,41 @@ func readOptionalBoundedFile(path string) ([]byte, bool, error) {
 	return data, err == nil, err
 }
 
-func samePath(left, right string) bool {
-	if os.PathSeparator == '\\' {
-		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+// volumeFacts caches the measured case and Unicode behavior of the active
+// project volume so path comparisons never infer semantics from the host OS.
+var volumeFacts safefs.Facts
+
+func measureVolume(projectRoot string) {
+	volumeFacts = safefs.FactsFor(projectRoot)
+}
+
+func pathFacts() safefs.Facts {
+	if volumeFacts.Probed {
+		return volumeFacts
 	}
-	return filepath.Clean(left) == filepath.Clean(right)
+	volumeFacts = safefs.FactsFor(os.TempDir())
+	return volumeFacts
+}
+
+// assertWritableProject validates host path limits and proves the project
+// directory is writable before any package file is staged or published.
+func assertWritableProject(projectRoot string) error {
+	policy := safefs.HostPathPolicy()
+	if err := policy.ValidateAbsolute(projectRoot); err != nil {
+		return fmt.Errorf("project path is invalid: %w", err)
+	}
+	if err := policy.EnsureWritable(projectRoot); err != nil {
+		return fmt.Errorf("project root is not writable: %w", err)
+	}
+	return nil
+}
+
+func samePath(left, right string) bool {
+	return safefs.EqualPath(left, right, pathFacts())
 }
 
 func pathIsDescendant(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	if err != nil || relative == "." || relative == "" || filepath.IsAbs(relative) {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+	return safefs.IsWithin(root, candidate, pathFacts())
 }
 
 func pathExists(path string) bool {

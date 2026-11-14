@@ -1,11 +1,8 @@
-// Package generate_file_tree recursively generates a Markdown directory structure.
-// Supports multiple profiles for different detail levels, depth limits, file extension
-// filters, and .treeignore files for project-specific exclusions.
+// Package generate_file_tree recursively generates a Markdown directory tree.
+// It supports several detail profiles, depth limits, extension filters and
+// .treeignore files for project-specific exclusions.
 //
 // The command is dispatched in-process by cmd/dev-tools.
-//
-// Interactive: Run with -i for profile selection menu.
-// CLI:         dev-tools generate_file_tree -profile standard -depth 5 -o tree.md
 package generate_file_tree
 
 import (
@@ -14,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,32 +20,30 @@ import (
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
-
-// ============================================================
-// Configuration & Types
-// ============================================================
 
 type config struct {
 	targetDir   string
 	outputFile  string
-	maxDepth    int // 0 = unlimited
+	maxDepth    int
 	dirsOnly    bool
 	showSize    bool
 	showCount   bool
 	ciMode      bool
-	extensions  map[string]bool // nil = accept all files
-	exactNames  map[string]bool // exact filename matches (README, LICENSE, etc.)
+	extensions  map[string]bool
+	exactNames  map[string]bool
 	ignoreDirs  map[string]bool
 	ignoreExts  map[string]bool
 	ignoreNames map[string]bool
 }
 
 type stats struct {
-	dirs      int
-	files     int
-	totalSize int64
+	dirs       int
+	files      int
+	totalSize  int64
+	readErrors []string
 }
 
 type profile struct {
@@ -59,14 +55,10 @@ type profile struct {
 	maxDepth    int
 }
 
-// ============================================================
-// Profiles
-// ============================================================
-
 var profiles = []profile{
 	{
 		name:        "minimal",
-		description: "Folders only, max depth 3 — quick overview",
+		description: "Folders only, max depth 3 - quick overview",
 		dirsOnly:    true,
 		maxDepth:    3,
 	},
@@ -81,7 +73,7 @@ var profiles = []profile{
 	},
 	{
 		name:        "detailed",
-		description: "Code, config, and Unity asset types",
+		description: "Code, config, and asset types",
 		extensions: []string{
 			".go", ".cs", ".md", ".json", ".yaml", ".yml", ".xml",
 			".txt", ".cfg", ".ini", ".toml",
@@ -99,10 +91,6 @@ var profiles = []profile{
 	},
 }
 
-// ============================================================
-// Default Ignore Lists
-// ============================================================
-
 var defaultIgnoreDirs = []string{
 	".git", ".vs", ".idea", ".vscode", ".utmp",
 	"node_modules", "obj", "Logs", "Temp",
@@ -118,24 +106,13 @@ var defaultIgnoreNames = []string{
 	".DS_Store", "Thumbs.db", "desktop.ini",
 }
 
-// Global stdin reader
-var stdinReader *bufio.Reader
-
-func init() {
-	stdinReader = bufio.NewReader(os.Stdin)
-}
-
-// ============================================================
-// .treeignore File
-// ============================================================
-
 // loadTreeIgnore reads a .treeignore file from the target directory.
 // Format: one entry per line.
 //
-//	name/   → ignore directory by name
-//	*.ext   → ignore file extension
-//	name    → ignore exact file or directory name
-//	# ...   → comment
+//	name/   -> ignore directory by name
+//	*.ext   -> ignore file extension
+//	name    -> ignore exact file or directory name
+//	# ...   -> comment
 func loadTreeIgnore(dir string) (dirs, exts, names []string) {
 	f, err := os.Open(filepath.Join(dir, ".treeignore"))
 	if err != nil {
@@ -160,10 +137,6 @@ func loadTreeIgnore(dir string) (dirs, exts, names []string) {
 	return
 }
 
-// ============================================================
-// Filtering
-// ============================================================
-
 func (c *config) isIgnored(name string, isDir bool) bool {
 	if isDir {
 		return c.ignoreDirs[name]
@@ -179,7 +152,6 @@ func (c *config) matchesFilter(name string) bool {
 	if c.dirsOnly {
 		return false
 	}
-	// No filter = accept all (full profile)
 	if c.extensions == nil && c.exactNames == nil {
 		return true
 	}
@@ -190,13 +162,12 @@ func (c *config) matchesFilter(name string) bool {
 	return ext != "" && c.extensions != nil && c.extensions[ext]
 }
 
-// ============================================================
-// Tree Traversal
-// ============================================================
-
+// traverseDir collects read failures into stats instead of dropping them, so a
+// partially unreadable tree cannot be reported as a complete success.
 func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix string, depth int) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
+		st.readErrors = append(st.readErrors, fmt.Sprintf("%s: %v", dirPath, err))
 		return
 	}
 
@@ -206,7 +177,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 	for _, entry := range entries {
 		name := entry.Name()
 
-		// Completely ignored — invisible, no "..." indicator
 		if cfg.isIgnored(name, entry.IsDir()) {
 			continue
 		}
@@ -218,7 +188,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 			}
 			visibleDirs = append(visibleDirs, entry)
 		} else if cfg.dirsOnly {
-			// Files hidden in dirs-only mode (expected, no "...")
 			continue
 		} else if cfg.matchesFilter(name) {
 			visibleFiles = append(visibleFiles, entry)
@@ -227,7 +196,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 		}
 	}
 
-	// Sort: case-insensitive alphabetical
 	sort.Slice(visibleDirs, func(i, j int) bool {
 		return strings.ToLower(visibleDirs[i].Name()) < strings.ToLower(visibleDirs[j].Name())
 	})
@@ -235,14 +203,12 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 		return strings.ToLower(visibleFiles[i].Name()) < strings.ToLower(visibleFiles[j].Name())
 	})
 
-	// Combine: directories first, then files
 	visible := make([]os.DirEntry, 0, len(visibleDirs)+len(visibleFiles))
 	visible = append(visible, visibleDirs...)
 	visible = append(visible, visibleFiles...)
 
 	hasEllipsis := filteredCount > 0
 
-	// Nothing visible at all
 	if len(visible) == 0 {
 		if hasEllipsis {
 			if cfg.showCount {
@@ -254,7 +220,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 		return
 	}
 
-	// Render entries
 	for i, entry := range visible {
 		isLast := i == len(visible)-1 && !hasEllipsis
 		connector := "├── "
@@ -285,7 +250,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 		}
 	}
 
-	// Trailing ellipsis for filtered items
 	if hasEllipsis {
 		if cfg.showCount {
 			buf.WriteString(fmt.Sprintf("%s└── ... (%d items)\n", prefix, filteredCount))
@@ -294,10 +258,6 @@ func traverseDir(cfg *config, buf *bytes.Buffer, st *stats, dirPath, prefix stri
 		}
 	}
 }
-
-// ============================================================
-// Config Building
-// ============================================================
 
 func findProfile(name string) (profile, bool) {
 	for _, p := range profiles {
@@ -309,7 +269,7 @@ func findProfile(name string) (profile, bool) {
 }
 
 func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
-	dirsOnly, showSize, showCount, ciMode bool, extOverride, ignoreExtra string) *config {
+	dirsOnly, showSize, showCount, ciMode, noDefaultIgnore bool, extOverride, ignoreExtra string) *config {
 
 	cfg := &config{
 		targetDir:   targetDir,
@@ -324,12 +284,10 @@ func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
 		ignoreNames: make(map[string]bool),
 	}
 
-	// CLI depth override (-1 = use profile default)
 	if maxDepth >= 0 {
 		cfg.maxDepth = maxDepth
 	}
 
-	// Build extension filter
 	if extOverride != "" {
 		cfg.extensions = make(map[string]bool)
 		for _, ext := range strings.Split(extOverride, ",") {
@@ -348,7 +306,6 @@ func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
 			cfg.extensions[strings.ToLower(ext)] = true
 		}
 	}
-	// else: nil = accept all files (full profile)
 
 	if len(p.exactNames) > 0 {
 		cfg.exactNames = make(map[string]bool)
@@ -357,18 +314,18 @@ func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
 		}
 	}
 
-	// Default ignore lists
-	for _, d := range defaultIgnoreDirs {
-		cfg.ignoreDirs[d] = true
-	}
-	for _, e := range defaultIgnoreExts {
-		cfg.ignoreExts[e] = true
-	}
-	for _, n := range defaultIgnoreNames {
-		cfg.ignoreNames[n] = true
+	if !noDefaultIgnore {
+		for _, d := range defaultIgnoreDirs {
+			cfg.ignoreDirs[d] = true
+		}
+		for _, e := range defaultIgnoreExts {
+			cfg.ignoreExts[e] = true
+		}
+		for _, n := range defaultIgnoreNames {
+			cfg.ignoreNames[n] = true
+		}
 	}
 
-	// .treeignore
 	igDirs, igExts, igNames := loadTreeIgnore(targetDir)
 	for _, d := range igDirs {
 		cfg.ignoreDirs[d] = true
@@ -380,7 +337,6 @@ func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
 		cfg.ignoreNames[n] = true
 	}
 
-	// CLI -ignore additions
 	if ignoreExtra != "" {
 		for _, item := range strings.Split(ignoreExtra, ",") {
 			item = strings.TrimSpace(item)
@@ -399,10 +355,6 @@ func buildConfig(p profile, targetDir, outputFile string, maxDepth int,
 	return cfg
 }
 
-// ============================================================
-// Generation
-// ============================================================
-
 func generate(cfg *config, profileName string) (string, stats) {
 	var buf bytes.Buffer
 	var st stats
@@ -414,7 +366,6 @@ func generate(cfg *config, profileName string) (string, stats) {
 		}
 	}
 
-	// Header
 	buf.WriteString("# Directory Structure\n\n")
 	buf.WriteString(fmt.Sprintf("- **Generated**: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 	buf.WriteString(fmt.Sprintf("- **Profile**: %s\n", profileName))
@@ -423,35 +374,92 @@ func generate(cfg *config, profileName string) (string, stats) {
 	}
 	buf.WriteString("\n```\n")
 
-	// Root
 	buf.WriteString(rootName + "/\n")
 
-	// Traverse
 	traverseDir(cfg, &buf, &st, cfg.targetDir, "", 0)
 
 	buf.WriteString("```\n")
 	return buf.String(), st
 }
 
+// writeOutput stages the content in a temporary file and publishes it with an
+// atomic replace, so a failed write never truncates the previous tree.
 func writeOutput(content, outputPath string) error {
-	f, err := os.Create(outputPath)
+	policy := safefs.HostPathPolicy()
+	abs, err := filepath.Abs(outputPath)
+	if err != nil {
+		return fmt.Errorf("cannot resolve output path %s: %w", outputPath, err)
+	}
+	if err := policy.ValidateAbsolute(abs); err != nil {
+		return err
+	}
+	base := filepath.Base(abs)
+	if err := policy.ValidateComponent(base); err != nil {
+		return err
+	}
+	dir := filepath.Dir(abs)
+	if err := policy.EnsureWritable(dir); err != nil {
+		return err
+	}
+	pattern := "." + base + ".partial-*"
+	budgetName := "." + base + ".partial-123456789012"
+	if err := policy.Budget(dir, budgetName); err != nil {
+		return err
+	}
+
+	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	stage := f.Name()
 
 	w := bufio.NewWriterSize(f, 64*1024)
 	if _, err := w.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(stage)
 		return err
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(stage)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(stage)
+		return err
+	}
+	return safefs.PublishReplace(stage, abs)
 }
 
-// ============================================================
-// Interactive Mode
-// ============================================================
+// readLine returns (text, nil) for a normal line and for the final unterminated
+// line before EOF; a closed or exhausted input stream returns ("", io.EOF) so
+// callers cancel instead of writing files on defaults.
+func readLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	if err == io.EOF && strings.TrimSpace(line) == "" {
+		return "", io.EOF
+	}
+	return strings.TrimSpace(line), nil
+}
 
-func runInteractive() {
+func cancelledByEOF() int {
+	fmt.Println("\n[FAIL] Cancelled: input stream closed.")
+	toolkit.WaitForExit()
+	return toolkit.ExitFailure
+}
+
+func reportReadErrors(st stats) {
+	for _, msg := range st.readErrors {
+		logging.Errorf("directory read failed: %s", msg)
+	}
+}
+
+// runInteractive is the guided interactive mode. Every prompt is fail-closed:
+// a closed input stream cancels before any file is written.
+func runInteractive(reader *bufio.Reader) int {
 	fmt.Println("==============================================")
 	fmt.Println("  Generate File Tree")
 	fmt.Println("  Create Markdown directory structure")
@@ -460,69 +468,73 @@ func runInteractive() {
 	targetDir, _ := os.Getwd()
 	fmt.Printf("\nTarget: %s\n", targetDir)
 
-	// Profile selection
 	fmt.Println("\nSelect profile:")
 	for i, p := range profiles {
 		def := ""
 		if i == 1 {
 			def = " (default)"
 		}
-		fmt.Printf("  [%d] %-10s — %s%s\n", i+1, p.name, p.description, def)
+		fmt.Printf("  [%d] %-10s - %s%s\n", i+1, p.name, p.description, def)
 	}
 
 	fmt.Print("\n> ")
-	input, _ := stdinReader.ReadString('\n')
-	input = strings.TrimSpace(input)
-	profileIdx := 1 // default: standard
-	if n, err := strconv.Atoi(input); err == nil && n >= 1 && n <= len(profiles) {
+	input, err := readLine(reader)
+	if err != nil {
+		return cancelledByEOF()
+	}
+	profileIdx := 1
+	if n, convErr := strconv.Atoi(input); convErr == nil && n >= 1 && n <= len(profiles) {
 		profileIdx = n - 1
 	}
 	p := profiles[profileIdx]
 	fmt.Printf("Using profile: %s\n", p.name)
 
-	// Optional depth
 	depthDefault := "unlimited"
 	if p.maxDepth > 0 {
 		depthDefault = strconv.Itoa(p.maxDepth)
 	}
 	fmt.Printf("\nMax depth (0=unlimited, default: %s): ", depthDefault)
-	depthStr, _ := stdinReader.ReadString('\n')
-	depthStr = strings.TrimSpace(depthStr)
-	maxDepth := -1 // use profile default
+	depthStr, err := readLine(reader)
+	if err != nil {
+		return cancelledByEOF()
+	}
+	maxDepth := -1
 	if depthStr != "" {
-		if n, err := strconv.Atoi(depthStr); err == nil && n >= 0 {
+		if n, convErr := strconv.Atoi(depthStr); convErr == nil && n >= 0 {
 			maxDepth = n
 		}
 	}
 
-	// Output file
 	fmt.Print("Output file (default: directory_structure.md): ")
-	outStr, _ := stdinReader.ReadString('\n')
-	outStr = strings.TrimSpace(outStr)
+	outStr, err := readLine(reader)
+	if err != nil {
+		return cancelledByEOF()
+	}
 	if outStr == "" {
 		outStr = "directory_structure.md"
 	}
 
-	cfg := buildConfig(p, targetDir, outStr, maxDepth, false, false, false, false, "", "")
+	cfg := buildConfig(p, targetDir, outStr, maxDepth, false, false, false, false, false, "", "")
 
 	fmt.Println("\nGenerating...")
 	startTime := time.Now()
 
 	content, st := generate(cfg, p.name)
+	reportReadErrors(st)
 	if err := writeOutput(content, cfg.outputFile); err != nil {
 		logging.Errorf("%v", err)
 		toolkit.WaitForExit()
-		return
+		return toolkit.ExitFailure
 	}
 
 	duration := time.Since(startTime)
 	printSummary(cfg.outputFile, p.name, st, duration, cfg)
 	toolkit.WaitForExit()
+	if len(st.readErrors) > 0 {
+		return toolkit.ExitFailure
+	}
+	return toolkit.ExitSuccess
 }
-
-// ============================================================
-// Utilities
-// ============================================================
 
 func formatSize(bytes int64) string {
 	const (
@@ -560,25 +572,22 @@ func printSummary(outputFile, profileName string, st stats, duration time.Durati
 	fmt.Printf("  Time:        %s\n", duration.Round(time.Millisecond))
 }
 
-// ============================================================
-// Entry Point
-// ============================================================
-
 // Run executes the file-tree generator and returns its process exit code.
 func Run(args []string) int {
 	logging.Command("generate_file_tree")
 	var (
-		profileName string
-		targetDir   string
-		outputFile  string
-		maxDepth    int
-		extStr      string
-		ignoreStr   string
-		dirsOnly    bool
-		showSize    bool
-		showCount   bool
-		ciMode      bool
-		interactive bool
+		profileName     string
+		targetDir       string
+		outputFile      string
+		maxDepth        int
+		extStr          string
+		ignoreStr       string
+		dirsOnly        bool
+		showSize        bool
+		showCount       bool
+		ciMode          bool
+		interactive     bool
+		noDefaultIgnore bool
 	)
 
 	flags := flag.NewFlagSet("generate_file_tree", flag.ContinueOnError)
@@ -594,6 +603,7 @@ func Run(args []string) int {
 	flags.BoolVar(&showCount, "show-count", false, "Show hidden item counts in ...")
 	flags.BoolVar(&ciMode, "ci", false, "CI mode (non-interactive, no prompts)")
 	flags.BoolVar(&interactive, "i", false, "Interactive mode with profile selection")
+	flags.BoolVar(&noDefaultIgnore, "no-default-ignore", false, "Do not apply the built-in ignore lists (.treeignore and -ignore still apply)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -601,16 +611,15 @@ func Run(args []string) int {
 		return toolkit.ExitUsage
 	}
 
-	// Interactive mode
+	reader := toolkit.Input()
+
 	if interactive {
-		runInteractive()
-		return toolkit.ExitSuccess
+		return runInteractive(reader)
 	}
 
-	// Resolve target directory
 	if targetDir == "" {
-		if args := flags.Args(); len(args) > 0 {
-			targetDir = args[0]
+		if rest := flags.Args(); len(rest) > 0 {
+			targetDir = rest[0]
 		} else {
 			var err error
 			targetDir, err = os.Getwd()
@@ -621,7 +630,6 @@ func Run(args []string) int {
 		}
 	}
 
-	// Validate target
 	info, err := os.Stat(targetDir)
 	if err != nil || !info.IsDir() {
 		logging.Errorf("target is not a valid directory: %s", targetDir)
@@ -631,10 +639,8 @@ func Run(args []string) int {
 		return toolkit.ExitFailure
 	}
 
-	// Resolve absolute path
 	targetDir, _ = filepath.Abs(targetDir)
 
-	// Resolve output file
 	if outputFile == "" {
 		if envOut := strings.TrimSpace(os.Getenv("FILE_TREE_OUT")); envOut != "" {
 			outputFile = envOut
@@ -643,7 +649,6 @@ func Run(args []string) int {
 		}
 	}
 
-	// Resolve profile
 	if profileName == "" {
 		profileName = "standard"
 	}
@@ -657,10 +662,8 @@ func Run(args []string) int {
 		return toolkit.ExitFailure
 	}
 
-	// Build config
-	cfg := buildConfig(p, targetDir, outputFile, maxDepth, dirsOnly, showSize, showCount, ciMode, extStr, ignoreStr)
+	cfg := buildConfig(p, targetDir, outputFile, maxDepth, dirsOnly, showSize, showCount, ciMode, noDefaultIgnore, extStr, ignoreStr)
 
-	// Generate
 	if !ciMode {
 		fmt.Printf("Target: %s\n", targetDir)
 		fmt.Printf("Profile: %s\n", profileName)
@@ -669,6 +672,7 @@ func Run(args []string) int {
 
 	startTime := time.Now()
 	content, st := generate(cfg, profileName)
+	reportReadErrors(st)
 
 	if err := writeOutput(content, cfg.outputFile); err != nil {
 		logging.Errorf("cannot write output file: %v", err)
@@ -683,6 +687,9 @@ func Run(args []string) int {
 
 	if !ciMode {
 		toolkit.WaitForExit()
+	}
+	if len(st.readErrors) > 0 {
+		return toolkit.ExitFailure
 	}
 	return toolkit.ExitSuccess
 }

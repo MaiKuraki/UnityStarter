@@ -1,214 +1,557 @@
-# Unity Starter Tools
+# Repository Tools
 
-Two cross-platform Go executables that carry every repository tool in-process, split by domain:
-`unity-project-tools` (Unity project tools) and `dev-tools` (general-purpose media/file tools).
-No PowerShell, no child-process launchers, no runtime downloads, no Go installation required to run
-prebuilt binaries.
+Two cross-platform Go executables carry every repository tool in-process. They
+need no interpreter, no package manager and no runtime downloads. External
+programs such as FFmpeg are resolved from the host environment, never bundled.
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
-## Overview
+---
 
-```bash
-unity-project-tools --list
-unity-project-tools rename_project --dry-run
-unity-project-tools remove_unity_packages --allow-package com.unity.2d.sprite --dry-run
-unity-project-tools unity_project_full_clean --dry-run
+## 1. What these tools solve
 
-dev-tools --list
-dev-tools generate_file_tree --ci --depth 2 --target . --o tree.md
-dev-tools unity_video_webm_converter --ci --input Assets/Movies --output Assets/Movies/webm --jobs 8
-dev-tools audio_volume_normalizer --ci --input Assets/Audio --format ogg --jobs 8
-```
+A Unity project accumulates regenerable state (import caches, IDE files,
+temporary build data) alongside irreplaceable source. Deleting the wrong
+directory, running a cleanup against the wrong project, or overwriting a media
+artifact halfway through an encode are all expensive mistakes.
 
-The first token selects a tool; every following argument is forwarded unchanged and each tool returns a
-portable exit code (`0` success, `1` failure, `2` usage error, `130` cancelled by signal), which makes
-both binaries safe to embed in CI pipelines on every platform. `<binary> --help` lists its commands and
-`<binary> <command> --help` shows command-specific flags.
+The design answers four questions before any tool touches a file:
 
-## Layout
+1. **Which project?** Root discovery is explicit, auditable, and never silently
+   chooses between several candidates.
+2. **Which paths belong to which category?** A single configurable layout
+   contract describes Unity's structure instead of scattering path literals
+   through every tool.
+3. **Which external programs exist?** Executables come from environment
+   variables or `PATH`; a missing tool produces a diagnostic that names the
+   variable to set.
+4. **What is the host allowed to do?** Path length, reserved names, case
+   sensitivity, Unicode normalization, file occupancy and write permission are
+   measured or validated before the first write.
+
+Every destructive operation is transactional: it stages work, verifies
+identity, and can roll back. Every command returns a portable exit code.
 
 ```text
-Tools/
-  Scripts/                         # Go module (single language, single module)
-    go.mod / go.sum                # pinned dependency set
-    internal/
-      toolkit/                     # command registry + dispatch contract
-      safefs/                      # build-tagged safe filesystem moves
-    cmd/
-      unity-project-tools/          # Unity project tools binary
-      dev-tools/          # general-purpose tools binary
-      toolsbuild/                  # cross-compile release bundler
-    <tool>/                        # one package per tool, Run(args) int
-  Executable/
-    <OS>/<GOARCH>/                 # prebuilt unity-project-tools + dev-tools + toolsbuild
+0  success          1  failure          2  usage error          130  cancelled
 ```
 
-## Commands
+---
 
-### unity-project-tools (Unity project tools)
+## 2. Quick start
 
-| Command | Purpose | Notes |
+```bash
+# List commands
+unity-project-tools --list
+dev-tools --list
+
+# Preview a cleanup without writing anything
+unity-project-tools unity_project_full_clean --project ./MyProject --dry-run --ci
+
+# Apply a cleanup non-interactively
+unity-project-tools unity_project_full_clean --project ./MyProject --ci
+
+# Generate a directory tree
+dev-tools generate_file_tree --ci --target ./MyProject/Assets --depth 3 -o tree.md
+```
+
+The first token selects a command; all remaining arguments are forwarded to it.
+`<binary> --help` prints the command list and `<binary> <command> --help`
+prints command-specific flags.
+
+### Minimal safe workflow
+
+| Step | Command | Effect |
 | --- | --- | --- |
-| `rename_project` | Rename a UnityStarter-derived project transactionally | `--dry-run` for a complete read-only plan; `--project <path>` to name the root explicitly; journaled with backups and rollback; re-runnable — renaming again reuses the persisted state and fresh fallback detection |
-| `remove_unity_packages` | Remove explicitly authorized Unity packages from `Packages/manifest.json` | `--allow-package`, `--allow-referenced-package`, `--profile`, `--project <path>`, `--apply`, `--dry-run`, `--resolve-stale-transaction`; fails closed |
-| `unity_project_full_clean` | Delete verified caches and Build-owned outputs | `--ci`, `--dry-run`, `--project <path>`, `--include-build-outputs`; unmarked (non-Build-owned) publication content is skipped, never deleted; interactive mode types `CLEAN` to confirm; fails closed while Unity is running, recovery evidence exists, or an ownership marker is malformed |
+| 1 | `unity-project-tools unity_project_full_clean --project <root> --dry-run --ci` | Read-only plan. No file is created or written. |
+| 2 | Review the printed inventory and the resolved root source. | Confirm the target is the intended project. |
+| 3 | `unity-project-tools unity_project_full_clean --project <root> --ci` | Performs the cleanup through a journaled quarantine. |
 
-### dev-tools (general-purpose tools)
+Interactive runs started by double-clicking a Windows binary show a numbered
+menu. A destructive command asks you to type `CLEAN`; the menu and the command
+share one input reader, so typed lines are never lost.
 
-| Command | Purpose | Notes |
+---
+
+## 3. Architecture
+
+```mermaid
+flowchart TD
+    A[cmd/unity-project-tools] --> T[internal/toolkit<br/>dispatch + shared input]
+    B[cmd/dev-tools] --> T
+    C[cmd/toolsbuild] --> E[internal/toolenv]
+    T --> P1[unity_project_full_clean]
+    T --> P2[remove_unity_packages]
+    T --> P3[rename_project]
+    T --> D1[generate_file_tree]
+    T --> D2[texture_channel_packer]
+    T --> D3[audio_volume_normalizer]
+    T --> D4[unity_video_webm_converter]
+    P1 --> L[internal/projectlayout]
+    P2 --> L
+    P3 --> L
+    P1 --> R[internal/recovery]
+    P2 --> R
+    P1 --> S[internal/safefs]
+    P2 --> S
+    D1 --> S
+    D2 --> S
+    D3 --> E
+    D4 --> E
+    D3 --> S
+    D4 --> S
+    E --> H[host environment<br/>PATH + variables]
+    L --> S
+```
+
+Each tool package is independent. It depends only on the shared contracts and
+the standard library; no tool imports another tool, and no tool relies on state
+written by a different tool. Removing a command from a binary, or deleting one
+tool package from the module, leaves every other command compiling and running.
+
+| Package | Responsibility |
+| --- | --- |
+| `internal/toolkit` | Command registry, dispatch, exit codes, one shared input reader, TTY-aware pause |
+| `internal/projectlayout` | The Unity file-structure contract and its optional per-project override |
+| `internal/projectroot` | Root discovery, origin tracking, ambiguity detection |
+| `internal/recovery` | Distinguishing active build transactions from completed records |
+| `internal/toolenv` | External executable resolution and bounded subprocess execution |
+| `internal/safefs` | Host filesystem facts, path policy, occupancy, atomic publishing |
+| `internal/term` | Terminal detection for progress and pause behaviour |
+| `internal/logging` | Structured diagnostics on stderr |
+
+---
+
+## 4. Shared contracts
+
+### 4.1 Project layout
+
+Unity's structure markers identify a project root. Everything else a tool needs
+is a portable relative path collected in one `Layout` document. No project name,
+drive letter or machine path is part of the contract.
+
+| Group | Default entries | Used by |
 | --- | --- | --- |
-| `generate_file_tree` | Generate a Markdown directory tree | `--profile`, `--target`, `--depth`, `--ext`, `--ignore`, `--ci`, `-i` |
-| `texture_channel_packer` | Pack images into RGBA texture channels | `-r/-g/-b/-a`, `-o`, `-size`, `-preset`, `-ci`, `--dry-run` |
-| `audio_volume_normalizer` | Category-aware audio loudness normalization | `--ci --input <dir> [--format wav\|ogg] [--jobs N]` (`--input` required in CI mode); parallel worker pool (default CPU count), Ctrl+C/SIGTERM cancel; requires FFmpeg |
-| `unity_video_webm_converter` | Convert videos to Unity-friendly WebM | `--ci --input <file\|dir> --output <dir> [--preset 1\|2\|3] [--overwrite] [--jobs N] [--ffmpeg-timeout 2h]`; parallel conversion pool, graceful cancel; requires FFmpeg |
+| `markers` | `Assets`, `ProjectSettings` | root discovery |
+| `projectVersionFile`, `manifestFile`, `packagesLockFile` | Unity metadata files | strict validation |
+| `cacheRoots` | `.vs`, `.utmp`, `obj`, `Logs`, `Library` | cleanup |
+| `publicationRoots` | `Build`, `Bundles`, `HybridCLRData`, `yoo`, `HotUpdateAssetsPreUpload` | ownership-aware cleanup |
+| `durableRoots` | `.buildpipeline`, `Temp/BuildPipeline/Workspace` | never deleted |
+| `transactionsDir`, `workspaceDir`, `quarantineDir`, `leaseFile`, `leaseMetadataFile` | build workspace state | cleanup, package removal |
+| `ownerSuffix`, `ownerMarkerNames` | ownership sidecars | publication verification |
+| `identityRegistry`, `renameStateFile`, `renameBackupDir`, `renameLockDir` | optional rename inputs | rename |
 
-### Project root resolution
+A project can override any field by placing a JSON document at
+`Tools/project-layout.json` in its root, or a command can pass
+`--layout <path>`. Overrides are merged onto the defaults, so a project declares
+only what differs. Every entry is validated: it must be relative, contain no
+parent traversal, use portable characters, fit the host's component limit, and
+keep mutable state inside a durable root.
 
-The Unity-project commands (`rename_project`, `remove_unity_packages`,
-`unity_project_full_clean`) do not blindly trust the current working directory.
-They resolve the project root in this order:
+```json
+{
+  "cacheRoots": ["Library", "Logs", "obj", ".vs", "Intermediates"],
+  "publicationRoots": ["Artifacts", "Bundles"]
+}
+```
 
-1. an explicit `--project <path>`, validated strictly and never falling back to a
-   discovered root;
-2. the current directory, when it is a Unity project root;
-3. a Unity project root among the current directory's immediate subdirectories
-   (the "repository root contains `UnityStarter/`" layout);
-4. the directory tree upwards from the current directory;
-5. upwards from the executable's own location, checking each level and its
-   immediate subdirectories.
+This adds one cache root and narrows the publication roots while keeping all
+other defaults intact. Unknown members, duplicate documents and trailing data
+are rejected.
 
-Step 5 is what makes a double-clicked Windows executable work: Windows sets the
-working directory to the executable's own folder (`Tools/Executable/<OS>/<GOARCH>/`),
-which is not itself a project, so the repository root and its `UnityStarter/`
-subdirectory are found from the executable path instead. When no root can be
-found the command prints every directory it inspected and suggests `--project <path>`.
-The interactive menu shows the same context up front as `Current project: <path>`,
-or the actionable hint when nothing is found.
+### 4.2 External executables
 
-Every resolution also records its **source** (explicit `--project`, the working
-directory, a working-directory subdirectory, an ancestor, or the executable
-directory fallback). The source matters because the executable fallback is
-ambiguous: run the binary from any unrelated directory and it would silently
-resolve to the repository that shipped the binary. Therefore:
+`internal/toolenv` resolves an executable in this order:
 
-- every command logs `resolved Unity project root … source=…` (and the preview
-  prints `Project: <root> (source: …)`) before any write, including in `--ci`;
-- a **destructive, non-interactive** run (real `unity_project_full_clean`, a real
-  `rename_project`, `remove_unity_packages --apply` / a real
-  `--resolve-stale-transaction`) **refuses** an executable-fallback root with an
-  actionable error telling you to run from the project root or pass `--project <path>`;
-- an interactive session (the double-click menu) may proceed, because it still
-  prints `Current project: <path>` and requires the typed `CLEAN` confirmation;
-- `--dry-run` may proceed but prints a prominent warning that the root was inferred.
+1. An override environment variable named after the tool (`ffmpeg` → `FFMPEG`,
+   `ffprobe` → `FFPROBE`, `go` → `GO`). The value may be a bare name resolved
+   through `PATH`, or a full path.
+2. `PATH` lookup for the tool name.
 
-## Install
+There is no bundled binary and no embedded installation directory. If a tool is
+missing, the error names both the `PATH` requirement and the override variable.
 
-### Prebuilt binaries (no Go required)
+```bash
+# Use whatever the machine provides
+export PATH="/opt/media/bin:$PATH"
 
-Each platform bundle under `Tools/Executable/<OS>/<GOARCH>/` contains the standalone
-`unity-project-tools` and `dev-tools` executables plus `toolsbuild` for producing further
-bundles. All platform bundles (Windows, macOS, Linux) are committed to the repository; they can
-also be regenerated with one command (below) or downloaded from the CI workflow's Artifacts
-(each platform runner uploads the bundle it built and verified).
+# Or point one tool at a pinned build
+export FFMPEG="/opt/media/bin/ffmpeg-7.1"
+```
 
-On Windows, double-clicking either executable opens an interactive command menu for its own tool
-family (pick a tool by number or name, `q` to quit); running them with arguments keeps the pure
-CLI behavior. After an argument-driven run, a double-clicked console window stays open with a
-"Press Enter to exit" prompt so success/failure output remains readable. The pause only happens
-when the process owns a fresh console and both stdin and stdout are interactive terminals; shells,
-scripts, redirected output, and CI are never paused. Opt out explicitly with the `--no-pause` flag
-or the `TOOLS_NO_PAUSE=1` environment variable.
+Every subprocess goes through one runner that provides:
+
+- a bounded lifetime (`--ffmpeg-timeout`, `--timeout`);
+- `Cmd.WaitDelay`, so a wrapper script or a descendant holding an inherited pipe
+  cannot wedge a worker after cancellation;
+- process-group termination on Unix;
+- bounded stderr capture that keeps both the beginning and the end of a long
+  encoder log;
+- a deterministic distinction between *could not start*, *exited non-zero*,
+  *timed out* and *cancelled*.
+
+A missing FFmpeg is therefore reported as a startup failure, never disguised as
+"no video stream" or "could not detect peak volume".
+
+### 4.3 Host filesystem rules
+
+`internal/safefs` measures or enforces the host's behaviour before a tool
+writes:
+
+| Concern | Behaviour |
+| --- | --- |
+| Case sensitivity | Probed by writing two spellings of one name and comparing file identity. Path comparisons use the measured result, not an OS guess. |
+| Unicode normalization | Probed with composed and decomposed spellings; volumes that normalize names (common on macOS) are detected. |
+| Path length | Windows `MAX_PATH` is bypassed with the `\\?\` extended prefix for absolute paths, up to the extended limit; Unix uses `PATH_MAX`. |
+| Reserved names | Windows device names (`CON`, `NUL`, `COM1`…) and trailing spaces or dots are rejected. |
+| Illegal characters | Platform-specific character sets and control characters are rejected per component. |
+| Write permission | A disposable probe file proves the directory is writable before a transaction begins. |
+| File occupancy | Windows detects an open handle that denies sharing; Unix uses a non-blocking advisory lock. Occupied targets produce an actionable message and can be retried. |
+| Mount boundaries | Linux uses mount IDs when available and falls back to device identity on older kernels; macOS compares device numbers; Windows checks the volume and rejects reparse points. |
+| Publishing | `PublishReplace` and `PublishNoReplace` stage a complete file, prove the target state, move atomically, and sync the parent directory. |
+
+### 4.4 Build transaction recovery
+
+A build pipeline keeps completed journals, scratch folders and idle lock files
+on disk. Those are durable state, not evidence of a half-finished operation.
+`internal/recovery` blocks a mutation only when:
+
+- a transaction document declares an active phase such as `Applying`,
+  `Claimed` or `InProgress`; or
+- a lock file is currently held by a live process.
+
+Terminal phases (`Published`, `Adopted`, `Completed`, `RolledBack`…) and
+unclassified envelopes are reported as diagnostics. Use `--strict-recovery`
+when an unknown record should also block the run.
+
+An interrupted cleanup is recovered automatically when its journal can be
+validated; `--resolve-stale-quarantine` remains available as an explicit entry
+point. A single interruption does not make a tool permanently unusable.
+
+---
+
+## 5. Project root discovery
+
+Commands that operate on a Unity project resolve the root in this order:
+
+1. `--project <path>` — validated strictly, never falls back.
+2. The working directory itself.
+3. Immediate subdirectories of the working directory.
+4. Ancestors of the working directory.
+5. Ancestors of the executable's directory and their subdirectories.
+
+A directory holding **more than one** project is never resolved implicitly: the
+command exits with `AmbiguousRootsError` and lists every candidate, asking for
+`--project`. A malformed sibling does not hide a healthy project; it is listed
+as a rejected candidate.
+
+Destructive, non-interactive runs are permitted only against an explicit
+`--project` or a working directory that is itself the project root. Inferred
+roots are allowed for previews and for interactive sessions, which print the
+resolved root and require a typed confirmation.
+
+```bash
+# Unambiguous and recommended for scripts
+unity-project-tools unity_project_full_clean --project ./MyProject --ci
+
+# From inside the project root
+cd ./MyProject
+unity-project-tools unity_project_full_clean --ci
+```
+
+---
+
+## 6. Command reference
+
+### 6.1 `unity-project-tools`
+
+#### `unity_project_full_clean`
+
+Deletes regenerable caches and, when requested, publication trees proven to be
+owned by the build pipeline.
+
+| Flag | Meaning |
+| --- | --- |
+| `--project <path>` | Explicit project root. |
+| `--layout <path>` | Layout override document. |
+| `--ci` | Non-interactive; no typed confirmation. |
+| `--dry-run` | Read-only preview. Creates no files. |
+| `--include-build-outputs` | Also delete verified build-owned publications. |
+| `--resolve-stale-quarantine` | Complete an interrupted cleanup explicitly. |
+| `--strict-recovery` | Treat unclassified transaction records as blocking. |
+| `--max-entries <n>` | Entry budget for each individual cleanup target. |
+| `--max-depth <n>` | Depth budget for each individual cleanup target. |
+
+Behaviour:
+
+- Caches listed in `cacheRoots` are matched using the measured case behaviour of
+  the volume, so `obj` and `Obj` are both cleaned.
+- `Temp` keeps the build workspace; other children are removed.
+- Publication trees without a verifiable ownership marker are reported as
+  skipped and never deleted. A present but malformed marker fails closed.
+- `durableRoots` are never deleted; their footprint is reported in the preview.
+- Deletion moves each target into a journaled quarantine first, then removes it
+  through a bound directory handle. On any failure the claims are restored.
+- A multi-gigabyte `Library` is removed with a bounded worker pool and periodic
+  progress reporting; cancellation is checked between items.
+
+```bash
+unity-project-tools unity_project_full_clean --project ./MyProject --dry-run --ci
+unity-project-tools unity_project_full_clean --project ./MyProject --ci --include-build-outputs
+```
+
+#### `remove_unity_packages`
+
+Removes explicitly authorized packages from `Packages/manifest.json`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--allow-package <id>` | Authorize one package; repeatable. |
+| `--allow-referenced-package <id>` | Authorize a referenced package; repeatable. |
+| `--profile <path>` | Strict JSON removal policy. |
+| `--apply` | Commit the reviewed removal. |
+| `--dry-run` | Read-only preview. |
+| `--project`, `--layout` | Root and structure override. |
+| `--resolve-stale-transaction` | Complete interrupted staged evidence. |
+| `--allow-lock-regeneration` | Back up and remove the lock file so Unity resolves packages again. |
+| `--strict-recovery` | Treat unclassified transaction records as blocking. |
+
+Without `--apply` the command only previews. The commit uses a staged manifest,
+a mandatory backup and a rollback closure; every step revalidates mutation
+evidence.
+
+```bash
+unity-project-tools remove_unity_packages --project ./MyProject \
+  --allow-package com.example.package --dry-run
+unity-project-tools remove_unity_packages --project ./MyProject \
+  --allow-package com.example.package --apply
+```
+
+#### `rename_project`
+
+Renames a Unity project transactionally: project settings, assembly
+definitions, state files and the main project folder.
+
+| Flag | Meaning |
+| --- | --- |
+| `--project`, `--layout` | Root and structure override. |
+| `--dry-run` | Print the complete plan without writing. |
+| `--company`, `--product`, `--project-name`, `--app-id` | Non-interactive values. |
+| `--yes` | Skip the final confirmation in scripted runs. |
+
+`identityRegistry` is optional. When absent, targets that depend on it are
+skipped and the rest of the rename proceeds, so the tool works on any Unity
+project. File reads are bounded, and path comparisons use measured case
+behaviour. A non-terminal run without explicit values returns a usage error
+instead of silently doing nothing.
+
+```bash
+unity-project-tools rename_project --project ./MyProject --dry-run
+unity-project-tools rename_project --project ./MyProject \
+  --company "Example" --product "Example Game" --project-name ExampleGame --yes
+```
+
+### 6.2 `dev-tools`
+
+#### `generate_file_tree`
+
+Generates a Markdown directory tree for any directory.
+
+| Flag | Meaning |
+| --- | --- |
+| `--ci` | Non-interactive. |
+| `--target <dir>` | Directory to scan. |
+| `--depth <n>` | Maximum depth; `0` is unlimited. |
+| `--ext`, `--ignore` | Extension filter and additional ignored names. |
+| `--no-default-ignore` | Start without the built-in ignore list. |
+| `--dirs-only`, `--show-size`, `--show-count` | Show only directories, include file sizes, report hidden item counts. |
+| `--profile`, `-o`, `-i` | Profile, output file, interactive mode. |
+
+Output is staged and published atomically. A closed input stream cancels an
+interactive run; directory read errors are reported and affect the exit code.
+
+```bash
+dev-tools generate_file_tree --ci --target ./Assets --depth 3 -o tree.md
+```
+
+#### `texture_channel_packer`
+
+Packs grayscale sources into RGBA channels.
+
+| Flag | Meaning |
+| --- | --- |
+| `-r`, `-g`, `-b`, `-a` | Per-channel source images. |
+| `-o` | Output PNG. |
+| `-size <WxH>` | Output size. |
+| `-preset`, `-ci`, `--dry-run` | Preset and run modes. |
+
+Output dimensions are bounded (16384 × 16384) with overflow-checked
+allocation. Sources are decoded with a bounded image configuration read; output
+is staged and published atomically.
+
+#### `audio_volume_normalizer`
+
+Category-aware loudness normalization for WAV and OGG files.
+
+| Flag | Meaning |
+| --- | --- |
+| `--ci` | Non-interactive; requires `--input`. |
+| `--input <dir>` | Source directory. |
+| `--format wav\|ogg` | Output format. |
+| `--jobs <n>` | Parallel workers, clamped to `1..64`. |
+| `--mono` | Produce a single-channel output. |
+| `--ffmpeg-timeout <duration>` | Per-encode timeout. |
+
+Each file is analysed and encoded through the shared runner. Output collisions
+are detected before work begins. Every encoder writes to a same-directory
+partial file that is published atomically on success.
+
+#### `unity_video_webm_converter`
+
+Converts videos to Unity-friendly WebM.
+
+| Flag | Meaning |
+| --- | --- |
+| `--ci`, `--input`, `--output` | Non-interactive source and destination. |
+| `--preset 1\|2\|3` | Encoding preset. |
+| `--overwrite` | Allow replacement of existing outputs. |
+| `--alpha` | Preserve an alpha channel. |
+| `--jobs <n>`, `--ffmpeg-timeout <duration>` | Concurrency and per-encode timeout. |
+
+Generated outputs from any preset are excluded from later input scans, so
+switching presets never re-encodes an earlier result. Progress is drawn only on
+interactive terminals; piped output stays clean.
+
+### 6.3 `toolsbuild`
+
+Produces platform bundles.
+
+| Flag | Meaning |
+| --- | --- |
+| `--targets <csv>` | GOOS/GOARCH list, validated against `go tool dist list`. |
+| `--output <dir>` | Output root. |
+| `--module-root <dir>` | Module root override; also settable with `TOOLS_MODULE_ROOT`. |
+| `--verify` | Run each current-platform binary after building. |
+| `--list` | Print supported targets and exit. |
+| `--timeout <duration>` | Per-build timeout. |
+
+```bash
+go run ./cmd/toolsbuild --targets windows/amd64,linux/arm64 --output ./bundle
+toolsbuild --module-root /path/to/Scripts --targets "$(go env GOOS)/$(go env GOARCH)" --verify
+```
+
+The binary is relocatable: `--module-root` or `TOOLS_MODULE_ROOT` lets it run
+from any directory, and the Go toolchain itself is resolved through the host
+environment.
+
+---
+
+## 7. Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `FFMPEG` | Override executable for audio and video tools. |
+| `FFPROBE` | Override executable for media probing. |
+| `GO` | Override Go toolchain used by `toolsbuild`. |
+| `TOOLS_MODULE_ROOT` | Locate the Go module for a relocated `toolsbuild`. |
+| `TOOLS_DELETION_WORKERS` | Global cap on concurrent cleanup deletion workers (`1..64`, default `8`). Raise it for high-throughput storage, lower it when directory metadata contention is visible. |
+| `TOOLS_NO_PAUSE` | Set to `1` to disable the Windows post-run pause. |
+
+A value may be a bare name resolved through `PATH` or a full path. Empty values
+are ignored.
+
+---
+
+## 8. Platform notes
+
+| Platform | Considerations |
+| --- | --- |
+| Windows | `MAX_PATH` is bypassed with the `\\?\` prefix for long absolute paths; UNC paths use the UNC extended form. Reserved device names, alternate data streams and trailing dots or spaces are rejected. A sharing violation means another process holds the file — close the editor, explorer, antivirus or media player. Read-only attributes are cleared before an authorized replacement. |
+| Linux | Mount identity uses `STATX_MNT_ID` where available and falls back to device identity on older kernels. `renameat2(RENAME_NOREPLACE)` provides no-replace publishing; filesystems without that flag fall back to an existence check. Advisory locks are cooperative. |
+| macOS | Case sensitivity and Unicode normalization are measured rather than assumed, because APFS volumes differ. `RenamexNp(RENAME_EXCL)` provides no-replace publishing. |
+| Other Unix | Build tags compile, but no-replace operations report that the platform primitive is unavailable. |
+
+Terminal detection controls progress bars and the post-run pause. Pipes,
+redirections, shells and CI never pause. Use `--no-pause` or
+`TOOLS_NO_PAUSE=1` to opt out explicitly.
+
+---
+
+## 9. Building, composing and extending
 
 ### Build from source
 
 ```bash
 cd Tools/Scripts
-go build -mod=readonly -trimpath -buildvcs=false -o unity-project-tools.exe ./cmd/unity-project-tools
+go build -mod=readonly -trimpath -buildvcs=false -o unity-project-tools ./cmd/unity-project-tools
+go build -mod=readonly -trimpath -buildvcs=false -o dev-tools ./cmd/dev-tools
+go build -mod=readonly -trimpath -buildvcs=false -o toolsbuild ./cmd/toolsbuild
 ```
 
-The module declares `go 1.25.0` because the destructive-filesystem tools rely on the Go 1.25 `os.Root`
-APIs. Any Go installation 1.21 or newer builds it transparently: the default `GOTOOLCHAIN=auto` mode
-downloads the required toolchain on first use. `go.sum` pins the only third-party dependency.
+The module declares a minimum Go version because the destructive tools use
+`os.Root` and `Cmd.WaitDelay`. A newer toolchain builds it directly.
 
-### Release bundles (local or CI)
+### Add a tool
+
+1. Create a package with `func Run(arguments []string) int`.
+2. Import only the shared contracts you need; parse flags locally.
+3. Register the command in a `cmd/*/main.go` command table.
+4. Add tests in the same package.
+
+No tool needs to know about any other tool. A command table is just data, so a
+binary can be built with any subset of commands.
+
+```go
+commands := []toolkit.Command{
+    {Name: "my_tool", Summary: "Describe the tool.", Run: mytool.Run},
+}
+```
+
+### Resolve an external program
+
+```go
+binary, err := toolenv.MustResolve("my-program")
+if err != nil {
+    return toolkit.ExitFailure
+}
+outcome, err := toolenv.Run(ctx, toolenv.Invocation{
+    Binary: binary, Args: []string{"--flag"}, Timeout: 2 * time.Minute,
+})
+if err != nil {
+    logging.Error(toolenv.FormatFailure(err, outcome))
+    return toolkit.ExitFailure
+}
+```
+
+### Publish a file safely
+
+```go
+stage, _ := os.CreateTemp(directory, ".output.partial-*")
+// write and sync the stage, then close it
+if err := safefs.PublishReplace(stage.Name(), outputPath); err != nil {
+    return err
+}
+```
+
+---
+
+## 10. Verification
 
 ```bash
 cd Tools/Scripts
-go run ./cmd/toolsbuild                         # all default targets
-go run ./cmd/toolsbuild --targets windows/amd64,darwin/arm64,linux/amd64
-go run ./cmd/toolsbuild --verify               # also smoke-test the current platform binary
-```
-
-`toolsbuild` cross-compiles static binaries (`CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`, stripped)
-into `Tools/Executable/<OS>/<GOARCH>/` and exits non-zero on any failure, so it is directly usable as a
-CI release step without any scripting layer. The distributed `toolsbuild` executable is also runnable
-on its own: it locates the module root from its own path (not the working directory), so a terminal
-command like `Tools/Executable/windows/amd64/toolsbuild.exe --targets windows/amd64` works from any
-directory. From a terminal it behaves like any CLI program; when double-clicked on Windows it keeps
-the console open until you press Enter, subject to the same `--no-pause` / `TOOLS_NO_PAUSE=1`
-opt-outs described above.
-
-## CI/CD
-
-The workflow at `.github/workflows/unitystarter-tools.yml` runs on every push/PR touching `Tools/`
-(plus manual dispatch). Two jobs run in parallel:
-
-- `build`: hosted Ubuntu/Windows/macOS runners build and vet the module, check `gofmt` cleanliness,
-  run `go test`, produce and verify the current-platform bundle through `toolsbuild --verify`, run the
-  smoke commands, and upload the per-platform bundle as a workflow Artifact (download from the
-  workflow run page, kept for 30 days).
-- `linux-distros`: the same checks run inside real Debian (bookworm) and Arch Linux containers,
-  covering both a stable baseline distribution and a rolling-release distribution.
-
-Runs auto-cancel on newer pushes (`concurrency`), are capped at 25 minutes, and never short-circuit
-on the first platform failure (`fail-fast: false`). The same core commands work verbatim on
-Jenkins, TeamCity, GitLab CI, or a local shell:
-
-```bash
-go build ./... && go vet ./...
+go build ./...
+go vet ./...
+gofmt -l .
+go test -count=1 ./...
 go run ./cmd/toolsbuild --targets "$(go env GOOS)/$(go env GOARCH)" --verify
-go run ./cmd/unity-project-tools --list
 ```
 
-## Prerequisites
+The test suite covers layout merging and validation, transaction state
+classification, held-lock detection, external process resolution, cancellation,
+bounded diagnostics, host path policy, atomic publishing, root discovery and
+multi-project ambiguity. End-to-end runs exercise varying corpus sizes, seeds,
+directory depths, name spellings, parameter combinations, concurrent invocations
+and interrupted cleanups.
 
-- `audio_volume_normalizer` and `unity_video_webm_converter` shell out to a compatible FFmpeg binary on
-  `PATH`; the other five commands have no external dependencies.
-- Interactive commands pause for confirmation unless run with their `--ci`/flag-driven modes, which are
-  the supported CI paths.
-
-## Design Notes
-
-- **Two binaries, in-process dispatch**: one artifact per tool family per platform; the Unity
-  project tools and the general-purpose tools never share a binary, and the UX is identical everywhere.
-- **Deterministic builds**: `-mod=readonly`, pinned `go.sum`, `-trimpath`, `-buildvcs=false`.
-- **Fails closed**: destructive tools keep their journal/backup/lease safety machinery, and every command
-  returns a portable exit code.
-- **Bounded parallelism**: the FFmpeg tools process files through a bounded worker pool (`--jobs`, default
-  CPU count, clamped to 1..64) instead of running sequentially or forking unbounded processes.
-- **Graceful cancellation**: every long-running tool derives from `signal.NotifyContext`; Ctrl+C/SIGTERM
-  cancels in-flight FFmpeg work and exits with code 1 after a clean summary.
-- **Structured logs**: diagnostics go to stderr as `slog` text lines (`cmd`, `level`, key=value) while
-  user-facing prompts, progress, and summaries stay on stdout, so CI logs stay parseable.
-- **Atomic outputs**: the FFmpeg tools write to a unique per-run temporary file (same directory, same
-  extension) and rename it into place on success, so interrupted or concurrent runs never leave a
-  half-written file at the final path.
-- **TTY-aware progress**: progress bars are drawn only when stdout is an interactive terminal; piped
-  and CI output stays clean.
-- **Ownership-aware cleanup**: `unity_project_full_clean` always removes the
-  regenerable caches (`Library`, `Logs`, `obj`/`Obj`, `.vs`, `.utmp`, `Temp`), but
-  the publication trees (`Build`, `Bundles`, `HybridCLRData`, `yoo`,
-  `HotUpdateAssetsPreUpload`) are deleted only when `--include-build-outputs` is
-  given *and* a valid Build ownership marker covers them. Unmarked content is
-  reported as skipped and never deleted, so a stray hand-built player output no
-  longer blocks cache cleanup; a marker that is present but malformed still fails
-  closed. `.buildpipeline` and `Temp/BuildPipeline/Workspace` are never deleted.
-- **Case-insensitive cache matching**: Unity's generated cache folder casing varies
-  by version and platform (the assembly intermediates are `obj` on some and `Obj`
-  on others, matching the project `.gitignore`'s `/[Oo]bj/`), so cache roots are
-  matched case-insensitively and Windows, macOS and Linux clean the same set.
-- **Windows double-click UX**: after an argument-driven run, a freshly opened console stays readable
-  until Enter is pressed. The decision is centralized in the toolkit (`ShouldPauseAfterRun`): pause
-  only when stdin and stdout are interactive terminals, the console hosts this process alone, and
-  neither `--no-pause` nor `TOOLS_NO_PAUSE=1` opted out. Pipes, scripts, shells, and CI never pause.
+Structured diagnostics go to stderr as `slog` text lines with `cmd`, `level`
+and key/value pairs; user-facing prompts, progress and summaries go to stdout.

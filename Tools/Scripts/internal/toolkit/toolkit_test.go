@@ -88,12 +88,12 @@ func TestInteractiveMenuShowsResolvedProjectRoot(t *testing.T) {
 	var output strings.Builder
 	code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output,
 		WithProjectResolver(func() (ProjectContext, error) {
-			return ProjectContext{Root: "/repo/UnityStarter", Origin: "current working directory"}, nil
+			return ProjectContext{Root: "/repo/ProjectA", Origin: "current working directory"}, nil
 		}))
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
 	}
-	if !strings.Contains(output.String(), "Current project: /repo/UnityStarter") {
+	if !strings.Contains(output.String(), "Current project: /repo/ProjectA") {
 		t.Fatalf("menu must show the resolved project, got:\n%s", output.String())
 	}
 }
@@ -105,12 +105,12 @@ func TestInteractiveMenuFlagsExecutableFallback(t *testing.T) {
 	var output strings.Builder
 	if code := InteractiveMenu("test-tool", commands, strings.NewReader("q\n"), &output,
 		WithProjectResolver(func() (ProjectContext, error) {
-			return ProjectContext{Root: "/repo/UnityStarter", Origin: "executable directory fallback", ExecutableFallback: true}, nil
+			return ProjectContext{Root: "/repo/ProjectA", Origin: "executable directory fallback", ExecutableFallback: true}, nil
 		})); code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d", code, ExitSuccess)
 	}
 	text := output.String()
-	if !strings.Contains(text, "Current project: /repo/UnityStarter") {
+	if !strings.Contains(text, "Current project: /repo/ProjectA") {
 		t.Fatalf("menu must show the fallback project, got:\n%s", text)
 	}
 	if !strings.Contains(text, "inferred from the executable's own directory") {

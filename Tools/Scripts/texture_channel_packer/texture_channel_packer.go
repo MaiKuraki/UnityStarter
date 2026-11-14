@@ -1,10 +1,8 @@
-// Package texture_channel_packer packs multiple images into RGBA channels of a single texture,
-// commonly used in Unity game development for HDRP/URP Mask Maps and packed textures.
+// Package texture_channel_packer packs multiple images into the RGBA channels
+// of a single texture. It supports PNG and JPEG inputs, emits lossless PNG
+// output, and loads one source at a time to keep peak memory bounded.
 //
 // The command is dispatched in-process by cmd/dev-tools.
-//
-// Supports PNG and JPEG input. Output is always PNG (lossless, alpha-preserving).
-// Memory-efficient: loads one source at a time, processes channels sequentially.
 package texture_channel_packer
 
 import (
@@ -18,18 +16,18 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
-// ============================================================
-// Configuration
-// ============================================================
+// maxOutputDimension caps each axis so a crafted header cannot request an
+// unbounded allocation. The RGBA buffer size is checked in int64 before use.
+const maxOutputDimension = 16384
 
 var channelLabels = [4]string{"Red", "Green", "Blue", "Alpha"}
 var channelLetters = [4]string{"R", "G", "B", "A"}
@@ -54,23 +52,11 @@ var presets = []preset{
 	},
 }
 
-// channelSource describes where to get one output channel's data
 type channelSource struct {
-	FilePath string // "" means use Fill value
-	Channel  string // "R", "G", "B", "A", "Gray"
+	FilePath string
+	Channel  string
 	Fill     uint8
 }
-
-// Global stdin reader to avoid multiple buffered readers competing for stdin
-var stdinReader *bufio.Reader
-
-func init() {
-	stdinReader = bufio.NewReader(os.Stdin)
-}
-
-// ============================================================
-// Path & Name Utilities
-// ============================================================
 
 func normalizePath(p string) string {
 	p = strings.TrimSpace(p)
@@ -93,37 +79,30 @@ func normalizeChannelName(s string) string {
 		return "B"
 	case "A", "ALPHA":
 		return "A"
-	case "GRAY", "GREY", "LUMINANCE", "L":
-		return "Gray"
 	default:
 		return "Gray"
 	}
 }
 
-// parseSourceSpec parses a CLI channel source specification.
-// Formats: "file.png", "file.png:R", "fill:128", "128", ""
-// The channel defaults to defaultChannel — the channel the flag itself names —
-// so "-r img.png" means "use the red channel"; an explicit ":Gray" suffix opts
-// out of that default.
+// parseSourceSpec parses a CLI channel source specification. The channel
+// defaults to the one the flag names, so "-r img.png" means "use the red
+// channel"; an explicit ":Gray" suffix opts out of that default.
 func parseSourceSpec(spec string, defaultFill uint8, defaultChannel string) channelSource {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return channelSource{Fill: defaultFill}
 	}
 
-	// Pure number → fill value
 	if val, err := strconv.Atoi(spec); err == nil && val >= 0 && val <= 255 {
 		return channelSource{Fill: uint8(val)}
 	}
 
-	// "fill:N" format
 	if strings.HasPrefix(strings.ToLower(spec), "fill:") {
 		if val, err := strconv.Atoi(spec[5:]); err == nil && val >= 0 && val <= 255 {
 			return channelSource{Fill: uint8(val)}
 		}
 	}
 
-	// File path with optional :CHANNEL suffix
 	channel := defaultChannel
 	if idx := strings.LastIndex(spec, ":"); idx > 0 {
 		suffix := strings.ToUpper(spec[idx+1:])
@@ -137,14 +116,9 @@ func parseSourceSpec(spec string, defaultFill uint8, defaultChannel string) chan
 	return channelSource{FilePath: normalizePath(spec), Channel: channel, Fill: defaultFill}
 }
 
-// ============================================================
-// Image I/O
-// ============================================================
-
-// loadImageAsNRGBA loads an image file and ensures it's in NRGBA format
-// for correct non-premultiplied channel extraction. Advisory warnings (for
-// example, a 16-bit source being reduced to 8 bits by the conversion) are
-// returned separately from hard errors.
+// loadImageAsNRGBA decodes into NRGBA for correct non-premultiplied channel
+// extraction. Advisory warnings (for example a 16-bit source reduced to 8 bits)
+// are returned separately from hard errors.
 func loadImageAsNRGBA(path string) (*image.NRGBA, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -163,24 +137,16 @@ func loadImageAsNRGBA(path string) (*image.NRGBA, []string, error) {
 		warnings = append(warnings, fmt.Sprintf("  [WARNING] 16-bit source %s is reduced to 8-bit output", filepath.Base(path)))
 	}
 
-	// Fast path: already NRGBA
 	if nrgba, ok := img.(*image.NRGBA); ok {
 		return nrgba, warnings, nil
 	}
 
-	// Convert to NRGBA (handles un-premultiplication, Gray→RGBA, YCbCr→RGBA, etc.)
 	bounds := img.Bounds()
 	nrgba := image.NewNRGBA(bounds)
 	draw.Draw(nrgba, bounds, img, bounds.Min, draw.Src)
 	return nrgba, warnings, nil
 }
 
-// ============================================================
-// Channel Operations
-// ============================================================
-
-// extractChannel extracts a single channel from an NRGBA image into a flat byte buffer.
-// Uses direct pixel access with precomputed offsets for maximum performance.
 func extractChannel(nrgba *image.NRGBA, ch string) []uint8 {
 	bounds := nrgba.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
@@ -225,8 +191,8 @@ func extractChannel(nrgba *image.NRGBA, ch string) []uint8 {
 	return buf
 }
 
-// resizeNearest performs nearest-neighbor resize of a single-channel buffer.
-// Ideal for mask/data textures where preserving hard edges is important.
+// resizeNearest performs nearest-neighbor resize of a single-channel buffer,
+// preserving hard edges for mask and data textures.
 func resizeNearest(src []uint8, srcW, srcH, dstW, dstH int) []uint8 {
 	if srcW == dstW && srcH == dstH {
 		return src
@@ -243,19 +209,13 @@ func resizeNearest(src []uint8, srcW, srcH, dstW, dstH int) []uint8 {
 	return dst
 }
 
-// ============================================================
-// Pack Logic
-// ============================================================
-
-// packChannels assembles an output NRGBA image from 4 channel sources.
-// Processes channels sequentially to minimize peak memory:
-//
-//	output (W*H*4) + one source image at a time + one channel buffer.
+// packChannels assembles an output NRGBA image from 4 channel sources,
+// processing one source at a time so peak memory stays bounded to the output
+// buffer plus one decoded image and one channel buffer.
 func packChannels(outW, outH int, sources [4]channelSource) (*image.NRGBA, []string, error) {
 	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
 	var log []string
 
-	// Fill output with defaults
 	for i := 0; i < len(out.Pix); i += 4 {
 		out.Pix[i] = sources[0].Fill
 		out.Pix[i+1] = sources[1].Fill
@@ -263,15 +223,13 @@ func packChannels(outW, outH int, sources [4]channelSource) (*image.NRGBA, []str
 		out.Pix[i+3] = sources[3].Fill
 	}
 
-	// Process each channel source sequentially
 	for ci := 0; ci < 4; ci++ {
 		src := sources[ci]
 		if src.FilePath == "" {
-			log = append(log, fmt.Sprintf("  [OK] %s ← fill(%d)", channelLetters[ci], src.Fill))
+			log = append(log, fmt.Sprintf("  [OK] %s <- fill(%d)", channelLetters[ci], src.Fill))
 			continue
 		}
 
-		// Load source image
 		img, warnings, err := loadImageAsNRGBA(src.FilePath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s channel: %w", channelLetters[ci], err)
@@ -283,20 +241,14 @@ func packChannels(outW, outH int, sources [4]channelSource) (*image.NRGBA, []str
 
 		srcW := img.Bounds().Dx()
 		srcH := img.Bounds().Dy()
-
-		// Extract the specified channel
 		chBuf := extractChannel(img, src.Channel)
-		img = nil // release source image for GC
-		runtime.GC()
 
-		// Resize if dimensions differ
 		resized := false
 		if srcW != outW || srcH != outH {
 			chBuf = resizeNearest(chBuf, srcW, srcH, outW, outH)
 			resized = true
 		}
 
-		// Write channel data to output
 		for y := 0; y < outH; y++ {
 			pixRow := out.PixOffset(0, y)
 			bufRow := y * outW
@@ -304,25 +256,38 @@ func packChannels(outW, outH int, sources [4]channelSource) (*image.NRGBA, []str
 				out.Pix[pixRow+x*4+ci] = chBuf[bufRow+x]
 			}
 		}
-		chBuf = nil
 
 		sizeInfo := fmt.Sprintf("%dx%d", srcW, srcH)
 		if resized {
-			sizeInfo += fmt.Sprintf(" → %dx%d", outW, outH)
+			sizeInfo += fmt.Sprintf(" -> %dx%d", outW, outH)
 		}
-		log = append(log, fmt.Sprintf("  [OK] %s ← %s (%s, %s)",
+		log = append(log, fmt.Sprintf("  [OK] %s <- %s (%s, %s)",
 			channelLetters[ci], filepath.Base(src.FilePath), src.Channel, sizeInfo))
 	}
 
 	return out, log, nil
 }
 
-// ============================================================
-// Output Size Detection
-// ============================================================
+// validateOutputDimensions enforces the hard axis cap and proves the RGBA
+// allocation fits the platform's addressable int range using int64 arithmetic.
+func validateOutputDimensions(w, h int) error {
+	if w <= 0 || h <= 0 {
+		return fmt.Errorf("output dimensions must be positive, got %dx%d", w, h)
+	}
+	width, height := int64(w), int64(h)
+	if width > maxOutputDimension || height > maxOutputDimension {
+		return fmt.Errorf("output dimensions %dx%d exceed the %dx%d limit", w, h, maxOutputDimension, maxOutputDimension)
+	}
+	pixels := width * height
+	bufferBytes := pixels * 4
+	maxInt := int64(^uint(0) >> 1)
+	if pixels <= 0 || bufferBytes/pixels != 4 || bufferBytes > maxInt {
+		return fmt.Errorf("output allocation overflows the addressable buffer size")
+	}
+	return nil
+}
 
-// detectOutputSize determines output dimensions from the first source with a file.
-// Uses image.DecodeConfig (reads only the header, not the full image).
+// detectOutputSize reads only the first source header, never the full image.
 func detectOutputSize(sources [4]channelSource) (int, int, error) {
 	for _, src := range sources {
 		if src.FilePath == "" {
@@ -339,12 +304,8 @@ func detectOutputSize(sources [4]channelSource) (int, int, error) {
 		}
 		return cfg.Width, cfg.Height, nil
 	}
-	return 0, 0, fmt.Errorf("no source images provided — cannot determine output size")
+	return 0, 0, fmt.Errorf("no source images provided - cannot determine output size")
 }
-
-// ============================================================
-// Preview
-// ============================================================
 
 func printPreview(sources [4]channelSource, outW, outH int, outPath string, labels [4]string) {
 	fmt.Println("\n=============================================")
@@ -357,19 +318,48 @@ func printPreview(sources [4]channelSource, outW, outH int, outPath string, labe
 			label = " (" + labels[ci] + ")"
 		}
 		if src.FilePath == "" {
-			fmt.Printf("  %s%s ← fill(%d)\n", channelLetters[ci], label, src.Fill)
+			fmt.Printf("  %s%s <- fill(%d)\n", channelLetters[ci], label, src.Fill)
 		} else {
-			fmt.Printf("  %s%s ← %s : %s\n", channelLetters[ci], label, filepath.Base(src.FilePath), src.Channel)
+			fmt.Printf("  %s%s <- %s : %s\n", channelLetters[ci], label, filepath.Base(src.FilePath), src.Channel)
 		}
 	}
 	fmt.Printf("\n  Output: %s (%dx%d, PNG)\n", outPath, outW, outH)
 }
 
-// ============================================================
-// Execution
-// ============================================================
+// prepareOutputTarget validates the destination before any file is created and
+// returns an absolute path plus a CreateTemp pattern. The staging-name budget
+// uses a representative longest random suffix so a long source name cannot
+// produce an unusable temporary path.
+func prepareOutputTarget(outPath string) (string, string, error) {
+	policy := safefs.HostPathPolicy()
+	abs, err := filepath.Abs(outPath)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot resolve output path %s: %w", outPath, err)
+	}
+	if err := policy.ValidateAbsolute(abs); err != nil {
+		return "", "", err
+	}
+	base := filepath.Base(abs)
+	if err := policy.ValidateComponent(base); err != nil {
+		return "", "", err
+	}
+	dir := filepath.Dir(abs)
+	if err := policy.EnsureWritable(dir); err != nil {
+		return "", "", err
+	}
+	pattern := "." + base + ".partial-*"
+	budgetName := "." + base + ".partial-123456789012"
+	if err := policy.Budget(dir, budgetName); err != nil {
+		return "", "", err
+	}
+	return abs, pattern, nil
+}
 
 func executePack(sources [4]channelSource, outW, outH int, outPath string) error {
+	if err := validateOutputDimensions(outW, outH); err != nil {
+		return err
+	}
+
 	fmt.Println("\nPacking channels...")
 	startTime := time.Now()
 
@@ -383,13 +373,13 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) error
 		fmt.Println(msg)
 	}
 
-	// Encode output PNG with buffered writer
 	fmt.Print("\nEncoding PNG...")
-	// A unique per-run temporary file (same directory, same extension) keeps
-	// half-written output away from the final path if the process dies
-	// mid-encode; the rename below publishes atomically, matching the FFmpeg
-	// tools' output convention.
-	tempFile, err := os.CreateTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+".partial-*"+filepath.Ext(outPath))
+	absOutput, pattern, err := prepareOutputTarget(outPath)
+	if err != nil {
+		logging.Errorf("%v", err)
+		return err
+	}
+	tempFile, err := os.CreateTemp(filepath.Dir(absOutput), pattern)
 	if err != nil {
 		logging.Errorf("cannot create temporary output file: %v", err)
 		return err
@@ -415,17 +405,14 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) error
 		logging.Errorf("close failed: %v", err)
 		return err
 	}
-	out = nil
-	runtime.GC()
 
-	if err := os.Rename(tempPath, outPath); err != nil {
+	if err := safefs.PublishReplace(tempPath, absOutput); err != nil {
 		os.Remove(tempPath)
 		logging.Errorf("cannot publish output: %v", err)
 		return fmt.Errorf("cannot publish output: %w", err)
 	}
 
-	// Report
-	info, _ := os.Stat(outPath)
+	info, _ := os.Stat(absOutput)
 	var outSize int64
 	if info != nil {
 		outSize = info.Size()
@@ -443,14 +430,9 @@ func executePack(sources [4]channelSource, outW, outH int, outPath string) error
 	return nil
 }
 
-// ============================================================
-// Interactive Mode
-// ============================================================
-
 // readPromptLine reads one prompt answer. A closed input stream is an error,
-// never a silent default: partially fed stdin (piped scripts, Ctrl+Z, closed
-// pipes) must not make the tool write files unattended. A final line without a
-// trailing newline is still accepted.
+// never a silent default: partially fed stdin must not make the tool write
+// files unattended. A final line without a trailing newline is still accepted.
 func readPromptLine(reader *bufio.Reader, prompt string) (string, error) {
 	fmt.Print(prompt)
 	line, err := reader.ReadString('\n')
@@ -499,7 +481,6 @@ func runInteractive(reader *bufio.Reader) int {
 	fmt.Println("\nSupported input formats: PNG, JPEG")
 	fmt.Println("Output format: PNG (lossless)")
 
-	// Select mode
 	fmt.Println("\nSelect packing mode:")
 	fmt.Println("  [1] Custom channel packing")
 	for i, p := range presets {
@@ -522,7 +503,6 @@ func runInteractive(reader *bufio.Reader) int {
 		fmt.Printf("\nUsing preset: %s\n", p.description)
 	}
 
-	// Collect channel sources
 	var sources [4]channelSource
 	fmt.Println("\nFor each channel, drag an image file or type its path.")
 	fmt.Println("Type a number (0-255) for a constant fill value.")
@@ -544,18 +524,16 @@ func runInteractive(reader *bufio.Reader) int {
 
 		if input == "" {
 			sources[ci] = channelSource{Fill: fillDefault}
-			fmt.Printf("  → fill(%d)\n\n", fillDefault)
+			fmt.Printf("  -> fill(%d)\n\n", fillDefault)
 			continue
 		}
 
-		// Check if it's a fill value
 		if val, parseErr := strconv.Atoi(input); parseErr == nil && val >= 0 && val <= 255 {
 			sources[ci] = channelSource{Fill: uint8(val)}
-			fmt.Printf("  → fill(%d)\n\n", val)
+			fmt.Printf("  -> fill(%d)\n\n", val)
 			continue
 		}
 
-		// Treat as file path
 		filePath := normalizePath(input)
 		if _, statErr := os.Stat(filePath); statErr != nil {
 			fmt.Printf("  [WARNING] File not found: %s\n", filePath)
@@ -564,7 +542,6 @@ func runInteractive(reader *bufio.Reader) int {
 			continue
 		}
 
-		// Ask which channel to extract
 		chStr, err := readPromptLine(reader, "  Extract channel [R/G/B/A/Gray] (default: Gray): ")
 		if err != nil {
 			return cancelledByEOF()
@@ -575,10 +552,9 @@ func runInteractive(reader *bufio.Reader) int {
 		}
 
 		sources[ci] = channelSource{FilePath: filePath, Channel: ch, Fill: fillDefault}
-		fmt.Printf("  → %s : %s\n\n", filepath.Base(filePath), ch)
+		fmt.Printf("  -> %s : %s\n\n", filepath.Base(filePath), ch)
 	}
 
-	// Output path
 	outPathInput, err := readPromptLine(reader, "Output file path (default: packed.png): ")
 	if err != nil {
 		return cancelledByEOF()
@@ -592,7 +568,6 @@ func runInteractive(reader *bufio.Reader) int {
 		outPath += ".png"
 	}
 
-	// Determine output size
 	outW, outH, sizeErr := detectOutputSize(sources)
 	if sizeErr != nil {
 		logging.Errorf("%v", sizeErr)
@@ -600,12 +575,15 @@ func runInteractive(reader *bufio.Reader) int {
 		toolkit.WaitForExit()
 		return toolkit.ExitFailure
 	}
+	if err := validateOutputDimensions(outW, outH); err != nil {
+		logging.Errorf("%v", err)
+		toolkit.WaitForExit()
+		return toolkit.ExitUsage
+	}
 	printSourceSizeWarnings(sources, outW, outH)
 
-	// Preview
 	printPreview(sources, outW, outH, outPath, labels)
 
-	// Confirm
 	confirmed, err := readPromptLine(reader, "\nProceed? (Y/n): ")
 	if err != nil {
 		return cancelledByEOF()
@@ -616,7 +594,6 @@ func runInteractive(reader *bufio.Reader) int {
 		return toolkit.ExitSuccess
 	}
 
-	// Execute
 	if packErr := executePack(sources, outW, outH, outPath); packErr != nil {
 		toolkit.WaitForExit()
 		return toolkit.ExitFailure
@@ -624,10 +601,6 @@ func runInteractive(reader *bufio.Reader) int {
 	toolkit.WaitForExit()
 	return toolkit.ExitSuccess
 }
-
-// ============================================================
-// Utilities
-// ============================================================
 
 func formatSize(bytes int64) string {
 	const (
@@ -650,10 +623,6 @@ func formatSize(bytes int64) string {
 func formatPresetLabels(labels [4]string) string {
 	return fmt.Sprintf("R=%s, G=%s, B=%s, A=%s", labels[0], labels[1], labels[2], labels[3])
 }
-
-// ============================================================
-// Entry Point
-// ============================================================
 
 // Run executes the channel packer and returns its process exit code.
 func Run(args []string) int {
@@ -688,12 +657,12 @@ func Run(args []string) int {
 		return toolkit.ExitUsage
 	}
 
-	// If no channel flags provided, run interactive mode
+	reader := toolkit.Input()
+
 	if redSpec == "" && greenSpec == "" && blueSpec == "" && alphaSpec == "" && !ciMode {
-		return runInteractive(stdinReader)
+		return runInteractive(reader)
 	}
 
-	// CLI mode
 	sources := [4]channelSource{
 		parseSourceSpec(redSpec, defaultFills[0], "R"),
 		parseSourceSpec(greenSpec, defaultFills[1], "G"),
@@ -701,7 +670,6 @@ func Run(args []string) int {
 		parseSourceSpec(alphaSpec, defaultFills[3], "A"),
 	}
 
-	// Validate source files exist
 	for ci := 0; ci < 4; ci++ {
 		if sources[ci].FilePath != "" {
 			if _, err := os.Stat(sources[ci].FilePath); err != nil {
@@ -711,7 +679,6 @@ func Run(args []string) int {
 		}
 	}
 
-	// Determine output size
 	var outW, outH int
 	if sizeSpec != "" {
 		parts := strings.SplitN(strings.ToLower(sizeSpec), "x", 2)
@@ -725,8 +692,9 @@ func Run(args []string) int {
 			logging.Errorf("invalid size values; width and height must be positive integers")
 			return toolkit.ExitFailure
 		}
-		if w > 16384 || h > 16384 {
-			logging.Warnf("texture dimensions exceed 16384; this will require significant memory")
+		if err := validateOutputDimensions(w, h); err != nil {
+			logging.Errorf("%v", err)
+			return toolkit.ExitUsage
 		}
 		outW, outH = w, h
 	} else {
@@ -735,15 +703,17 @@ func Run(args []string) int {
 			logging.Errorf("%v; use -size WxH to specify output dimensions", err)
 			return toolkit.ExitFailure
 		}
+		if err := validateOutputDimensions(w, h); err != nil {
+			logging.Errorf("%v", err)
+			return toolkit.ExitUsage
+		}
 		outW, outH = w, h
 	}
 
-	// Ensure .png extension
 	if !strings.HasSuffix(strings.ToLower(outPath), ".png") {
 		outPath += ".png"
 	}
 
-	// Resolve preset labels for preview
 	labels := channelLabels
 	for _, p := range presets {
 		if p.name == presetName {
@@ -752,7 +722,6 @@ func Run(args []string) int {
 		}
 	}
 
-	// Preview
 	printSourceSizeWarnings(sources, outW, outH)
 	printPreview(sources, outW, outH, outPath, labels)
 
@@ -761,9 +730,8 @@ func Run(args []string) int {
 		return toolkit.ExitSuccess
 	}
 
-	// Confirm in non-CI mode
 	if !ciMode {
-		confirmed, err := readPromptLine(stdinReader, "\nProceed? (Y/n): ")
+		confirmed, err := readPromptLine(reader, "\nProceed? (Y/n): ")
 		if err != nil {
 			return cancelledByEOF()
 		}

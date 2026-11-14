@@ -31,7 +31,7 @@ func writeUnityProjectFixture(t *testing.T) string {
 
 func TestResolveProjectRootExplicitPath(t *testing.T) {
 	root := writeUnityProjectFixture(t)
-	result, err := resolveProjectRoot(root)
+	result, err := resolveProjectRoot(root, "")
 	if err != nil {
 		t.Fatalf("explicit project root rejected: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestResolveProjectRootExplicitPath(t *testing.T) {
 
 func TestResolveProjectRootInvalidExplicitPathFailsClosed(t *testing.T) {
 	root := writeUnityProjectFixture(t)
-	_, err := resolveProjectRoot(filepath.Join(root, "missing"))
+	_, err := resolveProjectRoot(filepath.Join(root, "missing"), "")
 	if err == nil {
 		t.Fatalf("a missing --project path must fail")
 	}
@@ -60,7 +60,7 @@ func TestResolveProjectRootInvalidExplicitPathFailsClosed(t *testing.T) {
 // P0 guard: an executable-directory fallback must never drive a destructive,
 // non-interactive cleanup.
 func TestGuardDestructiveRunRefusesCIFallback(t *testing.T) {
-	fallback := projectroot.Result{Root: `/repo/UnityStarter`, Origin: projectroot.OriginExecutableFallback}
+	fallback := projectroot.Result{Root: `ProjectA`, Origin: projectroot.OriginExecutableFallback}
 
 	for _, c := range []struct {
 		name                string
@@ -82,7 +82,7 @@ func TestGuardDestructiveRunRefusesCIFallback(t *testing.T) {
 }
 
 func TestGuardDestructiveRunAllowsDryRunAndInteractive(t *testing.T) {
-	fallback := projectroot.Result{Root: `/repo/UnityStarter`, Origin: projectroot.OriginExecutableFallback}
+	fallback := projectroot.Result{Root: `ProjectA`, Origin: projectroot.OriginExecutableFallback}
 
 	if err := guardDestructiveRun(fallback, true, true, false, false); err != nil {
 		t.Fatalf("a --dry-run preview of a fallback root must be allowed: %v", err)
@@ -90,7 +90,7 @@ func TestGuardDestructiveRunAllowsDryRunAndInteractive(t *testing.T) {
 	if err := guardDestructiveRun(fallback, false, false, true, true); err != nil {
 		t.Fatalf("an interactive session may proceed to the CLEAN confirmation: %v", err)
 	}
-	if err := guardDestructiveRun(projectroot.Result{Root: `/repo/UnityStarter`, Origin: projectroot.OriginExplicit}, false, true, false, false); err != nil {
+	if err := guardDestructiveRun(projectroot.Result{Root: `ProjectA`, Origin: projectroot.OriginExplicit}, false, true, false, false); err != nil {
 		t.Fatalf("an explicit --project root must never be refused: %v", err)
 	}
 }

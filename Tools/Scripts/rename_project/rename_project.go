@@ -1,9 +1,7 @@
 package rename_project
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,12 +18,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"cyclonegames.tools/scripts/internal/logging"
+	"cyclonegames.tools/scripts/internal/projectlayout"
 	"cyclonegames.tools/scripts/internal/projectroot"
+	"cyclonegames.tools/scripts/internal/recovery"
+	"cyclonegames.tools/scripts/internal/safefs"
 	"cyclonegames.tools/scripts/internal/term"
+	"cyclonegames.tools/scripts/internal/toolenv"
 	"cyclonegames.tools/scripts/internal/toolkit"
 )
 
@@ -34,15 +35,14 @@ import (
 // ============================================================
 
 const (
-	stateFileName                 = ".rename_project.json"
 	renameStateSchemaVersion      = 1
-	backupDirName                 = ".rename_backup"
-	projectLockDirName            = ".rename_project.lock"
 	projectLockOwnerFileName      = "owner.json"
 	maxBackupCount                = 5
-	templateIdentityRegistryPath  = "ProjectSettings/TemplateIdentityRegistry.json"
 	templateIdentitySchemaVersion = 1
 	transactionJournalVersion     = 3
+
+	maximumReadBytes           = 64 * 1024 * 1024
+	maximumEditorEvidenceBytes = 64 * 1024
 )
 
 var projectTokenPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -85,11 +85,68 @@ var excludedDirs = map[string]bool{
 	"DOTween":      true,
 }
 
-// Global stdin reader to avoid multiple buffered readers competing for stdin
-var stdinReader *bufio.Reader
+// activeLayout holds the resolved structure contract for the current run; the
+// default describes a standard Unity project until --layout is applied.
+var activeLayout = projectlayout.Default()
 
-func init() {
-	stdinReader = bufio.NewReader(os.Stdin)
+// volumeFacts caches the measured case and Unicode behavior of the active
+// project volume so path comparisons never infer semantics from the host OS.
+var volumeFacts safefs.Facts
+
+// buildLeaseHeld probes the OS lease. Keeping it behind a variable lets the
+// safety gate be exercised without a live lock holder.
+var buildLeaseHeld = recovery.HeldLock
+
+func configureLayout(layout projectlayout.Layout) {
+	activeLayout = layout
+}
+
+func measureVolume(projectRoot string) {
+	volumeFacts = safefs.FactsFor(projectRoot)
+}
+
+func pathFacts() safefs.Facts {
+	if volumeFacts.Probed {
+		return volumeFacts
+	}
+	volumeFacts = safefs.FactsFor(os.TempDir())
+	return volumeFacts
+}
+
+// assertBoundedRegularFile rejects symlinks, non-regular files and files above
+// the read budget before any content is loaded into memory.
+func assertBoundedRegularFile(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing to read a non-regular path: %s", path)
+	}
+	if info.Size() < 0 || info.Size() > maximumReadBytes {
+		return nil, fmt.Errorf("file exceeds the %d byte read budget: %s", maximumReadBytes, path)
+	}
+	return info, nil
+}
+
+// readBoundedFile is the single bounded reader for project content.
+func readBoundedFile(path string) ([]byte, error) {
+	if _, err := assertBoundedRegularFile(path); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maximumReadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maximumReadBytes {
+		return nil, fmt.Errorf("file exceeded the %d byte read budget while reading: %s", maximumReadBytes, path)
+	}
+	return data, nil
 }
 
 // ============================================================
@@ -291,9 +348,12 @@ func (fileSystem osRenameFileSystem) ReadFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	if fileSystem.root != nil {
+		if _, err := assertBoundedRegularFile(path); err != nil {
+			return nil, err
+		}
 		return fileSystem.root.ReadFile(rootedPath)
 	}
-	return os.ReadFile(rootedPath)
+	return readBoundedFile(rootedPath)
 }
 
 func (fileSystem osRenameFileSystem) OpenFile(
@@ -405,7 +465,7 @@ func acquireProjectLock(
 	fileSystem renameFileSystem,
 	projectRoot string,
 ) (*projectLock, error) {
-	lockDirectory := filepath.Join(projectRoot, projectLockDirName)
+	lockDirectory := filepath.Join(projectRoot, filepath.FromSlash(activeLayout.RenameLockDir))
 	if err := fileSystem.Mkdir(lockDirectory, 0700); err != nil {
 		if os.IsExist(err) {
 			ownerPath := filepath.Join(lockDirectory, projectLockOwnerFileName)
@@ -466,66 +526,22 @@ func acquireProjectLock(
 	}, nil
 }
 
-// lockOwnerProbeTimeout bounds the external process-liveness probe so a wedged
-// tasklist can never hang lock acquisition.
-const lockOwnerProbeTimeout = 10 * time.Second
-
-// processIsLikelyRunning reports whether a PID probably belongs to a live
-// process. It is a liveness hint only: when the probe cannot prove absence
-// (unknown platform, probe failure), it conservatively reports "running" so
-// the lock error message never suggests deleting a possibly-live lock.
+// processIsLikelyRunning is a liveness hint: when the probe cannot prove
+// absence it reports "running" so no lock is removed while possibly live.
 func processIsLikelyRunning(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(context.Background(), lockOwnerProbeTimeout)
-		defer cancel()
-		command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
-		output, err := command.Output()
-		if err != nil {
-			return true
-		}
-		return strings.Contains(string(output), strconv.Itoa(pid))
-	}
-	process, err := os.FindProcess(pid)
+	alive, err := toolenv.ProcessAlive(pid)
 	if err != nil {
-		return false
-	}
-	err = process.Signal(syscall.Signal(0))
-	if err == nil || errors.Is(err, syscall.EPERM) {
 		return true
 	}
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-		return false
-	}
-	return true
+	return alive
 }
-
-// ============================================================
-// Workspace Safety (Unity Editor / Build pipeline coordination)
-// ============================================================
-
-const (
-	// editorInstanceRelativePath is Unity's per-project marker for "an editor
-	// has this exact project open"; it carries the editor process id.
-	editorInstanceRelativePath = "Library/EditorInstance.json"
-	// Build workspace lease files owned by the Assets/Build pipeline. A held
-	// lease means a Build workspace operation is in flight and BuildData
-	// identity writes would race it.
-	buildLeaseLockRelativePath     = "Temp/BuildPipeline/Workspace/lease.lock"
-	buildLeaseMetadataRelativePath = "Temp/BuildPipeline/Workspace/lease.json"
-	maxSafetyEvidenceBytes         = 64 * 1024
-)
 
 type editorInstanceReport struct {
 	ProcessID    int    `json:"process_id"`
 	UnityVersion string `json:"unity_version,omitempty"`
-}
-
-type buildLeaseMetadataReport struct {
-	PID       int    `json:"pid"`
-	Operation string `json:"operation,omitempty"`
 }
 
 // workspaceSafetyReport collects Unity Editor and Build-workspace activity that
@@ -536,33 +552,41 @@ type workspaceSafetyReport struct {
 }
 
 func assessWorkspaceSafety(projectRoot string) workspaceSafetyReport {
+	return assessWorkspaceSafetyWithLayout(projectRoot, activeLayout)
+}
+
+func assessWorkspaceSafetyWithLayout(projectRoot string, layout projectlayout.Layout) workspaceSafetyReport {
 	report := workspaceSafetyReport{}
-	checkUnityEditorActivity(projectRoot, &report)
-	checkBuildWorkspaceLease(projectRoot, &report)
+	checkUnityEditorActivity(projectRoot, layout, &report)
+	checkBuildWorkspaceLease(projectRoot, layout, &report)
 	return report
 }
 
-// checkUnityEditorActivity performs project-scoped editor detection: the
-// EditorInstance.json inside THIS project's Library folder is the only editor
-// signal examined, so editors open on other projects never block the rename.
-// A marker whose PID is gone is stale crash evidence and only warns.
-func checkUnityEditorActivity(projectRoot string, report *workspaceSafetyReport) {
-	editorPath := filepath.Join(projectRoot, filepath.FromSlash(editorInstanceRelativePath))
-	data, err := os.ReadFile(editorPath)
+// checkUnityEditorActivity performs project-scoped editor detection: only the
+// editor-instance marker declared by this project's layout is examined, so an
+// editor open on another project never blocks a rename. A marker whose PID is
+// gone is stale crash evidence and only warns.
+func checkUnityEditorActivity(projectRoot string, layout projectlayout.Layout, report *workspaceSafetyReport) {
+	editorPath, err := layout.Join(projectRoot, layout.EditorInstanceFile)
+	if err != nil {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot resolve the Unity Editor instance marker: %v", err))
+		return
+	}
+	data, err := readBoundedFile(editorPath)
 	if os.IsNotExist(err) {
 		return // No editor has this project open.
 	}
 	if err != nil {
-		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot inspect %s: %v", editorPath, err))
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot inspect the Unity Editor instance marker: %v", err))
 		return
 	}
-	if len(data) == 0 || len(data) > maxSafetyEvidenceBytes {
-		report.Blockers = append(report.Blockers, fmt.Sprintf("%s has an invalid size", editorPath))
+	if len(data) == 0 || len(data) > maximumEditorEvidenceBytes {
+		report.Blockers = append(report.Blockers, "the Unity Editor instance marker has an invalid size")
 		return
 	}
 	var instance editorInstanceReport
 	if jsonErr := json.Unmarshal(data, &instance); jsonErr != nil || instance.ProcessID <= 0 {
-		report.Blockers = append(report.Blockers, fmt.Sprintf("%s is malformed", editorPath))
+		report.Blockers = append(report.Blockers, "the Unity Editor instance marker is malformed")
 		return
 	}
 	if processIsLikelyRunning(instance.ProcessID) {
@@ -572,45 +596,28 @@ func checkUnityEditorActivity(projectRoot string, report *workspaceSafetyReport)
 		return
 	}
 	report.Warnings = append(report.Warnings, fmt.Sprintf(
-		"stale %s (PID %d is not running; the editor likely crashed and Library may hold recovery state)",
-		editorPath, instance.ProcessID))
+		"stale Unity Editor instance marker (PID %d is not running; the editor may have crashed and left recovery state)",
+		instance.ProcessID))
 }
 
-// checkBuildWorkspaceLease refuses renames while the Assets/Build pipeline owns
-// the shared Build workspace: BuildData identity writes must never race an
-// in-flight build transaction. An unprovable lease state fails closed.
-func checkBuildWorkspaceLease(projectRoot string, report *workspaceSafetyReport) {
-	leaseLockPath := filepath.Join(projectRoot, filepath.FromSlash(buildLeaseLockRelativePath))
-	lockInfo, lockErr := os.Lstat(leaseLockPath)
-	if os.IsNotExist(lockErr) {
-		return // No Build workspace holder.
-	}
-	if lockErr != nil {
-		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot inspect the Build workspace lease %s: %v", leaseLockPath, lockErr))
+// checkBuildWorkspaceLease probes the OS byte-range lease declared by the
+// layout. A lock left by a finished process is inert, so leftover metadata or a
+// PID can never block a rename; only a live holder refuses the run.
+func checkBuildWorkspaceLease(projectRoot string, layout projectlayout.Layout, report *workspaceSafetyReport) {
+	leasePath, err := layout.Join(projectRoot, layout.LeaseFile)
+	if err != nil {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot resolve the Build workspace lease path: %v", err))
 		return
 	}
-	if !lockInfo.Mode().IsRegular() || lockInfo.Mode()&os.ModeSymlink != 0 {
-		report.Blockers = append(report.Blockers, fmt.Sprintf("the Build workspace lease path is not a regular file: %s", leaseLockPath))
+	held, err := buildLeaseHeld(leasePath)
+	if err != nil {
+		report.Blockers = append(report.Blockers, fmt.Sprintf("cannot determine whether the Build workspace lease is held: %v", err))
 		return
 	}
-	leaseData, readErr := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(buildLeaseMetadataRelativePath)))
-	if readErr != nil || len(leaseData) == 0 || len(leaseData) > maxSafetyEvidenceBytes {
-		report.Blockers = append(report.Blockers, "a Build workspace lease exists but its metadata is unreadable; resolve the Build workspace (see Temp/BuildPipeline/Workspace) before renaming")
-		return
+	if held {
+		report.Blockers = append(report.Blockers,
+			"the Build workspace lease is held by a live process; wait for that operation to finish before renaming")
 	}
-	var lease buildLeaseMetadataReport
-	if jsonErr := json.Unmarshal(leaseData, &lease); jsonErr != nil || lease.PID <= 0 {
-		report.Blockers = append(report.Blockers, "the Build workspace lease metadata is malformed; resolve the Build workspace (see Temp/BuildPipeline/Workspace) before renaming")
-		return
-	}
-	if processIsLikelyRunning(lease.PID) {
-		report.Blockers = append(report.Blockers, fmt.Sprintf(
-			"the Build workspace lease is held by PID %d (%s); wait for that operation to finish before renaming",
-			lease.PID, lease.Operation))
-		return
-	}
-	report.Warnings = append(report.Warnings, fmt.Sprintf(
-		"stale Build workspace lease (holder PID %d is not running)", lease.PID))
 }
 
 func releaseProjectLock(fileSystem renameFileSystem, lock *projectLock) error {
@@ -805,8 +812,8 @@ func (l *Logger) Close() {
 // ============================================================
 
 func loadState(projectRoot string) (*RenameState, error) {
-	statePath := filepath.Join(projectRoot, stateFileName)
-	data, err := os.ReadFile(statePath)
+	statePath := filepath.Join(projectRoot, filepath.FromSlash(activeLayout.RenameStateFile))
+	data, err := readBoundedFile(statePath)
 	if err != nil {
 		return nil, err
 	}
@@ -814,8 +821,8 @@ func loadState(projectRoot string) (*RenameState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("invalid state file %s: %v", statePath, err)
 	}
-	// Schema version 0 is the legacy file written before versioning; it is compatible
-	// and is upgraded to the current version on the next successful rename.
+	// Schema version 0 predates versioned state files and is upgraded on the
+	// next successful rename.
 	if state.SchemaVersion != 0 && state.SchemaVersion != renameStateSchemaVersion {
 		return nil, fmt.Errorf("unsupported state schema version %d in %s", state.SchemaVersion, statePath)
 	}
@@ -826,17 +833,14 @@ func loadState(projectRoot string) (*RenameState, error) {
 // Project Detection
 // ============================================================
 
-// findProjectRoot scans for a Unity project root directory in the current or
-// immediate subdirectories, walking up the tree and beside the executable when
-// needed. It delegates to the shared resolver so every Unity-project tool agrees
-// on how the root is discovered (the original relative-path behaviour for the
-// current directory and its immediate subdirectories is preserved).
+// findProjectRoot delegates root discovery to the shared resolver so every
+// Unity-project tool agrees on the search order.
 func findProjectRoot() (projectroot.Result, error) {
 	return projectroot.Locate("")
 }
 
-// findMainProjectFolder intelligently detects the main project folder in Assets directory.
-// It uses multiple heuristics to identify the correct folder.
+// findMainProjectFolder scores the Assets subdirectories to pick the folder
+// that holds the project's scripts, assemblies and scenes.
 func findMainProjectFolder(projectRoot, productName string) (string, error) {
 	assetsPath := filepath.Join(projectRoot, "Assets")
 	entries, err := os.ReadDir(assetsPath)
@@ -963,7 +967,6 @@ func findMainProjectFolder(projectRoot, productName string) (string, error) {
 	return best.name, nil
 }
 
-// countAsmdefFiles counts .asmdef files recursively in a directory
 func countAsmdefFiles(dir string) int {
 	count := 0
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -1002,7 +1005,7 @@ func readUniqueTopLevelUnityYAMLScalar(content, fieldName string) (string, error
 // ProjectSettings. The state file is only a validated project-folder hint.
 func getCurrentProjectInfo(projectRoot string) (string, string, string, string, error) {
 	projectSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "ProjectSettings.asset")
-	projectSettingsBytes, err := os.ReadFile(projectSettingsPath)
+	projectSettingsBytes, err := readBoundedFile(projectSettingsPath)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("failed to read %s: %v", projectSettingsPath, err)
 	}
@@ -1032,21 +1035,15 @@ func getCurrentProjectInfo(projectRoot string) (string, string, string, string, 
 	state, stateErr := loadState(projectRoot)
 	if stateErr == nil && state.ProjectFolder != "" {
 		if err := validateExistingProjectFolder(projectRoot, state.ProjectFolder); err != nil {
-			return "", "", "", "", fmt.Errorf("invalid %s projectFolder: %v", stateFileName, err)
+			return "", "", "", "", fmt.Errorf("invalid projectFolder in the rename state file: %v", err)
 		}
 		if state.CompanyName != companyName || state.AppName != appName {
-			return "", "", "", "", fmt.Errorf(
-				"%s display identity does not match ProjectSettings.asset",
-				stateFileName,
-			)
+			return "", "", "", "", errors.New("rename state display identity does not match ProjectSettings.asset")
 		}
 		if state.ApplicationIdentifier != "" && state.ApplicationIdentifier != applicationIdentifier {
-			return "", "", "", "", fmt.Errorf(
-				"%s applicationIdentifier does not match ProjectSettings.asset",
-				stateFileName,
-			)
+			return "", "", "", "", errors.New("rename state applicationIdentifier does not match ProjectSettings.asset")
 		}
-		fmt.Printf("Loaded validated project folder from state file (%s)\n", stateFileName)
+		fmt.Println("Loaded validated project folder from the rename state file")
 		return state.ProjectFolder, companyName, appName, applicationIdentifier, nil
 	}
 	if stateErr != nil && !os.IsNotExist(stateErr) {
@@ -1058,7 +1055,7 @@ func getCurrentProjectInfo(projectRoot string) (string, string, string, string, 
 	if err != nil {
 		// Fallback: try to extract from EditorBuildSettings
 		editorBuildSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset")
-		editorBuildSettingsBytes, readErr := os.ReadFile(editorBuildSettingsPath)
+		editorBuildSettingsBytes, readErr := readBoundedFile(editorBuildSettingsPath)
 		if readErr != nil {
 			return "", "", "", "", fmt.Errorf("auto-detection failed and fallback read error: %v", readErr)
 		}
@@ -1099,7 +1096,7 @@ func promptValidatedInput(
 		fmt.Printf("\nCurrent value: %s\n", currentValue)
 		fmt.Print("Enter new value (press Enter to keep current): ")
 
-		input, _ := stdinReader.ReadString('\n')
+		input, _ := toolkit.Input().ReadString('\n')
 		input = strings.TrimSpace(input)
 
 		if input == "" {
@@ -1123,11 +1120,8 @@ func validateProjectToken(value string) error {
 			"project name must start with a letter or underscore and contain only letters, numbers, and underscores",
 		)
 	}
-
-	upper := strings.ToUpper(value)
-	if upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" ||
-		regexp.MustCompile(`^(COM|LPT)[1-9]$`).MatchString(upper) {
-		return fmt.Errorf("project name is reserved by Windows")
+	if err := safefs.HostPathPolicy().ValidateComponent(value); err != nil {
+		return fmt.Errorf("project name is not valid on this host: %w", err)
 	}
 	return nil
 }
@@ -1390,15 +1384,39 @@ func resolveRegistryTargetPath(
 func loadTemplateIdentityRegistry(
 	projectRoot string,
 ) (*templateIdentityRegistrySnapshot, error) {
-	registryPath := filepath.Join(projectRoot, filepath.FromSlash(templateIdentityRegistryPath))
-	info, err := os.Lstat(registryPath)
+	registryPath, err := activeLayout.Join(projectRoot, activeLayout.IdentityRegistry)
 	if err != nil {
-		return nil, fmt.Errorf("template identity registry is required: %s: %v", registryPath, err)
+		return nil, fmt.Errorf("template identity registry path is invalid: %w", err)
+	}
+	canonicalProject, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to canonicalize Unity project root: %v", err)
+	}
+	canonicalProject, err = filepath.Abs(canonicalProject)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve canonical Unity project root: %v", err)
+	}
+	canonicalProject = filepath.Clean(canonicalProject)
+
+	info, err := os.Lstat(registryPath)
+	if os.IsNotExist(err) {
+		// The registry is optional. When it is absent, only the identity targets
+		// it declares are skipped; every other rename operation still runs.
+		return &templateIdentityRegistrySnapshot{
+			Registry:                &templateIdentityRegistry{},
+			WorkspaceRoot:           canonicalProject,
+			ContentSHA256:           "",
+			ExternalWriteTargets:    map[string]string{},
+			DeclaredExternalTargets: map[string]string{},
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot inspect template identity registry: %v", err)
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("template identity registry must be a regular non-symlink file: %s", registryPath)
 	}
-	content, err := os.ReadFile(registryPath)
+	content, err := readBoundedFile(registryPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read template identity registry: %v", err)
 	}
@@ -1423,10 +1441,6 @@ func loadTemplateIdentityRegistry(
 	canonicalWorkspace, err := filepath.EvalSymlinks(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to canonicalize registry workspaceRoot: %v", err)
-	}
-	canonicalProject, err := filepath.EvalSymlinks(projectRoot)
-	if err != nil {
-		return nil, fmt.Errorf("failed to canonicalize Unity project root: %v", err)
 	}
 	if err := ensurePathInsideProject(canonicalWorkspace, canonicalProject); err != nil {
 		return nil, fmt.Errorf("registry workspaceRoot does not contain the Unity project: %v", err)
@@ -1513,7 +1527,7 @@ func getRegisteredUnityScriptGUID(scriptPath string) (string, error) {
 	if !metaInfo.Mode().IsRegular() || metaInfo.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("registered Unity script meta must be a regular non-symlink file: %s", metaPath)
 	}
-	content, err := os.ReadFile(metaPath)
+	content, err := readBoundedFile(metaPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read registered Unity script meta file %s: %v", metaPath, err)
 	}
@@ -1570,8 +1584,8 @@ func fileContainsBytes(path string, needle []byte) (bool, error) {
 	}
 }
 
-// findBuildDataAssets identifies BuildData assets by their serialized MonoScript GUID instead
-// of relying on a project-specific asset path or file name.
+// findBuildDataAssets locates BuildData assets through their serialized
+// MonoScript GUID so detection does not depend on a fixed asset name.
 func findBuildDataAssets(projectRoot, scriptGUID string) ([]string, error) {
 	if scriptGUID == "" {
 		return nil, nil
@@ -1604,7 +1618,7 @@ func findBuildDataAssets(projectRoot, scriptGUID string) ([]string, error) {
 			return nil
 		}
 
-		content, readErr := os.ReadFile(path)
+		content, readErr := readBoundedFile(path)
 		if readErr != nil {
 			return fmt.Errorf("failed to read candidate BuildData asset %s: %v", path, readErr)
 		}
@@ -1773,7 +1787,7 @@ func planBuildDataAssetUpdates(
 
 	updates := make([]buildDataAssetUpdate, 0, len(assetPaths))
 	for _, assetPath := range assetPaths {
-		content, readErr := os.ReadFile(assetPath)
+		content, readErr := readBoundedFile(assetPath)
 		if readErr != nil {
 			return nil, fmt.Errorf("failed to read BuildData asset %s: %v", assetPath, readErr)
 		}
@@ -2248,7 +2262,7 @@ func planTemplateIdentityTargets(
 				}
 			}
 		case "jsonStringOccurrences", "iniValue":
-			content, err := os.ReadFile(targetPath)
+			content, err := readBoundedFile(targetPath)
 			if err != nil {
 				return fmt.Errorf("failed to read template identity target %q: %v", target.ID, err)
 			}
@@ -2302,7 +2316,6 @@ func planTemplateIdentityTargets(
 // Backup
 // ============================================================
 
-// cleanupOldBackups keeps only the most recent backups
 func cleanupOldBackups(fileSystem renameFileSystem, backupBaseDir string) {
 	entries, err := fileSystem.ReadDir(backupBaseDir)
 	if err != nil {
@@ -2344,25 +2357,22 @@ func projectRelativePath(projectRoot, path string) string {
 
 func normalizedPathKey(path string) string {
 	cleanPath := filepath.Clean(path)
-	if runtime.GOOS == "windows" {
+	if !pathFacts().CaseSensitive {
 		return strings.ToLower(cleanPath)
 	}
 	return cleanPath
 }
 
 func pathsEqual(left, right string) bool {
-	return normalizedPathKey(left) == normalizedPathKey(right)
+	return safefs.EqualPath(left, right, pathFacts())
 }
 
 func ensurePathInsideProject(projectRoot, path string) error {
-	relative, err := filepath.Rel(projectRoot, path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve path %s: %v", path, err)
+	facts := pathFacts()
+	if safefs.EqualPath(projectRoot, path, facts) || safefs.IsWithin(projectRoot, path, facts) {
+		return nil
 	}
-	if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
-		return fmt.Errorf("path escaped the Unity project root: %s", path)
-	}
-	return nil
+	return fmt.Errorf("path escaped the Unity project root: %s", path)
 }
 
 func ensurePlannedWriteTarget(plan *RenamePlan, target string) error {
@@ -2403,7 +2413,7 @@ func appendPlannedWrite(
 			return fmt.Errorf("rewrite target is not a regular file: %s", target)
 		}
 		var readErr error
-		beforeContent, readErr = os.ReadFile(target)
+		beforeContent, readErr = readBoundedFile(target)
 		if readErr != nil {
 			return fmt.Errorf("failed to read rewrite target %s: %v", target, readErr)
 		}
@@ -2501,7 +2511,7 @@ func appendPlannedMove(
 		Details:       append([]string(nil), details...),
 	}
 	if !sourceInfo.IsDir() {
-		sourceContent, readErr := os.ReadFile(source)
+		sourceContent, readErr := readBoundedFile(source)
 		if readErr != nil {
 			return fmt.Errorf("failed to read rename source %s: %v", source, readErr)
 		}
@@ -2544,11 +2554,8 @@ func collectAsmdefPaths(root string) ([]string, error) {
 }
 
 func isPathInside(path, parent string) bool {
-	relative, err := filepath.Rel(parent, path)
-	if err != nil {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+	facts := pathFacts()
+	return safefs.EqualPath(path, parent, facts) || safefs.IsWithin(parent, path, facts)
 }
 
 func replaceUniqueProjectSettingsScalar(
@@ -2890,6 +2897,16 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 		return nil, fmt.Errorf("failed to resolve canonical Unity project root: %v", err)
 	}
 	absoluteRoot = filepath.Clean(absoluteRoot)
+	policy := safefs.HostPathPolicy()
+	if err := policy.ValidateAbsolute(absoluteRoot); err != nil {
+		return nil, fmt.Errorf("Unity project path is invalid: %w", err)
+	}
+	if err := policy.EnsureWritable(absoluteRoot); err != nil {
+		return nil, fmt.Errorf("Unity project root is not writable: %w", err)
+	}
+	if err := policy.Budget(filepath.Join(absoluteRoot, "Assets"), request.NewProjectName+".meta"); err != nil {
+		return nil, fmt.Errorf("new project folder path would exceed the host limit: %w", err)
+	}
 	if _, err := os.Stat(filepath.Join(absoluteRoot, "Assets")); err != nil {
 		return nil, fmt.Errorf("Unity project Assets directory is unavailable: %v", err)
 	}
@@ -2921,7 +2938,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 			plan.Warnings = append(
 				plan.Warnings,
 				fmt.Sprintf(
-					"Preserving legacy application identifier %q unchanged; choose a new lowercase identifier to satisfy current Android/iOS portability policy (%v).",
+					"Preserving application identifier %q unchanged; choose a new lowercase identifier to satisfy current Android/iOS portability policy (%v).",
 					request.NewApplicationIdentifier,
 					identifierErr,
 				),
@@ -2948,7 +2965,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 			return nil, fmt.Errorf("failed to inspect project asmdefs: %v", err)
 		}
 		for _, path := range internalAsmdefs {
-			content, readErr := os.ReadFile(path)
+			content, readErr := readBoundedFile(path)
 			if readErr != nil {
 				return nil, fmt.Errorf("failed to read asmdef %s: %v", path, readErr)
 			}
@@ -3004,7 +3021,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 			if isPathInside(path, oldProjectFolder) {
 				continue
 			}
-			content, readErr := os.ReadFile(path)
+			content, readErr := readBoundedFile(path)
 			if readErr != nil {
 				return nil, fmt.Errorf("failed to read external asmdef %s: %v", path, readErr)
 			}
@@ -3059,7 +3076,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 		"ProjectSettings",
 		"ProjectSettings.asset",
 	)
-	projectSettingsContent, err := os.ReadFile(projectSettingsPath)
+	projectSettingsContent, err := readBoundedFile(projectSettingsPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ProjectSettings.asset: %v", err)
 	}
@@ -3085,7 +3102,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 			"ProjectSettings",
 			"EditorBuildSettings.asset",
 		)
-		content, err := os.ReadFile(editorBuildSettingsPath)
+		content, err := readBoundedFile(editorBuildSettingsPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read EditorBuildSettings.asset: %v", err)
 		}
@@ -3134,7 +3151,7 @@ func buildRenamePlan(projectRoot string, request RenameRequest) (*RenamePlan, er
 	}
 	if err := appendPlannedWrite(
 		plan,
-		filepath.Join(absoluteRoot, stateFileName),
+		filepath.Join(absoluteRoot, filepath.FromSlash(activeLayout.RenameStateFile)),
 		stateContent,
 		0644,
 		true,
@@ -3358,7 +3375,7 @@ func createTransactionJournal(
 	fileSystem renameFileSystem,
 	plan *RenamePlan,
 ) (*transactionJournal, string, string, error) {
-	backupBase := filepath.Join(plan.ProjectRoot, backupDirName)
+	backupBase := filepath.Join(plan.ProjectRoot, filepath.FromSlash(activeLayout.RenameBackupDir))
 	if info, err := fileSystem.Lstat(backupBase); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return nil, "", "", fmt.Errorf("rename backup root must be a real directory: %s", backupBase)
@@ -4384,7 +4401,7 @@ func executeRenamePlan(
 		}
 		return transactionDirectory, err
 	}
-	cleanupOldBackups(fileSystem, filepath.Join(plan.ProjectRoot, backupDirName))
+	cleanupOldBackups(fileSystem, filepath.Join(plan.ProjectRoot, filepath.FromSlash(activeLayout.RenameBackupDir)))
 	return transactionDirectory, nil
 }
 
@@ -4430,8 +4447,14 @@ func validatePinnedExternalTargets(
 	projectRoot string,
 	journal *transactionJournal,
 ) (map[string]string, error) {
-	if !sha256HexPattern.MatchString(journal.TemplateIdentityRegistrySHA256) {
-		return nil, fmt.Errorf("transaction has no valid pinned template identity registry SHA-256")
+	// An empty digest is valid only for projects without an identity registry;
+	// such a transaction must not declare any external write target.
+	if journal.TemplateIdentityRegistrySHA256 != "" &&
+		!sha256HexPattern.MatchString(journal.TemplateIdentityRegistrySHA256) {
+		return nil, fmt.Errorf("transaction has an invalid pinned template identity registry SHA-256")
+	}
+	if journal.TemplateIdentityRegistrySHA256 == "" && len(journal.ApprovedExternalTargets) != 0 {
+		return nil, fmt.Errorf("transaction declares external targets without an identity registry")
 	}
 	if journal.RegistryWorkspaceRoot == "" ||
 		!filepath.IsAbs(journal.RegistryWorkspaceRoot) ||
@@ -4506,12 +4529,12 @@ func validateTransactionJournal(
 	case 2:
 		if requiresRecovery {
 			return fmt.Errorf(
-				"legacy incomplete rename transaction has no pinned registry digest; automatic recovery is refused",
+				"incomplete rename transaction has no pinned registry digest; automatic recovery is refused",
 			)
 		}
 		identitySnapshot, err := loadTemplateIdentityRegistry(projectRoot)
 		if err != nil {
-			return fmt.Errorf("cannot validate legacy terminal transaction without the identity registry: %v", err)
+			return fmt.Errorf("cannot validate a terminal rename transaction without the identity registry: %v", err)
 		}
 		workspaceRoot = identitySnapshot.WorkspaceRoot
 		externalTargets = identitySnapshot.ExternalWriteTargets
@@ -4553,7 +4576,7 @@ func validateTransactionJournal(
 
 	transactionDirectory := filepath.Dir(journalPath)
 	transactionToken := filepath.Base(transactionDirectory)
-	backupRoot := filepath.Join(projectRoot, backupDirName)
+	backupRoot := filepath.Join(projectRoot, filepath.FromSlash(activeLayout.RenameBackupDir))
 	if err := ensurePathInsideRootWithoutSymlinks(fileSystem, backupRoot, transactionDirectory); err != nil {
 		return fmt.Errorf("unsafe transaction directory: %v", err)
 	}
@@ -4720,7 +4743,7 @@ func findIncompleteTransactionWithFS(
 	fileSystem renameFileSystem,
 	projectRoot string,
 ) (string, *transactionJournal, error) {
-	backupRoot := filepath.Join(projectRoot, backupDirName)
+	backupRoot := filepath.Join(projectRoot, filepath.FromSlash(activeLayout.RenameBackupDir))
 	backupInfo, lstatErr := fileSystem.Lstat(backupRoot)
 	if os.IsNotExist(lstatErr) {
 		return "", nil, nil
@@ -4809,8 +4832,14 @@ func clearScreen() {
 // ============================================================
 
 type renameOptions struct {
-	dryRun  bool
-	project string
+	dryRun      bool
+	project     string
+	layout      string
+	company     string
+	product     string
+	projectName string
+	appID       string
+	yes         bool
 }
 
 func parseRenameOptions(args []string) (renameOptions, error) {
@@ -4819,6 +4848,12 @@ func parseRenameOptions(args []string) (renameOptions, error) {
 	options := renameOptions{}
 	flags.BoolVar(&options.dryRun, "dry-run", false, "validate and print the complete plan without writing files")
 	flags.StringVar(&options.project, "project", "", "Unity project root to rename (default: auto-detect from the working and executable directories)")
+	flags.StringVar(&options.layout, "layout", "", "explicit path to a project layout override document")
+	flags.StringVar(&options.company, "company", "", "new company name written to PlayerSettings.companyName")
+	flags.StringVar(&options.product, "product", "", "new application name written to PlayerSettings.productName")
+	flags.StringVar(&options.projectName, "project-name", "", "new Assets folder token")
+	flags.StringVar(&options.appID, "app-id", "", "new Android/iOS application identifier")
+	flags.BoolVar(&options.yes, "yes", false, "confirm the transaction without an interactive prompt")
 	if err := flags.Parse(args); err != nil {
 		return renameOptions{}, err
 	}
@@ -4829,9 +4864,67 @@ func parseRenameOptions(args []string) (renameOptions, error) {
 }
 
 func printRenameUsage() {
-	fmt.Println("Usage: rename_project [--dry-run] [--project <path>]")
-	fmt.Println("  --dry-run         Validate and print the complete plan without writing files.")
-	fmt.Println("  --project <path>  Unity project root to rename (default: auto-detect from the working and executable directories).")
+	fmt.Println("Usage: rename_project [options]")
+	fmt.Println("  --dry-run                 Validate and print the plan without writing files.")
+	fmt.Println("  --project <path>          Unity project root to rename (default: auto-detect).")
+	fmt.Println("  --layout <path>           Explicit project layout override document.")
+	fmt.Println("  --company <value>         New company name.")
+	fmt.Println("  --product <value>         New application (product) name.")
+	fmt.Println("  --project-name <value>    New project folder token.")
+	fmt.Println("  --app-id <value>          New Android/iOS application identifier.")
+	fmt.Println("  --yes                     Confirm the transaction without an interactive prompt.")
+	fmt.Println("Non-interactive runs require --company, --product, --project-name and --app-id;")
+	fmt.Println("a non-dry-run commit additionally requires --yes.")
+}
+
+// loadRenameLayout resolves the layout used for root discovery. An explicit
+// override is authoritative; otherwise defaults apply until the root is known.
+func loadRenameLayout(explicit string) (projectlayout.Layout, error) {
+	if explicit != "" {
+		return projectlayout.Load("", explicit)
+	}
+	return projectlayout.Default(), nil
+}
+
+// nonInteractiveInputError rejects a non-interactive invocation that cannot
+// obtain the four identity values, or a commit confirmation, from stdin.
+func nonInteractiveInputError(options renameOptions) error {
+	if term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) {
+		return nil
+	}
+	if options.company == "" || options.product == "" || options.projectName == "" || options.appID == "" {
+		return errors.New("non-interactive runs require --company, --product, --project-name and --app-id")
+	}
+	if !options.dryRun && !options.yes {
+		return errors.New("a non-interactive commit additionally requires --yes")
+	}
+	return nil
+}
+
+func identityValuesEqual(request RenameRequest) bool {
+	return request.NewProjectName == request.OldProjectName &&
+		request.NewCompanyName == request.OldCompanyName &&
+		request.NewAppName == request.OldAppName &&
+		request.NewApplicationIdentifier == request.OldApplicationIdentifier
+}
+
+// resolveIdentityValue takes an explicit flag value when supplied and otherwise
+// prompts interactively, validating either source before it is accepted.
+func resolveIdentityValue(
+	explicit string,
+	step int,
+	label,
+	description,
+	current string,
+	validate func(string) error,
+) (string, error) {
+	if explicit == "" {
+		return promptValidatedInput(step, label, description, current, validate), nil
+	}
+	if err := validate(explicit); err != nil {
+		return "", fmt.Errorf("invalid %s value %q: %w", label, explicit, err)
+	}
+	return explicit, nil
 }
 
 func runRenameTool(args []string) (exitCode int) {
@@ -4845,7 +4938,18 @@ func runRenameTool(args []string) (exitCode int) {
 		printRenameUsage()
 		return toolkit.ExitUsage
 	}
+	if err := nonInteractiveInputError(options); err != nil {
+		logging.Errorf("%v", err)
+		printRenameUsage()
+		return toolkit.ExitUsage
+	}
 	dryRun := options.dryRun
+
+	layout, err := loadRenameLayout(options.layout)
+	if err != nil {
+		logging.Errorf("Project layout rejected: %v", err)
+		return toolkit.ExitFailure
+	}
 
 	var resolution projectroot.Result
 	if options.project != "" {
@@ -4870,16 +4974,28 @@ func runRenameTool(args []string) (exitCode int) {
 			return toolkit.ExitFailure
 		}
 	}
-	projectRoot := resolution.Root
-	projectRoot, err = filepath.Abs(projectRoot)
+	projectRoot, err := filepath.Abs(resolution.Root)
 	if err != nil {
 		logging.Errorf("cannot resolve Unity project root: %v", err)
 		return toolkit.ExitFailure
 	}
 	projectRoot = filepath.Clean(projectRoot)
+	if options.layout == "" {
+		layout, err = projectlayout.Load(projectRoot, "")
+		if err != nil {
+			logging.Errorf("Project layout rejected: %v", err)
+			return toolkit.ExitFailure
+		}
+	}
+	configureLayout(layout)
+	measureVolume(projectRoot)
+	if err := safefs.HostPathPolicy().ValidateAbsolute(projectRoot); err != nil {
+		logging.Errorf("Project path rejected: %v", err)
+		return toolkit.ExitFailure
+	}
 	identitySnapshot, err := loadTemplateIdentityRegistry(projectRoot)
 	if err != nil {
-		fmt.Println("Error:", err)
+		logging.Errorf("cannot load the template identity registry: %v", err)
 		return toolkit.ExitFailure
 	}
 	fileSystemRoot := identitySnapshot.WorkspaceRoot
@@ -4889,7 +5005,7 @@ func runRenameTool(args []string) (exitCode int) {
 
 	fileSystem, err := newRootedRenameFileSystem(fileSystemRoot)
 	if err != nil {
-		logging.Errorf("cannot open rooted template workspace filesystem: %v", err)
+		logging.Errorf("cannot open the rooted project filesystem: %v", err)
 		return toolkit.ExitFailure
 	}
 	projectRoot, err = filepath.EvalSymlinks(projectRoot)
@@ -4907,7 +5023,7 @@ func runRenameTool(args []string) (exitCode int) {
 	projectRoot = filepath.Clean(projectRoot)
 	if err := ensurePathInsideProject(fileSystem.rootPath, projectRoot); err != nil {
 		_ = fileSystem.Close()
-		logging.Errorf("unity project is outside the template workspace: %v", err)
+		logging.Errorf("Unity project is outside the resolved workspace: %v", err)
 		return toolkit.ExitFailure
 	}
 	fmt.Printf("Found Unity project root at: %s (source: %s)\n", projectRoot, resolution.Origin)
@@ -4933,7 +5049,7 @@ func runRenameTool(args []string) (exitCode int) {
 		}
 	}()
 
-	safety := assessWorkspaceSafety(projectRoot)
+	safety := assessWorkspaceSafetyWithLayout(projectRoot, layout)
 	var log *Logger
 	logPath := filepath.Join(projectRoot, "rename_project.log")
 	if dryRun {
@@ -4991,43 +5107,48 @@ func runRenameTool(args []string) (exitCode int) {
 	log.Printf("  App Name:       %s\n", oldAppName)
 	log.Printf("  App Identifier: %s\n", oldApplicationIdentifier)
 
-	newProjectName := promptValidatedInput(
+	newProjectName, valueErr := resolveIdentityValue(
+		options.projectName,
 		1,
 		"Project Name",
 		"The Assets folder token must start with a letter or underscore and contain only ASCII letters, numbers, and underscores.",
 		oldName,
 		validateProjectToken,
 	)
-	newCompanyName := promptValidatedInput(
-		2,
-		"Company Name",
-		"Display name written to PlayerSettings.companyName. Spaces and Unicode are allowed.",
-		oldCompanyName,
-		func(value string) error {
-			return validateDisplayName("company name", value)
-		},
-	)
-	newAppName := promptValidatedInput(
-		3,
-		"Application Name",
-		"Display name written to PlayerSettings.productName. Spaces and Unicode are allowed.",
-		oldAppName,
-		func(value string) error {
-			return validateDisplayName("application name", value)
-		},
-	)
-	newApplicationIdentifier := promptValidatedInput(
-		4,
-		"Application Identifier",
-		"Android/iOS-compatible identifier written to every PlayerSettings applicationIdentifier entry. Use dot-separated segments that start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters or digits (for example, com.example.game2).",
-		oldApplicationIdentifier,
-		validateApplicationIdentifier,
-	)
-
-	if newProjectName == oldName && newCompanyName == oldCompanyName &&
-		newAppName == oldAppName && newApplicationIdentifier == oldApplicationIdentifier {
-		log.Println("\nNo changes needed - all values are unchanged.")
-		return toolkit.ExitSuccess
+	var newCompanyName, newAppName, newApplicationIdentifier string
+	if valueErr == nil {
+		newCompanyName, valueErr = resolveIdentityValue(
+			options.company,
+			2,
+			"Company Name",
+			"Display name written to PlayerSettings.companyName. Spaces and Unicode are allowed.",
+			oldCompanyName,
+			func(value string) error { return validateDisplayName("company name", value) },
+		)
+	}
+	if valueErr == nil {
+		newAppName, valueErr = resolveIdentityValue(
+			options.product,
+			3,
+			"Application Name",
+			"Display name written to PlayerSettings.productName. Spaces and Unicode are allowed.",
+			oldAppName,
+			func(value string) error { return validateDisplayName("application name", value) },
+		)
+	}
+	if valueErr == nil {
+		newApplicationIdentifier, valueErr = resolveIdentityValue(
+			options.appID,
+			4,
+			"Application Identifier",
+			"Android/iOS-compatible identifier written to every PlayerSettings applicationIdentifier entry. Use dot-separated segments that start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters or digits (for example, com.example.game2).",
+			oldApplicationIdentifier,
+			validateApplicationIdentifier,
+		)
+	}
+	if valueErr != nil {
+		log.Printf("Error: %v\n", valueErr)
+		return toolkit.ExitUsage
 	}
 
 	request := RenameRequest{
@@ -5039,6 +5160,10 @@ func runRenameTool(args []string) (exitCode int) {
 		NewAppName:               newAppName,
 		OldApplicationIdentifier: oldApplicationIdentifier,
 		NewApplicationIdentifier: newApplicationIdentifier,
+	}
+	if identityValuesEqual(request) {
+		log.Println("\nNo field changes were requested; provide new values with --company, --product, --project-name and --app-id.")
+		return toolkit.ExitUsage
 	}
 	plan, err := buildRenamePlan(projectRoot, request)
 	if err != nil {
@@ -5052,15 +5177,17 @@ func runRenameTool(args []string) (exitCode int) {
 		return toolkit.ExitSuccess
 	}
 
-	fmt.Print("\nProceed with this validated transaction? (y/N): ")
-	confirm, readErr := stdinReader.ReadString('\n')
-	if readErr != nil && strings.TrimSpace(confirm) == "" {
-		log.Println("\n[FAIL] Cancelled: input stream closed.")
-		return toolkit.ExitFailure
-	}
-	if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
-		log.Println("\nOperation cancelled by user.")
-		return toolkit.ExitSuccess
+	if !options.yes {
+		fmt.Print("\nProceed with this validated transaction? (y/N): ")
+		confirm, readErr := toolkit.Input().ReadString('\n')
+		if readErr != nil && strings.TrimSpace(confirm) == "" {
+			log.Println("\n[FAIL] Cancelled: input stream closed.")
+			return toolkit.ExitFailure
+		}
+		if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
+			log.Println("\nOperation cancelled by user.")
+			return toolkit.ExitSuccess
+		}
 	}
 
 	transactionDir, err := executeRenamePlan(fileSystem, plan, log)
@@ -5079,7 +5206,7 @@ func runRenameTool(args []string) (exitCode int) {
 	log.Printf("  App identifier: %s -> %s\n", oldApplicationIdentifier, newApplicationIdentifier)
 	log.Printf("  Transaction:    %s\n", transactionDir)
 	log.Printf("  Log:            %s\n", logPath)
-	log.Println("\nPlease open the project in Unity Editor and perform the documented validation steps.")
+	log.Println("\nOpen the project in the Unity Editor and verify the renamed identity.")
 	return toolkit.ExitSuccess
 }
 
