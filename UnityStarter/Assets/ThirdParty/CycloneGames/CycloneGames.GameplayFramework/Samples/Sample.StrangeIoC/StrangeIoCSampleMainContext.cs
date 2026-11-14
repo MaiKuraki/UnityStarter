@@ -1,7 +1,7 @@
 using strange.extensions.context.api;
 using strange.extensions.context.impl;
-using UnityEngine;
 using strange.extensions.signal.impl;
+using UnityEngine;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 
@@ -9,31 +9,44 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
 {
     public class StartGameSignal : Signal
     {
-
     }
+
     public class StrangeIoCSampleMainContext : MVCSContext
     {
-        const string StartGameCommand = "StartGame";
-        public StrangeIoCSampleMainContext(MonoBehaviour view, IWorldSettings worldSettings)
+        private readonly MonoBehaviour view;
+        private readonly WorldSettings worldSettings;
+
+        public StrangeIoCSampleMainContext(MonoBehaviour view, WorldSettings worldSettings)
             : base(view, ContextStartupFlags.MANUAL_MAPPING)
         {
-            this.worldSettingsInst = worldSettings;
+            if (worldSettings == null)
+            {
+                throw new System.InvalidOperationException(
+                    "StrangeIoCSampleMainContext requires WorldSettings.");
+            }
+
+            this.view = view;
+            this.worldSettings = worldSettings;
 
             Start();
         }
-
-        private IWorldSettings worldSettingsInst;
 
         protected override void mapBindings()
         {
             base.mapBindings();
 
+            injectionBinder.Bind<WorldSettings>().ToValue(worldSettings);
             injectionBinder.Bind<IUnityObjectSpawner>().To<StrangeIoCSampleObjectSpawner>().ToSingleton();
-            injectionBinder.Bind<IWorldSettings>().ToValue(worldSettingsInst);
-            IUnityObjectSpawner objectSpawner = injectionBinder.GetInstance<IUnityObjectSpawner>();
-            StrangeIoCSampleGameMode strangeIoCSampleGameMode = objectSpawner.Create(((WorldSettings)worldSettingsInst).GameModeClass) as StrangeIoCSampleGameMode;
-            injectionBinder.Bind<IGameMode>().ToValue(strangeIoCSampleGameMode);
 
+            // The world discovers scene Actors only through an explicit source, and creates them through an
+            // IActorLifetime rather than the container directly. Both are wired here so the container stays
+            // the composition root without leaking StrangeIoC types into the framework.
+            IUnityObjectSpawner objectSpawner = injectionBinder.GetInstance<IUnityObjectSpawner>();
+            var gameInstance = new GameInstance(
+                new StrangeIoCSampleActorLifetime(objectSpawner),
+                actorSource: new SceneWorldActorSource(view.gameObject.scene));
+
+            injectionBinder.Bind<GameInstance>().ToValue(gameInstance);
             injectionBinder.Bind<StartGameSignal>().ToSingleton();
             commandBinder.Bind<StartGameSignal>().To<StrangeIoCSampleLaunchCommand>();
         }
@@ -41,11 +54,7 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
         public override void Launch()
         {
             base.Launch();
-            var gameMode = injectionBinder.GetInstance<IGameMode>();
-            IUnityObjectSpawner objectSpawner = injectionBinder.GetInstance<IUnityObjectSpawner>();
-            ((StrangeIoCSampleGameMode)gameMode).Initialize(objectSpawner, worldSettingsInst);
-            var startGameSignal = injectionBinder.GetInstance<StartGameSignal>();
-            startGameSignal.Dispatch();
+            injectionBinder.GetInstance<StartGameSignal>().Dispatch();
         }
     }
 }

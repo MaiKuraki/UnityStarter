@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.GameplayFramework.Sample.StrangeIoC",
+    "rootNamespace": "",
+    "references": [
+        "StrangeIoC",
+        "UniTask",
+        "CycloneGames.Logging.Core",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime",
+        "CycloneGames.GameplayFramework.Core",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

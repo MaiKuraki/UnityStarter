@@ -3,18 +3,33 @@ using Cysharp.Threading.Tasks;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 
-public class StrangeIoCSampleLaunchCommand : Command
+namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
 {
-    [Inject] public IGameMode GameMode { get; set; }
-    public override void Execute()
+    public class StrangeIoCSampleLaunchCommand : Command
     {
-        Retain();
-        LaunchGameModeAsync(CancellationToken.None).Forget();
-    }
+        [Inject] public GameInstance GameInstance { get; set; }
 
-    async UniTask LaunchGameModeAsync(CancellationToken cancel)
-    {
-        await GameMode.LaunchGameModeAsync(cancel);
-        Release();
+        [Inject] public WorldSettings WorldSettings { get; set; }
+
+        public override void Execute()
+        {
+            Retain();
+            LaunchWorldAsync(CancellationToken.None).Forget();
+        }
+
+        private async UniTask LaunchWorldAsync(CancellationToken cancellation)
+        {
+            try
+            {
+                await GameInstance.StartWorldAsync(
+                    WorldSettings,
+                    WorldNetMode.Standalone,
+                    cancellationToken: cancellation);
+            }
+            finally
+            {
+                Release();
+            }
+        }
     }
 }
