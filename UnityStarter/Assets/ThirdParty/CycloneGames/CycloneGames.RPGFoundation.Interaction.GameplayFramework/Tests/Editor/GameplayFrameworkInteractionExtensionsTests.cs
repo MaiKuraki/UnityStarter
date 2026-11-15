@@ -59,8 +59,7 @@ namespace CycloneGames.RPGFoundation.Interaction.GameplayFramework.Tests.Editor
                 snapshot: out InteractionTargetSnapshot snapshot,
                 isAvailable: true,
                 allowDefaultAction: false,
-                enabledActionIds: enabledActions,
-                version: 6);
+                enabledActionIds: enabledActions);
 
             Assert.That(result, Is.True);
             Assert.That(snapshot.WorldId, Is.EqualTo(8));
@@ -70,7 +69,6 @@ namespace CycloneGames.RPGFoundation.Interaction.GameplayFramework.Tests.Editor
             Assert.That(snapshot.IsAvailable, Is.True);
             Assert.That(snapshot.AllowDefaultAction, Is.False);
             Assert.That(snapshot.EnabledActionIds, Is.SameAs(enabledActions));
-            Assert.That(snapshot.Version, Is.EqualTo(6));
         }
 
         [Test]

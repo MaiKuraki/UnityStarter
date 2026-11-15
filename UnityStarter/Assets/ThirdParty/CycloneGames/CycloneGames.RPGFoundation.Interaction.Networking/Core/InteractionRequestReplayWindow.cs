@@ -6,38 +6,41 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
     /// <summary>
     /// Per-instigator sliding window over recently accepted request IDs. Makes
     /// reliable-channel retransmission idempotent: a duplicate request ID inside
-    /// the window is rejected instead of executed twice. Bounded by
-    /// <see cref="MaxTrackedInstigators"/>; the least-recently-touched instigator
-    /// is evicted under pressure, which fails closed (new requests rejected until
-    /// the next accepted one re-opens the window).
+    /// the window is rejected instead of executed twice.
+    ///
+    /// The table is bounded by <see cref="MaxTrackedInstigators"/>. At capacity a new
+    /// identity is rejected rather than evicting a live one: eviction would silently
+    /// re-open replay protection for the evicted instigator, so a peer that controls
+    /// enough identities could push a target out and replay its requests. Callers
+    /// release identities explicitly with <see cref="Remove"/> when a session ends.
     /// </summary>
     public sealed class InteractionRequestReplayWindow
     {
         private const int WindowBitCount = 64;
         public const int MaxTrackedInstigators = 4096;
 
-        private sealed class InstigatorWindow
+        private struct InstigatorWindow
         {
             public int Highest;
             public ulong SeenMask;
         }
 
         private readonly Dictionary<ulong, InstigatorWindow> _windows;
-        private readonly LinkedList<ulong> _touchOrder;
-        private readonly Dictionary<ulong, LinkedListNode<ulong>> _nodes;
+        private long _rejectedAdmissionCount;
 
         public InteractionRequestReplayWindow(int capacity = 64)
         {
             _windows = new Dictionary<ulong, InstigatorWindow>(capacity);
-            _touchOrder = new LinkedList<ulong>();
-            _nodes = new Dictionary<ulong, LinkedListNode<ulong>>(capacity);
         }
 
         public int TrackedInstigatorCount => _windows.Count;
 
+        /// <summary>Number of new identities refused because the table was full.</summary>
+        public long RejectedAdmissionCount => _rejectedAdmissionCount;
+
         /// <summary>
-        /// Returns true if the request may execute; false if it is a duplicate or
-        /// too old. Monotonic request IDs per instigator are required.
+        /// Returns true if the request may execute; false if it is a duplicate, too old,
+        /// or the identity table is full.
         /// </summary>
         public bool TryAccept(ulong instigatorStableId, int requestId)
         {
@@ -47,22 +50,24 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
             if (!_windows.TryGetValue(instigatorStableId, out InstigatorWindow window))
             {
                 if (_windows.Count >= MaxTrackedInstigators)
-                    EvictLeastRecentlyTouched();
-                if (_windows.Count >= MaxTrackedInstigators)
+                {
+                    if (_rejectedAdmissionCount < long.MaxValue)
+                        _rejectedAdmissionCount++;
+
                     return false;
+                }
 
                 window = new InstigatorWindow { Highest = requestId, SeenMask = 1UL };
                 _windows.Add(instigatorStableId, window);
-                Touch(instigatorStableId);
                 return true;
             }
 
-            Touch(instigatorStableId);
             int forward = requestId - window.Highest;
             if (forward > 0)
             {
                 window.SeenMask = forward >= WindowBitCount ? 1UL : (window.SeenMask << forward) | 1UL;
                 window.Highest = requestId;
+                _windows[instigatorStableId] = window;
                 return true;
             }
 
@@ -75,48 +80,18 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
                 return false;
 
             window.SeenMask |= bit;
+            _windows[instigatorStableId] = window;
             return true;
         }
 
         public void Remove(ulong instigatorStableId)
         {
-            if (!_windows.Remove(instigatorStableId))
-                return;
-            if (_nodes.TryGetValue(instigatorStableId, out LinkedListNode<ulong> node))
-            {
-                _nodes.Remove(instigatorStableId);
-                _touchOrder.Remove(node);
-            }
+            _windows.Remove(instigatorStableId);
         }
 
         public void Clear()
         {
             _windows.Clear();
-            _touchOrder.Clear();
-            _nodes.Clear();
-        }
-
-        private void Touch(ulong instigatorStableId)
-        {
-            if (_nodes.TryGetValue(instigatorStableId, out LinkedListNode<ulong> node))
-            {
-                _touchOrder.Remove(node);
-                _touchOrder.AddLast(node);
-                return;
-            }
-
-            _nodes[instigatorStableId] = _touchOrder.AddLast(instigatorStableId);
-        }
-
-        private void EvictLeastRecentlyTouched()
-        {
-            LinkedListNode<ulong> first = _touchOrder.First;
-            if (first == null)
-                return;
-
-            _touchOrder.RemoveFirst();
-            _nodes.Remove(first.Value);
-            _windows.Remove(first.Value);
         }
     }
 }

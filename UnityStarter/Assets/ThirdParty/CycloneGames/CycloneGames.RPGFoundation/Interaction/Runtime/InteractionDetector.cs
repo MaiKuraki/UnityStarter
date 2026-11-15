@@ -67,7 +67,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         [Header("LOS Optimization")]
         [Tooltip("Maximum LOS raycasts per detection cycle. 0 = unlimited.")]
-        [SerializeField] private int maxLosChecksPerFrame;
+        [SerializeField] private int maxLosChecksPerFrame = 32;
         [Tooltip("If true, targets skipped because the LOS budget is exhausted are treated as blocked.")]
         [SerializeField] private bool blockWhenLosBudgetExceeded = true;
         [Tooltip("Cache LOS results for stationary objects across frames.")]
@@ -98,9 +98,20 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         // Nearby candidates are preallocated and sorted by score descending.
         private readonly List<InteractionCandidate> _nearbyCandidates = new(16);
         private InteractionCandidate[] _nearbySortBuffer = new InteractionCandidate[16];
-        private readonly List<IInteractable> _spatialQueryBuffer = new(64);
+        private int[] _slotQueryBuffer = new int[16];
+        private int[] _tierScratch = new int[16];
         private int _nearbyCount;
         private int _cycleIndex;
+        private ulong _cycleAnchoredIdentity;
+
+        /// <summary>
+        /// Candidate buffer is wider than the scoring cap so a single grid walk almost never
+        /// saturates; saturating is what forces the slower per-tier fallback.
+        /// </summary>
+        private const int CandidateOverscan = 4;
+
+        /// <summary>Cache ceiling as a multiple of maxInteractables; the cache is acceleration only.</summary>
+        private const int ComponentCacheOverscan = 4;
         public IReadOnlyList<InteractionCandidate> NearbyInteractables => _nearbyCandidates;
         public event Action<IReadOnlyList<InteractionCandidate>> OnNearbyInteractablesChanged;
 
@@ -120,8 +131,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         private int _losCheckCount;
 
 #if DEBUG
-        private readonly System.Text.StringBuilder _debugSb = new(512);
-        private string _debugStatus = string.Empty;
+        private int _debugCandidateCount;
+        private float _debugBestScore;
         [Header("Debug")]
         [SerializeField] private bool showDebugGUI;
 #endif
@@ -143,8 +154,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             _colliderBuffer2D = new Collider2D[maxInteractables];
             _raycastHits3D = new RaycastHit[16];
             _raycastHits2D = new RaycastHit2D[16];
-            // Layer masks are assigned per query; useTriggers mirrors the legacy non-alloc 2D queries,
-            // which honoured Physics2D.queriesHitTriggers.
+            // Layer masks are assigned per query. useTriggers follows Physics2D.queriesHitTriggers,
+            // which is what the non-alloc 2D queries honour.
             _filter2D = new ContactFilter2D
             {
                 useTriggers = Physics2D.queriesHitTriggers,
@@ -155,8 +166,10 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             _losCache = new Dictionary<ulong, LosCacheEntry>(maxInteractables);
             _autoInteractTimes = new Dictionary<ulong, float>(maxInteractables);
             _nearbyCandidates.Capacity = Mathf.Max(_nearbyCandidates.Capacity, maxNearbyCandidates);
-            _nearbySortBuffer = new InteractionCandidate[maxInteractables];
-            _spatialQueryBuffer.Capacity = Mathf.Max(_spatialQueryBuffer.Capacity, maxInteractables);
+            int sorted = maxInteractables * CandidateOverscan;
+            _nearbySortBuffer = new InteractionCandidate[sorted];
+            _slotQueryBuffer = new int[sorted];
+            _tierScratch = new int[sorted];
             _noTargetStartTime = Time.time;
             _cachedInstigator = new GameObjectInstigator(gameObject);
         }
@@ -334,25 +347,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private void PerformSpatialHashDetection()
         {
-#if DEBUG
-            _debugSb.Clear();
-#endif
             bool is2D = _system.Is2DMode;
             Vector3 originPos = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             Vector3 originFwd = is2D ? (Vector3)((Vector2)detectionOrigin.right) : detectionOrigin.forward;
 
-            _system.SpatialGrid.QueryRadiusNonAlloc(originPos, detectionRadius, _spatialQueryBuffer, is2D, maxInteractables, false);
-
-#if DEBUG
-            _debugSb.Append("[SpatialHash] ").Append(_spatialQueryBuffer.Count).AppendLine(" candidates");
-#endif
+            int count = CollectCandidates(originPos);
 
             _nearbyCount = 0;
-            EnsureSortBufferCapacity(_spatialQueryBuffer.Count);
 
-            for (int i = 0, count = _spatialQueryBuffer.Count; i < count; i++)
+            for (int i = 0; i < count; i++)
             {
-                IInteractable interactable = _spatialQueryBuffer[i];
+                IInteractable interactable = _system.GetInteractable(_slotQueryBuffer[i]);
                 if (!IsValidInteractable(interactable)) continue;
                 if (!interactable.CanInteract(_cachedInstigator)) continue;
                 if ((interactable.Channel & channelMask) == 0) continue;
@@ -385,30 +390,94 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 float dot = Vector3.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if DEBUG
-                string name = interactable is MonoBehaviour m ? m.name : "?";
-                _debugSb.Append("  [").Append(name).Append("] Score=").AppendLine(score.ToString("F1"));
-#endif
-
                 if (_nearbyCount < _nearbySortBuffer.Length)
                     _nearbySortBuffer[_nearbyCount++] = new InteractionCandidate(interactable, score, distSqr);
             }
 
+            SortCandidatesByScore();
             ApplyNearbyAndBest();
+        }
+
+        /// <summary>
+        /// Ranks scored candidates in place, best first. Shared by the detection paths so the
+        /// visibility pass always sees a deterministic order.
+        /// </summary>
+        private void SortCandidatesByScore()
+        {
+            if (_nearbyCount > 32)
+            {
+                QuickSortByScore(_nearbySortBuffer, 0, _nearbyCount - 1);
+                return;
+            }
+
+            for (int i = 1; i < _nearbyCount; i++)
+            {
+                InteractionCandidate key = _nearbySortBuffer[i];
+                int j = i - 1;
+                while (j >= 0 && _nearbySortBuffer[j].Score < key.Score)
+                {
+                    _nearbySortBuffer[j + 1] = _nearbySortBuffer[j];
+                    j--;
+                }
+
+                _nearbySortBuffer[j + 1] = key;
+            }
+        }
+
+        /// <summary>
+        /// Fills the slot buffer in one grid walk. A single walk is the fastest option and is exact
+        /// while the result fits: traversal order cannot drop a target if nothing is dropped at all.
+        /// Only a saturated buffer falls back to a per-tier walk, where each tier costs another pass
+        /// over the same cells but guarantees the highest priority band is collected first.
+        /// </summary>
+        private int CollectCandidates(Vector3 origin)
+        {
+            int capacity = _slotQueryBuffer.Length;
+            int count = _system.QuerySlots(origin, detectionRadius, _slotQueryBuffer, capacity, uint.MaxValue);
+            if (count < capacity)
+            {
+                return count;
+            }
+
+            int written = 0;
+            uint pending = _system.OccupiedTiers;
+            while (pending != 0 && written < capacity)
+            {
+                uint layer = HighestTierLayer(pending);
+                pending &= ~layer;
+
+                int budget = capacity - written;
+                int got = _system.QuerySlots(origin, detectionRadius, _tierScratch, budget, layer);
+                if (got <= 0)
+                {
+                    continue;
+                }
+
+                Array.Copy(_tierScratch, 0, _slotQueryBuffer, written, got);
+                written += got;
+            }
+
+            return written;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint HighestTierLayer(uint mask)
+        {
+            int tier = InteractionSystem.PriorityTierCount - 1;
+            while ((mask & (1u << tier)) == 0)
+            {
+                tier--;
+            }
+
+            return 1u << tier;
         }
 
         private void PerformPhysics3DDetection()
         {
-#if DEBUG
-            _debugSb.Clear();
-#endif
             Vector3 originPos = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             int count = Physics.OverlapSphereNonAlloc(
                 originPos, detectionRadius, _colliderBuffer3D, interactableLayer);
 
-#if DEBUG
-            _debugSb.Append("[3D Scan] ").Append(count).AppendLine(" colliders");
-#endif
 
             _nearbyCount = 0;
             EnsureSortBufferCapacity(count);
@@ -446,38 +515,27 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
                 if (CheckLos3D(originPos, dir, dist, col.transform, interactable))
                 {
-#if DEBUG
-                    _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
-#endif
                     continue;
                 }
 
                 float dot = Vector3.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if DEBUG
-                _debugSb.Append("  [").Append(col.name).Append("] Score=").AppendLine(score.ToString("F1"));
-#endif
 
                 if (_nearbyCount < _nearbySortBuffer.Length)
                     _nearbySortBuffer[_nearbyCount++] = new InteractionCandidate(interactable, score, distSqr);
             }
 
+            SortCandidatesByScore();
             ApplyNearbyAndBest();
         }
 
         private void PerformPhysics2DDetection()
         {
-#if DEBUG
-            _debugSb.Clear();
-#endif
             Vector2 origin2D = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             _filter2D.layerMask = interactableLayer;
             int count = Physics2D.OverlapCircle(origin2D, detectionRadius, _filter2D, _colliderBuffer2D);
 
-#if DEBUG
-            _debugSb.Append("[2D Scan] ").Append(count).AppendLine(" colliders");
-#endif
 
             _nearbyCount = 0;
             EnsureSortBufferCapacity(count);
@@ -515,23 +573,18 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
                 if (CheckLos2D(origin2D, dir, dist, col.transform, interactable))
                 {
-#if DEBUG
-                    _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
-#endif
                     continue;
                 }
 
                 float dot = Vector2.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
 
-#if DEBUG
-                _debugSb.Append("  [").Append(col.name).Append("] Score=").AppendLine(score.ToString("F1"));
-#endif
 
                 if (_nearbyCount < _nearbySortBuffer.Length)
                     _nearbySortBuffer[_nearbyCount++] = new InteractionCandidate(interactable, score, distSqr);
             }
 
+            SortCandidatesByScore();
             ApplyNearbyAndBest();
         }
 
@@ -541,27 +594,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             if (candidateCount > maxInteractables) candidateCount = maxInteractables;
             if (_nearbySortBuffer.Length < candidateCount)
                 _nearbySortBuffer = new InteractionCandidate[candidateCount];
+            if (_slotQueryBuffer.Length < candidateCount)
+                _slotQueryBuffer = new int[candidateCount];
         }
 
         private void ApplyNearbyAndBest()
         {
-            // Sort candidates by score descending
-            if (_nearbyCount > 32)
-                QuickSortByScore(_nearbySortBuffer, 0, _nearbyCount - 1);
-            else
-            {
-                for (int i = 1; i < _nearbyCount; i++)
-                {
-                    var key = _nearbySortBuffer[i];
-                    int j = i - 1;
-                    while (j >= 0 && _nearbySortBuffer[j].Score < key.Score)
-                    {
-                        _nearbySortBuffer[j + 1] = _nearbySortBuffer[j];
-                        j--;
-                    }
-                    _nearbySortBuffer[j + 1] = key;
-                }
-            }
+            // Candidates arrive already ranked by SortCandidatesByScore and filtered by
+            // SortCandidatesByScore, so this only fills the exposed list and picks the focused target.
 
             // Populate nearby list (capped at maxNearbyCandidates)
             _nearbyCandidates.Clear();
@@ -573,10 +613,28 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             if (_cycleIndex >= _nearbyCandidates.Count)
                 _cycleIndex = 0;
 
+            // The candidate array is rebuilt every cycle, so a bare index can point at a different
+            // object than the one the player cycled to. Re-anchor by identity before reusing it.
+            if (_cycleIndex > 0 && _cycleAnchoredIdentity != 0UL)
+            {
+                for (int i = 0; i < _nearbyCandidates.Count; i++)
+                {
+                    if (IdentityOf(_nearbyCandidates[i].Interactable) == _cycleAnchoredIdentity)
+                    {
+                        _cycleIndex = i;
+                        break;
+                    }
+                }
+            }
+
             // Best candidate is either the cycled target (if valid) or top scored
             IInteractable bestCandidate = _nearbyCandidates.Count > 0
                 ? _nearbyCandidates[_cycleIndex].Interactable
                 : null;
+
+            _cycleAnchoredIdentity = IdentityOf(bestCandidate);
+            _debugCandidateCount = _nearbyCandidates.Count;
+            _debugBestScore = _nearbyCandidates.Count > 0 ? _nearbyCandidates[0].Score : 0f;
 
             if (_currentInteractable.Value != bestCandidate)
             {
@@ -586,10 +644,14 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
 
             OnNearbyInteractablesChanged?.Invoke(_nearbyCandidates);
+        }
 
-#if DEBUG
-            _debugStatus = _debugSb.ToString();
-#endif
+        private static ulong IdentityOf(IInteractable item)
+        {
+            if (item == null) return 0UL;
+            if (item is IInteractionStableIdentity identity && identity.HasStableId) return identity.StableIdHash;
+            if (item is UnityEngine.Object unityObject) return unchecked((ulong)(uint)unityObject.GetInstanceID());
+            return 0UL;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -769,6 +831,21 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             QuickSortByScore(arr, partition + 1, right);
         }
 
+        /// <summary>
+        /// Bounded insert for the collider-to-interactable cache. The cache only accelerates
+        /// GetComponent lookups, so dropping it under pressure is always safe; keeping it unbounded
+        /// is not, because a player streaming through an open world would grow it without limit.
+        /// </summary>
+        private void StoreComponentCache(ulong id, IInteractable interactable)
+        {
+            if (_componentCache.Count >= maxInteractables * ComponentCacheOverscan)
+            {
+                _componentCache.Clear();
+            }
+
+            _componentCache[id] = interactable;
+        }
+
         private IInteractable GetCachedInteractable3D(Collider col)
         {
             ulong id = UnityObjectId.Of(col);
@@ -783,7 +860,10 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             IInteractable interactable = col.GetComponent<IInteractable>();
             if (interactable != null)
-                _componentCache[id] = interactable;
+            {
+                StoreComponentCache(id, interactable);
+            }
+
             return interactable;
         }
 
@@ -801,7 +881,10 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             IInteractable interactable = col.GetComponent<IInteractable>();
             if (interactable != null)
-                _componentCache[id] = interactable;
+            {
+                StoreComponentCache(id, interactable);
+            }
+
             return interactable;
         }
 
@@ -1006,7 +1089,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             GUILayout.Space(8);
             GUILayout.Label("Detection Log:", s_labelStyle);
-            GUILayout.TextArea(_debugStatus, s_labelStyle, GUILayout.ExpandHeight(true));
+            GUILayout.Label("Candidates: " + _debugCandidateCount, s_labelStyle);
+            GUILayout.Label("Best score: " + _debugBestScore.ToString("F1"), s_labelStyle);
+            GUILayout.Label("Cycle index: " + _cycleIndex, s_labelStyle);
 
             GUI.DragWindow(new Rect(0, 0, 380, 20));
         }

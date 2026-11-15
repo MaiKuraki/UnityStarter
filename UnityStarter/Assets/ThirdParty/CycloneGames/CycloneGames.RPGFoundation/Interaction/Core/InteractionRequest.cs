@@ -7,6 +7,13 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         public const ulong None = 0UL;
 
         /// <summary>
+        /// Bucket shared by every caller that did not present a stable identity. Rate limiting,
+        /// queue accounting and replay history map <see cref="None"/> here so anonymous traffic
+        /// competes for one bounded budget instead of bypassing the limit entirely.
+        /// </summary>
+        public const ulong Anonymous = ulong.MaxValue;
+
+        /// <summary>
         /// Deterministic FNV-1a 64-bit hash for stable authoring IDs.
         /// Not cryptographic; use transport or backend auth for trust boundaries.
         /// </summary>

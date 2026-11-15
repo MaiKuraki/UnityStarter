@@ -13,7 +13,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         public readonly bool IsAvailable;
         public readonly bool AllowDefaultAction;
         public readonly string[] EnabledActionIds;
-        public readonly int Version;
 
         public InteractionTargetSnapshot(
             int worldId,
@@ -22,8 +21,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
             float interactionRange,
             bool isAvailable,
             bool allowDefaultAction = true,
-            string[] enabledActionIds = null,
-            int version = 0)
+            string[] enabledActionIds = null)
         {
             WorldId = worldId;
             TargetStableId = targetStableId;
@@ -32,7 +30,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
             IsAvailable = isAvailable;
             AllowDefaultAction = allowDefaultAction;
             EnabledActionIds = enabledActionIds ?? EmptyActions;
-            Version = version;
         }
 
         public bool IsValid => TargetStableId != InteractionStableId.None;

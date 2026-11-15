@@ -5,6 +5,7 @@
         "UniTask",
         "CycloneGames.RPGFoundation.Interaction.Core",
         "CycloneGames.RPGFoundation.Interaction.Runtime",
+        "CycloneGames.Spatial.Core",
         "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [

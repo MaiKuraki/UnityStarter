@@ -1,712 +1,632 @@
 # RPG Interaction Module
 
-## Bounded Authority Admission
-
-One `InteractionAuthorityService` retains at most `65,536` registered targets and `65,536` queue owners. Its owned `InteractionRateLimiter` retains at most `65,536` instigator windows. These constants are implementation safety ceilings; products can construct a standalone limiter with a lower owner capacity. Existing entries can still be updated, consumed, removed, or cleared at capacity.
-
-`TryRegisterTarget` returns `false` when a new target reaches its ceiling. `TryGetOrCreateQueue` provides an explicit capacity result, while `GetOrCreateQueue` fails fast with `InvalidOperationException` at capacity. `TryQueueRequest` converts queue-owner capacity rejection into `QueueFull`. `InteractionRateLimiter.TryConsume` returns `false`, which the authority maps to `RateLimited`. O(1) snapshots expose all counts, capacities, and monotonic rejection counters.
-
-Rate windows use a bounded indexed expiry heap: each retained identity owns exactly one dictionary entry and one heap key. Before admission, one call removes at most `MaximumExpiredWindowsToPrunePerCall` (`256`) expired identities, so identity churn cannot permanently consume capacity and cleanup cannot become an unbounded request spike. `InteractionAuthorityService.RemoveInstigatorRateLimitWindow(instigatorId)` (or `InteractionRateLimiter.Remove` for a standalone owner) releases an authenticated identity explicitly on disconnect. Incoming `int` ticks are normalized to an owner-local monotonic `long` timeline by serial-number deltas, so the normal `int` wrap advances time. A backwards or out-of-order sample neither rewinds nor clears windows; it is evaluated at the latest observed time and therefore cannot reset another identity's limit. Use the explicit cold-path `Clear` operation when the authority intentionally starts a different time domain. Consecutive forward observations must remain less than half the `int` sequence space apart; a larger discontinuity requires that explicit reset. Mutation is O(log N), the common non-expired check is O(1), and snapshots remain allocation-free O(1).
-
-Use `Try*` APIs at untrusted or recoverable boundaries and route capacity rejection through the authoritative gameplay/security policy. Use `GetOrCreateQueue` only where fail-fast behavior is an explicit invariant. If one authority owner genuinely needs more than a ceiling, shard by explicit World/authority ownership; raising constants requires a reviewed build, abuse-case analysis, and load validation. Governance never clears targets, queues, or rate-limit policy under pressure.
-
-This contract adds no serialized field, changes no command or wire enum value, renames no serialized type or field, modifies no prefab, scene, or asset data, and persists no state.
-
 [English | 简体中文](README.SCH.md)
 
-A Unity interaction runtime supporting 3D, 2D, and Spatial Hash detection. Powered by R3 for reactive UI, VitalRouter for command routing, and UniTask for async execution.
+A Unity interaction runtime for 3D and 2D worlds. It decides which nearby object the player can interact with, runs the interaction lifecycle, and validates requests on an authoritative server. Detection can run on physics queries or on a spatial hash grid, which is what makes ten thousand interactables per scene practical.
 
-## Table of Contents
+Typical uses: a lootable world, a dialogue-and-quest NPC layer, an interaction prompt UI driven by gamepad or mouse, and a server that has to reject impossible interaction requests.
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
-- [Troubleshooting](#troubleshooting)
+What it does not do: play VFX, own inventory or quest state, or manage your input bindings. Those belong to the product.
 
-## Overview
+## Table of contents
 
-An interaction runtime with multi-mode detection, weighted target scoring, adaptive LOD, and pluggable authority contracts. The detector scores nearby candidates each frame based on distance, angle, and priority; the best-scored target triggers interactable state machines through VitalRouter command routing.
+- [1. Overview](#1-overview)
+- [2. Install and dependencies](#2-install-and-dependencies)
+- [3. First interaction](#3-first-interaction)
+- [4. How detection works](#4-detection)
+- [5. Building interaction logic](#5-building-interaction-logic)
+- [6. Choosing between several targets](#6-target-selection)
+- [7. Instigators and cancellation](#7-instigators-and-cancellation)
+- [8. Authority and networking](#8-authority-and-networking)
+- [9. Performance](#9-performance)
+- [10. Composition recipes](#10-composition-recipes)
+- [11. Troubleshooting](#11-troubleshooting)
+- [12. Validation](#12-validation)
 
-### Key Features
+## 1. Overview
 
-| Category                  | Description                                                                              |
-| ------------------------- | ---------------------------------------------------------------------------------------- |
-| **Multi-Mode Detection**  | Physics3D, Physics2D, and SpatialHash selected per detector.                             |
-| **Reactive Architecture** | R3 `ReactiveProperty` for event-driven UI binding.                                       |
-| **Command Routing**       | World-scoped VitalRouter routing with interceptable `InteractionCommand`.                |
-| **LOD Detection**         | Adaptive frequency scaling: fast when close, slow when far, sleep when idle.             |
-| **Channel Filtering**     | 16 semantics-free flag channels with constant-time bitwise AND filtering.                |
-| **Requirement System**    | Pluggable `IInteractionRequirement` conditions (key, level, quest state).                |
-| **Weighted Scoring**      | `Score = Priority × PriorityWeight + Dot(forward, direction) × AngleWeight − (distance / radius) × DistanceWeight` |
-| **Nearby Candidates**     | All scored candidates exposed for loot lists and gamepad target cycling.                 |
-| **Hold-to-Interact**      | Built-in `holdDuration` with automatic progress reporting (0–1).                         |
-| **Distance Auto-Cancel**  | Cancels if the instigator moves beyond `maxInteractionRange`.                            |
-| **Instigator System**     | `InstigatorHandle` with `GameObjectInstigator` built-in; extensible for ECS/entityless.  |
-| **Stable Identity**       | Optional `IInteractionStableIdentity` for multiplayer, replay, save data, and analytics. |
-| **Two-State Pattern**     | Toggle interaction (open/close, on/off) via `TwoStateInteractionBase`.                   |
-| **Effect Pool**           | Low-GC VFX spawning with auto return-to-pool.                                            |
-| **Editor Tooling**        | Custom Inspectors, Scene Debugger, Validator Window, Gizmos.                             |
+An interaction has four parts, and the module splits them so each can change independently:
 
-## Architecture
+| Part | Owner | Question it answers |
+| --- | --- | --- |
+| Detection | `InteractionDetector` | Which object is the player aiming at? |
+| Target state | `Interactable` | Can this object be used right now? |
+| Orchestration | `InteractionSystem` | Which world does this belong to, and who is notified? |
+| Authority | `InteractionAuthorityService` | Is this request legal on the server? |
+
+Detection and target state live on scene objects. Orchestration is one component per world. Authority is plain C# with no engine dependency, so it runs in a headless server or a unit test.
 
 ```mermaid
 graph TD
-    IS["InteractionSystem<br/>(MonoBehaviour · Singleton)<br/>VitalRouter command routing<br/>Spatial Hash Grid management"]
-    IA["Interactable<br/>(on world objects)<br/>State machine · Channel<br/>Requirements · Cooldown<br/>Hold timer · Distance monitor"]
-    ID["InteractionDetector<br/>(on player / camera)<br/>Physics3D / Physics2D / SpatialHash<br/>Channel mask · LOD scaling<br/>Weighted scoring · LOS · Sleep"]
-    IH["InstigatorHandle<br/>(abstract class)<br/>GameObjectInstigator (OOP)<br/>EntityInstigator (ECS)<br/>IdInstigator (entityless)"]
-    UI["UI Layer<br/>R3 ReactiveProperty binding"]
-    GL["Game Logic<br/>VitalRouter interceptors"]
-
-    IS --- IA
-    IS --- ID
-    ID -->|cached InstigatorHandle| IA
-    IA -->|R3 ReactiveProperty| UI
-    ID -->|InteractionCommand| IS
-    IS -->|VitalRouter| GL
+    D["InteractionDetector<br/>(on the player)"] -->|query| G["SpatialHashGrid&lt;int&gt;<br/>(owned by InteractionSystem)"]
+    D -->|score + LOS| C["InteractionCandidate"]
+    C -->|best target| S["InteractionSystem<br/>(one per world)"]
+    S -->|command| I["Interactable<br/>(on the target)"]
+    I -->|state machine| E["OnDoInteractAsync"]
+    S -.->|optional| A["InteractionAuthorityService<br/>(server-side validation)"]
 ```
 
-**Data flow:**
+The dashed edge is optional. Single-player builds never touch it.
+
+## 2. Install and dependencies
+
+| Package | Required | Purpose |
+| --- | --- | --- |
+| R3 | Yes | `ReactiveProperty` for prompt UI binding |
+| VitalRouter | Yes | Command routing and interception |
+| UniTask | Yes | Async execution and cancellation |
+| CycloneGames.Spatial | Yes | Spatial index used by the detector |
+| CycloneGames.Hash | Yes | Stable ID hashing for deterministic identity |
+| CycloneGames.Logging | Yes | `LogChannel` diagnostics |
+| Interaction.Networking | Optional | DTOs and authority bridge for networked play |
+| Interaction.GameplayFramework | Optional | `Actor` position adapter |
+| Interaction.DeterministicMath | Optional | Fixed-point authority for lockstep or replay |
+| Interaction.DeterministicMath.GF | Optional | `Actor` to fixed-point adapter |
+
+Each optional package is a separate assembly. You reference only the ones you use; no scripting define symbol is involved.
+
+```text
+CycloneGames.RPGFoundation/Interaction/
+  Core/       pure C#, no Unity types
+  Runtime/    MonoBehaviours, spatial grid, detector
+  Editor/     inspectors, validator, scene debugger
+  Tests/      EditMode suites
+```
+
+## 3. First interaction
+
+By the end of this section you will have a player that walks up to a chest and presses a key to open it. Five steps, no scripting.
+
+### Step 1: Add InteractionSystem
+
+Create an empty GameObject named `Interaction`. Add the `InteractionSystem` component.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| World Id | `0` | Scope for split-screen and additive scenes. Each world gets its own system. |
+| Is 2D Mode | `false` | `true` hashes X/Y and pins Z to zero. |
+| Cell Size | `10` | Grid cell edge in world units. Smaller cells mean finer queries and more cells to walk. |
+| Initial Capacity | `256` | Slots reserved up front. Raise it for large scenes to avoid growth during play. |
+| Enable Authority Gate | `true` | Validates requests with a stable target ID. Targets without one always pass. |
+
+One system per world. Two systems sharing a `World Id` log an error and the second one stops receiving routed commands.
+
+### Step 2: Make an object interactable
+
+Add `Interactable` to the chest. The fields you will touch first:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| Interaction Prompt | `"Interact"` | Fallback text when localization is off. |
+| Is Interactable | `true` | Cleared while the object is busy or on cooldown. |
+| Priority | `0` | Higher wins when several objects are in range. |
+| Interaction Distance | `2` | How close the instigator must be. |
+| Channel | `Channel0` | Filter bitmask. The detector only sees channels it asks for. |
+
+Leave `Auto Interact` off for now. It is covered in section 6.
+
+### Step 3: Add a detector to the player
+
+Add `InteractionDetector` to the player root.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| Detection Mode | `Physics3D` | `SpatialHash` is the scalable option; see section 4. |
+| Detection Radius | `3` | Query radius in world units. |
+| Interactable Layer | `Nothing` | Layers the physics query scans. |
+| Max Interactables | `64` | Candidate budget per cycle. |
+| Max LOS Checks Per Frame | `32` | Ray budget. `0` means unlimited, which is almost never what you want. |
+
+The detector reads its origin from `Detection Origin` when set, otherwise from its own transform.
+
+### Step 4: Trigger the interaction
+
+Any code can send a command. The simplest path is a key press wired to the detector's current target:
+
+```csharp
+using CycloneGames.RPGFoundation.Interaction.Runtime;
+using UnityEngine;
+
+public sealed class InteractInput : MonoBehaviour
+{
+    [SerializeField] private InteractionDetector detector;
+
+    private void Update()
+    {
+        if (!Input.GetKeyDown(KeyCode.E)) return;
+
+        IInteractable target = detector.CurrentInteractable.CurrentValue;
+        if (target == null) return;
+
+        InteractionSystem system = InteractionSystem.ResolveDefault();
+        system?.ProcessInteractionAsync(target).Forget();
+    }
+}
+```
+
+`CurrentInteractable` is an R3 `ReadOnlyReactiveProperty`, so UI can subscribe to the same value.
+
+### Step 5: Show a prompt
+
+Bind the prompt text to the same property. The binding survives target changes without any polling:
+
+```csharp
+using R3;
+using UnityEngine;
+using UnityEngine.UI;
+
+public sealed class PromptLabel : MonoBehaviour
+{
+    [SerializeField] private InteractionDetector detector;
+    [SerializeField] private Text label;
+
+    private void Start()
+    {
+        detector.CurrentInteractable
+            .Subscribe(target => label.text = target?.InteractionPrompt ?? string.Empty)
+            .AddTo(this);
+    }
+}
+```
+
+At this point you have a working interaction. Sections 4 and 5 explain what the detector actually did, and how to replace the default behaviour.
+
+## 4. Detection
+
+Each detection cycle runs four stages. The order matters, because the cheap filters run before the expensive ones.
 
 ```mermaid
 sequenceDiagram
-    participant Player as InteractionDetector
-    participant Router as VitalRouter
-    participant System as InteractionSystem
-    participant Target as Interactable
-
-    Player->>Player: PerformDetection() — score candidates
-    Player->>Router: PublishAsync(InteractionCommand)
-    Router->>System: On(InteractionCommand)
-    System->>System: OnAnyInteractionStarted?.Invoke()
-    System->>Target: TryInteractAsync(instigator, actionId)
-    Target->>Target: CanInteract() — check requirements
-    Target->>Target: State: Idle → Starting → InProgress → Completing → Completed → Idle
-    Target-->>System: return success/failure
-    System->>System: OnAnyInteractionCompleted?.Invoke()
+    participant D as Detector
+    participant G as Spatial grid
+    participant C as Candidate
+    D->>G: query slots in radius
+    G-->>D: slot IDs
+    D->>C: channel filter, distance gate
+    D->>C: score = priority + angle - distance
+    D->>C: line-of-sight check (budgeted)
+    D->>D: pick best, publish nearby list
 ```
 
-### Dependencies
+### Detection modes
 
-| Package                          | Purpose                                                         | Required |
-| -------------------------------- | --------------------------------------------------------------- | -------- |
-| **R3**                           | Reactive properties and observables for UI binding              | Yes      |
-| **VitalRouter**                  | Command routing and interceptor pipeline                        | Yes      |
-| **UniTask**                      | Unity-oriented asynchronous execution and cancellation          | Yes      |
-| **CycloneGames.Factory.Runtime** | Object pooling (`ObjectPool`, `IPoolable`, `MonoPrefabFactory`) | Yes      |
-| **CycloneGames.Logging**         | Backend-neutral `LogChannel` diagnostics                        | Yes      |
-| **CycloneGames.RPGFoundation.Interaction.Networking** | Optional `NetworkVector3` and DTO bridge | Optional |
-| **CycloneGames.RPGFoundation.Interaction.GameplayFramework** | Optional `Actor` / world adapter companion package | Optional |
-| **CycloneGames.RPGFoundation.Interaction.DeterministicMath** | Optional `FPVector3` / `FPInt64` authority companion package | Optional |
-| **CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework** | Optional Actor-to-fixed-point authority companion package | Optional |
+| Mode | Query | Cost driver | Use when |
+| --- | --- | --- | --- |
+| `Physics3D` | `Physics.OverlapSphereNonAlloc` | Collider count in radius | Few hundred objects, or you already need colliders |
+| `Physics2D` | `Physics2D.OverlapCircle` | Same, in 2D | 2D projects with colliders |
+| `SpatialHash` | Grid walk | Cells in radius, not total objects | Thousands of objects, or objects without colliders |
 
-Optional first-party integrations are physical sibling companion packages with direct package and asmdef dependencies. They compile consistently when installed through UPM or placed together under Assets. Consumer assemblies reference only the companion assembly they use; no PlayerSettings scripting define symbol is required.
+`SpatialHash` is the only mode that scales with local density instead of scene size. It requires every interactable to be registered, which `Interactable` does automatically on enable.
 
-Runtime diagnostics use `CycloneGames.RPGFoundation.Interaction`; Editor diagnostics use `CycloneGames.RPGFoundation.Interaction.Editor`. The module never owns logging backend lifecycle. The application composition root selects an `ILogWriter`; absent a backend, the logging contract uses `NullLogWriter`.
+### Score formula
 
-## Quick Start
+```
+score = Priority * priorityWeight
+      + Dot(forward, direction) * angleWeight
+      - (distance / detectionRadius) * distanceWeight
+```
 
-### Step 1 — Add InteractionSystem
+Defaults are `priorityWeight = 100`, `angleWeight = 2`, `distanceWeight = 1`. The priority term dominates: a single priority step outweighs the entire angle and distance range. That is deliberate, and section 6 explains why the module also layers priority separately.
 
-Create an empty GameObject, add `InteractionSystem`:
+### Level of detail
 
-| Inspector Field | Type    | Default | Description                                                 |
-| --------------- | ------- | ------- | ----------------------------------------------------------- |
-| **World Id**    | `int`   | `0`     | Local interaction world scope for split-screen or additive scenes. |
-| **Is 2D Mode**  | `bool`  | `false` | `true` for 2D games (X/Y hashing), `false` for 3D (X/Z).    |
-| **Cell Size**   | `float` | `10`    | Spatial hash cell size.                                      |
+The detector does not run every frame at every distance. It scales its interval by the current target distance, and sleeps when nothing has been in range for a while.
 
-### Step 2 — Create an Interactable
+| State | Distance | Interval |
+| --- | --- | --- |
+| Near | under `nearDistance` (5) | `nearIntervalMs` (33) |
+| Far | under `farDistance` (15) | `farIntervalMs` (150) |
+| Very far | under `disableDistance` (50) | `veryFarIntervalMs` (300) |
+| Sleep | no target for `sleepEnterMs` (1000) | `sleepIntervalMs` (500) |
 
-Add `Interactable` to any world object:
+LOD is what keeps a hundred detectors affordable. Without it, every detector runs a full query every frame.
 
-| Inspector Field           | Type                 | Default      | Description                                              |
-| ------------------------- | -------------------- | ------------ | -------------------------------------------------------- |
-| **Interaction Prompt**    | `string`             | `"Interact"` | UI text shown to the player.                             |
-| **Is Interactable**       | `bool`               | `true`       | Whether this object accepts interactions.                |
-| **Priority**              | `int`                | `0`          | Higher = preferred by scoring.                           |
-| **Interaction Distance**  | `float`              | `2`          | Max detection range from the detector.                   |
-| **Channel**               | `InteractionChannel` | `Channel0`   | Category flag for selective detection.                   |
-| **Hold Duration**         | `float`              | `0`          | Seconds the player must hold (0 = instant).              |
-| **Max Interaction Range** | `float`              | `0`          | Auto-cancel distance during interaction (0 = disabled).  |
+### Channels
 
-Add a `Collider` or `Collider2D` with **Is Trigger = true**. Set its layer to match the detector's **Interactable Layer** mask.
-
-### Step 3 — Add an InteractionDetector
-
-Add `InteractionDetector` to the player or camera:
-
-| Inspector Field        | Type                 | Default       | Description                                |
-| ---------------------- | -------------------- | ------------- | ------------------------------------------ |
-| **Detection Mode**     | `DetectionMode`      | `Physics3D`   | `Physics3D`, `Physics2D`, or `SpatialHash`. |
-| **Detection Radius**   | `float`              | `3`           | Scan radius.                               |
-| **Interactable Layer** | `LayerMask`          | —             | Physics layers to scan.                    |
-| **Obstruction Layer**  | `LayerMask`          | `1`           | Layers that block line-of-sight.           |
-| **Max Interactables**  | `int`                | `64`          | Overlap buffer size.                       |
-| **Channel Mask**       | `InteractionChannel` | `All`         | Which channels to detect.                  |
-| **Distance Weight**    | `float`              | `1`           | Scoring weight for distance.               |
-| **Angle Weight**       | `float`              | `2`           | Scoring weight for facing angle.           |
-| **Priority Weight**    | `float`              | `100`         | Scoring weight for `Priority`.             |
-
-### Step 4 — Trigger Interaction
+Sixteen flag bits, filtered with a single AND. Use them to separate interaction domains without layering:
 
 ```csharp
-using UnityEngine;
-using UnityEngine.InputSystem;
-
-public class PlayerInteraction : MonoBehaviour
+public static class GameChannels
 {
-    [SerializeField] private InteractionDetector detector;
-
-    void Update()
-    {
-        if (Keyboard.current.eKey.wasPressedThisFrame)
-            detector.TryInteract();
-    }
+    public const InteractionChannel Npc = InteractionChannel.Channel0;
+    public const InteractionChannel Item = InteractionChannel.Channel1;
+    public const InteractionChannel Door = InteractionChannel.Channel2;
 }
 ```
 
-### Step 5 — Display Prompt UI
+Set the detector's `Channel Mask` to the union of what that player should see.
+
+## 5. Building interaction logic
+
+Every subsection answers the same three questions: when to use it, what the code looks like, and what usually goes wrong.
+
+### 5.1 Custom behaviour
+
+Override `OnDoInteractAsync`. The base implementation drives the state machine and progress reporting, so call it first.
 
 ```csharp
-using UnityEngine;
-using UnityEngine.UI;
-using R3;
-
-public class InteractionPromptUI : MonoBehaviour
+public class Chest : Interactable
 {
-    [SerializeField] private InteractionDetector detector;
-    [SerializeField] private Text promptText;
-    [SerializeField] private GameObject promptPanel;
-
-    void Start()
-    {
-        detector.CurrentInteractable.Subscribe(i =>
-        {
-            bool hasTarget = i != null;
-            promptPanel.SetActive(hasTarget);
-            if (hasTarget)
-                promptText.text = $"[E] {i.InteractionPrompt}";
-        }).AddTo(this);
-    }
-}
-```
-
-### Detection Mode Comparison
-
-| Property             | Physics3D                 | Physics2D                 | SpatialHash                                  |
-| -------------------- | ------------------------- | ------------------------- | -------------------------------------------- |
-| Discovery source     | Unity 3D physics          | Unity 2D physics          | Module-owned spatial grid                    |
-| Requires colliders   | Yes (3D)                  | Yes (2D)                  | No                                           |
-| Line-of-sight        | 3D raycast                | 2D raycast                | 3D or 2D raycast                             |
-| Capacity control     | Non-alloc collider buffer | Non-alloc collider buffer | `maxResults` and `allowBufferGrowth`          |
-
-SpatialHash mode: Interactables register via `OnEnable()`. For moving interactables, call `interactable.NotifyPositionChanged()`. The grid updates only if the object has moved > 1 unit.
-
-## Core Concepts
-
-### Interaction Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> Starting : TryInteractAsync()
-    Starting --> InProgress : OnStartInteractAsync() completes
-    InProgress --> Completing : OnDoInteractAsync() completes
-    Completing --> Completed : OnEndInteractAsync() completes
-    Completed --> Idle : resetToIdleOnComplete
-
-    Starting --> Cancelled : CancellationToken / ForceEndInteraction()
-    InProgress --> Cancelled : CancellationToken / ForceEndInteraction()
-    Completing --> Cancelled : CancellationToken / ForceEndInteraction()
-    Cancelled --> Idle : automatic
-```
-
-**Lifecycle hooks** (override in subclasses):
-
-| Hook                       | When                     | Use For                          |
-| -------------------------- | ------------------------ | -------------------------------- |
-| `OnStartInteractAsync(ct)` | After `Starting` state   | Play animation, show UI          |
-| `OnDoInteractAsync(ct)`    | After `InProgress` state | Main logic, hold timer, progress |
-| `OnEndInteractAsync(ct)`   | After `Completing` state | Cleanup, rewards, VFX            |
-
-### State Machine
-
-Managed by shared `InteractionStateHandler` instances. Validated transitions:
-
-| From       | Allowed To            |
-| ---------- | --------------------- |
-| Idle       | Starting              |
-| Starting   | InProgress, Cancelled |
-| InProgress | Completing, Cancelled |
-| Completing | Completed, Cancelled  |
-| Completed  | Idle                  |
-| Cancelled  | Idle                  |
-
-### Detection Modes
-
-```csharp
-public enum DetectionMode : byte
-{
-    Physics3D = 0,   // OverlapSphereNonAlloc
-    Physics2D = 1,   // OverlapCircleNonAlloc
-    SpatialHash = 2  // SpatialHashGrid.QueryRadius — collider-free
-}
-```
-
-### Channel Filtering
-
-16 semantics-free flag slots. Game layers define meaning via constant aliases:
-
-```csharp
-[Flags]
-public enum InteractionChannel : ushort
-{
-    None      = 0,
-    Channel0  = 1 << 0, Channel1  = 1 << 1,
-    Channel2  = 1 << 2, Channel3  = 1 << 3,
-    // ... Channel4–Channel14
-    Channel15 = 1 << 15,
-    All       = 0xFFFF
-}
-
-// Game-layer alias pattern (recommended):
-public static class MyGameChannels
-{
-    public const InteractionChannel NPC         = InteractionChannel.Channel0;
-    public const InteractionChannel Item        = InteractionChannel.Channel1;
-    public const InteractionChannel Environment = InteractionChannel.Channel2;
-}
-```
-
-### Scoring Algorithm
-
-```
-Score = Priority × PriorityWeight + Dot(forward, direction) × AngleWeight − (distance / radius) × DistanceWeight
-```
-
-- **Priority**: Integer on the interactable. Higher = preferred.
-- **Angle**: Dot product of detector forward and target direction (+1 facing, −1 behind).
-- **Distance**: Normalized by detection radius.
-
-Highest-scored candidate becomes `CurrentInteractable`.
-
-### LOD System
-
-| Condition                             | Update Interval                |
-| ------------------------------------- | ------------------------------ |
-| Target within `nearDistance` (5m)     | `nearIntervalMs` (33ms ≈ 30Hz) |
-| Target within `farDistance` (15m)     | `farIntervalMs` (150ms ≈ 7Hz)  |
-| Target beyond `farDistance`           | `veryFarIntervalMs` (300ms)    |
-| Target beyond `disableDistance` (50m) | Target dropped, enters sleep   |
-| No target for > `sleepEnterMs` (1s)   | `sleepIntervalMs` (500ms)      |
-
-All values configurable per detector.
-
-### Instigator System
-
-```
-InstigatorHandle (abstract class)
-├── GameObjectInstigator — MonoBehaviour / OOP games
-├── EntityInstigator — Unity ECS (user-defined)
-└── IdInstigator — card game / turn-based (user-defined)
-```
-
-`InstigatorHandle` is an abstract class (not `object` or `interface`) because:
-- `object` allows value types, causing silent boxing GC.
-- `interface` causes boxing when structs implement it.
-- `abstract class` keeps the contract reference-typed without a generic parameter.
-
-```csharp
-public sealed class GameObjectInstigator : InstigatorHandle
-{
-    public GameObject GameObject { get; }
-    public override int Id => GameObject.GetInstanceID();
-    public override ulong StableId { get; }
-    public override bool TryGetPosition(out Vector3 position) { ... }
-    public T GetComponent<T>() => GameObject.GetComponent<T>();
-}
-```
-
-`InteractionDetector` caches one `GameObjectInstigator` in `Awake()`.
-
-## Usage Guide
-
-### Custom Interactable Logic
-
-```csharp
-using System.Threading;
-using Cysharp.Threading.Tasks;
-
-public class TreasureChest : Interactable
-{
-    protected override async UniTask OnStartInteractAsync(CancellationToken ct)
-    {
-        GetComponent<Animator>().SetTrigger("Open");
-        await UniTask.Delay(500, cancellationToken: ct);
-    }
+    [SerializeField] private int gold = 50;
 
     protected override async UniTask OnDoInteractAsync(CancellationToken ct)
     {
-        await HoldTimerAsync(ct);
-        switch (PendingActionId)
-        {
-            case "loot": GiveLoot(); break;
-            case "trap-check": CheckForTraps(); break;
-            default: GiveLoot(); break;
-        }
-    }
+        await base.OnDoInteractAsync(ct);
 
-    protected override async UniTask OnEndInteractAsync(CancellationToken ct)
-    {
-        EffectPoolSystem.Spawn(sparksPrefab, transform.position, Quaternion.identity, 2f);
+        PlayerWallet.Add(gold);
         isInteractable = false;
     }
 }
 ```
 
-### Interaction Requirements
+`isInteractable` is `protected`, so subclasses can flip it without a property round-trip.
 
-Implement `IInteractionRequirement` — auto-discovered at `Awake()` via `GetComponents<IInteractionRequirement>()`:
+### 5.2 Requirements
+
+Requirements are checked before the interaction starts. They are the place for quest state, keys, and level gates.
 
 ```csharp
-public class KeyRequirement : MonoBehaviour, IInteractionRequirement
+public sealed class HasKeyRequirement : IInteractionRequirement
 {
     [SerializeField] private string keyId;
 
-    public string FailureReason => $"Requires key: {keyId}";
-
-    public bool IsMet(IInteractable target, InstigatorHandle instigator)
-    {
-        if (instigator is GameObjectInstigator goi)
-        {
-            var inventory = goi.GetComponent<PlayerInventory>();
-            return inventory != null && inventory.HasKey(keyId);
-        }
-        return false;
-    }
+    public bool IsSatisfied(InstigatorHandle instigator) => Inventory.Has(keyId);
+    public string FailureMessage => "You need a key.";
 }
 ```
 
-### Two-State Interactions
+Add them to the `Requirements` array on the interactable. All entries must pass; the first failure supplies the message.
 
-For toggle-style interactions (doors, switches):
+### 5.3 Hold to interact
+
+Set `Hold Duration` to a non-zero value and the state machine reports progress on its own.
 
 ```csharp
-public class ToggleDoor : Interactable, ITwoStateInteraction
-{
-    private TwoStateInteractionBase _twoState;
-    public bool IsActivated => _twoState.IsActivated;
+detector.CurrentInteractable
+    .Subscribe(target => progressBar.value = target?.InteractionProgress ?? 0f)
+    .AddTo(this);
+```
 
-    protected override void Awake()
+Releasing early cancels with `InteractionCancelReason.Manual`. Moving out of range cancels with `OutOfRange`.
+
+### 5.4 Two-state interactions
+
+Doors, levers, and switches share one pattern: an on state and an off state behind a single entry point.
+
+```csharp
+public class Door : TwoStateInteractionBase
+{
+    [SerializeField] private Transform pivot;
+
+    protected override UniTask OnActivateAsync(CancellationToken ct)
     {
-        base.Awake();
-        _twoState = GetComponent<TwoStateInteractionBase>();
+        pivot.localRotation = Quaternion.Euler(0f, 90f, 0f);
+        return UniTask.CompletedTask;
     }
 
-    protected override UniTask OnDoInteractAsync(CancellationToken ct)
+    protected override UniTask OnDeactivateAsync(CancellationToken ct)
     {
-        _twoState.ToggleState();
-        interactionPrompt = IsActivated ? "Close" : "Open";
+        pivot.localRotation = Quaternion.identity;
         return UniTask.CompletedTask;
     }
 }
 ```
 
-### Pickable Items
+`TwoStateInteractionBase` tracks the boolean and routes to the right method.
 
-Built-in `PickableItem` subclass. Configure in Inspector: set `Destroy On Pickup = true` and assign a `Pickup Effect Prefab`. For custom logic:
+### 5.5 Pickable items
+
+`PickableItem` handles the common case: run a hook, then destroy.
 
 ```csharp
 public class GoldCoin : PickableItem
 {
-    [SerializeField] private int goldAmount = 10;
+    [SerializeField] private int amount = 1;
 
     protected override void OnPickedUp()
     {
-        if (CurrentInstigator is GameObjectInstigator goi)
-            goi.GetComponent<PlayerWallet>()?.AddGold(goldAmount);
+        PlayerWallet.Add(amount);
+        // Spawn VFX with whatever your project uses. The module does not own presentation.
     }
 }
 ```
 
-### Multi-Action Prompts
+The module deliberately ships no effect pool. Pooling and VFX playback differ too much between projects to belong here; `CycloneGames.Factory` covers pooling if you want it.
 
-Configure multiple actions in the Inspector's **Actions** array:
+### 5.6 Multiple actions
+
+An interactable can expose several actions. The detector reports all of them; the UI decides how to present them.
 
 ```csharp
-detector.TryInteract("examine");  // Triggers the "examine" action
-detector.TryInteract("pickup");   // Triggers the "pickup" action
-detector.TryInteract();           // Default (actionId = null)
+[SerializeField] private InteractionAction[] actions =
+{
+    new InteractionAction("open", "Open"),
+    new InteractionAction("break", "Break Open")
+};
 ```
 
-In the interactable, read `PendingActionId` to branch behavior.
-
-### Hold-to-Interact Timer
-
-Set `holdDuration > 0`. `HoldTimerAsync(ct)` drives `InteractionProgress` from 0 to 1:
+Dispatch by ID from your own input code:
 
 ```csharp
-protected override async UniTask OnDoInteractAsync(CancellationToken ct)
+target.TryInteractAsync("break", cancellationToken).Forget();
+```
+
+`CanExecuteAction` checks the enabled flags, so a disabled action never reaches the target.
+
+## 6. Target selection
+
+When two objects overlap, the module needs a rule. The score formula handles the common case, but it has a hard limit: a candidate budget.
+
+### Why the budget matters
+
+The detector collects at most `Max Interactables` candidates per cycle. If a crowded cell holds more than that, something has to be dropped. Dropping by traversal order would silently discard a high-priority target, so priority is layered separately from scoring.
+
+### Priority tiers
+
+`Priority` is projected onto the grid's 32 layer bits at registration. The detector walks tiers from high to low and only spends the remaining budget on lower tiers.
+
+```
+tier 31  highest priority, collected first
+  ...
+tier 0   lowest priority, collected last
+```
+
+Consequences worth knowing:
+
+- Priority is clamped into `[0, 31]`. Negative values become 0, values above 31 become 31.
+- Changing `Priority` at runtime requires `NotifyPositionChanged` (or `InteractionSystem.UpdatePosition`) to move the object between tiers.
+- A single-tier scene costs one grid walk. Sixteen occupied tiers cost up to sixteen. Keep the number of distinct priority values small.
+
+### Nearby candidates and cycling
+
+`NearbyInteractables` exposes the scored list, capped by `Max Nearby Candidates` (16). Use it for a loot list or gamepad target cycling.
+
+```csharp
+int index = detector.CycleTarget();
+IInteractable selected = detector.NearbyInteractables[index].Interactable;
+```
+
+Cycling re-anchors on the currently selected identity each cycle, so adding or removing a target does not silently move the selection to a different object.
+
+### Auto interact
+
+`Auto Interact` objects skip the prompt and trigger on their own. They never enter the candidate list, because they are triggers rather than choices.
+
+Three limits apply: the instigator must be within `InteractionDistance`, `autoInteractMinIntervalMs` (250) throttles repeats, and the per-detector time table is capped at `Max Interactables` entries. Past that cap, new objects trigger without the throttle. Keep auto-interact objects rare, or raise `Max Interactables`.
+
+## 7. Instigators and cancellation
+
+### InstigatorHandle
+
+An instigator is whoever initiated the interaction. It is an abstract class, not an interface, so structs cannot be boxed into it.
+
+```csharp
+public sealed class NetworkPlayerInstigator : InstigatorHandle
 {
-    await HoldTimerAsync(ct);
-    UnlockDoor();
+    private readonly ulong playerId;
+
+    public NetworkPlayerInstigator(ulong playerId) => this.playerId = playerId;
+
+    public override int Id => (int)playerId;
+    public override ulong StableId => playerId;
 }
 ```
 
-Bind UI: `interactable.OnProgressChanged += (_, progress) => progressBar.fillAmount = progress;`
+Override `StableId` for networked play. The default projects `Id` and is not stable across processes.
 
-### Distance Auto-Cancellation
+### Distance auto-cancellation
 
-Set `maxInteractionRange > 0`. During interaction, distance is checked every frame via squared comparison (no `sqrt`). Out-of-range cancels with `InteractionCancelReason.OutOfRange`. `InstigatorHandle.TryGetPosition()` returns `false` for entityless instigators; distance monitoring skips those entries.
+Set `Max Interaction Range` on the interactable and the system watches the distance every frame. Moving beyond it cancels with `OutOfRange`.
 
-### Cancellation Reasons
+The monitor table is indexed, so registration and removal are O(1). A few dozen concurrent monitors cost nothing measurable.
+
+### Cancellation reasons
+
+| Reason | Cause |
+| --- | --- |
+| `Manual` | Caller cancelled, or the player released a hold |
+| `OutOfRange` | Beyond `Max Interaction Range` |
+| `Interrupted` | Another interaction took over |
+| `Faulted` | The interaction threw |
+
+Every cancellation runs `OnInteractionCancelled` with the reason, which is the hook for refunds and UI resets.
+
+## 8. Authority and networking
+
+This section is optional. Local single-player builds can skip it entirely.
+
+### What the authority service does
+
+`InteractionAuthorityService` validates a request before it runs. It answers one narrow question: is this request legal, given what the server knows? It does not choose targets for the client.
 
 ```csharp
-public enum InteractionCancelReason : byte
+var authority = new InteractionAuthorityService(
+    new InteractionAuthorityOptions(worldId: 1, requireStableIds: true));
+
+authority.TryRegisterTarget(snapshot);
+
+InteractionValidationResult result = authority.ValidateRequest(request, serverPosition, serverTick);
+if (!result.IsAccepted)
 {
-    Manual,          // Player/code called ForceEndInteraction()
-    OutOfRange,      // Instigator moved beyond maxInteractionRange
-    Interrupted,     // External gameplay event (damage, stun)
-    Timeout,         // Interaction time limit exceeded
-    TargetDestroyed, // The interactable was destroyed
-    SystemShutdown,  // Scene unloaded / InteractionSystem disposed
-    Faulted          // User code or adapter threw an exception
+    // result.Failure names the gate that rejected it
 }
 ```
 
-React: `interactable.OnInteractionCancelled += (source, reason) => { ... };`
-Cancel: `interactable.ForceEndInteraction(InteractionCancelReason.Interrupted);`
+Validation order: request shape, world scope, tick drift, rate limit, target lookup, availability, action, range, then replay history. Everything that can reject runs before history is touched, so a flood of invalid requests cannot consume the replay budget.
 
-### Instigator Tracking
+### Capacity ceilings
+
+| Ceiling | Value | Behavior at capacity |
+| --- | --- | --- |
+| Registered targets | 65,536 | `TryRegisterTarget` returns `false` |
+| Queue owners | 65,536 | `TryGetOrCreateQueue` returns `false`; `GetOrCreateQueue` throws |
+| Rate-limit windows | 65,536 | `TryConsume` returns `false`, mapped to `RateLimited` |
+
+Existing entries remain updatable, removable, and clearable at capacity. If one authority genuinely needs more, shard by world rather than raising the constant.
+
+Rate windows use an indexed expiry heap with a per-call prune budget of 256, so identity churn cannot permanently consume capacity and cleanup cannot become a single-frame spike.
+
+### Priority is not an access control
+
+The authority never enumerates candidates. A client sends the target it chose, and the server checks whether that choice is legal. Priority decides which target a detector prefers; it does not restrict what a player may request. Access control is `IInteractionRequirement`'s job.
+
+The network payload therefore carries `TargetStableId`, not priority. Adding a priority field would create the appearance of server-side selection without the behavior.
+
+### Networking bridge
+
+`InteractionNetworkAuthorityBridge` wraps the authority with DTO conversions. Two overload families exist because the instigator position is client-reported and therefore untrusted:
+
+| Overload | Position used | Use for |
+| --- | --- | --- |
+| `Validate(request, tick)` | Client-reported | Client-informative servers |
+| `Validate(request, serverPosition, tick)` | Server-resolved | Authoritative range checks |
+
+A server that enforces range must use the second form. The first exists for products that deliberately trust the client.
+
+### Deterministic authority
+
+`InteractionDeterministicAuthorityService` is the same contract over `FPVector3` and `FPInt64`. Use it when the server replays a request stream and must reach identical verdicts on every host.
+
+Two independently constructed instances fed the same stream produce zero verdict divergences, which is the property a replay server depends on.
+
+### If you need optimality enforcement
+
+The client uses tiered queries, the server validates single targets, and the two can disagree about which target was optimal. That is acceptable: the server checks legality, not optimality. If you need the server to enforce "the client picked the best target", implement that as product policy on top of the bridge, not inside the module.
+
+## 9. Performance
+
+### Allocation boundaries
+
+| Path | Allocation |
+| --- | --- |
+| Spatial grid query | 0 bytes measured over one million iterations |
+| Authority validation | 0 bytes per request |
+| Detector per cycle | 0 bytes after warm-up; string formatting under the `DEBUG` define is the only exception |
+| Interactable position update | 0 bytes, snapshot arrays are cached |
+
+The detector pre-allocates its candidate buffers in `Awake`. Raising `Max Interactables` shifts that allocation to scene load, not gameplay.
+
+### Spatial grid cost
+
+Measured on 10,000 objects, cell size 10, query radius 10:
+
+| Metric | Value |
+| --- | --- |
+| Query p50 | 3.0 µs |
+| Query p99 | 8.0 µs |
+| Throughput | about 212,000 queries/s |
+| Worst case (cell size 4) p99 | 90 µs |
+
+Query cost follows local density, not total object count. Cell size is the dominant parameter: too small and the cell range explodes, too large and every cell chain grows.
+
+### Detector caches
+
+Three caches back the detector: collider to interactable, line-of-sight results, and auto-interact timestamps. All three are bounded.
+
+- Component cache clears at `Max Interactables * 4` entries.
+- LOS cache refuses new entries at `Max Interactables`.
+- Auto-interact table is described in section 6.
+
+Without these bounds, a player streaming through an open world would grow the caches for the whole session.
+
+### Threading
+
+Everything runs on the Unity main thread. The spatial grid is single-writer with a debug-only thread guard: it throws on a second writer in development builds and compiles the guard out of release.
+
+The authority service is not thread-safe. Use one instance per server world and drive it from the simulation thread.
+
+## 10. Composition recipes
+
+### Loot with a quest gate
+
+Requirement blocks, pickable rewards.
 
 ```csharp
-using CycloneGames.Logging;
-
-public class CoopChest : Interactable
+public class QuestChest : PickableItem
 {
-    private static readonly LogChannel Log = LogChannel.Create("Game.Interaction");
+    [SerializeField] private string requiredQuest = "find_the_key";
+    [SerializeField] private int gold = 100;
 
-    protected override async UniTask OnDoInteractAsync(CancellationToken ct)
-    {
-        if (CurrentInstigator is GameObjectInstigator goi)
-            Log.Info($"Opened by: {goi.GameObject.name}");
-        await HoldTimerAsync(ct);
-        GiveItemToPlayer(CurrentInstigator);
-    }
+    public override bool CanInteract(InstigatorHandle instigator) =>
+        base.CanInteract(instigator) && QuestLog.IsComplete(requiredQuest);
+
+    protected override void OnPickedUp() => PlayerWallet.Add(gold);
 }
 ```
 
-Custom instigator for ECS:
+### Split-screen with two worlds
+
+Each player gets its own system and detector, both with a distinct `World Id`. Commands route by world, so player one cannot trigger player two's targets.
+
+Do not share a detector between players. The nearby list and current target are per-detector state.
+
+### Server-authoritative interaction
+
+The client detects and requests, the server validates, the client plays the result.
+
+```csharp
+// client
+IInteractable target = detector.CurrentInteractable.CurrentValue;
+bridge.Validate(new InteractionNetworkRequest(...), tick);
+
+// server
+var result = authority.ValidateRequest(request, serverResolvedPosition, tick);
+if (result.IsAccepted) ExecuteInteraction(request);
+```
+
+The client detector still runs; it just does not decide legality. That keeps prompt UI responsive without trusting the client.
+
+### Entityless instigators
+
+`InstigatorHandle` is an abstract class precisely so ECS and headless setups can wrap whatever identifier they have.
 
 ```csharp
 public sealed class EntityInstigator : InstigatorHandle
 {
-    public Entity Entity { get; }
-    public override int Id => Entity.Index;
-    public EntityInstigator(Entity entity) => Entity = entity;
-    public override bool TryGetPosition(out Vector3 pos) { ... }
+    private readonly Entity entity;
+    public EntityInstigator(Entity entity) => this.entity = entity;
+
+    public override int Id => entity.Index;
+    public override ulong StableId => EntityId.ToULong(entity);
 }
 ```
 
-### Batch Interactions
+Cache one instance per entity; constructing per frame allocates.
 
-```csharp
-detector.TryInteractAll();       // All nearby targets
-detector.TryInteractAll("loot"); // Specific action, all targets
-```
+## 11. Troubleshooting
 
-### Global Events
-
-```csharp
-InteractionSystem.Instance.OnAnyInteractionStarted += (target, instigator) =>
-    Analytics.LogEvent("interaction_started", target.InteractionPrompt);
-
-InteractionSystem.Instance.OnAnyInteractionCompleted += (target, instigator, success) =>
-    { if (success) QuestManager.OnInteraction(target); };
-```
-
-### Nearby Candidates
-
-```csharp
-using CycloneGames.Logging;
-
-LogChannel log = LogChannel.Create("Game.Interaction");
-IReadOnlyList<InteractionCandidate> candidates = detector.NearbyInteractables;
-foreach (var c in candidates)
-    log.Info($"{c.Interactable.InteractionPrompt}: score={c.Score:F1}");
-```
-
-Gamepad cycling: `detector.CycleTarget(+1)` / `detector.CycleTarget(-1)`.
-
-### Interaction Progress
-
-Built-in: `HoldTimerAsync` drives progress automatically.
-Manual: `ReportProgress(0.5f)` for custom timed interactions.
-
-```csharp
-protected override async UniTask OnDoInteractAsync(CancellationToken ct)
-{
-    for (int i = 0; i < 100; i++)
-    {
-        ct.ThrowIfCancellationRequested();
-        await UniTask.Delay(50, cancellationToken: ct);
-        ReportProgress(i / 100f);
-    }
-}
-```
-
-### Effect Pool System
-
-```csharp
-EffectPoolSystem.Prewarm(sparksPrefab, 32);  // During loading
-EffectPoolSystem.Spawn(sparksPrefab, position, rotation, 2f);  // Auto-return after 2s
-EffectPoolSystem.Spawn(smokePrefab, position, rotation);  // Manual ReturnToPool()
-```
-
-Attach `PooledEffect` component to the effect prefab. Pools are keyed by prefab `InstanceID`, one pool per unique prefab. Initializes lazily on first spawn.
-
-## Advanced Topics
-
-### Authority and Networking
-
-This module provides Unity-free authority contracts for server-side validation:
-
-- `InteractionAuthorityService` — server-side request validation: world scope, stable IDs, tick drift, duplicate requests, rate limits, range checks, queue pressure.
-- `InteractionTargetSnapshot` / `InteractionVector3` — headless/server adapters without `UnityEngine` dependency.
-- `IInteractionPositionProvider` — pluggable position sources for networking, ECS, or backend simulation.
-- `InteractionMetrics` — thread-safe counters for accepted, rejected, queued, and faulted interactions.
-
-**Server-authoritative flow:**
-
-1. Client detector selects a candidate, sends `InteractionRequest` with `WorldId`, `TargetStableId`, `InstigatorStableId`, `ActionId`, `Tick`.
-2. Server resolves stable IDs and runs `InteractionAuthorityService.ValidateRequest()`.
-3. Game-specific server code validates LOS, permissions, cooldowns, ownership.
-4. Server executes and broadcasts `InteractionResult`.
-5. Clients reconcile local focus/UI against the server result.
-
-For deterministic multiplayer, install `CycloneGames.RPGFoundation.Interaction.DeterministicMath` and use `InteractionDeterministicAuthorityService` with `FPVector3` / `FPInt64`. Install the combined GameplayFramework companion only when an Actor needs to supply deterministic authority payloads.
-
-| Situation | Use | Do not use as authority |
+| Symptom | Cause | Fix |
 | --- | --- | --- |
-| Local single-player or non-deterministic server | `InteractionVector3`, `InteractionAuthorityService` | - |
-| Transport DTO for regular networking | `InteractionNetworkRequest` with `NetworkVector3` | `FPVector3` (unless transport supports raw fixed payloads) |
-| Deterministic multiplayer, rollback, or replay | `FPVector3`, `InteractionDeterministicAuthorityService` | `NetworkVector3`, `InteractionVector3` |
-| UI, debug, analytics | `FPVector3.ToInteractionVector3()` | Feeding converted float back into authority |
+| Nothing is detected | `Interactable Layer` is `Nothing` in Physics mode | Set the layer mask |
+| Nothing is detected in `SpatialHash` mode | Interactable is not registered | Confirm `InteractionSystem` exists and the object was enabled after it |
+| Wrong object is selected | Both targets have `Priority = 0` | Set priority; the score term dominates |
+| High-priority target is ignored | Priority outside `[0, 31]`, or priority changed without notifying | Clamp the value, then call `NotifyPositionChanged` |
+| Prompt never updates | UI subscribes before the system exists | Bind inside `InteractionSystem.SystemRegistered` |
+| Interaction cancels immediately | `Max Interaction Range` is smaller than the real distance | Raise it, or leave it at `0` |
+| Server rejects everything | `TargetStableId` is `0` while `requireStableIds` is on | Assign a stable ID on the target |
+| Second world's commands are ignored | Duplicate `World Id` | Give each system a unique ID |
 
-### System Registry and Binding
+## 12. Validation
 
-`InteractionSystem` exposes an explicit static registry so components never scan the scene to find it:
+The module ships EditMode suites that double as executable specifications.
 
-- `InteractionSystem.ResolveDefault()` — O(1) resolution: the alive global `Instance` first, then the first alive registered system. Main thread only.
-- `InteractionSystem.SystemRegistered` — static event raised on the main thread after a new system finishes `Awake` initialization.
-- `InteractionSystem.TryGetWorld(worldId, out system)` — world-scoped lookup for split-screen, additive scenes, prediction worlds, and server simulations.
+| Suite | Covers |
+| --- | --- |
+| `InteractionGridSpatialTests` | 105 grid scenarios across 5 seeds, oracle-checked against brute force |
+| `InteractionGridSoakFuzzTests` | 60-window soak with member churn, 20,000-operation fuzz |
+| `InteractionPriorityTests` | Tier isolation, bitmap bookkeeping, clamping, idempotent registration |
+| `InteractionSecurityBoundaryTests` | Anonymous rate limiting, tick rollback, replay history accounting, fail-closed replay window |
+| `InteractionDetectorCacheBoundTests` | Component cache ceiling, stale entry eviction |
+| `InteractionProductionReadinessTests` | Scale and seed matrix, single-frame burst, soak, fuzz, edge capacities |
+| `InteractionAssemblyLayoutTests` | Pure C# assemblies live under `Core/`, asmdef names match files, no object-pool dependency |
 
-Binding precedence used by `Interactable` and `InteractionDetector`:
+Run them from the Test Runner window, or headless:
 
-1. Explicit assignment — `Interactable.SetInteractionSystem()` or the detector's serialized `interactionSystem` reference.
-2. `InteractionSystem.ResolveDefault()`.
-3. Deferred binding — when no system exists yet (script execution order, late spawn, additive scene still loading), the component subscribes to `SystemRegistered` once and binds when a system appears. There is no scene-wide search anywhere in runtime code.
-
-Stale bindings self-heal: if the bound system is destroyed (for example, an additive scene unload while this component stays enabled), the component treats it as unbound at the next touchpoint and re-resolves. Components that are disabled and re-enabled rebind through `OnEnable` as usual.
-
-With Enter Play Mode Options (Domain Reload disabled), static registry state is rebuilt by `[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]` in `InteractionSystem` and `EffectPoolSystem`, so no stale system or pool survives between play sessions. Multi-world setups should still assign systems explicitly, because `ResolveDefault()` has no knowledge of which world a component belongs to.
-
-### VitalRouter Integration
-
-Interactions are routed as `InteractionCommand`:
-
-```csharp
-[Routes]
-public partial class CutsceneInterceptor : MonoBehaviour
-{
-    [Route]
-    async UniTask OnInteraction(InteractionCommand cmd)
-    {
-        if (CutsceneManager.IsPlaying)
-            return; // Swallow the command
-    }
-}
+```bash
+Unity.exe -batchmode -nographics -projectPath <project> \
+  -runTests -testPlatform EditMode \
+  -testFilter InteractionGridSpatialTests \
+  -testResults results.xml
 ```
 
-Bypass: `await InteractionSystem.Instance.ProcessInteractionAsync(target, instigator);`
-
-## Common Scenarios
-
-### Stop interaction during cutscenes
-
-Either call `detector.SetDetectionEnabled(false)`, or add a VitalRouter interceptor.
-
-### PUBG-style loot list
-
-Use `detector.NearbyInteractables` — returns all scored candidates sorted by score.
-
-### ECS / entityless games
-
-Subclass `InstigatorHandle`. `TryGetPosition()` returns `false` by default; distance monitoring skips automatically.
-
-### Input rebinding
-
-Update `InteractionAction.InputHint` at runtime when the player rebinds keys. Input processing belongs to the project's input adapter.
-
-## Performance and Memory
-
-### Allocation Boundaries
-
-| Technique                     | Where                                                            |
-| ----------------------------- | ---------------------------------------------------------------- |
-| Pre-allocated arrays          | Collider buffers, sort buffers, spatial grid slot arrays         |
-| Caller-owned query buffer     | `SpatialHashGrid.QueryRadiusNonAlloc()`                          |
-| Struct candidates/commands    | `InteractionCandidate`, `InteractionCommand` are `readonly struct` |
-| Cached position               | `Position` caches per frame, avoids `Transform` access           |
-| Flyweight states              | `InteractionStateHandler` instances are shared static singletons |
-| `InstigatorHandle` abstract   | Only reference types can inherit — compile-time boxing prevention |
-| Cached `GameObjectInstigator` | One reusable instance created in `InteractionDetector.Awake()`   |
-
-**Known allocation points:** `EffectPoolSystem` creates a pool on first spawn (use `Prewarm()` during loading), `InteractionDetector` allocates per-detector dictionaries in `Awake()`, and cancellable execution creates a `CancellationTokenSource`.
-
-### Spatial Hash Grid
-
-SoA layout for cache-friendly traversal:
-
-| Array           | Purpose                                          |
-| --------------- | ------------------------------------------------ |
-| `_items[]`      | `IInteractable` references                        |
-| `_posX/Y/Z[]`   | Cached world positions (SoA)                      |
-| `_hashes[]`     | Pre-computed cell hash                            |
-| `_nextInCell[]` | Intrusive linked list forward pointers            |
-| `_prevInCell[]` | Intrusive linked list backward pointers           |
-| `_cellHeads`    | `Dictionary<long, int>` cell hash → head slot     |
-| `_freeSlots`    | `Stack<int>` for O(1) slot recycling              |
-
-Thread-safe via `ReaderWriterLockSlim`. Query cost depends on cell size, radius, and local density.
-
-### Thread Safety
-
-| Component                 | Mechanism                                           |
-| ------------------------- | --------------------------------------------------- |
-| `Interactable` concurrency | `Interlocked.CompareExchange` — atomic lock-free    |
-| `SpatialHashGrid`         | `ReaderWriterLockSlim` — read-parallel, write-exclusive |
-| Unity components          | Main-thread only                                     |
-
-## Troubleshooting
-
-| Symptom | Likely cause | Resolution |
-| --- | --- | --- |
-| Object not detected | Missing/invalid collider, layer, channel, or `IsInteractable` | Use **Interaction Validator** window to auto-check |
-| Interaction blocked during cutscene | Detector still active | Call `detector.SetDetectionEnabled(false)` |
-| `TryInteractAsync` returns false during interaction | Concurrent interaction attempted | The atomic flag prevents re-entry; wait for completion |
-| Performance issues with many interactables | Cell size, radius, or density mismatch | Profile cell size and query radius in representative scenes |
-| ECS compatibility | Package uses `MonoBehaviour` paths | Subclass `InstigatorHandle` for entity identity; detector is main-thread only |
-| Use-after-destroy errors | Disposed GameObject accessed | `GameObjectInstigator.TryGetPosition` null-checks each frame |
-| Interactable never detected after scene load | `InteractionSystem` enabled after the interactable, and no serialized reference assigned | Registration defers to `SystemRegistered`; verify the system exists and logs no duplicate `WorldId` error |
-| Interactable bound to a destroyed system | Additive scene containing the system unloaded | Binding re-resolves lazily on the next position update or re-enable; toggle the component or call `SetInteractionSystem` to force it |
-
-## Validation
-
-Run EditMode tests from Unity Test Runner, targeting `CycloneGames.RPGFoundation.Interaction.Tests.Editor`. For multiplayer, test both client prediction and authoritative server paths with identical query inputs.
+Measured evidence behind the numbers in section 9 lives under `deliverables/review/evidence/interaction/` in the source repository.
