@@ -67,6 +67,8 @@ This package does not send packets. A project-specific networking adapter regist
 
 `ProjectileNetworkProtocol` owns message IDs `17000-17999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
 
+Protocol values are exposed as `public static readonly` fields: frozen contract ids and version constants are read at runtime rather than inlined across assemblies, and the tunable payload-size defaults are visible to every consumer without recompiling embedded literals. A contract change still requires a new `:vN` identity and coordinated version windows.
+
 Every descriptor declares an explicit printable-ASCII `ContractId` such as `ProjectileSpawnMessage:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. The fingerprint pins contract identity only: this package ships no wire codec, so the binary payload layout is owned by the integrator's chosen serializer and is NOT verified by the fingerprint. Peers agree on the layout by sharing serializer configuration, and any layout change must ship under a new contract identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
 
 | Message | ID | Channel | Payload |
@@ -96,7 +98,7 @@ public static class ProjectileNetworkInstaller
 
 ## Validation And Reconciliation
 
-`DefaultProjectileNetworkMessageValidator` validates projectile messages against `ProjectileNetworkValidationContext` and returns `NetworkActionResult`. It checks payload validity, authentication, tick windows, duplicate sequence state, ordered snapshots, velocity budgets, radius budgets, age budgets, and lifecycle flag masks.
+`DefaultProjectileNetworkMessageValidator` validates projectile messages against `ProjectileNetworkValidationContext` and returns `NetworkActionResult`. It checks payload validity, authentication, tick windows, duplicate sequence state, ordered snapshots, velocity budgets, radius budgets, age budgets, and lifecycle flag masks. Full-state requests go through the same envelope checks because they are the most expensive inbound message; per-connection rate limiting remains a product-layer policy.
 
 Authentication is fail-closed: a missing `Sender` is unauthenticated and produces `Unauthorized`. Trusted in-process paths must still provide an explicit authenticated connection context or use a separately validated project boundary; `null` is never an authentication bypass.
 
@@ -145,6 +147,29 @@ if (bridge.TryCaptureSnapshot(projectileEntityId, sequence, out ProjectileSnapsh
 ```
 
 Project code owns snapshot application, including the ownership policy for visual interpolation, prediction rollback, presentation-only projectiles, and server-owned projectile worlds.
+
+## Batch Capture and Replay History
+
+A full authoritative tick is one sequential pass. The bridge preallocates its conversion scratch at construction using `IProjectileNetworkSnapshotSource.SnapshotCapacity`, so steady-state capture performs no allocation:
+
+```csharp
+var messages = new ProjectileSnapshotMessage[projectileWorld.Capacity];
+int count = bridge.CaptureSnapshots(messages, sequence);
+```
+
+`ProjectileNetworkSnapshotHistory` keeps bounded replay state per entity. Each entity owns a fixed-depth contiguous ring; bucket heads are a compact sequential array, so a miss scans only the bucket heads rather than the whole ring. `TryGetAtOrBefore` resolves the newest snapshot at or before a server tick for rollback, and `CopyHistory` emits one entity's retained frames oldest-first into caller-owned storage.
+
+```csharp
+var history = new ProjectileNetworkSnapshotHistory(capacity: 4096, depthPerEntity: 8);
+history.Record(in authoritativeSnapshot);
+
+if (history.TryGetAtOrBefore(projectileEntityId, serverTick, out ProjectileSnapshotMessage frame))
+{
+    // Rewind to frame and resimulate forward.
+}
+```
+
+`Record`, `TryGet`, `TryGetLatest`, `TryGetAtOrBefore`, `CopyHistory` and `RemoveProjectile` are allocation-free. When every bucket is occupied, the least recently written entity is evicted and `OverwriteCount` records it.
 
 ## Synchronization Policy
 

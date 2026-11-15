@@ -628,5 +628,3 @@ Unity.exe -batchmode -nographics -projectPath <project> \
   -testFilter InteractionGridSpatialTests \
   -testResults results.xml
 ```
-
-第 9 节数字背后的实测证据位于源码仓库的 `deliverables/review/evidence/interaction/`。

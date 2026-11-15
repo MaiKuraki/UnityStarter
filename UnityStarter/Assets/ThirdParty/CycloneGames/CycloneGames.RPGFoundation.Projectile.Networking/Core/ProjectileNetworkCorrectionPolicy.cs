@@ -4,6 +4,16 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
 {
     public readonly struct ProjectileNetworkCorrectionPolicy
     {
+        // A struct's implicit parameterless constructor zero-initializes every field;
+        // the tuning constructor must be invoked explicitly to obtain real thresholds.
+        public static readonly ProjectileNetworkCorrectionPolicy Default = new ProjectileNetworkCorrectionPolicy(
+            positionCorrectionThreshold: 0.05f,
+            positionHardSnapThreshold: 2f,
+            velocityCorrectionThreshold: 0.5f,
+            ageCorrectionThreshold: 0.05f,
+            correctLifecycleFlags: true,
+            correctTarget: true);
+
         public readonly float PositionCorrectionThresholdSqr;
         public readonly float PositionHardSnapThresholdSqr;
         public readonly float VelocityCorrectionThresholdSqr;
@@ -45,14 +55,6 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             AgeCorrectionThreshold = ageCorrectionThreshold;
             CorrectLifecycleFlags = correctLifecycleFlags;
             CorrectTarget = correctTarget;
-        }
-
-        public static ProjectileNetworkCorrectionPolicy Default
-        {
-            get
-            {
-                return new ProjectileNetworkCorrectionPolicy();
-            }
         }
 
         private static bool IsFinite(float value)

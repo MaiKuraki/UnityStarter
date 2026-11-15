@@ -48,7 +48,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
         private static readonly GUIContent PredictedFlagLabel = new GUIContent("Predicted", "This definition may be spawned by client prediction. Runtime authority still decides whether prediction is accepted.");
         private static readonly GUIContent AuthoritativeFlagLabel = new GUIContent("Authoritative", "This definition may be simulated by the server or another authoritative owner.");
         private static readonly GUIContent DespawnOnHitFlagLabel = new GUIContent("Despawn On Hit", "Terminal hits despawn the projectile when no bounce or pierce continuation remains.");
-        private static readonly GUIContent IgnoreOwnerFlagLabel = new GUIContent("Ignore Owner", "Collision adapters should ignore the owner where supported.");
+        private static readonly GUIContent IgnoreOwnerFlagLabel = new GUIContent("Ignore Owner", "Hits reporting this entity as their target are skipped. Collision adapters must populate TargetEntityId for this to take effect.");
         private static readonly GUIContent HasVisualArcFlagLabel = new GUIContent("Has Visual Arc", "Presentation systems may render an arced visual trail for this definition.");
 
         private SerializedProperty _definitionId;
@@ -70,12 +70,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
         private readonly ProjectileDefinitionValidationIssue[] _validationIssues =
             new ProjectileDefinitionValidationIssue[ProjectileDefinitionValidator.RECOMMENDED_ISSUE_CAPACITY];
 
-        private static bool s_validationFoldout = true;
-        private static bool s_identityFoldout = true;
-        private static bool s_guidanceFoldout = true;
-        private static bool s_kinematicsFoldout = true;
-        private static bool s_collisionFoldout = true;
-        private static bool s_effectFoldout;
+        private bool s_validationFoldout = true;
+        private bool s_identityFoldout = true;
+        private bool s_guidanceFoldout = true;
+        private bool s_kinematicsFoldout = true;
+        private bool s_collisionFoldout = true;
+        private bool s_effectFoldout;
 
         private void OnEnable()
         {
