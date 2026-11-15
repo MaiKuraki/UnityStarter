@@ -67,6 +67,8 @@ Core 与 EditMode test assembly 都设置 `autoReferenced: false`。Consumer asm
 
 `ProjectileNetworkProtocol` 在共享 `NetworkMessageRanges.Module` 范围（`1000-29999`）内拥有 `17000-17999` 消息 ID。`CreateProtocolManifest` 构造完整 manifest，`RegisterMessageCatalog` / `TryRegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交它。Catalog 要么同时提交 range 和全部 descriptor，要么拒绝 manifest 且不留下部分注册。
 
+协议值以 `public static readonly` 字段暴露：冻结的 contract id 与版本常量在运行时读取，不会跨程序集内联；可调的 payload 上限默认值也能被所有消费方读到，无需重新编译内联字面量。契约变化仍需新的 `:vN` identity 并协调版本窗口。
+
 每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `ProjectileSpawnMessage:v1`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。注意：fingerprint 只钉住 contract identity——本包不提供 wire codec，二进制 payload layout 由集成方选用的 serializer 决定，fingerprint 无法验证它。通信双方通过共享 serializer 配置来约定 layout；任何 layout 变化都必须以新 contract identity 发布。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间协调 `CurrentVersion` / `MinimumSupportedVersion`。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
 
 | Message | ID | Channel | Payload |
@@ -96,7 +98,7 @@ public static class ProjectileNetworkInstaller
 
 ## 校验与修正
 
-`DefaultProjectileNetworkMessageValidator` 使用 `ProjectileNetworkValidationContext` 校验 projectile 消息，并返回 `NetworkActionResult`。它会检查 payload 有效性、认证状态、tick 窗口、重复 sequence、快照顺序、速度预算、半径预算、age 预算和 lifecycle flag mask。
+`DefaultProjectileNetworkMessageValidator` 使用 `ProjectileNetworkValidationContext` 校验 projectile 消息，并返回 `NetworkActionResult`。它会检查 payload 有效性、认证状态、tick 窗口、重复 sequence、快照顺序、速度预算、半径预算、age 预算和 lifecycle flag mask。Full-state request 是最昂贵的入站消息，因此同样经过完整的 envelope 校验；按连接的速率限制仍属于产品层策略。
 
 认证采用 fail-closed：缺失 `Sender` 会被视为未认证并返回 `Unauthorized`。可信任的进程内路径也必须提供显式 authenticated connection context，或在项目独立验证边界完成校验；`null` 不能作为认证绕过方式。
 
@@ -145,6 +147,29 @@ if (bridge.TryCaptureSnapshot(projectileEntityId, sequence, out ProjectileSnapsh
 ```
 
 项目代码负责 snapshot application，并为视觉插值、预测回滚、仅表现 projectile 和服务器持有的 projectile world 定义所有权策略。
+
+## 批量采集与回放历史
+
+一次完整的权威 tick 是一次顺序遍历。bridge 在构造时依据 `IProjectileNetworkSnapshotSource.SnapshotCapacity` 预分配转换 scratch，稳态采集不产生分配：
+
+```csharp
+var messages = new ProjectileSnapshotMessage[projectileWorld.Capacity];
+int count = bridge.CaptureSnapshots(messages, sequence);
+```
+
+`ProjectileNetworkSnapshotHistory` 为每个实体保留有界的回放状态。每个实体拥有固定深度的连续 ring，bucket head 是紧凑的顺序数组，因此 miss 只扫描 bucket head，而不是整个 ring。`TryGetAtOrBefore` 解析指定 server tick 之前（含）最新的快照用于回滚，`CopyHistory` 把某个实体保留的帧按从旧到新写入调用方持有的存储。
+
+```csharp
+var history = new ProjectileNetworkSnapshotHistory(capacity: 4096, depthPerEntity: 8);
+history.Record(in authoritativeSnapshot);
+
+if (history.TryGetAtOrBefore(projectileEntityId, serverTick, out ProjectileSnapshotMessage frame))
+{
+    // 回退到该帧并向前重仿真。
+}
+```
+
+`Record`、`TryGet`、`TryGetLatest`、`TryGetAtOrBefore`、`CopyHistory` 和 `RemoveProjectile` 均无分配。所有 bucket 都被占用时，最近最少写入的实体会被淘汰，并由 `OverwriteCount` 记录。
 
 ## 同步策略
 

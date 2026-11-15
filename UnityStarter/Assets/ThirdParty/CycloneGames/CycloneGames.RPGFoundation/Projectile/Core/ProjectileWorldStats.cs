@@ -1,41 +1,49 @@
 namespace CycloneGames.RPGFoundation.Projectile.Core
 {
+    /// <summary>
+    /// Observation snapshot. Lifetime counters are 64-bit so long-running servers never
+    /// wrap into negative diagnostics.
+    /// </summary>
     public readonly struct ProjectileWorldStats
     {
         public readonly int Capacity;
         public readonly int ActiveCount;
         public readonly int PeakActiveCount;
-        public readonly int StepCount;
+        public readonly long StepCount;
         public readonly int LastTick;
         public readonly float LastDeltaTime;
-        public readonly int LastHitEventCount;
-        public readonly int LastCollisionQueryCount;
-        public readonly int LastCollisionHitCount;
-        public readonly int TotalSpawnAcceptedCount;
-        public readonly int TotalSpawnRejectedInvalidCount;
-        public readonly int TotalSpawnRejectedCapacityCount;
-        public readonly int TotalDespawnCount;
-        public readonly int TotalHitEventCount;
-        public readonly int TotalHitEventOverflowCount;
-        public readonly int TotalCollisionIterationLimitCount;
+        public readonly long LastHitEventCount;
+        public readonly long LastCollisionQueryCount;
+        public readonly long LastCollisionHitCount;
+        public readonly long TotalSpawnAcceptedCount;
+        public readonly long TotalSpawnRejectedInvalidCount;
+        public readonly long TotalSpawnRejectedCapacityCount;
+        public readonly long TotalDespawnCount;
+        public readonly long TotalHitEventCount;
+        public readonly long TotalHitEventOverflowCount;
+        public readonly long TotalCollisionIterationLimitCount;
+        public readonly long TotalSubStepCount;
+        public readonly long TotalClampedFrameCount;
 
         public ProjectileWorldStats(
             int capacity,
             int activeCount,
             int peakActiveCount,
-            int stepCount,
+            long stepCount,
             int lastTick,
             float lastDeltaTime,
-            int lastHitEventCount,
-            int lastCollisionQueryCount,
-            int lastCollisionHitCount,
-            int totalSpawnAcceptedCount,
-            int totalSpawnRejectedInvalidCount,
-            int totalSpawnRejectedCapacityCount,
-            int totalDespawnCount,
-            int totalHitEventCount,
-            int totalHitEventOverflowCount,
-            int totalCollisionIterationLimitCount)
+            long lastHitEventCount,
+            long lastCollisionQueryCount,
+            long lastCollisionHitCount,
+            long totalSpawnAcceptedCount,
+            long totalSpawnRejectedInvalidCount,
+            long totalSpawnRejectedCapacityCount,
+            long totalDespawnCount,
+            long totalHitEventCount,
+            long totalHitEventOverflowCount,
+            long totalCollisionIterationLimitCount,
+            long totalSubStepCount,
+            long totalClampedFrameCount)
         {
             Capacity = capacity;
             ActiveCount = activeCount;
@@ -53,6 +61,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             TotalHitEventCount = totalHitEventCount;
             TotalHitEventOverflowCount = totalHitEventOverflowCount;
             TotalCollisionIterationLimitCount = totalCollisionIterationLimitCount;
+            TotalSubStepCount = totalSubStepCount;
+            TotalClampedFrameCount = totalClampedFrameCount;
         }
 
         public float ActiveCapacityRatio
