@@ -1,6 +1,7 @@
 using System;
 using Cysharp.Threading.Tasks;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
+using CycloneGames.Spatial.Core;
 using NUnit.Framework;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Core;
@@ -153,7 +154,11 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
 
         private sealed class TestInteractionSystem : IInteractionSystem
         {
-            public SpatialHashGrid SpatialGrid => null;
+            public SpatialHashGrid<int> SpatialGrid => null;
+            public IInteractable GetInteractable(int slot) => null;
+            public uint OccupiedTiers => 0u;
+            public int QuerySlots(Vector3 center, float radius, int[] results, int maxResults, uint layerMask) => 0;
+            public void AdvanceAuthorityTick(int tick) { }
             public bool Is2DMode => false;
             public int WorldId => 0;
             public int RegisterCalls { get; private set; }

@@ -12,7 +12,7 @@
 
 ```text
 CycloneGames.RPGFoundation.Interaction.DeterministicMath/
-  Runtime/
+  Core/
     CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.asmdef
     IInteractionDeterministicPositionProvider.cs
     InteractionDeterministicAuthorityService.cs

@@ -49,6 +49,10 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         [SerializeField] protected UnityEvent onFocus;
         [SerializeField] protected UnityEvent onDefocus;
 
+        private string[] _authorityActionIds;
+        private ulong _stableIdHash;
+        private bool _stableIdHashValid;
+
         private InteractionStateType _currentState = InteractionStateType.Idle;
         private float _lastInteractionTime = float.NegativeInfinity;
         private CancellationTokenSource _interactionCts;
@@ -76,7 +80,19 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         public string InteractionPrompt => interactionPrompt;
         public string StableId => stableId;
-        public ulong StableIdHash => InteractionStableId.Hash64(stableId);
+        public ulong StableIdHash
+        {
+            get
+            {
+                if (!_stableIdHashValid)
+                {
+                    _stableIdHash = InteractionStableId.Hash64(stableId);
+                    _stableIdHashValid = true;
+                }
+
+                return _stableIdHash;
+            }
+        }
         public bool HasStableId => StableIdHash != InteractionStableId.None;
         public InteractionPromptData? PromptData => useLocalization && promptData.IsValid ? promptData : null;
         public bool IsInteractable => isInteractable && !IsInteracting && IsCooldownComplete();
@@ -460,6 +476,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         private string[] BuildEnabledActionIdsForAuthority()
         {
+            string[] cached = _authorityActionIds;
+            if (cached != null)
+            {
+                return cached;
+            }
+
             InteractionAction[] availableActions = actions ?? s_emptyActions;
             int count = 0;
             for (int i = 0; i < availableActions.Length; i++)
@@ -472,7 +494,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
             if (count == 0)
             {
-                return InteractionTargetSnapshot.EmptyActions;
+                _authorityActionIds = InteractionTargetSnapshot.EmptyActions;
+                return _authorityActionIds;
             }
 
             string[] enabledActionIds = new string[count];
@@ -486,7 +509,18 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
                 }
             }
 
-            return enabledActionIds;
+            _authorityActionIds = enabledActionIds;
+            return _authorityActionIds;
+        }
+
+        /// <summary>
+        /// Drops the cached authority payload after <see cref="Actions"/> or the stable id changes at
+        /// runtime. The snapshot is rebuilt from scratch on the next request.
+        /// </summary>
+        public void InvalidateAuthorityCache()
+        {
+            _authorityActionIds = null;
+            _stableIdHashValid = false;
         }
 
         /// <summary>

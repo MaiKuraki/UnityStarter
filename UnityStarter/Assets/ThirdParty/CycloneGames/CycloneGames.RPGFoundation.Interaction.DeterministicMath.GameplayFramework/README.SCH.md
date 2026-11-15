@@ -13,7 +13,7 @@
 ```text
 CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework/
   Runtime/
-    DeterministicGameplayFramework.asmdef
+    CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.asmdef
     GameplayFrameworkDeterministicInteractionExtensions.cs
   Tests/Editor/
     DeterministicGameplayFramework.Tests.Editor.asmdef
@@ -24,8 +24,8 @@ CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework/
 
 | 程序集 | 职责 | Unity 依赖 | 使用方引用方式 |
 | --- | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | Actor 与 deterministic position adapter 方法。 | 有 | 显式引用 |
-| `CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor` | EditMode 行为测试。 | 有 | 仅 Test Runner |
+| `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF` | Actor 与 deterministic position adapter 方法。 | 有 | 显式引用 |
+| `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.Tests.Editor` | EditMode 行为测试。 | 有 | 仅 Test Runner |
 
 package.json 声明 Runtime assembly 直接使用的全部 package dependency：RPGFoundation、Interaction DeterministicMath companion、DeterministicMath 和 GameplayFramework。程序集设置为 `autoReferenced: false`。本包不需要 scripting define symbol 或 DI 容器。
 
@@ -113,7 +113,7 @@ Actor 缺失或已销毁、provider 缺失、provider 读取失败，或 target 
 修改 integration 后运行以下 EditMode assembly：
 
 ```text
-CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor
+CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.Tests.Editor
 CycloneGames.RPGFoundation.Interaction.DeterministicMath.Tests.Editor
 CycloneGames.GameplayFramework.Tests.Editor
 ```
@@ -122,7 +122,7 @@ CycloneGames.GameplayFramework.Tests.Editor
 
 ## 故障排查
 
-- 找不到扩展方法时，在使用方 asmdef 中加入 `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework`。
+- 找不到扩展方法时，在使用方 asmdef 中加入 `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF`。
 - asmdef reference 无法解析时，确认 Assets 安装章节列出的全部 package root 均已存在。
 - 创建返回 `false` 时，检查 Actor 生命周期、provider 是否存在、provider 读取是否成功，以及 stable ID。
 - authority 结果与确定性模拟不一致时，确认 provider 读取 simulation state，而不是渲染 Transform state。

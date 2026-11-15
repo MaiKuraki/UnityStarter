@@ -13,7 +13,7 @@ The bridge never derives authority position from `Transform`. This keeps renderi
 ```text
 CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework/
   Runtime/
-    DeterministicGameplayFramework.asmdef
+    CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.asmdef
     GameplayFrameworkDeterministicInteractionExtensions.cs
   Tests/Editor/
     DeterministicGameplayFramework.Tests.Editor.asmdef
@@ -24,8 +24,8 @@ CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework/
 
 | Assembly | Role | Unity dependency | Consumer reference |
 | --- | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | Actor and deterministic-position adapter methods. | Yes | Explicit |
-| `CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor` | EditMode behavior coverage. | Yes | Test Runner only |
+| `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF` | Actor and deterministic-position adapter methods. | Yes | Explicit |
+| `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.Tests.Editor` | EditMode behavior coverage. | Yes | Test Runner only |
 
 The package declares every direct package dependency used by its Runtime assembly: RPGFoundation, the Interaction DeterministicMath companion, DeterministicMath, and GameplayFramework. Its assemblies are `autoReferenced: false`. No scripting define symbol or DI container is required.
 
@@ -113,7 +113,7 @@ This package writes no files, assets, preferences, caches, or save data. It crea
 Run these EditMode assemblies after changing the integration:
 
 ```text
-CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor
+CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.Tests.Editor
 CycloneGames.RPGFoundation.Interaction.DeterministicMath.Tests.Editor
 CycloneGames.GameplayFramework.Tests.Editor
 ```
@@ -122,7 +122,7 @@ Validate the product's rollback or lockstep owner separately with its real simul
 
 ## Troubleshooting
 
-- If extension methods are unavailable, add `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` to the consumer asmdef references.
+- If extension methods are unavailable, add `CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF` to the consumer asmdef references.
 - If an asmdef reference cannot be resolved, confirm that every package root listed in the Assets installation section is present.
 - If creation returns `false`, verify Actor lifetime, provider availability, provider read success, and stable identifiers.
 - If authority results differ from the deterministic simulation, confirm that the provider reads simulation state rather than rendered Transform state.

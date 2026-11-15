@@ -5,14 +5,9 @@ using CycloneGames.Compat;
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
     /// <summary>
-    /// Built-in <see cref="InstigatorHandle"/> for MonoBehaviour-based games.
-    /// Wraps a <see cref="UnityEngine.GameObject"/> and uses its InstanceID as identity.
-    /// <para/>
-    /// Cache one instance per detector/player to avoid per-interaction allocation:
-    /// <code>
-    /// private GameObjectInstigator _cachedInstigator;
-    /// void Awake() => _cachedInstigator = new GameObjectInstigator(gameObject);
-    /// </code>
+    /// Built-in <see cref="InstigatorHandle"/> for MonoBehaviour-based games. Wraps a
+    /// <see cref="UnityEngine.GameObject"/> and uses its instance id as identity. Cache one instance
+    /// per player; constructing per interaction allocates.
     /// </summary>
     public sealed class GameObjectInstigator : InstigatorHandle
     {

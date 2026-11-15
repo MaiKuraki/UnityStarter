@@ -5,11 +5,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 {
     public sealed class InteractionAuthorityService
     {
-        /// <summary>Implementation safety ceiling for targets retained by one authority owner.</summary>
-        public const int MaximumRegisteredTargetCount = 65_536;
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumRegisteredTargetCount = 65_536;
 
-        /// <summary>Implementation safety ceiling for target-owned request queues.</summary>
-        public const int MaximumQueueOwnerCount = 65_536;
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumQueueOwnerCount = 65_536;
 
         private readonly Dictionary<ulong, InteractionTargetSnapshot> _targets = new Dictionary<ulong, InteractionTargetSnapshot>();
         private readonly Dictionary<ulong, InteractionQueue> _queuesByTarget = new Dictionary<ulong, InteractionQueue>();
@@ -253,21 +259,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
                 return InteractionValidationResult.Reject(request, InteractionValidationFailure.RateLimited);
             }
 
-            InteractionRequestHistoryResult historyResult = _requestHistory.MarkSeen(
-                request,
-                serverTick,
-                Options.RequestHistoryWindowTicks,
-                Options.RequestHistoryCapacity);
-            if (historyResult == InteractionRequestHistoryResult.Duplicate)
-            {
-                return InteractionValidationResult.Reject(request, InteractionValidationFailure.DuplicateRequest);
-            }
-
-            if (historyResult == InteractionRequestHistoryResult.CapacityExceeded)
-            {
-                return InteractionValidationResult.Reject(request, InteractionValidationFailure.RequestHistoryFull);
-            }
-
             if (!_targets.TryGetValue(request.TargetStableId, out InteractionTargetSnapshot target))
             {
                 return InteractionValidationResult.Reject(request, InteractionValidationFailure.UnknownTarget);
@@ -295,6 +286,24 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
                 {
                     return InteractionValidationResult.Reject(request, InteractionValidationFailure.OutOfRange);
                 }
+            }
+
+            // Recording happens after every rejection path so only requests that would actually
+            // execute consume replay-history capacity. Recording earlier let an unauthenticated peer
+            // fill the globally shared history with rejects and starve legitimate traffic.
+            InteractionRequestHistoryResult historyResult = _requestHistory.MarkSeen(
+                request,
+                serverTick,
+                Options.RequestHistoryWindowTicks,
+                Options.RequestHistoryCapacity);
+            if (historyResult == InteractionRequestHistoryResult.Duplicate)
+            {
+                return InteractionValidationResult.Reject(request, InteractionValidationFailure.DuplicateRequest);
+            }
+
+            if (historyResult == InteractionRequestHistoryResult.CapacityExceeded)
+            {
+                return InteractionValidationResult.Reject(request, InteractionValidationFailure.RequestHistoryFull);
             }
 
             return InteractionValidationResult.Accept(request, target);

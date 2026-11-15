@@ -1,5 +1,5 @@
 {
-    "name": "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework",
+    "name": "CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF",
     "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework",
     "references": [
         "CycloneGames.RPGFoundation.Interaction.Core",

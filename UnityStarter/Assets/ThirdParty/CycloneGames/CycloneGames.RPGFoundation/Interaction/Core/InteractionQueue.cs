@@ -5,6 +5,13 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 {
     public sealed class InteractionQueue
     {
+        /// <summary>
+        /// Ring capacity reserved when an owner is created. The authority may retain up to
+        /// 65,536 owners, so pre-sizing every idle owner to its full queue capacity costs
+        /// roughly 3 KB each and dominates the module's server footprint.
+        /// </summary>
+        private const int InitialRetainedCapacity = 4;
+
         private readonly Queue<InteractionRequest> _queue;
         private readonly HashSet<QueuedRequestKey> _queuedRequestKeys;
         private readonly Dictionary<ulong, int> _queuedStableInstigatorCounts;
@@ -15,7 +22,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         public InteractionQueue(int capacity = 64)
         {
             _capacity = capacity > 0 ? capacity : 64;
-            _queue = new Queue<InteractionRequest>(_capacity);
+            int retained = _capacity < InitialRetainedCapacity ? _capacity : InitialRetainedCapacity;
+            _queue = new Queue<InteractionRequest>(retained);
             _queuedRequestKeys = new HashSet<QueuedRequestKey>();
             _queuedStableInstigatorCounts = new Dictionary<ulong, int>();
             _queuedLocalInstigatorCounts = new Dictionary<int, int>();
@@ -117,7 +125,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         {
             if (instigatorStableId == InteractionStableId.None)
             {
-                return 0;
+                instigatorStableId = InteractionStableId.Anonymous;
             }
 
             return _queuedStableInstigatorCounts.TryGetValue(instigatorStableId, out int count) ? count : 0;
@@ -153,25 +161,25 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 
         private void IncrementInstigatorCount(InteractionRequest request)
         {
-            if (request.InstigatorStableId != InteractionStableId.None)
-            {
-                _queuedStableInstigatorCounts.TryGetValue(request.InstigatorStableId, out int count);
-                _queuedStableInstigatorCounts[request.InstigatorStableId] = count + 1;
-            }
+            ulong stableKey = request.InstigatorStableId == InteractionStableId.None
+                ? InteractionStableId.Anonymous
+                : request.InstigatorStableId;
+            _queuedStableInstigatorCounts.TryGetValue(stableKey, out int count);
+            _queuedStableInstigatorCounts[stableKey] = count + 1;
 
             if (request.InstigatorId != 0)
             {
-                _queuedLocalInstigatorCounts.TryGetValue(request.InstigatorId, out int count);
-                _queuedLocalInstigatorCounts[request.InstigatorId] = count + 1;
+                _queuedLocalInstigatorCounts.TryGetValue(request.InstigatorId, out int localCount);
+                _queuedLocalInstigatorCounts[request.InstigatorId] = localCount + 1;
             }
         }
 
         private void DecrementInstigatorCount(InteractionRequest request)
         {
-            if (request.InstigatorStableId != InteractionStableId.None)
-            {
-                DecrementCount(_queuedStableInstigatorCounts, request.InstigatorStableId);
-            }
+            ulong stableKey = request.InstigatorStableId == InteractionStableId.None
+                ? InteractionStableId.Anonymous
+                : request.InstigatorStableId;
+            DecrementCount(_queuedStableInstigatorCounts, stableKey);
 
             if (request.InstigatorId != 0)
             {

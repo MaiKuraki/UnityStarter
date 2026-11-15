@@ -5,29 +5,21 @@ using CycloneGames.RPGFoundation.Interaction.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
+    /// <summary>
+    /// Built-in interactable that disappears once activated. Playback of a pickup effect is left to
+    /// the product: override <see cref="OnPickedUp"/> and play whatever the project uses (object
+    /// pool, VFX Graph, ECS system). The interaction module does not own presentation concerns.
+    /// </summary>
     public class PickableItem : Interactable
     {
         [Header("Pickable Settings")]
         [SerializeField] private bool destroyOnPickup = true;
-        [SerializeField] private GameObject pickupEffectPrefab;
-
-        protected override void Awake()
-        {
-            base.Awake();
-            // Subclass or Inspector can assign a project-specific channel.
-            // No default override - the framework does not assume game semantics.
-        }
 
         protected override async UniTask OnDoInteractAsync(CancellationToken ct)
         {
             await base.OnDoInteractAsync(ct);
 
             OnPickedUp();
-
-            if (pickupEffectPrefab != null)
-            {
-                EffectPoolSystem.Spawn(pickupEffectPrefab, transform.position, Quaternion.identity);
-            }
 
             if (destroyOnPickup)
             {
@@ -36,6 +28,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
         }
 
+        /// <summary>Runs once when the item is picked up, before it is destroyed.</summary>
         protected virtual void OnPickedUp() { }
     }
 }

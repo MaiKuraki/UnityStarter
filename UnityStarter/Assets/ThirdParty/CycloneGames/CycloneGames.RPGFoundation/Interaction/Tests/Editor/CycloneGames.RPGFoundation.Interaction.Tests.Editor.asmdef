@@ -5,7 +5,8 @@
         "CycloneGames.RPGFoundation.Interaction.Core",
         "CycloneGames.RPGFoundation.Interaction.Runtime",
         "CycloneGames.RPGFoundation.Interaction.Editor",
-        "CycloneGames.Factory.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Networking.Core",
+        "CycloneGames.Spatial.Core",
         "UniTask"
     ],
     "includePlatforms": [

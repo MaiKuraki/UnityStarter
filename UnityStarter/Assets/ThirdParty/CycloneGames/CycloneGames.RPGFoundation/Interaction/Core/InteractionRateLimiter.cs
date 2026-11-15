@@ -4,11 +4,23 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 {
     public sealed class InteractionRateLimiter
     {
-        /// <summary>Implementation safety ceiling for retained instigator windows.</summary>
-        public const int MaximumWindowCount = 65_536;
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumWindowCount = 65_536;
 
-        /// <summary>Maximum expired-window removals performed by one request.</summary>
-        public const int MaximumExpiredWindowsToPrunePerCall = 256;
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumExpiredWindowsToPrunePerCall = 256;
+
+        /// <summary>
+        /// Backwards sample magnitude tolerated without re-basing the tick source. Smaller gaps are
+        /// ordinary out-of-order arrival; larger ones mean the caller changed time domains.
+        /// </summary>
+        private const int TickReorderTolerance = 4;
 
         private readonly Dictionary<ulong, WindowState> _windows = new Dictionary<ulong, WindowState>();
         private readonly List<ulong> _expiryHeap = new List<ulong>();
@@ -52,9 +64,16 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 
         public bool TryConsume(ulong key, int tick, int maxRequests, int windowTicks)
         {
-            if (key == InteractionStableId.None || maxRequests <= 0 || windowTicks <= 0)
+            if (maxRequests <= 0 || windowTicks <= 0)
             {
                 return true;
+            }
+
+            // Callers without a stable identity share one bounded window instead of skipping
+            // the limiter, so an unauthenticated peer cannot issue unlimited requests.
+            if (key == InteractionStableId.None)
+            {
+                key = InteractionStableId.Anonymous;
             }
 
             long monotonicTick = ObserveTick(tick);
@@ -140,6 +159,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
             {
                 _lastObservedTick = tick;
                 _monotonicTick = SaturatingAdd(_monotonicTick, delta);
+            }
+            else if (delta < -TickReorderTolerance)
+            {
+                // A backwards jump this large means the caller switched time domains (server restart,
+                // snapshot rollback, region handover). Retained windows describe the old timeline, so
+                // dropping them restarts admission on the new one. Keeping them froze every identity
+                // until the new tick caught up with the old expiry, which never happens after a reset.
+                _windows.Clear();
+                _expiryHeap.Clear();
+                _lastObservedTick = tick;
+                _monotonicTick = 0L;
             }
 
             return _monotonicTick;

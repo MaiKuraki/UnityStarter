@@ -1,6 +1,8 @@
 using System;
+using UnityEngine;
 using Cysharp.Threading.Tasks;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Spatial.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
@@ -11,10 +13,19 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
     /// </summary>
     public interface IInteractionSystem : IDisposable
     {
-        /// <summary>The spatial hash grid used for O(1) interactable lookups in SpatialHash mode.</summary>
-        SpatialHashGrid SpatialGrid { get; }
+        /// <summary>
+        /// Spatial index payload is a slot identifier, never an <see cref="IInteractable"/> reference.
+        /// Resolve slots with <see cref="GetInteractable"/> after a query returns.
+        /// </summary>
+        SpatialHashGrid<int> SpatialGrid { get; }
 
-        /// <summary>Whether the system is operating in 2D mode (X/Y hashing instead of X/Z).</summary>
+        /// <summary>Resolves a slot identifier returned by a grid query. Returns null for stale slots.</summary>
+        IInteractable GetInteractable(int slot);
+
+        /// <summary>Bitmask of priority tiers that currently hold at least one registered target.</summary>
+        uint OccupiedTiers { get; }
+
+        /// <summary>Whether the system is operating in 2D mode (positions project onto X/Y with Z pinned to zero).</summary>
         bool Is2DMode { get; }
 
         /// <summary>
@@ -37,8 +48,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         /// <summary>Remove an interactable from the spatial grid. Called automatically by Interactable.OnDisable.</summary>
         void Unregister(IInteractable interactable);
 
-        /// <summary>Notify the spatial grid that an interactable's position has changed significantly.</summary>
+        /// <summary>Notify the spatial grid that an interactable's position or priority has changed.</summary>
         void UpdatePosition(IInteractable interactable);
+
+        /// <summary>
+        /// Runs a radius query and writes slot identifiers into <paramref name="results"/> without allocating.
+        /// In 2D mode the position projects onto X/Y with Z pinned to zero, matching the registration projection.
+        /// </summary>
+        int QuerySlots(Vector3 center, float radius, int[] results, int maxResults, uint layerMask);
+
+        /// <summary>Advances the authoritative tick used by the authority gate.</summary>
+        void AdvanceAuthorityTick(int tick);
 
         /// <summary>Process an interaction command asynchronously, executing the target's interaction lifecycle.</summary>
         UniTask ProcessInteractionAsync(IInteractable target);

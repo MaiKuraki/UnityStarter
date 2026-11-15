@@ -29,8 +29,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.
             out InteractionDeterministicTargetSnapshot snapshot,
             bool isAvailable = true,
             bool allowDefaultAction = true,
-            string[] enabledActionIds = null,
-            int version = 0)
+            string[] enabledActionIds = null)
         {
             if (actor == null ||
                 positionProvider == null ||
@@ -48,8 +47,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.
                 interactionRange,
                 isAvailable,
                 allowDefaultAction,
-                enabledActionIds,
-                version);
+                enabledActionIds);
             return true;
         }
 
