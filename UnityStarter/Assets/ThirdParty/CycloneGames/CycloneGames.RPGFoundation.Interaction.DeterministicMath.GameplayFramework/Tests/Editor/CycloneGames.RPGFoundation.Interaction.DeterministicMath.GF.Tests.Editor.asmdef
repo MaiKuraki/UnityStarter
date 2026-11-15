@@ -1,10 +1,10 @@
 {
-    "name": "CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor",
-    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework.Tests.Editor",
+    "name": "CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework.Tests.Editor",
     "references": [
         "CycloneGames.RPGFoundation.Interaction.Core",
         "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath",
-        "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework",
+        "CycloneGames.RPGFoundation.Interaction.DeterministicMath.GF",
         "CycloneGames.DeterministicMath.Core",
         "CycloneGames.GameplayFramework.Runtime"
     ],

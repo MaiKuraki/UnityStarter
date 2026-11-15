@@ -6,8 +6,22 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
 {
     public sealed class InteractionDeterministicAuthorityService
     {
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumRegisteredTargetCount = 65_536;
+
+        /// <summary>
+        /// Implementation safety ceiling. Static readonly, not const, so a future adjustment is not
+        /// inlined into already-compiled consumers running against a different runtime ceiling.
+        /// </summary>
+        public static readonly int MaximumQueueOwnerCount = 65_536;
+
         private readonly Dictionary<ulong, InteractionDeterministicTargetSnapshot> _targets = new Dictionary<ulong, InteractionDeterministicTargetSnapshot>();
         private readonly Dictionary<ulong, InteractionQueue> _queuesByTarget = new Dictionary<ulong, InteractionQueue>();
+        private long _rejectedTargetAdmissionCount;
+        private long _rejectedQueueOwnerAdmissionCount;
         private readonly InteractionRateLimiter _rateLimiter = new InteractionRateLimiter();
         private readonly InteractionRequestHistory _requestHistory = new InteractionRequestHistory();
         private readonly InteractionMetrics _metrics = new InteractionMetrics();
@@ -21,6 +35,15 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
         public InteractionMetrics Metrics => _metrics;
         public int RegisteredTargetCount => _targets.Count;
 
+        /// <summary>Number of retained queue owners.</summary>
+        public int QueueOwnerCount => _queuesByTarget.Count;
+
+        /// <summary>New target registrations refused because the ceiling was reached.</summary>
+        public long RejectedTargetAdmissionCount => _rejectedTargetAdmissionCount;
+
+        /// <summary>New queue owners refused because the ceiling was reached.</summary>
+        public long RejectedQueueOwnerAdmissionCount => _rejectedQueueOwnerAdmissionCount;
+
         public void Configure(InteractionAuthorityOptions options)
         {
             Options = options;
@@ -31,6 +54,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
         {
             if (!snapshot.IsValid)
             {
+                return false;
+            }
+
+            if (!_targets.ContainsKey(snapshot.TargetStableId) &&
+                _targets.Count >= MaximumRegisteredTargetCount)
+            {
+                if (_rejectedTargetAdmissionCount < long.MaxValue)
+                {
+                    _rejectedTargetAdmissionCount++;
+                }
+
                 return false;
             }
 
@@ -87,7 +121,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
                 return result;
             }
 
-            InteractionQueue queue = GetOrCreateQueue(request.TargetStableId);
+            if (!TryGetOrCreateQueue(request.TargetStableId, out InteractionQueue queue))
+            {
+                result = InteractionValidationResult.Reject(request, InteractionValidationFailure.QueueFull);
+                _metrics.RecordValidation(result);
+                return result;
+            }
             if (Options.MaxQueuedRequestsPerInstigator > 0 &&
                 queue.CountQueuedForInstigator(request.InstigatorStableId) >= Options.MaxQueuedRequestsPerInstigator)
             {
@@ -124,15 +163,43 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
             return TryQueueRequest(request, instigatorPosition, serverTick);
         }
 
-        public InteractionQueue GetOrCreateQueue(ulong targetStableId)
+        /// <summary>
+        /// Returns the queue for a target, creating one on demand. Returns false when the owner
+        /// ceiling is reached so callers can reject through policy instead of exceptions.
+        /// </summary>
+        public bool TryGetOrCreateQueue(ulong targetStableId, out InteractionQueue queue)
         {
-            if (!_queuesByTarget.TryGetValue(targetStableId, out InteractionQueue queue))
+            if (_queuesByTarget.TryGetValue(targetStableId, out queue))
             {
-                queue = new InteractionQueue(Options.QueueCapacityPerTarget);
-                _queuesByTarget.Add(targetStableId, queue);
+                return true;
             }
 
-            return queue;
+            if (_queuesByTarget.Count >= MaximumQueueOwnerCount)
+            {
+                if (_rejectedQueueOwnerAdmissionCount < long.MaxValue)
+                {
+                    _rejectedQueueOwnerAdmissionCount++;
+                }
+
+                queue = null;
+                return false;
+            }
+
+            queue = new InteractionQueue(Options.QueueCapacityPerTarget);
+            _queuesByTarget.Add(targetStableId, queue);
+            return true;
+        }
+
+        /// <summary>Fail-fast variant for call sites where a full table is an explicit invariant.</summary>
+        public InteractionQueue GetOrCreateQueue(ulong targetStableId)
+        {
+            if (TryGetOrCreateQueue(targetStableId, out InteractionQueue queue))
+            {
+                return queue;
+            }
+
+            throw new System.InvalidOperationException(
+                "The deterministic authority reached its queue-owner ceiling; shard by world or raise the reviewed limit.");
         }
 
         public void Clear()
@@ -190,21 +257,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
                 return InteractionValidationResult.Reject(request, InteractionValidationFailure.RateLimited);
             }
 
-            InteractionRequestHistoryResult historyResult = _requestHistory.MarkSeen(
-                request,
-                serverTick,
-                Options.RequestHistoryWindowTicks,
-                Options.RequestHistoryCapacity);
-            if (historyResult == InteractionRequestHistoryResult.Duplicate)
-            {
-                return InteractionValidationResult.Reject(request, InteractionValidationFailure.DuplicateRequest);
-            }
-
-            if (historyResult == InteractionRequestHistoryResult.CapacityExceeded)
-            {
-                return InteractionValidationResult.Reject(request, InteractionValidationFailure.RequestHistoryFull);
-            }
-
             if (!_targets.TryGetValue(request.TargetStableId, out InteractionDeterministicTargetSnapshot target))
             {
                 return InteractionValidationResult.Reject(request, InteractionValidationFailure.UnknownTarget);
@@ -232,6 +284,24 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
                 {
                     return InteractionValidationResult.Reject(request, InteractionValidationFailure.OutOfRange);
                 }
+            }
+
+            // Recording happens after every rejection path so only requests that would execute
+            // consume replay-history capacity. Recording earlier let an unauthenticated peer fill
+            // the globally shared history with rejects and starve legitimate traffic.
+            InteractionRequestHistoryResult historyResult = _requestHistory.MarkSeen(
+                request,
+                serverTick,
+                Options.RequestHistoryWindowTicks,
+                Options.RequestHistoryCapacity);
+            if (historyResult == InteractionRequestHistoryResult.Duplicate)
+            {
+                return InteractionValidationResult.Reject(request, InteractionValidationFailure.DuplicateRequest);
+            }
+
+            if (historyResult == InteractionRequestHistoryResult.CapacityExceeded)
+            {
+                return InteractionValidationResult.Reject(request, InteractionValidationFailure.RequestHistoryFull);
             }
 
             return InteractionValidationResult.Accept(request, target.ToInteractionTargetSnapshot());

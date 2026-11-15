@@ -12,7 +12,7 @@ The package is Unity-free. It is suitable for authoritative servers, lockstep or
 
 ```text
 CycloneGames.RPGFoundation.Interaction.DeterministicMath/
-  Runtime/
+  Core/
     CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.asmdef
     IInteractionDeterministicPositionProvider.cs
     InteractionDeterministicAuthorityService.cs

@@ -70,7 +70,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
             AssertHasDisallowMultipleComponent(typeof(Interactable));
             AssertHasDisallowMultipleComponent(typeof(InteractionDetector));
             AssertHasDisallowMultipleComponent(typeof(InteractionSystem));
-            AssertHasDisallowMultipleComponent(typeof(PooledEffect));
             AssertHasDisallowMultipleComponent(typeof(TwoStateInteractionBase));
         }
 

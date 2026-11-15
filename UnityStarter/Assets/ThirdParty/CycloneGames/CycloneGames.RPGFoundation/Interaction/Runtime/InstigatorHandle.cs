@@ -4,18 +4,9 @@ using CycloneGames.RPGFoundation.Interaction.Core;
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
     /// <summary>
-    /// Abstract base class identifying who initiated an interaction.
-    /// Uses an abstract class (not interface) to guarantee zero boxing at the compile level -
-    /// only reference types can inherit from a class, eliminating any accidental struct boxing.
-    /// <para/>
-    /// Built-in implementation: <see cref="GameObjectInstigator"/> for MonoBehaviour-based games.
-    /// <para/>
-    /// Subclass for other paradigms:
-    /// <list type="bullet">
-    ///   <item>ECS: wrap <c>Entity</c> in a class (cache per-entity to avoid allocation)</item>
-    ///   <item>Entityless: wrap a player ID or session token</item>
-    ///   <item>Networking: wrap a network identity / client ID</item>
-    /// </list>
+    /// Identifies who initiated an interaction. An abstract class rather than an interface, so a
+    /// struct cannot be boxed into it. Override <see cref="StableId"/> for networked play; the
+    /// default projects <see cref="Id"/> and is not stable across processes.
     /// </summary>
     public abstract class InstigatorHandle
     {

@@ -2,6 +2,7 @@ using UnityEditor;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.Spatial.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Editor
 {
@@ -73,14 +74,16 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
                 return;
 
             InteractionSystem system = (InteractionSystem)target;
-            SpatialHashGrid grid = system.SpatialGrid;
+            SpatialHashGrid<int> grid = system.SpatialGrid;
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 if (grid != null)
                 {
-                    EditorGUILayout.LabelField("Registered Interactables", grid.ItemCount.ToString());
-                    EditorGUILayout.LabelField("Occupied Cells", grid.CellCount.ToString());
-                    EditorGUILayout.LabelField("Slot Capacity", grid.SlotCapacity.ToString());
+                    SpatialStatistics stats = grid.GetStatistics();
+                    EditorGUILayout.LabelField("Registered Interactables", stats.ElementCount.ToString());
+                    EditorGUILayout.LabelField("Occupied Cells", stats.OccupiedCellCount.ToString());
+                    EditorGUILayout.LabelField("Slot Capacity", stats.SlotCapacity.ToString());
+                    EditorGUILayout.LabelField("Priority Tiers In Use", CountBits(system.OccupiedTiers).ToString());
                     EditorGUILayout.LabelField("Mode", system.Is2DMode ? "2D (X/Y)" : "3D (X/Z)");
                     EditorGUILayout.LabelField("World Id", system.WorldId.ToString());
                 }
@@ -91,6 +94,18 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             }
 
             Repaint();
+        }
+
+        private static int CountBits(uint value)
+        {
+            int count = 0;
+            while (value != 0)
+            {
+                value &= value - 1;
+                count++;
+            }
+
+            return count;
         }
     }
 }

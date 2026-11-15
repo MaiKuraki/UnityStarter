@@ -231,7 +231,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             ValidateComponentRules();
             ValidateInteractables();
             ValidateDetectors();
-            ValidateEffectPool();
             ValidateLayers();
             ValidateTwoStateInteractions();
 
@@ -433,27 +432,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             }
         }
 
-        private void ValidateEffectPool()
-        {
-            PooledEffect[] pooledEffects = UnityObjectQuery.FindAll<PooledEffect>(false);
-            for (int i = 0; i < pooledEffects.Length; i++)
-            {
-                PooledEffect effect = pooledEffects[i];
-                if (effect == null || effect.gameObject.scene.isLoaded && !effect.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
 
-                ParticleSystem particleSystem = effect.GetComponent<ParticleSystem>();
-                if (particleSystem == null)
-                {
-                    _issues.Add(new ValidationIssue(
-                        Severity.Info,
-                        "PooledEffect '" + effect.name + "' has no ParticleSystem. This is valid for non-particle effects.",
-                        effect));
-                }
-            }
-        }
 
         private void ValidateLayers()
         {
