@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
 using CycloneGames.RPGFoundation.Projectile.Core;
@@ -174,11 +175,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         public void AuthorityBridge_CapturesSnapshotFromProjectileWorld()
         {
             ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 4,
+            var config = new ProjectileWorldConfig(
+                4, 4, 4,
                 in space);
+            var world = new ProjectileWorld(in config);
 
             ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(
                 definitionId: 100,
@@ -311,6 +311,152 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
             {
                 return other != null && other.ConnectionId == ConnectionId;
             }
+        }
+
+        [Test]
+        public void SnapshotHistory_RejectsDegenerateDepth()
+        {
+            bool rejected = false;
+            try
+            {
+                var h = new ProjectileNetworkSnapshotHistory(1024, 1);
+                Assert.That(h.DepthPerEntity, Is.GreaterThan(1));
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                rejected = true;
+            }
+
+            Assert.That(rejected, Is.True);
+            Assert.That(new ProjectileNetworkSnapshotHistory(1024, 2).BucketCount, Is.EqualTo(512));
+        }
+
+        [Test]
+        public void SnapshotHistory_BoundsEachEntityToItsOwnRing()
+        {
+            var history = new ProjectileNetworkSnapshotHistory(32, 4);
+            Assert.That(history.BucketCount, Is.EqualTo(8));
+            Assert.That(history.DepthPerEntity, Is.EqualTo(4));
+
+            for (int tick = 1; tick <= 6; tick++)
+            {
+                history.Record(CreateSnapshot(9UL, tick, (ushort)tick));
+            }
+
+            Assert.That(history.Count, Is.EqualTo(4));
+            Assert.That(history.TryGet(9UL, 1, 1, out _), Is.False);
+            Assert.That(history.TryGet(9UL, 6, 6, out _), Is.True);
+            Assert.That(history.TryGetLatest(9UL, out ProjectileSnapshotMessage latest), Is.True);
+            Assert.That(latest.ServerTick, Is.EqualTo(6));
+        }
+
+        [Test]
+        public void SnapshotHistory_SupportsRollbackAndOldestFirstCopy()
+        {
+            var history = new ProjectileNetworkSnapshotHistory(32, 4);
+            for (int tick = 3; tick <= 6; tick++)
+            {
+                history.Record(CreateSnapshot(9UL, tick, (ushort)tick));
+            }
+
+            Assert.That(history.TryGetAtOrBefore(9UL, 5, out ProjectileSnapshotMessage atFive), Is.True);
+            Assert.That(atFive.ServerTick, Is.EqualTo(5));
+            Assert.That(history.TryGetAtOrBefore(9UL, 2, out _), Is.False);
+
+            var copy = new ProjectileSnapshotMessage[4];
+            Assert.That(history.CopyHistory(9UL, copy), Is.EqualTo(4));
+            Assert.That(copy[0].ServerTick, Is.EqualTo(3));
+            Assert.That(copy[3].ServerTick, Is.EqualTo(6));
+        }
+
+        [Test]
+        public void SnapshotHistory_EvictsLeastRecentlyWrittenEntity()
+        {
+            var history = new ProjectileNetworkSnapshotHistory(8, 4);
+            Assert.That(history.BucketCount, Is.EqualTo(2));
+
+            history.Record(CreateSnapshot(1UL, 1, 1));
+            history.Record(CreateSnapshot(2UL, 1, 1));
+            history.Record(CreateSnapshot(3UL, 1, 1));
+
+            Assert.That(history.TryGetLatest(1UL, out _), Is.False);
+            Assert.That(history.TryGetLatest(2UL, out _), Is.True);
+            Assert.That(history.TryGetLatest(3UL, out _), Is.True);
+            Assert.That(history.OverwriteCount, Is.EqualTo(1L));
+        }
+
+        [Test]
+        public void Bridge_CapturesSequentialBatchWithoutPerEntityLookup()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(8, 16, 4, in space);
+            var world = new ProjectileWorld(in config);
+            ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(100, 10f, 0.1f, 10f, 0);
+            for (int i = 1; i <= 3; i++)
+            {
+                ProjectileSpawnRequest request = ProjectileSpawnRequest.Create(
+                    definition, 1UL, (ulong)i, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+                Assert.That(world.TrySpawn(in request, out _), Is.True);
+            }
+
+            var source = new ProjectileWorldNetworkSnapshotSource(world);
+            var bridge = new ProjectileNetworkAuthorityBridge(source);
+            var truncated = new ProjectileSnapshotMessage[2];
+            Assert.That(bridge.CaptureSnapshots(truncated, 7), Is.EqualTo(2));
+            Assert.That(truncated[0].ProjectileEntityId, Is.EqualTo(1UL));
+            Assert.That(truncated[1].ProjectileEntityId, Is.EqualTo(2UL));
+            Assert.That(truncated[1].Sequence, Is.EqualTo(7));
+
+            var full = new ProjectileSnapshotMessage[3];
+            Assert.That(bridge.CaptureSnapshots(full, 8), Is.EqualTo(3));
+            Assert.That(full[2].ProjectileEntityId, Is.EqualTo(3UL));
+        }
+
+        [Test]
+        public void FullStateRequest_RejectsStaleAcknowledgedTick()
+        {
+            var message = new ProjectileFullStateRequestMessage(9UL, 2, 2, 1);
+            var context = new ProjectileNetworkValidationContext(
+                new TestConnection(true),
+                new NetworkTickId(100),
+                NetworkTickId.Invalid);
+
+            NetworkActionResult result = DefaultProjectileNetworkMessageValidator.Instance
+                .ValidateFullStateRequest(message, context);
+            Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.Expired));
+        }
+
+        [Test]
+        public void FullStateRequest_RejectsDuplicateAndOutOfOrder()
+        {
+            var duplicate = new ProjectileFullStateRequestMessage(9UL, 2, 2, 1);
+            var duplicateContext = new ProjectileNetworkValidationContext(
+                new TestConnection(true),
+                new NetworkTickId(2),
+                new NetworkTickId(2),
+                lastAcceptedSequence: 1);
+            Assert.That(DefaultProjectileNetworkMessageValidator.Instance
+                    .ValidateFullStateRequest(duplicate, duplicateContext).Code,
+                Is.EqualTo(NetworkActionResultCode.Duplicate));
+
+            var outOfOrder = new ProjectileFullStateRequestMessage(9UL, 2, 2, 3);
+            var outOfOrderContext = new ProjectileNetworkValidationContext(
+                new TestConnection(true),
+                new NetworkTickId(2),
+                new NetworkTickId(2),
+                lastAcceptedSequence: 5);
+            Assert.That(DefaultProjectileNetworkMessageValidator.Instance
+                    .ValidateFullStateRequest(outOfOrder, outOfOrderContext).Code,
+                Is.EqualTo(NetworkActionResultCode.OutOfOrder));
+        }
+
+        [Test]
+        public void ProtocolValues_AreFrozenAndRuntimeReadable()
+        {
+            Assert.That(ProjectileNetworkProtocol.MESSAGE_ID_BASE, Is.EqualTo(17000));
+            Assert.That(ProjectileNetworkProtocol.MSG_FULL_STATE_REQUEST, Is.EqualTo(17006));
+            Assert.That(ProjectileNetworkProtocol.ProtocolFingerprint, Is.EqualTo(0x1C14C99D4AC2EB61UL));
+            Assert.That(ProjectileNetworkCorrectionPolicy.Default.PositionCorrectionThresholdSqr, Is.GreaterThan(0f));
         }
     }
 }

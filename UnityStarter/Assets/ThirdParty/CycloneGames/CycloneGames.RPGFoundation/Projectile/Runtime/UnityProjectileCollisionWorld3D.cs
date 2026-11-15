@@ -5,6 +5,11 @@ using CycloneGames.Compat;
 
 namespace CycloneGames.RPGFoundation.Projectile.Runtime
 {
+    /// <summary>
+    /// Non-allocating Physics sweep adapter. Product layers that own an entity-id lookup
+    /// can populate <see cref="ProjectileCollisionHit.TargetEntityId"/> to enable owner
+    /// filtering and repeated-hit suppression in the core resolver.
+    /// </summary>
     public sealed class UnityProjectileCollisionWorld3D : IProjectileCollisionWorld
     {
         private readonly RaycastHit[] _hits;
@@ -50,7 +55,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
                 results[written] = new ProjectileCollisionHit(
                     targetEntityId: 0UL,
                     targetObjectId: UnityObjectId.Of(hit.collider),
-                    hitLayerMask: 1 << hit.collider.gameObject.layer,
+                    hitLayerMask: unchecked((int)(1u << hit.collider.gameObject.layer)),
                     distance: hit.distance,
                     position: ToProjectileVector3(hit.point),
                     normal: ToProjectileVector3(hit.normal));

@@ -628,5 +628,3 @@ Unity.exe -batchmode -nographics -projectPath <project> \
   -testFilter InteractionGridSpatialTests \
   -testResults results.xml
 ```
-
-Measured evidence behind the numbers in section 9 lives under `deliverables/review/evidence/interaction/` in the source repository.

@@ -6,32 +6,37 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
     /// Contract registration for projectile networking. This package ships no wire codec:
     /// descriptor schema hashes pin the contract IDENTITY (the exact ContractId
     /// string), not the binary payload layout. The wire format is owned by the
-    /// integrator's chosen INetSerializer; peers agree on the layout by sharing
+    /// integrator's chosen serializer; peers agree on the layout by sharing
     /// serializer configuration, and any layout change must ship under a new
     /// contract identity.
     /// </summary>
+    /// <remarks>
+    /// Contract values are frozen for a given contract version. Tunable defaults use
+    /// static readonly fields so a change is visible to every consuming assembly
+    /// without recompilation of embedded literals.
+    /// </remarks>
     public static class ProjectileNetworkProtocol
     {
-        public const string MessageOwner = "CycloneGames.RPGFoundation.Projectile";
-        public const byte PROTOCOL_VERSION = 1;
-        public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
+        public static readonly string MessageOwner = "CycloneGames.RPGFoundation.Projectile";
+        public static readonly byte PROTOCOL_VERSION = 1;
+        public static readonly byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
-        public const ushort MESSAGE_ID_BASE = 17000;
-        public const ushort MESSAGE_ID_MAX = 17999;
-        public const ushort MSG_MANIFEST_HANDSHAKE = MESSAGE_ID_BASE;
-        public const ushort MSG_SPAWN = MESSAGE_ID_BASE + 1;
-        public const ushort MSG_AUTHORITATIVE_SNAPSHOT = MESSAGE_ID_BASE + 2;
-        public const ushort MSG_CORRECTION = MESSAGE_ID_BASE + 3;
-        public const ushort MSG_HIT = MESSAGE_ID_BASE + 4;
-        public const ushort MSG_DESPAWN = MESSAGE_ID_BASE + 5;
-        public const ushort MSG_FULL_STATE_REQUEST = MESSAGE_ID_BASE + 6;
+        public static readonly ushort MESSAGE_ID_BASE = 17000;
+        public static readonly ushort MESSAGE_ID_MAX = 17999;
+        public static readonly ushort MSG_MANIFEST_HANDSHAKE = MESSAGE_ID_BASE;
+        public static readonly ushort MSG_SPAWN = (ushort)(MESSAGE_ID_BASE + 1);
+        public static readonly ushort MSG_AUTHORITATIVE_SNAPSHOT = (ushort)(MESSAGE_ID_BASE + 2);
+        public static readonly ushort MSG_CORRECTION = (ushort)(MESSAGE_ID_BASE + 3);
+        public static readonly ushort MSG_HIT = (ushort)(MESSAGE_ID_BASE + 4);
+        public static readonly ushort MSG_DESPAWN = (ushort)(MESSAGE_ID_BASE + 5);
+        public static readonly ushort MSG_FULL_STATE_REQUEST = (ushort)(MESSAGE_ID_BASE + 6);
 
-        public const ushort DEFAULT_FEATURE_MASK = 0;
-        public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
-        public const int DEFAULT_MAX_SPAWN_PAYLOAD_SIZE = 256;
-        public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = 256;
-        public const int DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE = 512;
-        public const int DEFAULT_MAX_HIT_PAYLOAD_SIZE = 256;
+        public static readonly ushort DEFAULT_FEATURE_MASK = 0;
+        public static readonly int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
+        public static readonly int DEFAULT_MAX_SPAWN_PAYLOAD_SIZE = 256;
+        public static readonly int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = 256;
+        public static readonly int DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE = 512;
+        public static readonly int DEFAULT_MAX_HIT_PAYLOAD_SIZE = 256;
 
         // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
         private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0xBCEFB413200046DAUL;
@@ -134,6 +139,5 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
 
             return builder.Build();
         }
-
     }
 }

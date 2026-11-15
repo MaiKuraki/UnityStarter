@@ -59,7 +59,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
                 results[written] = new ProjectileCollisionHit(
                     targetEntityId: 0UL,
                     targetObjectId: UnityObjectId.Of(hit.collider),
-                    hitLayerMask: 1 << hit.collider.gameObject.layer,
+                    hitLayerMask: unchecked((int)(1u << hit.collider.gameObject.layer)),
                     distance: hit.distance,
                     position: new ProjectileVector3(hit.point.x, hit.point.y, query.To.Z),
                     normal: new ProjectileVector3(hit.normal.x, hit.normal.y, 0f));

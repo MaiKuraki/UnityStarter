@@ -89,9 +89,28 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 return Reject(NetworkActionResultCode.InvalidPayload, message.ClientTick, message.Sequence);
             }
 
+            // A full-state request is the most expensive inbound message: apply the same
+            // authentication, tick-window, duplicate and ordering checks as every other
+            // envelope before the product layer builds an authoritative full state.
+            var acknowledgedTick = new NetworkTickId(message.LastReceivedServerTick);
             if (!context.IsAuthenticated)
             {
                 return Reject(NetworkActionResultCode.Unauthorized, message.ClientTick, message.Sequence);
+            }
+
+            if (!context.IsTickInAcceptedWindow(acknowledgedTick))
+            {
+                return Reject(NetworkActionResultCode.Expired, message.ClientTick, message.Sequence);
+            }
+
+            if (context.IsDuplicate(acknowledgedTick, message.Sequence))
+            {
+                return Reject(NetworkActionResultCode.Duplicate, message.ClientTick, message.Sequence);
+            }
+
+            if (!context.IsSequenceOrdered(acknowledgedTick, message.Sequence))
+            {
+                return Reject(NetworkActionResultCode.OutOfOrder, message.ClientTick, message.Sequence);
             }
 
             return NetworkActionResult.Accept(new NetworkTickId(message.ClientTick), message.Sequence);
