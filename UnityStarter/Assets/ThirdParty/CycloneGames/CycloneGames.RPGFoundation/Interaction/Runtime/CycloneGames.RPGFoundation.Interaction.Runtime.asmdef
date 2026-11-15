@@ -6,9 +6,8 @@
         "R3.Unity",
         "VitalRouter.Unity",
         "Unity.Mathematics",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.Factory.Unity.Runtime",
         "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.Spatial.Core",
         "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],

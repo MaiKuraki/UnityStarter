@@ -53,13 +53,11 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
             int interactableCount = 0;
             int detectorCount = 0;
             int systemCount = 0;
-            int pooledEffectCount = 0;
             int twoStateHelperCount = 0;
 
             Component firstInteractable = null;
             Component firstDetector = null;
             Component firstSystem = null;
-            Component firstPooledEffect = null;
             Component firstTwoStateHelper = null;
             bool hasExactTwoStateBase = false;
 
@@ -89,12 +87,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
                     firstSystem ??= component;
                 }
 
-                if (component is PooledEffect)
-                {
-                    pooledEffectCount++;
-                    firstPooledEffect ??= component;
-                }
-
                 if (component is TwoStateInteractionBase twoStateHelper)
                 {
                     twoStateHelperCount++;
@@ -118,10 +110,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
 
             AddDuplicateRoleIssue(issues, detectorCount, "InteractionDetector", firstDetector, gameObject);
             AddDuplicateRoleIssue(issues, systemCount, "InteractionSystem", firstSystem, gameObject);
-            AddDuplicateRoleIssue(issues, pooledEffectCount, "PooledEffect", firstPooledEffect, gameObject);
             AddDuplicateRoleIssue(issues, twoStateHelperCount, "TwoStateInteractionBase", firstTwoStateHelper, gameObject);
 
-            if (systemCount > 0 && (interactableCount > 0 || detectorCount > 0 || pooledEffectCount > 0 || twoStateHelperCount > 0))
+            if (systemCount > 0 && (interactableCount > 0 || detectorCount > 0 || twoStateHelperCount > 0))
             {
                 issues.Add(new InteractionComponentRuleIssue(
                     InteractionComponentRuleSeverity.Error,
@@ -135,14 +126,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
                     InteractionComponentRuleSeverity.Warning,
                     "InteractionDetector is an instigator-side scanner. Keep it on player, camera, AI controller, or sensor objects instead of target objects.",
                     firstDetector != null ? firstDetector : gameObject));
-            }
-
-            if (pooledEffectCount > 0 && (interactableCount > 0 || detectorCount > 0 || systemCount > 0 || twoStateHelperCount > 0))
-            {
-                issues.Add(new InteractionComponentRuleIssue(
-                    InteractionComponentRuleSeverity.Warning,
-                    "PooledEffect belongs on effect prefabs or effect instances. Keep pooled VFX lifecycle separate from interaction targets, detectors, systems, and state helpers.",
-                    firstPooledEffect != null ? firstPooledEffect : gameObject));
             }
 
             if (hasExactTwoStateBase && interactableCount == 0)

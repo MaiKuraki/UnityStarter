@@ -4,17 +4,8 @@ using CycloneGames.RPGFoundation.Interaction.Core;
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
 {
     /// <summary>
-    /// Semantics-free interaction channel flags. The framework provides 16 numbered slots;
-    /// games define their own meaning via constant aliases in game-layer code.
-    /// <example>
-    /// <code>
-    /// public static class MyGameChannels
-    /// {
-    ///     public const InteractionChannel NPC  = InteractionChannel.Channel0;
-    ///     public const InteractionChannel Item = InteractionChannel.Channel1;
-    /// }
-    /// </code>
-    /// </example>
+    /// Channel flags with no built-in semantics. The module supplies sixteen numbered slots; the
+    /// game layer assigns meaning through constant aliases such as <c>Channel0 = NPC</c>.
     /// </summary>
     [Flags]
     public enum InteractionChannel : ushort

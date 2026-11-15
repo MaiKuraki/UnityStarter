@@ -44,8 +44,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework
             out InteractionTargetSnapshot snapshot,
             bool isAvailable = true,
             bool allowDefaultAction = true,
-            string[] enabledActionIds = null,
-            int version = 0)
+            string[] enabledActionIds = null)
         {
             if (actor == null || targetStableId == InteractionStableId.None)
             {
@@ -61,8 +60,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework
                 interactionRange,
                 isAvailable,
                 allowDefaultAction,
-                enabledActionIds,
-                version);
+                enabledActionIds);
             return true;
         }
     }

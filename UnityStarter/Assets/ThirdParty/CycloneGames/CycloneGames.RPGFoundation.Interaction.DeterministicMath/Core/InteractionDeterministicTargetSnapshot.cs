@@ -15,7 +15,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
         public readonly bool IsAvailable;
         public readonly bool AllowDefaultAction;
         public readonly string[] EnabledActionIds;
-        public readonly int Version;
 
         public InteractionDeterministicTargetSnapshot(
             int worldId,
@@ -24,8 +23,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
             FPInt64 interactionRange,
             bool isAvailable,
             bool allowDefaultAction = true,
-            string[] enabledActionIds = null,
-            int version = 0)
+            string[] enabledActionIds = null)
         {
             WorldId = worldId;
             TargetStableId = targetStableId;
@@ -34,7 +32,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
             IsAvailable = isAvailable;
             AllowDefaultAction = allowDefaultAction;
             EnabledActionIds = enabledActionIds ?? EmptyActions;
-            Version = version;
         }
 
         public bool IsValid => TargetStableId != InteractionStableId.None;
@@ -72,8 +69,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
                 InteractionRange.ToFloat(),
                 IsAvailable,
                 AllowDefaultAction,
-                EnabledActionIds,
-                Version);
+                EnabledActionIds);
         }
     }
 }

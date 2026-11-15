@@ -1,712 +1,632 @@
 # RPG 交互模块
 
-## 有界 Authority 准入
+[English | 简体中文](README.SCH.md)
 
-一个 `InteractionAuthorityService` 最多保留 `65,536` 个 registered target 与 `65,536` 个 queue owner；其拥有的 `InteractionRateLimiter` 最多保留 `65,536` 个 instigator window。这些常量是 implementation safety ceiling；产品可为独立 limiter 构造更低的 owner capacity。达到容量后，已有 entry 仍可更新、消费、移除或清空。
+Unity 的 3D / 2D 交互运行时。它决定玩家能交互附近哪个物体，驱动交互生命周期，并在权威服务器上校验请求。检测可以走物理查询，也可以走空间哈希网格；后者让单场景上万可交互物成为可行的配置。
 
-新增 target 达到 ceiling 时，`TryRegisterTarget` 返回 `false`。`TryGetOrCreateQueue` 提供显式容量结果，`GetOrCreateQueue` 则在达到容量时以 `InvalidOperationException` fail-fast。`TryQueueRequest` 将 queue-owner 容量拒绝转换为 `QueueFull`。`InteractionRateLimiter.TryConsume` 返回 `false`，authority 将其映射为 `RateLimited`。O(1) snapshot 暴露全部 count、capacity 与单调 rejection counter。
+典型用途：可拾取的世界、带对话与任务的 NPC 层、由手柄或鼠标驱动的交互提示 UI，以及需要拒绝非法交互请求的服务器。
 
-rate window 使用有界 indexed expiry heap：每个保留身份只拥有一个 dictionary entry 和一个 heap key。准入前，单次调用最多移除 `MaximumExpiredWindowsToPrunePerCall`（`256`）个过期身份，因此身份 churn 不会永久耗尽容量，清理本身也不会形成无界请求尖峰。身份通过认证且断线时，可调用 `InteractionAuthorityService.RemoveInstigatorRateLimitWindow(instigatorId)`（独立 owner 使用 `InteractionRateLimiter.Remove`）显式释放。输入的 `int` tick 通过序列号差值规范化到 owner-local monotonic `long` 时间线，因此正常的 `int` wrap 会继续推进时间。向后或乱序 sample 不会回退或清空任何 window，而是按最近观测时间求值，所以不能重置其他身份的限制。Authority 有意进入不同时间域时，应在冷路径显式调用 `Clear`。相邻两次前向观测必须小于 `int` 序列空间的一半；更大的 discontinuity 需要执行该显式 reset。mutation 为 O(log N)，常见的“无过期项”检查为 O(1)，snapshot 保持 allocation-free O(1)。
-
-在不可信或可恢复边界使用 `Try*` API，并由 authoritative gameplay/security policy 处理容量拒绝。只有在 fail-fast 是显式不变量时才使用 `GetOrCreateQueue`。若单个 authority owner 确实需要超过 ceiling，应按显式 World/authority ownership 分片；提高常量需要经过审查的 build、滥用场景分析与负载验证。治理逻辑不会在压力下清空 target、queue 或 rate-limit policy。
-
-此契约不新增 serialized field，不改变 command 或 wire enum value，不重命名 serialized type 或 field，不修改 prefab、scene 或 asset 数据，也不持久化状态。
-
-[English](README.md) | 简体中文
-
-支持 3D、2D 和空间哈希检测的 Unity 交互运行时。基于 R3 响应式 UI、VitalRouter 命令路由和 UniTask 异步执行。
+它不负责的部分：播放特效、管理背包或任务状态、处理输入绑定。这些属于产品层。
 
 ## 目录
 
-- [概述](#概述)
-- [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [故障排查](#故障排查)
+- [1. 概览](#1-概览)
+- [2. 安装与依赖](#2-安装与依赖)
+- [3. 第一个交互](#3-第一个交互)
+- [4. 检测是怎么工作的](#4-检测机制)
+- [5. 编写交互逻辑](#5-编写交互逻辑)
+- [6. 多个目标之间如何选择](#6-多目标选择)
+- [7. 发起者与取消](#7-发起者与取消)
+- [8. 权威与网络](#8-权威与网络)
+- [9. 性能](#9-性能)
+- [10. 组合用法](#10-组合用法)
+- [11. 故障排查](#11-故障排查)
+- [12. 验证](#12-验证)
 
-## 概述
+## 1. 概览
 
-一个具备多模式检测、加权目标评分、自适应 LOD 和可插拔权威契约的交互运行时。检测器每帧根据距离、角度和优先级对附近候选项评分；得分最高的目标通过 VitalRouter 命令路由触发可交互对象状态机。
+一次交互由四部分组成，模块把它们拆开，让每一部分可以独立变化：
 
-### 主要特性
+| 部分 | 归属 | 回答的问题 |
+| --- | --- | --- |
+| 检测 | `InteractionDetector` | 玩家瞄的是哪个物体？ |
+| 目标状态 | `Interactable` | 这个物体现在能用吗？ |
+| 编排 | `InteractionSystem` | 属于哪个 world，通知谁？ |
+| 权威 | `InteractionAuthorityService` | 这个请求在服务器上合法吗？ |
 
-| 类别                 | 说明                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| **多模式检测**       | 每个 detector 可选择 Physics3D、Physics2D 或 SpatialHash 检测。                           |
-| **响应式架构**       | R3 `ReactiveProperty` 驱动的事件化 UI 绑定。                                              |
-| **命令路由**         | 带 World 作用域的 VitalRouter 路由，`InteractionCommand` 可被拦截。                       |
-| **LOD 检测**         | 自适应频率：近距高频、远距低频、无目标休眠。                                              |
-| **通道过滤**         | 16 个语义无关的 Flag 通道，常数时间按位 AND 过滤。                                        |
-| **条件系统**         | 可插拔的 `IInteractionRequirement` 前置条件（钥匙、等级、任务状态等）。                   |
-| **加权评分**         | `Score = Priority × PriorityWeight + Dot(forward, direction) × AngleWeight − (distance / radius) × DistanceWeight` |
-| **附近候选列表**     | 暴露所有评分候选项，用于拾取列表和手柄目标切换。                                          |
-| **长按交互**         | 内置 `holdDuration` 及自动 0–1 进度上报。                                                 |
-| **距离自动取消**     | 发起者超出 `maxInteractionRange` 时自动取消。                                             |
-| **发起者系统**       | `InstigatorHandle`，内置 `GameObjectInstigator`；可扩展用于 ECS 或无实体游戏。            |
-| **稳定身份**         | 可选 `IInteractionStableIdentity`，面向多人、回放、存档和统计。                           |
-| **双态模式**         | 开关式交互（开/关）通过 `TwoStateInteractionBase` 实现。                                  |
-| **特效池**           | 低 GC 的 VFX 生成，支持自动回收入池。                                                     |
-| **编辑器工具**       | 自定义 Inspector、场景调试器、验证窗口、Gizmos。                                          |
-
-## 架构
+检测和目标状态挂在场景物体上。编排是每个 world 一个组件。权威是纯 C#、不依赖引擎，所以能跑在 headless 服务器或单元测试里。
 
 ```mermaid
 graph TD
-    IS["InteractionSystem<br/>(MonoBehaviour · 单例)<br/>VitalRouter 命令路由<br/>空间哈希网格管理"]
-    IA["Interactable<br/>(挂载于世界对象)<br/>状态机 · 通道<br/>条件 · 冷却<br/>长按计时 · 距离监控"]
-    ID["InteractionDetector<br/>(挂载于玩家/摄像机)<br/>Physics3D / Physics2D / SpatialHash<br/>通道掩码 · LOD 缩放<br/>加权评分 · LOS · 休眠"]
-    IH["InstigatorHandle<br/>(抽象类)<br/>GameObjectInstigator (OOP)<br/>EntityInstigator (ECS)<br/>IdInstigator (无实体)"]
-    UI["UI 层<br/>R3 ReactiveProperty 绑定"]
-    GL["游戏逻辑<br/>VitalRouter 拦截器"]
-
-    IS --- IA
-    IS --- ID
-    ID -->|缓存的 InstigatorHandle| IA
-    IA -->|R3 ReactiveProperty| UI
-    ID -->|InteractionCommand| IS
-    IS -->|VitalRouter| GL
+    D["InteractionDetector<br/>(挂在玩家上)"] -->|查询| G["SpatialHashGrid&lt;int&gt;<br/>(由 InteractionSystem 持有)"]
+    D -->|评分 + 视线| C["InteractionCandidate"]
+    C -->|最优目标| S["InteractionSystem<br/>(每个 world 一个)"]
+    S -->|命令| I["Interactable<br/>(挂在目标上)"]
+    I -->|状态机| E["OnDoInteractAsync"]
+    S -.->|可选| A["InteractionAuthorityService<br/>(服务器侧校验)"]
 ```
 
-**数据流：**
+虚线是可选的。单人构建完全不会碰到它。
+
+## 2. 安装与依赖
+
+| 包 | 必需 | 用途 |
+| --- | --- | --- |
+| R3 | 是 | `ReactiveProperty`，用于提示 UI 绑定 |
+| VitalRouter | 是 | 命令路由与拦截 |
+| UniTask | 是 | 异步执行与取消 |
+| CycloneGames.Spatial | 是 | 检测器使用的空间索引 |
+| CycloneGames.Hash | 是 | 稳定 ID 哈希 |
+| CycloneGames.Logging | 是 | `LogChannel` 诊断 |
+| Interaction.Networking | 可选 | 网络交互的 DTO 与权威桥接 |
+| Interaction.GameplayFramework | 可选 | `Actor` 位置适配 |
+| Interaction.DeterministicMath | 可选 | 定点数权威，用于 lockstep 或回放 |
+| Interaction.DeterministicMath.GF | 可选 | `Actor` 到定点数的适配 |
+
+每个可选包都是独立程序集。只引用你用的那些，不涉及任何 scripting define symbol。
+
+```text
+CycloneGames.RPGFoundation/Interaction/
+  Core/       纯 C#，不含 Unity 类型
+  Runtime/    MonoBehaviour、空间网格、检测器
+  Editor/     检视面板、校验器、场景调试器
+  Tests/      EditMode 测试套件
+```
+
+## 3. 第一个交互
+
+做完这一节，你会有一个能走到箱子前按键打开的玩家。五步，不写脚本。
+
+### 步骤 1：添加 InteractionSystem
+
+新建空 GameObject，命名为 `Interaction`，挂上 `InteractionSystem`。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| World Id | `0` | 分屏与 additive 场景的作用域。每个 world 一个 system。 |
+| Is 2D Mode | `false` | `true` 时按 X/Y 分格，Z 固定为零。 |
+| Cell Size | `10` | 网格单元边长（世界单位）。越小查询越精细，需要遍历的 cell 越多。 |
+| Initial Capacity | `256` | 预分配槽位。大场景请调高，避免运行期扩容。 |
+| Enable Authority Gate | `true` | 对带稳定 ID 的目标做校验。没有稳定 ID 的目标直接放行。 |
+
+一个 world 一个 system。两个 system 使用相同 `World Id` 会记录错误，第二个不再接收路由命令。
+
+### 步骤 2：让物体可交互
+
+给箱子挂 `Interactable`。最先会碰到的字段：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| Interaction Prompt | `"Interact"` | 未启用本地化时的提示文本。 |
+| Is Interactable | `true` | 物体忙碌或冷却时会被清空。 |
+| Priority | `0` | 多个物体在范围内时，数值大的优先。 |
+| Interaction Distance | `2` | 发起者需要多近。 |
+| Channel | `Channel0` | 过滤掩码。检测器只看到它请求的通道。 |
+
+先不要开 `Auto Interact`，第 6 节会讲。
+
+### 步骤 3：给玩家加检测器
+
+在玩家根节点挂 `InteractionDetector`。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| Detection Mode | `Physics3D` | 可扩展的是 `SpatialHash`，见第 4 节。 |
+| Detection Radius | `3` | 查询半径（世界单位）。 |
+| Interactable Layer | `Nothing` | 物理查询扫描的层。 |
+| Max Interactables | `64` | 每个周期的候选预算。 |
+| Max LOS Checks Per Frame | `32` | 射线预算。`0` 表示不限，几乎永远不是想要的结果。 |
+
+检测原点优先取 `Detection Origin`，未设置时用自身 transform。
+
+### 步骤 4：触发交互
+
+任何代码都可以发命令。最简单的方式是把按键接上检测器的当前目标：
+
+```csharp
+using CycloneGames.RPGFoundation.Interaction.Runtime;
+using UnityEngine;
+
+public sealed class InteractInput : MonoBehaviour
+{
+    [SerializeField] private InteractionDetector detector;
+
+    private void Update()
+    {
+        if (!Input.GetKeyDown(KeyCode.E)) return;
+
+        IInteractable target = detector.CurrentInteractable.CurrentValue;
+        if (target == null) return;
+
+        InteractionSystem system = InteractionSystem.ResolveDefault();
+        system?.ProcessInteractionAsync(target).Forget();
+    }
+}
+```
+
+`CurrentInteractable` 是 R3 的 `ReadOnlyReactiveProperty`，UI 可以订阅同一个值。
+
+### 步骤 5：显示提示
+
+把提示文本绑到同一个属性上。目标变化时绑定自动更新，不需要轮询：
+
+```csharp
+using R3;
+using UnityEngine;
+using UnityEngine.UI;
+
+public sealed class PromptLabel : MonoBehaviour
+{
+    [SerializeField] private InteractionDetector detector;
+    [SerializeField] private Text label;
+
+    private void Start()
+    {
+        detector.CurrentInteractable
+            .Subscribe(target => label.text = target?.InteractionPrompt ?? string.Empty)
+            .AddTo(this);
+    }
+}
+```
+
+到这里交互已经能用了。第 4、5 节解释检测器实际做了什么，以及如何替换默认行为。
+
+## 4. 检测机制
+
+每个检测周期跑四个阶段。顺序很重要，因为便宜的过滤排在昂贵的操作前面。
 
 ```mermaid
 sequenceDiagram
-    participant Player as InteractionDetector（玩家）
-    participant Router as VitalRouter
-    participant System as InteractionSystem
-    participant Target as Interactable（目标）
-
-    Player->>Player: PerformDetection() — 评分候选项
-    Player->>Router: PublishAsync(InteractionCommand)
-    Router->>System: On(InteractionCommand)
-    System->>System: OnAnyInteractionStarted?.Invoke()
-    System->>Target: TryInteractAsync(instigator, actionId)
-    Target->>Target: CanInteract() — 检查前置条件
-    Target->>Target: 状态: Idle → Starting → InProgress → Completing → Completed → Idle
-    Target-->>System: 返回 成功/失败
-    System->>System: OnAnyInteractionCompleted?.Invoke()
+    participant D as 检测器
+    participant G as 空间网格
+    participant C as 候选
+    D->>G: 查询半径内的 slot
+    G-->>D: slot ID
+    D->>C: 通道过滤、距离门限
+    D->>C: 评分 = 优先级 + 角度 - 距离
+    D->>C: 视线检查（受限预算）
+    D->>D: 选出最优，发布附近列表
 ```
-
-### 依赖项
-
-| 包                               | 用途                                                     | 是否必需 |
-| -------------------------------- | -------------------------------------------------------- | -------- |
-| **R3**                           | 响应式属性与可观察对象，用于 UI 绑定                     | 是       |
-| **VitalRouter**                  | 命令路由与拦截器管线                                     | 是       |
-| **UniTask**                      | 面向 Unity 的异步执行与取消                              | 是       |
-| **CycloneGames.Factory.Runtime** | 对象池（`ObjectPool`、`IPoolable`、`MonoPrefabFactory`） | 是       |
-| **CycloneGames.Logging**         | 与 backend 解耦的 `LogChannel` 诊断                     | 是       |
-| **CycloneGames.RPGFoundation.Interaction.Networking** | 可选 `NetworkVector3` 与 DTO 桥 | 可选     |
-| **CycloneGames.RPGFoundation.Interaction.GameplayFramework** | 可选 `Actor` / World adapter companion package | 可选 |
-| **CycloneGames.RPGFoundation.Interaction.DeterministicMath** | 可选 `FPVector3` / `FPInt64` authority companion package | 可选 |
-| **CycloneGames.RPGFoundation.Interaction.DeterministicMath.GameplayFramework** | 可选 Actor 到定点 authority 的 companion package | 可选 |
-
-可选 first-party integration 采用物理 sibling companion package，并通过 package.json 与 asmdef 直接声明依赖。无论通过 UPM 安装还是共同放置在 Assets 下，编译边界都保持一致。使用方程序集只显式引用实际使用的 companion assembly，不需要 PlayerSettings scripting define symbol。
-
-Runtime 诊断使用 `CycloneGames.RPGFoundation.Interaction`，Editor 诊断使用 `CycloneGames.RPGFoundation.Interaction.Editor`。模块不会持有 logging backend 生命周期。应用 composition root 选择 `ILogWriter`；未安装 backend 时，logging contract 使用 `NullLogWriter`。
-
-## 快速上手
-
-### 第 1 步 — 添加 InteractionSystem
-
-创建空 GameObject，添加 `InteractionSystem`：
-
-| Inspector 字段 | 类型    | 默认值  | 说明                                                |
-| -------------- | ------- | ------- | --------------------------------------------------- |
-| **World Id**   | `int`   | `0`     | 本地交互世界作用域，用于分屏或 additive scene。     |
-| **Is 2D Mode** | `bool`  | `false` | 2D 游戏设为 `true`（X/Y 哈希），3D 设为 `false`（X/Z 哈希）。 |
-| **Cell Size**  | `float` | `10`    | 空间哈希单元格大小。                                |
-
-### 第 2 步 — 创建 Interactable
-
-给任意世界对象添加 `Interactable`：
-
-| Inspector 字段            | 类型                 | 默认值       | 说明                                     |
-| ------------------------- | -------------------- | ------------ | ---------------------------------------- |
-| **Interaction Prompt**    | `string`             | `"Interact"` | 显示给玩家的 UI 提示文本。               |
-| **Is Interactable**       | `bool`               | `true`       | 该对象是否接受交互。                     |
-| **Priority**              | `int`                | `0`          | 越高 = 评分算法越优先选择。              |
-| **Interaction Distance**  | `float`              | `2`          | 距检测器的最大检测距离。                 |
-| **Channel**               | `InteractionChannel` | `Channel0`   | 分类标记，用于选择性检测。               |
-| **Hold Duration**         | `float`              | `0`          | 玩家需长按的时间（秒），0 = 即时交互。   |
-| **Max Interaction Range** | `float`              | `0`          | 交互过程中的自动取消距离，0 = 不限制。   |
-
-添加 `Collider` 或 `Collider2D` 并设为 **Is Trigger = true**。将图层设置为与检测器的 **Interactable Layer** 掩码匹配。
-
-### 第 3 步 — 添加 InteractionDetector
-
-在玩家或摄像机上添加 `InteractionDetector`：
-
-| Inspector 字段         | 类型                 | 默认值        | 说明                                 |
-| ---------------------- | -------------------- | ------------- | ------------------------------------ |
-| **Detection Mode**     | `DetectionMode`      | `Physics3D`   | `Physics3D`、`Physics2D` 或 `SpatialHash`。 |
-| **Detection Radius**   | `float`              | `3`           | 扫描半径。                           |
-| **Interactable Layer** | `LayerMask`          | —             | 要扫描的物理图层。                   |
-| **Obstruction Layer**  | `LayerMask`          | `1`           | 阻挡视线的图层。                     |
-| **Max Interactables**  | `int`                | `64`          | 重叠查询缓冲区大小。                 |
-| **Channel Mask**       | `InteractionChannel` | `All`         | 要检测的通道。                       |
-| **Distance Weight**    | `float`              | `1`           | 距离评分权重。                       |
-| **Angle Weight**       | `float`              | `2`           | 角度评分权重。                       |
-| **Priority Weight**    | `float`              | `100`         | `Priority` 评分权重。                |
-
-### 第 4 步 — 触发交互
-
-```csharp
-using UnityEngine;
-using UnityEngine.InputSystem;
-
-public class PlayerInteraction : MonoBehaviour
-{
-    [SerializeField] private InteractionDetector detector;
-
-    void Update()
-    {
-        if (Keyboard.current.eKey.wasPressedThisFrame)
-            detector.TryInteract();
-    }
-}
-```
-
-### 第 5 步 — 显示提示 UI
-
-```csharp
-using UnityEngine;
-using UnityEngine.UI;
-using R3;
-
-public class InteractionPromptUI : MonoBehaviour
-{
-    [SerializeField] private InteractionDetector detector;
-    [SerializeField] private Text promptText;
-    [SerializeField] private GameObject promptPanel;
-
-    void Start()
-    {
-        detector.CurrentInteractable.Subscribe(i =>
-        {
-            bool hasTarget = i != null;
-            promptPanel.SetActive(hasTarget);
-            if (hasTarget)
-                promptText.text = $"[E] {i.InteractionPrompt}";
-        }).AddTo(this);
-    }
-}
-```
-
-### 检测模式对比
-
-| 属性         | Physics3D             | Physics2D             | SpatialHash                                  |
-| ------------ | --------------------- | --------------------- | -------------------------------------------- |
-| 发现来源     | Unity 3D Physics      | Unity 2D Physics      | 模块持有的空间网格                           |
-| 需要碰撞体   | 是（3D）              | 是（2D）              | 否                                           |
-| 视线检测     | 3D raycast            | 2D raycast            | 3D 或 2D raycast                             |
-| 容量控制     | Non-alloc 碰撞体缓冲区 | Non-alloc 碰撞体缓冲区 | `maxResults` 与 `allowBufferGrowth`          |
-
-SpatialHash 模式：可交互对象由 `OnEnable()` 自动注册。移动的可交互对象调用 `interactable.NotifyPositionChanged()`。网格仅在对象移动超过 1 单位时更新。
-
-## 核心概念
-
-### 交互生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> Starting : TryInteractAsync()
-    Starting --> InProgress : OnStartInteractAsync() 完成
-    InProgress --> Completing : OnDoInteractAsync() 完成
-    Completing --> Completed : OnEndInteractAsync() 完成
-    Completed --> Idle : resetToIdleOnComplete
-
-    Starting --> Cancelled : CancellationToken / ForceEndInteraction()
-    InProgress --> Cancelled : CancellationToken / ForceEndInteraction()
-    Completing --> Cancelled : CancellationToken / ForceEndInteraction()
-    Cancelled --> Idle : 自动
-```
-
-**生命周期钩子**（在子类中重写）：
-
-| 钩子                       | 触发时机                 | 用途                       |
-| -------------------------- | ------------------------ | -------------------------- |
-| `OnStartInteractAsync(ct)` | 进入 `Starting` 状态后   | 播放动画、显示 UI          |
-| `OnDoInteractAsync(ct)`    | 进入 `InProgress` 状态后 | 主逻辑、长按计时、进度上报 |
-| `OnEndInteractAsync(ct)`   | 进入 `Completing` 状态后 | 清理、奖励、VFX            |
-
-### 状态机
-
-由共享的 `InteractionStateHandler` 实例管理。已验证的转换规则：
-
-| 来源状态   | 允许转换到            |
-| ---------- | --------------------- |
-| Idle       | Starting              |
-| Starting   | InProgress, Cancelled |
-| InProgress | Completing, Cancelled |
-| Completing | Completed, Cancelled  |
-| Completed  | Idle                  |
-| Cancelled  | Idle                  |
 
 ### 检测模式
 
+| 模式 | 查询方式 | 成本来源 | 适用 |
+| --- | --- | --- | --- |
+| `Physics3D` | `Physics.OverlapSphereNonAlloc` | 半径内的 Collider 数量 | 几百个物体，或者本来就需要 Collider |
+| `Physics2D` | `Physics2D.OverlapCircle` | 同上，2D | 有 Collider 的 2D 项目 |
+| `SpatialHash` | 网格遍历 | 半径内的 cell 数，与总量无关 | 数千物体，或没有 Collider 的物体 |
+
+`SpatialHash` 是唯一按局部密度而非场景规模扩展的模式。它要求每个可交互物都已注册，`Interactable` 在 enable 时自动完成。
+
+### 评分公式
+
+```
+score = Priority * priorityWeight
+      + Dot(forward, direction) * angleWeight
+      - (distance / detectionRadius) * distanceWeight
+```
+
+默认 `priorityWeight = 100`、`angleWeight = 2`、`distanceWeight = 1`。优先级项占绝对主导：一级优先级就压过角度与距离的全部范围。这是刻意的，第 6 节会解释为什么模块还要单独做优先级分层。
+
+### LOD
+
+检测器不会在任意距离都逐帧运行。它按当前目标距离拉长间隔，长时间没有目标时进入休眠。
+
+| 状态 | 距离 | 间隔 |
+| --- | --- | --- |
+| 近 | 小于 `nearDistance`（5） | `nearIntervalMs`（33） |
+| 远 | 小于 `farDistance`（15） | `farIntervalMs`（150） |
+| 很远 | 小于 `disableDistance`（50） | `veryFarIntervalMs`（300） |
+| 休眠 | 无目标持续 `sleepEnterMs`（1000） | `sleepIntervalMs`（500） |
+
+LOD 是上百个检测器仍然可承受的原因。没有它，每个检测器每帧都要跑完整查询。
+
+### 通道
+
+16 个标志位，用一次 AND 过滤。用它区分交互领域，而不必依赖 Layer：
+
 ```csharp
-public enum DetectionMode : byte
+public static class GameChannels
 {
-    Physics3D = 0,   // OverlapSphereNonAlloc
-    Physics2D = 1,   // OverlapCircleNonAlloc
-    SpatialHash = 2  // SpatialHashGrid.QueryRadius — 无需碰撞体
+    public const InteractionChannel Npc = InteractionChannel.Channel0;
+    public const InteractionChannel Item = InteractionChannel.Channel1;
+    public const InteractionChannel Door = InteractionChannel.Channel2;
 }
 ```
 
-### 通道过滤
+检测器的 `Channel Mask` 设为该玩家应该看到的通道并集。
 
-16 个语义无关的 Flag 槽位，游戏层通过常量别名定义含义：
+## 5. 编写交互逻辑
 
-```csharp
-[Flags]
-public enum InteractionChannel : ushort
-{
-    None      = 0,
-    Channel0  = 1 << 0, Channel1  = 1 << 1,
-    Channel2  = 1 << 2, Channel3  = 1 << 3,
-    // ... Channel4–Channel14
-    Channel15 = 1 << 15,
-    All       = 0xFFFF
-}
+每个小节回答同样三个问题：什么时候用、代码长什么样、通常会在哪里出错。
 
-// 游戏层常量别名模式（推荐）：
-public static class MyGameChannels
-{
-    public const InteractionChannel NPC         = InteractionChannel.Channel0;
-    public const InteractionChannel Item        = InteractionChannel.Channel1;
-    public const InteractionChannel Environment = InteractionChannel.Channel2;
-}
-```
+### 5.1 自定义行为
 
-### 评分算法
-
-```
-Score = Priority × PriorityWeight + Dot(forward, direction) × AngleWeight − (distance / radius) × DistanceWeight
-```
-
-- **Priority**：可交互对象上的整数。越高 = 越优先。
-- **Angle**：检测器前方与目标方向的点积（面朝 = +1，背对 = −1）。
-- **Distance**：按检测半径归一化。
-
-得分最高的候选项成为 `CurrentInteractable`。
-
-### LOD 系统
-
-| 条件                              | 更新间隔                        |
-| --------------------------------- | ------------------------------- |
-| 目标在 `nearDistance`（5m）内     | `nearIntervalMs`（33ms ≈ 30Hz） |
-| 目标在 `farDistance`（15m）内     | `farIntervalMs`（150ms ≈ 7Hz）  |
-| 目标超过 `farDistance`            | `veryFarIntervalMs`（300ms）    |
-| 目标超过 `disableDistance`（50m） | 丢弃目标，进入休眠              |
-| 超过 `sleepEnterMs`（1s）无目标   | `sleepIntervalMs`（500ms）      |
-
-所有数值均可在每个检测器的 Inspector 中配置。
-
-### 发起者系统
-
-```
-InstigatorHandle（抽象类）
-├── GameObjectInstigator — MonoBehaviour / OOP 游戏
-├── EntityInstigator — Unity ECS（用户自定义）
-└── IdInstigator — 卡牌 / 回合制游戏（用户自定义）
-```
-
-使用抽象类而非 `object` 或 `interface` 的原因：
-- `object` 允许值类型，导致隐式装箱 GC。
-- `interface` 在 struct 实现时会发生装箱。
-- `abstract class` 让公共契约保持引用类型，无需泛型参数。
+重写 `OnDoInteractAsync`。基类实现负责状态机与进度上报，所以先调用它。
 
 ```csharp
-public sealed class GameObjectInstigator : InstigatorHandle
+public class Chest : Interactable
 {
-    public GameObject GameObject { get; }
-    public override int Id => GameObject.GetInstanceID();
-    public override ulong StableId { get; }
-    public override bool TryGetPosition(out Vector3 position) { ... }
-    public T GetComponent<T>() => GameObject.GetComponent<T>();
-}
-```
-
-`InteractionDetector` 在 `Awake()` 中缓存一个 `GameObjectInstigator`。
-
-## 使用指南
-
-### 自定义交互逻辑
-
-```csharp
-using System.Threading;
-using Cysharp.Threading.Tasks;
-
-public class TreasureChest : Interactable
-{
-    protected override async UniTask OnStartInteractAsync(CancellationToken ct)
-    {
-        GetComponent<Animator>().SetTrigger("Open");
-        await UniTask.Delay(500, cancellationToken: ct);
-    }
+    [SerializeField] private int gold = 50;
 
     protected override async UniTask OnDoInteractAsync(CancellationToken ct)
     {
-        await HoldTimerAsync(ct);
-        switch (PendingActionId)
-        {
-            case "loot": GiveLoot(); break;
-            case "trap-check": CheckForTraps(); break;
-            default: GiveLoot(); break;
-        }
-    }
+        await base.OnDoInteractAsync(ct);
 
-    protected override async UniTask OnEndInteractAsync(CancellationToken ct)
-    {
-        EffectPoolSystem.Spawn(sparksPrefab, transform.position, Quaternion.identity, 2f);
+        PlayerWallet.Add(gold);
         isInteractable = false;
     }
 }
 ```
 
-### 交互条件系统
+`isInteractable` 是 `protected`，子类可以直接改，不必绕属性。
 
-实现 `IInteractionRequirement` — 在 `Awake()` 中通过 `GetComponents<IInteractionRequirement>()` 自动发现：
+### 5.2 条件
+
+条件在交互开始前检查，用来处理任务状态、钥匙、等级门槛。
 
 ```csharp
-public class KeyRequirement : MonoBehaviour, IInteractionRequirement
+public sealed class HasKeyRequirement : IInteractionRequirement
 {
     [SerializeField] private string keyId;
 
-    public string FailureReason => $"需要钥匙: {keyId}";
-
-    public bool IsMet(IInteractable target, InstigatorHandle instigator)
-    {
-        if (instigator is GameObjectInstigator goi)
-        {
-            var inventory = goi.GetComponent<PlayerInventory>();
-            return inventory != null && inventory.HasKey(keyId);
-        }
-        return false;
-    }
+    public bool IsSatisfied(InstigatorHandle instigator) => Inventory.Has(keyId);
+    public string FailureMessage => "需要一把钥匙。";
 }
 ```
 
-### 双态交互
+放进可交互物的 `Requirements` 数组。全部通过才允许交互，第一个失败项提供提示文本。
 
-用于开关式交互（门、开关）：
+### 5.3 长按交互
+
+把 `Hold Duration` 设为非零值，状态机会自行上报进度。
 
 ```csharp
-public class ToggleDoor : Interactable, ITwoStateInteraction
-{
-    private TwoStateInteractionBase _twoState;
-    public bool IsActivated => _twoState.IsActivated;
+detector.CurrentInteractable
+    .Subscribe(target => progressBar.value = target?.InteractionProgress ?? 0f)
+    .AddTo(this);
+```
 
-    protected override void Awake()
+提前松手会以 `InteractionCancelReason.Manual` 取消，走出范围会以 `OutOfRange` 取消。
+
+### 5.4 双态交互
+
+门、拉杆、开关都是同一个模式：一个开状态、一个关状态，共用一个入口。
+
+```csharp
+public class Door : TwoStateInteractionBase
+{
+    [SerializeField] private Transform pivot;
+
+    protected override UniTask OnActivateAsync(CancellationToken ct)
     {
-        base.Awake();
-        _twoState = GetComponent<TwoStateInteractionBase>();
+        pivot.localRotation = Quaternion.Euler(0f, 90f, 0f);
+        return UniTask.CompletedTask;
     }
 
-    protected override UniTask OnDoInteractAsync(CancellationToken ct)
+    protected override UniTask OnDeactivateAsync(CancellationToken ct)
     {
-        _twoState.ToggleState();
-        interactionPrompt = IsActivated ? "关闭" : "打开";
+        pivot.localRotation = Quaternion.identity;
         return UniTask.CompletedTask;
     }
 }
 ```
 
-### 可拾取物品
+`TwoStateInteractionBase` 维护布尔状态并路由到对应方法。
 
-内置 `PickableItem` 子类。在 Inspector 中配置：设置 `Destroy On Pickup = true`，指定 `Pickup Effect Prefab`。自定义逻辑：
+### 5.5 可拾取物
+
+`PickableItem` 覆盖常见情况：执行一个钩子，然后销毁。
 
 ```csharp
 public class GoldCoin : PickableItem
 {
-    [SerializeField] private int goldAmount = 10;
+    [SerializeField] private int amount = 1;
 
     protected override void OnPickedUp()
     {
-        if (CurrentInstigator is GameObjectInstigator goi)
-            goi.GetComponent<PlayerWallet>()?.AddGold(goldAmount);
+        PlayerWallet.Add(amount);
+        // 用项目自己的方式播放特效。模块不负责表现层。
     }
 }
 ```
 
-### 多动作提示
+模块刻意不内置特效池。池化与特效播放在不同项目之间差异太大，不属于这里；需要池化时 `CycloneGames.Factory` 已经覆盖。
 
-在 Inspector 的 **Actions** 数组中配置多个动作：
+### 5.6 多动作
+
+一个可交互物可以暴露多个动作。检测器会报告全部动作，由 UI 决定怎么呈现。
 
 ```csharp
-detector.TryInteract("examine");  // 触发 "examine" 动作
-detector.TryInteract("pickup");   // 触发 "pickup" 动作
-detector.TryInteract();           // 默认动作（actionId = null）
+[SerializeField] private InteractionAction[] actions =
+{
+    new InteractionAction("open", "打开"),
+    new InteractionAction("break", "砸开")
+};
 ```
 
-在可交互对象中读取 `PendingActionId` 分支行为。
-
-### 长按交互计时器
-
-设置 `holdDuration > 0`。`HoldTimerAsync(ct)` 驱动 `InteractionProgress` 从 0 到 1：
+在自己的输入代码里按 ID 分发：
 
 ```csharp
-protected override async UniTask OnDoInteractAsync(CancellationToken ct)
+target.TryInteractAsync("break", cancellationToken).Forget();
+```
+
+`CanExecuteAction` 会检查启用标志，被禁用的动作不会到达目标。
+
+## 6. 多目标选择
+
+两个物体重叠时，模块需要一个规则。评分公式处理常见情况，但它有一个硬限制：候选预算。
+
+### 为什么预算重要
+
+检测器每个周期最多收集 `Max Interactables` 个候选。如果某个拥挤的 cell 里的物体超过这个数，必须有东西被丢弃。按遍历顺序丢弃会静默丢掉高优先级目标，所以优先级被单独分层处理。
+
+### 优先级分层
+
+`Priority` 在注册时被投影到网格的 32 个 layer 位上。检测器从高档向低档遍历，只在低档上花剩余的预算。
+
+```
+tier 31  最高优先级，最先收集
+  ...
+tier 0   最低优先级，最后收集
+```
+
+需要知道的三个后果：
+
+- 优先级被夹到 `[0, 31]`。负值变 0，大于 31 的变 31。
+- 运行期修改 `Priority` 需要调用 `NotifyPositionChanged`（或 `InteractionSystem.UpdatePosition`）才会换档。
+- 单档场景只需一次网格遍历。占用 16 档最多 16 次。请控制不同优先级取值的数量。
+
+### 附近候选与循环选择
+
+`NearbyInteractables` 暴露评分后的列表，上限是 `Max Nearby Candidates`（16）。用它做战利品列表或手柄目标轮换。
+
+```csharp
+int index = detector.CycleTarget();
+IInteractable selected = detector.NearbyInteractables[index].Interactable;
+```
+
+循环选择每个周期按当前选中目标的身份重新锚定，增删目标不会让选择静默跳到另一个物体上。
+
+### 自动交互
+
+`Auto Interact` 物体跳过提示，自行触发。它们不会进入候选列表，因为它们是触发器而不是选项。
+
+三条限制：发起者必须在 `InteractionDistance` 内；`autoInteractMinIntervalMs`（250）节流重复触发；每个检测器的时间表上限为 `Max Interactables` 条。超过上限后，新物体触发时不再受节流约束。自动交互物请保持稀少，或调高 `Max Interactables`。
+
+## 7. 发起者与取消
+
+### InstigatorHandle
+
+发起者是触发交互的一方。它是抽象类而不是接口，这样结构体不会被装箱塞进去。
+
+```csharp
+public sealed class NetworkPlayerInstigator : InstigatorHandle
 {
-    await HoldTimerAsync(ct);
-    UnlockDoor();
+    private readonly ulong playerId;
+
+    public NetworkPlayerInstigator(ulong playerId) => this.playerId = playerId;
+
+    public override int Id => (int)playerId;
+    public override ulong StableId => playerId;
 }
 ```
 
-绑定 UI：`interactable.OnProgressChanged += (_, progress) => progressBar.fillAmount = progress;`
+联机时请重写 `StableId`。默认实现只是把 `Id` 投影过去，跨进程并不稳定。
 
 ### 距离自动取消
 
-设置 `maxInteractionRange > 0`。交互期间每帧使用平方距离比较（无 `sqrt`）。超出范围以 `InteractionCancelReason.OutOfRange` 取消。`InstigatorHandle.TryGetPosition()` 对无实体发起者返回 `false`，距离监控自动跳过。
+在可交互物上设置 `Max Interaction Range`，系统会逐帧检查距离。超出后以 `OutOfRange` 取消。
+
+监控表带索引，注册与移除都是 O(1)。几十个并发监控没有可测量的开销。
 
 ### 取消原因
 
+| 原因 | 触发条件 |
+| --- | --- |
+| `Manual` | 调用方取消，或玩家松开长按 |
+| `OutOfRange` | 超出 `Max Interaction Range` |
+| `Interrupted` | 被另一个交互抢占 |
+| `Faulted` | 交互过程抛出异常 |
+
+每次取消都会带原因触发 `OnInteractionCancelled`，这是做退款和 UI 复位的钩子。
+
+## 8. 权威与网络
+
+这一节是可选的。本地单人构建可以完全跳过。
+
+### 权威服务做什么
+
+`InteractionAuthorityService` 在请求执行前校验它。它只回答一个问题：在服务器已知信息下，这个请求合法吗？它不替客户端选目标。
+
 ```csharp
-public enum InteractionCancelReason : byte
+var authority = new InteractionAuthorityService(
+    new InteractionAuthorityOptions(worldId: 1, requireStableIds: true));
+
+authority.TryRegisterTarget(snapshot);
+
+InteractionValidationResult result = authority.ValidateRequest(request, serverPosition, serverTick);
+if (!result.IsAccepted)
 {
-    Manual,          // 玩家/代码调用了 ForceEndInteraction()
-    OutOfRange,      // 发起者超出 maxInteractionRange
-    Interrupted,     // 外部玩法事件（受伤、眩晕）
-    Timeout,         // 交互超时
-    TargetDestroyed, // 可交互对象被销毁
-    SystemShutdown,  // 场景卸载 / InteractionSystem 被释放
-    Faulted          // 用户代码或 adapter 抛出异常
+    // result.Failure 指出是哪一道门拒绝的
 }
 ```
 
-响应取消：`interactable.OnInteractionCancelled += (source, reason) => { ... };`
-强制取消：`interactable.ForceEndInteraction(InteractionCancelReason.Interrupted);`
+校验顺序：请求形状、world 作用域、tick 漂移、限流、目标查找、可用性、动作、距离，最后才写重放历史。所有可能拒绝的判断都在触碰历史之前完成，所以大量非法请求不会消耗重放预算。
 
-### 发起者追踪
+### 容量上限
+
+| 上限 | 数值 | 达到容量时的行为 |
+| --- | --- | --- |
+| 已注册目标 | 65,536 | `TryRegisterTarget` 返回 `false` |
+| 队列持有者 | 65,536 | `TryGetOrCreateQueue` 返回 `false`；`GetOrCreateQueue` 抛异常 |
+| 限流窗口 | 65,536 | `TryConsume` 返回 `false`，映射为 `RateLimited` |
+
+达到容量后，已有条目仍可更新、移除和清空。如果单个权威确实需要更多，请按 world 分片，而不是调高常量。
+
+限流窗口使用带索引的过期堆，每次调用最多清理 256 条，所以身份churn 不会永久占用容量，清理也不会变成单帧尖峰。
+
+### 优先级不是访问控制
+
+权威端从不枚举候选。客户端发送它选中的目标，服务器检查这个选择是否合法。优先级决定检测器偏好哪个目标，不限制玩家能请求什么。访问控制是 `IInteractionRequirement` 的职责。
+
+因此网络载荷携带的是 `TargetStableId`，不是优先级。加一个优先级字段只会制造「服务器在做选择」的假象。
+
+### 网络桥接
+
+`InteractionNetworkAuthorityBridge` 用 DTO 转换包住权威服务。存在两组重载，因为发起者位置由客户端上报，属于不可信输入：
+
+| 重载 | 使用的位置 | 适用 |
+| --- | --- | --- |
+| `Validate(request, tick)` | 客户端上报 | 客户端提供信息、服务器宽松的产品 |
+| `Validate(request, serverPosition, tick)` | 服务器解析 | 权威距离校验 |
+
+需要强制距离的服务器必须用第二种。第一种留给刻意信任客户端的产品。
+
+### 确定性权威
+
+`InteractionDeterministicAuthorityService` 是同一套契约，建立在 `FPVector3` 与 `FPInt64` 之上。服务器需要回放请求流并在每台主机上得到相同判决时使用它。
+
+两个独立构造的实例喂同一请求流，判决分歧为零，这正是回放服务器依赖的性质。
+
+### 如果需要强制最优性
+
+客户端用分层查询，服务器校验单个目标，两者对「哪个目标最优」可能有不同看法。这可以接受：服务器校验的是合法性，不是最优性。如果确实需要服务器强制「客户端选了最优目标」，请把它作为产品策略建立在桥接层之上，而不是塞进模块内部。
+
+## 9. 性能
+
+### 分配边界
+
+| 路径 | 分配 |
+| --- | --- |
+| 空间网格查询 | 一百万次迭代测得 0 字节 |
+| 权威校验 | 每请求 0 字节 |
+| 检测器每周期 | 预热后 0 字节；唯一例外是 `DEBUG` 宏下的字符串拼装 |
+| 可交互物位置更新 | 0 字节，快照数组已缓存 |
+
+检测器在 `Awake` 里预分配候选缓冲。调高 `Max Interactables` 只是把分配挪到场景加载，不会进入游戏循环。
+
+### 空间网格成本
+
+10,000 个物体、cell size 10、查询半径 10 的实测：
+
+| 指标 | 数值 |
+| --- | --- |
+| 查询 p50 | 3.0 µs |
+| 查询 p99 | 8.0 µs |
+| 吞吐 | 约 212,000 次/秒 |
+| 最差格（cell size 4）p99 | 90 µs |
+
+查询成本跟随局部密度，而不是物体总数。cell size 是主导参数：太小则 cell 范围爆炸，太大则每条 cell 链变长。
+
+### 检测器缓存
+
+检测器背后有三个缓存：Collider 到可交互物、视线结果、自动交互时间戳。三者都有界。
+
+- 组件缓存在 `Max Interactables * 4` 条时清空。
+- 视线缓存在 `Max Interactables` 条时拒绝新条目。
+- 自动交互时间表见第 6 节。
+
+没有这些边界，玩家在开放世界里持续行进会让缓存在整个会话期间增长。
+
+### 线程
+
+所有内容跑在 Unity 主线程。空间网格是单写者模型，带仅 Debug 生效的线程守卫：开发构建里第二个写者会抛异常，Release 里守卫被编译掉。
+
+权威服务不是线程安全的。每个服务器 world 用一个实例，并由模拟线程驱动。
+
+## 10. 组合用法
+
+### 带任务门槛的拾取
+
+条件负责拦截，拾取负责奖励。
 
 ```csharp
-using CycloneGames.Logging;
-
-public class CoopChest : Interactable
+public class QuestChest : PickableItem
 {
-    private static readonly LogChannel Log = LogChannel.Create("Game.Interaction");
+    [SerializeField] private string requiredQuest = "find_the_key";
+    [SerializeField] private int gold = 100;
 
-    protected override async UniTask OnDoInteractAsync(CancellationToken ct)
-    {
-        if (CurrentInstigator is GameObjectInstigator goi)
-            Log.Info($"Opened by: {goi.GameObject.name}");
-        await HoldTimerAsync(ct);
-        GiveItemToPlayer(CurrentInstigator);
-    }
+    public override bool CanInteract(InstigatorHandle instigator) =>
+        base.CanInteract(instigator) && QuestLog.IsComplete(requiredQuest);
+
+    protected override void OnPickedUp() => PlayerWallet.Add(gold);
 }
 ```
 
-自定义 ECS 发起者：
+### 分屏两套 world
+
+每个玩家有自己的 system 和 detector，各自使用不同的 `World Id`。命令按 world 路由，玩家一无法触发玩家二的目标。
+
+不要把同一个 detector 共享给两个玩家。附近列表和当前目标都是 detector 私有状态。
+
+### 服务器权威交互
+
+客户端检测并发起请求，服务器校验，客户端播放结果。
+
+```csharp
+// 客户端
+IInteractable target = detector.CurrentInteractable.CurrentValue;
+bridge.Validate(new InteractionNetworkRequest(...), tick);
+
+// 服务器
+var result = authority.ValidateRequest(request, serverResolvedPosition, tick);
+if (result.IsAccepted) ExecuteInteraction(request);
+```
+
+客户端的检测器仍在运行，只是不再决定合法性。这样提示 UI 保持响应，又不必信任客户端。
+
+### 无实体发起者
+
+`InstigatorHandle` 设计成抽象类，正是为了让 ECS 和 headless 环境包裹任意标识符。
 
 ```csharp
 public sealed class EntityInstigator : InstigatorHandle
 {
-    public Entity Entity { get; }
-    public override int Id => Entity.Index;
-    public EntityInstigator(Entity entity) => Entity = entity;
-    public override bool TryGetPosition(out Vector3 pos) { ... }
+    private readonly Entity entity;
+    public EntityInstigator(Entity entity) => this.entity = entity;
+
+    public override int Id => entity.Index;
+    public override ulong StableId => EntityId.ToULong(entity);
 }
 ```
 
-### 批量交互
+每个实体缓存一个实例；逐帧构造会产生分配。
 
-```csharp
-detector.TryInteractAll();       // 所有附近目标
-detector.TryInteractAll("loot"); // 特定动作，所有目标
-```
+## 11. 故障排查
 
-### 全局事件
-
-```csharp
-InteractionSystem.Instance.OnAnyInteractionStarted += (target, instigator) =>
-    Analytics.LogEvent("interaction_started", target.InteractionPrompt);
-
-InteractionSystem.Instance.OnAnyInteractionCompleted += (target, instigator, success) =>
-    { if (success) QuestManager.OnInteraction(target); };
-```
-
-### 附近候选列表
-
-```csharp
-using CycloneGames.Logging;
-
-LogChannel log = LogChannel.Create("Game.Interaction");
-IReadOnlyList<InteractionCandidate> candidates = detector.NearbyInteractables;
-foreach (var c in candidates)
-    log.Info($"{c.Interactable.InteractionPrompt}: score={c.Score:F1}");
-```
-
-手柄循环切换：`detector.CycleTarget(+1)` / `detector.CycleTarget(-1)`。
-
-### 交互进度
-
-内置方式：`HoldTimerAsync` 自动驱动进度。
-手动方式：`ReportProgress(0.5f)` 实现自定义定时交互。
-
-```csharp
-protected override async UniTask OnDoInteractAsync(CancellationToken ct)
-{
-    for (int i = 0; i < 100; i++)
-    {
-        ct.ThrowIfCancellationRequested();
-        await UniTask.Delay(50, cancellationToken: ct);
-        ReportProgress(i / 100f);
-    }
-}
-```
-
-### 特效池系统
-
-```csharp
-EffectPoolSystem.Prewarm(sparksPrefab, 32);  // 加载阶段预热
-EffectPoolSystem.Spawn(sparksPrefab, position, rotation, 2f);  // 2 秒后自动回收
-EffectPoolSystem.Spawn(smokePrefab, position, rotation);  // 手动 ReturnToPool()
-```
-
-在特效预制体上挂载 `PooledEffect` 组件。池以预制体 `InstanceID` 为键，每个唯一预制体一个池。首次生成时懒加载初始化。
-
-## 进阶主题
-
-### 权威与网络同步
-
-本模块提供 Unity-free 的权威契约，用于服务端校验：
-
-- `InteractionAuthorityService` — 服务端请求校验：World 作用域、稳定 ID、tick 漂移、重复请求、限流、距离检查、队列压力。
-- `InteractionTargetSnapshot` / `InteractionVector3` — 不依赖 `UnityEngine` 的 headless/server adapter。
-- `IInteractionPositionProvider` — 可插拔位置来源，用于 Networking、ECS 或后端 simulation。
-- `InteractionMetrics` — 用于 accepted、rejected、queued 和 faulted 的线程安全计数器。
-
-**服务端权威流程：**
-
-1. 客户端 detector 选择候选目标，发送带 `WorldId`、`TargetStableId`、`InstigatorStableId`、`ActionId`、`Tick` 的 `InteractionRequest`。
-2. 服务端将稳定 ID 解析为权威实体，运行 `InteractionAuthorityService.ValidateRequest()`。
-3. 游戏专属服务端代码验证 LOS、权限、冷却、所有权。
-4. 服务端执行并广播 `InteractionResult`。
-5. 客户端根据服务端结果重对齐本地聚焦和 UI。
-
-确定性多人游戏安装 `CycloneGames.RPGFoundation.Interaction.DeterministicMath`，并使用 `FPVector3` / `FPInt64` 配合 `InteractionDeterministicAuthorityService`。仅当 Actor 需要提供确定性 authority payload 时安装组合 GameplayFramework companion。
-
-| 场景 | 应使用 | 不应作为权威源 |
+| 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 本地单机或非确定性服务端 | `InteractionVector3`、`InteractionAuthorityService` | - |
-| 普通网络传输 DTO | 带 `NetworkVector3` 的 `InteractionNetworkRequest` | `FPVector3`（除非 transport 支持 raw fixed payload） |
-| 确定性多人、rollback 或 replay | `FPVector3`、`InteractionDeterministicAuthorityService` | `NetworkVector3`、`InteractionVector3` |
-| UI、调试、统计 | `FPVector3.ToInteractionVector3()` | 把转换后的 float 再喂回权威判定 |
+| 检测不到任何东西 | Physics 模式下 `Interactable Layer` 是 `Nothing` | 设置层掩码 |
+| `SpatialHash` 模式下检测不到 | 可交互物未注册 | 确认 `InteractionSystem` 存在，且物体在其之后 enable |
+| 选错了物体 | 两个目标的 `Priority` 都是 `0` | 设置优先级，评分项占主导 |
+| 高优先级目标被忽略 | 优先级超出 `[0, 31]`，或改档后没有通知 | 夹紧数值，再调用 `NotifyPositionChanged` |
+| 提示从不更新 | UI 在 system 存在之前就订阅了 | 在 `InteractionSystem.SystemRegistered` 里绑定 |
+| 交互立刻被取消 | `Max Interaction Range` 小于实际距离 | 调大，或设为 `0` |
+| 服务器拒绝所有请求 | `TargetStableId` 为 `0` 而 `requireStableIds` 开着 | 给目标分配稳定 ID |
+| 第二个 world 的命令被忽略 | `World Id` 重复 | 给每个 system 唯一的 ID |
 
-### 系统注册表与绑定
+## 12. 验证
 
-`InteractionSystem` 提供显式静态注册表，任何组件都不需要全场景扫描来查找它：
+模块自带 EditMode 测试套件，同时充当可执行的规格说明。
 
-- `InteractionSystem.ResolveDefault()` — O(1) 解析：优先返回存活的 `Instance`，否则返回第一个存活的已注册系统。仅限主线程。
-- `InteractionSystem.SystemRegistered` — 静态事件，在新系统完成 `Awake` 初始化后于主线程触发。
-- `InteractionSystem.TryGetWorld(worldId, out system)` — 按 world 查找，适用于分屏、叠加场景、预测世界与服务器模拟。
+| 套件 | 覆盖 |
+| --- | --- |
+| `InteractionGridSpatialTests` | 5 个种子下的 105 个网格场景，与暴力法逐条对照 |
+| `InteractionGridSoakFuzzTests` | 60 窗口带成员 churn 的 SOAK，20,000 次操作 FUZZ |
+| `InteractionPriorityTests` | 分档隔离、位图记账、夹紧、重复注册幂等 |
+| `InteractionSecurityBoundaryTests` | 匿名限流、tick 回滚、重放历史记账、重放窗口 fail-closed |
+| `InteractionDetectorCacheBoundTests` | 组件缓存上限、死引用驱逐 |
+| `InteractionProductionReadinessTests` | 规模与种子矩阵、单帧脉冲、SOAK、FUZZ、边界容量 |
+| `InteractionAssemblyLayoutTests` | 纯 C# 程序集位于 `Core/`、asmdef 名与文件名一致、不依赖对象池 |
 
-`Interactable` 与 `InteractionDetector` 的绑定优先级：
+在 Test Runner 窗口运行，或走命令行：
 
-1. 显式赋值 —— `Interactable.SetInteractionSystem()` 或 detector 上序列化的 `interactionSystem` 引用。
-2. `InteractionSystem.ResolveDefault()`。
-3. 延迟绑定 —— 当系统尚不存在时（脚本执行顺序、迟到生成、叠加场景仍在加载），组件一次性订阅 `SystemRegistered`，系统出现后自动绑定。运行时代码中不存在任何全场景搜索。
-
-过期绑定可自愈：如果已绑定的系统被销毁（例如包含系统的叠加场景被卸载而本组件仍保持启用），组件会在下一次触点将其视为未绑定并重新解析。被禁用后重新启用的组件照常通过 `OnEnable` 重新绑定。
-
-在 Enter Play Mode Options（关闭 Domain Reload）下，`InteractionSystem` 与 `EffectPoolSystem` 通过 `[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]` 重建静态注册表状态，因此不会在两次 Play 之间残留过期系统或对象池。多 world 配置仍应显式赋值系统，因为 `ResolveDefault()` 无从得知组件属于哪个 world。
-
-### VitalRouter 集成
-
-交互通过 `InteractionCommand` 经 VitalRouter 路由：
-
-```csharp
-[Routes]
-public partial class CutsceneInterceptor : MonoBehaviour
-{
-    [Route]
-    async UniTask OnInteraction(InteractionCommand cmd)
-    {
-        if (CutsceneManager.IsPlaying)
-            return; // 吞掉命令
-    }
-}
+```bash
+Unity.exe -batchmode -nographics -projectPath <project> \
+  -runTests -testPlatform EditMode \
+  -testFilter InteractionGridSpatialTests \
+  -testResults results.xml
 ```
 
-绕过路由：`await InteractionSystem.Instance.ProcessInteractionAsync(target, instigator);`
-
-## 常见场景
-
-### 过场期间阻止交互
-
-调用 `detector.SetDetectionEnabled(false)`，或添加 VitalRouter 拦截器。
-
-### PUBG 风格拾取列表
-
-使用 `detector.NearbyInteractables` — 返回按分数排序的所有候选项。
-
-### ECS / 无实体游戏
-
-子类化 `InstigatorHandle`。`TryGetPosition()` 默认返回 `false`，距离监控自动跳过。
-
-### 按键重绑定
-
-玩家重绑定按键时在运行时更新 `InteractionAction.InputHint`。输入处理由项目的 input adapter 负责。
-
-## 性能与内存
-
-### 分配边界
-
-| 技术                      | 应用位置                                                 |
-| ------------------------- | -------------------------------------------------------- |
-| 预分配数组                | 碰撞体缓冲区、排序缓冲区、空间网格槽数组                 |
-| 调用方持有查询缓冲        | `SpatialHashGrid.QueryRadiusNonAlloc()`                  |
-| 结构体候选项/命令         | `InteractionCandidate`、`InteractionCommand` 为 `readonly struct` |
-| 缓存位置                  | `Position` 每帧缓存，避免 `Transform` 访问               |
-| 享元状态                  | `InteractionStateHandler` 实例为共享静态单例             |
-| `InstigatorHandle` 抽象类 | 只有引用类型可继承 — 编译期防止装箱                      |
-| 缓存 `GameObjectInstigator` | `InteractionDetector.Awake()` 创建一个可复用实例        |
-
-**已知分配点：** `EffectPoolSystem` 首次生成时创建池（使用 `Prewarm()` 移到加载阶段），`InteractionDetector` 在 `Awake()` 中分配 per-detector Dictionary，可取消执行会创建 `CancellationTokenSource`。
-
-### 空间哈希网格
-
-SoA 布局实现缓存友好遍历：
-
-| 数组            | 用途                                    |
-| --------------- | --------------------------------------- |
-| `_items[]`      | `IInteractable` 引用                    |
-| `_posX/Y/Z[]`   | 缓存的世界坐标（SoA）                   |
-| `_hashes[]`     | 预计算单元格哈希                        |
-| `_nextInCell[]` | 侵入式链表前向指针                      |
-| `_prevInCell[]` | 侵入式链表后向指针                      |
-| `_cellHeads`    | `Dictionary<long, int>` 单元格哈希→头槽 |
-| `_freeSlots`    | `Stack<int>` 实现 O(1) 槽回收           |
-
-通过 `ReaderWriterLockSlim` 实现线程安全。查询成本取决于单元格大小、半径和局部密度。
-
-### 线程安全
-
-| 组件                  | 机制                                       |
-| --------------------- | ------------------------------------------ |
-| `Interactable` 并发控制 | `Interlocked.CompareExchange` — 原子无锁  |
-| `SpatialHashGrid`     | `ReaderWriterLockSlim` — 读并行、写独占    |
-| Unity 组件            | 仅主线程                                   |
-
-## 故障排查
-
-| 现象                       | 可能原因                                   | 解决方法                                           |
-| -------------------------- | ------------------------------------------ | -------------------------------------------------- |
-| 对象未被检测到             | 缺失/invalid collider、layer、channel 或 `IsInteractable` | 使用 **Interaction Validator** 窗口自动检查       |
-| 过场期间交互仍触发         | Detector 仍处于活动状态                    | 调用 `detector.SetDetectionEnabled(false)`         |
-| 交互期间 `TryInteractAsync` 返回 false | 尝试并发交互                    | 原子标志阻止重入；等待当前交互完成                 |
-| 大量可交互对象时性能差     | 单元格大小、半径或密度不匹配               | 在代表性场景中测量单元格大小和查询半径             |
-| ECS 兼容性                 | Package 使用 `MonoBehaviour` 路径          | 子类化 `InstigatorHandle` 暴露实体身份；detector 是主线程 |
-| 使用已销毁对象错误         | 访问已释放的 GameObject                    | `GameObjectInstigator.TryGetPosition` 每帧空值检查 |
-| 场景加载后 Interactable 始终未被检测 | `InteractionSystem` 晚于 interactable 启用，且未赋显式引用 | 注册会延迟到 `SystemRegistered`；确认系统存在且没有 duplicate `WorldId` 报错 |
-| Interactable 绑定到了已销毁系统 | 包含系统的叠加场景被卸载            | 绑定会在下一次位置更新或重新启用时懒重解析；切换组件启用状态或调用 `SetInteractionSystem` 可强制触发 |
-
-## 验证
-
-通过 Unity Test Runner 运行 EditMode 测试，目标为 `CycloneGames.RPGFoundation.Interaction.Tests.Editor`。多人场景需用相同 query 输入同时验证客户端预测路径与权威服务端路径。
+第 9 节数字背后的实测证据位于源码仓库的 `deliverables/review/evidence/interaction/`。
