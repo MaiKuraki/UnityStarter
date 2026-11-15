@@ -2,12 +2,16 @@ using System;
 
 namespace CycloneGames.RPGFoundation.Projectile.Core
 {
+    /// <summary>
+    /// Slot plus generation handle. The generation is monotonic per slot and wide enough
+    /// that a released handle can never alias a later occupant, including after Clear().
+    /// </summary>
     public readonly struct ProjectileHandle : IEquatable<ProjectileHandle>
     {
         public readonly int Slot;
-        public readonly int Generation;
+        public readonly ulong Generation;
 
-        public ProjectileHandle(int slot, int generation)
+        public ProjectileHandle(int slot, ulong generation)
         {
             Slot = slot;
             Generation = generation;
@@ -17,7 +21,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         {
             get
             {
-                return Slot >= 0 && Generation > 0;
+                return Slot >= 0 && Generation > 0UL;
             }
         }
 
@@ -35,7 +39,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         {
             unchecked
             {
-                return (Slot * 397) ^ Generation;
+                ulong folded = Generation ^ (Generation >> 32);
+                return (Slot * 397) ^ (int)folded;
             }
         }
 

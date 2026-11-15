@@ -1,9 +1,9 @@
-using System;
-
 namespace CycloneGames.RPGFoundation.Projectile.Core
 {
     public static class ProjectileSimulator
     {
+        private const float DIRECTION_EPSILON = 0.000001f;
+
         public static void Step(
             ref ProjectileState state,
             in ProjectileDefinition definition,
@@ -11,8 +11,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             float deltaTime,
             int tick,
             bool hasTarget,
-            ProjectileVector3 targetPosition,
-            ProjectileVector3 targetVelocity)
+            in ProjectileVector3 targetPosition,
+            in ProjectileVector3 targetVelocity)
         {
             state.PreviousPosition = state.Position;
             state.Velocity = ResolveVelocity(
@@ -21,8 +21,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 in space,
                 deltaTime,
                 hasTarget,
-                targetPosition,
-                targetVelocity);
+                in targetPosition,
+                in targetVelocity);
             state.Position = space.ProjectPosition(state.Position + state.Velocity * deltaTime);
             state.Age += deltaTime;
             state.CurrentTick = tick;
@@ -34,12 +34,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             in ProjectileSpaceProfile space,
             float deltaTime,
             bool hasTarget,
-            ProjectileVector3 targetPosition,
-            ProjectileVector3 targetVelocity)
+            in ProjectileVector3 targetPosition,
+            in ProjectileVector3 targetVelocity)
         {
             ProjectileVector3 velocity = space.ProjectVector(state.Velocity);
             float speed = velocity.Length;
-            ProjectileVector3 direction = speed > 0.000001f
+            ProjectileVector3 direction = speed > DIRECTION_EPSILON
                 ? velocity / speed
                 : ProjectileVector3.Forward;
 
@@ -76,6 +76,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             return space.ProjectVector(velocity);
         }
 
+        /// <summary>
+        /// Bounded turn expressed as a chord-length budget between two unit directions.
+        /// For small angles the chord length equals the angle in radians; clamping the
+        /// budget to 2 makes a full reversal a single step. Avoids the transcendental
+        /// call on every guided projectile every frame.
+        /// </summary>
         private static ProjectileVector3 RotateTowards(
             ProjectileVector3 current,
             ProjectileVector3 target,
@@ -83,30 +89,26 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         {
             current = current.NormalizedOrZero();
             target = target.NormalizedOrZero();
-            if (current.LengthSquared <= 0.000001f || target.LengthSquared <= 0.000001f)
+            if (current.LengthSquared <= DIRECTION_EPSILON || target.LengthSquared <= DIRECTION_EPSILON)
             {
                 return current;
             }
 
-            float dot = Clamp(ProjectileVector3.Dot(current, target), -1f, 1f);
-            float angle = (float)Math.Acos(dot);
-            if (angle <= 0.000001f || maxRadiansDelta >= angle)
+            if (maxRadiansDelta <= 0f)
+            {
+                return current;
+            }
+
+            ProjectileVector3 delta = target - current;
+            float chordSquared = delta.LengthSquared;
+            float maxChord = maxRadiansDelta >= 2f ? 2f : maxRadiansDelta;
+            if (chordSquared <= maxChord * maxChord)
             {
                 return target;
             }
 
-            float t = maxRadiansDelta / angle;
-            return ProjectileVector3.Lerp(current, target, t).NormalizedOrFallback(current);
-        }
-
-        private static float Clamp(float value, float min, float max)
-        {
-            if (value < min)
-            {
-                return min;
-            }
-
-            return value > max ? max : value;
+            float chord = (float)System.Math.Sqrt(chordSquared);
+            return ProjectileVector3.Lerp(current, target, maxChord / chord).NormalizedOrFallback(current);
         }
     }
 }

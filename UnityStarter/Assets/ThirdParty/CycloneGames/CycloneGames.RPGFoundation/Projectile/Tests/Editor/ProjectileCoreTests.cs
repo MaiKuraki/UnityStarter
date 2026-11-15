@@ -9,11 +9,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void LinearProjectile_AdvancesOnConfiguredPlane()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.TopDown2D());
+            var world = new ProjectileWorld(in config);
 
             ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(
                 definitionId: 100,
@@ -43,11 +42,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void HomingProjectile_RotatesTowardTarget()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.TopDown2D());
+            var world = new ProjectileWorld(in config);
 
             var definition = new ProjectileDefinition(
                 new ProjectileDefinitionId(200),
@@ -91,11 +89,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void InitialVelocity_DoesNotFoldLockedAxisSpeedIntoPlane()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.TopDown2D());
+            var world = new ProjectileWorld(in config);
 
             ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(
                 definitionId: 250,
@@ -128,11 +125,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void Collision_EmitsHitAndInvalidatesHandleOnTerminalHit()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.Full3D());
+            var world = new ProjectileWorld(in config);
 
             ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(
                 definitionId: 300,
@@ -161,11 +157,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void Collision_WithoutDespawnOnHit_EmitsNonTerminalHitAndKeepsProjectile()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.Full3D());
+            var world = new ProjectileWorld(in config);
 
             var definition = new ProjectileDefinition(
                 new ProjectileDefinitionId(350),
@@ -203,11 +198,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void Collision_BounceContinuesAlongRemainingSweepDistance()
         {
-            var world = new ProjectileWorld(
-                capacity: 4,
-                eventCapacity: 4,
-                collisionHitCapacity: 2,
+            var config = new ProjectileWorldConfig(
+                4, 4, 2,
                 ProjectileSpaceProfile.Full3D());
+            var world = new ProjectileWorld(in config);
 
             var definition = new ProjectileDefinition(
                 new ProjectileDefinitionId(400),
@@ -274,11 +268,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
         [Test]
         public void WorldStats_RecordSpawnCapacityPressure()
         {
-            var world = new ProjectileWorld(
-                capacity: 1,
-                eventCapacity: 1,
-                collisionHitCapacity: 1,
+            var config = new ProjectileWorldConfig(
+                1, 1, 1,
                 ProjectileSpaceProfile.Full3D());
+            var world = new ProjectileWorld(in config);
 
             ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(
                 definitionId: 500,
@@ -374,6 +367,174 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
                     distance: 5f,
                     position: new ProjectileVector3(5f, 0f, 0f),
                     normal: new ProjectileVector3(-1f, 0f, 0f));
+                return 1;
+            }
+        }
+
+        [Test]
+        public void Clear_InvalidatesOutstandingHandles()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(8, 16, 4, in space);
+            var world = new ProjectileWorld(in config);
+            ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(1, 10f, 0.2f, 10f, 0);
+            ProjectileSpawnRequest first = ProjectileSpawnRequest.Create(
+                definition, 1UL, 1UL, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+            Assert.That(world.TrySpawn(in first, out ProjectileHandle retained), Is.True);
+
+            world.Clear();
+
+            ProjectileSpawnRequest second = ProjectileSpawnRequest.Create(
+                definition, 1UL, 2UL, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+            Assert.That(world.TrySpawn(in second, out ProjectileHandle fresh), Is.True);
+            Assert.That(fresh.Equals(retained), Is.False);
+            Assert.That(world.TryGetState(retained, out _), Is.False);
+            Assert.That(world.TryGetState(fresh, out ProjectileState state), Is.True);
+            Assert.That(state.NetworkEntityId, Is.EqualTo(2UL));
+        }
+
+        [Test]
+        public void Config_ExposesExplicitBounds()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var zeroCapacity = new ProjectileWorldConfig(0, 16, 4, in space);
+            Assert.That(zeroCapacity.IsValid, Is.False);
+
+            var zeroEvents = new ProjectileWorldConfig(8, 0, 4, in space);
+            Assert.That(zeroEvents.IsValid, Is.False);
+
+            var negativeStep = new ProjectileWorldConfig(8, 16, 4, in space, 4, -1f, 4);
+            Assert.That(negativeStep.IsValid, Is.False);
+
+            var valid = new ProjectileWorldConfig(8, 16, 4, in space, 4, 1f / 60f, 4);
+            Assert.That(valid.IsValid, Is.True);
+        }
+
+        [Test]
+        public void Config_RejectsUnboundedBudgets()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var hugeIterations = new ProjectileWorldConfig(8, 16, 4, in space, int.MaxValue, 1f / 60f, 4);
+            Assert.That(hugeIterations.IsValid, Is.False);
+
+            var hugeSubSteps = new ProjectileWorldConfig(8, 16, 4, in space, 4, 1e-30f, int.MaxValue);
+            Assert.That(hugeSubSteps.IsValid, Is.False);
+
+            var hugeDelta = new ProjectileWorldConfig(8, 16, 4, in space, 4, float.MaxValue, 4);
+            Assert.That(hugeDelta.IsValid, Is.False);
+
+            var nanDelta = new ProjectileWorldConfig(8, 16, 4, in space, 4, float.NaN, 4);
+            Assert.That(nanDelta.IsValid, Is.False);
+
+            var sane = new ProjectileWorldConfig(8, 16, 4, in space, 16, 1f / 60f, 8);
+            Assert.That(sane.IsValid, Is.True);
+        }
+
+        [Test]
+        public void SubSteps_BoundEachIntegrationStep()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(4, 16, 4, in space, 4, 0.02f, 4);
+            var world = new ProjectileWorld(in config);
+            ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(2, 10f, 0.2f, 100f, 0);
+            ProjectileSpawnRequest request = ProjectileSpawnRequest.Create(
+                definition, 1UL, 1UL, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+            Assert.That(world.TrySpawn(in request, out ProjectileHandle handle), Is.True);
+
+            world.Step(0.5f, 1);
+
+            Assert.That(world.TryGetState(handle, out ProjectileState state), Is.True);
+            Assert.That(state.Position.Z, Is.EqualTo(0.8f).Within(0.0001f));
+            Assert.That(world.Stats.TotalSubStepCount, Is.EqualTo(4L));
+            Assert.That(world.Stats.TotalClampedFrameCount, Is.EqualTo(1L));
+        }
+
+        [Test]
+        public void BatchSnapshots_AreDenseAndTruncate()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(8, 16, 4, in space);
+            var world = new ProjectileWorld(in config);
+            ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(3, 10f, 0.2f, 10f, 0);
+            for (int i = 1; i <= 3; i++)
+            {
+                ProjectileSpawnRequest request = ProjectileSpawnRequest.Create(
+                    definition, 1UL, (ulong)i, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+                Assert.That(world.TrySpawn(in request, out _), Is.True);
+            }
+
+            var truncated = new ProjectileSnapshot[2];
+            Assert.That(world.CaptureSnapshots(truncated), Is.EqualTo(2));
+            Assert.That(truncated[0].NetworkEntityId, Is.EqualTo(1UL));
+            Assert.That(truncated[1].NetworkEntityId, Is.EqualTo(2UL));
+
+            var full = new ProjectileSnapshot[3];
+            Assert.That(world.CaptureSnapshots(full), Is.EqualTo(3));
+            Assert.That(full[2].NetworkEntityId, Is.EqualTo(3UL));
+        }
+
+        [Test]
+        public void RepeatedHit_IsSuppressedWithinOneSweep()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(4, 64, 4, in space, 8);
+            var world = new ProjectileWorld(in config);
+            var definition = new ProjectileDefinition(
+                new ProjectileDefinitionId(4),
+                ProjectileGuidanceMode.Direction,
+                ProjectileLifecycleFlags.None,
+                10f, 20f, 0f, 0f, 0.2f, 10f, 0f, 0f,
+                0, 6, ~0, 0);
+            ProjectileSpawnRequest request = ProjectileSpawnRequest.Create(
+                definition, 1UL, 1UL, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+            Assert.That(world.TrySpawn(in request, out _), Is.True);
+
+            world.Step(1f / 60f, 1, new RepeatingTargetCollisionWorld(), null);
+
+            Assert.That(world.HitEvents.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void IgnoreOwner_FiltersOwnerEntityHits()
+        {
+            ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+            var config = new ProjectileWorldConfig(4, 16, 4, in space);
+            var world = new ProjectileWorld(in config);
+            ProjectileDefinition definition = ProjectileDefinition.CreateKinematic(5, 10f, 0.2f, 10f, ~0);
+            ProjectileSpawnRequest request = ProjectileSpawnRequest.Create(
+                definition, 7UL, 1UL, 0, ProjectileVector3.Zero, ProjectileVector3.Forward);
+            Assert.That(world.TrySpawn(in request, out _), Is.True);
+
+            world.Step(1f / 60f, 1, new OwnerHitCollisionWorld(), null);
+
+            Assert.That(world.HitEvents.Count, Is.EqualTo(0));
+            Assert.That(world.ActiveCount, Is.EqualTo(1));
+        }
+
+        private sealed class RepeatingTargetCollisionWorld : IProjectileCollisionWorld
+        {
+            public int Cast(
+                in ProjectileCollisionQuery query,
+                ProjectileCollisionHit[] results,
+                int maxResults)
+            {
+                results[0] = new ProjectileCollisionHit(
+                    99UL, 99UL, 1, 0.01f,
+                    query.From, new ProjectileVector3(0f, 1f, 0f));
+                return 1;
+            }
+        }
+
+        private sealed class OwnerHitCollisionWorld : IProjectileCollisionWorld
+        {
+            public int Cast(
+                in ProjectileCollisionQuery query,
+                ProjectileCollisionHit[] results,
+                int maxResults)
+            {
+                results[0] = new ProjectileCollisionHit(
+                    7UL, 7UL, 1, 0.01f,
+                    query.From, new ProjectileVector3(0f, 1f, 0f));
                 return 1;
             }
         }

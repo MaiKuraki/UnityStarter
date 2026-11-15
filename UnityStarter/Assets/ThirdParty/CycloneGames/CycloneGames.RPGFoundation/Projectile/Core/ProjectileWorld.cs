@@ -2,6 +2,73 @@ using System;
 
 namespace CycloneGames.RPGFoundation.Projectile.Core
 {
+    /// <summary>
+    /// Immutable construction contract for <see cref="ProjectileWorld"/>. All storage is
+    /// allocated once at construction; no parameter can trigger later growth.
+    /// </summary>
+    public readonly struct ProjectileWorldConfig
+    {
+        // Bounds keep an authored or remote configuration from turning one frame
+        // into an unbounded loop. They are deliberately generous for real workloads.
+        private const int MaxCollisionIterationsLimit = 64;
+        private const int MaxSubStepsLimit = 16;
+        private const float MaxDeltaTimeLimit = 1f;
+
+        public readonly int Capacity;
+        public readonly int EventCapacity;
+        public readonly int CollisionHitCapacity;
+        public readonly int MaxCollisionIterations;
+        public readonly float MaxDeltaTime;
+        public readonly int MaxSubSteps;
+        public readonly ProjectileSpaceProfile Space;
+
+        public ProjectileWorldConfig(
+            int capacity,
+            int eventCapacity,
+            int collisionHitCapacity,
+            in ProjectileSpaceProfile space,
+            int maxCollisionIterations = 4,
+            float maxDeltaTime = 0f,
+            int maxSubSteps = 1)
+        {
+            Capacity = capacity;
+            EventCapacity = eventCapacity;
+            CollisionHitCapacity = collisionHitCapacity;
+            MaxCollisionIterations = maxCollisionIterations;
+            MaxDeltaTime = maxDeltaTime;
+            MaxSubSteps = maxSubSteps;
+            Space = space;
+        }
+
+        /// <summary>
+        /// Zero <see cref="MaxDeltaTime"/> disables sub-stepping. A positive value bounds
+        /// each integration step; <see cref="MaxSubSteps"/> bounds the work spent on one
+        /// <see cref="ProjectileWorld.Step"/> call.
+        /// </summary>
+        public bool IsValid
+        {
+            get
+            {
+                return Capacity > 0
+                       && EventCapacity > 0
+                       && CollisionHitCapacity > 0
+                       && MaxCollisionIterations >= 1
+                       && MaxCollisionIterations <= MaxCollisionIterationsLimit
+                       && MaxSubSteps >= 1
+                       && MaxSubSteps <= MaxSubStepsLimit
+                       && !float.IsNaN(MaxDeltaTime)
+                       && !float.IsInfinity(MaxDeltaTime)
+                       && MaxDeltaTime >= 0f
+                       && MaxDeltaTime <= MaxDeltaTimeLimit;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fixed-capacity dense projectile store. Single-writer: one simulation thread owns
+    /// all mutable state and feeds commands at a known simulation barrier. Every array
+    /// is allocated at construction and never grows; the hot path performs no allocation.
+    /// </summary>
     public sealed class ProjectileWorld
     {
         private const int NullDenseIndex = -1;
@@ -10,58 +77,55 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         private readonly ProjectileSpaceProfile _space;
         private readonly ProjectileState[] _states;
         private readonly ProjectileDefinition[] _definitions;
-        private readonly int[] _slotGenerations;
+        private readonly ulong[] _slotGenerations;
         private readonly int[] _slotToDense;
         private readonly int[] _denseToSlot;
         private readonly int[] _freeSlots;
         private readonly ProjectileCollisionHit[] _collisionHits;
         private readonly int _maxCollisionIterations;
+        private readonly float _maxDeltaTime;
+        private readonly int _maxSubSteps;
 
         private int _activeCount;
         private int _slotHighWaterMark;
         private int _freeCount;
         private int _peakActiveCount;
-        private int _stepCount;
+        private long _stepCount;
         private int _lastTick;
         private float _lastDeltaTime;
-        private int _lastHitEventCount;
-        private int _lastCollisionQueryCount;
-        private int _lastCollisionHitCount;
-        private int _totalSpawnAcceptedCount;
-        private int _totalSpawnRejectedInvalidCount;
-        private int _totalSpawnRejectedCapacityCount;
-        private int _totalDespawnCount;
-        private int _totalHitEventCount;
-        private int _totalHitEventOverflowCount;
-        private int _totalCollisionIterationLimitCount;
+        private long _lastHitEventCount;
+        private long _lastCollisionQueryCount;
+        private long _lastCollisionHitCount;
+        private long _totalSpawnAcceptedCount;
+        private long _totalSpawnRejectedInvalidCount;
+        private long _totalSpawnRejectedCapacityCount;
+        private long _totalDespawnCount;
+        private long _totalHitEventCount;
+        private long _totalHitEventOverflowCount;
+        private long _totalCollisionIterationLimitCount;
+        private long _totalSubStepCount;
+        private long _totalClampedFrameCount;
 
-        public ProjectileWorld(
-            int capacity,
-            int eventCapacity,
-            int collisionHitCapacity,
-            in ProjectileSpaceProfile space,
-            int maxCollisionIterations = 4)
+        public ProjectileWorld(in ProjectileWorldConfig config)
         {
-            if (capacity <= 0)
+            if (!config.IsValid)
             {
-                throw new ArgumentOutOfRangeException(nameof(capacity));
+                throw new ArgumentOutOfRangeException(nameof(config));
             }
 
-            if (collisionHitCapacity <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(collisionHitCapacity));
-            }
-
-            _space = space;
+            int capacity = config.Capacity;
+            _space = config.Space;
             _states = new ProjectileState[capacity];
             _definitions = new ProjectileDefinition[capacity];
-            _slotGenerations = new int[capacity];
+            _slotGenerations = new ulong[capacity];
             _slotToDense = new int[capacity];
             _denseToSlot = new int[capacity];
             _freeSlots = new int[capacity];
-            _collisionHits = new ProjectileCollisionHit[collisionHitCapacity];
-            _maxCollisionIterations = Math.Max(1, maxCollisionIterations);
-            HitEvents = new ProjectileEventBuffer(eventCapacity);
+            _collisionHits = new ProjectileCollisionHit[config.CollisionHitCapacity];
+            _maxCollisionIterations = config.MaxCollisionIterations;
+            _maxDeltaTime = config.MaxDeltaTime;
+            _maxSubSteps = config.MaxSubSteps;
+            HitEvents = new ProjectileEventBuffer(config.EventCapacity);
 
             for (int i = 0; i < capacity; i++)
             {
@@ -70,47 +134,31 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             }
         }
 
-        public int Capacity
-        {
-            get
-            {
-                return _states.Length;
-            }
-        }
+        public int Capacity => _states.Length;
 
-        public int ActiveCount
-        {
-            get
-            {
-                return _activeCount;
-            }
-        }
+        public int ActiveCount => _activeCount;
 
         public ProjectileEventBuffer HitEvents { get; }
 
-        public ProjectileWorldStats Stats
-        {
-            get
-            {
-                return new ProjectileWorldStats(
-                    Capacity,
-                    _activeCount,
-                    _peakActiveCount,
-                    _stepCount,
-                    _lastTick,
-                    _lastDeltaTime,
-                    _lastHitEventCount,
-                    _lastCollisionQueryCount,
-                    _lastCollisionHitCount,
-                    _totalSpawnAcceptedCount,
-                    _totalSpawnRejectedInvalidCount,
-                    _totalSpawnRejectedCapacityCount,
-                    _totalDespawnCount,
-                    _totalHitEventCount,
-                    _totalHitEventOverflowCount,
-                    _totalCollisionIterationLimitCount);
-            }
-        }
+        public ProjectileWorldStats Stats => new ProjectileWorldStats(
+            Capacity,
+            _activeCount,
+            _peakActiveCount,
+            _stepCount,
+            _lastTick,
+            _lastDeltaTime,
+            _lastHitEventCount,
+            _lastCollisionQueryCount,
+            _lastCollisionHitCount,
+            _totalSpawnAcceptedCount,
+            _totalSpawnRejectedInvalidCount,
+            _totalSpawnRejectedCapacityCount,
+            _totalDespawnCount,
+            _totalHitEventCount,
+            _totalHitEventOverflowCount,
+            _totalCollisionIterationLimitCount,
+            _totalSubStepCount,
+            _totalClampedFrameCount);
 
         public bool TrySpawn(in ProjectileSpawnRequest request, out ProjectileHandle handle)
         {
@@ -134,10 +182,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 return false;
             }
 
-            int generation = _slotGenerations[slot];
-            if (generation <= 0)
+            ulong generation = _slotGenerations[slot];
+            if (generation == 0UL)
             {
-                generation = 1;
+                generation = 1UL;
                 _slotGenerations[slot] = generation;
             }
 
@@ -193,23 +241,40 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             return true;
         }
 
-        public bool TryGetSnapshotByNetworkEntityId(
-            ulong networkEntityId,
-            out ProjectileSnapshot snapshot)
+        /// <summary>
+        /// Copies every active snapshot in dense order with one sequential pass. The
+        /// destination is caller-owned contiguous storage; no allocation and no index
+        /// structure is involved. A return value below <see cref="ActiveCount"/> means
+        /// the destination was too small and the batch was truncated.
+        /// </summary>
+        public int CaptureSnapshots(ProjectileSnapshot[] destination, int startIndex = 0)
         {
-            if (!TryGetStateByNetworkEntityId(networkEntityId, out ProjectileState state))
+            if (destination == null)
             {
-                snapshot = default;
-                return false;
+                throw new ArgumentNullException(nameof(destination));
             }
 
-            snapshot = ProjectileSnapshot.FromState(in state);
-            return true;
+            if ((uint)startIndex > (uint)destination.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(startIndex));
+            }
+
+            int available = destination.Length - startIndex;
+            int count = _activeCount < available ? _activeCount : available;
+            for (int i = 0; i < count; i++)
+            {
+                destination[startIndex + i] = ProjectileSnapshot.FromState(in _states[i]);
+            }
+
+            return count;
         }
 
-        public bool TryGetStateByNetworkEntityId(
-            ulong networkEntityId,
-            out ProjectileState state)
+        /// <summary>
+        /// Low-frequency convenience lookup. <see cref="ProjectileSpawnRequest.NetworkEntityId"/>
+        /// must be unique per active projectile; duplicates resolve to the first dense
+        /// slot. Prefer <see cref="CaptureSnapshots"/> for per-frame authority broadcast.
+        /// </summary>
+        public bool TryGetStateByNetworkEntityId(ulong networkEntityId, out ProjectileState state)
         {
             if (networkEntityId == 0UL)
             {
@@ -232,6 +297,27 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             return false;
         }
 
+        public bool TryGetSnapshotByNetworkEntityId(ulong networkEntityId, out ProjectileSnapshot snapshot)
+        {
+            if (!TryGetStateByNetworkEntityId(networkEntityId, out ProjectileState state))
+            {
+                snapshot = default;
+                return false;
+            }
+
+            snapshot = ProjectileSnapshot.FromState(in state);
+            return true;
+        }
+
+        /// <summary>
+        /// Advances the world by <paramref name="deltaTime"/>. When a positive
+        /// <see cref="ProjectileWorldConfig.MaxDeltaTime"/> is configured, the frame is
+        /// split into equal sub-steps no larger than that value. A frame beyond
+        /// <see cref="ProjectileWorldConfig.MaxSubSteps"/> is deterministically clamped,
+        /// so oversized steps never tunnel through collision geometry and every device
+        /// observes the same simulation boundary. Hit events accumulate across sub-steps
+        /// and are cleared once per call.
+        /// </summary>
         public void Step(
             float deltaTime,
             int tick,
@@ -251,46 +337,25 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _lastCollisionQueryCount = 0;
             _lastCollisionHitCount = 0;
 
-            int denseIndex = 0;
-            while (denseIndex < _activeCount)
+            int subSteps = ComputeSubSteps(deltaTime);
+            float maxFrame = _maxDeltaTime > 0f ? _maxDeltaTime * subSteps : deltaTime;
+            float effectiveDelta = deltaTime;
+            if (maxFrame > 0f && deltaTime > maxFrame)
             {
-                ProjectileState state = _states[denseIndex];
-                ProjectileDefinition definition = _definitions[denseIndex];
-
-                bool hasTarget = TryGetTarget(
-                    targetProvider,
-                    state.TargetEntityId,
-                    out ProjectileVector3 targetPosition,
-                    out ProjectileVector3 targetVelocity);
-
-                ProjectileSimulator.Step(
-                    ref state,
-                    in definition,
-                    in _space,
-                    deltaTime,
-                    tick,
-                    hasTarget,
-                    targetPosition,
-                    targetVelocity);
-
-                bool despawn = state.Age >= definition.MaxLifetime;
-                if (!despawn && collisionWorld != null && definition.CollisionLayerMask != 0)
-                {
-                    despawn = ResolveCollision(
-                        ref state,
-                        in definition,
-                        collisionWorld);
-                }
-
-                if (despawn)
-                {
-                    DespawnDense(denseIndex);
-                    continue;
-                }
-
-                _states[denseIndex] = state;
-                denseIndex++;
+                // A frame beyond the catch-up budget is clamped rather than simulated
+                // with oversized steps. The clamp is deterministic on every device, so
+                // replay and rollback stay aligned even under a stalled CPU.
+                effectiveDelta = maxFrame;
+                _totalClampedFrameCount++;
             }
+
+            float subDelta = effectiveDelta / subSteps;
+            for (int s = 0; s < subSteps; s++)
+            {
+                StepCore(subDelta, tick, collisionWorld, targetProvider);
+            }
+
+            _totalSubStepCount += subSteps;
         }
 
         public void Clear()
@@ -302,6 +367,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             {
                 _slotToDense[i] = NullDenseIndex;
                 _denseToSlot[i] = NullDenseIndex;
+            }
+
+            // Advancing every issued generation keeps outstanding handles invalid
+            // after slot reuse. Without this, Clear() produces handle aliasing.
+            for (int i = 0; i < _slotHighWaterMark; i++)
+            {
+                _slotGenerations[i]++;
             }
 
             _activeCount = 0;
@@ -327,6 +399,68 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _totalHitEventCount = 0;
             _totalHitEventOverflowCount = 0;
             _totalCollisionIterationLimitCount = 0;
+            _totalSubStepCount = 0;
+            _totalClampedFrameCount = 0;
+        }
+
+        private int ComputeSubSteps(float deltaTime)
+        {
+            if (_maxDeltaTime <= 0f || _maxSubSteps <= 1 || deltaTime <= _maxDeltaTime)
+            {
+                return 1;
+            }
+
+            double ratio = (double)deltaTime / _maxDeltaTime;
+            if (ratio >= _maxSubSteps)
+            {
+                return _maxSubSteps;
+            }
+
+            int needed = (int)Math.Ceiling(ratio);
+            return needed < 1 ? 1 : needed;
+        }
+
+        private void StepCore(
+            float deltaTime,
+            int tick,
+            IProjectileCollisionWorld collisionWorld,
+            IProjectileTargetProvider targetProvider)
+        {
+            int denseIndex = 0;
+            while (denseIndex < _activeCount)
+            {
+                ref ProjectileState state = ref _states[denseIndex];
+
+                bool hasTarget = TryGetTarget(
+                    targetProvider,
+                    state.TargetEntityId,
+                    out ProjectileVector3 targetPosition,
+                    out ProjectileVector3 targetVelocity);
+
+                ProjectileSimulator.Step(
+                    ref state,
+                    in _definitions[denseIndex],
+                    in _space,
+                    deltaTime,
+                    tick,
+                    hasTarget,
+                    in targetPosition,
+                    in targetVelocity);
+
+                bool despawn = state.Age >= _definitions[denseIndex].MaxLifetime;
+                if (!despawn && collisionWorld != null && _definitions[denseIndex].CollisionLayerMask != 0)
+                {
+                    despawn = ResolveCollision(ref state, in _definitions[denseIndex], collisionWorld);
+                }
+
+                if (despawn)
+                {
+                    DespawnDense(denseIndex);
+                    continue;
+                }
+
+                denseIndex++;
+            }
         }
 
         private bool ResolveCollision(
@@ -336,6 +470,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         {
             ProjectileVector3 sweepFrom = state.PreviousPosition;
             ProjectileVector3 sweepTo = state.Position;
+            ulong lastHitTargetId = 0UL;
+            ulong ownerToIgnore = (definition.LifecycleFlags & ProjectileLifecycleFlags.IgnoreOwner)
+                                  != ProjectileLifecycleFlags.None
+                ? state.OwnerEntityId
+                : 0UL;
 
             for (int iteration = 0; iteration < _maxCollisionIterations; iteration++)
             {
@@ -349,10 +488,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                     sweepTo);
 
                 _lastCollisionQueryCount++;
-                int count = collisionWorld.Cast(
-                    in query,
-                    _collisionHits,
-                    _collisionHits.Length);
+                int count = collisionWorld.Cast(in query, _collisionHits, _collisionHits.Length);
                 if (count > 0)
                 {
                     _lastCollisionHitCount += Math.Min(count, _collisionHits.Length);
@@ -363,10 +499,15 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                     return false;
                 }
 
-                ProjectileCollisionHit hit = SelectNearestHit(count);
+                ProjectileCollisionHit hit = SelectNearestHit(count, lastHitTargetId, ownerToIgnore);
                 if (!hit.IsValid)
                 {
                     return false;
+                }
+
+                if (hit.TargetEntityId != 0UL)
+                {
+                    lastHitTargetId = hit.TargetEntityId;
                 }
 
                 bool canBounce = state.RemainingBounceCount > 0;
@@ -502,7 +643,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             return remainingDistance > 0f ? remainingDistance : 0f;
         }
 
-        private ProjectileCollisionHit SelectNearestHit(int count)
+        /// <summary>
+        /// Picks the nearest valid hit while suppressing the entity resolved on the
+        /// previous iteration and the owner when the definition requests it. Entity ids
+        /// of zero are unpopulated transport objects and are never filtered.
+        /// </summary>
+        private ProjectileCollisionHit SelectNearestHit(int count, ulong excludedTargetId, ulong ownerToIgnore)
         {
             ProjectileCollisionHit best = default;
             float bestDistance = float.PositiveInfinity;
@@ -511,6 +657,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             {
                 ProjectileCollisionHit hit = _collisionHits[i];
                 if (!hit.IsValid || hit.Distance >= bestDistance)
+                {
+                    continue;
+                }
+
+                if (hit.TargetEntityId != 0UL
+                    && (hit.TargetEntityId == excludedTargetId || hit.TargetEntityId == ownerToIgnore))
                 {
                     continue;
                 }
@@ -602,11 +754,6 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _activeCount--;
 
             _slotGenerations[slot]++;
-            if (_slotGenerations[slot] <= 0)
-            {
-                _slotGenerations[slot] = 1;
-            }
-
             _freeSlots[_freeCount] = slot;
             _freeCount++;
             _totalDespawnCount++;

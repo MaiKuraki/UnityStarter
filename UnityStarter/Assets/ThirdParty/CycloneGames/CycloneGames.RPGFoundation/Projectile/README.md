@@ -143,11 +143,40 @@ High-density bullet patterns should avoid GameObject-per-projectile presentation
 
 ### Collision and Tunneling
 
-`ProjectileWorld` expects collision worlds to perform swept queries from `PreviousPosition` to `Position`. Unity adapters use `SphereCastNonAlloc` (3D) and `CircleCastNonAlloc` (2D). When a projectile bounces or pierces, the world continues with a fixed collision-iteration budget (default `4`).
+`ProjectileWorld` expects collision worlds to perform swept queries from `PreviousPosition` to `Position`. Unity adapters use `SphereCastNonAlloc` (3D) and `CircleCastNonAlloc` (2D). When a projectile bounces or pierces, the world continues with a fixed collision-iteration budget (default `4`) and suppresses a target entity already resolved during the same sweep.
 
-Core does not own Unity collider filtering. Add target ignore lists, owner filtering, friendly-fire rules, and duplicate-hit suppression in project-specific adapters.
+Core filters hits by entity id. A collision adapter that populates `ProjectileCollisionHit.TargetEntityId` enables both repeated-hit suppression and `ProjectileLifecycleFlags.IgnoreOwner`. Hits with an unpopulated entity id are never filtered, so presentation-only adapters stay usable. Collider filtering, friendly-fire rules and layer policy remain the responsibility of the adapter.
 
 ## Advanced Topics
+
+### World Configuration
+
+`ProjectileWorld` takes a single `ProjectileWorldConfig` value. Every storage size and simulation budget is declared at construction, so a new budget never changes the constructor signature.
+
+```csharp
+using CycloneGames.RPGFoundation.Projectile.Core;
+
+ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+var config = new ProjectileWorldConfig(
+    4096, 512, 8, in space,
+    maxCollisionIterations: 4,
+    maxDeltaTime: 1f / 60f,
+    maxSubSteps: 4);
+var world = new ProjectileWorld(in config);
+```
+
+`maxDeltaTime` bounds each integration step. A frame longer than `maxSubSteps * maxDeltaTime` is deterministically clamped, reported by `ProjectileWorldStats.TotalClampedFrameCount`, and never simulated with an oversized step. `ProjectileSystemBehaviour` drives the same world with a fixed-step accumulator and a bounded catch-up budget, so tick-indexed state stays identical across frame rates and hardware tiers.
+
+### Batch Snapshots
+
+Collect authoritative state for many projectiles with one sequential pass over dense storage:
+
+```csharp
+var buffer = new ProjectileSnapshot[world.Capacity];
+int count = world.CaptureSnapshots(buffer);
+```
+
+`CaptureSnapshots` reads the dense state array in order and writes caller-owned contiguous storage. It performs no per-projectile lookup and no allocation. A result smaller than `world.ActiveCount` means the destination was too small. Use `TryGetStateByNetworkEntityId` only for low-frequency single lookups: it scans active state linearly and `NetworkEntityId` must be unique per active projectile.
 
 ### DeterministicMath Integration
 
@@ -175,7 +204,7 @@ Networking lives in the separate `CycloneGames.RPGFoundation.Projectile.Networki
 
 ### Threading
 
-`ProjectileWorld` is single-writer. Own it from one simulation thread and feed commands at a known simulation barrier. Unity-facing adapters must run on the main thread. Pure Core and DeterministicMath state can run in headless/server contexts.
+`ProjectileWorld` is single-writer. Own it from one simulation thread and feed commands at a known simulation barrier. No lock, interlocked primitive or concurrent collection is used: projectile integration is a sequential pass over dense arrays, so parallelism belongs at the batch collision, presentation and serialization boundaries instead. Unity-facing adapters must run on the main thread. Pure Core and DeterministicMath state can run in headless/server contexts.
 
 ## Common Scenarios
 
@@ -199,17 +228,18 @@ When testing physics adapters, create small scenes with `ProjectileSystemBehavio
 
 ## Performance and Memory
 
-`ProjectileWorld` allocates state arrays, slot maps, free-list, and hit event buffers at construction — this is world storage, not a general-purpose pool.
+`ProjectileWorld` allocates state arrays, definition arrays, slot maps, generation table, free-list, collision scratch and hit event buffers at construction — this is world storage, not a general-purpose pool.
 
 After warm-up:
 
 - Spawn and despawn: O(1).
-- Stepping: O(n) for active projectiles.
-- Despawn uses swap-remove and generation-safe handles.
-- Hit events write into a fixed-capacity buffer.
+- Stepping: O(n) for active projectiles, with state and definition accessed by reference so no per-projectile struct copy occurs.
+- Despawn uses swap-remove and generation-safe handles; the generation is 64-bit and advances on `Clear()`.
+- Full authoritative capture: one sequential O(n) pass through `CaptureSnapshots`, no index structure and no allocation.
+- Hit events write into a fixed-capacity buffer; entity-level repeated hits are suppressed within one sweep.
 - Unity adapters use `SphereCastNonAlloc` / `CircleCastNonAlloc`.
-- Bounce/pierce use fixed iteration budget — no allocation.
-- `ProjectileWorldStats` records pressure without allocating.
+- Bounce/pierce and integration sub-steps use fixed budgets — no allocation.
+- `ProjectileWorldStats` records pressure with 64-bit lifetime counters and never allocates.
 
 Capacity misses return `false` without silent resizing. Size the world per encounter, room, server shard, or bullet-pattern profile.
 

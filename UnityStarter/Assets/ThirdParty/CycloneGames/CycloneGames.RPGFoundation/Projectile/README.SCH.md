@@ -143,11 +143,40 @@ Projectile Core 不直接引用 `CycloneGames.GameplayAbilities`。火球类能�
 
 ### 碰撞与防穿墙
 
-`ProjectileWorld` 要求 collision world 从 `PreviousPosition` 到 `Position` 执行 swept query。Unity adapter 使用 `SphereCastNonAlloc`（3D）和 `CircleCastNonAlloc`（2D）。当 projectile 反弹或穿透时，world 以固定 collision iteration budget（默认 4）继续。
+`ProjectileWorld` 要求 collision world 从 `PreviousPosition` 到 `Position` 执行 swept query。Unity adapter 使用 `SphereCastNonAlloc`（3D）和 `CircleCastNonAlloc`（2D）。当 projectile 反弹或穿透时，world 以固定 collision iteration budget（默认 4）继续，并抑制同一次 sweep 中已经解析过的目标实体。
 
-Core 不直接拥有 collider filtering。应在项目专用 adapter 中添加 target ignore list、owner filtering、friendly-fire rule 和 duplicate-hit suppression。
+Core 按 entity id 过滤命中。collision adapter 填充 `ProjectileCollisionHit.TargetEntityId` 后，重复命中抑制与 `ProjectileLifecycleFlags.IgnoreOwner` 同时生效；未填充 entity id 的 hit 不会被过滤，因此仅用于表现层的 adapter 仍可直接使用。collider filtering、friendly-fire rule 和 layer policy 仍由 adapter 负责。
 
 ## 进阶主题
+
+### World 配置
+
+`ProjectileWorld` 只接收一个 `ProjectileWorldConfig` 值。所有存储容量与仿真预算都在构造时声明，新增预算不会改变构造函数签名。
+
+```csharp
+using CycloneGames.RPGFoundation.Projectile.Core;
+
+ProjectileSpaceProfile space = ProjectileSpaceProfile.Full3D();
+var config = new ProjectileWorldConfig(
+    4096, 512, 8, in space,
+    maxCollisionIterations: 4,
+    maxDeltaTime: 1f / 60f,
+    maxSubSteps: 4);
+var world = new ProjectileWorld(in config);
+```
+
+`maxDeltaTime` 限制每个积分子步。超过 `maxSubSteps * maxDeltaTime` 的帧会被确定性截断，由 `ProjectileWorldStats.TotalClampedFrameCount` 上报，不会用超长步长仿真。`ProjectileSystemBehaviour` 以固定步长累加器和有界 catch-up 预算驱动同一个 world，使按 tick 编号的状态在不同帧率与硬件档位下保持一致。
+
+### 批量快照
+
+对多个 projectile 采集权威状态时，应一次顺序遍历完成：
+
+```csharp
+var buffer = new ProjectileSnapshot[world.Capacity];
+int count = world.CaptureSnapshots(buffer);
+```
+
+`CaptureSnapshots` 按 dense 顺序读取 state array 并写入调用方持有的连续存储，不做逐 projectile 查找、不分配。返回值小于 `world.ActiveCount` 表示目标数组容量不足。`TryGetStateByNetworkEntityId` 只用于低频单点查询：它线性扫描活跃状态，且要求 `NetworkEntityId` 在活跃 projectile 中唯一。
 
 ### DeterministicMath 集成
 
@@ -175,7 +204,7 @@ Integration 在 projectile 边界显式选择 zero-vector fallback：zero spawn 
 
 ### 线程模型
 
-`ProjectileWorld` 是 single-writer 设计。由一个 simulation thread 拥有，在已知 simulation barrier 接收 command。Unity-facing adapter 必须运行在主线程。纯 Core 和 DeterministicMath state 可在 headless/server context 运行。
+`ProjectileWorld` 是 single-writer 设计。由一个 simulation thread 拥有，在已知 simulation barrier 接收 command。不使用 lock、Interlocked 原语或并发集合：projectile 积分是对 dense array 的顺序遍历，并行应放在批量碰撞、表现层和序列化边界上。Unity-facing adapter 必须运行在主线程。纯 Core 和 DeterministicMath state 可在 headless/server context 运行。
 
 ## 常见场景
 
@@ -199,17 +228,18 @@ Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Networking.
 
 ## 性能与内存
 
-`ProjectileWorld` 在构造时分配 state array、slot map、free-list 和 hit event buffer — 这是 world storage，不是通用对象池。
+`ProjectileWorld` 在构造时分配 state array、definition array、slot map、generation table、free-list、collision scratch 和 hit event buffer — 这是 world storage，不是通用对象池。
 
 预热后：
 
 - Spawn 和 despawn：O(1)。
-- Stepping：活跃 projectile 的 O(n)。
-- Despawn 使用 swap-remove 和 generation-safe handle。
-- Hit event 写入固定容量 buffer。
+- Stepping：活跃 projectile 的 O(n)；state 与 definition 按引用访问，不产生每 projectile 的 struct 拷贝。
+- Despawn 使用 swap-remove 和 generation-safe handle；generation 为 64 位，且 `Clear()` 会推进代际。
+- 全量权威采集：`CaptureSnapshots` 一次顺序 O(n) 遍历，无索引结构、无分配。
+- Hit event 写入固定容量 buffer；同一次 sweep 内的实体级重复命中会被抑制。
 - Unity adapter 使用 `SphereCastNonAlloc` / `CircleCastNonAlloc`。
-- Bounce/pierce 使用固定 iteration budget — 无分配。
-- `ProjectileWorldStats` 不分配地记录压力。
+- Bounce/pierce 与积分子步使用固定预算 — 无分配。
+- `ProjectileWorldStats` 使用 64 位生命周期计数器记录压力，且不分配。
 
 容量不足返回 `false`，不会静默扩容。按 encounter、room、server shard 或 bullet-pattern profile 配置容量。
 

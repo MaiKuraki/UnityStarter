@@ -12,11 +12,16 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             _world = world ?? throw new ArgumentNullException(nameof(world));
         }
 
-        public bool TryGetSnapshot(
-            ulong projectileEntityId,
-            out ProjectileSnapshot snapshot)
+        public int SnapshotCapacity => _world.Capacity;
+
+        public bool TryGetSnapshot(ulong projectileEntityId, out ProjectileSnapshot snapshot)
         {
             return _world.TryGetSnapshotByNetworkEntityId(projectileEntityId, out snapshot);
+        }
+
+        public int CaptureSnapshots(ProjectileSnapshot[] destination, int startIndex = 0)
+        {
+            return _world.CaptureSnapshots(destination, startIndex);
         }
     }
 }
