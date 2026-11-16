@@ -403,7 +403,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         /// Resolves a projectile by its replicated network id. O(1) when
         /// <see cref="ProjectileWorldConfig.EnableNetworkEntityIdIndex"/> is on, otherwise a
         /// linear scan of active projectiles. <see cref="ProjectileSpawnRequest.NetworkEntityId"/>
-        /// must be unique per active projectile; duplicates resolve to the first dense slot.
+        /// must be unique per active projectile: with the index enabled a duplicate resolves
+        /// to the most recently inserted slot, without it to the first dense slot.
         /// </summary>
         public bool TryGetStateByNetworkEntityId(ulong networkEntityId, out ProjectileState state)
         {
@@ -691,14 +692,39 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             {
                 ref readonly ProjectileSnapshot snapshot = ref snapshots[i];
                 bool rewind = mode == ProjectileRestoreMode.Replace;
-                if (ApplySnapshot(in snapshot, rewind) == ProjectileSnapshotApplyResult.Applied)
+                ProjectileSnapshotApplyResult applyResult = ApplySnapshot(in snapshot, rewind);
+                if (applyResult == ProjectileSnapshotApplyResult.Applied)
                 {
                     applied++;
                     continue;
                 }
 
-                // Missing: pass 1 proved a definition exists, and capacity was checked.
-                catalog.TryGetDefinition(snapshot.DefinitionId.Value, out ProjectileDefinition definition);
+                // A stale patch refers to an id that already exists locally. It is not a
+                // spawn candidate, and it must not stay counted as a known-and-patched id
+                // or DuplicateIds would under-report on later entries in the same batch.
+                if (applyResult == ProjectileSnapshotApplyResult.Stale)
+                {
+                    alreadyKnown--;
+                    continue;
+                }
+
+                // Only a genuinely missing id may create a projectile. Spawning for Stale
+                // or Invalid would create a duplicate network id and make the index
+                // ambiguous; Invalid batches are already rejected in pass 1.
+                if (applyResult != ProjectileSnapshotApplyResult.Missing)
+                {
+                    continue;
+                }
+
+                // Pass 1 resolved definitions for every unknown id, but Merge batches made
+                // up entirely of known ids are allowed to run with a null catalog. Keep the
+                // guard so a future change to pass 1 cannot turn that into a null deref.
+                if (catalog == null
+                    || !catalog.TryGetDefinition(snapshot.DefinitionId.Value, out ProjectileDefinition definition))
+                {
+                    continue;
+                }
+
                 if (TrySpawnFromSnapshot(in snapshot, in definition, out _))
                 {
                     spawned++;

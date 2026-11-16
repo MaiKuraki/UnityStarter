@@ -188,9 +188,58 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor
 
             world.TryRestoreStates(older, ProjectileRestoreMode.Merge, catalog);
             Assert.That(world.LatestTick, Is.EqualTo(200), "Merge must not rewind the anchor");
+            Assert.That(world.ActiveCount, Is.EqualTo(1), "a stale Merge patch must not spawn a duplicate id");
 
             world.TryRestoreStates(older, ProjectileRestoreMode.Replace, catalog);
             Assert.That(world.LatestTick, Is.EqualTo(50), "Replace is a rewind and must move the anchor back");
+            Assert.That(world.ActiveCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Restore_StaleMergeKeepsTheExistingProjectile()
+        {
+            ProjectileWorld world = CreateWorld(8);
+            ProjectileDefinition definition = Definition();
+            var catalog = new Catalog(definition);
+            Spawn(world, definition, 1UL, 1);
+            world.Step(1f / 60f, 200, null, null);
+
+            var older = new ProjectileSnapshot[1];
+            older[0] = Snapshot(1UL, 50, 10f);
+
+            ProjectileRestoreResult result = world.TryRestoreStates(older, ProjectileRestoreMode.Merge, catalog);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.Applied, Is.EqualTo(0));
+            Assert.That(result.Spawned, Is.EqualTo(0));
+            Assert.That(world.ActiveCount, Is.EqualTo(1));
+            Assert.That(world.TryGetStateByNetworkEntityId(1UL, out ProjectileState state), Is.True);
+            Assert.That(state.CurrentTick, Is.EqualTo(200), "stale snapshot must not rewind the live state");
+        }
+
+        [Test]
+        public void Restore_StaleMergeWithNullCatalogDoesNotThrow()
+        {
+            ProjectileWorld world = CreateWorld(8);
+            ProjectileDefinition definition = Definition();
+            Spawn(world, definition, 1UL, 1);
+            world.Step(1f / 60f, 200, null, null);
+
+            var older = new ProjectileSnapshot[1];
+            older[0] = Snapshot(1UL, 50, 10f);
+
+            bool threw = false;
+            try
+            {
+                world.TryRestoreStates(older, ProjectileRestoreMode.Merge, null);
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+
+            Assert.That(threw, Is.False, "a Merge batch of known ids must not dereference the catalog");
+            Assert.That(world.ActiveCount, Is.EqualTo(1));
         }
 
         [Test]
