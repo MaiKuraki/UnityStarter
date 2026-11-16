@@ -2,7 +2,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 {
     public static class ProjectileDefinitionValidator
     {
-        public static readonly int RECOMMENDED_ISSUE_CAPACITY = 16;
+        public const int RECOMMENDED_ISSUE_CAPACITY = 16;
 
         public static int Validate(
             in ProjectileDefinition definition,

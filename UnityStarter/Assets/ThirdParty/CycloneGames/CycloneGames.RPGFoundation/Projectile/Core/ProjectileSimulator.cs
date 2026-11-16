@@ -78,9 +78,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 
         /// <summary>
         /// Bounded turn expressed as a chord-length budget between two unit directions.
-        /// For small angles the chord length equals the angle in radians; clamping the
-        /// budget to 2 makes a full reversal a single step. Avoids the transcendental
-        /// call on every guided projectile every frame.
+        /// Avoids the transcendental call on every guided projectile every frame, at the cost
+        /// of a rate-dependent deviation: the turn actually applied is 2*asin(delta/2), so the
+        /// realised angle is 1.1% larger than the budget at 0.5 rad/step, 4.7% larger at
+        /// 1 rad/step, and a full reversal (pi) at 2 rad/step. A typical homing setup
+        /// (6.28 rad/s at 60 Hz = 0.105 rad/step) stays within 0.05%, so the approximation is
+        /// only visible at very high turn rates. Callers that need the nominal angle exactly
+        /// must compensate or use an angle-domain rotation instead.
         /// </summary>
         private static ProjectileVector3 RotateTowards(
             ProjectileVector3 current,

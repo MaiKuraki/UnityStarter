@@ -24,6 +24,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
             "FixedDeltaTime",
             "MaxSubSteps",
             "MaxFrameDeltaTime",
+            "MaxTravelPerStep",
+            "MaxIntegrationSubSteps",
             "AutoTick"
         };
 
@@ -38,6 +40,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
         private static readonly GUIContent MaxCollisionIterationsLabel = new GUIContent("Max Collision Iterations", "Maximum swept-collision continuations per projectile per step. Bounded so one hit cannot create unbounded iteration work.");
         private static readonly GUIContent FixedDeltaTimeLabel = new GUIContent("Fixed Delta Time", "Deterministic simulation step in seconds. The accumulator advances the world in whole steps so tick-indexed state stays frame-rate independent.");
         private static readonly GUIContent MaxSubStepsLabel = new GUIContent("Max Sub Steps", "Maximum catch-up steps per frame. Excess frame time is deterministically clamped and reported by TotalClampedFrameCount.");
+        private static readonly GUIContent MaxIntegrationSubStepsLabel = new GUIContent("Max Integration Sub Steps", "Sub-step cap inside a single simulation step. Zero mirrors Max Sub Steps. Raise it when projectiles are fast enough to saturate the displacement bound; the catch-up budget does not have to change with it.");
+        private static readonly GUIContent MaxTravelPerStepLabel = new GUIContent("Max Travel Per Step", "Largest distance a projectile may cover inside one simulation step. Zero disables the bound. Set it below the thinnest collider a projectile can hit, and no lower than Speed * Fixed Delta Time / Max Sub Steps, or the budget saturates.");
         private static readonly GUIContent MaxFrameDeltaTimeLabel = new GUIContent("Max Frame Delta Time", "Upper bound on the wall-clock delta fed into the accumulator. Prevents a stalled frame from creating unbounded catch-up work.");
 
         private SerializedProperty _simulationPlane;
@@ -51,6 +55,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
         private SerializedProperty _fixedDeltaTime;
         private SerializedProperty _maxSubSteps;
         private SerializedProperty _maxFrameDeltaTime;
+        private SerializedProperty _maxTravelPerStep;
+        private SerializedProperty _maxIntegrationSubSteps;
         private SerializedProperty _autoTick;
 
         private bool _validationFoldout = true;
@@ -71,6 +77,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
             _fixedDeltaTime = serializedObject.FindProperty("FixedDeltaTime");
             _maxSubSteps = serializedObject.FindProperty("MaxSubSteps");
             _maxFrameDeltaTime = serializedObject.FindProperty("MaxFrameDeltaTime");
+            _maxTravelPerStep = serializedObject.FindProperty("MaxTravelPerStep");
+            _maxIntegrationSubSteps = serializedObject.FindProperty("MaxIntegrationSubSteps");
             _autoTick = serializedObject.FindProperty("AutoTick");
         }
 
@@ -177,11 +185,34 @@ namespace CycloneGames.RPGFoundation.Projectile.Editor
                 EditorGUILayout.PropertyField(_fixedDeltaTime, FixedDeltaTimeLabel);
                 EditorGUILayout.PropertyField(_maxSubSteps, MaxSubStepsLabel);
                 EditorGUILayout.PropertyField(_maxFrameDeltaTime, MaxFrameDeltaTimeLabel);
+                EditorGUILayout.PropertyField(_maxIntegrationSubSteps, MaxIntegrationSubStepsLabel);
+                EditorGUILayout.PropertyField(_maxTravelPerStep, MaxTravelPerStepLabel);
 
                 if (!HasMixedValues(_fixedDeltaTime) && !HasMixedValues(_maxSubSteps))
                 {
                     float catchUpWindow = Mathf.Max(0f, _fixedDeltaTime.floatValue) * Mathf.Max(1, _maxSubSteps.intValue);
                     RPGFoundationEditorUiUtility.DrawReadOnlyText("Catch-up Window", catchUpWindow.ToString("F3") + " s");
+                }
+
+                // The bound is only honoured while the budget can pay for it, so show the speed
+                // ceiling implied by the current settings.
+                if (!HasMixedValues(_maxTravelPerStep) && !HasMixedValues(_fixedDeltaTime)
+                    && !HasMixedValues(_maxSubSteps) && !HasMixedValues(_maxIntegrationSubSteps))
+                {
+                    float travel = _maxTravelPerStep.floatValue;
+                    if (travel > 0f)
+                    {
+                        // Same resolution the component uses, so the readout cannot drift from runtime.
+                        int integration = CycloneGames.RPGFoundation.Projectile.Runtime.ProjectileSystemBehaviour
+                            .ResolveIntegrationSubSteps(_maxIntegrationSubSteps.intValue, _maxSubSteps.intValue);
+                        float fixedDelta = Mathf.Max(1f / 240f, _fixedDeltaTime.floatValue);
+                        float ceiling = travel * integration / fixedDelta;
+                        RPGFoundationEditorUiUtility.DrawReadOnlyText("Bound Holds Up To", ceiling.ToString("F1") + " m/s");
+                    }
+                    else
+                    {
+                        RPGFoundationEditorUiUtility.DrawReadOnlyText("Bound", "Disabled");
+                    }
                 }
             });
         }
