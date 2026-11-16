@@ -25,6 +25,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         public readonly long TotalSubStepCount;
         public readonly long TotalClampedFrameCount;
 
+        /// <summary>
+        /// Projectiles reaped because integration produced NaN or infinity. Non-zero means an
+        /// authored definition can overflow the float state; see
+        /// <see cref="ProjectileWorld.NonFiniteRejectedCount"/>.
+        /// </summary>
+        public readonly long TotalNonFiniteRejectedCount;
+
         public ProjectileWorldStats(
             int capacity,
             int activeCount,
@@ -43,7 +50,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             long totalHitEventOverflowCount,
             long totalCollisionIterationLimitCount,
             long totalSubStepCount,
-            long totalClampedFrameCount)
+            long totalClampedFrameCount,
+            long totalNonFiniteRejectedCount = 0L)
         {
             Capacity = capacity;
             ActiveCount = activeCount;
@@ -63,6 +71,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             TotalCollisionIterationLimitCount = totalCollisionIterationLimitCount;
             TotalSubStepCount = totalSubStepCount;
             TotalClampedFrameCount = totalClampedFrameCount;
+            TotalNonFiniteRejectedCount = totalNonFiniteRejectedCount;
         }
 
         public float ActiveCapacityRatio

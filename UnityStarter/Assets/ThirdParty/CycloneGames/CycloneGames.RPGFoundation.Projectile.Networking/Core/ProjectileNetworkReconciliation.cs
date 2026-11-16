@@ -13,6 +13,20 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             out float positionErrorSqr)
         {
             correctionFlags = ProjectileNetworkCorrectionFlags.None;
+
+            // NaN makes every threshold comparison below evaluate to false, so a corrupt
+            // prediction would be reported as "no divergence" and the client would keep a
+            // state it can never reconcile. Detect it first and demand a hard reset.
+            if (!IsFinite(in predicted) || !IsFinite(in authoritative))
+            {
+                correctionFlags = ProjectileNetworkCorrectionFlags.Transform
+                                  | ProjectileNetworkCorrectionFlags.Velocity
+                                  | ProjectileNetworkCorrectionFlags.Timeline
+                                  | ProjectileNetworkCorrectionFlags.HardSnap;
+                positionErrorSqr = float.PositiveInfinity;
+                return true;
+            }
+
             positionErrorSqr = NetworkVector3.SqrDistance(predicted.Position, authoritative.Position);
             if (positionErrorSqr > policy.PositionCorrectionThresholdSqr)
             {
@@ -60,8 +74,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             in ProjectileNetworkCorrectionPolicy policy,
             out ProjectileCorrectionMessage correction)
         {
-            if (!predicted.IsValid
-                || !authoritative.IsValid
+            if (!authoritative.IsValid
+                || predicted.ProjectileEntityId == 0UL
                 || predicted.ProjectileEntityId != authoritative.ProjectileEntityId)
             {
                 correction = default;
@@ -86,6 +100,20 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 (uint)correctionFlags,
                 authoritative);
             return true;
+        }
+
+        private static bool IsFinite(in ProjectileSnapshotMessage message)
+        {
+            return IsFinite(message.Age)
+                   && IsFinite(message.Radius)
+                   && message.Position.IsFinite()
+                   && message.PreviousPosition.IsFinite()
+                   && message.Velocity.IsFinite();
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }
