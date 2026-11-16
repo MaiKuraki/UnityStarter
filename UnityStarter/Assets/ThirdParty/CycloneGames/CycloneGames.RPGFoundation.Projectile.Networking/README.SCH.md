@@ -1,199 +1,274 @@
-# CycloneGames.RPGFoundation.Projectile.Networking
+# CycloneGames.RPGFoundation · Projectile.Networking
 
-[English](./README.md) | 简体中文
+[English](README.md) | 简体中文
 
-`CycloneGames.RPGFoundation.Projectile.Networking` 用于把 RPGFoundation Projectile 接入 `CycloneGames.Networking`。它提供传输无关的协议元数据、消息 DTO、校验辅助、预测修正、快照历史和 authority bridge 抽象。
+抛射物模块的复制层：消息 schema、校验器、用于回滚与插值的有界历史，以及把收到的消息落成世界状态的处理器。
 
-基础 Projectile 模块不依赖 `CycloneGames.Networking`。只有当 projectile state 需要跨越 Cyclone 网络边界时，才需要使用这个包。
+这个包只产出和消费已校验的消息，不发包。序列化与传输属于你的网络层。
 
-## 包结构
+只有抛射物状态需要跨网络边界时才需要它。基础 Projectile 模块不依赖此包。
 
-```text
-CycloneGames.RPGFoundation.Projectile.Networking/
-  Core/
-    CycloneGames.RPGFoundation.Projectile.Networking.Core.asmdef
-    DefaultProjectileNetworkMessageValidator.cs
-    IProjectileNetworkMessageValidator.cs
-    IProjectileNetworkSnapshotSink.cs
-    IProjectileNetworkSnapshotSource.cs
-    ProjectileCorrectionMessage.cs
-    ProjectileDespawnMessage.cs
-    ProjectileFullStateRequestMessage.cs
-    ProjectileHitMessage.cs
-    ProjectileManifestHandshakeMessage.cs
-    ProjectileNetworkAuthorityBridge.cs
-    ProjectileNetworkCorrectionFlags.cs
-    ProjectileNetworkCorrectionPolicy.cs
-    ProjectileNetworkProtocol.cs
-    ProjectileNetworkReconciliation.cs
-    ProjectileNetworkSnapshotHistory.cs
-    ProjectileNetworkValidationContext.cs
-    ProjectileNetworkVectorExtensions.cs
-    ProjectileSnapshotMessage.cs
-    ProjectileSpawnMessage.cs
-    ProjectileWorldNetworkSnapshotSource.cs
-  Tests/Editor/
-    CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor.asmdef
-    ProjectileNetworkingIntegrationTests.cs
-```
+## 目录
 
-## 程序集边界
+1. [适用范围](#1-适用范围)
+2. [安装](#2-安装)
+3. [线格式](#3-线格式)
+4. [服务端：捕获与发送](#4-服务端捕获与发送)
+5. [客户端：落地](#5-客户端落地)
+6. [校验](#6-校验)
+7. [对账与修正](#7-对账与修正)
+8. [回滚](#8-回滚)
+9. [开销与规模](#9-开销与规模)
+10. [测试](#10-测试)
 
-| Assembly | 职责 | Unity 依赖 |
+---
+
+## 1. 适用范围
+
+本包负责抛射物协议：消息 id、DTO、校验、对账、快照历史，以及把上述内容落到 `ProjectileWorld` 的处理器。
+
+`CycloneGames.Networking` 负责共享基础设施：消息区间、清单、通道、目录注册、`NetworkVector3`、
+`NetworkActionResult`，以及传输。
+
+抛射物仿真与快照仍然属于 `CycloneGames.RPGFoundation.Projectile.Core`，这里不做重复实现。
+
+不负责：字节布局、可靠性策略的执行、路由、会话、兴趣管理。
+
+## 2. 安装
+
+| 程序集 | 内容 | 依赖 UnityEngine |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Projectile.Networking.Core` | Projectile 协议、DTO、校验、修正、快照历史、authority bridge 接口，以及 `CycloneGames.Networking` 集成契约。 | 无 UnityEngine |
-| `CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor` | 覆盖协议、validator、history、reconciliation 和 bridge 行为的 EditMode 测试。 | 无 UnityEngine |
+| `CycloneGames.RPGFoundation.Projectile.Networking.Core` | 消息、校验器、历史、sink、消息处理器 | 否 |
+| `CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor` | EditMode 覆盖 | 否 |
 
-`CycloneGames.RPGFoundation.Projectile.Networking.Core` 使用 `CycloneGames.RPGFoundation.Projectile.Networking` root namespace，并引用 `CycloneGames.RPGFoundation.Projectile.Core` 和 `CycloneGames.Networking.Core`。它不引用 Unity package、后端 SDK、Unity 场景对象、PlayerSettings scripting define symbol、具体 transport 或 DI 容器。
+两者都是 `autoReferenced: false`，使用方 asmdef 需显式引用 Core。不需要 PlayerSettings 宏。
 
-Core 与 EditMode test assembly 都设置 `autoReferenced: false`。Consumer asmdef 必须显式引用 Core。无需 PlayerSettings scripting define。
+依赖：`CycloneGames.RPGFoundation.Projectile.Core` 与 `CycloneGames.Networking.Core`。
 
-## 与 CycloneGames.Networking 协同
+包里没有 Unity 引用、后端 SDK、传输层或 DI 容器。项目侧适配器负责注册协议、序列化消息、
+校验入站流量，并把通过校验的部分转给玩法系统。
 
-`CycloneGames.Networking` 负责共享 networking infrastructure。本包负责 projectile 协议元数据、DTO、校验、reconciliation、snapshot history 和 authority bridge contract。
+## 3. 线格式
 
-| 能力 | Owner |
-| --- | --- |
-| Message range、manifest、channel 和 catalog registration | `ProjectileNetworkProtocol` 与 `CycloneGames.Networking` protocol API |
-| 稳定网络向量载荷 | `CycloneGames.Networking` 的 `NetworkVector3` |
-| 校验结果 | `CycloneGames.Networking.Simulation` 的 `NetworkActionResult`、`NetworkActionResultCode` 和 `NetworkTickId` |
-| 快照历史 | `CycloneGames.Networking.Simulation` 的 `NetworkActionHistory<T>` |
-| Transport、routing、session、security pipeline 和后端 SDK adapter | 项目层或 `CycloneGames.Networking` runtime 包 |
-| Projectile 模拟与快照 | `CycloneGames.RPGFoundation.Projectile.Core` |
+消息 id 为 `17000` 到 `17999`，落在 `NetworkMessageRanges.Module` 拥有的 `1000` 到 `29999` 区间内。
 
-本包不发送网络包。项目侧 networking adapter 负责注册协议、通过选定 transport 序列化消息、校验入站消息，并把已接受的消息转发给 gameplay 系统。
+| 消息 | Id | 可靠性 |
+| --- | --- | --- |
+| `MSG_MANIFEST_HANDSHAKE` | 17000 | 可靠、有序 |
+| `MSG_SPAWN` | 17001 | 可靠、有序 |
+| `MSG_AUTHORITATIVE_SNAPSHOT` | 17002 | 不可靠、有序号 |
+| `MSG_CORRECTION` | 17003 | 可靠、有序 |
+| `MSG_HIT` | 17004 | 可靠、有序 |
+| `MSG_DESPAWN` | 17005 | 可靠、有序 |
+| `MSG_FULL_STATE_REQUEST` | 17006 | 可靠、有序 |
 
-## 协议
+`ProjectileNetworkProtocol.CreateProtocolManifest` 构建完整描述符集合，
+`RegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交。注册要么整体提交区间与所有描述符，
+要么整体拒绝，因此不会出现部分写入的目录。
 
-`ProjectileNetworkProtocol` 在共享 `NetworkMessageRanges.Module` 范围（`1000-29999`）内拥有 `17000-17999` 消息 ID。`CreateProtocolManifest` 构造完整 manifest，`RegisterMessageCatalog` / `TryRegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交它。Catalog 要么同时提交 range 和全部 descriptor，要么拒绝 manifest 且不留下部分注册。
+协议值是 `public static readonly` 而不是 `const`：契约 id 与版本常量在运行时读取，而不是在跨程序集时
+被内联；负载默认值也对使用方可见，不需要重编字面量。改契约仍然需要新的 `:vN` 标识与协同的版本窗口。
 
-协议值以 `public static readonly` 字段暴露：冻结的 contract id 与版本常量在运行时读取，不会跨程序集内联；可调的 payload 上限默认值也能被所有消费方读到，无需重新编译内联字面量。契约变化仍需新的 `:vN` identity 并协调版本窗口。
+schema 指纹覆盖字段名与类型，不覆盖二进制布局，所以序列化器可以调整填充而不破坏握手。
+双方在其余流程之前交换指纹。不一致说明两个构建对 schema 的理解不同，应当拒绝连接，
+而不是让它跑下去产生不同步。
 
-每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `ProjectileSpawnMessage:v1`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。注意：fingerprint 只钉住 contract identity——本包不提供 wire codec，二进制 payload layout 由集成方选用的 serializer 决定，fingerprint 无法验证它。通信双方通过共享 serializer 配置来约定 layout；任何 layout 变化都必须以新 contract identity 发布。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间协调 `CurrentVersion` / `MinimumSupportedVersion`。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
+`ProjectileSnapshotMessage` 为 88 字节：实体 id、owner、target、定义 id、tick、sequence、
+prediction key、生命周期 flags、age、radius，以及三个向量（position、previous position、velocity）。
+向量占其中 36 字节，是带宽紧张时首先该量化的部分。
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `17000` | Reliable | `ProjectileManifestHandshakeMessage` |
-| `MSG_SPAWN` | `17001` | Reliable | `ProjectileSpawnMessage` |
-| `MSG_AUTHORITATIVE_SNAPSHOT` | `17002` | UnreliableSequenced | `ProjectileSnapshotMessage` |
-| `MSG_CORRECTION` | `17003` | Reliable | `ProjectileCorrectionMessage` |
-| `MSG_HIT` | `17004` | Reliable | `ProjectileHitMessage` |
-| `MSG_DESPAWN` | `17005` | Reliable | `ProjectileDespawnMessage` |
-| `MSG_FULL_STATE_REQUEST` | `17006` | Reliable | `ProjectileFullStateRequestMessage` |
+## 4. 服务端：捕获与发送
 
-在 composition root 中注册协议：
+权威侧持有世界，并从中广播。
 
 ```csharp
-using CycloneGames.Networking;
+using CycloneGames.RPGFoundation.Projectile.Core;
 using CycloneGames.RPGFoundation.Projectile.Networking;
 
-public static class ProjectileNetworkInstaller
+var source = new ProjectileWorldNetworkSnapshotSource(world);
+var scratch = new ProjectileSnapshot[world.Capacity];
+
+// 每个复制 tick 一次。单次顺序遍历，不分配。
+int count = source.CaptureSnapshots(scratch);
+
+for (int i = 0; i < count; i++)
 {
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        ProjectileNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
+    ProjectileSnapshot snapshot = scratch[i];
+    ProjectileSnapshotMessage message = ProjectileSnapshotMessage.FromSnapshot(in snapshot, sequence);
+    // 序列化后走不可靠有序通道发送。
 }
 ```
 
-## 校验与修正
+`source.SnapshotCapacity` 的存在是为了让 bridge 只预分配一次转换缓冲区，而不是每次广播都分配。
 
-`DefaultProjectileNetworkMessageValidator` 使用 `ProjectileNetworkValidationContext` 校验 projectile 消息，并返回 `NetworkActionResult`。它会检查 payload 有效性、认证状态、tick 窗口、重复 sequence、快照顺序、速度预算、半径预算、age 预算和 lifecycle flag mask。Full-state request 是最昂贵的入站消息，因此同样经过完整的 envelope 校验；按连接的速率限制仍属于产品层策略。
+spawn、hit、despawn、correction 走可靠有序通道。全量状态请求用于客户端漏收 spawn 的情况：
+它可以要求重建，而不是等来一堆引用着从未创建过的子弹的修正。
 
-认证采用 fail-closed：缺失 `Sender` 会被视为未认证并返回 `Unauthorized`。可信任的进程内路径也必须提供显式 authenticated connection context，或在项目独立验证边界完成校验；`null` 不能作为认证绕过方式。
+## 5. 客户端：落地
+
+两个入口。传输层已经产出 `ProjectileSnapshot` 时用 sink；直接处理线消息时用消息处理器。
+
+```csharp
+using CycloneGames.RPGFoundation.Projectile.Networking;
+
+// 客户端必须为每个复制来的定义 id 持有本地运动学。
+var catalog = new MyDefinitionCatalog();
+var sink = new ProjectileWorldSnapshotSink(world, catalog);
+var handler = new ProjectileWorldMessageHandler(world, catalog, hitReceiver);
+
+// 快照走不可靠通道，由 sink 落地。
+sink.TryApplySnapshot(in snapshot);
+
+// 其余消息走处理器。
+handler.TryHandleSpawn(in spawnMessage);
+handler.TryHandleCorrection(in correctionMessage);
+handler.TryHandleDespawn(in despawnMessage);
+handler.TryHandleHit(in hitMessage);
+```
+
+```mermaid
+flowchart LR
+    subgraph authority
+        world["ProjectileWorld"] --> source["快照源"]
+    end
+    source -->|"快照<br/>不可靠、有序号"| validator["校验器"]
+    intent["spawn、despawn、correction、hit"] -->|"可靠、有序"| validator
+    validator --> kind{"消息类型"}
+    kind -->|快照| sink["快照 sink"]
+    kind -->|意图| handler["消息处理器"]
+    sink --> replica["副本 ProjectileWorld"]
+    handler --> replica
+```
+
+处理器里有几个策略决定值得了解：
+
+- 实体 id 已存在的 spawn 会被拒绝，不会覆盖。幂等意味着第二次请求不改变任何状态；
+  定义变化必须走 correction。
+- 已消失实体的 despawn 只递增计数后返回。可靠通道带重试，重复投递是常态。
+- 带 `HardSnap` 或 `FullReset` 的 correction 会重建子弹；其余就在地修补，保留句柄、
+  反弹与穿透预算。
+- hit 消息从不改动世界。客户端已经预测了这次命中，这条消息是给必须由权威决定的表现用的。
+
+每种结果都有独立计数：`AppliedCount`、`SpawnedCount`、`StaleCount`、`InvalidCount`、
+`MissingDefinitionCount`、`CapacityRejectedCount`、`DuplicateCount`、`AlreadyGoneCount`。
+接到遥测上去。静默丢弃是最耗时间的故障类型。
+
+## 6. 校验
 
 ```csharp
 var context = new ProjectileNetworkValidationContext(
-    sender,
-    serverTick,
-    lastAcceptedServerTick,
-    lastAcceptedSequence);
+    sender: connection,
+    serverTick: currentTick,
+    lastAcceptedServerTick: lastAcceptedTick,
+    authorityMode: NetworkActionAuthorityMode.ClientPredictedServerAuthoritative,
+    maxInitialVelocity: 512f,
+    maxSnapshotVelocity: 512f,
+    maxRadius: 16f,
+    maxAge: 3600f,
+    senderOwnedEntityId: playerEntityId);
 
-NetworkActionResult result =
-    DefaultProjectileNetworkMessageValidator.Instance.ValidateSnapshot(snapshot, context);
-
+NetworkActionResult result = validator.ValidateSpawn(in message, in context);
 if (!result.IsAccepted)
 {
-    return;
+    // result 带有拒绝码
 }
 ```
 
-`ProjectileNetworkReconciliation` 用于比较 predicted 和 authoritative `ProjectileSnapshotMessage`，并在 position、velocity、timeline、lifecycle、target 或 definition 数据超过策略阈值时创建 `ProjectileCorrectionMessage`。
+拒绝码把客户端 bug 和协议违规分开。`OutOfOrder`、`Duplicate`、`Stale` 在丢包通道上是预期行为，
+属于计数器。`Invalid`、`ImpersonatedOwner`、`TickInFuture` 说明客户端在撒谎或严重出错，属于日志。
+
+默认校验器是无状态单例。实现 `IProjectileNetworkMessageValidator` 可以收紧或放宽某条规则。
+处理器不关心是谁校验的，只关心消息是否通过。
+
+## 7. 对账与修正
 
 ```csharp
-bool needsCorrection = ProjectileNetworkReconciliation.TryCreateCorrection(
-    predicted,
-    authoritative,
-    ProjectileNetworkCorrectionPolicy.Default,
-    out ProjectileCorrectionMessage correction);
-```
-
-`ProjectileNetworkCorrectionFlags` 用于标识修正影响 transform、velocity、timeline、lifecycle、target、hard snap 或 full reset 行为。
-
-## Authority Bridge
-
-`ProjectileNetworkAuthorityBridge` 可以从 `IProjectileNetworkSnapshotSource` 捕获 authoritative snapshot，并通过可选的 `IProjectileNetworkSnapshotSink` 应用入站 snapshot。
-
-`ProjectileWorldNetworkSnapshotSource` 可以按 projectile network entity id 适配 `ProjectileWorld`：
-
-```csharp
-var source = new ProjectileWorldNetworkSnapshotSource(projectileWorld);
-var bridge = new ProjectileNetworkAuthorityBridge(source);
-
-if (bridge.TryCaptureSnapshot(projectileEntityId, sequence, out ProjectileSnapshotMessage snapshot))
+if (ProjectileNetworkReconciliation.RequiresCorrection(
+        in predicted, in authoritative, policy,
+        out ProjectileNetworkCorrectionFlags flags, out float error))
 {
-    // Send snapshot through the project networking adapter.
+    ProjectileNetworkReconciliation.TryCreateCorrection(
+        in predicted, in authoritative, policy, out ProjectileCorrectionMessage correction);
 }
 ```
 
-项目代码负责 snapshot application，并为视觉插值、预测回滚、仅表现 projectile 和服务器持有的 projectile world 定义所有权策略。
+`RequiresCorrection` 按策略阈值比较位置、速度与年龄，并填出一组描述偏差字段的 flags。
+达到或超过硬吸附阈值的修正应带 `HardSnap`，客户端据此重建而不是修补。
 
-## 批量采集与回放历史
+非有限输入按最大偏差处理。NaN 与任何阈值比较都是 false，没有显式检查时会被判成"无需修正"，
+客户端就会保留一个永远无法对齐的状态。
 
-一次完整的权威 tick 是一次顺序遍历。bridge 在构造时依据 `IProjectileNetworkSnapshotSource.SnapshotCapacity` 预分配转换 scratch，稳态采集不产生分配：
+## 8. 回滚
 
-```csharp
-var messages = new ProjectileSnapshotMessage[projectileWorld.Capacity];
-int count = bridge.CaptureSnapshots(messages, sequence);
-```
-
-`ProjectileNetworkSnapshotHistory` 为每个实体保留有界的回放状态。每个实体拥有固定深度的连续 ring，bucket head 是紧凑的顺序数组，因此 miss 只扫描 bucket head，而不是整个 ring。`TryGetAtOrBefore` 解析指定 server tick 之前（含）最新的快照用于回滚，`CopyHistory` 把某个实体保留的帧按从旧到新写入调用方持有的存储。
+客户端预测需要两半：用历史缓冲区决定还原什么，用世界的还原入口决定怎么还原。
 
 ```csharp
-var history = new ProjectileNetworkSnapshotHistory(capacity: 4096, depthPerEntity: 8);
-history.Record(in authoritativeSnapshot);
+// 有界的按实体历史，用于插值与回滚。
+var history = new ProjectileNetworkSnapshotHistory(capacity: 8192, depthPerEntity: 8);
 
-if (history.TryGetAtOrBefore(projectileEntityId, serverTick, out ProjectileSnapshotMessage frame))
+history.Record(in snapshotMessage);
+
+if (history.TryGetAtOrBefore(entityId, rewindTick, out ProjectileSnapshotMessage frame))
 {
-    // 回退到该帧并向前重仿真。
+    // 插值远端子弹，或收集完整一帧用于还原
 }
 ```
 
-`Record`、`TryGet`、`TryGetLatest`、`TryGetAtOrBefore`、`CopyHistory` 和 `RemoveProjectile` 均无分配。所有 bucket 都被占用时，最近最少写入的实体会被淘汰，并由 `OverwriteCount` 记录。
+`depthPerEntity` 是每个实体的环形深度。`TryGetAtOrBefore` 返回不晚于指定 tick 的最新保留帧，
+这正是插值需要的。`CopyHistory` 按从旧到新填充调用方数组。`RemoveProjectile` 释放对应桶，
+避免池子被死亡实体填满。
 
-## 同步策略
+还原整个 tick 用 Core 的接口：
 
-推荐多人流程：
+```csharp
+ProjectileRestoreResult result = world.TryRestoreStates(
+    capturedSpan, ProjectileRestoreMode.Replace, catalog);
 
-1. Client 通过项目自有 gameplay path 发送 ability 或 weapon request。
-2. Server 校验 cost、cooldown、tag、line-of-sight、ownership、fire rate 和 anti-cheat rule。
-3. Server 向相关 observer 发送 `ProjectileSpawnMessage`。
-4. Server 模拟 authoritative projectile state，并为长生命周期 projectile 发送 `ProjectileSnapshotMessage`。
-5. Client 使用 `ProjectileCorrectionMessage` 修正 predicted visual。
-6. Server 在权威结果确定后 reliable 发送 `ProjectileHitMessage` 和 `ProjectileDespawnMessage`。
+// result.Applied、result.Spawned、result.Despawned 描述发生了什么变化。
+// result.Succeeded == false 表示批次被拒绝，世界未改动。
+```
 
-高密度弹幕通常应通过项目自有 user protocol 同步 `definitionId`、`seed`、`startTick` 和 emitter 参数。逐 projectile snapshot 应保留给无法从 deterministic pattern state 重建的特殊 projectile。
+```mermaid
+flowchart LR
+    capture["捕获 tick T"] --> buffer["快照缓冲与历史"]
+    buffer --> forward["向前仿真到 T+K"]
+    forward --> arrive["收到指向更早 tick 的修正"]
+    arrive --> restore["TryRestoreStates Replace"]
+    restore --> replay["重放 T 到 T+K"]
+    replay --> compare["状态与首次运行一致"]
+```
 
-## 持久化
+`Replace` 表示这一批就是该 tick 的完整状态：批次未提及的子弹会被删除，`world.LatestTick` 会退到
+批次 tick，使重放从正确的起点开始。`Merge` 保留批次未提及的本地子弹，锚点只前进，
+适合兴趣管理这类局部视图。
 
-本包不写文件、资产、偏好、缓存或 runtime save data。它只定义协议元数据、value-type DTO、validator、固定容量 history helper 和显式 bridge 接口。
+还原是原子的。任一条目格式错误、任一需要的定义缺失、或删除后仍装不下，都不会改动任何状态，
+并在结果里说明原因。
 
-## 验证
+## 9. 开销与规模
 
-修改本包后运行：
+这里的成本是结构性的。本文不写计时数字，理由与基础模块相同：包里不带基准测试，
+写进去的数字会静默过时。
+
+代码固定下来的性质：
+
+- 历史写入与查找对每个实体是常数时间。桶索引是实体 id 上的开放寻址，空闲桶栈让首次插入也是
+  常数时间，因此填充 N 个实体的总开销随 N 线性增长，而不是二次。
+- Bridge 在密集存储上做单次顺序遍历，没有逐弹查找。
+- 消息处理器每条消息做一次索引查找，任何路径都不分配，包括各条拒绝路径。
+
+需要盯的是带宽，而它是算术不是测量。30 Hz 下 10 000 颗子弹，每条 88 字节的快照是
+88 x 30 x 10 000，算包头之前约 26 MB/s。三条降法，按投入排序：
+
+1. 降低频率。远处的子弹 10 Hz 复制，观感上没有区别。
+2. 减少单条体积。把三个向量量化成 1/128 单位、每轴 16 位的定点，消息可降到约 40 字节。
+3. 减少数量。会话层做兴趣管理，玩家自己打出的子弹用客户端预测。
+
+## 10. 测试
 
 ```text
 Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
+
+套件覆盖校验器拒绝码、历史环形行为与驱逐、对账的 flags 选择（含非有限路径），
+以及消息处理器的每一种结果。

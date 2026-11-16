@@ -8,8 +8,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
     /// </summary>
     public readonly struct ProjectileWorldConfig
     {
-        // Bounds keep an authored or remote configuration from turning one frame
-        // into an unbounded loop. They are deliberately generous for real workloads.
+        // Upper bounds on per-frame work, so a bad configuration cannot turn one Step call
+        // into an unbounded loop.
         private const int MaxCollisionIterationsLimit = 64;
         private const int MaxSubStepsLimit = 16;
         private const float MaxDeltaTimeLimit = 1f;
@@ -22,6 +22,27 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         public readonly int MaxSubSteps;
         public readonly ProjectileSpaceProfile Space;
 
+        /// <summary>
+        /// Maintains an open-addressing <see cref="ulong"/> to slot index so
+        /// <see cref="ProjectileWorld.TryGetStateByNetworkEntityId"/> is O(1) instead of a
+        /// linear scan of active projectiles. Costs roughly 24 bytes per world slot
+        /// (two tables sized at 2x capacity). Disable only when the product never resolves
+        /// a projectile by network id, or when the extra memory is not affordable.
+        /// </summary>
+        public readonly bool EnableNetworkEntityIdIndex;
+
+        /// <summary>
+        /// Largest distance a projectile may travel in one integration step. Zero disables
+        /// distance-based sub-stepping.
+        ///
+        /// Time-based sub-stepping alone does not bound displacement: at
+        /// <see cref="MaxDeltaTime"/> = 1/60 a projectile at 500 m/s still moves 8.3 m per step,
+        /// so any adapter that tests the endpoint instead of the segment will miss a thin wall.
+        /// With this set, the frame is split until no projectile moves further than this value,
+        /// and <see cref="MaxSubSteps"/> caps the work when the budget is insufficient.
+        /// </summary>
+        public readonly float MaxTravelPerStep;
+
         public ProjectileWorldConfig(
             int capacity,
             int eventCapacity,
@@ -29,7 +50,9 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             in ProjectileSpaceProfile space,
             int maxCollisionIterations = 4,
             float maxDeltaTime = 0f,
-            int maxSubSteps = 1)
+            int maxSubSteps = 1,
+            bool enableNetworkEntityIdIndex = true,
+            float maxTravelPerStep = 0f)
         {
             Capacity = capacity;
             EventCapacity = eventCapacity;
@@ -38,6 +61,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             MaxDeltaTime = maxDeltaTime;
             MaxSubSteps = maxSubSteps;
             Space = space;
+            EnableNetworkEntityIdIndex = enableNetworkEntityIdIndex;
+            MaxTravelPerStep = maxTravelPerStep;
         }
 
         /// <summary>
@@ -59,7 +84,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                        && !float.IsNaN(MaxDeltaTime)
                        && !float.IsInfinity(MaxDeltaTime)
                        && MaxDeltaTime >= 0f
-                       && MaxDeltaTime <= MaxDeltaTimeLimit;
+                       && MaxDeltaTime <= MaxDeltaTimeLimit
+                       && !float.IsNaN(MaxTravelPerStep)
+                       && !float.IsInfinity(MaxTravelPerStep)
+                       && MaxTravelPerStep >= 0f
+                       && (MaxTravelPerStep == 0f || MaxSubSteps > 1);
             }
         }
     }
@@ -74,22 +103,52 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         private const int NullDenseIndex = -1;
         private const float SURFACE_OFFSET = 0.001f;
 
+        /// <summary>
+        /// Distinct collision objects suppressed inside one sweep. Bounce and pierce restart
+        /// the sweep at the impact point, where the surface just hit is reported again at
+        /// distance zero.
+        /// </summary>
+        private const int MaxSweepExclusions = 8;
+
+        // Open addressing sentinels for the network-id index.
+        private const int NetIdEmpty = -1;
+        private const int NetIdTombstone = -2;
+
         private readonly ProjectileSpaceProfile _space;
         private readonly ProjectileState[] _states;
+
+        // One definition per dense slot. Merging these fields into ProjectileState would
+        // remove a memory stream; indexing a shared table does not, because the table still
+        // has to be sized for capacity.
         private readonly ProjectileDefinition[] _definitions;
+
         private readonly ulong[] _slotGenerations;
         private readonly int[] _slotToDense;
         private readonly int[] _denseToSlot;
         private readonly int[] _freeSlots;
         private readonly ProjectileCollisionHit[] _collisionHits;
+        private readonly ulong[] _sweepExcludedObjects;
+
+        // Scratch for Replace-mode restores: which dense slots the batch still mentions.
+        // Allocated once so a restore never allocates, even though it is not a hot path.
+        private readonly bool[] _restoreKeepMask;
         private readonly int _maxCollisionIterations;
         private readonly float _maxDeltaTime;
         private readonly int _maxSubSteps;
+        private readonly float _maxTravelPerStep;
+
+        private readonly bool _hasNetIdIndex;
+        private readonly ulong[] _netIdKeys;
+        private readonly int[] _netIdValues;
+        private readonly int _netIdMask;
 
         private int _activeCount;
         private int _slotHighWaterMark;
         private int _freeCount;
         private int _peakActiveCount;
+        private int _netIdUsed;
+        private int _netIdTombstones;
+        private long _nonFiniteRejectedCount;
         private long _stepCount;
         private int _lastTick;
         private float _lastDeltaTime;
@@ -103,8 +162,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         private long _totalHitEventCount;
         private long _totalHitEventOverflowCount;
         private long _totalCollisionIterationLimitCount;
-        private long _totalSubStepCount;
+        private long _totalSubStepsCount;
         private long _totalClampedFrameCount;
+        private long _subStepSaturationCount;
+        private float _maxObservedSpeed;
+        private float _stepMaxSpeedSqr;
 
         public ProjectileWorld(in ProjectileWorldConfig config)
         {
@@ -122,9 +184,34 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _denseToSlot = new int[capacity];
             _freeSlots = new int[capacity];
             _collisionHits = new ProjectileCollisionHit[config.CollisionHitCapacity];
+            _sweepExcludedObjects = new ulong[MaxSweepExclusions];
+            _restoreKeepMask = new bool[capacity];
             _maxCollisionIterations = config.MaxCollisionIterations;
             _maxDeltaTime = config.MaxDeltaTime;
             _maxSubSteps = config.MaxSubSteps;
+            _maxTravelPerStep = config.MaxTravelPerStep;
+
+            _hasNetIdIndex = config.EnableNetworkEntityIdIndex;
+            if (_hasNetIdIndex)
+            {
+                // Two entries per slot keeps the load factor <= 0.5, so linear probing
+                // stays short and a rebuild always leaves free slots behind.
+                int tableSize = NextPowerOfTwo(capacity * 2);
+                _netIdKeys = new ulong[tableSize];
+                _netIdValues = new int[tableSize];
+                _netIdMask = tableSize - 1;
+                for (int i = 0; i < tableSize; i++)
+                {
+                    _netIdValues[i] = NetIdEmpty;
+                }
+            }
+            else
+            {
+                _netIdKeys = Array.Empty<ulong>();
+                _netIdValues = Array.Empty<int>();
+                _netIdMask = 0;
+            }
+
             HitEvents = new ProjectileEventBuffer(config.EventCapacity);
 
             for (int i = 0; i < capacity; i++)
@@ -138,7 +225,36 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 
         public int ActiveCount => _activeCount;
 
+        /// <summary>
+        /// Projectiles removed because integration produced NaN or infinity. A non-zero value
+        /// means an authored definition reaches the float limit.
+        /// </summary>
+        public long NonFiniteRejectedCount => _nonFiniteRejectedCount;
+
+        /// <summary>
+        /// Replay origin: the last tick passed to <see cref="Step"/>, or updated by a successful
+        /// batch restore. Reading it does not build a <see cref="ProjectileWorldStats"/>.
+        /// </summary>
+        public int LatestTick => _lastTick;
+
+        /// <summary>
+        /// Frames where the displacement bound could not be honoured within
+        /// <see cref="ProjectileWorldConfig.MaxSubSteps"/>. Non-zero means projectiles travelled
+        /// further than <see cref="ProjectileWorldConfig.MaxTravelPerStep"/> in one step, so a
+        /// discrete collision adapter may tunnel. Raise the sub-step budget or slow the projectile.
+        /// </summary>
+        public long SubStepSaturationCount => _subStepSaturationCount;
+
         public ProjectileEventBuffer HitEvents { get; }
+
+        /// <summary>
+        /// Read-only view over the dense active range, for presentation and serialization.
+        /// Invalidated by spawn or despawn.
+        /// </summary>
+        public ReadOnlySpan<ProjectileState> ActiveStates
+        {
+            get { return new ReadOnlySpan<ProjectileState>(_states, 0, _activeCount); }
+        }
 
         public ProjectileWorldStats Stats => new ProjectileWorldStats(
             Capacity,
@@ -157,8 +273,9 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _totalHitEventCount,
             _totalHitEventOverflowCount,
             _totalCollisionIterationLimitCount,
-            _totalSubStepCount,
-            _totalClampedFrameCount);
+            _totalSubStepsCount,
+            _totalClampedFrameCount,
+            _nonFiniteRejectedCount);
 
         public bool TrySpawn(in ProjectileSpawnRequest request, out ProjectileHandle handle)
         {
@@ -197,6 +314,19 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _denseToSlot[denseIndex] = slot;
             _definitions[denseIndex] = request.Definition;
             _states[denseIndex] = ProjectileState.Create(handle, in request, in _space);
+            if (_hasNetIdIndex)
+            {
+                NetIdIndexInsert(request.NetworkEntityId, slot);
+            }
+
+            float ceiling = request.Definition.MaxSpeed > 0f
+                ? request.Definition.MaxSpeed
+                : request.Definition.InitialSpeed;
+            if (ceiling > _maxObservedSpeed)
+            {
+                _maxObservedSpeed = ceiling;
+            }
+
             _totalSpawnAcceptedCount++;
             if (_activeCount > _peakActiveCount)
             {
@@ -270,14 +400,31 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         }
 
         /// <summary>
-        /// Low-frequency convenience lookup. <see cref="ProjectileSpawnRequest.NetworkEntityId"/>
-        /// must be unique per active projectile; duplicates resolve to the first dense
-        /// slot. Prefer <see cref="CaptureSnapshots"/> for per-frame authority broadcast.
+        /// Resolves a projectile by its replicated network id. O(1) when
+        /// <see cref="ProjectileWorldConfig.EnableNetworkEntityIdIndex"/> is on, otherwise a
+        /// linear scan of active projectiles. <see cref="ProjectileSpawnRequest.NetworkEntityId"/>
+        /// must be unique per active projectile; duplicates resolve to the first dense slot.
         /// </summary>
         public bool TryGetStateByNetworkEntityId(ulong networkEntityId, out ProjectileState state)
         {
             if (networkEntityId == 0UL)
             {
+                state = default;
+                return false;
+            }
+
+            if (_hasNetIdIndex)
+            {
+                if (TryNetIdIndexFind(networkEntityId, out int slot))
+                {
+                    int denseIndex = _slotToDense[slot];
+                    if (denseIndex >= 0 && denseIndex < _activeCount && _states[denseIndex].NetworkEntityId == networkEntityId)
+                    {
+                        state = _states[denseIndex];
+                        return true;
+                    }
+                }
+
                 state = default;
                 return false;
             }
@@ -310,6 +457,300 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         }
 
         /// <summary>
+        /// Removes a live projectile by its replicated network id and reports the handle it had.
+        /// O(1) via the same index that serves <see cref="TryGetStateByNetworkEntityId"/>; it is
+        /// the id-addressed counterpart of <see cref="Despawn"/> and exists so a despawn message
+        /// can be landed without the receiver first having to hold a handle.
+        ///
+        /// Returns false when no live projectile owns the id, which is the normal outcome for a
+        /// re-delivered despawn: unreliable delivery duplicates messages, it does not reorder
+        /// them into a state where a second despawn is an error.
+        /// </summary>
+        public bool TryDespawnByNetworkEntityId(ulong networkEntityId, out ProjectileHandle handle)
+        {
+            handle = default;
+            if (!TryGetDenseIndexByNetworkEntityId(networkEntityId, out int denseIndex))
+            {
+                return false;
+            }
+
+            handle = _states[denseIndex].Handle;
+            DespawnDense(denseIndex);
+            return true;
+        }
+
+        /// <summary>
+        /// Overwrites a live projectile with an authoritative snapshot. Position, velocity,
+        /// previous position, age and tick are replaced; handle, bounce and pierce counters are
+        /// preserved so a correction does not hand the projectile a fresh budget.
+        /// Returns <see cref="ProjectileSnapshotApplyResult.Missing"/> when no live projectile
+        /// owns the id, and <see cref="ProjectileSnapshotApplyResult.Stale"/> when the snapshot's
+        /// tick is older than the local one (out-of-order unreliable delivery).
+        /// </summary>
+        public ProjectileSnapshotApplyResult TryApplySnapshot(in ProjectileSnapshot snapshot)
+        {
+            return ApplySnapshot(in snapshot, allowRewind: false);
+        }
+
+        /// <summary>
+        /// Shared apply path. <paramref name="allowRewind"/> exists because a Replace restore is
+        /// by definition "go back to this tick": the out-of-order guard that protects incremental
+        /// patches would otherwise reject every snapshot of a rollback and silently apply nothing.
+        /// </summary>
+        private ProjectileSnapshotApplyResult ApplySnapshot(in ProjectileSnapshot snapshot, bool allowRewind)
+        {
+            if (!IsSnapshotUsable(in snapshot))
+            {
+                return ProjectileSnapshotApplyResult.Invalid;
+            }
+
+            if (!TryGetDenseIndexByNetworkEntityId(snapshot.NetworkEntityId, out int denseIndex))
+            {
+                return ProjectileSnapshotApplyResult.Missing;
+            }
+
+            ref ProjectileState state = ref _states[denseIndex];
+            if (!allowRewind && snapshot.Tick < state.CurrentTick)
+            {
+                return ProjectileSnapshotApplyResult.Stale;
+            }
+
+            state.Position = space_ProjectPosition(in snapshot.Position);
+            state.PreviousPosition = space_ProjectPosition(in snapshot.PreviousPosition);
+            state.Velocity = _space.ProjectVector(snapshot.Velocity);
+            state.Age = snapshot.Age;
+            state.CurrentTick = snapshot.Tick;
+            return ProjectileSnapshotApplyResult.Applied;
+        }
+
+        /// <summary>
+        /// Creates a projectile from an authoritative snapshot. Kinematics come from the local
+        /// definition (the snapshot carries only the id), while age, tick and previous position
+        /// are taken from the snapshot so the replica continues where the authority is.
+        /// </summary>
+        public bool TrySpawnFromSnapshot(
+            in ProjectileSnapshot snapshot,
+            in ProjectileDefinition definition,
+            out ProjectileHandle handle)
+        {
+            handle = default;
+            if (!IsSnapshotUsable(in snapshot) || !definition.IsValid)
+            {
+                return false;
+            }
+
+            ProjectileVector3 direction = snapshot.Velocity.NormalizedOrFallback(ProjectileVector3.Forward);
+            var request = new ProjectileSpawnRequest(
+                definition,
+                snapshot.OwnerEntityId,
+                snapshot.NetworkEntityId,
+                snapshot.TargetEntityId,
+                snapshot.Tick,
+                snapshot.PredictionKey,
+                0u,
+                snapshot.Position,
+                direction,
+                snapshot.Velocity);
+
+            if (!TrySpawn(in request, out handle))
+            {
+                return false;
+            }
+
+            if (TryGetDenseIndex(handle, out int denseIndex))
+            {
+                ref ProjectileState state = ref _states[denseIndex];
+                state.Age = snapshot.Age;
+                state.CurrentTick = snapshot.Tick;
+                state.PreviousPosition = space_ProjectPosition(in snapshot.PreviousPosition);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Hard reset: drops any local projectile with this id and recreates it from the
+        /// snapshot. Used when reconciliation reports a definition mismatch or a hard snap,
+        /// where patching individual fields would leave counters and definition data wrong.
+        /// </summary>
+        public ProjectileSnapshotApplyResult TryResetFromSnapshot(
+            in ProjectileSnapshot snapshot,
+            in ProjectileDefinition definition,
+            out ProjectileHandle handle)
+        {
+            handle = default;
+            if (!IsSnapshotUsable(in snapshot) || !definition.IsValid)
+            {
+                return ProjectileSnapshotApplyResult.Invalid;
+            }
+
+            if (TryGetDenseIndexByNetworkEntityId(snapshot.NetworkEntityId, out int denseIndex))
+            {
+                DespawnDense(denseIndex);
+            }
+
+            return TrySpawnFromSnapshot(in snapshot, in definition, out handle)
+                ? ProjectileSnapshotApplyResult.Spawned
+                : ProjectileSnapshotApplyResult.Failed;
+        }
+
+        /// <summary>
+        /// Replaces the world with a whole authoritative state: patches known ids, creates
+        /// unknown ones through <paramref name="catalog"/>, and in
+        /// <see cref="ProjectileRestoreMode.Replace"/> removes everything the batch omits.
+        ///
+        /// Atomic. The batch is validated, its definitions resolved and the capacity checked
+        /// before any state changes, so a rejected batch leaves the world untouched. A patch
+        /// keeps the handle, bounce and pierce budgets; only a created projectile gets a fresh
+        /// budget.
+        ///
+        /// <paramref name="catalog"/> may be null only when the batch mentions no unknown id.
+        /// Allocation free, O(batch + active).
+        /// </summary>
+        public ProjectileRestoreResult TryRestoreStates(
+            ReadOnlySpan<ProjectileSnapshot> snapshots,
+            ProjectileRestoreMode mode,
+            IProjectileDefinitionCatalog catalog = null)
+        {
+            int batchTick = 0;
+            int needSpawn = 0;
+            int alreadyKnown = 0;
+
+            // Pass 1: validate, resolve definitions, and mark what survives. No mutation yet.
+            Array.Clear(_restoreKeepMask, 0, _activeCount);
+
+            for (int i = 0; i < snapshots.Length; i++)
+            {
+                ref readonly ProjectileSnapshot snapshot = ref snapshots[i];
+                if (!IsSnapshotUsable(in snapshot))
+                {
+                    return Rejected(ProjectileRestoreRejection.InvalidSnapshot, in snapshot);
+                }
+
+                if (snapshot.Tick > batchTick)
+                {
+                    batchTick = snapshot.Tick;
+                }
+
+                if (TryGetDenseIndexByNetworkEntityId(snapshot.NetworkEntityId, out int denseIndex))
+                {
+                    _restoreKeepMask[denseIndex] = true;
+                    alreadyKnown++;
+                    continue;
+                }
+
+                needSpawn++;
+                if (catalog == null
+                    || !catalog.TryGetDefinition(snapshot.DefinitionId.Value, out ProjectileDefinition definition)
+                    || !definition.IsValid)
+                {
+                    return Rejected(ProjectileRestoreRejection.UnknownDefinition, in snapshot);
+                }
+            }
+
+            int toRemove = 0;
+            if (mode == ProjectileRestoreMode.Replace)
+            {
+                for (int denseIndex = 0; denseIndex < _activeCount; denseIndex++)
+                {
+                    if (!_restoreKeepMask[denseIndex])
+                    {
+                        toRemove++;
+                    }
+                }
+            }
+
+            int projected = _activeCount - toRemove + needSpawn;
+            if (projected > _states.Length)
+            {
+                return new ProjectileRestoreResult(
+                    0, 0, 0, 0, projected - _states.Length, 0, 0, _lastTick, false,
+                    ProjectileRestoreRejection.Capacity);
+            }
+
+            // Pass 2: mutate. Removals run descending so the swap-remove source is always an
+            // index already decided.
+            int despawned = 0;
+            if (mode == ProjectileRestoreMode.Replace)
+            {
+                for (int denseIndex = _activeCount - 1; denseIndex >= 0; denseIndex--)
+                {
+                    if (_restoreKeepMask[denseIndex])
+                    {
+                        continue;
+                    }
+
+                    DespawnDense(denseIndex);
+                    despawned++;
+                }
+            }
+
+            int applied = 0;
+            int spawned = 0;
+            for (int i = 0; i < snapshots.Length; i++)
+            {
+                ref readonly ProjectileSnapshot snapshot = ref snapshots[i];
+                bool rewind = mode == ProjectileRestoreMode.Replace;
+                if (ApplySnapshot(in snapshot, rewind) == ProjectileSnapshotApplyResult.Applied)
+                {
+                    applied++;
+                    continue;
+                }
+
+                // Missing: pass 1 proved a definition exists, and capacity was checked.
+                catalog.TryGetDefinition(snapshot.DefinitionId.Value, out ProjectileDefinition definition);
+                if (TrySpawnFromSnapshot(in snapshot, in definition, out _))
+                {
+                    spawned++;
+                }
+            }
+
+            // Replace means "this batch IS the world at that tick", so the anchor may move
+            // backwards: that is exactly what a rollback needs. Merge only ever advances.
+            // Recompute the displacement driver from restored state: it feeds ComputeSubSteps, and
+            // a stale value would make the replay after a rollback pick a different sub-step count
+            // than the original run.
+            float restoredMaxSpeed = 0f;
+            for (int i = 0; i < _activeCount; i++)
+            {
+                float speed = _states[i].Velocity.Length;
+                if (speed > restoredMaxSpeed)
+                {
+                    restoredMaxSpeed = speed;
+                }
+            }
+
+            _maxObservedSpeed = restoredMaxSpeed;
+
+            _lastTick = mode == ProjectileRestoreMode.Replace
+                ? batchTick
+                : (batchTick > _lastTick ? batchTick : _lastTick);
+            int tick = _lastTick;
+
+            int duplicates = applied - alreadyKnown;
+
+            return new ProjectileRestoreResult(
+                applied,
+                spawned,
+                despawned,
+                0,
+                0,
+                0,
+                duplicates < 0 ? 0 : duplicates,
+                tick,
+                true,
+                ProjectileRestoreRejection.None);
+        }
+
+        private ProjectileRestoreResult Rejected(ProjectileRestoreRejection reason, in ProjectileSnapshot snapshot)
+        {
+            int invalid = reason == ProjectileRestoreRejection.InvalidSnapshot ? 1 : 0;
+            int unknown = reason == ProjectileRestoreRejection.UnknownDefinition ? 1 : 0;
+            return new ProjectileRestoreResult(
+                0, 0, 0, invalid, 0, unknown, 0, _lastTick, false, reason);
+        }
+
+        /// <summary>
         /// Advances the world by <paramref name="deltaTime"/>. When a positive
         /// <see cref="ProjectileWorldConfig.MaxDeltaTime"/> is configured, the frame is
         /// split into equal sub-steps no larger than that value. A frame beyond
@@ -324,7 +765,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             IProjectileCollisionWorld collisionWorld = null,
             IProjectileTargetProvider targetProvider = null)
         {
-            if (deltaTime < 0f || !IsFinite(deltaTime))
+            if (deltaTime < 0f || !IsFiniteValue(deltaTime))
             {
                 throw new ArgumentOutOfRangeException(nameof(deltaTime));
             }
@@ -349,13 +790,20 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 _totalClampedFrameCount++;
             }
 
+            _stepMaxSpeedSqr = 0f;
             float subDelta = effectiveDelta / subSteps;
             for (int s = 0; s < subSteps; s++)
             {
                 StepCore(subDelta, tick, collisionWorld, targetProvider);
             }
 
-            _totalSubStepCount += subSteps;
+            // Observed speed drives next frame's displacement bound. It is sampled during the
+            // dense pass that already touches velocity, so no extra traversal is paid. Spawn also
+            // raises it, which keeps the first frame after a fast projectile from running
+            // under-substepped.
+            _maxObservedSpeed = (float)Math.Sqrt(_stepMaxSpeedSqr);
+
+            _totalSubStepsCount += subSteps;
         }
 
         public void Clear()
@@ -374,6 +822,17 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             for (int i = 0; i < _slotHighWaterMark; i++)
             {
                 _slotGenerations[i]++;
+            }
+
+            if (_hasNetIdIndex)
+            {
+                for (int i = 0; i < _netIdValues.Length; i++)
+                {
+                    _netIdValues[i] = NetIdEmpty;
+                }
+
+                _netIdUsed = 0;
+                _netIdTombstones = 0;
             }
 
             _activeCount = 0;
@@ -399,24 +858,55 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _totalHitEventCount = 0;
             _totalHitEventOverflowCount = 0;
             _totalCollisionIterationLimitCount = 0;
-            _totalSubStepCount = 0;
+            _totalSubStepsCount = 0;
             _totalClampedFrameCount = 0;
+            _nonFiniteRejectedCount = 0;
+            _subStepSaturationCount = 0;
         }
 
+        /// <summary>
+        /// Sub-step count for one frame, driven by both a time bound and a displacement bound and
+        /// clamped by <see cref="ProjectileWorldConfig.MaxSubSteps"/>.
+        /// </summary>
         private int ComputeSubSteps(float deltaTime)
         {
-            if (_maxDeltaTime <= 0f || _maxSubSteps <= 1 || deltaTime <= _maxDeltaTime)
+            if (_maxSubSteps <= 1)
             {
                 return 1;
             }
 
-            double ratio = (double)deltaTime / _maxDeltaTime;
-            if (ratio >= _maxSubSteps)
+            int needed = 1;
+
+            if (_maxDeltaTime > 0f && deltaTime > _maxDeltaTime)
             {
-                return _maxSubSteps;
+                double ratio = (double)deltaTime / _maxDeltaTime;
+                needed = ratio >= _maxSubSteps ? _maxSubSteps : (int)Math.Ceiling(ratio);
             }
 
-            int needed = (int)Math.Ceiling(ratio);
+            if (_maxTravelPerStep > 0f && _maxObservedSpeed > 0f)
+            {
+                double displacement = (double)_maxObservedSpeed * deltaTime;
+                if (displacement > _maxTravelPerStep)
+                {
+                    double ratio = displacement / _maxTravelPerStep;
+                    if (ratio > _maxSubSteps)
+                    {
+                        // The budget cannot honour MaxTravelPerStep for this frame. The counter is
+                        // the only signal a caller gets that the bound is not being met.
+                        _subStepSaturationCount++;
+                        needed = _maxSubSteps;
+                    }
+                    else
+                    {
+                        int byDistance = (int)Math.Ceiling(ratio);
+                        if (byDistance > needed)
+                        {
+                            needed = byDistance;
+                        }
+                    }
+                }
+            }
+
             return needed < 1 ? 1 : needed;
         }
 
@@ -430,6 +920,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             while (denseIndex < _activeCount)
             {
                 ref ProjectileState state = ref _states[denseIndex];
+                ref readonly ProjectileDefinition definition = ref _definitions[denseIndex];
 
                 bool hasTarget = TryGetTarget(
                     targetProvider,
@@ -439,7 +930,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 
                 ProjectileSimulator.Step(
                     ref state,
-                    in _definitions[denseIndex],
+                    in definition,
                     in _space,
                     deltaTime,
                     tick,
@@ -447,10 +938,33 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                     in targetPosition,
                     in targetVelocity);
 
-                bool despawn = state.Age >= _definitions[denseIndex].MaxLifetime;
-                if (!despawn && collisionWorld != null && _definitions[denseIndex].CollisionLayerMask != 0)
+                // Sampled here rather than in a separate pass: the dense loop already holds the
+                // state, and the maximum feeds next frame's displacement bound.
+                float speedSqr = state.Velocity.X * state.Velocity.X
+                                 + state.Velocity.Y * state.Velocity.Y
+                                 + state.Velocity.Z * state.Velocity.Z;
+                if (speedSqr > _stepMaxSpeedSqr)
                 {
-                    despawn = ResolveCollision(ref state, in _definitions[denseIndex], collisionWorld);
+                    _stepMaxSpeedSqr = speedSqr;
+                }
+
+                // Integration is unguarded by design (it must stay branch-free and
+                // allocation-free), so the one place non-finite state can be observed
+                // cheaply is here. Without this a legal-but-overflowing definition keeps
+                // producing NaN/Infinity that silently fails snapshot validation later.
+                if (state.MayOverflow && !state.IsFinite)
+                {
+                    _nonFiniteRejectedCount++;
+                    DespawnDense(denseIndex);
+                    continue;
+                }
+
+                bool despawn = state.Age >= definition.MaxLifetime;
+                if (!despawn
+                    && collisionWorld != null
+                    && definition.CollisionLayerMask != 0)
+                {
+                    despawn = ResolveCollision(ref state, in definition, collisionWorld);
                 }
 
                 if (despawn)
@@ -476,6 +990,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 ? state.OwnerEntityId
                 : 0UL;
 
+            // Bounce and pierce restart the sweep from the impact point. PhysX reports the
+            // collider the sweep starts inside again, at distance ~0, so suppressing the
+            // already-consumed object ids is what stops one wall from eating the whole
+            // bounce budget. Stack allocated: no GC, no shared mutable state.
+            ulong[] excludedObjects = _sweepExcludedObjects;
+            int excludedCount = 0;
+
             for (int iteration = 0; iteration < _maxCollisionIterations; iteration++)
             {
                 var query = new ProjectileCollisionQuery(
@@ -499,7 +1020,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                     return false;
                 }
 
-                ProjectileCollisionHit hit = SelectNearestHit(count, lastHitTargetId, ownerToIgnore);
+                ProjectileCollisionHit hit = SelectNearestHit(
+                    count,
+                    lastHitTargetId,
+                    ownerToIgnore,
+                    excludedObjects,
+                    excludedCount);
                 if (!hit.IsValid)
                 {
                     return false;
@@ -508,6 +1034,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 if (hit.TargetEntityId != 0UL)
                 {
                     lastHitTargetId = hit.TargetEntityId;
+                }
+
+                if (excludedCount < MaxSweepExclusions && hit.TargetObjectId != 0UL)
+                {
+                    excludedObjects[excludedCount] = hit.TargetObjectId;
+                    excludedCount++;
                 }
 
                 bool canBounce = state.RemainingBounceCount > 0;
@@ -576,7 +1108,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             return (definition.LifecycleFlags & ProjectileLifecycleFlags.DespawnOnHit) != ProjectileLifecycleFlags.None;
         }
 
-        private static bool IsFinite(float value)
+        private static bool IsFiniteValue(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
         }
@@ -644,11 +1176,17 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         }
 
         /// <summary>
-        /// Picks the nearest valid hit while suppressing the entity resolved on the
-        /// previous iteration and the owner when the definition requests it. Entity ids
-        /// of zero are unpopulated transport objects and are never filtered.
+        /// Picks the nearest valid hit while suppressing the entity and the collision object
+        /// already resolved during this sweep, plus the owner when the definition requests
+        /// it. Entity ids of zero are unpopulated transport objects and are never filtered
+        /// by entity id; object ids of zero are never filtered by object id.
         /// </summary>
-        private ProjectileCollisionHit SelectNearestHit(int count, ulong excludedTargetId, ulong ownerToIgnore)
+        private ProjectileCollisionHit SelectNearestHit(
+            int count,
+            ulong excludedTargetId,
+            ulong ownerToIgnore,
+            ulong[] excludedObjectIds,
+            int excludedObjectCount)
         {
             ProjectileCollisionHit best = default;
             float bestDistance = float.PositiveInfinity;
@@ -667,11 +1205,29 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                     continue;
                 }
 
+                if (hit.TargetObjectId != 0UL && IsExcludedObject(hit.TargetObjectId, excludedObjectIds, excludedObjectCount))
+                {
+                    continue;
+                }
+
                 best = hit;
                 bestDistance = hit.Distance;
             }
 
             return best;
+        }
+
+        private static bool IsExcludedObject(ulong objectId, ulong[] excludedObjectIds, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (excludedObjectIds[i] == objectId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool TryGetTarget(
@@ -695,6 +1251,62 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
 
             targetProvider.TryGetTargetVelocity(targetEntityId, out targetVelocity);
             return true;
+        }
+
+        private bool TryGetDenseIndexByNetworkEntityId(ulong networkEntityId, out int denseIndex)
+        {
+            denseIndex = default;
+            if (networkEntityId == 0UL)
+            {
+                return false;
+            }
+
+            if (_hasNetIdIndex)
+            {
+                if (!TryNetIdIndexFind(networkEntityId, out int slot))
+                {
+                    return false;
+                }
+
+                int candidate = _slotToDense[slot];
+                if (candidate < 0 || candidate >= _activeCount
+                    || _states[candidate].NetworkEntityId != networkEntityId)
+                {
+                    return false;
+                }
+
+                denseIndex = candidate;
+                return true;
+            }
+
+            for (int i = 0; i < _activeCount; i++)
+            {
+                if (_states[i].NetworkEntityId != networkEntityId)
+                {
+                    continue;
+                }
+
+                denseIndex = i;
+                return true;
+            }
+
+            return false;
+        }
+
+        private ProjectileVector3 space_ProjectPosition(in ProjectileVector3 value)
+        {
+            return _space.ProjectPosition(value);
+        }
+
+        private static bool IsSnapshotUsable(in ProjectileSnapshot snapshot)
+        {
+            return snapshot.NetworkEntityId != 0UL
+                   && snapshot.Age >= 0f
+                   && !float.IsNaN(snapshot.Age)
+                   && !float.IsInfinity(snapshot.Age)
+                   && snapshot.Position.IsFinite
+                   && snapshot.PreviousPosition.IsFinite
+                   && snapshot.Velocity.IsFinite;
         }
 
         private int AllocateSlot()
@@ -735,6 +1347,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         private void DespawnDense(int denseIndex)
         {
             int slot = _denseToSlot[denseIndex];
+            ulong removedNetworkEntityId = _states[denseIndex].NetworkEntityId;
             int lastDenseIndex = _activeCount - 1;
 
             if (denseIndex != lastDenseIndex)
@@ -757,6 +1370,171 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             _freeSlots[_freeCount] = slot;
             _freeCount++;
             _totalDespawnCount++;
+
+            // Removal runs last: a rebuild triggered here must not observe this slot as live.
+            if (_hasNetIdIndex && removedNetworkEntityId != 0UL)
+            {
+                NetIdIndexRemove(removedNetworkEntityId);
+            }
+        }
+
+        private static int NextPowerOfTwo(int value)
+        {
+            int result = 1;
+            while (result < value)
+            {
+                result <<= 1;
+            }
+
+            return result;
+        }
+
+        private static int NetIdHash(ulong key)
+        {
+            // 64-bit finalizer (MurmurHash3 fmix64). Deterministic on every platform:
+            // pure integer arithmetic, no floating point, no culture dependency.
+            ulong x = key;
+            x ^= x >> 33;
+            x *= 0xFF51AFD7ED558CCDUL;
+            x ^= x >> 33;
+            x *= 0xC4CEB9FE1A85EC53UL;
+            x ^= x >> 33;
+            return (int)(x & 0x7FFFFFFFUL);
+        }
+
+        private void NetIdIndexInsert(ulong key, int slot)
+        {
+            // Keep the load factor (live + tombstones) at or below 0.5. Churn turns live
+            // entries into tombstones without freeing probe space, so without this the
+            // probe length would grow even though the live count stays flat.
+            if ((_netIdUsed + _netIdTombstones + 1) * 2 > _netIdValues.Length)
+            {
+                NetIdIndexRebuild();
+            }
+
+            if (!TryNetIdIndexInsertRaw(key, slot))
+            {
+                NetIdIndexRebuild();
+                TryNetIdIndexInsertRaw(key, slot);
+            }
+        }
+
+        private bool TryNetIdIndexInsertRaw(ulong key, int slot)
+        {
+            int index = NetIdHash(key) & _netIdMask;
+            int firstTombstone = -1;
+            for (int probe = 0; probe < _netIdValues.Length; probe++)
+            {
+                int value = _netIdValues[index];
+                if (value == NetIdEmpty)
+                {
+                    if (firstTombstone >= 0)
+                    {
+                        index = firstTombstone;
+                        _netIdTombstones--;
+                    }
+
+                    _netIdKeys[index] = key;
+                    _netIdValues[index] = slot;
+                    _netIdUsed++;
+                    return true;
+                }
+
+                if (value == NetIdTombstone)
+                {
+                    if (firstTombstone < 0)
+                    {
+                        firstTombstone = index;
+                    }
+                }
+                else if (_netIdKeys[index] == key)
+                {
+                    _netIdValues[index] = slot;
+                    return true;
+                }
+
+                index = (index + 1) & _netIdMask;
+            }
+
+            return false;
+        }
+
+        private void NetIdIndexRemove(ulong key)
+        {
+            int index = NetIdHash(key) & _netIdMask;
+            for (int probe = 0; probe < _netIdValues.Length; probe++)
+            {
+                int value = _netIdValues[index];
+                if (value == NetIdEmpty)
+                {
+                    return;
+                }
+
+                if (value != NetIdTombstone && _netIdKeys[index] == key)
+                {
+                    _netIdValues[index] = NetIdTombstone;
+                    _netIdUsed--;
+                    _netIdTombstones++;
+                    return;
+                }
+
+                index = (index + 1) & _netIdMask;
+            }
+        }
+
+        private bool TryNetIdIndexFind(ulong key, out int slot)
+        {
+            int index = NetIdHash(key) & _netIdMask;
+            for (int probe = 0; probe < _netIdValues.Length; probe++)
+            {
+                int value = _netIdValues[index];
+                if (value == NetIdEmpty)
+                {
+                    slot = -1;
+                    return false;
+                }
+
+                if (value != NetIdTombstone && _netIdKeys[index] == key)
+                {
+                    slot = value;
+                    return true;
+                }
+
+                index = (index + 1) & _netIdMask;
+            }
+
+            slot = -1;
+            return false;
+        }
+
+        /// <summary>
+        /// Rebuilds the index from live slot state. Triggered only when tombstones from
+        /// churn degrade probe length; cost is O(active), amortised over many despawns.
+        /// </summary>
+        private void NetIdIndexRebuild()
+        {
+            for (int i = 0; i < _netIdValues.Length; i++)
+            {
+                _netIdValues[i] = NetIdEmpty;
+            }
+
+            _netIdUsed = 0;
+            _netIdTombstones = 0;
+
+            for (int slot = 0; slot < _slotHighWaterMark; slot++)
+            {
+                int denseIndex = _slotToDense[slot];
+                if (denseIndex < 0 || denseIndex >= _activeCount)
+                {
+                    continue;
+                }
+
+                ulong key = _states[denseIndex].NetworkEntityId;
+                if (key != 0UL)
+                {
+                    TryNetIdIndexInsertRaw(key, slot);
+                }
+            }
         }
     }
 }

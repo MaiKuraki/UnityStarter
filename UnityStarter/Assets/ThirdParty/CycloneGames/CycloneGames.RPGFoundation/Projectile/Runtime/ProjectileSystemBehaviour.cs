@@ -22,12 +22,39 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
         [SerializeField] private float FixedDeltaTime = 1f / 60f;
         [SerializeField] private int MaxSubSteps = 4;
         [SerializeField] private float MaxFrameDeltaTime = 0.25f;
+
+        /// <summary>
+        /// Sub-step cap applied inside a single <c>Step</c> call, which bounds integration accuracy
+        /// and the displacement limit. Zero mirrors <see cref="MaxSubSteps"/>.
+        ///
+        /// Kept separate because the two answer different questions: <see cref="MaxSubSteps"/> is how
+        /// many fixed steps may run per frame to catch up, this one is how finely a single step is
+        /// split. Sharing one field meant that raising the catch-up budget silently changed
+        /// collision behaviour as well.
+        /// </summary>
+        [SerializeField] private int MaxIntegrationSubSteps = 0;
+
+        /// <summary>
+        /// Largest distance a projectile may travel inside one simulation step. Zero disables the
+        /// bound and leaves only the time-based split.
+        ///
+        /// The value is a match setting, not a client preference: it changes how many times the
+        /// integrator runs, so peers configured differently diverge. The world honours
+        /// <c>V * FixedDeltaTime / MaxSubSteps</c> at worst, so a projectile faster than
+        /// <c>MaxTravelPerStep * MaxSubSteps / FixedDeltaTime</c> saturates the budget and is only
+        /// kept out of thin geometry by a sweeping collision adapter.
+        /// </summary>
+        [SerializeField] private float MaxTravelPerStep = 0f;
         [SerializeField] private bool AutoTick = true;
 
         private ProjectileWorld _world;
         private IProjectileCollisionWorld _collisionWorld;
         private int _tick;
         private float _accumulator;
+
+        // Assigned by the composition root, never serialized: a scene reference to a
+        // provider would couple the projectile system to a specific targeting service.
+        [NonSerialized] private IProjectileTargetProvider _targetProvider;
 
         public event Action<ProjectileHitEvent> Hit;
 
@@ -43,6 +70,17 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
         public bool IsInitialized => _world != null;
 
         public int CurrentTick => _tick;
+
+        /// <summary>
+        /// Target source for Homing and LeadHoming. The fixed-step loop has no other way to
+        /// reach gameplay targets, so leaving this null makes every guided definition fly
+        /// straight; assign it from the composition root before the first tick.
+        /// </summary>
+        public IProjectileTargetProvider TargetProvider
+        {
+            get { return _targetProvider; }
+            set { _targetProvider = value; }
+        }
 
         private void Awake()
         {
@@ -74,7 +112,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
             int steps = 0;
             while (_accumulator >= fixedDelta && steps < subSteps)
             {
-                Step(fixedDelta, _tick + 1, null);
+                Step(fixedDelta, _tick + 1, ResolveTargetProvider());
                 _accumulator -= fixedDelta;
                 steps++;
             }
@@ -164,12 +202,31 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
             _collisionWorld = CreateCollisionWorld();
         }
 
+        /// <summary>
+        /// Override to resolve the target provider per tick (for example from a session or
+        /// world service). Defaults to <see cref="TargetProvider"/>.
+        /// </summary>
+        protected virtual IProjectileTargetProvider ResolveTargetProvider()
+        {
+            return _targetProvider;
+        }
+
         protected virtual ProjectileSpaceProfile CreateSpaceProfile()
         {
             return new ProjectileSpaceProfile(
                 SimulationPlane,
                 LockedAxisValue,
                 ToProjectileVector3(Gravity));
+        }
+
+        /// <summary>
+        /// Sub-step cap to hand to the world. Zero follows <paramref name="catchUpSubSteps"/>.
+        /// </summary>
+        public static int ResolveIntegrationSubSteps(int configured, int catchUpSubSteps)
+        {
+            return configured > 0
+                ? ClampStatic(configured, 1, 16)
+                : ClampStatic(catchUpSubSteps, 1, 8);
         }
 
         protected virtual ProjectileWorld CreateWorld(in ProjectileSpaceProfile space)
@@ -182,7 +239,9 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
                 in space,
                 Clamp(MaxCollisionIterations, 1, 16),
                 fixedDelta,
-                Clamp(MaxSubSteps, 1, 8));
+                ResolveIntegrationSubSteps(MaxIntegrationSubSteps, MaxSubSteps),
+                enableNetworkEntityIdIndex: true,
+                maxTravelPerStep: MaxTravelPerStep > 0f ? MaxTravelPerStep : 0f);
             return new ProjectileWorld(in config);
         }
 
@@ -219,6 +278,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
         private static ProjectileVector3 ToProjectileVector3(Vector3 value)
         {
             return new ProjectileVector3(value.x, value.y, value.z);
+        }
+
+        private static int ClampStatic(int value, int min, int max)
+        {
+            return value < min ? min : (value > max ? max : value);
         }
 
         private static float Clamp(float value, float min, float max)

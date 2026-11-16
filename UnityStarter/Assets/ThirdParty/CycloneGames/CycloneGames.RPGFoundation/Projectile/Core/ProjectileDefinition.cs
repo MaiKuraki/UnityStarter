@@ -103,6 +103,25 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 0);
         }
 
+        /// <summary>
+        /// True when speed, acceleration and lifetime could push a component past the float
+        /// range. The bound assumes all three push the same way and uses a gravity ceiling above
+        /// any authored value; anything reachable below 1e25 cannot overflow, so those
+        /// definitions skip the per-step finiteness check.
+        /// </summary>
+        public bool MayOverflow
+        {
+            get
+            {
+                const double GravityCeiling = 1.0e5;
+                double lifetime = MaxLifetime;
+                double speed = Math.Abs((double)InitialSpeed);
+                double acceleration = Math.Abs((double)Acceleration);
+                double reach = (speed + acceleration * lifetime + GravityCeiling * lifetime) * lifetime;
+                return double.IsNaN(reach) || double.IsInfinity(reach) || reach > 1.0e25;
+            }
+        }
+
         private static bool IsFinite(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);

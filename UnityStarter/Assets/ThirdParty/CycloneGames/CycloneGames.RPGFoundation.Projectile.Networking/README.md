@@ -1,199 +1,303 @@
-# CycloneGames.RPGFoundation.Projectile.Networking
+# CycloneGames.RPGFoundation · Projectile.Networking
 
-English | [Simplified Chinese](./README.SCH.md)
+[English | 简体中文](README.SCH.md)
 
-`CycloneGames.RPGFoundation.Projectile.Networking` connects RPGFoundation Projectile to `CycloneGames.Networking`. It provides transport-neutral protocol metadata, message DTOs, validation helpers, prediction reconciliation, snapshot history, and authority bridge abstractions.
+Replication for the projectile module: a message schema, a validator, a bounded history for
+rollback and interpolation, and handlers that turn incoming messages into world state.
 
-The base Projectile module remains usable without `CycloneGames.Networking`. This package is only required when projectile state crosses a Cyclone network boundary.
+The package produces and consumes validated messages. It does not send packets; serialization and
+transport belong to your networking layer.
 
-## Package Layout
+It is only needed when projectile state crosses a network boundary. The base Projectile module
+works without it.
 
-```text
-CycloneGames.RPGFoundation.Projectile.Networking/
-  Core/
-    CycloneGames.RPGFoundation.Projectile.Networking.Core.asmdef
-    DefaultProjectileNetworkMessageValidator.cs
-    IProjectileNetworkMessageValidator.cs
-    IProjectileNetworkSnapshotSink.cs
-    IProjectileNetworkSnapshotSource.cs
-    ProjectileCorrectionMessage.cs
-    ProjectileDespawnMessage.cs
-    ProjectileFullStateRequestMessage.cs
-    ProjectileHitMessage.cs
-    ProjectileManifestHandshakeMessage.cs
-    ProjectileNetworkAuthorityBridge.cs
-    ProjectileNetworkCorrectionFlags.cs
-    ProjectileNetworkCorrectionPolicy.cs
-    ProjectileNetworkProtocol.cs
-    ProjectileNetworkReconciliation.cs
-    ProjectileNetworkSnapshotHistory.cs
-    ProjectileNetworkValidationContext.cs
-    ProjectileNetworkVectorExtensions.cs
-    ProjectileSnapshotMessage.cs
-    ProjectileSpawnMessage.cs
-    ProjectileWorldNetworkSnapshotSource.cs
-  Tests/Editor/
-    CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor.asmdef
-    ProjectileNetworkingIntegrationTests.cs
-```
+## Contents
 
-## Assembly Boundary
+1. [Scope](#1-scope)
+2. [Install](#2-install)
+3. [Wire format](#3-wire-format)
+4. [Server: capture and send](#4-server-capture-and-send)
+5. [Client: apply](#5-client-apply)
+6. [Validation](#6-validation)
+7. [Reconciliation](#7-reconciliation)
+8. [Rollback](#8-rollback)
+9. [Budget and scale](#9-budget-and-scale)
+10. [Testing](#10-testing)
 
-| Assembly | Role | Unity dependency |
+---
+
+## 1. Scope
+
+This package owns the projectile protocol: message ids, DTOs, validation, reconciliation, snapshot
+history, and the handlers that apply all of it to a `ProjectileWorld`.
+
+`CycloneGames.Networking` owns the shared infrastructure: message ranges, manifests, channels,
+catalog registration, `NetworkVector3`, `NetworkActionResult`, and transport.
+
+Projectile simulation and snapshots stay in `CycloneGames.RPGFoundation.Projectile.Core`. Nothing
+here duplicates them.
+
+Out of scope: byte layout, reliability enforcement, routing, sessions, interest management.
+
+## 2. Install
+
+| Assembly | Contents | UnityEngine |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Projectile.Networking.Core` | Projectile protocol, DTOs, validation, reconciliation, snapshot history, authority bridge interfaces, and `CycloneGames.Networking` integration contracts. | No UnityEngine |
-| `CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor` | EditMode coverage for protocol, validator, history, reconciliation, and bridge behavior. | No UnityEngine |
+| `CycloneGames.RPGFoundation.Projectile.Networking.Core` | Messages, validator, history, sink, message handler | No |
+| `CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor` | EditMode coverage | No |
 
-`CycloneGames.RPGFoundation.Projectile.Networking.Core` uses the `CycloneGames.RPGFoundation.Projectile.Networking` root namespace and references `CycloneGames.RPGFoundation.Projectile.Core` and `CycloneGames.Networking.Core`. It does not reference Unity packages, backend SDKs, Unity scene objects, PlayerSettings scripting define symbols, concrete transports, or a DI container.
+Both use `autoReferenced: false`; consumer asmdefs must reference Core explicitly. No PlayerSettings
+define is required.
 
-The Core and EditMode test assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly. No PlayerSettings scripting define is required.
+Dependencies: `CycloneGames.RPGFoundation.Projectile.Core` and `CycloneGames.Networking.Core`.
 
-## CycloneGames.Networking Collaboration
+The package holds no Unity references, backend SDKs, transports, or DI container. A project-side
+adapter registers the protocol, serializes messages, validates inbound traffic, and forwards what
+passes.
 
-`CycloneGames.Networking` owns shared networking infrastructure. This package owns projectile protocol metadata, DTOs, validation, reconciliation, snapshot history, and authority bridge contracts.
+## 3. Wire format
 
-| Capability | Owner |
-| --- | --- |
-| Message range, manifest, channels, and catalog registration | `ProjectileNetworkProtocol` plus `CycloneGames.Networking` protocol APIs |
-| Stable network vector payloads | `NetworkVector3` from `CycloneGames.Networking` |
-| Validation results | `NetworkActionResult`, `NetworkActionResultCode`, and `NetworkTickId` from `CycloneGames.Networking.Simulation` |
-| Snapshot history | `NetworkActionHistory<T>` from `CycloneGames.Networking.Simulation` |
-| Transport, routing, sessions, security pipeline, and backend SDK adapters | Product or `CycloneGames.Networking` runtime packages |
-| Projectile simulation and snapshots | `CycloneGames.RPGFoundation.Projectile.Core` |
+Message ids are `17000` to `17999`, inside the shared module range `1000` to `29999` owned by
+`NetworkMessageRanges.Module`.
 
-This package does not send packets. A project-specific networking adapter registers the protocol, serializes messages through the selected transport, validates inbound messages, and forwards accepted messages to gameplay systems.
+| Message | Id | Reliability |
+| --- | --- | --- |
+| `MSG_MANIFEST_HANDSHAKE` | 17000 | Reliable, ordered |
+| `MSG_SPAWN` | 17001 | Reliable, ordered |
+| `MSG_AUTHORITATIVE_SNAPSHOT` | 17002 | Unreliable, sequenced |
+| `MSG_CORRECTION` | 17003 | Reliable, ordered |
+| `MSG_HIT` | 17004 | Reliable, ordered |
+| `MSG_DESPAWN` | 17005 | Reliable, ordered |
+| `MSG_FULL_STATE_REQUEST` | 17006 | Reliable, ordered |
 
-## Protocol
+`ProjectileNetworkProtocol.CreateProtocolManifest` builds the full descriptor set, and
+`RegisterMessageCatalog` submits it through `TryRegisterProtocolManifest`. Registration commits the
+range and every descriptor together or rejects the manifest, so a partial catalog cannot appear.
 
-`ProjectileNetworkProtocol` owns message IDs `17000-17999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
+Protocol values are `public static readonly` rather than `const`: contract ids and version
+constants are read at runtime instead of being inlined across assembly boundaries, and payload
+defaults stay visible to consumers without recompiling literals. Changing a contract still needs a
+new `:vN` identity and a coordinated version window.
 
-Protocol values are exposed as `public static readonly` fields: frozen contract ids and version constants are read at runtime rather than inlined across assemblies, and the tunable payload-size defaults are visible to every consumer without recompiling embedded literals. A contract change still requires a new `:vN` identity and coordinated version windows.
+The schema fingerprint covers field names and types, not binary layout, so a serializer may change
+padding without breaking the handshake. Both peers exchange fingerprints before anything else. A
+mismatch means the two builds disagree about the schema; refuse the connection instead of letting
+it desync.
 
-Every descriptor declares an explicit printable-ASCII `ContractId` such as `ProjectileSpawnMessage:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. The fingerprint pins contract identity only: this package ships no wire codec, so the binary payload layout is owned by the integrator's chosen serializer and is NOT verified by the fingerprint. Peers agree on the layout by sharing serializer configuration, and any layout change must ship under a new contract identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
+`ProjectileSnapshotMessage` is 88 bytes: entity id, owner, target, definition id, tick, sequence,
+prediction key, lifecycle flags, age, radius, and three vectors (position, previous position,
+velocity). The vectors are 36 of those bytes, which is the part worth quantizing if bandwidth
+becomes a problem.
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `17000` | Reliable | `ProjectileManifestHandshakeMessage` |
-| `MSG_SPAWN` | `17001` | Reliable | `ProjectileSpawnMessage` |
-| `MSG_AUTHORITATIVE_SNAPSHOT` | `17002` | UnreliableSequenced | `ProjectileSnapshotMessage` |
-| `MSG_CORRECTION` | `17003` | Reliable | `ProjectileCorrectionMessage` |
-| `MSG_HIT` | `17004` | Reliable | `ProjectileHitMessage` |
-| `MSG_DESPAWN` | `17005` | Reliable | `ProjectileDespawnMessage` |
-| `MSG_FULL_STATE_REQUEST` | `17006` | Reliable | `ProjectileFullStateRequestMessage` |
+## 4. Server: capture and send
 
-Register the protocol in a composition root:
+The authority owns the world and broadcasts from it.
 
 ```csharp
-using CycloneGames.Networking;
+using CycloneGames.RPGFoundation.Projectile.Core;
 using CycloneGames.RPGFoundation.Projectile.Networking;
 
-public static class ProjectileNetworkInstaller
+var source = new ProjectileWorldNetworkSnapshotSource(world);
+var scratch = new ProjectileSnapshot[world.Capacity];
+
+// Once per replication tick. One sequential pass, no allocation.
+int count = source.CaptureSnapshots(scratch);
+
+for (int i = 0; i < count; i++)
 {
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        ProjectileNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
+    ProjectileSnapshot snapshot = scratch[i];
+    ProjectileSnapshotMessage message = ProjectileSnapshotMessage.FromSnapshot(in snapshot, sequence);
+    // Serialize and send on the unreliable sequenced channel.
 }
 ```
 
-## Validation And Reconciliation
+`source.SnapshotCapacity` exists so a bridge can preallocate its conversion scratch once instead of
+per broadcast.
 
-`DefaultProjectileNetworkMessageValidator` validates projectile messages against `ProjectileNetworkValidationContext` and returns `NetworkActionResult`. It checks payload validity, authentication, tick windows, duplicate sequence state, ordered snapshots, velocity budgets, radius budgets, age budgets, and lifecycle flag masks. Full-state requests go through the same envelope checks because they are the most expensive inbound message; per-connection rate limiting remains a product-layer policy.
+Spawn, hit, despawn and correction travel on the reliable ordered channel. The full-state request
+lets a client that missed spawns ask for a rebuild, rather than waiting for corrections that
+reference projectiles it never created.
 
-Authentication is fail-closed: a missing `Sender` is unauthenticated and produces `Unauthorized`. Trusted in-process paths must still provide an explicit authenticated connection context or use a separately validated project boundary; `null` is never an authentication bypass.
+## 5. Client: apply
+
+Two entry points. Use the sink when your transport already produces `ProjectileSnapshot` values;
+use the message handler when you work with wire messages.
+
+```csharp
+using CycloneGames.RPGFoundation.Projectile.Networking;
+
+// The client must own local kinematics for every replicated definition id.
+var catalog = new MyDefinitionCatalog();
+var sink = new ProjectileWorldSnapshotSink(world, catalog);
+var handler = new ProjectileWorldMessageHandler(world, catalog, hitReceiver);
+
+// Snapshots arrive on the unreliable channel and go through the sink.
+sink.TryApplySnapshot(in snapshot);
+
+// Every other message goes through the handler.
+handler.TryHandleSpawn(in spawnMessage);
+handler.TryHandleCorrection(in correctionMessage);
+handler.TryHandleDespawn(in despawnMessage);
+handler.TryHandleHit(in hitMessage);
+```
+
+```mermaid
+flowchart LR
+    subgraph authority
+        world["ProjectileWorld"] --> source["snapshot source"]
+    end
+    source -->|"snapshot<br/>unreliable, sequenced"| validator["validator"]
+    intent["spawn, despawn, correction, hit"] -->|"reliable, ordered"| validator
+    validator --> kind{"message kind"}
+    kind -->|snapshot| sink["snapshot sink"]
+    kind -->|intent| handler["message handler"]
+    sink --> replica["replica ProjectileWorld"]
+    handler --> replica
+```
+
+The handler owns a few policy decisions worth knowing:
+
+- A spawn for an entity id that already exists is refused, not applied. Idempotence means the
+  second request changes nothing. A definition change has to travel as a correction.
+- A despawn for an entity that is already gone increments a counter and returns. Duplicate delivery
+  is normal on a reliable channel with retries.
+- A correction carrying `HardSnap` or `FullReset` rebuilds the projectile. Anything else patches it
+  in place and keeps the handle, bounce and pierce budgets.
+- A hit message never mutates the world. The client already predicted the impact; the message
+  exists for effects that must be authoritative.
+
+Every outcome has its own counter: `AppliedCount`, `SpawnedCount`, `StaleCount`, `InvalidCount`,
+`MissingDefinitionCount`, `CapacityRejectedCount`, `DuplicateCount`, `AlreadyGoneCount`. Wire them
+to telemetry. A silent drop is the failure mode that costs days to find.
+
+## 6. Validation
 
 ```csharp
 var context = new ProjectileNetworkValidationContext(
-    sender,
-    serverTick,
-    lastAcceptedServerTick,
-    lastAcceptedSequence);
+    sender: connection,
+    serverTick: currentTick,
+    lastAcceptedServerTick: lastAcceptedTick,
+    authorityMode: NetworkActionAuthorityMode.ClientPredictedServerAuthoritative,
+    maxInitialVelocity: 512f,
+    maxSnapshotVelocity: 512f,
+    maxRadius: 16f,
+    maxAge: 3600f,
+    senderOwnedEntityId: playerEntityId);
 
-NetworkActionResult result =
-    DefaultProjectileNetworkMessageValidator.Instance.ValidateSnapshot(snapshot, context);
-
+NetworkActionResult result = validator.ValidateSpawn(in message, in context);
 if (!result.IsAccepted)
 {
-    return;
+    // result carries the rejection code
 }
 ```
 
-`ProjectileNetworkReconciliation` compares predicted and authoritative `ProjectileSnapshotMessage` values and can create `ProjectileCorrectionMessage` values when position, velocity, timeline, lifecycle, target, or definition data diverges beyond policy thresholds.
+Rejection codes separate client bugs from protocol violations. `OutOfOrder`, `Duplicate` and
+`Stale` are expected on a lossy channel and belong in counters. `Invalid`, `ImpersonatedOwner` and
+`TickInFuture` indicate a client that is lying or badly broken and belong in logs.
+
+The default validator is a stateless singleton. Implement `IProjectileNetworkMessageValidator` to
+tighten or relax a rule. The handler does not care which validator ran, only that the message
+passed.
+
+## 7. Reconciliation
 
 ```csharp
-bool needsCorrection = ProjectileNetworkReconciliation.TryCreateCorrection(
-    predicted,
-    authoritative,
-    ProjectileNetworkCorrectionPolicy.Default,
-    out ProjectileCorrectionMessage correction);
-```
-
-`ProjectileNetworkCorrectionFlags` identifies whether the correction affects transform, velocity, timeline, lifecycle, target, hard snap, or full reset behavior.
-
-## Authority Bridge
-
-`ProjectileNetworkAuthorityBridge` captures authoritative snapshots from an `IProjectileNetworkSnapshotSource` and applies incoming snapshots through an optional `IProjectileNetworkSnapshotSink`.
-
-`ProjectileWorldNetworkSnapshotSource` adapts a `ProjectileWorld` by network projectile entity id:
-
-```csharp
-var source = new ProjectileWorldNetworkSnapshotSource(projectileWorld);
-var bridge = new ProjectileNetworkAuthorityBridge(source);
-
-if (bridge.TryCaptureSnapshot(projectileEntityId, sequence, out ProjectileSnapshotMessage snapshot))
+if (ProjectileNetworkReconciliation.RequiresCorrection(
+        in predicted, in authoritative, policy,
+        out ProjectileNetworkCorrectionFlags flags, out float error))
 {
-    // Send snapshot through the project networking adapter.
+    ProjectileNetworkReconciliation.TryCreateCorrection(
+        in predicted, in authoritative, policy, out ProjectileCorrectionMessage correction);
 }
 ```
 
-Project code owns snapshot application, including the ownership policy for visual interpolation, prediction rollback, presentation-only projectiles, and server-owned projectile worlds.
+`RequiresCorrection` compares position, velocity and age against policy thresholds and fills a flag
+set describing which fields diverged. A correction at or above the hard-snap threshold should carry
+`HardSnap`, which makes the client rebuild instead of patch.
 
-## Batch Capture and Replay History
+Non-finite input is treated as maximum divergence. A NaN prediction compares false against every
+threshold, so without an explicit check it reads as "no correction needed" and the client keeps a
+state it can never reconcile.
 
-A full authoritative tick is one sequential pass. The bridge preallocates its conversion scratch at construction using `IProjectileNetworkSnapshotSource.SnapshotCapacity`, so steady-state capture performs no allocation:
+## 8. Rollback
+
+Client-side prediction needs two halves: a history buffer for what to restore, and the world's
+restore entry point for how.
 
 ```csharp
-var messages = new ProjectileSnapshotMessage[projectileWorld.Capacity];
-int count = bridge.CaptureSnapshots(messages, sequence);
-```
+// Bounded per-entity history for interpolation and rollback.
+var history = new ProjectileNetworkSnapshotHistory(capacity: 8192, depthPerEntity: 8);
 
-`ProjectileNetworkSnapshotHistory` keeps bounded replay state per entity. Each entity owns a fixed-depth contiguous ring; bucket heads are a compact sequential array, so a miss scans only the bucket heads rather than the whole ring. `TryGetAtOrBefore` resolves the newest snapshot at or before a server tick for rollback, and `CopyHistory` emits one entity's retained frames oldest-first into caller-owned storage.
+history.Record(in snapshotMessage);
 
-```csharp
-var history = new ProjectileNetworkSnapshotHistory(capacity: 4096, depthPerEntity: 8);
-history.Record(in authoritativeSnapshot);
-
-if (history.TryGetAtOrBefore(projectileEntityId, serverTick, out ProjectileSnapshotMessage frame))
+if (history.TryGetAtOrBefore(entityId, rewindTick, out ProjectileSnapshotMessage frame))
 {
-    // Rewind to frame and resimulate forward.
+    // interpolate a remote projectile, or collect a whole tick to restore
 }
 ```
 
-`Record`, `TryGet`, `TryGetLatest`, `TryGetAtOrBefore`, `CopyHistory` and `RemoveProjectile` are allocation-free. When every bucket is occupied, the least recently written entity is evicted and `OverwriteCount` records it.
+`depthPerEntity` is the ring size per entity. `TryGetAtOrBefore` returns the newest retained frame
+at or before the requested tick, which is what interpolation needs. `CopyHistory` fills a
+caller-owned array oldest first. `RemoveProjectile` releases the bucket so the pool does not fill
+with dead entities.
 
-## Synchronization Policy
+Restoring a whole tick uses the Core API:
 
-Recommended multiplayer flow:
+```csharp
+ProjectileRestoreResult result = world.TryRestoreStates(
+    capturedSpan, ProjectileRestoreMode.Replace, catalog);
 
-1. Client sends an ability or weapon request through the product-owned gameplay path.
-2. Server validates cost, cooldown, tags, line-of-sight, ownership, fire rate, and anti-cheat rules.
-3. Server sends `ProjectileSpawnMessage` to relevant observers.
-4. Server simulates authoritative projectile state and sends `ProjectileSnapshotMessage` for long-lived projectiles.
-5. Clients reconcile predicted visuals with `ProjectileCorrectionMessage`.
-6. Server sends `ProjectileHitMessage` and `ProjectileDespawnMessage` reliably when authority resolves the outcome.
+// result.Applied, result.Spawned, result.Despawned describe what changed.
+// result.Succeeded == false means the batch was rejected and nothing changed.
+```
 
-High-density bullet patterns should usually replicate `definitionId`, `seed`, `startTick`, and emitter parameters through a project-owned user protocol. Per-projectile snapshots should be reserved for exceptional projectiles that cannot be reconstructed from deterministic pattern state.
+```mermaid
+flowchart LR
+    capture["capture tick T"] --> buffer["snapshot buffer and history"]
+    buffer --> forward["simulate forward to T+K"]
+    forward --> arrive["correction names an older tick"]
+    arrive --> restore["TryRestoreStates Replace"]
+    restore --> replay["replay T to T+K"]
+    replay --> compare["state matches the first run"]
+```
 
-## Persistence
+`Replace` means the batch is the complete state for that tick. Projectiles the batch omits are
+removed, and `world.LatestTick` moves back to the batch tick so replay starts from the right
+origin. `Merge` keeps local projectiles the batch does not mention and never rewinds the anchor,
+which is what a partial view such as interest-managed updates needs.
 
-This package does not write files, assets, preferences, caches, or runtime save data. It only defines protocol metadata, value-type DTOs, validators, fixed-capacity history helpers, and explicit bridge interfaces.
+The restore is atomic. If any entry is malformed, any required definition is missing, or the batch
+does not fit after removals, nothing changes and the result says why.
 
-## Validation
+## 9. Budget and scale
 
-Run these checks after changing the package:
+Costs here are structural. This document carries no timings for the same reason the base module
+does not: the package ships no benchmark, and a number here would rot silently.
+
+What the code fixes:
+
+- History record and lookup are constant time per entity. The bucket index is open addressing over
+  the entity id, and the free-bucket stack keeps insertion constant time as well, so filling N
+  entities stays linear in N rather than quadratic.
+- The bridge captures in one sequential pass over dense storage, with no per-projectile lookup.
+- The message handler performs one indexed lookup per message and allocates nothing on any path,
+  including the rejections.
+
+Bandwidth is the number to watch, and it is arithmetic rather than measurement. An 88-byte snapshot
+at 30 Hz for 10 000 projectiles is 88 x 30 x 10 000, about 26 MB/s before headers. Three ways down,
+in order of effort:
+
+1. Send less often. Distant projectiles replicate at 10 Hz without a visible difference.
+2. Send less per message. Quantizing the three vectors to 1/128 unit fixed point with 16 bits per
+   axis brings the message to about 40 bytes.
+3. Send fewer projectiles. Interest management at the session layer, plus client-side prediction for
+   anything the player fired.
+
+## 10. Testing
 
 ```text
 Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
+
+The suite covers validator rejection codes, history ring behaviour and eviction, reconciliation flag
+selection including the non-finite path, and every message handler outcome.
