@@ -4,13 +4,17 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
 {
     /// <summary>
     /// Bounded replay history for rollback and smooth rewind. Each entity owns a
-    /// fixed-depth contiguous ring; bucket heads are a compact sequential array.
-    /// All storage is allocated once, every operation is allocation-free, and a miss
-    /// scans bucket heads (a few KB of sequential memory) instead of the entire ring.
+    /// fixed-depth contiguous ring; bucket lookup is an open-addressing index over the
+    /// entity id, so record and lookup are O(1) per entity instead of a scan.
+    /// All storage is allocated once and every operation is allocation-free.
     /// </summary>
     public sealed class ProjectileNetworkSnapshotHistory
     {
         private const int DEFAULT_DEPTH_PER_ENTITY = 8;
+
+        // Open addressing sentinels for the entity-id index.
+        private const int LookupEmpty = -1;
+        private const int LookupTombstone = -2;
 
         private struct Entry
         {
@@ -28,6 +32,19 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
         private readonly int[] _bucketHeads;
         private readonly int[] _bucketCounts;
         private readonly long[] _bucketLastWrite;
+
+        // Free-bucket stack. Scanning for an unoccupied bucket would make first insertion
+        // O(buckets).
+        private readonly int[] _freeBuckets;
+        private int _freeBucketCount;
+
+        // entity id -> bucket, open addressing with linear probing. A linear scan of bucket
+        // heads would make filling N entities O(N^2).
+        private readonly ulong[] _lookupKeys;
+        private readonly int[] _lookupBuckets;
+        private readonly int _lookupMask;
+        private int _lookupUsed;
+        private int _lookupTombstones;
 
         private long _writeCounter;
         private long _overwriteCount;
@@ -47,8 +64,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 throw new ArgumentOutOfRangeException(nameof(capacity));
             }
 
-            // A depth of one cannot rewind and makes the bucket-head array as large
-            // as the whole ring, degrading a miss back to a full linear scan.
+            // A depth of one cannot rewind, and it would make the bucket-head array as
+            // large as the whole ring.
             if (depthPerEntity < 2)
             {
                 throw new ArgumentOutOfRangeException(nameof(depthPerEntity));
@@ -61,6 +78,24 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             _bucketHeads = new int[_bucketCount];
             _bucketCounts = new int[_bucketCount];
             _bucketLastWrite = new long[_bucketCount];
+            _freeBuckets = new int[_bucketCount];
+            for (int i = 0; i < _bucketCount; i++)
+            {
+                _freeBuckets[i] = _bucketCount - 1 - i;
+            }
+
+            _freeBucketCount = _bucketCount;
+
+            // Two entries per bucket keeps the load factor at or below 0.5.
+            int tableSize = NextPowerOfTwo(_bucketCount * 2);
+            _lookupKeys = new ulong[tableSize];
+            _lookupBuckets = new int[tableSize];
+            _lookupMask = tableSize - 1;
+            for (int i = 0; i < tableSize; i++)
+            {
+                _lookupBuckets[i] = LookupEmpty;
+            }
+
             _lastBucket = -1;
         }
 
@@ -119,7 +154,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 int start = bucket * _depth;
                 for (int i = 0; i < _depth; i++)
                 {
-                    Entry entry = _entries[start + i];
+                    ref readonly Entry entry = ref _entries[start + i];
                     if (entry.IsValid
                         && entry.EntityId == projectileEntityId
                         && entry.Tick == serverTick
@@ -153,7 +188,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             int start = bucket * _depth;
             for (int i = 0; i < _depth; i++)
             {
-                Entry entry = _entries[start + i];
+                ref readonly Entry entry = ref _entries[start + i];
                 if (!entry.IsValid || entry.EntityId != projectileEntityId)
                 {
                     continue;
@@ -203,7 +238,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             int start = bucket * _depth;
             for (int i = 0; i < _depth; i++)
             {
-                Entry entry = _entries[start + i];
+                ref readonly Entry entry = ref _entries[start + i];
                 if (!entry.IsValid || entry.EntityId != projectileEntityId || entry.Tick > serverTick)
                 {
                     continue;
@@ -257,7 +292,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                     index -= _depth;
                 }
 
-                Entry entry = _entries[index];
+                ref readonly Entry entry = ref _entries[index];
                 if (entry.IsValid && entry.EntityId == projectileEntityId)
                 {
                     destination[written] = entry.Snapshot;
@@ -279,10 +314,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
 
             int removed = _bucketCounts[bucket];
             Array.Clear(_entries, bucket * _depth, _depth);
+            LookupRemove(projectileEntityId);
             _bucketEntityIds[bucket] = 0UL;
             _bucketHeads[bucket] = 0;
             _bucketCounts[bucket] = 0;
             _bucketLastWrite[bucket] = 0L;
+            _freeBuckets[_freeBucketCount] = bucket;
+            _freeBucketCount++;
             _count -= removed;
             if (_lastEntityId == projectileEntityId)
             {
@@ -300,16 +338,25 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             Array.Clear(_bucketHeads, 0, _bucketHeads.Length);
             Array.Clear(_bucketCounts, 0, _bucketCounts.Length);
             Array.Clear(_bucketLastWrite, 0, _bucketLastWrite.Length);
+            for (int i = 0; i < _lookupBuckets.Length; i++)
+            {
+                _lookupBuckets[i] = LookupEmpty;
+            }
+
+            _freeBucketCount = _bucketCount;
+            for (int i = 0; i < _bucketCount; i++)
+            {
+                _freeBuckets[i] = _bucketCount - 1 - i;
+            }
+
+            _lookupUsed = 0;
+            _lookupTombstones = 0;
             _count = 0;
             _writeCounter = 0;
             _lastEntityId = 0UL;
             _lastBucket = -1;
         }
 
-        /// <summary>
-        /// Bucket heads are scanned sequentially: they occupy a compact array that stays
-        /// resident in cache, and no hash probe, tombstone or deletion rehash is needed.
-        /// </summary>
         private int FindBucket(ulong entityId)
         {
             if (_lastBucket >= 0
@@ -319,14 +366,11 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 return _lastBucket;
             }
 
-            for (int i = 0; i < _bucketCount; i++)
+            if (TryLookup(entityId, out int bucket))
             {
-                if (_bucketEntityIds[i] == entityId)
-                {
-                    _lastEntityId = entityId;
-                    _lastBucket = i;
-                    return i;
-                }
+                _lastEntityId = entityId;
+                _lastBucket = bucket;
+                return bucket;
             }
 
             return -1;
@@ -340,18 +384,23 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 return existing;
             }
 
-            for (int i = 0; i < _bucketCount; i++)
+            if (_freeBucketCount > 0)
             {
-                if (_bucketEntityIds[i] == 0UL)
-                {
-                    _bucketEntityIds[i] = entityId;
-                    _lastEntityId = entityId;
-                    _lastBucket = i;
-                    return i;
-                }
+                _freeBucketCount--;
+                int free = _freeBuckets[_freeBucketCount];
+                _bucketEntityIds[free] = entityId;
+                _bucketHeads[free] = 0;
+                _bucketCounts[free] = 0;
+                _bucketLastWrite[free] = 0L;
+                LookupInsert(entityId, free);
+                _lastEntityId = entityId;
+                _lastBucket = free;
+                return free;
             }
 
-            // All buckets are occupied: evict the least recently written entity.
+            // All buckets are occupied: evict the least recently written entity. This is a
+            // bounded fallback for an under-sized history, not the steady-state path; it
+            // stays a full scan because exact LRU is what the diagnostics promise.
             int victim = 0;
             for (int i = 1; i < _bucketCount; i++)
             {
@@ -361,6 +410,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 }
             }
 
+            ulong evictedEntityId = _bucketEntityIds[victim];
             int removed = _bucketCounts[victim];
             if (removed > 0)
             {
@@ -369,7 +419,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             }
 
             Array.Clear(_entries, victim * _depth, _depth);
+            if (evictedEntityId != 0UL)
+            {
+                LookupRemove(evictedEntityId);
+            }
+
             _bucketEntityIds[victim] = entityId;
+            LookupInsert(entityId, victim);
             _bucketHeads[victim] = 0;
             _bucketCounts[victim] = 0;
             _bucketLastWrite[victim] = 0L;
@@ -389,6 +445,152 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             if (entityId == 0UL)
             {
                 throw new ArgumentOutOfRangeException(nameof(entityId));
+            }
+        }
+
+        private static int NextPowerOfTwo(int value)
+        {
+            int result = 1;
+            while (result < value)
+            {
+                result <<= 1;
+            }
+
+            return result;
+        }
+
+        private static int HashEntityId(ulong key)
+        {
+            // MurmurHash3 fmix64. Integer-only, so bucket assignment is identical on every
+            // platform and never depends on floating point or culture.
+            ulong x = key;
+            x ^= x >> 33;
+            x *= 0xFF51AFD7ED558CCDUL;
+            x ^= x >> 33;
+            x *= 0xC4CEB9FE1A85EC53UL;
+            x ^= x >> 33;
+            return (int)(x & 0x7FFFFFFFUL);
+        }
+
+        private bool TryLookup(ulong key, out int bucket)
+        {
+            int index = HashEntityId(key) & _lookupMask;
+            for (int probe = 0; probe < _lookupBuckets.Length; probe++)
+            {
+                int value = _lookupBuckets[index];
+                if (value == LookupEmpty)
+                {
+                    bucket = -1;
+                    return false;
+                }
+
+                if (value != LookupTombstone && _lookupKeys[index] == key)
+                {
+                    bucket = value;
+                    return true;
+                }
+
+                index = (index + 1) & _lookupMask;
+            }
+
+            bucket = -1;
+            return false;
+        }
+
+        private void LookupInsert(ulong key, int bucket)
+        {
+            if ((_lookupUsed + _lookupTombstones + 1) * 2 > _lookupBuckets.Length)
+            {
+                LookupRebuild();
+            }
+
+            if (!TryLookupInsertRaw(key, bucket))
+            {
+                LookupRebuild();
+                TryLookupInsertRaw(key, bucket);
+            }
+        }
+
+        private bool TryLookupInsertRaw(ulong key, int bucket)
+        {
+            int index = HashEntityId(key) & _lookupMask;
+            int firstTombstone = -1;
+            for (int probe = 0; probe < _lookupBuckets.Length; probe++)
+            {
+                int value = _lookupBuckets[index];
+                if (value == LookupEmpty)
+                {
+                    if (firstTombstone >= 0)
+                    {
+                        index = firstTombstone;
+                        _lookupTombstones--;
+                    }
+
+                    _lookupKeys[index] = key;
+                    _lookupBuckets[index] = bucket;
+                    _lookupUsed++;
+                    return true;
+                }
+
+                if (value == LookupTombstone)
+                {
+                    if (firstTombstone < 0)
+                    {
+                        firstTombstone = index;
+                    }
+                }
+                else if (_lookupKeys[index] == key)
+                {
+                    _lookupBuckets[index] = bucket;
+                    return true;
+                }
+
+                index = (index + 1) & _lookupMask;
+            }
+
+            return false;
+        }
+
+        private void LookupRemove(ulong key)
+        {
+            int index = HashEntityId(key) & _lookupMask;
+            for (int probe = 0; probe < _lookupBuckets.Length; probe++)
+            {
+                int value = _lookupBuckets[index];
+                if (value == LookupEmpty)
+                {
+                    return;
+                }
+
+                if (value != LookupTombstone && _lookupKeys[index] == key)
+                {
+                    _lookupBuckets[index] = LookupTombstone;
+                    _lookupUsed--;
+                    _lookupTombstones++;
+                    return;
+                }
+
+                index = (index + 1) & _lookupMask;
+            }
+        }
+
+        private void LookupRebuild()
+        {
+            for (int i = 0; i < _lookupBuckets.Length; i++)
+            {
+                _lookupBuckets[i] = LookupEmpty;
+            }
+
+            _lookupUsed = 0;
+            _lookupTombstones = 0;
+
+            for (int bucket = 0; bucket < _bucketCount; bucket++)
+            {
+                ulong key = _bucketEntityIds[bucket];
+                if (key != 0UL)
+                {
+                    TryLookupInsertRaw(key, bucket);
+                }
             }
         }
     }

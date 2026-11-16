@@ -17,6 +17,12 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
         public float Radius;
         public int RemainingPierceCount;
         public int RemainingBounceCount;
+
+        /// <summary>
+        /// Cached <see cref="ProjectileDefinition.MayOverflow"/> for this projectile, so the
+        /// per-step finiteness guard costs one predictable branch instead of a definition read.
+        /// </summary>
+        public bool MayOverflow;
         public ProjectileVector3 Position;
         public ProjectileVector3 PreviousPosition;
         public ProjectileVector3 Velocity;
@@ -26,6 +32,22 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
             get
             {
                 return Handle.IsValid && NetworkEntityId != 0UL;
+            }
+        }
+
+        /// <summary>
+        /// False when integration produced NaN or infinity. A projectile in this state must
+        /// be removed: it would otherwise fail snapshot validation silently while still
+        /// participating in collision queries.
+        /// </summary>
+        public bool IsFinite
+        {
+            get
+            {
+                return Position.IsFinite
+                       && Velocity.IsFinite
+                       && !float.IsNaN(Age)
+                       && !float.IsInfinity(Age);
             }
         }
 
@@ -59,6 +81,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Core
                 Radius = definition.Radius,
                 RemainingPierceCount = definition.PierceCount,
                 RemainingBounceCount = definition.BounceCount,
+                MayOverflow = definition.MayOverflow,
                 Position = space.ProjectPosition(request.Position),
                 PreviousPosition = space.ProjectPosition(request.Position),
                 Velocity = space.ProjectVector(initialVelocity)
