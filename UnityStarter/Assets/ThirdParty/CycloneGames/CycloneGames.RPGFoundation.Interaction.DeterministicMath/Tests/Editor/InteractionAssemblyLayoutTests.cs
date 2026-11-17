@@ -25,11 +25,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor.Integrations.Deter
         /// </summary>
         private static string ResolvePackageRoot()
         {
-            // Test assemblies load from <project>/Library/ScriptAssemblies; AppDomain.BaseDirectory
-            // points at the editor install, so resolve from this assembly's own location.
-            string assemblyPath = typeof(InteractionAssemblyLayoutTests).Assembly.Location;
-            string scriptAssemblies = Path.GetDirectoryName(assemblyPath);
-            string projectRoot = Path.GetFullPath(Path.Combine(scriptAssemblies, "..", ".."));
+            // Unity loads assemblies from a stream, so Assembly.Location is empty and cannot be used to
+            // walk up to the project. The editor's working directory is the project root.
+            string projectRoot = Directory.GetCurrentDirectory();
             return Path.Combine(projectRoot, PackageRootRelative.Replace('/', Path.DirectorySeparatorChar));
         }
 

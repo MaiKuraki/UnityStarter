@@ -650,7 +650,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
         {
             if (item == null) return 0UL;
             if (item is IInteractionStableIdentity identity && identity.HasStableId) return identity.StableIdHash;
-            if (item is UnityEngine.Object unityObject) return unchecked((ulong)(uint)unityObject.GetInstanceID());
+            if (item is UnityEngine.Object unityObject) return UnityObjectId.Of(unityObject);
             return 0UL;
         }
 
