@@ -50,6 +50,13 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
         private static bool s_traversalFoldout = true;
         private static bool s_ignoreFoldout;
 
+        // Cached method-group delegates. An instance method group allocates a new Action on every
+        // conversion, so cache them once instead of on every inspector frame.
+        private System.Action _drawValidationSection;
+        private System.Action _drawShapeSection;
+        private System.Action _drawTraversalSection;
+        private System.Action _drawIgnoreSection;
+
         private void OnEnable()
         {
             _collisionLayerMask = serializedObject.FindProperty("CollisionLayerMask");
@@ -65,6 +72,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             _surfaceOffset = serializedObject.FindProperty("SurfaceOffset");
             _initialIgnoredTargetEntityId = serializedObject.FindProperty("InitialIgnoredTargetEntityId");
             _initialIgnoredTargetObjectId = serializedObject.FindProperty("InitialIgnoredTargetObjectId");
+
+            _drawValidationSection = DrawValidationSection;
+            _drawShapeSection = DrawShapeSection;
+            _drawTraversalSection = DrawTraversalSection;
+            _drawIgnoreSection = DrawIgnoreSection;
         }
 
         public override void OnInspectorGUI()
@@ -79,7 +91,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
             RPGFoundationEditorUiUtility.DrawDerivedProperties(
                 serializedObject,
-                target.GetType().Name + " Extension Fields",
+                "Extension Fields",
                 ExcludedProperties);
 
             serializedObject.ApplyModifiedProperties();
@@ -96,85 +108,93 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
         private void DrawValidation()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Validation", RPGFoundationEditorUiUtility.ColorWarning, ref s_validationFoldout, () =>
-            {
-                DrawQueryValidation();
-            });
+            RPGFoundationEditorUiUtility.DrawSection("Validation", RPGFoundationEditorUiUtility.ColorWarning, ref s_validationFoldout, _drawValidationSection);
+        }
+
+        private void DrawValidationSection()
+        {
+            DrawQueryValidation();
         }
 
         private void DrawShape()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Shape", RPGFoundationEditorUiUtility.ColorCore, ref s_shapeFoldout, () =>
+            RPGFoundationEditorUiUtility.DrawSection("Shape", RPGFoundationEditorUiUtility.ColorCore, ref s_shapeFoldout, _drawShapeSection);
+        }
+
+        private void DrawShapeSection()
+        {
+            EditorGUILayout.PropertyField(_collisionLayerMask);
+            EditorGUILayout.PropertyField(_maxDistance);
+            EditorGUILayout.PropertyField(_shape);
+
+            if (!HasMixedValues(_shape))
             {
-                EditorGUILayout.PropertyField(_collisionLayerMask);
-                EditorGUILayout.PropertyField(_maxDistance);
-                EditorGUILayout.PropertyField(_shape);
-
-                if (!HasMixedValues(_shape))
+                var shape = (TrajectoryShape)_shape.enumValueIndex;
+                switch (shape)
                 {
-                    var shape = (TrajectoryShape)_shape.enumValueIndex;
-                    switch (shape)
-                    {
-                        case TrajectoryShape.Sphere:
-                            EditorGUILayout.PropertyField(_radius);
-                            break;
-                        case TrajectoryShape.Capsule:
-                            EditorGUILayout.PropertyField(_radius);
-                            EditorGUILayout.PropertyField(_height);
-                            if (!HasMixedValues(_radius) && !HasMixedValues(_height)
-                                && _height.floatValue < _radius.floatValue * 2f)
-                            {
-                                RPGFoundationEditorUiUtility.DrawHelpBox(
-                                    "Capsule height must be at least twice the radius; the query is invalid until it is.",
-                                    MessageType.Error);
-                            }
-                            break;
-                        case TrajectoryShape.Box:
-                            EditorGUILayout.PropertyField(_halfExtents);
-                            break;
-                        default:
+                    case TrajectoryShape.Sphere:
+                        EditorGUILayout.PropertyField(_radius);
+                        break;
+                    case TrajectoryShape.Capsule:
+                        EditorGUILayout.PropertyField(_radius);
+                        EditorGUILayout.PropertyField(_height);
+                        if (!HasMixedValues(_radius) && !HasMixedValues(_height)
+                            && _height.floatValue < _radius.floatValue * 2f)
+                        {
                             RPGFoundationEditorUiUtility.DrawHelpBox(
-                                "Ray ignores radius, height and extents. Switch to Sweep, Capsule or Box for a volume cast.",
-                                MessageType.None);
+                                "Capsule height must be at least twice the radius; the query is invalid until it is.",
+                                MessageType.Error);
+                        }
+                        break;
+                    case TrajectoryShape.Box:
+                        EditorGUILayout.PropertyField(_halfExtents);
+                        break;
+                    default:
+                        RPGFoundationEditorUiUtility.DrawHelpBox(
+                            "Ray ignores radius, height and extents. Switch to Sweep, Capsule or Box for a volume cast.",
+                            MessageType.None);
 
-                            // A ray with no continuation budget can only ever record one hit, so a larger
-                            // Max Hit Count is dead configuration rather than a tuning choice.
-                            if (_maxReflectionCount.intValue == 0
-                                && _maxPierceCount.intValue == 0
-                                && _maxHitCount.intValue > 1)
-                            {
-                                RPGFoundationEditorUiUtility.DrawHelpBox(
-                                    "Ray with no reflection or pierce budget records at most one hit; Max Hit Count above 1 has no effect.",
-                                    MessageType.Info);
-                            }
-                            break;
-                    }
+                        // A ray with no continuation budget can only ever record one hit, so a larger
+                        // Max Hit Count is dead configuration rather than a tuning choice.
+                        if (_maxReflectionCount.intValue == 0
+                            && _maxPierceCount.intValue == 0
+                            && _maxHitCount.intValue > 1)
+                        {
+                            RPGFoundationEditorUiUtility.DrawHelpBox(
+                                "Ray with no reflection or pierce budget records at most one hit; Max Hit Count above 1 has no effect.",
+                                MessageType.Info);
+                        }
+                        break;
                 }
-            });
+            }
         }
 
         private void DrawTraversal()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Traversal", RPGFoundationEditorUiUtility.ColorRuntime, ref s_traversalFoldout, () =>
-            {
-                EditorGUILayout.PropertyField(_maxReflectionCount);
-                EditorGUILayout.PropertyField(_maxPierceCount);
-                EditorGUILayout.PropertyField(_maxHitCount);
-                EditorGUILayout.PropertyField(_maxIterationCount);
-                EditorGUILayout.PropertyField(_surfaceOffset);
-            });
+            RPGFoundationEditorUiUtility.DrawSection("Traversal", RPGFoundationEditorUiUtility.ColorRuntime, ref s_traversalFoldout, _drawTraversalSection);
+        }
+
+        private void DrawTraversalSection()
+        {
+            EditorGUILayout.PropertyField(_maxReflectionCount);
+            EditorGUILayout.PropertyField(_maxPierceCount);
+            EditorGUILayout.PropertyField(_maxHitCount);
+            EditorGUILayout.PropertyField(_maxIterationCount);
+            EditorGUILayout.PropertyField(_surfaceOffset);
         }
 
         private void DrawInitialIgnore()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Initial Ignore", RPGFoundationEditorUiUtility.ColorDebug, ref s_ignoreFoldout, () =>
-            {
-                EditorGUILayout.PropertyField(_initialIgnoredTargetEntityId);
-                EditorGUILayout.PropertyField(_initialIgnoredTargetObjectId);
-                RPGFoundationEditorUiUtility.DrawHelpBox(
-                    "Use initial ignore values when the trace starts inside an owner, weapon muzzle, shield, or previously confirmed hit surface.",
-                MessageType.None);
-            });
+            RPGFoundationEditorUiUtility.DrawSection("Initial Ignore", RPGFoundationEditorUiUtility.ColorDebug, ref s_ignoreFoldout, _drawIgnoreSection);
+        }
+
+        private void DrawIgnoreSection()
+        {
+            EditorGUILayout.PropertyField(_initialIgnoredTargetEntityId);
+            EditorGUILayout.PropertyField(_initialIgnoredTargetObjectId);
+            RPGFoundationEditorUiUtility.DrawHelpBox(
+                "Use initial ignore values when the trace starts inside an owner, weapon muzzle, shield, or previously confirmed hit surface.",
+            MessageType.None);
         }
 
         private void DrawPresetButtons()

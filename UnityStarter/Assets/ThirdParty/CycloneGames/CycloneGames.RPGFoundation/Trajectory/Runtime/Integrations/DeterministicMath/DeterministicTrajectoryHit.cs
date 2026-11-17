@@ -39,6 +39,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             get
             {
                 return Distance.RawValue >= 0
+                    && (uint)Response <= (uint)TrajectoryHitResponse.Pierce
                     && (TargetEntityId != 0UL || TargetObjectId != 0 || HitLayerMask != 0);
             }
         }

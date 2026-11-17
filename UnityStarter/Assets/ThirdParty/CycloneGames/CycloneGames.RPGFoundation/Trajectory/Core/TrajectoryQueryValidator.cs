@@ -165,6 +165,63 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                     "Max Iteration Count exceeds the recommended ceiling; the fixed-capacity buffers bound the real cost, so a larger budget rarely changes the result.");
             }
 
+            // Shape checks share the exact helpers used by TrajectoryQuery.IsValid and
+            // TrajectoryPolylineSolver, so an Inspector that reports no error can never disagree
+            // with the runtime gate.
+            switch (query.Shape)
+            {
+                case TrajectoryShape.Ray:
+                    break;
+
+                case TrajectoryShape.Sphere:
+                    if (!TrajectoryQuery.IsSphereShapeValid(query.Radius))
+                    {
+                        AddIssue(
+                            issues,
+                            ref count,
+                            TrajectoryValidationSeverity.Error,
+                            TrajectoryQueryValidationCode.InvalidSphereRadius,
+                            "Sphere radius must be finite and greater than zero.");
+                    }
+
+                    break;
+
+                case TrajectoryShape.Capsule:
+                    if (!TrajectoryQuery.IsCapsuleShapeValid(query.Radius, query.Height))
+                    {
+                        AddIssue(
+                            issues,
+                            ref count,
+                            TrajectoryValidationSeverity.Error,
+                            TrajectoryQueryValidationCode.InvalidCapsuleHeight,
+                            "Capsule requires a finite radius greater than zero and a height of at least 2 * radius.");
+                    }
+
+                    break;
+
+                case TrajectoryShape.Box:
+                    if (!TrajectoryQuery.IsBoxShapeValid(query.HalfExtents))
+                    {
+                        AddIssue(
+                            issues,
+                            ref count,
+                            TrajectoryValidationSeverity.Error,
+                            TrajectoryQueryValidationCode.InvalidBoxHalfExtents,
+                            "Box half extents must be finite and greater than zero on every axis.");
+                    }
+
+                    break;
+
+                default:
+                    AddIssue(
+                        issues,
+                        ref count,
+                        TrajectoryValidationSeverity.Error,
+                        TrajectoryQueryValidationCode.InvalidShape,
+                        "Sweep shape is not a supported value.");
+                    break;
+            }
+
             return count;
         }
 

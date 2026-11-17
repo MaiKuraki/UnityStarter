@@ -138,7 +138,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                             hitCount,
                             out TrajectoryHit hit))
                     {
-                        flags |= TrajectorySolver.TryAddSegment(
+                        TrajectoryTraceFlags segmentFlags = TrajectorySolver.TryAddSegment(
                             buffer,
                             segmentFrom,
                             segmentTo,
@@ -146,13 +146,14 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                             segmentLength,
                             -1,
                             out _);
-                        travelDistance += segmentLength;
-                        endPosition = segmentTo;
-                        if ((flags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
+                        flags |= segmentFlags;
+                        if ((segmentFlags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
                         {
                             return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                         }
 
+                        travelDistance += segmentLength;
+                        endPosition = segmentTo;
                         break;
                     }
 
@@ -300,33 +301,26 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
 
         private static bool IsQueryValidForPolyline(in TrajectoryQuery query)
         {
+            // The path supplies origin and direction, so those two checks are intentionally omitted.
+            // Every other field must agree with TrajectoryQuery.IsValid; the shared shape helpers
+            // keep this gate from drifting away from the main one.
             return query.CollisionLayerMask != 0
+                && IsFinite(query.MaxDistance)
                 && query.MaxDistance > 0f
-                && !float.IsNaN(query.MaxDistance)
-                && !float.IsInfinity(query.MaxDistance)
+                && IsFinite(query.Radius)
+                && query.Radius >= 0f
+                && IsFinite(query.Height)
+                && query.HalfExtents.IsFinite
                 && query.MaxHitCount > 0
                 && query.MaxIterationCount > 0
+                && IsFinite(query.SurfaceOffset)
                 && query.SurfaceOffset >= 0f
-                && IsShapeValid(in query);
+                && query.HasValidShape();
         }
 
-        private static bool IsShapeValid(in TrajectoryQuery query)
+        private static bool IsFinite(float value)
         {
-            switch (query.Shape)
-            {
-                case TrajectoryShape.Ray:
-                    return true;
-                case TrajectoryShape.Sphere:
-                    return query.Radius > 0f;
-                case TrajectoryShape.Capsule:
-                    return query.Radius > 0f && query.Height >= query.Radius * 2f;
-                case TrajectoryShape.Box:
-                    return query.HalfExtents.X > 0f
-                        && query.HalfExtents.Y > 0f
-                        && query.HalfExtents.Z > 0f;
-                default:
-                    return false;
-            }
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

@@ -68,6 +68,15 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
         private Quaternion _lastOverrideRotation;
         private bool _hasTransformSnapshot;
 
+        // Cached method-group delegates. An instance method group allocates a new Action on every
+        // conversion, so cache them once instead of on every inspector frame.
+        private System.Action _drawValidationSection;
+        private System.Action _drawQuerySection;
+        private System.Action _drawCollisionSection;
+        private System.Action _drawBuffersSection;
+        private System.Action _drawScenePreviewSection;
+        private System.Action _drawTraceResultSection;
+
         private void OnEnable()
         {
             _queryPreset = serializedObject.FindProperty("QueryPreset");
@@ -86,11 +95,22 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             _pierceColor = serializedObject.FindProperty("PierceColor");
             _hitColor = serializedObject.FindProperty("HitColor");
             _normalColor = serializedObject.FindProperty("NormalColor");
+
+            _drawValidationSection = DrawValidationSection;
+            _drawQuerySection = DrawQuerySection;
+            _drawCollisionSection = DrawCollisionSection;
+            _drawBuffersSection = DrawBuffersSection;
+            _drawScenePreviewSection = DrawScenePreviewSection;
+            _drawTraceResultSection = DrawTraceResultSection;
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+            if (_presetSerialized != null)
+            {
+                _presetSerialized.Update();
+            }
 
             EditorGUI.BeginChangeCheck();
 
@@ -104,7 +124,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
             RPGFoundationEditorUiUtility.DrawDerivedProperties(
                 serializedObject,
-                target.GetType().Name + " Extension Fields",
+                "Extension Fields",
                 ExcludedProperties);
 
             serializedObject.ApplyModifiedProperties();
@@ -196,6 +216,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
         private void DrawInteractiveHandles(TrajectoryDebugProbe probe)
         {
+            if (!TrajectoryGizmoSettings.ShowHandles)
+            {
+                return;
+            }
+
             Vector3 origin = probe.Origin;
             Vector3 direction = probe.Direction;
             float handleSize = HandleUtility.GetHandleSize(origin);
@@ -277,162 +302,174 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
         private void DrawValidation()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Validation", RPGFoundationEditorUiUtility.ColorWarning, ref s_validationFoldout, () =>
+            RPGFoundationEditorUiUtility.DrawSection("Validation", RPGFoundationEditorUiUtility.ColorWarning, ref s_validationFoldout, _drawValidationSection);
+        }
+
+        private void DrawValidationSection()
+        {
+            bool hasIssue = false;
+
+            if (!HasMixedValues(_queryPreset) && _queryPreset.objectReferenceValue == null)
             {
-                bool hasIssue = false;
+                hasIssue = true;
+                RPGFoundationEditorUiUtility.DrawHelpBox("Assign a Trajectory Query Preset before tracing.", MessageType.Error);
+            }
 
-                if (!HasMixedValues(_queryPreset) && _queryPreset.objectReferenceValue == null)
-                {
-                    hasIssue = true;
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Assign a Trajectory Query Preset before tracing.", MessageType.Error);
-                }
+            if (!HasMixedValues(_localDirection) && _localDirection.vector3Value.sqrMagnitude <= 0.000001f)
+            {
+                RPGFoundationEditorUiUtility.DrawHelpBox("Local Direction is zero. The probe will fall back to transform.forward.", MessageType.Info);
+            }
 
-                if (!HasMixedValues(_localDirection) && _localDirection.vector3Value.sqrMagnitude <= 0.000001f)
-                {
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Local Direction is zero. The probe will fall back to transform.forward.", MessageType.Info);
-                }
+            if (!HasMixedValues(_segmentCapacity) && _segmentCapacity.intValue <= 0)
+            {
+                hasIssue = true;
+                RPGFoundationEditorUiUtility.DrawHelpBox("Segment Capacity must be greater than zero.", MessageType.Error);
+            }
 
-                if (!HasMixedValues(_segmentCapacity) && _segmentCapacity.intValue <= 0)
-                {
-                    hasIssue = true;
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Segment Capacity must be greater than zero.", MessageType.Error);
-                }
+            if (!HasMixedValues(_hitCapacity) && _hitCapacity.intValue <= 0)
+            {
+                hasIssue = true;
+                RPGFoundationEditorUiUtility.DrawHelpBox("Hit Capacity must be greater than zero.", MessageType.Error);
+            }
 
-                if (!HasMixedValues(_hitCapacity) && _hitCapacity.intValue <= 0)
-                {
-                    hasIssue = true;
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Hit Capacity must be greater than zero.", MessageType.Error);
-                }
+            if (!HasMixedValues(_castHitCapacity) && _castHitCapacity.intValue <= 0)
+            {
+                hasIssue = true;
+                RPGFoundationEditorUiUtility.DrawHelpBox("Cast Hit Capacity must be greater than zero.", MessageType.Error);
+            }
 
-                if (!HasMixedValues(_castHitCapacity) && _castHitCapacity.intValue <= 0)
-                {
-                    hasIssue = true;
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Cast Hit Capacity must be greater than zero.", MessageType.Error);
-                }
+            if (!HasMixedValues(_collisionMode) && (TrajectoryCollisionMode)_collisionMode.enumValueIndex == TrajectoryCollisionMode.None)
+            {
+                RPGFoundationEditorUiUtility.DrawHelpBox("Collision Mode is None. The solver will draw the unblocked path only.", MessageType.Info);
+            }
 
-                if (!HasMixedValues(_collisionMode) && (TrajectoryCollisionMode)_collisionMode.enumValueIndex == TrajectoryCollisionMode.None)
-                {
-                    RPGFoundationEditorUiUtility.DrawHelpBox("Collision Mode is None. The solver will draw the unblocked path only.", MessageType.Info);
-                }
-
-                if (!hasIssue)
-                {
-                    RPGFoundationEditorUiUtility.DrawStatusRow("Status", "Ready", RPGFoundationEditorUiUtility.ColorBehavior);
-                }
-            });
+            if (!hasIssue)
+            {
+                RPGFoundationEditorUiUtility.DrawStatusRow("Status", "Ready", RPGFoundationEditorUiUtility.ColorBehavior);
+            }
         }
 
         private void DrawQuery()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Query", RPGFoundationEditorUiUtility.ColorCore, ref s_queryFoldout, () =>
-            {
-                EditorGUILayout.PropertyField(_queryPreset);
-                EditorGUILayout.PropertyField(_originOverride);
-                EditorGUILayout.PropertyField(_localDirection);
-            });
+            RPGFoundationEditorUiUtility.DrawSection("Query", RPGFoundationEditorUiUtility.ColorCore, ref s_queryFoldout, _drawQuerySection);
+        }
+
+        private void DrawQuerySection()
+        {
+            EditorGUILayout.PropertyField(_queryPreset);
+            EditorGUILayout.PropertyField(_originOverride);
+            EditorGUILayout.PropertyField(_localDirection);
         }
 
         private void DrawCollision()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Collision Adapter", RPGFoundationEditorUiUtility.ColorRuntime, ref s_collisionFoldout, () =>
+            RPGFoundationEditorUiUtility.DrawSection("Collision Adapter", RPGFoundationEditorUiUtility.ColorRuntime, ref s_collisionFoldout, _drawCollisionSection);
+        }
+
+        private void DrawCollisionSection()
+        {
+            EditorGUILayout.PropertyField(_collisionMode);
+            EditorGUILayout.PropertyField(_reflectionLayerMask);
+            EditorGUILayout.PropertyField(_pierceLayerMask);
+            EditorGUILayout.PropertyField(_queryTriggerInteraction);
+
+            var probe = (TrajectoryDebugProbe)target;
+            if (_collisionMode.intValue != 0
+                && probe.ReflectionMask.value == 0
+                && probe.PierceMask.value == 0)
             {
-                EditorGUILayout.PropertyField(_collisionMode);
-                EditorGUILayout.PropertyField(_reflectionLayerMask);
-                EditorGUILayout.PropertyField(_pierceLayerMask);
-                EditorGUILayout.PropertyField(_queryTriggerInteraction);
-
-                var probe = (TrajectoryDebugProbe)target;
-                if (_collisionMode.intValue != 0
-                    && probe.ReflectionMask.value == 0
-                    && probe.PierceMask.value == 0)
-                {
-                    RPGFoundationEditorUiUtility.DrawHelpBox(
-                        "Both response masks are empty, so every hit stops the trace. Reflection and pierce budgets in the preset will never be used.",
-                        MessageType.Info);
-                }
-
                 RPGFoundationEditorUiUtility.DrawHelpBox(
-                    "Reflection and Pierce layer masks map Unity hits to TrajectoryHitResponse values. Layers outside these masks stop the trace.",
-                    MessageType.None);
-            });
+                    "Both response masks are empty, so every hit stops the trace. Reflection and pierce budgets in the preset will never be used.",
+                    MessageType.Info);
+            }
+
+            RPGFoundationEditorUiUtility.DrawHelpBox(
+                "Reflection and Pierce layer masks map Unity hits to TrajectoryHitResponse values. Layers outside these masks stop the trace.",
+                MessageType.None);
         }
 
         private void DrawBuffers()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Buffers", RPGFoundationEditorUiUtility.ColorBehavior, ref s_bufferFoldout, () =>
+            RPGFoundationEditorUiUtility.DrawSection("Buffers", RPGFoundationEditorUiUtility.ColorBehavior, ref s_bufferFoldout, _drawBuffersSection);
+        }
+
+        private void DrawBuffersSection()
+        {
+            EditorGUILayout.PropertyField(_segmentCapacity);
+            EditorGUILayout.PropertyField(_hitCapacity);
+            EditorGUILayout.PropertyField(_castHitCapacity);
+
+            var probe = (TrajectoryDebugProbe)target;
+            TrajectoryTraceBuffer buffer = probe.Buffer;
+            RPGFoundationEditorUiUtility.DrawReadOnlyText(
+                "Last usage",
+                "segments " + buffer.SegmentCount + "/" + buffer.SegmentCapacity
+                + "   hits " + buffer.HitCount + "/" + buffer.HitCapacity);
+
+            if (buffer.SegmentCount >= buffer.SegmentCapacity || buffer.HitCount >= buffer.HitCapacity)
             {
-                EditorGUILayout.PropertyField(_segmentCapacity);
-                EditorGUILayout.PropertyField(_hitCapacity);
-                EditorGUILayout.PropertyField(_castHitCapacity);
-
-                var probe = (TrajectoryDebugProbe)target;
-                TrajectoryTraceBuffer buffer = probe.Buffer;
-                RPGFoundationEditorUiUtility.DrawReadOnlyText(
-                    "Last usage",
-                    "segments " + buffer.SegmentCount + "/" + buffer.SegmentCapacity
-                    + "   hits " + buffer.HitCount + "/" + buffer.HitCapacity);
-
-                if (buffer.SegmentCount >= buffer.SegmentCapacity || buffer.HitCount >= buffer.HitCapacity)
-                {
-                    RPGFoundationEditorUiUtility.DrawHelpBox(
-                        "The last trace filled a buffer. Raise the capacity or the result is truncated with a capacity flag.",
-                        MessageType.Warning);
-                }
-
                 RPGFoundationEditorUiUtility.DrawHelpBox(
-                    "These capacities allocate reusable editor/runtime buffers. Increase them for multi-bounce beams, pierce chains, or dense scenes.",
-                    MessageType.None);
-            });
+                    "The last trace filled a buffer. Raise the capacity or the result is truncated with a capacity flag.",
+                    MessageType.Warning);
+            }
+
+            RPGFoundationEditorUiUtility.DrawHelpBox(
+                "These capacities allocate reusable editor/runtime buffers. Increase them for multi-bounce beams, pierce chains, or dense scenes.",
+                MessageType.None);
         }
 
         private void DrawPreview()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Scene Preview", RPGFoundationEditorUiUtility.ColorDebug, ref s_previewFoldout, () =>
-            {
-                EditorGUILayout.PropertyField(_drawScenePreview);
-                EditorGUILayout.PropertyField(_segmentColor);
-                EditorGUILayout.PropertyField(_reflectionColor);
-                EditorGUILayout.PropertyField(_pierceColor);
-                EditorGUILayout.PropertyField(_hitColor);
-                EditorGUILayout.PropertyField(_normalColor);
-            });
+            RPGFoundationEditorUiUtility.DrawSection("Scene Preview", RPGFoundationEditorUiUtility.ColorDebug, ref s_previewFoldout, _drawScenePreviewSection);
+        }
+
+        private void DrawScenePreviewSection()
+        {
+            EditorGUILayout.PropertyField(_drawScenePreview);
+            EditorGUILayout.PropertyField(_segmentColor);
+            EditorGUILayout.PropertyField(_reflectionColor);
+            EditorGUILayout.PropertyField(_pierceColor);
+            EditorGUILayout.PropertyField(_hitColor);
+            EditorGUILayout.PropertyField(_normalColor);
         }
 
         private void DrawTraceResult()
         {
-            RPGFoundationEditorUiUtility.DrawSection("Trace Result", RPGFoundationEditorUiUtility.ColorDebug, ref s_resultFoldout, () =>
+            RPGFoundationEditorUiUtility.DrawSection("Trace Result", RPGFoundationEditorUiUtility.ColorDebug, ref s_resultFoldout, _drawTraceResultSection);
+        }
+
+        private void DrawTraceResultSection()
+        {
+            var probe = (TrajectoryDebugProbe)target;
+
+            if (!_hasCachedResult && !probe.TryTrace(out _cachedResult))
             {
-                var probe = (TrajectoryDebugProbe)target;
+                RPGFoundationEditorUiUtility.DrawHelpBox("No trace result. Assign a preset and make sure the query is valid.", MessageType.Info);
+                return;
+            }
 
-                if (!_hasCachedResult && !probe.TryTrace(out _cachedResult))
-                {
-                    RPGFoundationEditorUiUtility.DrawHelpBox("No trace result. Assign a preset and make sure the query is valid.", MessageType.Info);
-                    return;
-                }
+            _hasCachedResult = true;
 
-                _hasCachedResult = true;
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Flags", _cachedResult.Flags.ToString());
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Segments", _cachedResult.SegmentCount.ToString());
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Hits", _cachedResult.HitCount.ToString());
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Travel Distance", _cachedResult.TravelDistance.ToString("F3"));
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("End Position", FormatVector(_cachedResult.EndPosition));
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Nearest Hit", _cachedResult.NearestHitIndex.ToString());
+            RPGFoundationEditorUiUtility.DrawReadOnlyText("Trace Time", _lastTraceMs.ToString("F4") + " ms");
 
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Flags", _cachedResult.Flags.ToString());
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Segments", _cachedResult.SegmentCount.ToString());
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Hits", _cachedResult.HitCount.ToString());
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Travel Distance", _cachedResult.TravelDistance.ToString("F3"));
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("End Position", FormatVector(_cachedResult.EndPosition));
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Nearest Hit", _cachedResult.NearestHitIndex.ToString());
-                RPGFoundationEditorUiUtility.DrawReadOnlyText("Trace Time", _lastTraceMs.ToString("F4") + " ms");
-
-                TrajectoryTraceBuffer buffer = probe.Buffer;
-                for (int i = 0; i < buffer.HitCount; i++)
-                {
-                    TrajectoryHit hit = buffer.GetHit(i);
-                    RPGFoundationEditorUiUtility.DrawReadOnlyText(
-                        "Hit " + i,
-                        "#" + hit.SegmentIndex
-                        + "  d=" + hit.Distance.ToString("F2")
-                        + "  " + hit.Response
-                        + "  p=" + FormatVector(hit.Position)
-                        + "  n=" + FormatVector(hit.Normal));
-                }
-            });
+            TrajectoryTraceBuffer buffer = probe.Buffer;
+            for (int i = 0; i < buffer.HitCount; i++)
+            {
+                TrajectoryHit hit = buffer.GetHit(i);
+                RPGFoundationEditorUiUtility.DrawReadOnlyText(
+                    "Hit " + i,
+                    "#" + hit.SegmentIndex
+                    + "  d=" + hit.Distance.ToString("F2")
+                    + "  " + hit.Response
+                    + "  p=" + FormatVector(hit.Position)
+                    + "  n=" + FormatVector(hit.Normal));
+            }
         }
 
         /// <summary>
@@ -635,6 +672,14 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             TrajectoryTraceBuffer buffer = probe.Buffer;
 
             DrawSweepVolumes(probe, buffer);
+
+            // Read the view preferences once per draw. They live in static memory, so these reads
+            // are free; the previous version performed EditorPrefs I/O on every toggle.
+            bool showSegments = TrajectoryGizmoSettings.ShowSegments;
+            bool showHits = TrajectoryGizmoSettings.ShowHits;
+            bool showNormals = TrajectoryGizmoSettings.ShowNormals;
+            bool showLabels = TrajectoryGizmoSettings.ShowLabels;
+
             for (int i = 0; i < buffer.SegmentCount; i++)
             {
                 TrajectorySegment segment = buffer.GetSegment(i);
@@ -652,10 +697,13 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
                     }
                 }
 
-                Handles.color = color;
-                Handles.DrawLine(ToVector3(segment.From), ToVector3(segment.To));
+                if (showSegments)
+                {
+                    Handles.color = color;
+                    Handles.DrawLine(ToVector3(segment.From), ToVector3(segment.To));
+                }
 
-                if (i == 0)
+                if (i == 0 && showLabels)
                 {
                     Handles.Label(ToVector3(segment.From), "origin", EditorStyles.miniLabel);
                 }
@@ -666,18 +714,27 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
                 TrajectoryHit hit = buffer.GetHit(i);
                 Vector3 position = ToVector3(hit.Position);
                 float handleSize = HandleUtility.GetHandleSize(position);
-                Vector3 normalEnd = position + ToVector3(hit.Normal).normalized * (handleSize * 0.6f);
 
-                Handles.color = probe.PreviewHitColor;
-                Handles.SphereHandleCap(0, position, Quaternion.identity, handleSize * 0.08f, EventType.Repaint);
+                if (showHits)
+                {
+                    Handles.color = probe.PreviewHitColor;
+                    Handles.SphereHandleCap(0, position, Quaternion.identity, handleSize * 0.08f, EventType.Repaint);
+                }
 
-                Handles.color = probe.PreviewNormalColor;
-                Handles.DrawLine(position, normalEnd);
+                if (showNormals)
+                {
+                    Vector3 normalEnd = position + ToVector3(hit.Normal).normalized * (handleSize * 0.6f);
+                    Handles.color = probe.PreviewNormalColor;
+                    Handles.DrawLine(position, normalEnd);
+                }
 
-                Handles.Label(
-                    position + Vector3.up * (handleSize * 0.12f),
-                    "#" + i + " " + hit.Distance.ToString("F2") + " " + hit.Response,
-                    EditorStyles.miniLabel);
+                if (showLabels)
+                {
+                    Handles.Label(
+                        position + Vector3.up * (handleSize * 0.12f),
+                        "#" + i + " " + hit.Distance.ToString("F2") + " " + hit.Response,
+                        EditorStyles.miniLabel);
+                }
             }
         }
 

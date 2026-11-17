@@ -26,6 +26,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         ///
         /// <see cref="TrajectoryCollisionWorldConformance.VerifySweep"/> exercises the observable parts
         /// of this contract.
+        ///
+        /// Identity contract: implementations must be plain C# objects, or be wrapped by a Runtime
+        /// adapter that checks Unity's fake-null. A destroyed UnityEngine.Object still compares as
+        /// non-null when held through this interface, so passing one directly would bypass the
+        /// solver's <c>collisionWorld == null</c> check and dispatch into a destroyed object.
         /// </summary>
         int Cast(
             in TrajectoryCastQuery query,

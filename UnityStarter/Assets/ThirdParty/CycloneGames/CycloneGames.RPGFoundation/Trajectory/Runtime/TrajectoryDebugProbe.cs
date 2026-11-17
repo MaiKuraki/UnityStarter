@@ -179,6 +179,14 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             EnsureBuffer();
             EnsureCollisionWorld();
 
+            // A custom adapter can be a MonoBehaviour. An interface reference comparison cannot see
+            // Unity's fake-null for a destroyed object, so check the Unity object explicitly before
+            // dispatching. This mirrors the identity contract documented on ITrajectoryCollisionWorld.
+            if (_collisionWorld is UnityEngine.Object unityAdapter && unityAdapter == null)
+            {
+                return false;
+            }
+
             TrajectoryQuery query = QueryPreset.BuildQuery(
                 traceId: unchecked((int)UnityObjectId.Of(this)),
                 ownerEntityId: 0UL,

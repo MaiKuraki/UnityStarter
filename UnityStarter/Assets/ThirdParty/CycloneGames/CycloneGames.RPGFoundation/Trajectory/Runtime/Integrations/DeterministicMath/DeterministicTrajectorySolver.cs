@@ -4,8 +4,18 @@ using CycloneGames.RPGFoundation.Trajectory.Core;
 
 namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 {
+    /// <summary>
+    /// Fixed-point counterpart of <see cref="TrajectorySolver"/>. Behaviour is kept in lockstep with
+    /// the float Core: nearest-hit selection with a deterministic tie-break and pierce repeat
+    /// suppression, atomic hit/segment commit, scratch clearing, an untrusted-position fallback,
+    /// a bounded iteration budget and NearestHitIndex all mirror the float implementation. Only the
+    /// arithmetic type differs.
+    /// </summary>
     public static class DeterministicTrajectorySolver
     {
+        /// <summary>Recent pierce hits inspected by the repeat filter. Mirrors the float Core.</summary>
+        private const int PIERCE_HISTORY_WINDOW = 8;
+
         public static DeterministicTrajectoryTraceResult Trace(
             in DeterministicTrajectoryQuery query,
             IDeterministicTrajectoryCollisionWorld collisionWorld,
@@ -44,12 +54,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             {
                 endPosition = query.Origin + direction * query.MaxDistance;
                 TrajectoryTraceFlags flags = TryAddSegment(
-                    buffer,
-                    query.Origin,
-                    endPosition,
-                    direction,
-                    query.MaxDistance,
-                    -1);
+                    buffer, query.Origin, endPosition, direction, query.MaxDistance, -1, out _);
 
                 return new DeterministicTrajectoryTraceResult(
                     flags | TrajectoryTraceFlags.MissingCollisionWorld,
@@ -77,17 +82,15 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             int remainingPierces = query.MaxPierceCount;
             ulong ignoredTargetEntityId = query.InitialIgnoredTargetEntityId;
             ulong ignoredTargetObjectId = query.InitialIgnoredTargetObjectId;
+            int nearestHitIndex = -1;
+            bool hasNearestHit = false;
+            FPInt64 nearestPathDistance = FPInt64.Zero;
 
             for (int iteration = 0; iteration < query.MaxIterationCount; iteration++)
             {
                 if (remainingDistance.RawValue <= 0)
                 {
-                    return new DeterministicTrajectoryTraceResult(
-                        flags,
-                        buffer.SegmentCount,
-                        buffer.HitCount,
-                        travelDistance,
-                        endPosition);
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                 }
 
                 FPVector3 to = from + direction * remainingDistance;
@@ -102,23 +105,66 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
                     to,
                     direction,
                     ignoredTargetEntityId,
-                    ignoredTargetObjectId);
+                    ignoredTargetObjectId,
+                    query.Shape,
+                    query.Height,
+                    query.HalfExtents);
 
-                int hitCount = collisionWorld.Cast(
-                    in castQuery,
-                    buffer.CastHits);
+                int hitCount = collisionWorld.Cast(in castQuery, buffer.CastHits);
 
-                if (hitCount <= 0 || !TrySelectNearestHit(buffer.CastHits, hitCount, out DeterministicTrajectoryHit hit))
+                // Remember what the adapter claims it wrote so the next Clear wipes exactly that
+                // range. A count above capacity is clamped; the read loop clamps as well.
+                buffer.MarkCastHitsWritten(hitCount);
+
+                if (hitCount <= 0 || !TrySelectNearestHit(
+                        buffer.CastHits,
+                        hitCount,
+                        buffer.Hits,
+                        buffer.HitCount,
+                        out DeterministicTrajectoryHit hit))
                 {
-                    flags |= TryAddSegment(buffer, from, to, direction, remainingDistance, -1);
-                    travelDistance += remainingDistance;
-                    endPosition = to;
-                    return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+                    TrajectoryTraceFlags segmentFlags = TryAddSegment(
+                        buffer, from, to, direction, remainingDistance, -1, out _);
+                    flags |= segmentFlags;
+
+                    // TravelDistance accounts for recorded segments only. When the final segment
+                    // cannot be stored, claiming the remaining distance would make the result
+                    // disagree with the buffer.
+                    if ((segmentFlags & TrajectoryTraceFlags.SegmentCapacityReached) == 0)
+                    {
+                        travelDistance += remainingDistance;
+                        endPosition = to;
+                    }
+
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                 }
 
                 FPInt64 hitDistance = ClampDistance(hit.Distance, remainingDistance);
-                FPVector3 hitPosition = hit.Position;
+                FPVector3 hitPosition = ResolveHitPosition(from, direction, hit, hitDistance);
+
+                // Commit the hit and its segment together. Checking both capacities before writing
+                // keeps HitCount <= SegmentCount and makes every hit's SegmentIndex resolvable.
+                if (buffer.HitCount >= buffer.HitCapacity)
+                {
+                    flags |= TrajectoryTraceFlags.HitCapacityReached;
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
+                }
+
+                if (buffer.SegmentCount >= buffer.SegmentCapacity)
+                {
+                    flags |= TrajectoryTraceFlags.SegmentCapacityReached;
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
+                }
+
                 int hitIndex = buffer.HitCount;
+                TrajectoryTraceFlags addSegmentFlags = TryAddSegment(
+                    buffer, from, hitPosition, direction, hitDistance, hitIndex, out int segmentIndex);
+                flags |= addSegmentFlags;
+                if ((addSegmentFlags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
+                {
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
+                }
+
                 var storedHit = new DeterministicTrajectoryHit(
                     hit.TargetEntityId,
                     hit.TargetObjectId,
@@ -127,27 +173,28 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
                     hitPosition,
                     hit.Normal,
                     hit.Response,
-                    buffer.SegmentCount);
+                    segmentIndex);
 
                 if (!buffer.TryAddHit(in storedHit))
                 {
                     flags |= TrajectoryTraceFlags.HitCapacityReached;
-                    return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
-                }
-
-                flags |= TryAddSegment(buffer, from, hitPosition, direction, hitDistance, hitIndex);
-                if ((flags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
-                {
-                    return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                 }
 
                 travelDistance += hitDistance;
                 endPosition = hitPosition;
 
+                if (!hasNearestHit || travelDistance < nearestPathDistance)
+                {
+                    nearestPathDistance = travelDistance;
+                    nearestHitIndex = hitIndex;
+                    hasNearestHit = true;
+                }
+
                 if (buffer.HitCount >= query.MaxHitCount)
                 {
                     flags |= TrajectoryTraceFlags.MaxHitCountReached;
-                    return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+                    return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                 }
 
                 if (storedHit.Response == TrajectoryHitResponse.Reflect && remainingReflections > 0)
@@ -156,7 +203,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
                     FPVector3 reflected = NormalizeOrZero(Reflect(direction, normal));
                     if (normal.SqrMagnitude.RawValue == 0 || reflected.SqrMagnitude.RawValue == 0)
                     {
-                        return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+                        return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
                     }
 
                     remainingReflections--;
@@ -178,11 +225,27 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
                     continue;
                 }
 
-                return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+                return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
             }
 
             flags |= TrajectoryTraceFlags.IterationLimitReached;
-            return new DeterministicTrajectoryTraceResult(flags, buffer.SegmentCount, buffer.HitCount, travelDistance, endPosition);
+            return Build(flags, buffer, travelDistance, endPosition, nearestHitIndex);
+        }
+
+        private static DeterministicTrajectoryTraceResult Build(
+            TrajectoryTraceFlags flags,
+            DeterministicTrajectoryTraceBuffer buffer,
+            FPInt64 travelDistance,
+            FPVector3 endPosition,
+            int nearestHitIndex)
+        {
+            return new DeterministicTrajectoryTraceResult(
+                flags,
+                buffer.SegmentCount,
+                buffer.HitCount,
+                travelDistance,
+                endPosition,
+                nearestHitIndex);
         }
 
         private static TrajectoryTraceFlags TryAddSegment(
@@ -191,10 +254,12 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             FPVector3 to,
             FPVector3 direction,
             FPInt64 distance,
-            int hitIndex)
+            int hitIndex,
+            out int segmentIndex)
         {
+            segmentIndex = buffer.SegmentCount;
             var segment = new DeterministicTrajectorySegment(
-                buffer.SegmentCount,
+                segmentIndex,
                 hitIndex,
                 from,
                 to,
@@ -209,6 +274,8 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
         private static bool TrySelectNearestHit(
             DeterministicTrajectoryHit[] hits,
             int hitCount,
+            DeterministicTrajectoryHit[] recordedHits,
+            int recordedHitCount,
             out DeterministicTrajectoryHit selected)
         {
             selected = default;
@@ -216,15 +283,27 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             FPInt64 bestDistance = FPInt64.Zero;
             int limit = Math.Min(hitCount, hits.Length);
 
+            // Resolve the pierce history once instead of per candidate: the common Stop/Reflect
+            // traces have no pierce history and pay nothing for the filter.
+            bool filterPiercedTargets = HasPierceHistory(recordedHits, recordedHitCount);
+
             for (int i = 0; i < limit; i++)
             {
                 DeterministicTrajectoryHit hit = hits[i];
-                if (!hit.IsValid)
+                if (!hit.IsValid || !IsKnownResponse(hit.Response))
                 {
                     continue;
                 }
 
-                if (!hasSelected || hit.Distance < bestDistance || (hit.Distance == bestDistance && IsDeterministicTieBreak(hit, selected)))
+                // A pierce continuation must not re-hit a target that a previous pierce already
+                // passed through. Reflection deliberately skips this filter.
+                if (filterPiercedTargets && IsPiercedTargetRepeat(hit, recordedHits, recordedHitCount))
+                {
+                    continue;
+                }
+
+                if (!hasSelected || hit.Distance < bestDistance
+                    || (hit.Distance == bestDistance && IsDeterministicTieBreak(hit, selected)))
                 {
                     selected = hit;
                     bestDistance = hit.Distance;
@@ -233,6 +312,67 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             }
 
             return hasSelected;
+        }
+
+        private static bool HasPierceHistory(
+            DeterministicTrajectoryHit[] recordedHits,
+            int recordedHitCount)
+        {
+            int limit = Math.Min(recordedHitCount, recordedHits.Length);
+            int first = limit - PIERCE_HISTORY_WINDOW;
+            if (first < 0)
+            {
+                first = 0;
+            }
+
+            for (int i = first; i < limit; i++)
+            {
+                if (recordedHits[i].Response == TrajectoryHitResponse.Pierce)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsPiercedTargetRepeat(
+            in DeterministicTrajectoryHit candidate,
+            DeterministicTrajectoryHit[] recordedHits,
+            int recordedHitCount)
+        {
+            if (candidate.TargetEntityId == 0UL && candidate.TargetObjectId == 0UL)
+            {
+                return false;
+            }
+
+            int limit = Math.Min(recordedHitCount, recordedHits.Length);
+            int first = limit - PIERCE_HISTORY_WINDOW;
+            if (first < 0)
+            {
+                first = 0;
+            }
+
+            for (int i = first; i < limit; i++)
+            {
+                DeterministicTrajectoryHit previous = recordedHits[i];
+                if (previous.Response != TrajectoryHitResponse.Pierce)
+                {
+                    continue;
+                }
+
+                if (candidate.TargetEntityId != 0UL && previous.TargetEntityId == candidate.TargetEntityId)
+                {
+                    return true;
+                }
+
+                if (candidate.TargetObjectId != 0UL && previous.TargetObjectId == candidate.TargetObjectId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsDeterministicTieBreak(
@@ -247,6 +387,52 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 
             return candidate.TargetObjectId != 0
                 && (current.TargetObjectId == 0 || candidate.TargetObjectId < current.TargetObjectId);
+        }
+
+        private static bool IsKnownResponse(TrajectoryHitResponse response)
+        {
+            return (uint)response <= (uint)TrajectoryHitResponse.Pierce;
+        }
+
+        /// <summary>
+        /// Counterpart of TrajectorySolver.ResolveHitPosition. The reported position is untrusted:
+        /// accept it only when it agrees with From + Direction * Distance. Comparisons use raw
+        /// Q32.32 units in linear space, so no squaring can overflow.
+        /// </summary>
+        private static FPVector3 ResolveHitPosition(
+            FPVector3 from,
+            FPVector3 direction,
+            in DeterministicTrajectoryHit hit,
+            FPInt64 hitDistance)
+        {
+            FPVector3 expected = from + direction * hitDistance;
+
+            long tolerance = hitDistance.RawValue / 1000L;
+            long minimum = FPInt64.FromFloat(0.0001f).RawValue;
+            if (tolerance < minimum)
+            {
+                tolerance = minimum;
+            }
+
+            FPVector3 error = hit.Position - expected;
+            if (AbsRaw(error.X.RawValue) <= tolerance
+                && AbsRaw(error.Y.RawValue) <= tolerance
+                && AbsRaw(error.Z.RawValue) <= tolerance)
+            {
+                return hit.Position;
+            }
+
+            return expected;
+        }
+
+        private static long AbsRaw(long value)
+        {
+            if (value == long.MinValue)
+            {
+                return long.MaxValue;
+            }
+
+            return value < 0L ? -value : value;
         }
 
         private static FPInt64 ClampDistance(FPInt64 distance, FPInt64 maxDistance)

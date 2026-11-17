@@ -132,9 +132,19 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                         buffer.HitCount,
                         out TrajectoryHit hit))
                 {
-                    flags |= TryAddSegment(buffer, from, to, direction, remainingDistance, -1, out _);
-                    travelDistance += remainingDistance;
-                    endPosition = to;
+                    TrajectoryTraceFlags segmentFlags = TryAddSegment(
+                        buffer, from, to, direction, remainingDistance, -1, out _);
+                    flags |= segmentFlags;
+
+                    // TravelDistance accounts for recorded segments only. When the final segment
+                    // cannot be stored, claiming the remaining distance would make the result
+                    // disagree with the buffer.
+                    if ((segmentFlags & TrajectoryTraceFlags.SegmentCapacityReached) == 0)
+                    {
+                        travelDistance += remainingDistance;
+                        endPosition = to;
+                    }
+
                     return new TrajectoryTraceResult(
                         flags,
                         buffer.SegmentCount,

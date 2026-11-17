@@ -75,9 +75,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             get
             {
                 return CollisionLayerMask != 0
-                    && Origin.IsFinite
-                    && Direction.IsFinite
-                    && Direction.LengthSquared > 0.000001f
+                && Origin.IsFinite
+                && Direction.IsFinite
+                && IsFinite(Direction.LengthSquared)
+                && Direction.LengthSquared > 0.000001f
                     && MaxDistance > 0f
                     && Radius >= 0f
                     && MaxReflectionCount >= 0
@@ -87,8 +88,8 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                     && SurfaceOffset >= 0f
                     && IsFinite(MaxDistance)
                     && IsFinite(Radius)
-                    && IsFinite(SurfaceOffset)
-                    && IsShapeValid();
+                && IsFinite(SurfaceOffset)
+                && HasValidShape();
             }
         }
 
@@ -218,22 +219,44 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                 halfExtents: halfExtents);
         }
 
-        private bool IsShapeValid()
+        /// <summary>
+        /// Single source of truth for shape validity. <see cref="IsValid"/>,
+        /// <see cref="TrajectoryQueryValidator"/> and <see cref="TrajectoryPolylineSolver"/> all use
+        /// these helpers, so the three gates cannot drift apart.
+        /// </summary>
+        internal bool HasValidShape()
         {
             switch (Shape)
             {
                 case TrajectoryShape.Ray:
                     return true;
                 case TrajectoryShape.Sphere:
-                    return Radius > 0f;
+                    return IsSphereShapeValid(Radius);
                 case TrajectoryShape.Capsule:
-                    return Radius > 0f && IsFinite(Height) && Height >= Radius * 2f;
+                    return IsCapsuleShapeValid(Radius, Height);
                 case TrajectoryShape.Box:
-                    return IsFinite(HalfExtents.X) && IsFinite(HalfExtents.Y) && IsFinite(HalfExtents.Z)
-                        && HalfExtents.X > 0f && HalfExtents.Y > 0f && HalfExtents.Z > 0f;
+                    return IsBoxShapeValid(HalfExtents);
                 default:
                     return false;
             }
+        }
+
+        internal static bool IsSphereShapeValid(float radius)
+        {
+            return IsFinite(radius) && radius > 0f;
+        }
+
+        internal static bool IsCapsuleShapeValid(float radius, float height)
+        {
+            return IsFinite(radius) && radius > 0f && IsFinite(height) && height >= radius * 2f;
+        }
+
+        internal static bool IsBoxShapeValid(TrajectoryVector3 halfExtents)
+        {
+            return halfExtents.IsFinite
+                && halfExtents.X > 0f
+                && halfExtents.Y > 0f
+                && halfExtents.Z > 0f;
         }
 
         private static bool IsFinite(float value)

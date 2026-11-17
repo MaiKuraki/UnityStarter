@@ -239,13 +239,15 @@ Lockstep 或 rollback 玩法使用 `DeterministicMath` integration（`FPVector3`
 
 仅当 UPM 解析到 `com.cyclone-games.deterministic-math` `1.x` 时启用。Integration asmdef 生成并消费 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`，使用 `autoReferenced: false`，且必须由 consumer 显式引用。不要在 PlayerSettings 中添加 capability symbol。没有受支持 package 时，只排除该 integration 及其 test assembly。该 integration 用 `FPVector3` 和 `FPInt64` 镜像 query、buffer、hit、segment 和 solver 模型。
 
+定点 solver 与 float Core 的求解语义保持一致：最近命中 tie-break、pierce 重复抑制、cast scratch 清除、hit/segment 原子提交、不可信 position 回退以及 `NearestHitIndex`。四种扫掠体都可通过 `DeterministicTrajectoryQuery.CreateRay`、`DeterministicTrajectoryQuery.CreateSweep`、`DeterministicTrajectoryQuery.CreateCapsule` 和 `DeterministicTrajectoryQuery.CreateBox` 构造；`DeterministicTrajectoryCastQuery` 会把 `Shape` / `Height` / `HalfExtents` 转发给定点碰撞世界。
+
 ### Editor 工具
 
 `TrajectoryQueryPresetAsset` 保存可复用 authoring data，提供 Hitscan、Ricochet Beam、Piercing Beam、Capsule、Box preset。`TrajectoryDebugProbe` 在 Scene View 中预览 segment、hit point 和 normal，并提供可拖拽的 origin / aim / radius 句柄与 Undo 支持。两者均可被继承；自定义 Inspector 先绘制已知字段，再绘制未处理的业务子类字段。
 
 `Tools/CycloneGames/Trajectory/Workbench` 打开场景级窗口：列出所有 probe、以表格展示已记录的 segment 与 hit、解释 trace flags、对所有 probe 全量重 trace 并计时、一键套用形状预设。扫描由手动触发，不会每帧运行。
 
-场景显示开关（segments / hits / normals / labels / handles / idle indicator）位于 `TrajectoryGizmoSettings`，属于视图偏好而非模块配置。未选中的 probe 只画一条低成本指示线；完整路径仅在选中时追踪。
+场景显示开关（segments / hits / normals / labels / handles / idle indicator）位于 `TrajectoryGizmoSettings`，属于视图偏好而非模块配置。真相源是显式、可审查的文件 `ProjectSettings/CycloneGames.TrajectoryGizmoSettings.json`（见 `TrajectoryGizmoSettings.SettingsFileRelativePath`）；Workbench 展示该路径、显示文件错误，并提供 Reload / Reset / Reveal。不会写入 EditorPrefs、PlayerPrefs 或 SessionState。未选中的 probe 只画一条低成本指示线；完整路径仅在选中时追踪。
 
 ## 常见场景
 

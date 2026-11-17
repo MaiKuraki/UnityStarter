@@ -240,13 +240,15 @@ For lockstep or rollback, use the `DeterministicMath` integration with `FPVector
 
 Enabled only when UPM resolves `com.cyclone-games.deterministic-math` `1.x`. The integration asmdef generates and consumes `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, uses `autoReferenced: false`, and must be referenced explicitly by the consumer. Do not add the capability symbol to PlayerSettings. Without a supported package, only this integration and its test assembly are excluded. It mirrors the query, buffer, hit, segment, and solver model with `FPVector3` and `FPInt64`.
 
+The fixed-point solver matches the float Core's solver semantics: nearest-hit tie-break, pierce repeat suppression, cast-scratch clearing, atomic hit/segment commit, untrusted-position fallback and `NearestHitIndex`. All four sweep volumes are available through `DeterministicTrajectoryQuery.CreateRay`, `DeterministicTrajectoryQuery.CreateSweep`, `DeterministicTrajectoryQuery.CreateCapsule` and `DeterministicTrajectoryQuery.CreateBox`; `DeterministicTrajectoryCastQuery` forwards `Shape` / `Height` / `HalfExtents` to the fixed-point collision world.
+
 ### Editor Tooling
 
 `TrajectoryQueryPresetAsset` stores reusable authoring data with presets (Hitscan, Ricochet Beam, Piercing Beam, Capsule, Box). `TrajectoryDebugProbe` previews segments, hit points, and normals in the Scene View, with draggable origin / aim / radius handles and Undo support. Both are inheritable; custom inspectors draw known fields first, then unhandled derived fields.
 
 `Tools/CycloneGames/Trajectory/Workbench` opens a scene-wide window: it lists every probe, shows the recorded segments and hits as tables, explains trace flags, times a full re-trace across all probes, and applies preset shapes. The scan is manual, so nothing runs per editor frame.
 
-Scene display toggles (segments / hits / normals / labels / handles / idle indicator) live in `TrajectoryGizmoSettings`. They are view preferences, not module configuration. Unselected probes draw a cheap indicator line only; the full path is traced while the probe is selected.
+Scene display toggles (segments / hits / normals / labels / handles / idle indicator) live in `TrajectoryGizmoSettings`. They are view preferences, not module configuration. The source of truth is the explicit, reviewable file `ProjectSettings/CycloneGames.TrajectoryGizmoSettings.json` (see `TrajectoryGizmoSettings.SettingsFileRelativePath`); the Workbench shows the path, surfaces file errors, and offers Reload / Reset / Reveal. Nothing is written to EditorPrefs, PlayerPrefs or SessionState. Unselected probes draw a cheap indicator line only; the full path is traced while the probe is selected.
 
 ## Common Scenarios
 

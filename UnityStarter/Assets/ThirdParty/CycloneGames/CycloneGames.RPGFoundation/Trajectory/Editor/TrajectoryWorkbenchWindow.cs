@@ -27,6 +27,12 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
         private bool _showHits = true;
         private bool _showSettings = true;
 
+        // A trace is recomputed only when its inputs can have changed. OnGUI runs for Layout,
+        // Repaint and every input event, so tracing there would issue a physics query per event.
+        private TrajectoryDebugProbe _cachedProbe;
+        private TrajectoryTraceResult _cachedResult;
+        private bool _hasCachedTrace;
+
         private double _lastTraceAllMs;
         private int _lastTraceAllCount;
         private double _lastTraceAllMaxMs;
@@ -68,6 +74,19 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             {
                 _selectedIndex = _probes.Length - 1;
             }
+
+            InvalidateTraceCache();
+        }
+
+        /// <summary>
+        /// Drops the cached trace. Called only when the inputs can have changed (scene scan,
+        /// selection change, preset edit, explicit re-trace), so OnGUI never issues a physics query
+        /// on every repaint.
+        /// </summary>
+        private void InvalidateTraceCache()
+        {
+            _hasCachedTrace = false;
+            _cachedProbe = null;
         }
 
         /// <summary>
@@ -136,6 +155,33 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
                     TrajectoryGizmoSettings.DrawMenuItems();
+
+                    EditorGUILayout.LabelField(
+                        "Settings file: " + TrajectoryGizmoSettings.SettingsFileRelativePath,
+                        EditorStyles.miniLabel);
+                    string settingsError = TrajectoryGizmoSettings.LastLoadError;
+                    if (!string.IsNullOrEmpty(settingsError))
+                    {
+                        EditorGUILayout.HelpBox("Settings file error: " + settingsError, MessageType.Warning);
+                    }
+
+                    EditorGUILayout.BeginHorizontal();
+                    if (GUILayout.Button("Reload from file", EditorStyles.miniButton))
+                    {
+                        TrajectoryGizmoSettings.ReloadFromDisk();
+                    }
+
+                    if (GUILayout.Button("Reset to defaults", EditorStyles.miniButton))
+                    {
+                        TrajectoryGizmoSettings.ResetToDefaults();
+                    }
+
+                    if (GUILayout.Button("Reveal file", EditorStyles.miniButton))
+                    {
+                        EditorUtility.RevealInFinder(TrajectoryGizmoSettings.SettingsFilePath);
+                    }
+
+                    EditorGUILayout.EndHorizontal();
                 }
             }
 
@@ -187,6 +233,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
                 if (GUILayout.Toggle(selected, _probeLabels[i], EditorStyles.miniButton) != selected)
                 {
                     _selectedIndex = i;
+                    InvalidateTraceCache();
                     if (_probes[i] != null)
                     {
                         Selection.activeGameObject = _probes[i].gameObject;
@@ -266,11 +313,29 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
 
         private void DrawTraceDetails(TrajectoryDebugProbe probe)
         {
-            if (!probe.TryTrace(out TrajectoryTraceResult result))
+            if (!_hasCachedTrace || _cachedProbe != probe)
             {
-                EditorGUILayout.HelpBox("Trace failed: assign a preset and make sure the query is valid.", MessageType.Warning);
-                return;
+                if (!probe.TryTrace(out _cachedResult))
+                {
+                    _hasCachedTrace = false;
+                    EditorGUILayout.HelpBox("Trace failed: assign a preset and make sure the query is valid.", MessageType.Warning);
+                    return;
+                }
+
+                _cachedProbe = probe;
+                _hasCachedTrace = true;
             }
+
+            TrajectoryTraceResult result = _cachedResult;
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Trace details (cached)", EditorStyles.miniLabel);
+            if (GUILayout.Button("Re-trace selected", EditorStyles.miniButton))
+            {
+                InvalidateTraceCache();
+            }
+
+            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.LabelField("Flags", result.Flags.ToString());
             EditorGUILayout.LabelField(
@@ -419,9 +484,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             _lastTraceAllMaxMs = max;
             Log.Info("[Trajectory Workbench] traced " + traced + " probes, sum " + sum.ToString("F3")
                      + " ms, max " + max.ToString("F3") + " ms");
+
+            InvalidateTraceCache();
         }
 
-        private static void ApplyPreset(
+        private void ApplyPreset(
             TrajectoryDebugProbe probe,
             float maxDistance,
             TrajectoryShape shape,
@@ -449,9 +516,23 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             SetInt(serialized, "MaxPierceCount", pierceCount);
             SetInt(serialized, "MaxHitCount", hitCount);
             SetInt(serialized, "MaxIterationCount", iterationCount);
+            SetFloat(serialized, "SurfaceOffset", TrajectoryQuery.DEFAULT_SURFACE_OFFSET);
+
+            SerializedProperty layerMask = serialized.FindProperty("CollisionLayerMask");
+            if (layerMask != null)
+            {
+                layerMask.intValue = -1;
+            }
+
+            SerializedProperty halfExtents = serialized.FindProperty("HalfExtents");
+            if (halfExtents != null)
+            {
+                halfExtents.vector3Value = new Vector3(0.5f, 0.5f, 0.5f);
+            }
 
             serialized.ApplyModifiedProperties();
             EditorUtility.SetDirty(preset);
+            InvalidateTraceCache();
         }
 
         private static void SetFloat(SerializedObject serialized, string propertyName, float value)

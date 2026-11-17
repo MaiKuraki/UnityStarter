@@ -1,4 +1,5 @@
 using CycloneGames.DeterministicMath;
+using CycloneGames.RPGFoundation.Trajectory.Core;
 
 namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 {
@@ -15,6 +16,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
         public readonly FPVector3 Direction;
         public readonly ulong IgnoredTargetEntityId;
         public readonly ulong IgnoredTargetObjectId;
+        public readonly TrajectoryShape Shape;
+        public readonly FPInt64 Height;
+        public readonly FPVector3 HalfExtents;
 
         public DeterministicTrajectoryCastQuery(
             int traceId,
@@ -27,7 +31,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             FPVector3 to,
             FPVector3 direction,
             ulong ignoredTargetEntityId,
-            ulong ignoredTargetObjectId)
+            ulong ignoredTargetObjectId,
+            TrajectoryShape shape = TrajectoryShape.Ray,
+            FPInt64 height = default,
+            FPVector3 halfExtents = default)
         {
             TraceId = traceId;
             SegmentIndex = segmentIndex;
@@ -40,6 +47,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             Direction = direction;
             IgnoredTargetEntityId = ignoredTargetEntityId;
             IgnoredTargetObjectId = ignoredTargetObjectId;
+            Shape = shape;
+            Height = height;
+            HalfExtents = halfExtents;
         }
     }
 }

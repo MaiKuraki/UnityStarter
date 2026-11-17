@@ -19,6 +19,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
     {
         private const int MaxSamples = 256;
 
+        private static readonly string[] s_curveKindLabels =
+        {
+            "Bezier (cubic)", "Sine", "Damped sine", "Parabolic"
+        };
+
         private readonly TrajectoryVector3[] _samples = new TrajectoryVector3[MaxSamples];
         private TrajectoryTraceBuffer _traceBuffer;
 
@@ -70,7 +75,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Editor
             {
                 _kind = EditorGUILayout.Popup(
                     "Curve", _kind,
-                    new[] { "Bezier (cubic)", "Sine", "Damped sine", "Parabolic" });
+                    s_curveKindLabels);
                 _sampleCount = EditorGUILayout.IntSlider("Samples", _sampleCount, 2, MaxSamples);
 
                 if (_kind == 0)
