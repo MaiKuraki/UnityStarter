@@ -76,7 +76,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             int remainingReflections = query.MaxReflectionCount;
             int remainingPierces = query.MaxPierceCount;
             ulong ignoredTargetEntityId = query.InitialIgnoredTargetEntityId;
-            int ignoredTargetObjectId = query.InitialIgnoredTargetObjectId;
+            ulong ignoredTargetObjectId = query.InitialIgnoredTargetObjectId;
 
             for (int iteration = 0; iteration < query.MaxIterationCount; iteration++)
             {
@@ -106,8 +106,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 
                 int hitCount = collisionWorld.Cast(
                     in castQuery,
-                    buffer.CastHits,
-                    buffer.CastHitCapacity);
+                    buffer.CastHits);
 
                 if (hitCount <= 0 || !TrySelectNearestHit(buffer.CastHits, hitCount, out DeterministicTrajectoryHit hit))
                 {

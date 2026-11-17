@@ -12,6 +12,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         SegmentCapacityReached = 1 << 3,
         IterationLimitReached = 1 << 4,
         MaxHitCountReached = 1 << 5,
-        DegenerateDirection = 1 << 6
+        DegenerateDirection = 1 << 6,
+
+        /// <summary>Polyline trace stopped because the path exceeded the query's MaxDistance budget.</summary>
+        PolylineTruncatedByMaxDistance = 1 << 7
     }
 }

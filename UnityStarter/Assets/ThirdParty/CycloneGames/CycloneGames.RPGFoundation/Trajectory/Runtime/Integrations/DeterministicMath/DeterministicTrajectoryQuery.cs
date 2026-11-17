@@ -21,7 +21,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
         public readonly int MaxIterationCount;
         public readonly FPInt64 SurfaceOffset;
         public readonly ulong InitialIgnoredTargetEntityId;
-        public readonly int InitialIgnoredTargetObjectId;
+        public readonly ulong InitialIgnoredTargetObjectId;
 
         public DeterministicTrajectoryQuery(
             int traceId,
@@ -37,7 +37,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             int maxIterationCount,
             FPInt64 surfaceOffset,
             ulong initialIgnoredTargetEntityId = 0UL,
-            int initialIgnoredTargetObjectId = 0)
+            ulong initialIgnoredTargetObjectId = 0UL)
         {
             TraceId = traceId;
             OwnerEntityId = ownerEntityId;
@@ -93,6 +93,39 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
                 maxHitCount: int.MaxValue,
                 DEFAULT_MAX_ITERATION_COUNT,
                 DefaultSurfaceOffset);
+        }
+
+        /// <summary>
+        /// Fixed-point counterpart of <see cref="Trajectory.Core.TrajectoryQuery.CreateSweep"/>.
+        /// Keeps the two query models constructible through the same shape.
+        /// </summary>
+        public static DeterministicTrajectoryQuery CreateSweep(
+            int traceId,
+            ulong ownerEntityId,
+            int collisionLayerMask,
+            FPVector3 origin,
+            FPVector3 direction,
+            FPInt64 maxDistance,
+            FPInt64 radius,
+            int maxReflectionCount = 0,
+            int maxPierceCount = 0,
+            int maxHitCount = int.MaxValue,
+            int maxIterationCount = DEFAULT_MAX_ITERATION_COUNT,
+            FPInt64? surfaceOffset = null)
+        {
+            return new DeterministicTrajectoryQuery(
+                traceId,
+                ownerEntityId,
+                collisionLayerMask,
+                origin,
+                direction,
+                maxDistance,
+                radius,
+                maxReflectionCount,
+                maxPierceCount,
+                maxHitCount,
+                maxIterationCount,
+                surfaceOffset.HasValue ? surfaceOffset.Value : DefaultSurfaceOffset);
         }
     }
 }

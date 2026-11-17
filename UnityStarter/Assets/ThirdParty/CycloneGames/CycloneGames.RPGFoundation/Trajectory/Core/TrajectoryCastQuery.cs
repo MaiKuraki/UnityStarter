@@ -13,6 +13,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         public readonly TrajectoryVector3 Direction;
         public readonly ulong IgnoredTargetEntityId;
         public readonly ulong IgnoredTargetObjectId;
+        public readonly TrajectoryShape Shape;
+        public readonly float Height;
+        public readonly TrajectoryVector3 HalfExtents;
 
         public TrajectoryCastQuery(
             int traceId,
@@ -25,7 +28,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             TrajectoryVector3 to,
             TrajectoryVector3 direction,
             ulong ignoredTargetEntityId,
-            ulong ignoredTargetObjectId)
+            ulong ignoredTargetObjectId,
+            TrajectoryShape shape = TrajectoryShape.Ray,
+            float height = 0f,
+            TrajectoryVector3 halfExtents = default)
         {
             TraceId = traceId;
             SegmentIndex = segmentIndex;
@@ -38,6 +44,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             Direction = direction;
             IgnoredTargetEntityId = ignoredTargetEntityId;
             IgnoredTargetObjectId = ignoredTargetObjectId;
+            Shape = shape;
+            Height = height;
+            HalfExtents = halfExtents;
         }
     }
 }

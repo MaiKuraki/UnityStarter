@@ -18,17 +18,42 @@
 
 ## Overview
 
-`TrajectorySolver.Trace` takes a `TrajectoryQuery`, queries an `ITrajectoryCollisionWorld`, and writes segment and hit records into a caller-owned `TrajectoryTraceBuffer`. The solver always uses swept segment casts rather than endpoint-only checks. Core has no Unity dependency; Unity Physics adapters convert the sweep requests to `RaycastNonAlloc` / `SphereCastNonAlloc` / `CircleCastNonAlloc`.
+`TrajectorySolver.Trace` takes a `TrajectoryQuery`, queries an `ITrajectoryCollisionWorld`, and writes segment and hit records into a caller-owned `TrajectoryTraceBuffer`. The solver always uses swept segment casts rather than endpoint-only checks. Core has no Unity dependency; Unity Physics adapters convert the sweep requests to `RaycastNonAlloc`, `SphereCastNonAlloc`, `CapsuleCastNonAlloc` and `BoxCastNonAlloc` in 3D, and to `Physics2D.Raycast`, `CircleCast`, `CapsuleCast` and `BoxCast` in 2D.
+
+### Why this module exists
+
+A physics engine answers "what did this ray hit". A weapon, a beam or an AI sight check usually needs more: the full path after a ricochet, every layer a piercing shot crossed, or the same answer recomputed on a server with no renderer.
+
+Hand-rolling that loop means meeting the same three problems in every feature. A hit array gets allocated per query. Ignore state has to be threaded from one segment to the next. The 2D, 3D and server paths drift apart because each is written separately.
+
+This module turns that loop into one call. `TrajectorySolver.Trace` writes the whole chain of segments and hits into a buffer the caller owns, applies the reflection and pierce limits, and carries ignore state between segments. Core has no Unity types, so the same code answers the same question on a client, on a headless server, and in a fixed-point replay.
+
+### When to use it
+
+- Hitscan weapons and laser sights, where the result is needed now rather than over several frames.
+- Beams that bounce, pierce, or both, where the whole chain matters and the first contact does not.
+- Aim indicators, ability ranges, turret coverage: anything authored in the editor and useful as a preview.
+- Server-side hit validation, including replay from a recorded query.
+- Batch sight checks, where a spread or a crowd is evaluated without allocating per query.
+
+Cases that belong elsewhere:
+
+- Projectiles that travel over time, track a target, or react to forces. That is `Projectile`. A trajectory has no velocity and no lifetime.
+- Anything that needs the physics engine to resolve a collision response, not just report a contact.
+- Continuous curves re-evaluated every frame. Sample once, hand the points to `TrajectoryPolylineSolver`, and simulate flight in `Projectile`.
 
 ### Key Features
 
-- **Ray and radius sweeps** — 2D and 3D, with swept from-to casts (no tunneling)
+- **Ray, sphere, capsule and box sweeps** — 2D and 3D, with swept from-to casts (no tunneling)
+- **Batch tracing** — `TrajectoryBatchTracer` reuses pre-allocated per-query buffers for shotgun spreads and AI sight checks, allocation-free after construction
 - **Reflection and pierce** — Configurable continuation with fixed iteration budget
 - **Caller-owned buffers** — No per-trace managed allocation when buffers are reused
 - **Unity-free Core** — `noEngineReferences: true`, usable in headless/server contexts
 - **DeterministicMath integration** — Fixed-point solver for lockstep, rollback, replay
-- **Editor presets** — `TrajectoryQueryPresetAsset` with Hitscan, Ricochet Beam, Piercing Beam presets
-- **Debug probe** — Scene view preview with segment, hit point, and normal visualization
+- **Polyline paths** — `TrajectoryPolylineSolver.Trace` solves collision along a caller-supplied point list, which is how curves, waypoints and portal paths enter the solver
+- **Curve sampling** — Bezier, sine, damped sine and parabolic sampling in a separate Unity-free assembly
+- **Editor presets** — `TrajectoryQueryPresetAsset` with Hitscan, Ricochet Beam, Piercing Beam, Capsule and Box presets
+- **Debug probe and workbench** — Scene view preview with segments, hit points, normals and the swept volume wireframe; a scene-wide workbench lists every probe, shows segment and hit tables, times a full re-trace and applies presets
 
 ## Architecture
 
@@ -45,9 +70,10 @@ flowchart LR
 | Area | Purpose |
 | --- | --- |
 | `Core/` | Unity-free data structures, `TrajectorySolver`, fixed-capacity buffers, collision-world contracts. |
+| `Curves/` | Unity-free curve sampling (Bezier, sine, damped sine, parabolic). Produces point lists for `TrajectoryPolylineSolver`. |
 | `Runtime/` | Unity Physics adapters for 3D and 2D collision queries. |
 | `Runtime/Integrations/DeterministicMath/` | Fixed-point solver for lockstep, rollback, server replay, or deterministic validation. |
-| `Tests/Editor/` | Nearest-hit selection, reflection continuation, pierce ignore state, deterministic repeatability. |
+| `Tests/Editor/` | Nearest-hit selection, reflection continuation, pierce ignore state, capacity invariants, adapter conformance, polyline and curve sampling. |
 
 ## Quick Start
 
@@ -107,6 +133,10 @@ Collision worlds return `TrajectoryHitResponse`:
 
 The solver selects the nearest valid hit from each non-alloc cast result. Equal-distance ties resolve by stable target identity where available.
 
+Pierce continuations never re-hit a target the same trace already pierced: the solver suppresses those repeats itself, scanning the eight most recent pierce hits. Reflection is deliberately exempt, because bouncing back onto the same surface is a legitimate pattern. An adapter that also honors `IgnoredTargetEntityId` / `IgnoredTargetObjectId` is redundant but harmless — correctness does not depend on adapter cooperation.
+
+The adapter contract is executable: `TrajectoryCollisionWorldConformance.VerifySweep` sweeps a segment you know crosses your thinnest collider and checks the reported distance, payload and response values. Run it once per adapter; it mirrors the role `ProjectileCollisionWorldConformance` plays for the projectile module.
+
 ## Usage Guide
 
 ### Creating a Ray Trace
@@ -121,6 +151,19 @@ var query = TrajectoryQuery.CreateRay(
     maxDistance: 100f,
     maxReflectionCount: 0);
 ```
+
+### Choosing a shape
+
+| Shape | Factory | Adapter call (3D / 2D) |
+| --- | --- | --- |
+| Ray | `CreateRay` | `RaycastNonAlloc` / `Physics2D.Raycast` |
+| Sphere | `CreateSweep` | `SphereCastNonAlloc` / `CircleCast` |
+| Capsule | `CreateCapsule` | `CapsuleCastNonAlloc` / `Physics2D.CapsuleCast` |
+| Box | `CreateBox` | `BoxCastNonAlloc` / `Physics2D.BoxCast` |
+
+Capsule is aligned to the world up axis with `Height` as the total height including both hemispherical caps (`Height >= 2 * Radius`). Box is axis-aligned. Both choices keep the result independent of travel direction so replays and server validation stay reproducible.
+
+Core never computes geometry from the shape: it only forwards `Shape` / `Height` / `HalfExtents` to the adapter, which keeps the solver engine-free.
 
 ### Creating a Sweep Trace
 
@@ -153,10 +196,31 @@ void Update()
 
 ### Unity Physics Adapters
 
-| Adapter | 3D Query | 2D Query |
+| Shape | 3D query | 2D query |
 | --- | --- | --- |
-| Ray | `Physics.RaycastNonAlloc` | `Physics2D.RaycastNonAlloc` |
-| Radius sweep | `Physics.SphereCastNonAlloc` | `Physics2D.CircleCastNonAlloc` |
+| Ray | `Physics.RaycastNonAlloc` | `Physics2D.Raycast` |
+| Sphere | `Physics.SphereCastNonAlloc` | `Physics2D.CircleCast` |
+| Capsule | `Physics.CapsuleCastNonAlloc` | `Physics2D.CapsuleCast` |
+| Box | `Physics.BoxCastNonAlloc` | `Physics2D.BoxCast` |
+
+### Paths from curves or waypoints
+
+`TrajectoryPolylineSolver.Trace` solves collision along a caller-supplied polyline. The path is fixed: hits are recorded but do not bend it, and the reflection and pierce budgets are ignored. To continue after a reflective surface, build the reflected path and trace it again.
+
+```csharp
+var path = new TrajectoryVector3[33];
+TrajectoryCurveSampler.SampleBezier3(p0, p1, p2, p3, path);
+
+var query = TrajectoryQuery.CreateSweep(
+    traceId: 1, ownerEntityId: 0UL, collisionLayerMask: ~0,
+    origin: path[0], direction: TrajectoryVector3.Forward, maxDistance: 200f, radius: 0.2f);
+
+TrajectoryTraceResult result = TrajectoryPolylineSolver.Trace(path, in query, world, buffer);
+```
+
+`TrajectoryCurveSampler` lives in the `CycloneGames.RPGFoundation.Trajectory.Curves` assembly and produces point lists for quadratic and cubic Bezier, sine, damped sine and parabolic arcs. Sampling is uniform in the curve parameter, not in arc length.
+
+`SampleParabolic(origin, initialVelocity, gravity, duration, ...)` covers ballistic prediction. The curve layer never simulates flight; use `Projectile` for that.
 
 ## Advanced Topics
 
@@ -178,7 +242,11 @@ Enabled only when UPM resolves `com.cyclone-games.deterministic-math` `1.x`. The
 
 ### Editor Tooling
 
-`TrajectoryQueryPresetAsset` stores reusable authoring data with presets (Hitscan, Ricochet Beam, Piercing Beam). `TrajectoryDebugProbe` previews segments, hit points, and normals in the Scene View. Both are inheritable; custom inspectors draw known fields first, then unhandled derived fields.
+`TrajectoryQueryPresetAsset` stores reusable authoring data with presets (Hitscan, Ricochet Beam, Piercing Beam, Capsule, Box). `TrajectoryDebugProbe` previews segments, hit points, and normals in the Scene View, with draggable origin / aim / radius handles and Undo support. Both are inheritable; custom inspectors draw known fields first, then unhandled derived fields.
+
+`Tools/CycloneGames/Trajectory/Workbench` opens a scene-wide window: it lists every probe, shows the recorded segments and hits as tables, explains trace flags, times a full re-trace across all probes, and applies preset shapes. The scan is manual, so nothing runs per editor frame.
+
+Scene display toggles (segments / hits / normals / labels / handles / idle indicator) live in `TrajectoryGizmoSettings`. They are view preferences, not module configuration. Unselected probes draw a cheap indicator line only; the full path is traced while the probe is selected.
 
 ## Common Scenarios
 
@@ -201,10 +269,14 @@ Server builds an identical `TrajectoryQuery` from the client's reported aim data
 ## Performance and Memory
 
 - No per-trace managed allocation when the caller reuses `TrajectoryTraceBuffer`.
-- Core is stateless and thread-safe.
+- Core is stateless; `TrajectorySolver` holds no shared mutable state and is safe to call concurrently as long as each thread owns its buffer. `TrajectoryTraceBuffer` itself is mutable and not thread-safe.
 - Buffers are mutable and caller-owned — use one buffer per worker, actor, or ability execution.
+- Buffer invariants: `HitCount <= SegmentCount`, every recorded hit's `SegmentIndex` resolves to an existing segment, and every segment's `HitIndex` is `-1` or a valid hit index. The solver checks both capacities before committing a hit and its segment together.
+- `ITrajectoryCollisionWorld.Cast` takes a `Span<TrajectoryHit>` loan whose length is the hard write limit. A `ref struct` cannot be stored or captured, so an adapter cannot retain it past the call.
+- Hits are stored in path order, not distance order. `TrajectoryTraceResult.NearestHitIndex` gives the closest hit along the travelled path (-1 when nothing was hit), so callers do not need to scan.
+- `TrajectoryBatchTracer` owns one buffer per slot. Construction allocates; `TraceAll` does not. A tracer is not thread-safe — give each worker its own.
 - Unity adapters wrap Unity Physics and must be called on Unity's supported thread/context.
-- DeterministicMath integration is Unity-free and can run in headless/server code.
+- DeterministicMath integration is Unity-free and can run in headless/server code. The assembly is compiled only when `com.cyclone-games.deterministic-math` 1.x is resolved through UPM — that is the intended shipping shape for consumers that reference this package from another project.
 
 ### Persistence
 
@@ -215,7 +287,7 @@ This module writes no files, assets, preferences, save data, or caches at runtim
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | No hits detected | Wrong collision mask or layer setup | Verify `collisionLayerMask` and ensure colliders exist on the configured layer |
-| Missed hits (tunneling) | Teleport-style endpoint check instead of sweep | Use sweep-based adapters (`SphereCastNonAlloc` / `CircleCastNonAlloc`) |
+| Missed hits (tunneling) | Teleport-style endpoint check instead of sweep | Use sweep-based adapters (`SphereCastNonAlloc` / `Physics2D.CircleCast`) |
 | Reflection not working | Missing `maxReflectionCount` or reflection collision mask | Set `maxReflectionCount > 0` and configure reflection layer mask |
 | Deterministic mismatch | Unity Physics non-determinism | Switch to `DeterministicMath` integration with a deterministic collision world |
 | GC allocations | Buffer recreated per trace | Preallocate and reuse `TrajectoryTraceBuffer` across calls |

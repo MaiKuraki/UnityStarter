@@ -6,7 +6,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Runtime
 {
     [CreateAssetMenu(
         fileName = "ProjectileDefinition",
-        menuName = "CycloneGames/RPGFoundation/Projectile/Definition")]
+        menuName = "CycloneGames/RPG Foundation/Projectile/Definition")]
     public class ProjectileDefinitionAsset : ScriptableObject
     {
         [SerializeField] private int DefinitionId = 1;
