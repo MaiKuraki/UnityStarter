@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -37,7 +38,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             for (int i = 0; i < shimPaths.Length; i++)
             {
                 var symbols = new HashSet<string>();
-                Match match = VersionSymbol.Match(File.ReadAllText(shimPaths[i]));
+                Match match = VersionSymbol.Match(StripLineComments(File.ReadAllText(shimPaths[i])));
                 while (match.Success)
                 {
                     symbols.Add(match.Value);
@@ -68,7 +69,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
                 if (text.Contains("class UnityObjectId") &&
                     (!text.Contains("EntityId.ToULong(target.GetEntityId())") ||
-                     !text.Contains("unchecked((ulong)target.GetInstanceID())")))
+                     !text.Contains("unchecked((ulong)(uint)target.GetInstanceID())")))
                 {
                     message.Append("UnityObjectId must read EntityId on new editors and widen the legacy id: ")
                         .AppendLine(path);
@@ -84,6 +85,31 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
 
             Assert.That(message.Length, Is.Zero, message.ToString());
+        }
+
+
+        /// <summary>
+        /// Drops <c>//</c> comments before scanning. The shims explain in prose which editor versions
+        /// changed an API, and a symbol named in a comment is documentation, not a branch.
+        /// </summary>
+        private static string StripLineComments(string text)
+        {
+            var builder = new StringBuilder(text.Length);
+            int start = 0;
+            while (start < text.Length)
+            {
+                int end = text.IndexOf('\n', start);
+                if (end < 0)
+                    end = text.Length;
+
+                int comment = text.IndexOf("//", start, end - start, StringComparison.Ordinal);
+                int lineEnd = comment >= 0 ? comment : end;
+                builder.Append(text, start, lineEnd - start).Append('\n');
+
+                start = end + 1;
+            }
+
+            return builder.ToString();
         }
 
         private static string[] FindShims()

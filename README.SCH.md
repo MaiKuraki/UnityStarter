@@ -5,8 +5,8 @@
 面向长期维护同一套 Unity 代码的中大型项目。具体特性：
 
 - 每个模块是独立的 UPM 包，带自己的程序集定义；项目只引用用得到的包，未使用的模块不进入编译与构建。
-- 能保持引擎无关的逻辑就保持引擎无关，因此可以跑在 EditMode 测试、无头进程与 CLI 工具里。
-- 模块边界由测试守住（引擎接缝、包图），不只依赖约定。
+- 与引擎解耦的逻辑可在 EditMode 测试、无头进程与 CLI 工具中运行。
+- 模块边界由测试校验：Core 程序集不得引用 `UnityEngine` 类型，跨包程序集引用须在 `package.json` 中声明，或由 `defineConstraints` 条件宏限定。
 - 构建管线、analyzer 与维护工具都在仓库内，随代码一起版本化。
 
 [English](README.md) | [简体中文](README.SCH.md)
@@ -14,8 +14,8 @@
 > [!NOTE]
 > 如果你觉得这个项目对你有帮助，请点一个 Star ⭐，谢谢！
 
-![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS-black?logo=unity)
-![Unity6](https://img.shields.io/badge/Unity-6000.x%20Compatible-black?logo=unity)
+![Unity](https://img.shields.io/badge/Unity-LTS%20only-black?logo=unity)
+![Supported lines](https://img.shields.io/badge/Supported-2022.3%20%7C%206000.0%20%7C%206000.3%20%7C%206000.7%20LTS-blue?logo=unity)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
@@ -37,6 +37,7 @@
 - [Build、CI/CD 与项目工具](#buildcicd-与项目工具)
   - [Build 是项目自有基础设施](#build-是项目自有基础设施)
   - [派生项目工具](#派生项目工具)
+- [支持的 Unity 版本](#支持的-unity-版本)
 - [快速开始](#快速开始)
   - [环境要求](#环境要求)
   - [首次运行](#首次运行)
@@ -291,11 +292,26 @@ Unity -batchmode -quit -projectPath UnityStarter \
 
 详见 [Tools README](Tools/README.SCH.md)。
 
+## 支持的 Unity 版本
+
+支持范围限于 Unity LTS 发行线。Alpha、Beta、技术预览及其他非 LTS 构建不在支持范围内。
+
+| 发行线 | 状态 |
+| --- | --- |
+| 2022.3 LTS | 支持 |
+| 6000.0 LTS | 支持 |
+| 6000.3 LTS | 支持 |
+| 6000.7 LTS | 支持 |
+
+一条发行线满足以下条件即为受支持：工程在该版本的编辑器中导入后无 error、无 warning，且相关模块的 EditMode 套件通过。
+
+版本兼容代码位于各包内部。版本相关 API 由该包自带的 shim 用编译符号隔离，编译符号按其对应的 API 引入版本设置。引擎无关的 Core 程序集不引用 `UnityEngine` 类型。
+
 ## 快速开始
 
 ### 环境要求
 
-- `UnityStarter/ProjectSettings/ProjectVersion.txt` 中记录的 Unity 版本。
+- 受支持 LTS 发行线中的 Unity 编辑器，见[支持的 Unity 版本](#支持的-unity-版本)。
 - batch mode 和 release 构建必须使用 Git 或 Perforce 生成自动版本元数据；只有交互式 Development 构建可以使用确定性的 `LocalDevelopment` 回退元数据。
 
 ### 首次运行
@@ -306,9 +322,8 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 
 1. 在 Unity Hub 中打开 `UnityStarter/`。
 2. 打开 `UnityStarter/Assets/UnityStarter/Scenes/Scene_Launch.unity`。
-3. 阅读 [GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md)，理解高层架构。
-4. 修改 build settings 或 CI methods 前，先阅读 [Build](UnityStarter/Assets/Build/README.SCH.md)。
-5. 如果你要从该模板创建新项目，运行 `Tools/Executable/Windows/rename_project.exe`，并阅读 [Tools README](Tools/README.SCH.md)。
+3. 修改 build settings 或 CI methods 前，先阅读 [Build](UnityStarter/Assets/Build/README.SCH.md)。
+4. 如果你要从该模板创建新项目，运行 `Tools/Executable/Windows/rename_project.exe`，并阅读 [Tools README](Tools/README.SCH.md)。
 
 ### 单独使用模块
 
@@ -353,7 +368,7 @@ Unity -batchmode -nographics -projectPath UnityStarter -runTests \
 
 - 两个守卫套件保护仓库级不变量，应保持通过：
   - `CoreSeamGuardTests` 检查引擎无关的 Core 程序集不引用 Unity 类型、不做磁盘 IO、不使用宿主编译符号。
-  - `PackageReferenceGuardTests` 检查每一处跨包程序集引用，要么在 `package.json` 中声明，要么由能力符号门控。
+  - `PackageReferenceGuardTests` 检查每一处跨包程序集引用：须在 `package.json` 中声明，或由 `defineConstraints` 条件宏限定。
 - 使用 `dotnet build UnityStarter/Analyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj -c Release` 构建 analyzer project。
 - 修改 BuildData 或 CI settings 前，使用 `Build > Pipeline > Print Selected Profile`。
 - Networking 模块仍属实验性；生产使用需要对选定的 transport、serializer 与 authority model 做端到端验证。

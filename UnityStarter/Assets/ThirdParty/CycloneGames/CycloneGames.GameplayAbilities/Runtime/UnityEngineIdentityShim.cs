@@ -28,7 +28,9 @@ namespace CycloneGames.Compat
 #if UNITY_6000_6_OR_NEWER
             return EntityId.ToULong(target.GetEntityId());
 #else
-            return unchecked((ulong)target.GetInstanceID());
+            // Zero-extend: a negative instance id must not sign-extend into 0xFFFF_FFFF_xxxx_xxxx,
+            // which would break equality with the uint-truncated form used elsewhere.
+            return unchecked((ulong)(uint)target.GetInstanceID());
 #endif
         }
     }
