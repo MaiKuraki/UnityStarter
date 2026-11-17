@@ -6,12 +6,15 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 {
     [CreateAssetMenu(
         fileName = "TrajectoryQueryPreset",
-        menuName = "CycloneGames/RPGFoundation/Trajectory/Query Preset")]
+        menuName = "CycloneGames/RPG Foundation/Trajectory/Query Preset")]
     public class TrajectoryQueryPresetAsset : ScriptableObject
     {
         [SerializeField] private LayerMask CollisionLayerMask = ~0;
         [SerializeField] private float MaxDistance = 40f;
+        [SerializeField] private TrajectoryShape Shape = TrajectoryShape.Ray;
         [SerializeField] private float Radius;
+        [SerializeField] private float Height = 1.8f;
+        [SerializeField] private Vector3 HalfExtents = new Vector3(0.5f, 0.5f, 0.5f);
         [SerializeField] private int MaxReflectionCount;
         [SerializeField] private int MaxPierceCount;
         [SerializeField] private int MaxHitCount = 8;
@@ -33,6 +36,42 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             get
             {
                 return MaxDistance;
+            }
+        }
+
+        /// <summary>Sweep volume authored by this preset.</summary>
+        public TrajectoryShape QueryShape
+        {
+            get
+            {
+                return Shape;
+            }
+        }
+
+        /// <summary>Sphere or capsule radius, zero for ray and box presets.</summary>
+        public float RadiusValue
+        {
+            get
+            {
+                return Radius;
+            }
+        }
+
+        /// <summary>Box half extents as a solver-space vector.</summary>
+        public TrajectoryVector3 HalfExtentsValue
+        {
+            get
+            {
+                return new TrajectoryVector3(HalfExtents.x, HalfExtents.y, HalfExtents.z);
+            }
+        }
+
+        /// <summary>Total capsule height including both caps.</summary>
+        public float HeightValue
+        {
+            get
+            {
+                return Height;
             }
         }
 
@@ -75,7 +114,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
                 sanitize ? Math.Max(1, MaxIterationCount) : MaxIterationCount,
                 sanitize ? Math.Max(0f, SurfaceOffset) : SurfaceOffset,
                 InitialIgnoredTargetEntityId,
-                InitialIgnoredTargetObjectId);
+                InitialIgnoredTargetObjectId,
+                Shape,
+                sanitize ? Math.Max(0f, Height) : Height,
+                new TrajectoryVector3(HalfExtents.x, HalfExtents.y, HalfExtents.z));
         }
 
         protected static TrajectoryVector3 ToTrajectoryVector3(Vector3 value)

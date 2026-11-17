@@ -26,7 +26,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             _pierceLayerMask = pierceLayerMask;
 
             // The filter is rebuilt per cast only for the layer mask; trigger, depth and layer filtering
-            // are fixed for the lifetime of the world. useTriggers mirrors the legacy non-alloc queries,
+            // are fixed for the lifetime of the world. useTriggers mirrors Physics2D.queriesHitTriggers,
             // which honoured Physics2D.queriesHitTriggers instead of always including triggers.
             _filter = new ContactFilter2D
             {
@@ -45,10 +45,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 
         public int Cast(
             in TrajectoryCastQuery query,
-            TrajectoryHit[] results,
-            int maxResults)
+            Span<TrajectoryHit> results)
         {
-            if (results == null || maxResults <= 0 || query.Distance <= EPSILON)
+            if (results.Length == 0 || query.Distance <= EPSILON)
             {
                 return 0;
             }
@@ -62,12 +61,47 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 
             direction.Normalize();
             _filter.layerMask = query.CollisionLayerMask;
-            int hitCount = query.Radius > EPSILON
-                ? Physics2D.CircleCast(origin, query.Radius, direction, _filter, _hits, query.Distance)
-                : Physics2D.Raycast(origin, direction, _filter, _hits, query.Distance);
+
+            int hitCount;
+            switch (query.Shape)
+            {
+                case TrajectoryShape.Sphere:
+                    hitCount = query.Radius > EPSILON
+                        ? Physics2D.CircleCast(origin, query.Radius, direction, _filter, _hits, query.Distance)
+                        : Physics2D.Raycast(origin, direction, _filter, _hits, query.Distance);
+                    break;
+
+                case TrajectoryShape.Capsule:
+                    // Physics2D sizes are full extents, not radii or half extents.
+                    hitCount = Physics2D.CapsuleCast(
+                        origin,
+                        new Vector2(query.Radius * 2f, query.Height),
+                        CapsuleDirection2D.Vertical,
+                        0f,
+                        direction,
+                        _filter,
+                        _hits,
+                        query.Distance);
+                    break;
+
+                case TrajectoryShape.Box:
+                    hitCount = Physics2D.BoxCast(
+                        origin,
+                        new Vector2(query.HalfExtents.X * 2f, query.HalfExtents.Y * 2f),
+                        0f,
+                        direction,
+                        _filter,
+                        _hits,
+                        query.Distance);
+                    break;
+
+                default:
+                    hitCount = Physics2D.Raycast(origin, direction, _filter, _hits, query.Distance);
+                    break;
+            }
 
             int written = 0;
-            int limit = Math.Min(Math.Min(hitCount, _hits.Length), Math.Min(maxResults, results.Length));
+            int limit = Math.Min(Math.Min(hitCount, _hits.Length), results.Length);
             for (int i = 0; i < limit; i++)
             {
                 RaycastHit2D hit = _hits[i];
@@ -77,6 +111,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
                 }
 
                 ulong objectId = UnityObjectId.Of(hit.collider);
+                // Only the object channel is meaningful here: Unity colliders carry no entity id, so
+                // every hit below reports TargetEntityId = 0. IgnoredTargetEntityId exists for
+                // ECS/server adapters that do have one. Pierce repeats are suppressed by the solver
+                // itself, so an adapter that skips this check is still correct.
                 if (objectId == query.IgnoredTargetObjectId)
                 {
                     continue;
