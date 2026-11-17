@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.DeterministicMath;
 using CycloneGames.RPGFoundation.Trajectory.Core;
 using CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath;
@@ -39,10 +40,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Tests.Editor.Integrations.Determ
 
             public int Cast(
                 in DeterministicTrajectoryCastQuery query,
-                DeterministicTrajectoryHit[] results,
-                int maxResults)
+                Span<DeterministicTrajectoryHit> results)
             {
-                if (_castCount > 0)
+                if (results.Length == 0 || _castCount > 0)
                 {
                     return 0;
                 }

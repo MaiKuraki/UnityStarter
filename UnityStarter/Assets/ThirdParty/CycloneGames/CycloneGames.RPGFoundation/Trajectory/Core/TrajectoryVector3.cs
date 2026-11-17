@@ -85,7 +85,11 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
 
         public override string ToString()
         {
-            return $"({X}, {Y}, {Z})";
+            // Explicit invariant formatting: an ambient culture with a comma decimal separator
+            // must not change a vector's textual form, because logs and digests consume it.
+            return "(" + X.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ", " + Y.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ", " + Z.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -14,6 +14,12 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
         InvalidHitCount,
         InvalidIterationCount,
         InvalidSurfaceOffset,
-        IterationBudgetMayEndEarly
+        IterationBudgetMayEndEarly,
+        IterationBudgetExcessive,
+        NonFiniteDirectionMagnitude,
+        InvalidShape,
+        InvalidSphereRadius,
+        InvalidCapsuleHeight,
+        InvalidBoxHalfExtents
     }
 }

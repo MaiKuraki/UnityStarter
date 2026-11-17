@@ -28,10 +28,9 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
 
         public int Cast(
             in TrajectoryCastQuery query,
-            TrajectoryHit[] results,
-            int maxResults)
+            Span<TrajectoryHit> results)
         {
-            if (results == null || maxResults <= 0 || query.Distance <= EPSILON)
+            if (results.Length == 0 || query.Distance <= EPSILON)
             {
                 return 0;
             }
@@ -44,12 +43,61 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
             }
 
             direction.Normalize();
-            int hitCount = query.Radius > EPSILON
-                ? Physics.SphereCastNonAlloc(origin, query.Radius, direction, _hits, query.Distance, query.CollisionLayerMask, _queryTriggerInteraction)
-                : Physics.RaycastNonAlloc(origin, direction, _hits, query.Distance, query.CollisionLayerMask, _queryTriggerInteraction);
+
+            int hitCount;
+            switch (query.Shape)
+            {
+                case TrajectoryShape.Sphere:
+                    hitCount = query.Radius > EPSILON
+                        ? Physics.SphereCastNonAlloc(origin, query.Radius, direction, _hits, query.Distance, query.CollisionLayerMask, _queryTriggerInteraction)
+                        : Physics.RaycastNonAlloc(origin, direction, _hits, query.Distance, query.CollisionLayerMask, _queryTriggerInteraction);
+                    break;
+
+                case TrajectoryShape.Capsule:
+                {
+                    // CapsuleCast wants the two cap centres. Total height includes both hemispheres,
+                    // so the straight section is Height - 2 * Radius. World-up alignment keeps the
+                    // result independent of travel direction.
+                    float halfSegment = query.Height * 0.5f - query.Radius;
+                    if (halfSegment < 0f)
+                    {
+                        halfSegment = 0f;
+                    }
+
+                    Vector3 up = Vector3.up * halfSegment;
+                    hitCount = Physics.CapsuleCastNonAlloc(
+                        origin + up,
+                        origin - up,
+                        query.Radius,
+                        direction,
+                        _hits,
+                        query.Distance,
+                        query.CollisionLayerMask,
+                        _queryTriggerInteraction);
+                    break;
+                }
+
+                case TrajectoryShape.Box:
+                    // Orientation is identity on purpose: an oriented box would make the result
+                    // depend on the sweep direction and break replay determinism.
+                    hitCount = Physics.BoxCastNonAlloc(
+                        origin,
+                        ToVector3(query.HalfExtents),
+                        direction,
+                        _hits,
+                        Quaternion.identity,
+                        query.Distance,
+                        query.CollisionLayerMask,
+                        _queryTriggerInteraction);
+                    break;
+
+                default:
+                    hitCount = Physics.RaycastNonAlloc(origin, direction, _hits, query.Distance, query.CollisionLayerMask, _queryTriggerInteraction);
+                    break;
+            }
 
             int written = 0;
-            int limit = Math.Min(Math.Min(hitCount, _hits.Length), Math.Min(maxResults, results.Length));
+            int limit = Math.Min(Math.Min(hitCount, _hits.Length), results.Length);
             for (int i = 0; i < limit; i++)
             {
                 RaycastHit hit = _hits[i];
@@ -59,6 +107,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Runtime
                 }
 
                 ulong objectId = UnityObjectId.Of(hit.collider);
+                // Only the object channel is meaningful here: Unity colliders carry no entity id, so
+                // every hit below reports TargetEntityId = 0. IgnoredTargetEntityId exists for
+                // ECS/server adapters that do have one. Pierce repeats are suppressed by the solver
+                // itself, so an adapter that skips this check is still correct.
                 if (objectId == query.IgnoredTargetObjectId)
                 {
                     continue;
