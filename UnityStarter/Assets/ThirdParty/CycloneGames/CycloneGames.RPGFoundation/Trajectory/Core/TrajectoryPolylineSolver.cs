@@ -263,21 +263,35 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                         return Build(flags, buffer, travelDistance, endPosition, -1);
                     }
 
-                    endPosition = path[i] + direction * allowed;
-                    flags |= TrajectorySolver.TryAddSegment(
-                        buffer, path[i], endPosition, direction, allowed, -1, out _);
-                    return Build(flags, buffer, travelDistance + allowed, endPosition, -1);
+                    // TravelDistance accounts for recorded segments only. Check the write before
+                    // claiming the truncated span, so a full buffer cannot make the result
+                    // disagree with the segments actually stored.
+                    TrajectoryVector3 truncatedEnd = path[i] + direction * allowed;
+                    TrajectoryTraceFlags truncatedFlags = TrajectorySolver.TryAddSegment(
+                        buffer, path[i], truncatedEnd, direction, allowed, -1, out _);
+                    flags |= truncatedFlags;
+
+                    if ((truncatedFlags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
+                    {
+                        return Build(flags, buffer, travelDistance, endPosition, -1);
+                    }
+
+                    return Build(flags, buffer, travelDistance + allowed, truncatedEnd, -1);
                 }
 
-                flags |= TrajectorySolver.TryAddSegment(
+                TrajectoryTraceFlags segmentFlags = TrajectorySolver.TryAddSegment(
                     buffer, path[i], path[i + 1], direction, segmentLength, -1, out _);
-                travelDistance += segmentLength;
-                endPosition = path[i + 1];
+                flags |= segmentFlags;
 
-                if ((flags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
+                // Same invariant as the collision-world loop: when the segment cannot be stored,
+                // neither travelDistance nor endPosition may advance past the last recorded point.
+                if ((segmentFlags & TrajectoryTraceFlags.SegmentCapacityReached) != 0)
                 {
                     return Build(flags, buffer, travelDistance, endPosition, -1);
                 }
+
+                travelDistance += segmentLength;
+                endPosition = path[i + 1];
             }
 
             return Build(flags, buffer, travelDistance, endPosition, -1);

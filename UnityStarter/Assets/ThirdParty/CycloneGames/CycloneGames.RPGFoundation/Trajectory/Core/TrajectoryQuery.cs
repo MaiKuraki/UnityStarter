@@ -75,10 +75,10 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
             get
             {
                 return CollisionLayerMask != 0
-                && Origin.IsFinite
-                && Direction.IsFinite
-                && IsFinite(Direction.LengthSquared)
-                && Direction.LengthSquared > 0.000001f
+                    && Origin.IsFinite
+                    && Direction.IsFinite
+                    && IsFinite(Direction.LengthSquared)
+                    && Direction.LengthSquared > 0.000001f
                     && MaxDistance > 0f
                     && Radius >= 0f
                     && MaxReflectionCount >= 0
@@ -88,8 +88,8 @@ namespace CycloneGames.RPGFoundation.Trajectory.Core
                     && SurfaceOffset >= 0f
                     && IsFinite(MaxDistance)
                     && IsFinite(Radius)
-                && IsFinite(SurfaceOffset)
-                && HasValidShape();
+                    && IsFinite(SurfaceOffset)
+                    && HasValidShape();
             }
         }
 
