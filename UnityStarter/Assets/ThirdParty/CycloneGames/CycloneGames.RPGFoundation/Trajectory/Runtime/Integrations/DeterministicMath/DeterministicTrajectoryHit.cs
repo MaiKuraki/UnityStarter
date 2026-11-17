@@ -6,7 +6,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
     public readonly struct DeterministicTrajectoryHit
     {
         public readonly ulong TargetEntityId;
-        public readonly int TargetObjectId;
+        public readonly ulong TargetObjectId;
         public readonly int HitLayerMask;
         public readonly FPInt64 Distance;
         public readonly int SegmentIndex;
@@ -16,7 +16,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 
         public DeterministicTrajectoryHit(
             ulong targetEntityId,
-            int targetObjectId,
+            ulong targetObjectId,
             int hitLayerMask,
             FPInt64 distance,
             FPVector3 position,
@@ -39,6 +39,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
             get
             {
                 return Distance.RawValue >= 0
+                    && (uint)Response <= (uint)TrajectoryHitResponse.Pierce
                     && (TargetEntityId != 0UL || TargetObjectId != 0 || HitLayerMask != 0);
             }
         }

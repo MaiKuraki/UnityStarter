@@ -1,6 +1,6 @@
-// Package-local copy of the Unity compatibility shims. Unity 6.6 replaced the 32-bit instance id with
-// EntityId and later moved scene queries behind sort-free overloads, while 2022 LTS still exposes the
-// legacy shape. A package carries this file so that no cross-package assembly reference is introduced;
+// Package-local copy of the Unity compatibility shims. The instance id is 32-bit on 2022 LTS and an
+// EntityId from 6.6 onward, and scene queries gain sort-free overloads on the same boundary. A package
+// carries this file so that no cross-package assembly reference is introduced;
 // it only contains the shims that package actually uses (runtime packages must not ship scene-wide
 // queries, which the CG0011 analyzer rejects). CompatShimConsistencyTests fails when the version
 // boundaries drift between copies. An assembly that has InternalsVisibleTo into another assembly
@@ -28,7 +28,10 @@ namespace CycloneGames.Compat
 #if UNITY_6000_6_OR_NEWER
             return EntityId.ToULong(target.GetEntityId());
 #else
-            return unchecked((ulong)target.GetInstanceID());
+            // Zero-extend: a negative instance id must not sign-extend into 0xFFFF_FFFF_xxxx_xxxx,
+            // which would render as a huge token and break equality with the uint-truncated form
+            // used elsewhere in the repository.
+            return unchecked((ulong)(uint)target.GetInstanceID());
 #endif
         }
     }

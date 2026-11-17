@@ -2,8 +2,10 @@
     "name": "CycloneGames.RPGFoundation.Trajectory.Editor",
     "rootNamespace": "CycloneGames.RPGFoundation.Trajectory.Editor",
     "references": [
+        "CycloneGames.Logging.Core",
         "CycloneGames.RPGFoundation.Editor",
         "CycloneGames.RPGFoundation.Trajectory.Core",
+        "CycloneGames.RPGFoundation.Trajectory.Curves",
         "CycloneGames.RPGFoundation.Trajectory.Runtime"
     ],
     "includePlatforms": [
