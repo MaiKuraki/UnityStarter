@@ -6,7 +6,7 @@ The repository targets medium and large Unity projects that keep one codebase fo
 
 - Each module is a separate UPM package with its own assembly definition, so a project references only what it uses and unused modules never enter the compile or the build.
 - Logic that can stay engine-free does, so it runs in EditMode tests, headless processes and CLI tools.
-- Module boundaries are held by tests (engine seam, package graph), not only by convention.
+- Module boundaries are checked by tests: Core assemblies must not reference UnityEngine types, and cross-package assembly references must be declared in package.json or constrained by a `defineConstraints` symbol.
 - Build pipeline, analyzers and maintenance tools live in the repository and version together with the code.
 
 [English](README.md) | [简体中文](README.SCH.md)
@@ -14,8 +14,8 @@ The repository targets medium and large Unity projects that keep one codebase fo
 > [!NOTE]
 > If you find this project helpful, please consider giving it a star ⭐ Thank you!
 
-![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS-black?logo=unity)
-![Unity6](https://img.shields.io/badge/Unity-6000.x%20Compatible-black?logo=unity)
+![Unity](https://img.shields.io/badge/Unity-LTS%20only-black?logo=unity)
+![Supported lines](https://img.shields.io/badge/Supported-2022.3%20%7C%206000.0%20%7C%206000.3%20%7C%206000.7%20LTS-blue?logo=unity)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
@@ -37,6 +37,7 @@ The repository targets medium and large Unity projects that keep one codebase fo
 - [Build, CI/CD And Project Tooling](#build-cicd-and-project-tooling)
   - [Build is project-owned infrastructure](#build-is-project-owned-infrastructure)
   - [Tools for derived projects](#tools-for-derived-projects)
+- [Supported Unity Versions](#supported-unity-versions)
 - [Getting Started](#getting-started)
   - [Requirements](#requirements)
   - [First Run](#first-run)
@@ -291,11 +292,26 @@ The `Tools/` directory contains standalone Go utilities:
 
 See [Tools README](Tools/README.md) for usage details.
 
+## Supported Unity Versions
+
+Support is limited to Unity LTS release lines. Alpha, beta, tech preview and other non-LTS builds are out of scope.
+
+| Release line | Status |
+| --- | --- |
+| 2022.3 LTS | Supported |
+| 6000.0 LTS | Supported |
+| 6000.3 LTS | Supported |
+| 6000.7 LTS | Supported |
+
+A release line counts as supported when the project imports in that editor with no errors or warnings and the EditMode suites of the affected modules pass.
+
+Compatibility code lives in each package. Version-specific APIs are isolated behind compilation symbols in that package's local shim, with each symbol set at the Unity version that introduced the API. Engine-free Core assemblies do not reference `UnityEngine` types.
+
 ## Getting Started
 
 ### Requirements
 
-- The Unity version recorded in `UnityStarter/ProjectSettings/ProjectVersion.txt`.
+- A Unity editor from a supported LTS release line; see [Supported Unity Versions](#supported-unity-versions).
 - Git or Perforce is required for automatic version metadata in batch-mode and release builds; only an interactive Development build may use deterministic `LocalDevelopment` fallback metadata.
 
 ### First Run
@@ -306,9 +322,8 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 
 1. Open `UnityStarter/` in Unity Hub.
 2. Open `UnityStarter/Assets/UnityStarter/Scenes/Scene_Launch.unity`.
-3. Read [GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) to understand the high-level architecture.
-4. Read [Build](UnityStarter/Assets/Build/README.md) before changing build settings or CI methods.
-5. If you are creating a new project from this template, run `Tools/Executable/Windows/rename_project.exe` and review [Tools README](Tools/README.md).
+3. Read [Build](UnityStarter/Assets/Build/README.md) before changing build settings or CI methods.
+4. If you are creating a new project from this template, run `Tools/Executable/Windows/rename_project.exe` and review [Tools README](Tools/README.md).
 
 ### Using Individual Modules
 
@@ -352,7 +367,7 @@ Unity -batchmode -nographics -projectPath UnityStarter -runTests   -testPlatform
 
 - Two guard suites protect repository-wide invariants and should stay green:
   - `CoreSeamGuardTests` checks that engine-free Core assemblies stay free of Unity types, disk IO and host compilation symbols.
-  - `PackageReferenceGuardTests` checks that every cross-package assembly reference is either declared in `package.json` or gated by a capability symbol.
+  - `PackageReferenceGuardTests` checks that every cross-package assembly reference is either declared in `package.json` or constrained by a `defineConstraints` symbol.
 - Build the analyzers with `dotnet build UnityStarter/Analyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj -c Release`.
 - Use `Build > Pipeline > Print Selected Profile` before changing BuildData or CI settings.
 - Networking modules remain experimental; production use needs end-to-end validation against the chosen transport, serializer and authority model.
