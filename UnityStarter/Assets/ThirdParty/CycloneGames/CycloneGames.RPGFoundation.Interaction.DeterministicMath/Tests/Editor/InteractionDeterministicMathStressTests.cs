@@ -304,10 +304,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor.Integrations.Deter
 
             public StressCsvWriter(string fileName, string header)
             {
-                // Test assemblies load from <project>/Library/ScriptAssemblies; AppDomain.BaseDirectory
-                // points at the editor install, so resolve from this assembly's own location.
-                string scriptAssemblies = System.IO.Path.GetDirectoryName(typeof(StressCsvWriter).Assembly.Location);
-                string projectRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptAssemblies, "..", ".."));
+                // Unity loads assemblies from a stream, so Assembly.Location is empty and cannot be used to
+                // walk up to the project. The editor's working directory is the project root.
+                string projectRoot = System.IO.Directory.GetCurrentDirectory();
                 string dir = System.IO.Path.Combine(projectRoot, "deliverables", "review", "evidence", "interaction");
                 System.IO.Directory.CreateDirectory(dir);
                 _writer = new System.IO.StreamWriter(System.IO.Path.Combine(dir, fileName), append: false);
