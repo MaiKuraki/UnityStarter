@@ -4,11 +4,9 @@
     "references": [
         "UniTask",
         "CycloneGames.Logging.Core",
-        "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement",
         "CycloneGames.GameplayTags.Unity.Runtime"
     ],
     "includePlatforms": [],

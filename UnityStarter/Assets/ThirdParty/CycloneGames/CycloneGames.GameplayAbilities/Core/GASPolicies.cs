@@ -44,7 +44,6 @@ namespace CycloneGames.GameplayAbilities.Core
 
         /// <summary>
         /// Multiply and Division form a bias sum: 1 + sum(Mi - 1); two x2 modifiers yield x3.
-        /// This is the additive-bucket convention shared by Unreal Engine and most ARPG stat systems.
         /// Per-stack scaling is a separate axis; see <see cref="GASStackMagnitudePolicy"/>.
         /// </summary>
         UnrealBiasSum
@@ -53,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Core
     /// <summary>
     /// Selects how one effect's stack count scales its Multiply/Division modifier magnitude.
     /// Additive modifiers always scale linearly (magnitude * stackCount) and Override ignores the
-    /// stack count entirely, matching Unreal Engine's ComputeStackedModifierMagnitude.
+    /// stack count entirely.
     /// Orthogonal to <see cref="GASModifierAggregationMode"/>, which only decides how several
     /// modifiers of the same channel combine.
     /// </summary>
@@ -61,7 +60,7 @@ namespace CycloneGames.GameplayAbilities.Core
     {
         /// <summary>
         /// Default. (magnitude - 1) * stackCount + 1: every stack adds the same delta, so a x1.1 buff
-        /// at 5 stacks is x1.5. Prevalent ARPG/MMORPG convention and numerically identical to UE.
+        /// at 5 stacks is x1.5.
         /// </summary>
         LinearBias,
 

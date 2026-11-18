@@ -31,7 +31,7 @@ Input, transport, save files, matchmaking, and animation live in their own modul
 | `Core/` | Unity-free fixed-point data, state/facade APIs, stable IDs, prediction records, registries, process-local reconciliation buffers, and authoritative activation results |
 | `Runtime/` | `AbilitySystemComponent`, abilities, effects, attributes, tasks, target data, cues, Unity authoring bridges, and runtime diagnostics |
 | `Editor/` | Inspectors, property drawers, debugger, trace window, and overlay configuration tooling |
-| `Runtime/Integrations/AssetManagement/` | Active adapter from `CycloneGames.AssetManagement` handles to the cue-facing `IResourceLocator` contract |
+| `Runtime/Integrations/AssetManagement/` | Optional UPM-gated adapter from `CycloneGames.AssetManagement` handles to the cue-facing `IResourceLocator` contract |
 | `Runtime/Integrations/DataTable/` | Optional UPM-gated DataTable adapters, isolated behind an integration assembly |
 | `Samples/` | Playable examples, authoring assets, target actors, manual composition, headless composition, and optional DI composition |
 | `Tests/Editor/` | Core hardening, deterministic behavior, attribute registration, lease/cache, Runtime contract, and integration tests |
@@ -46,7 +46,7 @@ flowchart LR
     Hash["CycloneGames.Hash.Core"]
     Core["GameplayAbilities.Core<br/>noEngineReferences"]
     Asset["CycloneGames.AssetManagement.Runtime"]
-    AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
+    AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement<br/>conditional UPM integration"]
     DataTableCore["CycloneGames.DataTable.Core"]
     UniTask["UniTask"]
     Logging["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
@@ -76,19 +76,17 @@ flowchart LR
     Core --> DataTable
     Runtime --> Editor
     Runtime --> Samples
-    Asset --> Samples
-    AssetIntegration --> Samples
     Core --> Tests
     Runtime --> Tests
     Runtime --> PlayTests
     Runtime --> DataTable
 ```
 
-`CycloneGames.GameplayAbilities.Core` has `noEngineReferences: true` and does not expose `UnityEngine` types. `CycloneGames.GameplayAbilities.Runtime` is the Unity adapter and authoring layer. Runtime code must not be moved into Core merely to share an implementation.
+`CycloneGames.GameplayAbilities.Core` has `noEngineReferences: true` and does not expose `UnityEngine` types. `CycloneGames.GameplayAbilities.Runtime` is the Unity adapter and authoring layer.
 
-`AbilitySpecContainer`, `PredictionManager`, and `ReplicationStateBuilder` are internal Runtime assembly implementation types. Public consumers use the `AbilitySystemComponent` facade, stable `GASReadOnlyListView<T>`, `GASReadOnlySetView<T>`, and `GASReadOnlyTagView` instances, query methods, and diagnostics; they do not receive mutable container or builder access. These internal types are not extension points. Consolidating mutation authority in the ASC narrows the public API and long-term compatibility surface.
+`AbilitySpecContainer`, `PredictionManager`, and `ReplicationStateBuilder` are internal Runtime assembly implementation types. Public consumers use the `AbilitySystemComponent` facade, stable `GASReadOnlyListView<T>`, `GASReadOnlySetView<T>`, and `GASReadOnlyTagView` instances, query methods, and diagnostics; they do not receive mutable container or builder access. These internal types are not extension points.
 
-The package metadata declares its direct package requirements. In an `Assets/ThirdParty` checkout, `package.json` is descriptive metadata; Unity compilation is determined by the actual asmdef graph, installed packages, constraints, and symbols. The main Runtime assembly directly references the backend-neutral `CycloneGames.Logging.Core` contract assembly but does not reference AssetManagement, DataTable, or a concrete logging backend; optional feature dependencies terminate in their integration assemblies.
+The main Runtime assembly directly references the backend-neutral `CycloneGames.Logging.Core` contract assembly but does not reference AssetManagement, DataTable, or a concrete logging backend; optional feature dependencies terminate in their integration assemblies.
 
 ### Logging contract and backend integration
 
@@ -104,8 +102,6 @@ private static readonly LogChannel Log = ProductAbilityLog.Channel;
 Log.Warning("Ability activation was rejected.");
 Log.Error(exception, "Ability activation failed.");
 ```
-
-Consumers may remove a concrete logging backend without changing GameplayAbilities asmdefs; logging naturally returns to the no-op writer.
 
 ## Runtime model
 
@@ -218,7 +214,7 @@ var cuePoolConfig = new GameObjectPoolManager.PoolConfig(
     maxTotalRetainedInstances: 1024);
 
 IResourceLocator cueResources =
-    new AssetManagementResourceLocator(assetPackage);
+    hostProvidedLocator;
 
 var cueManager = new GameplayCueManager(cuePoolConfig);
 cueManager.Initialize(cueResources);
@@ -226,7 +222,7 @@ cueManager.Initialize(cueResources);
 var context = new GASRuntimeContext(cueManager: cueManager);
 ```
 
-The `AssetManagementResourceLocator` type belongs to `CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement`; the main Runtime assembly knows only `IResourceLocator`. A project using another asset system supplies another adapter. The concrete resource boundary is `GameplayCueManager.Initialize(IResourceLocator)`; the Core `IGameplayCueManager` contract does not expose `Initialize`. The caller owns injected services. Dispose every ASC, then the context, then `GameplayCueManager`. A headless process should inject `NullGameplayCueManager.Instance` and avoid loading visual assets.
+`hostProvidedLocator` is supplied by the composition root; the main Runtime assembly knows only `IResourceLocator`. The optional UPM-gated `AssetManagementResourceLocator` and the sample-only `ResourcesResourceLocator` are two interchangeable implementations, and neither is referenced by Core, Runtime, Editor or Tests. The concrete resource boundary is `GameplayCueManager.Initialize(IResourceLocator)`; the Core `IGameplayCueManager` contract does not expose `Initialize`. The caller owns injected services. Dispose every ASC, then the context, then `GameplayCueManager`. A headless process should inject `NullGameplayCueManager.Instance` and avoid loading visual assets.
 
 ### DI composition
 
@@ -234,7 +230,7 @@ No runtime type depends on a DI container. Register concrete instances in the pr
 
 ```csharp
 builder.Register<IResourceLocator>(
-    _ => new AssetManagementResourceLocator(assetPackage),
+    _ => hostProvidedLocator,
     Lifetime.Singleton);
 
 builder.Register(
@@ -579,9 +575,9 @@ protected override GameplayEffectSpec CreateCooldownEffectSpec(
 }
 ```
 
-The override is only valid while the caller owns the spec (before submission); submission itself is the lock, so UE's `bDurationLocked` flag is unnecessary. The definition must use `EDurationPolicy.HasDuration`; `Instant` and `Infinite` definitions reject the call. `SetDuration` requires a positive finite value; `SetDurationRaw` additionally accepts zero (the effect expires on its first tick). Active-effect initialization, stacking duration refresh, and the authoritative replication channel all read the per-spec duration, so the override flows through every consumption path. `GetCooldownInfo` reports the per-instance spec duration, matching UE's `GetCooldownTimeRemainingAndDuration`.
+The override is only valid while the caller owns the spec (before submission); submission itself is the lock. The definition must use `EDurationPolicy.HasDuration`; `Instant` and `Infinite` definitions reject the call. `SetDuration` requires a positive finite value; `SetDurationRaw` additionally accepts zero (the effect expires on its first tick). Active-effect initialization, stacking duration refresh, and the authoritative replication channel all read the per-spec duration, so the override flows through every consumption path. `GetCooldownInfo` reports the per-instance spec duration.
 
-For data-driven durations that need no ability code at all, the definition can instead carry a `DurationMagnitude` (UE5: `FGameplayEffectDurationMagnitude`): a level-scalable constant, a captured attribute (e.g. a cooldown-reduction stat), or a SetByCaller key. Each created spec evaluates it once through the fixed-point magnitude pipeline, the server-replicated `durationRaw` carries the result to every client without client-side re-evaluation, and an explicit `SetDuration` call always wins over later SetByCaller-driven re-evaluation. Evaluated negative durations clamp to zero. When no `DurationMagnitude` is configured, `def.Duration` behaves exactly as before.
+For data-driven durations that need no ability code at all, the definition can instead carry a `DurationMagnitude`: a level-scalable constant, a captured attribute (e.g. a cooldown-reduction stat), or a SetByCaller key. Each created spec evaluates it once through the fixed-point magnitude pipeline, the server-replicated `durationRaw` carries the result to every client without client-side re-evaluation, and an explicit `SetDuration` call always wins over later SetByCaller-driven re-evaluation. Evaluated negative durations clamp to zero.
 
 ```csharp
 var cooldownEffect = new GameplayEffect(
@@ -842,7 +838,6 @@ The convenience capture path may prepare and commit locally, but it does not sen
 
 `GASAbilitySystemStateDeltaBuffer` and `GASAbilitySystemFullStateBuffer` remain process-local bridge structures. The Networking integration maps them to stable wire records, validates and prepares complete receiver state, resolves every runtime reference, and only then invokes the ASC apply boundary on its owner thread. Never serialize either process-local buffer directly.
 
-
 ## Memory, performance, and capacity
 
 ### Managed runtime memory
@@ -868,9 +863,9 @@ context.TrimCaches(); // discards every retained backing record
 
 `GASRuntimeLeaseStatistics` reports `Active`, `PeakActive`, `Acquisitions`, `InvalidReleases`, and `ReleaseFailures` for one object group. `context.GetMemoryStatistics()` returns `GASRuntimeMemoryStatistics` containing `EffectSpecs`, `ActiveEffects`, `EffectContexts`, `AbilitySpecs`, `Tasks`, `Abilities`, `TargetData`, and their summed `OutstandingLeases`. `context.GetCacheStatistics()` independently reports backing-cache `Retained`, `Capacity`, `Hits`, `Misses`, and `Discards`. `TrimCaches()` clears retained backing records without invalidating active specs. These APIs validate context ownership and disposal; they are diagnostics and explicit cache control, not active-lease recovery.
 
-Under `Throw`, cross-thread access throws immediately. Under `LogWarning`, runtime-memory access logs and still throws before mutation. `Disabled` removes only that diagnostic and adds no synchronization. Capacity should come from hardware composition profiles and measured telemetry rather than platform compiler symbols.
+Under `Throw`, cross-thread access throws immediately. Under `LogWarning`, runtime-memory access logs and still throws before mutation. `Disabled` removes only that diagnostic and adds no synchronization.
 
-No package-wide zero-allocation claim is made. Cache hits can reuse cleared spec backing buffers, but every public runtime acquisition still creates its one-shot object. First use, dictionary or buffer growth, event subscriptions, project callbacks, warnings/errors, authoring conversion, and external adapters can allocate. Successful hot-path ability/effect/prediction events, including committed effect removal and ability cancellation, use the optional `GASTrace` ring rather than emitting a log for every success. `GASTraceEvent.AbilityDefinition` stores the stable ability definition, never a released runtime instance. Trace capacity defaults to `4096`; `SetCapacity` accepts only `1..65536` and resets the ring. Verify representative gameplay with the Unity Profiler and allocation call stacks.
+Cache hits can reuse cleared spec backing buffers, but every public runtime acquisition still creates its one-shot object. First use, dictionary or buffer growth, event subscriptions, project callbacks, warnings/errors, authoring conversion, and external adapters can allocate. Successful hot-path ability/effect/prediction events, including committed effect removal and ability cancellation, use the optional `GASTrace` ring rather than emitting a log for every success. `GASTraceEvent.AbilityDefinition` stores the stable ability definition, never a released runtime instance. Trace capacity defaults to `4096`; `SetCapacity` accepts only `1..65536` and resets the ring.
 
 ### Stable public collection and tag views
 
@@ -885,7 +880,7 @@ ASC collection and tag queries return cached live views instead of a backing `Li
 
 These are stable object identities and live views, not copied snapshots. They expose no backing collection, implicit conversion, mutation method, tag callback registration, or raw container. Every count, index, query, and enumeration step checks ASC owner-thread affinity and disposal, including a view captured before its ASC is disposed. Do not enumerate while synchronously mutating the same owner; copy the required stable IDs or values when a snapshot is required.
 
-Concrete `foreach` over these view types uses value-type enumerators. The focused allocation guard observed zero current-thread bytes for the tested concrete-view enumeration path after warmup. Enumeration through `IEnumerable<T>` or another interface can box the struct enumerator and is not covered by that result.
+Concrete `foreach` over these view types uses value-type enumerators.
 
 ### Consumed and borrowed managed references
 
@@ -911,11 +906,9 @@ Internal lease generations still protect framework cleanup against reentrant or 
 
 `GASRuntimeLimits` bounds attribute sets, attributes, granted abilities, active effects, prediction windows, targets, SetByCaller entries, modifiers per effect, Core modifiers, outstanding predicted attribute snapshots, tag changes per delta, and per-tick catch-up work. `GASAbilitySystemLimits` applies corresponding state limits to the Unity-free state.
 
-`MaxPeriodicEffectExecutionsPerTick` and `MaxAbilityTaskRepeatExecutionsPerTick` both default to `8` and must be positive. Each active periodic effect and repeat task executes no more than its configured budget in one tick. Excess elapsed intervals remain in the timer as deterministic backlog and are processed on later ticks; the runtime does not silently drop or merge repetitions. This bounds each catch-up loop without changing elapsed-time ordering. Projects must still budget the aggregate cost of all active effects and tasks.
+`MaxPeriodicEffectExecutionsPerTick` and `MaxAbilityTaskRepeatExecutionsPerTick` both default to `8` and must be positive. Each active periodic effect and repeat task executes no more than its configured budget in one tick. Excess elapsed intervals remain in the timer as deterministic backlog and are processed on later ticks; the runtime does not silently drop or merge repetitions. This bounds each catch-up loop without changing elapsed-time ordering.
 
-There is no retained public AbilityTask pool and no task-cache capacity that limits concurrent tasks. Each ability must bound the tasks it can own through its workflow and project limits, and product stress tests must cover the maximum authored concurrency.
-
-Limit failures are operational signals. Record them with entity, ability/effect definition ID, current count, configured limit, and authority role without logging sensitive payload content.
+There is no retained public AbilityTask pool and no task-cache capacity that limits concurrent tasks.
 
 ### Complexity guidance
 
@@ -924,10 +917,8 @@ Limit failures are operational signals. Record them with entity, ability/effect 
 - Stacking lookups use maintained indexes by target/source.
 - ASC ability ticking copies the current ticking-spec set into a reusable snapshot, then checks live membership before each dispatch. A spec removed before its turn is skipped, a spec activated during the pass starts on the next simulation frame, and each initially live spec is dispatched at most once. Nested ASC Tick and ASC disposal from a tick callback are rejected. With `T` ticking specs, the snapshot pass is `O(T)` with average `O(1)` membership checks and `O(T)` retained snapshot capacity. `ReserveRuntimeCapacity(tickingAbilityCapacity: ...)` moves expected growth to composition; cold growth can still allocate.
 - Inside one ability, task removal during iteration writes a tombstone and immediately removes the task from the membership index. A `finally` pass compacts tombstones in place. A task created during the pass is deferred to the next task tick, a removed sibling is skipped, ability end stops traversal through the activation-generation guard, and nested task ticking is rejected. Traversal is `O(K)` for `K` initially tickable tasks; a pass with removals adds an `O(K)` in-place compaction and no scratch collection. Task-list capacity is retained by the ability instance and can grow on cold use.
-- Active-effect Tick cost grows with active effects and periodic work. The preallocated ASC snapshot and task tombstone paths observed zero current-thread allocation in their focused steady-state tests; this is not a package-wide Tick or zero-GC guarantee.
+- Active-effect Tick cost grows with active effects and periodic work.
 - Broad callbacks, custom requirements, calculations, and cue handlers remain project-controlled cost.
-
-For 10,000+ simple simulation entities, use the Unity-free Core data model or a project DOD/batch simulation and bridge only presentation-relevant entities to Runtime ASCs. Do not create one Unity-facing ASC with per-frame tasks for every data-only entity without profiling.
 
 ## Threading and safety
 
@@ -971,8 +962,6 @@ The stacking rows follow the configuration: `Stack Limit Mode = Unlimited` stops
 
 `GameplayAbilitySO.GetGameplayAbility()` lazily creates and returns one reusable immutable definition per loaded asset revision. Custom assets implement `CreateGameplayAbility()`, construct the derived ability with only its derived immutable inputs, then call `InitializeAbility(ability)` exactly once so every base tag, trigger, cost, cooldown, and policy is validated and transferred consistently. Validation and deserialization clear the definition cache. `CreateRuntimeInstance()` reconstructs only activation-state inputs; Runtime copies the sealed base configuration from the cached definition and must not invoke `InitializeAbility` again.
 
-Asset configuration should use stable tag and attribute names. Renaming a serialized type, field, tag, or definition identity requires a project migration plan and fixture coverage.
-
 ## Editor tools
 
 The Editor assembly is isolated to the Editor platform.
@@ -987,11 +976,11 @@ The Editor assembly is isolated to the Editor platform.
 
 The debugger uses selection or explicit refresh rather than periodic whole-scene scanning. Trace selection is sequence-based so ring-buffer movement does not silently change the selected event.
 
-Custom inspectors edit serialized fields through `SerializedObject`/`SerializedProperty` and support Unity Undo, Prefab overrides, and multi-object editing where applicable. Diagnostics are observability tools, not proof of Player, IL2CPP, platform, or allocation behavior.
+Custom inspectors edit serialized fields through `SerializedObject`/`SerializedProperty` and support Unity Undo, Prefab overrides, and multi-object editing where applicable.
 
 `AbilitySystemComponent` is a pure C# runtime object rather than a `UnityEngine.Object`, so Unity does not draw an Inspector for it directly. The sample's `AbilitySystemComponentHolder` Inspector exposes Play Mode-only controls for its hosted ASC. Select one or more holders, then use **Add / Update Selected & Show**, **Remove Selected**, **Show Overlay**, or **Hide Overlay**. These commands change transient runtime diagnostics state only: they do not serialize a debug flag, create a Prefab override, own or dispose an ASC, call `ClearTargets`, remove unselected ASCs, or destroy the overlay singleton. The registry contains one shared entry per ASC, so adding, updating, or removing a selected ASC changes that entry regardless of which caller registered it.
 
-Projects that provide a different ASC host can expose the same workflow from their own Custom Inspector by calling `TryAddTarget`, `IsTargetRegistered`, `RemoveTarget`, and `SetEnabled`. Keep registration at an explicit host or composition boundary; do not discover ASCs by scanning the scene on every Inspector repaint.
+Projects that provide a different ASC host can expose the same workflow from their own Custom Inspector by calling `TryAddTarget`, `IsTargetRegistered`, `RemoveTarget`, and `SetEnabled`.
 
 The optional runtime overlay accepts a bounded, explicitly registered set of live ASCs. It performs no whole-scene discovery and no reflection in the Runtime assembly. It is not created automatically during Runtime startup:
 
@@ -1026,11 +1015,9 @@ The overlay resolves its configuration in this order: the `configuration` argume
 
 `Toggle` remains a single-target convenience API: it replaces the complete target set with the supplied live ASC and toggles visibility. The Editor menu collects live ASCs only from the exact selected GameObjects before replacing its target set; it does not scan the scene. The sample registers Player and Enemy explicitly.
 
-All overlay APIs are Unity-main-thread diagnostics APIs. Registration is a bounded cold path with a maximum linear scan of 32 targets. The enabled IMGUI presentation formats diagnostic text and is not a zero-allocation gameplay path. Keep it absent or disabled in release and headless compositions unless runtime diagnostics are an explicit product requirement.
+All overlay APIs are Unity-main-thread diagnostics APIs. Registration is a bounded cold path with a maximum linear scan of 32 targets. The enabled IMGUI presentation formats diagnostic text and is not a zero-allocation gameplay path.
 
 ## Platform guidance
-
-The table describes static design compatibility. A platform is verified only after the project runs its target Player build and tests on representative hardware.
 
 | Platform | Static design guidance | Required project verification |
 | --- | --- | --- |
@@ -1041,17 +1028,19 @@ The table describes static design compatibility. A platform is verified only aft
 | Dedicated Server | Core is Unity-free; Runtime can use `NullGameplayCueManager` | Headless build, transport adapter, tick scheduling, state checksum/recovery, soak |
 | Future consoles | Core/Runtime asmdefs disable unsafe code; attribute registration is explicit and the runtime path does not require reflection or a native plugin | SDK/compiler restrictions, AOT/stripping, suspend/resume, memory budgets, certification requirements |
 
-Use hardware quality profiles to supply `GASRuntimeCacheProfile` backing capacity and GameplayCue pool retention. A low-memory device may retain fewer internal EffectSpec backing records and fewer cue instances while preserving the same public one-shot lease and gameplay-limit contracts. Platform-specific optimizations belong in adapters or composition profiles, not in common gameplay contracts.
-
-The Core/Runtime source and asmdefs contain no `UnityEditor` dependency in Runtime, unsafe code, reflection-based registration, native plugin, platform-name-based tuning, background-worker requirement, or runtime code-generation path. Core has `noEngineReferences: true`; Runtime contains the Unity-facing adapters. These are static portability facts, not execution evidence. Windows, Linux, macOS, iOS, Android, WebGL, dedicated-server, and console profiles still require their own Player build, IL2CPP/AOT and stripping checks where applicable, representative-device profiling, lifecycle tests, memory-pressure tests, and long-session soak results.
+The Core/Runtime source and asmdefs contain no `UnityEditor` dependency in Runtime, unsafe code, reflection-based registration, native plugin, platform-name-based tuning, background-worker requirement, or runtime code-generation path. Core has `noEngineReferences: true`; Runtime contains the Unity-facing adapters.
 
 ## Integration assemblies
 
 ### AssetManagement
 
-`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` is connected through direct asmdef references. It depends on `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Logging.Core`, and the main GameplayAbilities Runtime assembly, and contains `AssetManagementResourceLocator`.
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` is an optional, UPM-gated adapter. It depends on `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Logging.Core`, and the main GameplayAbilities Runtime assembly, and contains `AssetManagementResourceLocator`.
 
-The main Runtime assembly owns only `IResourceLocator` and `IResourceHandle<T>`; it has no AssetManagement asmdef reference. The Sample assembly references the integration explicitly and constructs the adapter from its `IAssetPackage`. At assembly level, a project that excludes AssetManagement can keep Core and Runtime and provide another `IResourceLocator`; it must also exclude the AssetManagement integration and any sample composition that references it. `package.json` declares AssetManagement as a direct requirement, so a UPM packaging profile that omits it must update that metadata coherently.
+The integration is enabled only when Unity Package Manager resolves `com.cyclone-games.asset-management` in the supported `[1.0.0,2.0.0)` range. Its asmdef maps that package version to the assembly-local `CYCLONEGAMES_HAS_ASSETMANAGEMENT` capability through `versionDefines`, then requires the same capability through `defineConstraints`. It uses `autoReferenced: false`, so a dedicated composition asmdef must reference it explicitly. `package.json` does not declare AssetManagement as a dependency: installing GameplayAbilities alone never pulls an asset backend into a project.
+
+The main Runtime assembly owns only `IResourceLocator` and `IResourceHandle<T>`; it has no AssetManagement asmdef reference. Core, Runtime, Editor, Tests and the Sample assembly all compile with AssetManagement absent. A host supplies any `IResourceLocator`; the sample includes `ResourcesResourceLocator`, a zero-dependency reference implementation backed by Unity `Resources` that intentionally ignores `bucket`, `cacheTag` and `cacheOwner` because Resources has no cache-ownership model. A headless process injects `NullGameplayCueManager.Instance` instead.
+
+A `package.json` inside an `Assets/ThirdParty` sibling folder is not an installed UPM package and does not activate `versionDefines`. The integration remains inactive unless Unity Package Manager resolves both packages under the supported conditions. Do not add `CYCLONEGAMES_HAS_ASSETMANAGEMENT` manually to PlayerSettings.
 
 ### DataTable
 
@@ -1061,12 +1050,10 @@ DataTable adapter source is present under `Runtime/Integrations/DataTable`. Its 
 
 The integration uses `autoReferenced: false`. Add explicit references to `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` and the DataTable assemblies used by the application from a dedicated composition asmdef. If that consumer assembly must also disappear when DataTable is absent, repeat the same package version define and constraint in the consumer asmdef. Do not add `CYCLONEGAMES_HAS_DATA_TABLE` manually to PlayerSettings.
 
-A `package.json` inside an `Assets/ThirdParty` sibling folder is not an installed UPM package and does not activate `versionDefines`. The integration remains inactive unless Unity Package Manager resolves both packages under the supported conditions. Validate the active path in a project that installs both packages through UPM.
+A `package.json` inside an `Assets/ThirdParty` sibling folder is not an installed UPM package and does not activate `versionDefines`. The integration remains inactive unless Unity Package Manager resolves both packages under the supported conditions.
 
 The integration provides attribute initialization, level value providers, modifier factories, and magnitude calculations. Core and Runtime do not depend on it.
 
 ### VContainer sample
 
 The VContainer composition sample is isolated in `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer`. Its assembly compiles only when the `VCONTAINER_PRESENT` condition is active.
-
-Projects using another container should reproduce the explicit lifetime graph, not add container references to Core or Runtime.

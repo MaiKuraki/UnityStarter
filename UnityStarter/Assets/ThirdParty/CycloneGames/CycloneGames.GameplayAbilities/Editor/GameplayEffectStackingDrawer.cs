@@ -27,7 +27,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             "Magnitude Policy",
             "How the stack count scales this effect's Multiply/Division magnitudes.\n\n" +
             "LinearBias (default): (M - 1) x stack + 1. Every stack adds the same delta, so a x1.1 buff " +
-            "at 5 stacks is x1.5. Matches Unreal Engine and the prevalent ARPG/MMORPG convention.\n\n" +
+            "at 5 stacks is x1.5.\n\n" +
             "Exponential: M ^ stack. Every stack compounds, so a x1.1 buff at 5 stacks is x1.61. " +
             "Use for deliberate 'double per stack' designs; the authoring range check rejects limits " +
             "whose worst-case product leaves the Q32.32 range.");

@@ -13,9 +13,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
     /// Cross-directional permutation, boundary and reentrancy suite:
     /// 1. Aggregation formula oracle sweep (operation x evaluation channel x stack count x base value)
     ///    and a multi-channel ordering case, each compared against an independently derived result.
-    ///    NOTE: the oracle encodes the framework's current product semantics for Multiply/Division
-    ///    combination (M1*M2, M^stack). UE's stock aggregator uses bias-sum (1 + sum(Mi-1)); this is a
-    ///    deliberate, documented divergence - see the UE alignment section of the audit report.
     /// 2. Cross-feature interaction: ongoing-tag-requirement inhibition gating aggregated values.
     /// 3. Boundary / hostile inputs: invalid delta time, over-limit modifier counts, extreme magnitudes.
     /// 4. Reentrancy: applying an effect from inside an attribute observer callback.
