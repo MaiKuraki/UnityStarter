@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.Text;
-using CycloneGames.IO;
 using CycloneGames.InputSystem.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -805,11 +804,10 @@ namespace CycloneGames.InputSystem.Editor
         {
             try
             {
-                string yaml = SystemFileStore.Default.ReadText(
+                string yaml = InputEditorConfigReader.ReadStrictUtf8(
                     path,
                     MaxConfigBytes,
-                    StrictUtf8,
-                    detectByteOrderMark: false);
+                    StrictUtf8);
                 if (!InputConfigurationYamlPreflight.TryValidate(yaml, out string yamlError))
                 {
                     SetStatus($"Cannot load configuration: {yamlError}", MessageType.Error);

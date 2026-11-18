@@ -213,7 +213,6 @@ flowchart TD
 | **Persistence.VYaml** | 可选 generated-resolver VYaml codec，用于可读 UTF-8 persistence payload。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence.VYaml/README.SCH.md) |
 | **Persistence.MessagePack** | 可选、受 asmdef gate 控制的 MessagePack codec source；只有安装锁定 binary、analyzer 与 Unity bridge 后才会参与编译。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence.MessagePack/README.SCH.md) |
 | **InputSystem** | 提供经过验证的 YAML 输入 authoring、带优先级的 mapping context、每玩家设备所有权、本地多人、binding profile、Editor tooling 与 opt-in integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
-| **InputSystem.AssetManagement** | InputSystem、AssetManagement 与 VContainer 之间的可选物理 package-loading bridge。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem.AssetManagement/README.SCH.md) |
 | **DeviceFeedback** | Haptics、vibration、rumble 与 device-light feedback abstractions。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
 | **Settings** | 无 Unity 依赖、带 clone 的 settings state，提供默认值、validation、forward migration、隔离 snapshot 与强类型 commit 后通知。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Settings/README.SCH.md) |
 | **Settings.Persistence** | 可选 integration，在不耦合两个 Core 的前提下组合 Settings state/migration 与一条 Persistence Store。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Settings.Persistence/README.SCH.md) |
