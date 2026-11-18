@@ -1,12 +1,11 @@
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement;
 
 namespace CycloneGames.GameplayAbilities.Integrate.Setup
 {
     /// <summary>
-    /// Example manual startup utility for projects that use CycloneGames.AssetManagement without a DI container.
+    /// Example manual, non-DI startup utility. The host supplies an IResourceLocator,
+    /// so neither this helper nor the sample assembly depends on a concrete asset backend.
     /// </summary>
     public static class GASManualSetup
     {
@@ -15,21 +14,21 @@ namespace CycloneGames.GameplayAbilities.Integrate.Setup
         /// Dispose every ASC first, then dispose the returned context and cue manager.
         /// </summary>
         public static GASRuntimeContext CreateContext(
-            IAssetPackage assetPackage,
+            IResourceLocator resourceLocator,
             GameObjectPoolManager.PoolConfig cuePoolConfig,
             out GameplayCueManager cueManager,
             GASRuntimeThreadPolicy threadPolicy = GASRuntimeThreadPolicy.Throw,
             GASRuntimeCacheProfile cacheProfile = null)
         {
-            if (assetPackage == null)
+            if (resourceLocator == null)
             {
-                throw new System.ArgumentNullException(nameof(assetPackage));
+                throw new System.ArgumentNullException(nameof(resourceLocator));
             }
 
             cueManager = new GameplayCueManager(cuePoolConfig);
             try
             {
-                cueManager.Initialize(new AssetManagementResourceLocator(assetPackage));
+                cueManager.Initialize(resourceLocator);
                 return new GASRuntimeContext(
                     cueManager: cueManager,
                     threadPolicy: threadPolicy,
