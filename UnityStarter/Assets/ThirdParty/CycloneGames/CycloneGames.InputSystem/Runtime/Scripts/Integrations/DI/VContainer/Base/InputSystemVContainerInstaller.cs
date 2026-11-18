@@ -2,103 +2,29 @@
 using System;
 using System.Threading;
 
-using UnityEngine;
-
 using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
 
-using CycloneGames.IO.Unity;
 using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 {
-    public delegate UniTask<string> InputSystemDefaultConfigurationLoader(
-        CancellationToken cancellationToken);
-
-    public delegate UniTask<string> InputSystemPackageConfigurationLoader(
-        object package,
-        string configLocation,
-        CancellationToken cancellationToken);
-
     /// <summary>
-    /// Registers a container-owned InputManager and lifecycle-safe initialization adapters.
+    /// Registers container-owned input services. Configuration sources, storage roots,
+    /// startup timing, failure handling, and runtime update permission are supplied by
+    /// the composition root through <see cref="InputSystemVContainerOptions"/>.
     /// </summary>
     public sealed class InputSystemVContainerInstaller : IInstaller
     {
-        private readonly string _defaultConfigFileName;
-        private readonly string _userConfigFileName;
-        private readonly InputSystemDefaultConfigurationLoader _defaultConfigLoader;
-        private readonly InputSystemPackageConfigurationLoader _packageConfigurationLoader;
-        private readonly InputSystemBootstrapOptions _bootstrapOptions;
+        private readonly InputSystemVContainerOptions _options;
         private readonly Func<IObjectResolver, UniTask> _postInitCallback;
-        private readonly bool _autoInitialize;
 
         public InputSystemVContainerInstaller(
-            InputSystemBootstrapOptions bootstrapOptions,
-            bool autoInitialize = true,
+            InputSystemVContainerOptions options,
             Func<IObjectResolver, UniTask> postInitCallback = null)
         {
-            _bootstrapOptions = bootstrapOptions ??
-                throw new ArgumentNullException(nameof(bootstrapOptions));
-            _autoInitialize = autoInitialize;
-            _postInitCallback = postInitCallback;
-        }
-
-        public InputSystemVContainerInstaller(
-            string defaultConfigFileName = "input_config.yaml",
-            string userConfigFileName = "user_input_settings.yaml",
-            bool autoInitialize = true,
-            Func<IObjectResolver, UniTask> postInitCallback = null)
-            : this(
-                defaultConfigFileName,
-                userConfigFileName,
-                null,
-                autoInitialize,
-                postInitCallback)
-        {
-        }
-
-        public InputSystemVContainerInstaller(
-            string defaultConfigFileName,
-            string userConfigFileName,
-            InputSystemPackageConfigurationLoader packageConfigurationLoader,
-            bool autoInitialize = true,
-            Func<IObjectResolver, UniTask> postInitCallback = null)
-        {
-            _defaultConfigFileName = defaultConfigFileName;
-            _userConfigFileName = userConfigFileName;
-            _packageConfigurationLoader = packageConfigurationLoader;
-            _autoInitialize = autoInitialize;
-            _postInitCallback = postInitCallback;
-        }
-
-        public InputSystemVContainerInstaller(
-            InputSystemDefaultConfigurationLoader defaultConfigLoader,
-            string userConfigFileName = "user_input_settings.yaml",
-            bool autoInitialize = true,
-            Func<IObjectResolver, UniTask> postInitCallback = null)
-            : this(
-                defaultConfigLoader,
-                userConfigFileName,
-                null,
-                autoInitialize,
-                postInitCallback)
-        {
-        }
-
-        public InputSystemVContainerInstaller(
-            InputSystemDefaultConfigurationLoader defaultConfigLoader,
-            string userConfigFileName,
-            InputSystemPackageConfigurationLoader packageConfigurationLoader,
-            bool autoInitialize = true,
-            Func<IObjectResolver, UniTask> postInitCallback = null)
-        {
-            _defaultConfigLoader = defaultConfigLoader ??
-                throw new ArgumentNullException(nameof(defaultConfigLoader));
-            _userConfigFileName = userConfigFileName;
-            _packageConfigurationLoader = packageConfigurationLoader;
-            _autoInitialize = autoInitialize;
+            _options = options ?? throw new ArgumentNullException(nameof(options));
             _postInitCallback = postInitCallback;
         }
 
@@ -109,6 +35,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 throw new ArgumentNullException(nameof(builder));
             }
 
+            InputSystemRegistrationPlan plan = _options.GetRegistrationPlan();
+
             builder.Register(_ => new InputManager(), Lifetime.Singleton)
                 .As<InputManager>();
             builder.Register(
@@ -118,21 +46,18 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             builder.Register(
                     resolver => new InputSystemInitializer(
                         resolver.Resolve<InputManager>(),
-                        _defaultConfigFileName,
-                        _userConfigFileName,
-                        _defaultConfigLoader,
-                        _packageConfigurationLoader,
-                        _bootstrapOptions,
+                        _options,
                         _postInitCallback),
                     Lifetime.Singleton)
                 .As<IInputSystemInitializer>()
                 .As<IInputSystemInitializerDiagnostics>();
 
-            if (_autoInitialize)
+            if (plan.RegisterEntryPoint)
             {
                 builder.RegisterEntryPoint(
                     resolver => new InputSystemAutoStartable(
                         resolver.Resolve<IInputSystemInitializerDiagnostics>(),
+                        _options,
                         resolver),
                     Lifetime.Singleton);
             }
@@ -142,11 +67,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
     public interface IInputSystemInitializer
     {
         UniTask InitializeAsync(IObjectResolver resolver);
-        UniTask ReinitializeFromPackageAsync(
-            object package,
-            string configLocation,
-            bool saveToUserConfig = true,
-            CancellationToken cancellationToken = default);
         UniTask UpdateConfigurationAsync(
             string yamlContent,
             bool saveToUserConfig = false,
@@ -155,7 +75,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
     }
 
     /// <summary>
-    /// Additive diagnostics contract for callers that need an authoritative initialization result.
+    /// Diagnostics contract for callers that need the authoritative initialization result.
     /// </summary>
     public interface IInputSystemInitializerDiagnostics
     {
@@ -177,13 +97,16 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
     internal sealed class InputSystemAutoStartable : IAsyncStartable
     {
         private readonly IInputSystemInitializerDiagnostics _initializer;
+        private readonly InputSystemVContainerOptions _options;
         private readonly IObjectResolver _resolver;
 
         internal InputSystemAutoStartable(
             IInputSystemInitializerDiagnostics initializer,
+            InputSystemVContainerOptions options,
             IObjectResolver resolver)
         {
             _initializer = initializer ?? throw new ArgumentNullException(nameof(initializer));
+            _options = options ?? throw new ArgumentNullException(nameof(options));
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         }
 
@@ -191,7 +114,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         {
             InputSystemLoadResult result =
                 await _initializer.InitializeWithResultAsync(_resolver, cancellationToken);
-            if (!result.IsBootstrapComplete)
+
+            if (_options.ShouldEscalateStartupFailure(result))
             {
                 throw new InvalidOperationException(
                     $"Input System startup failed with status {result.Status}: {result.Error}");
@@ -206,15 +130,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         private static readonly LogChannel Log = InputSystemVContainerLog.Channel;
 
         private const string LogPrefix = "[InputSystemInitializer]";
-        private const string DefaultUserConfigurationKey = "user_input_settings.yaml";
-        private const string CustomDefaultConfigurationKey = "custom-default";
 
         private readonly InputManager _inputManager;
-        private readonly string _defaultConfigFileName;
-        private readonly string _userConfigKey;
-        private readonly InputSystemDefaultConfigurationLoader _defaultConfigLoader;
-        private readonly InputSystemPackageConfigurationLoader _packageConfigurationLoader;
-        private readonly InputSystemBootstrapOptions _bootstrapOptions;
+        private readonly InputSystemVContainerOptions _options;
         private readonly Func<IObjectResolver, UniTask> _postInitCallback;
 
         public InputSystemLoadResult? LastResult { get; private set; }
@@ -222,21 +140,11 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
         internal InputSystemInitializer(
             InputManager inputManager,
-            string defaultConfigFileName,
-            string userConfigFileName,
-            InputSystemDefaultConfigurationLoader defaultConfigLoader,
-            InputSystemPackageConfigurationLoader packageConfigurationLoader,
-            InputSystemBootstrapOptions bootstrapOptions,
+            InputSystemVContainerOptions options,
             Func<IObjectResolver, UniTask> postInitCallback)
         {
             _inputManager = inputManager ?? throw new ArgumentNullException(nameof(inputManager));
-            _defaultConfigFileName = defaultConfigFileName;
-            _userConfigKey = string.IsNullOrWhiteSpace(userConfigFileName)
-                ? DefaultUserConfigurationKey
-                : userConfigFileName;
-            _defaultConfigLoader = defaultConfigLoader;
-            _packageConfigurationLoader = packageConfigurationLoader;
-            _bootstrapOptions = bootstrapOptions;
+            _options = options ?? throw new ArgumentNullException(nameof(options));
             _postInitCallback = postInitCallback;
         }
 
@@ -254,34 +162,16 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 throw new ArgumentNullException(nameof(resolver));
             }
 
-            InputSystemLoadResult result;
-            if (_bootstrapOptions != null)
-            {
-                result = await InputSystemLoader.LoadAndInitializeAsync(
-                    _bootstrapOptions,
-                    _inputManager,
-                    _inputManager.IsInitialized,
-                    cancellationToken);
-            }
-            else
-            {
-                IInputConfigurationSource defaultSource = CreateDefaultSource(out string defaultKey);
-                var userStore = new FileInputConfigurationStore(Application.persistentDataPath);
-                result = await InputSystemLoader.LoadAndInitializeAsync(
-                    defaultSource,
-                    defaultKey,
-                    userStore,
-                    _userConfigKey,
-                    _inputManager,
-                    _inputManager.IsInitialized,
-                    cancellationToken);
-            }
+            InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
+                _options.Bootstrap,
+                _inputManager,
+                _inputManager.IsInitialized,
+                cancellationToken);
             LastResult = result;
 
             if (!result.IsBootstrapComplete)
             {
-                Log.Error(
-                    $"{LogPrefix} Initialization failed: {result.Status}. {result.Error}");
+                Log.Error($"{LogPrefix} Initialization failed: {result.Status}. {result.Error}");
                 return result;
             }
 
@@ -302,54 +192,17 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             return result;
         }
 
-        public async UniTask ReinitializeFromPackageAsync(
-            object package,
-            string configLocation,
-            bool saveToUserConfig = true,
-            CancellationToken cancellationToken = default)
-        {
-            if (_packageConfigurationLoader == null)
-            {
-                Log.Error(
-                    $"{LogPrefix} No package configuration loader is registered. " +
-                    "Install an explicit package integration adapter.");
-                return;
-            }
-
-            try
-            {
-                string yamlContent = await _packageConfigurationLoader(
-                    package,
-                    configLocation,
-                    cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (yamlContent == null || yamlContent.Length == 0)
-                {
-                    Log.Warning($"{LogPrefix} Package configuration was unavailable.");
-                    return;
-                }
-
-                if (await TryUpdateConfigurationAsync(
-                        yamlContent,
-                        saveToUserConfig,
-                        cancellationToken))
-                {
-                    Log.Info($"{LogPrefix} Reinitialized from the package configuration.");
-                }
-            }
-            catch (Exception exception) when (IsRecoverableException(exception))
-            {
-                Log.Error(
-                    exception,
-                    $"{LogPrefix} Package configuration load failed.");
-            }
-        }
-
         public async UniTask UpdateConfigurationAsync(
             string yamlContent,
             bool saveToUserConfig = false,
             CancellationToken cancellationToken = default)
         {
+            if (!_options.AllowRuntimeConfigurationUpdates)
+            {
+                Log.Warning($"{LogPrefix} Runtime configuration updates are disabled by policy.");
+                return;
+            }
+
             await TryUpdateConfigurationAsync(
                 yamlContent,
                 saveToUserConfig,
@@ -359,11 +212,17 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         public async UniTask ReloadUserConfigurationAsync(
             CancellationToken cancellationToken = default)
         {
-            IInputConfigurationStore userStore = CreateUserStore(out string userKey);
-            if (userStore == null)
+            if (!_options.AllowRuntimeConfigurationUpdates)
             {
-                Log.Warning(
-                    $"{LogPrefix} No user configuration store is configured.");
+                Log.Warning($"{LogPrefix} Runtime configuration updates are disabled by policy.");
+                return;
+            }
+
+            IInputConfigurationStore userStore = _options.Bootstrap.UserStore;
+            string userKey = _options.Bootstrap.UserKey;
+            if (userStore == null || string.IsNullOrEmpty(userKey))
+            {
+                Log.Warning($"{LogPrefix} No user configuration store is configured.");
                 return;
             }
 
@@ -442,8 +301,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 return false;
             }
 
-            IInputConfigurationStore userStore = CreateUserStore(out string userKey);
-            if (userStore == null)
+            IInputConfigurationStore userStore = _options.Bootstrap.UserStore;
+            string userKey = _options.Bootstrap.UserKey;
+            if (userStore == null || string.IsNullOrEmpty(userKey))
             {
                 Log.Warning(
                     $"{LogPrefix} Configuration is active but no user store is configured.");
@@ -479,35 +339,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 return false;
             }
 
-            Log.Info(
-                $"{LogPrefix} Configuration updated and atomically persisted.");
+            Log.Info($"{LogPrefix} Configuration updated and atomically persisted.");
             return true;
-        }
-
-        private IInputConfigurationStore CreateUserStore(out string key)
-        {
-            if (_bootstrapOptions != null)
-            {
-                key = _bootstrapOptions.UserKey;
-                return _bootstrapOptions.UserStore;
-            }
-
-            key = _userConfigKey;
-            return new FileInputConfigurationStore(Application.persistentDataPath);
-        }
-
-        private IInputConfigurationSource CreateDefaultSource(out string key)
-        {
-            if (_defaultConfigLoader != null)
-            {
-                key = CustomDefaultConfigurationKey;
-                return new DelegateInputConfigurationSource(_defaultConfigLoader);
-            }
-
-            key = UnityFileUri.Create(
-                _defaultConfigFileName,
-                UnityFileLocation.StreamingAssets);
-            return new UriInputConfigurationSource();
         }
 
         private static bool IsRecoverableException(Exception exception)
@@ -516,46 +349,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                    exception is not OutOfMemoryException &&
                    exception is not AccessViolationException &&
                    exception is not StackOverflowException;
-        }
-    }
-
-    internal sealed class DelegateInputConfigurationSource : IInputConfigurationSource
-    {
-        private readonly InputSystemDefaultConfigurationLoader _loader;
-
-        internal DelegateInputConfigurationSource(InputSystemDefaultConfigurationLoader loader)
-        {
-            _loader = loader ?? throw new ArgumentNullException(nameof(loader));
-        }
-
-        public async UniTask<InputConfigurationReadResult> LoadAsync(
-            string key,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                string content = await _loader(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                return string.IsNullOrWhiteSpace(content)
-                    ? InputConfigurationReadResult.Failure(
-                        InputConfigurationStorageStatus.NotFound,
-                        "The custom default configuration loader returned no content.")
-                    : InputConfigurationReadResult.Success(content);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception exception) when (
-                exception is not OutOfMemoryException &&
-                exception is not AccessViolationException &&
-                exception is not StackOverflowException)
-            {
-                return InputConfigurationReadResult.Failure(
-                    InputConfigurationStorageStatus.IoError,
-                    $"Custom default configuration loading failed ({exception.GetType().Name}).");
-            }
         }
     }
 

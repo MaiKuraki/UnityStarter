@@ -2,83 +2,26 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层。它在提交前验证配置，为每个本地玩家创建独立的输入服务，通过优先级映射上下文路由 action，提供 R3 数据流、同步读取，并为配置和绑定 profile 持久化提供显式边界。
-
-## 目录
-
-- [概述](#概述)
-- [架构](#架构)
-- [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [故障排除](#故障排除)
-
-## 概述
-
-本模块将 authoring（在 Input System Editor 中编辑 YAML 配置）与 runtime dispatch（`InputManager` 提交不可变快照）以及 per-player delivery（`IInputPlayer` 持有 `InputUser`、action asset、active context 与 R3 stream）分离。在 YAML 中定义 context、action、binding、composite、interaction、processor 与 control scheme；manager 提交前根据当前 Unity Input System registry 验证；每个 joined player 获得独立构建的 action asset。
-
-本模块面向可审阅的 YAML authoring、有界验证、per-player `InputUser` 与设备所有权（本地多人）、优先级 context（Gameplay、Vehicle、Menu、Modal）、事件驱动和轮询读取、长按和 chord、具有版本化模块自有 JSON profile 的运行时 rebind、以及显式配置 source 和 store。
-
-### 核心特性
-
-- **已验证的 YAML authoring**：有界形状预检、schema validation、以及提交前的 Unity Input System registry/graph preflight。
-- **Per-player ownership**：每个 joined player 获得自己的 `InputUser`、action asset、context、stream 和 binding override。
-- **优先级映射 context**：`InputContext` 支持 priority 和 `BlocksLowerPriority`；capture 和全局 blocking scope。
-- **R3 stream 和同步读取**：`GetButtonObservable`、`GetVector2Observable`、`GetScalarObservable`、`TryReadValue<T>`、长按进度和 chord。
-- **Context-qualified identity**：`InputHashUtility.GetActionId(context, map, action)` 生成确定性 FNV-1a 32 位 hash。
-- **运行时 rebind**：`RebindAction` 应用选定路径；per-player 和 manager 级 JSON profile，支持 import/export 和有界预算。
-- **显式配置存储**：`IInputConfigurationSource`（读取）和 `IInputConfigurationStore`（读/写/删除）；内置 `UriInputConfigurationSource` 和 `FileInputConfigurationStore`。
-- **Editor 工具和代码生成**：Input System Editor 窗口、validation、确定性 `InputActions.cs` 生成，含 context-qualified action ID。
-- **可选集成**：UGUI adapter、VContainer composition、AssetManagement 支持的 package loading、诊断 `InputRecorder`/`InputReplayCursor`。
-
-## 架构
-
-| Assembly | Path | 用途 |
-| --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、player、context、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash 与 `CycloneGames.Logging.Core`。 |
-| `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、validation、安全写入、常量生成。仅 Editor。 |
-| `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | `InputDeviceIconSet`、`InputDeviceIconSwitcher`、菜单导航组件。`autoReferenced: false`。 |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、async startup、resolver adapter。无 AssetManagement 依赖。 |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | sibling package | Package-configuration loader adapter；由 `CycloneGames.InputSystem.AssetManagement` 提供。 |
-| `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` 和 `InputReplayCursor` 诊断工具。 |
-| `CycloneGames.InputSystem.Sample` | `Samples/` | 可选的 scene 和 bootstrap 示例。 |
-| `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode validation 和回归覆盖。 |
-
-可选 assembly 设置 `autoReferenced: false`。仅在用到对应功能时添加显式 asmdef 引用。UGUI 和 VContainer 使用 package 派生的 `versionDefines` 和 `defineConstraints` 激活；缺少对应 package 时排除该 assembly。AssetManagement 支持物理上位于同级 `CycloneGames.InputSystem.AssetManagement` package 中。
-
-InputSystem 通过以 `CycloneGames.InputSystem` 为根的稳定 `LogChannel` category 输出诊断。logging writer 生命周期由 host 负责。`com.cyclone-games.logging` 提供安全的 `NullLogWriter` 默认实现；应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供任意其他 `ILogWriter` backend。
-
-每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
-
-可选 sample asmdef 通过 `Samples/Diagnostics/InputSystemSampleLog.cs` 遵循同一约定，并保留 `CycloneGames.InputSystem.Sample`。
-
-```mermaid
-flowchart LR
-    A["Default IInputConfigurationSource"] --> L["InputSystemLoader"]
-    U["User IInputConfigurationStore"] --> L
-    L --> S["Bounded shape preflight"]
-    S --> V["Clone, prepare, validate schema"]
-    V --> P["Input System registry and temporary-graph preflight"]
-    P -->|success| M["Immutable InputManager snapshot"]
-    S -->|failure| F["Typed failure; no commit"]
-    V -->|failure| F
-    P -->|failure| F
-    M --> P1["IInputPlayer 0 / owned action asset"]
-    M --> P2["IInputPlayer N / owned action asset"]
-    P1 --> C["Prioritized active InputContexts"]
-    C --> R["R3 streams, commands, synchronous reads"]
-```
-
-初始化路径是事务性的：先执行有界形状预检再 clone，然后对 clone 进行 schema preparation 和语义 validation。在 Unity main thread 上根据当前 Input System registry 验证 layout、path、interaction、processor、composite 和 control scheme，构建并解析临时 action graph，然后释放这些 graph。只有成功的 preflight 才允许 immutable runtime snapshot 生效。之后每个 joined player 会收到一份独立构建的 action asset。
+建立在 Unity Input System 之上的输入层。适合需要按玩家隔离设备所有权，或输入路由随 UI 状态（游戏、菜单、弹窗）变化的场景。单人、静态 action map 的项目直接用 Unity Input System 更简单。
 
 ## 快速开始
 
-打开 `Tools > CycloneGames > Input System Editor` 生成或编辑配置。`Assets/StreamingAssets` 下不需要项目级默认文件。产品 composition root 决定配置来自 serialized `TextAsset`、StreamingAssets、asset package、有界远程 source、user store 还是显式 in-memory content。
+### 依赖
 
-最简单的 scene 级集成使用 serialized `TextAsset` 直接提供已验证的 YAML：
+| Package | 用途 |
+| --- | --- |
+| `com.unity.inputsystem` | 动作、绑定、设备 |
+| `com.cysharp.unitask` | 异步加载与加入玩家 |
+| `com.cysharp.r3` | 动作流 |
+| `jp.hadashikick.vyaml` | YAML 解析 |
+| `com.cyclone-games.hash` | 稳定的动作 ID |
+| `com.cyclone-games.logging` | 诊断日志 |
+
+版本声明见 `package.json`。在 asmdef 中添加对 `CycloneGames.InputSystem.Runtime` 的引用。UGUI、VContainer 和 Tools 程序集均为可选，用到时才添加引用。
+
+### 最小示例
+
+用 `Tools > CycloneGames > Input System Editor` 生成配置，把生成的 YAML `TextAsset` 赋给 `_configuration`：
 
 ```csharp
 using CycloneGames.InputSystem.Runtime;
@@ -136,74 +79,41 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
 }
 ```
 
-`InputManager` 的 owner 应在 composition root 中显式持有。`InputManager.Instance` 是全局入口；显式构造使 shutdown、测试、多 scope 和 DI ownership 更为清晰。已 dispose 的 manager 不能再次初始化，应构造新实例。配置定义了可用 context 但不推送 gameplay state —— 在对应产品状态开始时创建并 push `InputContext` 对象。
+`InitializeWithResult` 返回带类型的结果，加入玩家前先检查 `IsSuccess`。已释放的 manager 不能重新初始化，需要新建一个。manager 由 composition root 持有并在退出时释放。`InputManager.Instance` 提供全局入口；显式构造让关闭流程和测试更容易追踪。
 
-更多内容参见 [Documents~](Documents~/GettingStarted.md) 文件夹。
+配置只声明有哪些上下文，不会自动推送。在对应的业务状态开始时创建并推送 `InputContext`。
 
 ## 核心概念
 
-| 概念 | 表示形式 | 职责 |
+### 从 YAML 到运行中的玩家
+
+```mermaid
+flowchart LR
+    Source[IInputConfigurationSource] --> Preflight[有预算的 YAML 预检]
+    Preflight --> Validate[Schema 与 Input System 注册表校验]
+    Validate -->|成功| Snapshot[不可变 InputManager 快照]
+    Validate -->|失败| Result[带类型的失败，不提交]
+    Snapshot --> Players[每个玩家一个 IInputPlayer]
+```
+
+初始化是事务式的。克隆前先做有预算的形状预检，随后在副本上做 schema 准备和语义校验。在 Unity 主线程上，依据当前 Input System 注册表校验 layout、path、interaction、processor、composite 和 control scheme，构造临时 action graph、解析后释放。只有预检全部通过才提交不可变运行时快照。之后每个加入的玩家获得单独构造、由自己持有的 action asset。
+
+| Concept | Representation | Responsibility |
 | --- | --- | --- |
-| Action | `ActionBindingConfig` 和内部 Unity `InputAction` | 为一个或多个 binding 赋予逻辑名称和值类型。 |
-| Mapping Context | YAML `ContextDefinitionConfig` 加 runtime `InputContext` | 按优先级和低优先级阻止策略组织 action 和 command binding。 |
-| Interaction | Action 级 `interactions` | 使用 Unity Input System interaction 语法决定 action 何时 started、performed 或 cancelled。composite part 的 interaction 会被拒绝；将表达式放在 action 上。 |
-| Processor | `processors` 或 composite-part `processors` | 使用 Unity Input System processor 语法在 consumer 读取前转换值。 |
-| Composite | `CompositeBindingConfig` | 从命名 part 构建如 `2DVector` 等值，无需将 composite 编码为 control path。 |
-| Control Scheme | `ControlSchemeConfig` | 声明 binding group 及必需、可选或替代 device layout 用于匹配。 |
-| Player | `IInputPlayer` 由 `InputUser` 支持 | 持有配对设备、内部 action asset、active context、stream 和 binding override。 |
-| Binding Profile | `InputBindingOverrideProfile` 或 per-player override JSON | 独立于配置存储，持久化稳定的 context/map/action binding selector。 |
+| Action | `ActionBindingConfig` 与内部 Unity `InputAction` | 为一个或多个绑定指定逻辑名和值类型。 |
+| Mapping context | YAML `ContextDefinitionConfig` 与运行时 `InputContext` | 按优先级、低优先级阻断策略组织动作和命令绑定。 |
+| Interaction | 动作级 `interactions` | 用 Unity Input System 语法决定动作何时 started、performed、canceled。composite part 上的 interaction 会被拒绝。 |
+| Processor | `processors` 或 composite part 的 `processors` | 在消费端读取前变换值。 |
+| Composite | `CompositeBindingConfig` | 用命名 part 组合出 `2DVector` 之类的值。 |
+| Control scheme | `ControlSchemeConfig` | 声明 binding group 以及必需、可选或替代的设备 layout。 |
+| Player | `IInputPlayer`，底层为 `InputUser` | 持有配对设备、action asset、活动上下文、流和绑定覆盖。 |
+| Binding profile | `InputBindingOverrideProfile` 或每玩家覆盖 JSON | 独立于配置存储，持久化 context/map/action 绑定选择器。 |
 
-[Unity Input System 手册](https://docs.unity3d.com/Manual/com.unity.inputsystem.html) 是底层 Unity action、binding、interaction、processor 和 device 语义的权威参考。
+底层动作、绑定、interaction、processor 和设备的语义以 [Unity Input System 手册](https://docs.unity3d.com/Manual/com.unity.inputsystem.html) 为准。
 
-### Mapping context 仲裁
+### 映射上下文
 
-`PushContext` 将 runtime context 放入普通 context set 中。Active normal context 按降序 priority 排序；相同 priority 保持栈顺序。Evaluation 从该顺序的顶部开始，直到某个 active context 的 `BlocksLowerPriority` 为 `true`。这使得非阻塞 overlay 可以与 Gameplay 共存，而 Menu 可以阻止 Gameplay。
-
-双参数 `InputContext(actionMapName, name)` 构造从匹配的 YAML context 获取 priority 和 blocking policy。四参数构造提供显式 runtime policy：
-
-```csharp
-var gameplay = new InputContext("PlayerActions", "Gameplay");
-var menu = new InputContext("UIActions", "Menu", priority: 100, blocksLowerPriority: true);
-```
-
-名称区分大小写。
-
-### Capture 和全局 blocking
-
-`CaptureContext` 临时选择一个 capture context 排在所有 normal context 之前。它返回幂等的 `IDisposable`；dispose scope 后揭示下一个 capture 或 normal priority set。
-
-`BlockInputScope` 禁用 player 的所有 action map，同样返回幂等 scope。block 按深度计数，只有所有匹配 scope 或 `UnblockInput` 调用都释放后输入才会恢复。异步加载和转场场景优先使用 scoped form。
-
-```csharp
-using IDisposable modalCapture = player.CaptureContext(modalContext);
-using IDisposable loadingBlock = player.BlockInputScope();
-```
-
-不要保留 scope 超出其持有流程的声明周期，并在 Unity main thread 上 dispose。
-
-### Event stream、polling 和读取
-
-`EventDriven` 值 action 在 performed 时发射，cancel 时发射中性值。`Polling` `Vector2` 和 `Float` action 在 map enabled 时由 player 的单个 update pump 读取。需要连续采样的值用 polling，离散状态变化用 event-driven。每个 subscription 需要可见的 lifetime；由 `InputContext`、`CompositeDisposable` 或 owning component 负责 dispose。
-
-生成或计算出的 action ID 避免重复 string lookup 并包含 context identity：
-
-```csharp
-int moveId = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Move");
-player.GetVector2Observable(moveId).Subscribe(MoveCharacter);
-
-if (player.TryReadValue(moveId, out Vector2 move))
-{
-    ApplyMove(move);
-}
-```
-
-简短的 action-only 和 map/action 重载仍可用，但在请求 identity 不明确时返回空 observable。Context-qualified API 是稳定选择。
-
-## 使用指南
-
-### Context、priority、capture 和 blocking
-
-Push context 前先绑定 command。Context 持有 command mapping；player 持有该 context active 期间的 live subscription。
+`PushContext` 把运行时上下文加入常规集合。活动上下文按优先级降序排列，同优先级保持入栈顺序。求值从最高优先级开始，遇到 `BlocksLowerPriority == true` 的活动上下文即停止。非阻断的覆盖层可以与 Gameplay 共存，而 Menu 会阻断 Gameplay。
 
 ```csharp
 InputContext gameplay = new InputContext("PlayerActions", "Gameplay")
@@ -220,41 +130,81 @@ InputContext menu = new InputContext("UIActions", "Menu")
         new MoveCommand(NavigateMenu));
 
 player.PushContext(gameplay);
-player.PushContext(menu); // YAML priority 100 和 blocking policy 使 Menu 成为权威。
+player.PushContext(menu); // YAML 中优先级 100 且阻断，Menu 生效。
 
-player.RemoveContext(menu); // Gameplay 恢复 active。
+player.RemoveContext(menu); // Gameplay 重新生效。
 gameplay.Dispose();
 menu.Dispose();
 ```
 
-`ActiveContextName` 报告最高 active context。产品状态应作为推送哪些 context 的事实来源。
+先绑定命令再推送上下文。上下文持有命令映射，玩家在上下文活动期间持有实时订阅。名称按 ordinal 比较且区分大小写，`ActiveContextName` 返回当前最高优先级的活动上下文。
 
-Context stack/capture 变更先提交 model，再重建 Unity action-map projection。如果 map enablement 或自定义 observable subscription 抛出异常，model 变更保持提交，所有 projected map/subscription 故障关闭，`ActiveContextName` 被清空，发起 API 重新抛出。移除失败的 binding/subscriber，然后调用 `RefreshActiveContext()` 重试。同步重入刷新被合并，上限 16 次；超过上限也会禁用输入而非让 main thread 自旋。
+两参数构造 `InputContext(actionMapName, name)` 从匹配的 YAML 上下文读取优先级和阻断策略；四参数构造直接指定运行时策略：
 
-### 本地多人和设备 ownership
+```csharp
+var menu = new InputContext("UIActions", "Menu", priority: 100, blocksLowerPriority: true);
+```
+
+上下文切换时如果启用 map 或订阅自定义 observable 抛异常，模型变更仍然提交，所有投影出的 map 与订阅会全部停用，`ActiveContextName` 被清空，发起调用的接口重新抛出异常。移除出错的绑定后调用 `RefreshActiveContext()` 重试。同步重入刷新会合并，上限 16 轮；超过上限时输入保持停用，不会让主线程空转。
+
+### 捕获与全局阻断
+
+`CaptureContext` 临时把一个捕获上下文排在所有常规上下文之前，返回幂等的 `IDisposable`；释放后回到下一个捕获上下文或常规优先级集合。
+
+`BlockInputScope` 停用该玩家的所有 action map。阻断按深度计数，所有匹配的 scope 或 `UnblockInput` 调用都释放后输入才恢复。
+
+```csharp
+using IDisposable modalCapture = player.CaptureContext(modalContext);
+using IDisposable loadingBlock = player.BlockInputScope();
+```
+
+两个 scope 都要在创建它的流程内、在 Unity 主线程上释放。
+
+### 读取动作
+
+`EventDriven` 动作在 performed 时发出值，cancel 时发出中性值。`Polling` 的 `Vector2` 和 `Float` 动作由玩家唯一的 update pump 在 map 启用期间读取。需要连续采样用 polling，离散状态变化用事件驱动。每个订阅都要有明确的生命周期：`InputContext`、`CompositeDisposable` 或持有它的组件负责释放。
+
+生成或计算出的动作 ID 避免重复字符串查找，并包含上下文标识：
+
+```csharp
+int moveId = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Move");
+player.GetVector2Observable(moveId).Subscribe(MoveCharacter);
+
+if (player.TryReadValue(moveId, out Vector2 move))
+{
+    ApplyMove(move);
+}
+```
+
+每个 ID 是 `context/map/action` 的确定性 FNV-1a 32 位 hash。只带动作名、或带 map/动作名的重载仍然可用，但标识有歧义时会返回空 observable。带上下文限定的 API 是稳定选择。
+
+## 常见任务
+
+### 本地多人
 
 | API | 设备策略 | 典型用途 |
 | --- | --- | --- |
-| `JoinSinglePlayer` / `JoinSinglePlayerAsync` | 从 unclaimed device 匹配首选再剩余 control scheme。 | 标准本地 player 创建。 |
-| `JoinPlayerAndLockDevice` | 要求提供设备参与有效 declared scheme；声明所有匹配 scheme device。 | 用户从已知 gamepad 加入。 |
-| `JoinPlayerOnSharedDevice` | 配对当前键盘，存在 mouse 时配对 mouse，不独占声明。 | 明确的共享键盘模式。 |
-| `StartListeningForPlayers` | 合并配置的 join path。Join binding 从第一个未注册的 slot 创建新 player；只有当所有 slot 都已占用时，才把设备扩展到 primary player 的设备集合。 | Lobby join flow。 |
-| `PairAdditionalDevice` | 显式为已加入的 player 再配对一台声明过 layout 的设备，绝不创建新 player。设备不可声明或 layout 未声明时 fail closed。 | 单人热插拔第二台设备。 |
-| `RemovePlayer` | Dispose player、unpair 其 `InputUser`、释放声明。 | 离开、slot reset 或重新初始化前关闭。 |
+| `JoinSinglePlayer` / `JoinSinglePlayerAsync` | 从未占用的设备中依次匹配首选和其余 control scheme。 | 常规本地玩家创建。 |
+| `JoinPlayerAndLockDevice` | 要求传入设备参与某个有效 scheme，并占用该 scheme 匹配到的全部设备。 | 从已知手柄加入。 |
+| `JoinPlayerOnSharedDevice` | 配对当前键盘以及存在的鼠标，不做独占占用。 | 共享键盘模式。 |
+| `StartListeningForPlayers` | join 绑定从第一个未注册槽位创建玩家；所有声明槽位都占满后扩展主玩家的设备集。 | 大厅加入流程。 |
+| `PairAdditionalDevice` | 给已加入玩家再配对一个声明 layout 的设备。设备不可占用或 layout 未声明时失败关闭。 | 单人热插拔。 |
+| `RemovePlayer` | 释放玩家、解绑 `InputUser`、释放占用。 | 离场、槽位重置、重新初始化前的清理。 |
 
-**设备白名单与 locked / mixed 的区别。** 每个 player 都会把 action asset 关联到自己的 `InputUser`，因此 `InputActionAsset.devices` 始终是该 player 自己的配对设备白名单。锁定 slot 会额外激活 control scheme，把 binding mask 收窄到该 scheme 的 group。设置 `pairAllMatchingDevices: true` 的 slot 保持 scheme 未激活：所有 binding 都保持可用，但只作用于该 player 白名单内的设备。这既让单个 player 在键鼠与手柄之间无缝切换而无需重新 join，也让第二个本地 player 仍能认领剩余设备。per-binding `deviceBindingGroups` 与该 slot 自身的 `controlSchemes` 都依赖一个已激活的 scheme，因此该模式按设计忽略它们；此时设备白名单是唯一边界。
+```csharp
+IInputPlayer player1 = manager.JoinPlayerAndLockDevice(0, gamepad1);
+IInputPlayer player2 = manager.JoinPlayerAndLockDevice(1, gamepad2);
+```
 
-`maxDevicesPerLayout`（默认 `1`，钳制到 `1..8`）限制此类 slot 对每个被引用 layout 可认领的设备数量；没有它，一个 player 会吃光所有键盘、鼠标和手柄。`deviceSwitchDebounceMs`（默认 `0`，钳制到 `0..5000`）设置 `ActiveDeviceKind` 再次切换前的最小驻留时间，把快速设备交替合并成一次呈现更新。`InputPlayer.NotifyDeviceActivity(InputDevice)` 是可选显式入口，供在 action callback 之外观察设备活动的产品代码使用。
+每个玩家的 action asset 都与自己的 `InputUser` 关联，因此 `InputActionAsset.devices` 始终是该玩家的配对设备白名单。锁定槽位还会激活一个 control scheme，把 binding mask 收窄到该 scheme 的 group。`pairAllMatchingDevices: true` 的槽位不设置 scheme：所有绑定保持有效，但只在该玩家的白名单设备上生效。这样单个玩家可以在键鼠和手柄之间切换而无需重新加入，第二个本地玩家仍能占用其余设备。逐绑定 `deviceBindingGroups` 和槽位 `controlSchemes` 都依赖活动 scheme，因此该模式会忽略它们。
 
-Async 重载接受 `CancellationToken`。单 player 超时返回 `null`；caller cancellation 被传播。Batch aggregate timeout 或 manager shutdown 返回成功 joined 前缀。Caller cancellation 仅回滚该 batch 创建的 player，保留已有 registration，然后抛出。Join 方法对已注册 player ID 幂等，返回该 player。
+`maxDevicesPerLayout`（默认 `1`，钳制到 `1..8`）限制此类槽位对每种引用 layout 可占用的设备数。`deviceSwitchDebounceMs`（默认 `0`，钳制到 `0..5000`）设定 `ActiveDeviceKind` 再次切换前的最短停留时间。
 
-`JoinPlayersBatchAsync` 把 batch 分摊到多帧：除最后一个 player 外，每完成一个就 yield 一次，因此 *N* 个 player 的 batch 最多跨 *N* 帧，每帧承担一个 player 的构造成本。分帧限制的是单帧内落下多少工作，但在参考配置（8 player、3 context、每 context 32 action）下，每个 player 的构造仍需几十毫秒（EditMode 基准实测总计 739.9 ms、每 player 92.5 ms、最差单帧 114.8 ms）。应在加载画面期间执行 batch，并在目标平台上实测。最后一个 player 不额外多等一帧。返回的列表只在 task 完成时才完整，因此调用方不能在自己发起调用的那一帧读取结果。
+异步重载接受 `CancellationToken`。单玩家超时返回 `null`；调用方取消会向上传播。批量总超时或 manager 关闭返回已成功加入的前缀。调用方取消只回滚该批次创建的玩家，保留已有注册，然后抛出异常。对已注册的玩家 ID，join 方法是幂等的，直接返回该玩家。
 
-分帧不改变超时、取消与关闭语义：batch aggregate timeout 或 manager shutdown 仍返回成功 joined 的前缀；caller cancellation 仍只回滚该 batch 创建的 player，然后抛出。同步版本 `JoinPlayersBatch` 未变，仍在发起调用的那一帧内完成；只在整批成本可接受于单帧时使用它，例如加载画面期间。
+`JoinPlayersBatchAsync` 把批次摊到多帧，除最后一个玩家外每加入一个就让出一帧，N 个玩家最多跨 N 帧。在八玩家、每玩家三个上下文、每上下文 32 个动作的参考配置下，EditMode 基准测得总计 739.9 ms、每玩家 92.5 ms、最差帧 114.8 ms。请在加载界面执行批量加入。返回的列表只在任务完成后才完整，同步版本 `JoinPlayersBatch` 在调用帧内完成。
 
-Control-scheme 匹配由 `deviceRequirements` 驱动。`isOptional` 允许缺失设备。`isOr` 按 Unity Input System scheme 顺序表达替代要求。Binding 应使用同一 player slot 声明的 group。如未声明 scheme，从 configured direct 和 composite-part path 派生的 layout 作为替代：选择首个可声明的匹配 device。当选中的 device 是 keyboard 或 mouse 时，另一个可声明的 keyboard/mouse 设备作为 companion 加入。推荐使用显式 scheme，因为可审计。
-
-每个 player 暴露配对设备生命周期变化：
+control scheme 匹配由 `deviceRequirements` 驱动：`isOptional` 允许设备缺失，`isOr` 按 Unity Input System 的 scheme 顺序表达替代条件。没有声明 scheme 时，从配置的直接绑定和 composite part 路径推导出的 layout 互为替代，选中第一个可占用的匹配设备。若选中的是键盘或鼠标，另一个可占用的键鼠设备会作为伴随设备加入。显式声明 scheme 更利于审查设备所有权。
 
 ```csharp
 private void ObserveDevices(IInputPlayer player)
@@ -278,32 +228,45 @@ private void ObserveDevices(IInputPlayer player)
 }
 ```
 
-`ActiveDeviceKind` 在观察到有意义 action 活动时变化；用于 glyph 展示。非零的 `deviceSwitchDebounceMs` 会抑制快速交替，产品 UI 无需再自己做去抖。
-
-### 设备活动与提示替换
-
-`ActiveDeviceKind` 是粗粒度、带去抖的呈现状态。要做精确的提示替换，`InputPlayer.DeviceActivity` 会为该 player 自己设备上的每次可观察活动发布一个 `InputDeviceActivity`：
+`ActiveDeviceKind` 在观察到有效动作活动时变化，用于图标展示。需要精确的提示替换时，`InputPlayer.DeviceActivity` 会为该玩家自己设备上的每次活动发布 `InputDeviceActivity`：
 
 | 字段 | 含义 |
 | --- | --- |
-| `PlayerId`、`DeviceId` | 所属 slot 与具体 Unity device id。 |
-| `DeviceLayout` | 具体 layout，例如 `DualShockGamepad`、`XInputController`。 |
-| `Family` | 细粒度 `InputDeviceFamily`：`Keyboard`、`Mouse`、`Gamepad`、`Touchscreen`、`Joystick`、`Other`。 |
-| `PromptKind` | 旧的粗粒度 `InputDeviceKind`，保证现有消费者不受影响。 |
-| `ControlPath` | 已知时给出来源 control 的完整 path。 |
-| `Timestamp` | Player 帧时间戳，由 `UpdateRuntimeState` 推进。 |
+| `PlayerId`, `DeviceId` | 所属槽位与具体的 Unity 设备 id。 |
+| `DeviceLayout` | 具体 layout，例如 `DualShockGamepad` 或 `XInputController`。 |
+| `Family` | `InputDeviceFamily`：`Keyboard`、`Mouse`、`Gamepad`、`Touchscreen`、`Joystick`、`Other`。 |
+| `PromptKind` | 供既有消费端使用的粗粒度 `InputDeviceKind`。 |
+| `ControlPath` | 已知时给出来源控制的完整路径。 |
+| `Timestamp` | 玩家帧时间戳，由 `UpdateRuntimeState` 推进。 |
 
-该流由 Unity 的 `onAnyButtonPress` 自动驱动，并过滤到该 player 自己的设备白名单，因此其他本地 player 无法劫持提示。连续量活动（鼠标移动、摇杆漂移）可通过 `NotifyDeviceActivity(device)` 或 `NotifyDeviceActivity(device, control)` 显式上报。`InputDeviceIconSet.GetIcon(kind, deviceLayout)` 优先按 layout 解析 sprite（Xbox 与 PlayStation 图标），未命中再回退到粗粒度 kind；`GetIcon(InputDeviceActivity)` 是便捷重载。`DeviceActivity` 是原始流、不去抖——产品 UI 应按 `Family` 或 `DeviceLayout` 自行去重；`ActiveDeviceKind` 仍是带去抖的粗粒度状态。`IInputPlayer` 与 `InputDeviceKind` 均未改动，因此这是 additive 能力。
+该流由 Unity 的 `onAnyButtonPress` 驱动，并按玩家设备白名单过滤，其他本地玩家无法劫持提示。连续活动（鼠标移动、摇杆漂移）可用 `NotifyDeviceActivity(device)` 或 `NotifyDeviceActivity(device, control)` 显式上报。`InputDeviceIconSet.GetIcon(kind, deviceLayout)` 先按 layout 查精灵（Xbox 与 PlayStation 图标），再回退到粗粒度 kind。`DeviceActivity` 是未去抖的原始流，业务 UI 需按 `Family` 或 `DeviceLayout` 去重；去抖后的粗粒度状态仍看 `ActiveDeviceKind`。
 
-### 设备断连恢复
+control scheme 只在加入时选定一次。玩家所有配对设备断开后，玩家仍保持注册，白名单为空，scheme 与 binding mask 不变。调用 `InputManager.ReassignPlayerDevices(playerId)` 会用当前可用设备移除并重新加入该玩家，同时刷新 scheme、binding mask 和白名单。通常在 `OnDeviceStatusChanged` 中、`ChangeKind` 为 `Lost`/`Unpaired` 且 `User.pairedDevices.Count == 0` 时调用，并延迟一帧，避免在自身回调里释放玩家。`InputManager.AutoReassignOnDeviceLoss`（默认 `false`）在设备拓扑变化时自动执行同样的恢复。
 
-Control scheme 只在 join 时选择一次。若某 player 的配对设备全部断开，该 player 仍保持注册，但白名单变空、所有 action 解析到 0 个 control，且 scheme 与 binding mask 保持不变。调用 `InputManager.ReassignPlayerDevices(playerId)` 会移除并按当前可用设备重新 join 该 player，同时刷新 scheme、binding mask 与白名单。产品通常在 `OnDeviceStatusChanged` 收到 `Lost`/`Unpaired` 且 `User.pairedDevices.Count == 0` 时调用它，并延迟一帧以避免在自己的回调里 dispose player。`InputManager.AutoReassignOnDeviceLoss`（默认 `false`）会在拓扑变化时自动执行同样的恢复；当 `OnPlayerInputReady` 通知时机需要由产品显式控制时请保持关闭。
+### 弹窗捕获与输入阻断
 
-### Interaction、processor、long press 和 chord
+```csharp
+IDisposable capture = player.CaptureContext(modalDialogContext);
+try
+{
+    // Drive the modal flow.
+}
+finally
+{
+    capture.Dispose();
+}
 
-Action-level `interactions` 和 `processors` 在创建内部 action 时转发给 Unity Input System。Composite part 可添加 `processors`；part-level `interactions` 会被拒绝。初始化 preflight 根据当前注册的 Unity Input System 环境解析 expression name/参数、layout、control path、composite 和 composite part。在调用 `InitializeWithResult` 或 `ReinitializeWithResult` 之前注册产品定义的 layout、interaction、processor 和 composite。
+using (player.BlockInputScope())
+{
+    // Synchronous transition. For async code, keep the scope in a try/finally.
+}
+```
 
-模块的 long-press completion stream 支持 `Button` 和 `Float`，由 `longPressMs > 0` 启用，与 Unity `hold(...)` interaction 独立。长按进度仅适用于 `Button` action：
+### 长按与组合键
+
+动作级 `interactions` 和 `processors` 在创建内部动作时转发给 Unity Input System。composite part 可以加 `processors`，但不能加 `interactions`。初始化预检会按当前注册环境解析表达式名和参数、layout、控制路径、composite 与 composite part，因此自定义的 layout、interaction、processor、composite 要在 `InitializeWithResult` 或 `ReinitializeWithResult` 之前注册。
+
+模块自带的长按完成流支持 `Button` 和 `Float`，由 `longPressMs > 0` 启用，与 Unity 的 `hold(...)` interaction 相互独立。进度仅对 `Button` 可用，按住期间为 `0..1`，提前松开发出 `-1`。`Float` 长按时 `longPressValueThreshold` 必须有限且位于 `(0,1]`；长按关闭时允许 `0..1`。
 
 ```csharp
 player.GetLongPressObservable("Gameplay", "PlayerActions", "Confirm")
@@ -311,25 +274,18 @@ player.GetLongPressObservable("Gameplay", "PlayerActions", "Confirm")
 
 player.GetLongPressProgressObservable("Gameplay", "PlayerActions", "Confirm")
     .Subscribe(progress => UpdateHoldMeter(progress));
-```
 
-Button 进度在按下期间为 `0..1`。未完成释放时发射 `-1`。对于 `Float` 长按，`longPressValueThreshold` 必须在 `(0,1]` 且有限；长按禁用时接受范围为 `0..1`。
-
-Chord 需要两个已配置的 button action。名称可能复用时使用 context-qualified ID：
-
-```csharp
-int first = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Confirm");
-int second = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Cancel");
-
-player.GetChordObservable(first, second, windowMs: 200f)
+int confirm = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Confirm");
+int cancel = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Cancel");
+player.GetChordObservable(confirm, cancel, windowMs: 200f)
     .Subscribe(_ => OpenShortcut());
 ```
 
-Chord stream 在请求窗口内识别两次按下，释放后重置。
+组合键要求两个已配置的按钮动作。该流在指定时间窗内识别两次按下，松开后复位。
 
-### Rebind 和 binding profile
+### 重绑定与绑定档案
 
-Rebind 操作 player 内部 Unity action。推荐使用 context-qualified 重载并传入原始配置路径：
+`RebindAction` 应用已经选定的路径。业务侧的 rebind UI 负责采集候选控制、执行保留键与无障碍策略、与当前有效路径比较、向用户确认冲突处理方式，然后应用覆盖。`CheckBindingConflicts` 是针对配置中直接绑定的 authoring 诊断，不评估待定候选或运行时覆盖。
 
 ```csharp
 bool changed = player.RebindAction(
@@ -343,13 +299,9 @@ player.ResetActionBinding("Gameplay", "PlayerActions", "Confirm");
 player.ResetAllActionBindings();
 ```
 
-此 API 应用已选定的路径。产品拥有的 rebind UI 负责捕获候选 control、执行保留键和可访问性策略、与当前有效路径比较、向用户询问冲突解决方案，最后应用 override。`CheckBindingConflicts` 是 configured direct binding 的 authoring diagnostic；不评估待定候选或 runtime override。
+每玩家 JSON 使用模块自有 schema，包含 context/map/action 标识、绑定序号和原始绑定元数据。导入时先暂存并校验文档，再替换活动覆盖。单份每玩家文档上限为 128 条覆盖记录和 1 MiB 严格 UTF-8。manager 档案在 4 MiB 总预算下聚合各玩家 JSON，可在玩家加入前导入，待处理条目在玩家构造时应用。
 
-Per-player JSON 使用模块自有 schema，含 context/map/action identity 加 binding ordinal 和原始 binding metadata。Import 先分段验证文档再替换 active override。Per-player document 上限 128 条 override record 和 1 MiB strict UTF-8。Manager profile 聚合 per-player JSON，总预算 4 MiB，可在 player join 前 import；待处理条目在 player 构造时应用。
-
-Binding-profile 持久化属于产品 composition root。使用 `CycloneGames.Persistence` 时，注入产品选择的 `IPersistenceStorage` 和 `IPersistenceCodec<string>`，然后将导出的 profile 作为 opaque JSON 存储。Codec 可以将字符串编码为 strict UTF-8，但不能解析或重写 InputSystem schema。`InputManager` 是唯一的 profile validator。
-
-以下类属于产品代码或产品自有 integration assembly：
+项目若使用 `CycloneGames.Persistence`，注入项目选定的 `IPersistenceStorage` 和 `IPersistenceCodec<string>`，把导出的档案当作不透明 JSON 存储。codec 可以把字符串编码为严格 UTF-8，但不能解释或改写 InputSystem 的 schema。`InputManager` 是唯一的档案校验方。下面这个类应放在业务代码或项目自己的集成程序集中：
 
 ```csharp
 using System.Threading;
@@ -407,13 +359,13 @@ public sealed class InputBindingProfilePersistence
 }
 ```
 
-在 composition root 构造一次，player join 前加载，仅在显式 settings commit 或生命周期检查点保存。预算耗尽是可预期失败路径时使用 `TryExportBindingOverridesJson` 或 `TryExportBindingOverrideProfile`。Profile JSON 包含输入偏好而非敏感信息，但其存储、账户关联、保留、完整性、加密和平台提供者仍属于产品 save policy。
+在 composition root 中只构造一次，玩家加入前加载，在明确的设置提交或生命周期检查点保存。预算耗尽属于预期失败路径时用 `TryExportBindingOverridesJson` 或 `TryExportBindingOverrideProfile`。加载失败时保持配置默认值；数据缺失是首次运行的正常状态。
 
-### 配置加载和持久化
+### 加载配置
 
-`IInputConfigurationSource` 为只读。`IInputConfigurationStore` 增加 save 和 delete。`FileInputConfigurationStore` 接受固定 root 和相对 Unicode Form C 的逻辑 key。`/` 是唯一的逻辑段分隔符；`\` 被拒绝。Store 拒绝 rooted path、URI、traversal、不安全字符、以及在操作边界包含可检测符号链接或 reparse point 的路径，限制 strict UTF-8 content，通过临时文件写入，并保留一个固定 `.bak` 用于恢复。
+`IInputConfigurationSource` 只读，`IInputConfigurationStore` 增加保存和删除。`FileInputConfigurationStore` 接受固定根目录和相对、Unicode Form C 的逻辑键；`/` 是唯一的分段分隔符，`\` 被拒绝。它还拒绝根路径、URI、路径穿越、不安全字符，以及操作边界上可检测到的符号链接或重解析点；内容按严格 UTF-8 限额，经临时文件写入，并保留一个固定 `.bak` 用于恢复。
 
-`UriInputConfigurationSource` 从本地 `StreamingAssets`、Android `jar:file`、same-origin StreamingAssets web URL 或显式提供给 allowlist 的 HTTPS host 读取默认配置。逻辑 URI 上限 4,096 字符。HTTPS allowlist 最多接受 64 个有界 DNS/IPv4 host，每个不超过 253 字符。本地路径必须保持在 `StreamingAssets` 内。Allowlisted HTTPS endpoint 必须使用 port 443 且不含凭据或 fragment。Redirect 被禁用，读取有 byte budget 和 timeout。
+`UriInputConfigurationSource` 从本地 `StreamingAssets`、Android `jar:file`、同源 StreamingAssets Web URL 或显式加入允许列表的 HTTPS 主机读取默认配置。逻辑 URI 上限 4,096 字符。HTTPS 允许列表最多 64 个受限 DNS/IPv4 主机，每个不超过 253 字符；端点必须使用 443 端口，不含凭据或 fragment，重定向关闭，读取有字节预算和超时。
 
 ```csharp
 using System.IO;
@@ -445,278 +397,221 @@ if (!load.IsBootstrapComplete)
 }
 ```
 
-`Disabled`：不执行读取。`Optional`：user 和 default content 都缺失时返回 `NotConfigured`；`Required`：无可用配置时报告 `DefaultConfigurationUnavailable`。User file 有效时直接使用；缺失时使用已验证的 default 并复制到 user store；存在但无效时保留并暂用有效 default。主文件缺失但 `.bak` 可读时 store 报告 backup recovery。只有在 schema validation 和 Input System preflight 都成功后配置才会被 commit。
+`Disabled` 不执行任何读取。`Optional` 在用户与默认内容都缺失时返回 `NotConfigured`；`Required` 在无可用配置时报告 `DefaultConfigurationUnavailable`。有效的用户文件直接使用；文件缺失时回退到已校验的默认配置并复制进用户存储；无效文件保留，本次会话使用有效默认配置。主文件缺失但 `.bak` 可读时，存储层报告备份恢复。只有 schema 校验和 Input System 预检都通过才提交配置。
 
-`InputManager` 只持有经过验证的 runtime state，不保留 URI、source 或 store。Composition root 持有配置持久化所有权，并通过显式 `IInputConfigurationSource` 与 `IInputConfigurationStore` 实例执行后续 load、save、reset 或 delete。
+`InputManager` 只持有已校验的运行时状态，不保留 URI、source 或 store。`ReinitializeWithResult` 在有活动玩家时拒绝替换：先移除玩家、释放上下文，重新初始化，再重建玩家服务并重新应用已接受的绑定档案。重新初始化失败时已提交的配置保持不变。
 
-更换配置需要生命周期决策。`ReinitializeWithResult` 在 player 活跃时拒绝替换。移除 player、释放 context、reinitialize，然后重建 player service 并重新应用已接受的 binding profile。Reinitialize 失败时保留当前已提交的配置。
-
-## 进阶主题
-
-### 配置参考
+## 配置参考
 
 | 层级 | 字段 | 含义 |
 | --- | --- | --- |
-| Root | `schemaVersion` | Runtime schema 权威。新文件使用值 `1` 编写。 |
-| Root | `schemaFingerprint` | 可选 Editor diagnostic。不批准也不拒绝 runtime data。 |
-| Root | `joinAction` | 可选共享 join binding。Player-slot join binding 也会考虑。 |
-| Root | `playerSlots` | 经过验证的 player template，由唯一非负 `playerId` 标识。 |
-| Player | `controlSchemes` | 可选确定性设备匹配 scheme。 |
-| Player | `defaultControlScheme` | 首选 scheme；无法匹配时尝试其他声明的 scheme。 |
-| Player | `pairAllMatchingDevices` | 为每个被引用的 layout 认领设备并保持 control scheme 未激活。Action asset 仍受该 player 设备白名单约束。 |
-| Player | `maxDevicesPerLayout` | 启用 `pairAllMatchingDevices` 时，每个被引用 layout 可认领设备的上限。默认 `1`，钳制到 `1..8`。 |
-| Player | `deviceSwitchDebounceMs` | `ActiveDeviceKind` 再次切换前的最小驻留时间。默认 `0`（沿用旧的立即切换行为），钳制到 `0..5000`。 |
-| Player | `contexts` | 该 player 的命名 mapping context。 |
-| Context | `name`、`actionMap` | Context identity 和公开 action-map identity。 |
-| Context | `priority` | 值越高优先考虑。默认限制接受 `-100000..100000`。 |
-| Context | `blocksLowerPriority` | `true` 时阻止低于此 context 的 activation。 |
+| Root | `schemaVersion` | 运行时 schema 权威值。新文件写 `1`。 |
+| Root | `schemaFingerprint` | 可选的 Editor 诊断信息，不参与运行时数据的批准或拒绝。 |
+| Root | `joinAction` | 可选的共享 join 绑定，玩家槽位的 join 绑定同样参与。 |
+| Root | `playerSlots` | 经校验的玩家模板，用唯一非负 `playerId` 标识。 |
+| Player | `controlSchemes` | 可选的确定性设备匹配 scheme。 |
+| Player | `defaultControlScheme` | 首选 scheme；无法匹配时尝试其余已声明 scheme。 |
+| Player | `pairAllMatchingDevices` | 占用每种引用 layout 的设备且不设置 control scheme，action asset 仍限定在该玩家的设备白名单内。 |
+| Player | `maxDevicesPerLayout` | 启用 `pairAllMatchingDevices` 时每种引用 layout 可占用的设备上限。默认 `1`，钳制到 `1..8`。 |
+| Player | `deviceSwitchDebounceMs` | `ActiveDeviceKind` 再次切换前的最短停留时间。默认 `0`，钳制到 `0..5000`。 |
+| Player | `contexts` | 该玩家的命名映射上下文。 |
+| Context | `name`, `actionMap` | 上下文标识与公开 action map 标识。 |
+| Context | `priority` | 数值高的先求值，默认限额接受 `-100000..100000`。 |
+| Context | `blocksLowerPriority` | 为 `true` 时停止激活更低优先级上下文。 |
 | Action | `type` | `Button`、`Vector2` 或 `Float`。 |
-| Action | `action` | 逻辑 action 名称。Context、map 和 action 构成稳定 identity。 |
-| Action | `expectedControlType` | Unity 预期 control layout（`Button`、`Vector2`、`Axis`）。 |
-| Action | `deviceBindings` | 直接 Unity control path。 |
-| Action | `deviceBindingGroups` | 可选逐 binding 的 control-scheme group，与 `deviceBindings` 按位置对齐。省略列表或某项为空时回退到 `bindingGroups`，因此旧配置行为不变。 |
-| Action | `compositeBindings` | 结构化 composite name、parameters、groups 和 parts。 |
-| Action | `bindingGroups` | 分号分隔的 action 级 control-scheme binding group。 |
+| Action | `action` | 逻辑动作名。context、map、action 共同构成稳定标识。 |
+| Action | `expectedControlType` | Unity 期望的控制 layout（`Button`、`Vector2`、`Axis`）。 |
+| Action | `deviceBindings` | 直接控制路径。 |
+| Action | `deviceBindingGroups` | 逐绑定的 control scheme group，按位置与 `deviceBindings` 对齐。省略列表或空条目会回退到 `bindingGroups`。 |
+| Action | `compositeBindings` | 结构化的 composite 名称、参数、group 与 part。 |
+| Action | `bindingGroups` | 分号分隔的动作级 control scheme binding group。 |
+| Action | `interactions`, `processors` | 应用到动作的 Unity Input System 表达式。 |
+| Action | `updateMode` | `EventDriven` 或 `Polling`，delta 路径按 polling 处理。 |
+| Action | `longPressMs` | `Button` 或 `Float` 的模块长按完成时长，`0` 关闭该流。 |
+| Action | `longPressValueThreshold` | `Float` 触发阈值。启用 Float 长按时须在 `(0,1]`，关闭长按时可为 `0..1`。 |
+| Composite part | `name`, `path`, `processors` | 命名 part 的控制路径与可选的 part 局部 processor。非空 part `interactions` 会被拒绝。 |
 
-`deviceBindingGroups` 是精确形式。Unity Input System 的 binding group 是 binding 级概念：当一个 action 同时存在键盘和手柄 binding 时，为每条 binding 指定各自的 scheme group，能让激活 scheme 的 `bindingMask` 成为独立于 `InputUser` 设备白名单的第二道防线。若缺少它，携带 `KeyboardMouse;Gamepad` 的手柄 binding 在白名单放宽（例如调用 `PairAdditionalDevice` 后）仍会在 `KeyboardMouse` scheme 下被解析，设备隔离就只剩白名单一层。该列表必须与 `deviceBindings` 条目数完全一致；非空条目必须引用已声明的 scheme group；空条目显式回退到 action 级值。
-| Action | `interactions`、`processors` | 应用于 action 的 Unity Input System 表达式。 |
-| Composite part | `name`、`path`、`processors` | Named part control path，可选 part-local processor。非空 part `interactions` 值被拒绝。 |
-| Action | `updateMode` | `EventDriven` 或 `Polling`。Delta path 视为 polling。 |
-| Action | `longPressMs` | `Button` 或 `Float` 的模块级长按完成时长；`0` 禁用。 |
-| Action | `longPressValueThreshold` | `Float` actuation threshold。Float 长按启用时必须在 `(0,1]`；长按禁用时可为 `0..1`。 |
+`deviceBindings` 只放直接控制路径，composite 必须用 `compositeBindings`，不要把 `2DVector(...)` 写进 `deviceBindings`。composite 的 `parameters` 不带外层括号。interaction 写在所属动作上，不写在 composite part 上。
 
-`deviceBindings` 仅包含直接 control path。Composite 必须使用 `compositeBindings`；不要将 `2DVector(...)` 放在 `deviceBindings` 中。Composite `parameters` 省略外层括号。Composite part 仅支持 `processors`；非空 part `interactions` 值导致 validation 失败。将 interaction 放在包含的 action 上。
+`deviceBindingGroups` 是精确形式。Unity 的 binding group 是绑定级概念：同一个动作同时有键盘和手柄绑定时，给每个绑定各指定 scheme group，能让活动 scheme 的 `bindingMask` 在 `InputUser` 设备白名单之外再形成一道独立约束。没有它，携带 `KeyboardMouse;Gamepad` 的手柄绑定在白名单放宽（例如 `PairAdditionalDevice` 之后）时仍会在 `KeyboardMouse` scheme 下解析生效。该列表条目数必须与 `deviceBindings` 一致，非空条目必须指向已声明的 scheme group。
 
-### Validation 预算
+### 校验预算
 
-默认 validation budget：8 players、每 player 32 contexts、每 context 128 actions、每 player 1,024 total actions、每 action 16 total direct/composite-part binding entries、每 action 16 composites、每 composite 16 parts、每 player 16 control schemes、每 scheme 16 device requirements、每技术字符串 256 字符。可在 `InputManager` 构造注入更严格的 `InputConfigurationLimits`。
+默认限额：8 个玩家、每玩家 32 个上下文、每上下文 128 个动作、每玩家总计 1,024 个动作、每动作 16 个直接/composite part 绑定条目、每动作 16 个 composite、每 composite 16 个 part、每玩家 16 个 control scheme、每 scheme 16 个设备要求、技术字符串 256 字符。可向 `InputManager` 构造函数注入更严格的 `InputConfigurationLimits`。
 
-VYaml materialization 前，runtime 和 Editor YAML 入口还将输入限制为 1 MiB strict UTF-8 without BOM、16,384 lines、4,096 characters/line、64 indentation spaces、65,536 structural tokens、nesting depth 64。YAML anchor、alias、explicit tag、directive/document marker、block scalar、tab indentation、禁止的 control/format/private-use character、以及非 CR/LF 行分隔符不在此严格子集中。
+在进入 VYaml 实例化之前，运行时与 Editor 的 YAML 入口还限制：1 MiB 严格 UTF-8 无 BOM、16,384 行、每行 4,096 字符、64 个缩进空格、65,536 个结构 token、嵌套深度 64。YAML anchor、alias、显式 tag、指令与文档标记、块标量、Tab 缩进、被禁止的控制/格式/私用区字符，以及非 CR/LF 的行分隔符都不在这个严格子集内。
 
-一个动作序列化后约占十二行 YAML，因此 16,384 行预算把「所有玩家合计」的动作总数限制在约 1,300 个（`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`）。上文的「每玩家动作上限」约束的是以编程方式构造的配置；在多人规模下，该上限无法通过 YAML 源达到。超出行业预算会在 preflight 阶段被拒绝，并返回指明行数上限的消息；因此编排配置时应按序列化后的动作总数做预算，而不是按每玩家上限。
+一个动作序列化后约占十二行，所以 16,384 行预算把序列化配置限制在全体玩家共约 1,300 个动作（`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`）。上面的每玩家动作上限约束的是程序化构造的配置，在多人规模下通过 YAML 源达不到。超出行预算会在预检阶段被拒绝，消息中会给出行数上限。
 
-### Editor 工作流和代码生成
+`schemaVersion` 是权威值。当前文件写 schema `1`，负值和未来值都会被拒绝。准备与校验都在副本上进行，不会改写源文件。
 
-打开 `Tools > CycloneGames > Input System Editor`。左侧 project-settings panel 显示 runtime 和代码生成路径，提供 reveal/ping 快捷方式。右侧 workspace 将 serialized configuration 与文件操作分离。彩色徽章区分 editable、valid、review、invalid 和 optional 状态。Validation error 阻止 persistence 但不禁用 working-copy 字段。
+## Editor 工作流
 
-1. 在 `Assets` 下选择 default-config folder；文件名为 `input_config.yaml`。
-2. 在 `Application.persistentDataPath` 下选择可选相对 user-config subdirectory。
-3. Load user 或 default file，或 generate 默认 working configuration。
-4. 编辑 join action、player slot、control scheme、context、direct binding、composite、interaction、processor、priority 和 blocking policy。
-5. 保存前解决 validation error。
-6. 根据目标 owner 使用 `Save User Config`、`Save User + Generate Code`、`Save Project Default` 或 `Restore User from Default`。
-7. 在 `Assets` 下选择 codegen folder 和 namespace，然后 generate `InputActions.cs`。
+打开 `Tools > CycloneGames > Input System Editor`。左侧项目设置面板显示运行时和代码生成路径，并提供 reveal/ping 快捷操作；右侧工作区把序列化配置与文件操作分开。彩色徽标区分可编辑、有效、待检查、无效和可选状态。校验错误会阻止持久化，但不会禁用工作副本中的字段。
 
-Editor 使用隐藏的 in-memory `ScriptableObject` working copy 和 `SerializedObject`/`SerializedProperty`，因此 Undo/Redo 和 serialized-field 处理在 Editor path 中。
+1. 在 `Assets` 下选择默认配置目录，文件名为 `input_config.yaml`。
+2. 在 `Application.persistentDataPath` 下选择可选的用户配置相对子目录。
+3. 加载用户或默认文件，或生成一份默认工作配置。
+4. 编辑 join 动作、玩家槽位、control scheme、上下文、直接绑定、composite、interaction、processor、优先级与阻断策略。
+5. 保存前解决全部校验错误。
+6. 使用 `Save User Config`、`Save User + Generate Code`、`Save Project Default` 或 `Restore User from Default`。
+7. 在 `Assets` 下选择代码生成目录和命名空间，生成 `InputActions.cs`。
 
-生成的代码包含 `InputActions.Contexts`、`InputActions.ActionMaps` 和 `InputActions.Actions` 下的 context-qualified ID。每个 signed `int` action ID 是 `context/map/action` 的确定性 FNV-1a 32 位 hash。Context、map 或 action identity 变更后应重新生成。
+Editor 使用隐藏的内存 `ScriptableObject` 工作副本和 `SerializedObject`/`SerializedProperty`，Undo/Redo 与序列化字段处理都留在 Editor 路径中。
 
-### 可选集成
+生成的代码包含 `InputActions.Contexts`、`InputActions.ActionMaps`，以及 `InputActions.Actions` 下带上下文限定的 ID。context、map 或 action 标识变化后需要重新生成。
 
-**UGUI** — 添加 asmdef 引用到 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 和 horizontal/vertical menu-navigation 组件。Assembly 仅拥有 presentation adapter；core runtime 不引用 UGUI。
-
-**VContainer** — 基础集成注册容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer`、diagnostics，以及 auto-initialization enabled 时的 `IAsyncStartable`。向 `InputSystemVContainerInstaller` 传入显式 `InputSystemBootstrapOptions`；`Optional` 和 `Disabled` 在 auto-start 时不抛出异常。该 scope 中所有 consumer 必须 resolve/inject 相同的 manager；同时使用 `InputManager.Instance` 会创建独立 session。
-
-AssetManagement-backed package loading 需要安装同级 `CycloneGames.InputSystem.AssetManagement` package 并引用 `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`：
-
-```csharp
-var packageLoader =
-    InputSystemAssetManagementVContainerAdapter.CreatePackageConfigurationLoader();
-
-builder.Install(new InputSystemVContainerInstaller(
-    "input_config.yaml",
-    "user_input_settings.yaml",
-    packageLoader));
-```
-
-**Tools** — `CycloneGames.InputSystem.Tools.Runtime` 是可选诊断工具。`InputRecorder` 将选定的 context-qualified stream 记录到固定容量 in-memory buffer。溢出递增 `DroppedSampleCount`；录制期间永不扩展 sample buffer。`StopRecording` 创建不可变快照，`InputReplayCursor` 允许 caller 按录制的 tick/order 消费 sample。
-
-**Sample** — Sample assembly、scene 和 fixture 是可选的，不会自动引用或添加到 Build Settings。参见 [Samples/README.md](Samples/README.md)。
+## 进阶主题
 
 ### 失败模型
 
-在操作有可恢复边界的地方，失败通过类型化 result 返回：
+可恢复的操作返回带类型的结果：
 
-- `InputConfigurationReadResult` 和 `InputConfigurationStoreResult` 报告 `NotFound`、`InvalidKey`、`TooLarge`、`Unsupported`、`AccessDenied` 或 `IoError`。
-- `InputSystemLoadResult` 区分 user/default success、unavailable defaults、invalid configuration 和 manager initialization failure。
-- `InputManagerInitializationResult` 报告 empty content、wrong thread、active players、disposed manager、parse failure、schema validation failure 或 `InputSystemPreflightFailed`。暴露 `Validation` 以及 registry/graph preflight 执行时的 `Preflight`。
-- Join 方法在 slot、device 或 scheme 无法解析时返回 `null`；caller cancellation 不转换为 success。
-- Rebind/profile API 对于 unknown identity、selector mismatch、unsupported schema、duplicate entry 或 budget violation 返回 `false`。
+- `InputConfigurationReadResult` 与 `InputConfigurationStoreResult` 报告 `NotFound`、`InvalidKey`、`TooLarge`、`Unsupported`、`AccessDenied` 或 `IoError`。
+- `InputSystemLoadResult` 区分用户/默认成功、默认不可用、配置无效、manager 初始化失败。
+- `InputManagerInitializationResult` 报告内容为空、线程错误、存在活动玩家、manager 已释放、解析失败、schema 校验失败或 `InputSystemPreflightFailed`，并通过 `Validation` 和（预检执行过时）`Preflight` 暴露细节。
+- join 方法在槽位、设备或 scheme 无法解析时返回 `null`；调用方取消不会被转成成功。
+- rebind 与档案 API 在标识未知、选择器不匹配、schema 不支持、条目重复或超出预算时返回 `false`。
 
-`schemaVersion` 是权威来源。用 schema `1` 编写当前文件；负值和未来值被拒绝。Preparation 和 validation 在 clone 上操作，不重写 source file。only通过显式 Editor save 或产品自有 transaction 持久化配置，含 backup 和 rollback。
+### 所有权与释放
 
-## 常见场景
+| 持有者 | 持有内容 |
+| --- | --- |
+| Composition root | `InputManager`、配置 source 与 store、绑定档案持久化。 |
+| `InputManager` | 已注册玩家，在移除或 manager 释放时一并释放。 |
+| `InputPlayer` | `InputUser`、生成的 `InputActionAsset`、subject、update 订阅、设备订阅。 |
+| 业务状态 | `InputContext` 实例以及捕获/阻断 scope；释放上下文会把它从所有使用它的玩家上移除。 |
+| 订阅持有者 | 未通过活动 `InputContext` 管理的直接 R3 订阅。 |
 
-### Bootstrap single player
+Subsystem registration 会让所有仍活动的 manager 失效，避免关闭 Domain Reload 的 play session 残留 user、action、listener 或静态监听计数。正常退出时业务侧仍需释放 manager。`InputManager.GetMemoryStats()` 与 `InputPlayer.GetMemoryStats()` 提供主线程、无分配的计数快照。可配置的 `InputConfigurationLimits` 值带有公开绝对上限，调用方无法把实际产品预算换成 `int.MaxValue`。重复捕获 scope 另受 `InputPlayer.MaximumContextCaptureDepth`（`1024`）约束；泄漏的 scope 会失败关闭，不会无限增长捕获栈。
 
-从 serialized `TextAsset` 构造 `InputManager`，用最佳匹配 control scheme join player 0，push Gameplay context（参见[快速开始](#快速开始)）。
+### 性能
 
-### 本地多人 with device locking
-
-本地合作游戏使用 `JoinPlayerAndLockDevice` 从已知 gamepad join 每个 player，或使用 `StartListeningForPlayers(lockDeviceOnJoin: true)` 让每个 unclaimed device 执行其 join binding 成为 primary player。`RemovePlayer` 在离开或 slot reset 时释放声明。
-
-```csharp
-IInputPlayer player1 = manager.JoinPlayerAndLockDevice(0, gamepad1);
-IInputPlayer player2 = manager.JoinPlayerAndLockDevice(1, gamepad2);
-```
-
-### Modal capture 和 input blocking
-
-Modal dialog 在其生命周期内 capture input；loading transition 在完成前 block 所有输入：
-
-```csharp
-IDisposable capture = player.CaptureContext(modalDialogContext);
-try
-{
-    // Drive the modal flow.
-}
-finally
-{
-    capture.Dispose();
-}
-
-using (player.BlockInputScope())
-{
-    // Synchronous transition。async code 在 try/finally 中持有 scope。
-}
-```
-
-### Long press 和 chord
-
-```csharp
-player.GetLongPressObservable("Gameplay", "PlayerActions", "Confirm")
-    .Subscribe(_ => OpenConfirmDetails());
-
-player.GetLongPressProgressObservable("Gameplay", "PlayerActions", "Confirm")
-    .Subscribe(progress => UpdateHoldMeter(progress));
-
-int confirm = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Confirm");
-int cancel = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Cancel");
-player.GetChordObservable(confirm, cancel, windowMs: 200f)
-    .Subscribe(_ => OpenShortcut());
-```
-
-### Rebind profile save 和 load
-
-```csharp
-using CycloneGames.Logging;
-
-LogChannel log = LogChannel.Create("Game.Input");
-PersistenceOperationResult saved = await profilePersistence.SaveAsync(cancellationToken);
-if (!saved.IsSuccess)
-    log.Warning($"Binding profile save failed: {saved.ErrorCode}");
-
-string loadError = await profilePersistence.LoadAndApplyAsync(cancellationToken);
-if (loadError != null)
-    log.Warning($"Binding profile load failed: {loadError}");
-```
-
-加载失败时保持 configured default active。缺失数据是正常的首次运行状态；损坏、未来版本或 schema 不兼容的数据不得静默应用。不要直接暴露 persistence exception message —— 将详细异常仅发送到产品拥有的日志管道进行脱敏和访问控制。
-
-## 性能与内存
-
-| 领域 | Runtime behavior | 工程指导 |
+| 方面 | 运行时行为 | 使用位置 |
 | --- | --- | --- |
-| 初始化 | 有界形状检查、clone/migrate/validate DTO、验证 Input System registration、构建/解析/dispose temporary action graph、提交 immutable snapshot。 | 在输入敏感帧之外、所有自定义 Input System registration 后初始化。复用已提交的 manager。 |
-| Event-driven action | Action map enabled 时 Unity callback 转发到预创建的 subject。 | button 和离散值首选。Subscription callback 必须保持有界。 |
-| Polling 和 hold | 每 player 一个 update subscription 服务所有 polling action 和 hold progress。 | 仅在需要连续采样时使用 `Polling`。 |
-| Context 变更 | Dispose active command subscription、禁用 map、排序 active context、启用选定 map、重建 command subscription。 | 在状态转场时变更 context，不每帧变更。 |
-| Rebind/profile 操作 | Export、import、conflict check、report 时遍历 binding 并分配数组/JSON。Manager import 为每个 staged player 构建并 dispose 临时 action graph。 | 在 settings/save flow 中执行，不在 gameplay hot path。 |
-| 设备活动 | 使用 action activity 和 Input System device/user notification；`ActiveDeviceKind` 是展示提示。 | 如果 noisy hardware 导致快速 glyph change，debounce 产品 UI。 |
-| Tools recording | 录制时固定容量 list；snapshot 创建时拷贝 sample。`CancelRecording(maximumSamplesToDiscard)` 会停止 subscription，并在调用方限定的批次内释放 sample 引用而不导出 snapshot。 | 检查 `WasTruncated`/`DroppedSampleCount`；不无意间保持 diagnostics enabled。取消会丢弃诊断证据，因此必须由产品策略显式授权。 |
+| 初始化 | 有预算的形状检查、克隆并校验 DTO、校验 Input System 注册、构造并解析再释放临时 action graph、提交不可变快照。 | 避开输入敏感帧，放在所有自定义 Input System 注册之后，复用已提交的 manager。 |
+| 事件驱动动作 | map 启用期间，Unity 回调转发到预创建的 subject。 | 按钮和离散值，订阅回调保持有界。 |
+| Polling 与长按 | 每玩家一个 update 订阅服务所有 polling 动作和长按进度。 | 仅在需要连续采样时使用。 |
+| 上下文切换 | 释放活动命令订阅、停用 map、排序活动上下文、启用选中 map、重建命令订阅。 | 状态切换时执行，不要每帧执行。 |
+| Rebinding 与档案操作 | 导出、导入、冲突检查时枚举绑定并分配数组/JSON；manager 导入会为每个暂存玩家构造并释放临时 action graph。 | 设置与保存流程。 |
+| 设备活动 | 使用动作活动以及 Input System 的设备/用户通知。 | `ActiveDeviceKind` 只是展示提示；硬件抖动时业务 UI 需自行去抖。 |
+| Tools 录制 | 录制期间使用固定容量列表，创建快照时复制样本。`CancelRecording(maximumSamplesToDiscard)` 停止订阅并按调用方限定的分块释放样本引用。 | 检查 `WasTruncated`/`DroppedSampleCount`。 |
 
-使用 Unity Profiler marker `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer` 和 `CycloneGames.Input.BuildAsset` 分析初始化和 player 构造。
+初始化和玩家构造可用 Unity Profiler 标记 `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer`、`CycloneGames.Input.BuildAsset` 观测。
 
-### Ownership
+### 线程与平台
 
-- Composition root 持有并 dispose `InputManager`。
-- Subsystem registration 使每个 still-active manager 失效，因此禁用 domain reload 的 play session 无法保留 user、action、listener 或静态 listening count；产品 owner 仍需在正常 teardown 时 dispose manager。
-- `InputManager` 持有 registered player，在 removal 或 manager disposal 时 dispose 它们。
-- `InputPlayer` 持有其 `InputUser`、生成的 `InputActionAsset`、subject、update subscription 和 device subscription。
-- 产品状态持有 `InputContext` 实例和 capture/block scope；dispose context 会将其从所有使用它的 player 中移除。
-- Subscription owner dispose 未通过 active `InputContext` 管理的 direct R3 subscription。
-- Storage owner 选择 root、key、retention、encryption、backup 和 format-update policy。
+Unity API 以及玩家/上下文操作限定在主线程。`UriInputConfigurationSource` 在使用 `UnityWebRequest` 前切回 Unity 主线程。`FileInputConfigurationStore` 提供异步 I/O，但不会让 `InputManager`、`IInputPlayer` 或 `InputContext` 变成线程安全。异步加载要传递取消令牌，回到 Unity 主线程后再修改 manager，并在该线程释放 Unity 持有的状态。
 
-`InputManager.GetMemoryStats()` 与 `InputPlayer.GetMemoryStats()` 提供 main-thread、allocation-free 的 count snapshot，recorder count/capacity/drop property 也是标量读取。Caller-owned adapter 可以使用这些 API；全局 telemetry 与 pressure callback 由 host 负责。
+| 目标平台 | 默认配置路径 | 用户持久化 |
+| --- | --- | --- |
+| Windows、macOS、Linux | 通过 `UriInputConfigurationSource` 读本地 `StreamingAssets` | `persistentDataPath` 下的 `FileInputConfigurationStore` |
+| Android | 通过 `UnityWebRequest` 读 `jar:file`/StreamingAssets | 应用 persistent data 下的 `FileInputConfigurationStore` |
+| iOS | 本地 StreamingAssets URI/文件路径 | 应用 persistent data 下的 `FileInputConfigurationStore` |
+| WebGL | 同源 StreamingAssets Web URI | 项目自行提供 `IInputConfigurationStore` |
+| 主机平台 | 平台认可的 source adapter 或打包的 StreamingAssets 路径 | 平台认可的 store adapter |
+| 远程 HTTPS | 允许列表内的 HTTPS 主机，443 端口，无凭据/fragment/重定向 | 项目选定的 store |
 
-可配置的 `InputConfigurationLimits` 还具有公开的绝对上限，避免调用方用 `int.MaxValue` allocation/iteration budget 替代实际产品预算。重复 capture scope 另受 `InputPlayer.MaximumContextCaptureDepth`（`1024`）限制；泄漏的 scope 会 fail closed，而不是让 capture stack 无限增长。
+控制路径和设备 layout 因平台与包版本而异，发布前用 Unity Input Debugger 和代表性硬件验证每个 scheme。
 
-### 线程
+### 存储的数据
 
-Unity API 和 player/context 操作限制在 main thread。`UriInputConfigurationSource` 在使用 `UnityWebRequest` 前切换到 Unity main thread。`FileInputConfigurationStore` 暴露异步 I/O，但不使 `InputManager`、`IInputPlayer` 或 `InputContext` 线程安全。Carry cancellation through async loading，在 manager mutation 前返回 Unity main thread，并在该线程上 dispose Unity-owned state。
-
-### 平台支持
-
-| 目标 | Default configuration path | User persistence | 所需验证 |
+| 数据 | 持有者 | 默认路径/键 | 格式 |
 | --- | --- | --- | --- |
-| Windows Editor/Player | 通过 `UriInputConfigurationSource` 的本地 `StreamingAssets` | `FileInputConfigurationStore` under `persistentDataPath` | EditMode tests、Player build、unplug/replug、filesystem fault tests。 |
-| macOS Editor/Player | 本地 `StreamingAssets` file | `FileInputConfigurationStore` | Path casing、replacement/backup behavior、permissions、notarized build、device layouts。 |
-| Linux Editor/Player | 本地 `StreamingAssets` file | `FileInputConfigurationStore` | Case-sensitive paths、controller layouts、filesystem semantics、headless behavior。 |
-| Android | 通过 `UnityWebRequest` 的 `jar:file`/StreamingAssets | `FileInputConfigurationStore` under app persistent data | APK/AAB reads、cancellation、lifecycle resume、controller reconnect、IL2CPP。 |
-| iOS | 本地 StreamingAssets URI/file path | `FileInputConfigurationStore` under app persistent data | Sandbox backup policy、atomic replacement、controller lifecycle、stripping、device suspension。 |
-| WebGL | Same-origin StreamingAssets web URI | 产品提供的 `IInputConfigurationStore` | 实现有界浏览器持久化；测试 quota、corruption、format updates、refresh、cancellation。 |
-| Consoles | Platform-approved source adapter 或 packaged StreamingAssets path | Platform-approved store adapter | 根据 NDA review SDK storage、suspend/resume、user ownership、controller assignment、AOT/stripping、certification。 |
-| Remote HTTPS | Allowlisted HTTPS host、port 443、no credentials/fragments/redirects | 产品选择 store | Certificate policy、timeout、payload budget、offline fallback、update authenticity、rollout/rollback。 |
+| 默认输入配置 | 项目 composition root | 项目选定的 source/key，StreamingAssets 可选 | YAML，带 schema 版本 |
+| 用户输入配置 | 项目运行时，经 `IInputConfigurationStore` | `persistentDataPath` 下的 `input/user_input_settings.yaml` | YAML 加一个同级 `.bak` |
+| 绑定覆盖档案 | 项目 composition root | 项目选定的 bound entry | 模块自有不透明 JSON，schema `1` |
+| Editor 本地设置 | Input System Editor | `UserSettings/CycloneGames.InputSystem.EditorSettings.asset` | Unity 序列化的 Editor 设置 |
+| 生成的常量 | 项目/代码持有者 | `Assets/.../InputActions.cs` | 生成的 C# |
 
-Input control path 和 device layout 因平台和 package version 而异。使用 Unity Input Debugger 和代表性硬件验证每个 shipped scheme。
+`DeleteAsync` 会同时删除主用户文件和 `.bak`。无效的用户内容会保留而不被覆盖，清理需要通过 `DeleteAsync` 显式执行。常量从 YAML 重新生成，不要手工编辑。这些记录都不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
 
-### 持久化
+### 可选集成
 
-| 数据 | Owner | Default path/key | 格式 | Cleanup 和 recovery |
-| --- | --- | --- | --- | --- |
-| Default input configuration | 产品 composition root | 产品选择 source/key；StreamingAssets 可选 | YAML、schema-versioned | 仅在变更 bootstrap policy 或提供其他验证 source 后移除。 |
-| User input configuration | 产品 runtime via `IInputConfigurationStore` | `input/user_input_settings.yaml` under `persistentDataPath` | YAML 加一个同级 `.bak` | 缺失时从已验证 defaults 创建；invalid content 保留；`DeleteAsync` 移除 primary 和 `.bak`。 |
-| Binding override profile | 产品 composition root | 产品选择 bound entry | 模块自有 opaque JSON、schema `1`；产品选择可选外层 Persistence Record V1 | 重置 binding 并持久化新 profile，或通过选定 provider 删除 bound entry。Per-player：128 records/1 MiB；manager：4 MiB。 |
-| Editor-local settings | Input System Editor | `UserSettings/CycloneGames.InputSystem.EditorSettings.asset` | Unity serialized Editor settings | 关闭窗口并删除文件恢复默认值。 |
-| Generated constants | Project/code owner | `Assets/.../InputActions.cs` | Generated C# | 从 YAML 重新生成；不手动编辑。 |
+**UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 和横/纵向菜单导航组件。该程序集只负责展示适配，核心运行时不引用 UGUI。
 
-这些记录从不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
+**VContainer。** 集成层注册容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer` 与诊断组件。它不会自行决定配置来源、存储路径、启动时机或失败处理：由 composition root 构造不可变的 `InputSystemVContainerOptions` 传入。只有 `registerEntryPoint: true` 才注册 entry point，只有 `throwOnStartupFailure: true` 才把启动失败升级为异常；其余情况结果保留在 `IInputSystemInitializerDiagnostics.LastResult`。同一作用域内的消费端必须解析/注入同一个 manager，混用 `InputManager.Instance` 会创建另一个会话。
 
-## 故障排除
+```csharp
+var bootstrap = new InputSystemBootstrapOptions(
+    InputSystemBootstrapMode.Optional,
+    new UriInputConfigurationSource(),
+    Path.Combine(Application.streamingAssetsPath, "input_config.yaml"),
+    new FileInputConfigurationStore(Application.persistentDataPath),
+    "input/user_input_settings.yaml");
 
-| 症状 | 可能原因 | 解决方法 |
-| --- | --- | --- |
-| 初始化不成功 | Empty/oversized content、YAML parse error、schema error、invalid identity、duplicate、configured limit、unavailable Input System registration 或 graph-resolution failure | 检查 `InputManagerInitializationResult.Status`、`Message`、`Validation.Issues`、`Preflight.Issues`。在初始化前注册自定义 layout/interaction/processor/composite。 |
-| Valid user settings 被忽略 | 读取或验证失败 | 检查 `InputSystemLoadResult.UserStorageStatus`；保留 user file 并与 default 比较。 |
-| `JoinSinglePlayer` 返回 `null` | Unknown player ID、无成功 scheme match、所需设备缺失或设备已被声明 | 检查 Input Debugger 中的 player slot scheme 和当前已配对/保留设备。 |
-| 无 action stream event | Context 未 push、context/map/action 大小写不匹配、context blocked/captured、输入全局 blocked、错误的 value getter 或 action ambiguous | 使用 context-qualified getter 并检查 `ActiveContextName`。 |
-| Polling value 保持中性 | Map disabled、device not paired、binding 被 scheme 屏蔽、错误 control layout 或 value type mismatch | 验证 active context、scheme groups、paired devices 和 control path。 |
-| Long-press getter empty | `longPressMs` 为 `0`、action missing 或 identity ambiguous | 启用有界 duration 并使用 context-qualified getter。 |
-| Reinitialize 报告 `ActivePlayers` | Registered player 仍持有 action asset 和配置派生状态 | 移除 player 和 context，然后 reinitialize 并重建。 |
-| Binding-profile import 返回 `false` | Profile schema/size invalid，或 context/map/action/binding selector 不再匹配 | 保持 configured defaults、保留 profile、提供产品自有 reset。 |
-| File store 报告 `InvalidKey` | Rooted path、URI、traversal、empty segment、unsafe character 或 reparse-point path | 在 store 固定 root 下传入相对 logical key。 |
-| VContainer types unavailable | Package-derived define 缺失或 consumer asmdef 缺少可选引用 | 通过项目依赖源安装 package 并添加 integration asmdef 引用。 |
-| Constant generation 失败 | Invalid namespace/identifier、duplicate generated name、action-ID collision 或 unsafe output path | 修复 YAML identity 或 Editor settings；不编辑生成文件。 |
+var options = new InputSystemVContainerOptions(bootstrap);
 
-## 验证
-
-从 Unity Test Runner 运行聚焦测试：
-
-```text
-<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.InputSystem.Tests.Editor -testResults <result-path> -quit
+builder.Install(new InputSystemVContainerInstaller(options));
 ```
 
-使用与 `UnityStarter/ProjectSettings/ProjectVersion.txt` 匹配的 Unity 可执行文件。通过 EditMode 运行不替代 PlayMode、Player、IL2CPP、hardware、persistence-fault 或 target-platform validation。
+**Tools。** `CycloneGames.InputSystem.Tools.Runtime` 是可选的诊断工具。`InputRecorder` 把选定的带上下文限定的流记录到固定容量的内存缓冲区，溢出时递增 `DroppedSampleCount`，录制期间缓冲区不会增长。`StopRecording` 创建不可变快照，`InputReplayCursor` 按录制的 tick/顺序消费样本。
+
+**Sample。** sample 程序集、场景与 fixture 均为可选，不会自动被引用或加入 Build Settings，见 [Samples/README.md](Samples/README.md)。
+
+### 程序集
+
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、玩家、上下文、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash 与 `CycloneGames.Logging.Core`。 |
+| `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、校验、安全写入、常量生成，仅 Editor。 |
+| `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | 展示适配器，`autoReferenced: false`。 |
+| `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、异步启动、resolver 适配器，无 AssetManagement 依赖。 |
+
+| `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` 与 `InputReplayCursor` 诊断工具。 |
+| `CycloneGames.InputSystem.Sample` | `Samples/` | 可选的 scene 与 bootstrap 示例。 |
+| `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode 校验与回归覆盖。 |
+
+可选程序集设置了 `autoReferenced: false`，只在用到对应功能时添加显式 asmdef 引用。UGUI 与 VContainer 通过 package 派生的 `versionDefines` 和 `defineConstraints` 激活，缺少对应 package 时排除该程序集。
+
+诊断使用以 `CycloneGames.InputSystem` 为根的稳定 `LogChannel` category。logging writer 生命周期由 host 负责。`com.cyclone-games.logging` 提供 `NullLogWriter` 默认实现；composition root 可以安装 `com.cyclone-games.logging.pipeline`、加入 `com.cyclone-games.logging.unity`，或提供其他 `ILogWriter` backend。
 
 ## API 参考
 
 | 类型 | 用途 |
 | --- | --- |
-| `InputManager` | 验证/提交配置、join/remove player、listen for joins、聚合 profile、持有 player service。 |
-| `InputManagerInitializationResult` | 通过 `Status`、`Validation`、`Preflight`、`WasMigrated` 检查 parse、schema validation、Input System preflight、lifecycle、preparation outcome。 |
-| `InputConfigurationPreflightResult` | 通过 `Status`、有界 `Issues`、`WasTruncated` 检查 main-thread registry 和 temporary action-graph validation。 |
-| `IInputPlayer` | 读取 action、管理 context、观察 device state、rebind、导入/导出 per-player override。 |
-| `InputContext` | 绑定 R3 stream 到 command；提供 priority/blocking policy。 |
-| `InputConfigurationValidator` / `InputConfigurationLimits` | 在显式 allocation/iteration budget 下验证 untrusted DTO。 |
-| `InputConfigurationYamlPreflight` / `InputConfigurationYamlCodec` | 强制严格 pre-materialization YAML subset；将准备好的配置序列化为有界 canonical YAML。 |
-| `IInputConfigurationSource` / `IInputConfigurationStore` | 实现显式 read 和 persistence adapter。 |
-| `UriInputConfigurationSource` / `FileInputConfigurationStore` | 内置有界 default-source 和 root-confined local-store 实现。 |
-| `InputSystemLoader` | 选择 user/default content、保留 invalid user data、仅从 validated content 初始化。 |
-| `InputHashUtility` | 生成确定性 map hash 和 context-qualified action ID。 |
-| `InputBindingValidator` | 检测 player 或 context 的 configured direct-binding conflict。 |
-| `InputRx` | 低级 R3 wrapper，用于 keyboard、pointer、gamepad、touch、users、actions、`PlayerInput`。 |
+| `InputManager` | 校验并提交配置、加入/移除玩家、监听加入、聚合档案、持有玩家服务。 |
+| `InputManagerInitializationResult` | 通过 `Status`、`Validation`、`Preflight`、`WasMigrated` 查看解析、schema 校验、Input System 预检、生命周期与准备结果。 |
+| `InputConfigurationPreflightResult` | 通过 `Status`、有界的 `Issues`、`WasTruncated` 查看主线程注册表与临时 action graph 校验结果。 |
+| `IInputPlayer` | 读取动作、管理上下文、观察设备状态、重绑定、导入导出每玩家覆盖。 |
+| `InputContext` | 把 R3 流绑定到命令，指定优先级与阻断策略。 |
+| `InputConfigurationValidator` / `InputConfigurationLimits` | 在显式分配/迭代预算下校验不可信 DTO。 |
+| `InputConfigurationYamlPreflight` / `InputConfigurationYamlCodec` | 执行实例化前的严格 YAML 子集检查，把准备好的配置序列化为有界的规范 YAML。 |
+| `IInputConfigurationSource` / `IInputConfigurationStore` | 实现显式的读取与持久化适配器。 |
+| `UriInputConfigurationSource` / `FileInputConfigurationStore` | 内置的有界默认源与限定根目录的本地存储实现。 |
+| `InputSystemLoader` | 选择用户/默认内容、保留无效用户数据、只用已校验内容初始化。 |
+| `InputHashUtility` | 生成确定性的 map hash 与带上下文限定的动作 ID。 |
+| `InputBindingValidator` | 检测玩家或上下文中已配置的直接绑定冲突。 |
+| `InputRx` | 面向键盘、指针、手柄、触摸、用户、动作和 `PlayerInput` 的底层 R3 包装。 |
 
-## 参考
+## 故障排查
 
-- [Unity Input System 手册](https://docs.unity3d.com/Manual/com.unity.inputsystem.html) — 底层 Unity action、binding、interaction、processor、device 语义
-- [快速上手](Documents~/GettingStarted.SCH.md) | [配置指南](Documents~/Configuration.SCH.md) | [Runtime 指南](Documents~/RuntimeGuide.SCH.md) | [Sample](Samples/README.md)
+| 现象 | 常见原因 | 处理 |
+| --- | --- | --- |
+| 初始化失败 | 内容为空或过大、YAML 解析错误、schema 错误、标识非法、重复、超出限额、Input System 注册缺失、graph 解析失败 | 检查 `InputManagerInitializationResult.Status`、`Message`、`Validation.Issues`、`Preflight.Issues`；初始化前注册自定义 layout/interaction/processor/composite。 |
+| 有效的用户设置被忽略 | 读取或校验失败 | 检查 `InputSystemLoadResult.UserStorageStatus`，保留用户文件并与默认配置比对。 |
+| `JoinSinglePlayer` 返回 `null` | 玩家 ID 未知、无匹配的 scheme、必需设备缺失或设备已被占用 | 在 Input Debugger 中检查玩家槽位 scheme 与当前配对/占用设备。 |
+| 动作流没有事件 | 上下文未推送、context/map/action 大小写不符、上下文被阻断/捕获、全局阻断、取值 getter 用错、标识有歧义 | 使用带上下文限定的 getter，检查 `ActiveContextName`。 |
+| Polling 值始终为中性 | map 未启用、设备未配对、绑定被 scheme 屏蔽、控制 layout 不符、值类型不符 | 核对活动上下文、scheme group、配对设备和控制路径。 |
+| 长按 getter 为空 | `longPressMs` 为 `0`、动作不存在或标识有歧义 | 设置有界时长，使用带上下文限定的 getter。 |
+| 重新初始化报告 `ActivePlayers` | 已注册玩家仍持有 action asset 与配置派生状态 | 移除玩家和上下文后再重新初始化并重建。 |
+| 绑定档案导入返回 `false` | 档案 schema/大小无效，或 context/map/action/绑定选择器不再匹配 | 保持配置默认值，保留档案，提供项目自有的重置入口。 |
+| 文件存储报告 `InvalidKey` | 根路径、URI、路径穿越、空段、不安全字符或重解析点路径 | 传入存储固定根目录下的相对逻辑键。 |
+| VContainer 类型不可用 | package 派生 define 缺失，或消费端 asmdef 缺少可选引用 | 安装对应 package 并添加集成 asmdef 引用。 |
+| 常量生成失败 | 命名空间/标识符非法、生成名重复、动作 ID 冲突、输出路径不安全 | 修正 YAML 标识或 Editor 设置，不要编辑生成文件。 |
+
+## 运行测试
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.InputSystem.Tests.Editor -testResults <result-path> -quit
+```
+
+使用与 `UnityStarter/ProjectSettings/ProjectVersion.txt` 匹配的 Unity 可执行文件。
+
+## 相关文档
+
+- [入门](Documents~/GettingStarted.md)
+- [配置指南](Documents~/Configuration.md)
+- [运行时指南](Documents~/RuntimeGuide.md)
+- [示例](Samples/README.md)
+- [Unity Input System 手册](https://docs.unity3d.com/Manual/com.unity.inputsystem.html)
