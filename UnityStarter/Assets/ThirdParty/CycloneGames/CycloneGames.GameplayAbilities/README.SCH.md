@@ -42,7 +42,7 @@ Gameplay 行为具备以下一项或多项需求时，可以使用本模块：
 | `Core/` | Unity-free 定点数数据、状态/Facade API、稳定 ID、预测记录、Registry、Process-local Reconciliation Buffer 与 Authoritative Activation Result |
 | `Runtime/` | `AbilitySystemComponent`、Ability、Effect、Attribute、Task、TargetData、Cue、Unity 创作桥接与运行时诊断 |
 | `Editor/` | Inspector、PropertyDrawer、Debugger、Trace Window 与 Overlay 配置工具 |
-| `Runtime/Integrations/AssetManagement/` | 从 `CycloneGames.AssetManagement` Handle 到 Cue 侧 `IResourceLocator` 契约的已激活 Adapter |
+| `Runtime/Integrations/AssetManagement/` | 从 `CycloneGames.AssetManagement` Handle 到 Cue 侧 `IResourceLocator` 契约的可选 UPM 条件 Adapter |
 | `Runtime/Integrations/DataTable/` | 独立 Integration Assembly 中由 UPM 条件激活的可选 DataTable Adapter |
 | `Samples/` | 可运行示例、创作资产、TargetActor、手动组合、Headless 组合和可选 DI 组合 |
 | `Tests/Editor/` | Core 强化、确定性行为、Attribute 注册、Lease/Cache、Runtime 契约与 Integration 测试 |
@@ -57,7 +57,7 @@ flowchart LR
     Hash["CycloneGames.Hash.Core"]
     Core["GameplayAbilities.Core<br/>noEngineReferences"]
     Asset["CycloneGames.AssetManagement.Runtime"]
-    AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
+    AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement<br/>条件 UPM Integration"]
     DataTableCore["CycloneGames.DataTable.Core"]
     UniTask["UniTask"]
     Logging["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
@@ -87,19 +87,17 @@ flowchart LR
     Core --> DataTable
     Runtime --> Editor
     Runtime --> Samples
-    Asset --> Samples
-    AssetIntegration --> Samples
     Core --> Tests
     Runtime --> Tests
     Runtime --> PlayTests
     Runtime --> DataTable
 ```
 
-`CycloneGames.GameplayAbilities.Core` 设置了 `noEngineReferences: true`，且不暴露 `UnityEngine` 类型。`CycloneGames.GameplayAbilities.Runtime` 是 Unity Adapter 与创作层。不能仅为复用实现而把 Runtime 代码移入 Core。
+`CycloneGames.GameplayAbilities.Core` 设置了 `noEngineReferences: true`，且不暴露 `UnityEngine` 类型。`CycloneGames.GameplayAbilities.Runtime` 是 Unity Adapter 与创作层。
 
-`AbilitySpecContainer`、`PredictionManager` 与 `ReplicationStateBuilder` 都是 Runtime Assembly 的 Internal Implementation Type。Public Consumer 通过 `AbilitySystemComponent` Facade、稳定的 `GASReadOnlyListView<T>`、`GASReadOnlySetView<T>`、`GASReadOnlyTagView`、Query Method 与 Diagnostics 工作，不会取得 Mutable Container 或 Builder Access。这些 Internal Type 不是 Extension Point。把 Mutation Authority 收敛在 ASC 可以缩小 Public API 与长期兼容性表面积。
+`AbilitySpecContainer`、`PredictionManager` 与 `ReplicationStateBuilder` 都是 Runtime Assembly 的 Internal Implementation Type。Public Consumer 通过 `AbilitySystemComponent` Facade、稳定的 `GASReadOnlyListView<T>`、`GASReadOnlySetView<T>`、`GASReadOnlyTagView`、Query Method 与 Diagnostics 工作，不会取得 Mutable Container 或 Builder Access。这些 Internal Type 不是 Extension Point。
 
-包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 直接引用与 Backend 无关的 `CycloneGames.Logging.Core` 契约 assembly，但不引用 AssetManagement、DataTable 或具体日志 Backend；可选功能依赖终止在各自的 Integration Assembly。
+主 Runtime Assembly 直接引用与 Backend 无关的 `CycloneGames.Logging.Core` 契约 assembly，但不引用 AssetManagement、DataTable 或具体日志 Backend；可选功能依赖终止在各自的 Integration Assembly。
 
 ### 日志契约与 Backend 集成
 
@@ -115,8 +113,6 @@ private static readonly LogChannel Log = ProductAbilityLog.Channel;
 Log.Warning("Ability activation was rejected.");
 Log.Error(exception, "Ability activation failed.");
 ```
-
-Consumer 可以移除具体 logging backend，而不需要修改 GameplayAbilities asmdef；日志会自然回退到 no-op Writer。
 
 ## 运行时模型
 
@@ -229,7 +225,7 @@ var cuePoolConfig = new GameObjectPoolManager.PoolConfig(
     maxTotalRetainedInstances: 1024);
 
 IResourceLocator cueResources =
-    new AssetManagementResourceLocator(assetPackage);
+    hostProvidedLocator;
 
 var cueManager = new GameplayCueManager(cuePoolConfig);
 cueManager.Initialize(cueResources);
@@ -237,7 +233,7 @@ cueManager.Initialize(cueResources);
 var context = new GASRuntimeContext(cueManager: cueManager);
 ```
 
-`AssetManagementResourceLocator` 属于 `CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement`；主 Runtime Assembly 只感知 `IResourceLocator`。使用其他 Asset System 的项目应提供对应 Adapter。具体资源边界是 `GameplayCueManager.Initialize(IResourceLocator)`；Core `IGameplayCueManager` 契约不暴露 `Initialize`。调用方拥有注入的 Service。先释放所有 ASC，再释放 Context，最后释放 `GameplayCueManager`。Headless 进程应注入 `NullGameplayCueManager.Instance`，且不加载视觉资产。
+`hostProvidedLocator` 由 Composition Root 提供；主 Runtime Assembly 只感知 `IResourceLocator`。可选的 UPM 条件 `AssetManagementResourceLocator` 与 Sample-only `ResourcesResourceLocator` 是两个可互换实现，Core、Runtime、Editor 与 Tests 都不引用它们。具体资源边界是 `GameplayCueManager.Initialize(IResourceLocator)`；Core `IGameplayCueManager` 契约不暴露 `Initialize`。调用方拥有注入的 Service。先释放所有 ASC，再释放 Context，最后释放 `GameplayCueManager`。Headless 进程应注入 `NullGameplayCueManager.Instance`，且不加载视觉资产。
 
 ### DI 组合
 
@@ -245,7 +241,7 @@ Runtime 类型不依赖任何 DI Container。可在项目 Composition Root 中�
 
 ```csharp
 builder.Register<IResourceLocator>(
-    _ => new AssetManagementResourceLocator(assetPackage),
+    _ => hostProvidedLocator,
     Lifetime.Singleton);
 
 builder.Register(
@@ -590,9 +586,9 @@ protected override GameplayEffectSpec CreateCooldownEffectSpec(
 }
 ```
 
-覆写仅在 Caller 持有 Spec（提交前）时有效——提交本身即是锁定，因此不需要 UE 的 `bDurationLocked` 标记。Definition 必须使用 `EDurationPolicy.HasDuration`；`Instant` 与 `Infinite` 会拒绝调用。`SetDuration` 要求正有限值；`SetDurationRaw` 额外允许 0（Effect 在首个 Tick 到期）。Active Effect 初始化、Stacking Duration 刷新与权威复制通道都读取 Per-spec Duration，覆写会贯穿所有消费路径。`GetCooldownInfo` 返回实例 Spec 的实际 Duration，与 UE 的 `GetCooldownTimeRemainingAndDuration` 一致。
+覆写仅在 Caller 持有 Spec（提交前）时有效——提交本身即是锁定。Definition 必须使用 `EDurationPolicy.HasDuration`；`Instant` 与 `Infinite` 会拒绝调用。`SetDuration` 要求正有限值；`SetDurationRaw` 额外允许 0（Effect 在首个 Tick 到期）。Active Effect 初始化、Stacking Duration 刷新与权威复制通道都读取 Per-spec Duration，覆写会贯穿所有消费路径。`GetCooldownInfo` 返回实例 Spec 的实际 Duration。
 
-如果需要完全数据驱动、不写技能代码的时长，Definition 可以携带 `DurationMagnitude`（对标 UE5 `FGameplayEffectDurationMagnitude`）：随等级缩放的常量、捕获的属性（如冷却缩减属性）或 SetByCaller 键。每个 Spec 创建时通过定点数 Magnitude 管道求值一次，结果随服务器复制的 `durationRaw` 下发到所有客户端（客户端不重算，不会发散）；显式 `SetDuration` 永远优先于后续 SetByCaller 触发的重算。求值为负时钳到 0。未配置 `DurationMagnitude` 时，`def.Duration` 行为与之前完全一致。
+如果需要完全数据驱动、不写技能代码的时长，Definition 可以携带 `DurationMagnitude`：随等级缩放的常量、捕获的属性（如冷却缩减属性）或 SetByCaller 键。每个 Spec 创建时通过定点数 Magnitude 管道求值一次，结果随服务器复制的 `durationRaw` 下发到所有客户端（客户端不重算，不会发散）；显式 `SetDuration` 永远优先于后续 SetByCaller 触发的重算。求值为负时钳到 0。
 
 ```csharp
 var cooldownEffect = new GameplayEffect(
@@ -853,7 +849,6 @@ Convenience Capture Path 可以在本地 Prepare 并 Commit，但不会发送任
 
 `GASAbilitySystemStateDeltaBuffer` 与 `GASAbilitySystemFullStateBuffer` 仍是 Process-local Bridge Structure。Networking Integration 会把它们映射到稳定 Wire Record，校验并准备完整 Receiver State，解析全部 Runtime Reference，随后才在 ASC Owner Thread 调用 Apply Boundary。禁止直接序列化这两个 Process-local Buffer。
 
-
 ## 内存、性能与容量
 
 ### Managed Runtime Memory
@@ -879,9 +874,9 @@ context.TrimCaches(); // discards every retained backing record
 
 `GASRuntimeLeaseStatistics` 为一组 Object 报告 `Active`、`PeakActive`、`Acquisitions`、`InvalidReleases` 与 `ReleaseFailures`。`context.GetMemoryStatistics()` 返回 `GASRuntimeMemoryStatistics`，其中包含 `EffectSpecs`、`ActiveEffects`、`EffectContexts`、`AbilitySpecs`、`Tasks`、`Abilities`、`TargetData` 以及它们求和后的 `OutstandingLeases`。`context.GetCacheStatistics()` 独立报告 Backing Cache 的 `Retained`、`Capacity`、`Hits`、`Misses` 与 `Discards`。`TrimCaches()` 会清除已保留的 Backing Record，但不会使 Active Spec 失效。这些 API 会校验 Context Ownership 与 Dispose State；它们是 Diagnostics 与显式 Cache Control，不负责恢复 Active Lease。
 
-使用 `Throw` 时，跨线程访问会立即抛出异常。使用 `LogWarning` 时，Runtime-memory Access 会记录日志，然后仍在修改前抛出异常。`Disabled` 只移除该诊断，不提供 Synchronization。容量应来自硬件 Composition Profile 与测量后的 Telemetry，不能根据 Platform Compiler Symbol 猜测。
+使用 `Throw` 时，跨线程访问会立即抛出异常。使用 `LogWarning` 时，Runtime-memory Access 会记录日志，然后仍在修改前抛出异常。`Disabled` 只移除该诊断，不提供 Synchronization。
 
-模块不声明全局 Zero Allocation。Cache Hit 可以复用已清理的 Spec Backing Buffer，但每次 Public Runtime Acquire 仍会创建一次性 Object。首次使用、Dictionary/Buffer 扩容、Event 订阅、项目 Callback、Warning/Error、Authoring 转换与外部 Adapter 都可能产生分配。成功的热路径 Ability/Effect/Prediction Event（包括已提交的 Effect Removal 与 Ability Cancellation）使用可选 `GASTrace` Ring，而不是逐次输出成功日志。`GASTraceEvent.AbilityDefinition` 保存稳定 Ability Definition，不保存已释放的 Runtime Instance。Trace Capacity 默认为 `4096`；`SetCapacity` 只接受 `1..65536`，并会重置 Ring。必须使用 Unity Profiler 和 Allocation Call Stack 验证代表性 Gameplay。
+Cache Hit 可以复用已清理的 Spec Backing Buffer，但每次 Public Runtime Acquire 仍会创建一次性 Object。首次使用、Dictionary/Buffer 扩容、Event 订阅、项目 Callback、Warning/Error、Authoring 转换与外部 Adapter 都可能产生分配。成功的热路径 Ability/Effect/Prediction Event（包括已提交的 Effect Removal 与 Ability Cancellation）使用可选 `GASTrace` Ring，而不是逐次输出成功日志。`GASTraceEvent.AbilityDefinition` 保存稳定 Ability Definition，不保存已释放的 Runtime Instance。Trace Capacity 默认为 `4096`；`SetCapacity` 只接受 `1..65536`，并会重置 Ring。
 
 ### 稳定的公共 Collection 与 Tag View
 
@@ -896,7 +891,7 @@ ASC 的 Collection 与 Tag Query 返回 Cached Live View，不返回 Backing `Li
 
 这些对象具有稳定 Identity，是 Live View，不是复制后的 Snapshot。它们不暴露 Backing Collection、Implicit Conversion、Mutation Method、Tag Callback Registration 或 Raw Container。每次 Count、Index、Query 与 Enumeration Step 都会检查 ASC Owner-thread Affinity 与 Dispose 状态；这也适用于 ASC Dispose 前捕获的 View。同步修改同一 Owner 时不得同时枚举；需要 Snapshot 时，应复制 Stable ID 或 Immutable Value。
 
-直接对这些具体 View Type 使用 `foreach` 时会采用 Value-type Enumerator。聚焦 Allocation Guard 在 Warmup 后的具体 View Enumeration Path 观察到 Current Thread 分配为零。通过 `IEnumerable<T>` 或其他 Interface 枚举可能对 Struct Enumerator 发生 Boxing，不属于该结果的覆盖范围。
+直接对这些具体 View Type 使用 `foreach` 时会采用 Value-type Enumerator。
 
 ### Consumed 与 Borrowed Managed Reference
 
@@ -922,11 +917,9 @@ Internal Lease Generation 仍会保护 Framework Cleanup，避免 Reentrant 或 
 
 `GASRuntimeLimits` 限制 AttributeSet、Attribute、Granted Ability、Active Effect、Prediction Window、Target、SetByCaller Entry、单 Effect Modifier、Core Modifier、Outstanding Predicted Attribute Snapshot、单 Delta Tag Change 与单 Tick Catch-up 工作量。`GASAbilitySystemLimits` 对 Unity-free State 施加对应的状态限制。
 
-`MaxPeriodicEffectExecutionsPerTick` 与 `MaxAbilityTaskRepeatExecutionsPerTick` 的默认值均为 `8`，且必须为正值。每个 Active Periodic Effect 与 Repeat Task 在一个 Tick 内最多执行对应预算次数。超出预算的已流逝 Interval 会作为确定性 Backlog 保留在 Timer 中，并在后续 Tick 继续处理；Runtime 不会静默丢弃或合并重复执行。这一策略限制了每个 catch-up 循环，同时保持 elapsed-time 顺序。项目仍需为全部 Active Effect 与 Task 的总成本制定预算。
+`MaxPeriodicEffectExecutionsPerTick` 与 `MaxAbilityTaskRepeatExecutionsPerTick` 的默认值均为 `8`，且必须为正值。每个 Active Periodic Effect 与 Repeat Task 在一个 Tick 内最多执行对应预算次数。超出预算的已流逝 Interval 会作为确定性 Backlog 保留在 Timer 中，并在后续 Tick 继续处理；Runtime 不会静默丢弃或合并重复执行。这一策略限制了每个 catch-up 循环，同时保持 elapsed-time 顺序。
 
-不存在 Retained Public AbilityTask Pool，也不存在限制 Concurrent Task 的 Task-cache Capacity。每个 Ability 必须通过 Workflow 与项目 Limit 限制自身可持有的 Task 数量，产品 Stress Test 必须覆盖 Authoring 允许的最大并发。
-
-Limit Failure 是运行信号。日志或 Telemetry 应记录 Entity、Ability/Effect Definition ID、Current Count、Configured Limit 与 Authority Role，同时避免记录敏感 Payload。
+不存在 Retained Public AbilityTask Pool，也不存在限制 Concurrent Task 的 Task-cache Capacity。
 
 ### 复杂度指引
 
@@ -935,10 +928,8 @@ Limit Failure 是运行信号。日志或 Telemetry 应记录 Entity、Ability/E
 - Stacking Lookup 使用按 Target/Source 维护的 Index。
 - ASC 的 Ability Tick 会把当前 Ticking Spec Set 复制到可复用 Snapshot，再在每次 Dispatch 前检查 Live Membership。轮到某个 Spec 前它已被移除，则跳过；本轮中激活的 Spec 从下一 Simulation Frame 开始 Tick；初始存活的每个 Spec 最多 Dispatch 一次。Nested ASC Tick 与 Tick Callback 内 Dispose ASC 都会被拒绝。存在 `T` 个 Ticking Spec 时，Snapshot Pass 为 `O(T)`，Membership Check 平均为 `O(1)`，保留的 Snapshot Capacity 为 `O(T)`。`ReserveRuntimeCapacity(tickingAbilityCapacity: ...)` 可以把预期扩容移到 Composition 阶段；Cold Growth 仍可能分配。
 - 单个 Ability 内，Task 在 Iteration 期间移除时会写入 Tombstone，并立即从 Membership Index 删除；`finally` Pass 会 In-place Compact Tombstone。本轮创建的 Task 延后到下一次 Task Tick；已移除的 Sibling 会跳过；Ability End 通过 Activation-generation Guard 停止遍历；Nested Task Tick 会被拒绝。对于初始 `K` 个 Tickable Task，遍历为 `O(K)`；发生移除时增加一次 `O(K)` 的 In-place Compaction，不创建 Scratch Collection。Task-list Capacity 由 Ability Instance 保留，Cold Use 时可能扩容。
-- Active-effect Tick 成本随 Active Effect 与 Periodic Work 增长。预分配的 ASC Snapshot 与 Task Tombstone Path 在各自聚焦的 Steady-state Test 中观察到 Current Thread 分配为零；这不是 Package-wide Tick 或 Zero-GC 保证。
+- Active-effect Tick 成本随 Active Effect 与 Periodic Work 增长。
 - 宽泛 Callback、Custom Requirement、Calculation 与 Cue Handler 的成本由项目控制。
-
-面对 10000+ 简单模拟实体，应使用 Unity-free Core Data Model 或项目 DOD/Batch Simulation，仅把需要表现的实体桥接到 Runtime ASC。没有性能证据时，不要为每个纯数据实体创建包含 Per-frame Task 的 Unity-facing ASC。
 
 ## 线程与安全
 
@@ -982,8 +973,6 @@ Stacking 下的各行会跟随当前配置：`Stack Limit Mode = Unlimited` 时�
 
 `GameplayAbilitySO.GetGameplayAbility()` 会按当前已加载的 Asset Revision 延迟创建并复用一份不可变 Definition。自定义 Asset 实现 `CreateGameplayAbility()`，只使用 Derived Immutable Input 构造 Derived Ability，然后恰好调用一次 `InitializeAbility(ability)`，以统一校验并转移全部 Base Tag、Trigger、Cost、Cooldown 和 Policy。Validation 与 Deserialization 会清除 Definition Cache。`CreateRuntimeInstance()` 只重建 Activation State Input；Runtime 会从缓存的 Definition 复制已封存的 Base Configuration，不能再次调用 `InitializeAbility`。
 
-Asset 配置应使用稳定 Tag 与 Attribute Name。重命名 Serialized Type、Field、Tag 或 Definition Identity 时，必须提供项目迁移方案和 Fixture Coverage。
-
 ## Editor 工具
 
 Editor Assembly 仅包含在 Editor 平台。
@@ -998,11 +987,11 @@ Editor Assembly 仅包含在 Editor 平台。
 
 Debugger 使用 Selection 或显式 Refresh，不进行周期性全 Scene 扫描。Trace Selection 基于 Sequence，Ring Buffer 移动不会静默改变已选择 Event。
 
-Custom Inspector 通过 `SerializedObject`/`SerializedProperty` 修改 Serialized Field，并在适用位置支持 Unity Undo、Prefab Override 与 Multi-object Editing。诊断工具只提供可观测性，不能证明 Player、IL2CPP、平台或 Allocation 结论。
+Custom Inspector 通过 `SerializedObject`/`SerializedProperty` 修改 Serialized Field，并在适用位置支持 Unity Undo、Prefab Override 与 Multi-object Editing。
 
 `AbilitySystemComponent` 是纯 C# Runtime Object，而不是 `UnityEngine.Object`，因此 Unity 不会直接为它绘制 Inspector。Sample 的 `AbilitySystemComponentHolder` Inspector 为其承载的 ASC 提供仅 Play Mode 可用的控制。选择一个或多个 Holder 后，可以使用 **Add / Update Selected & Show**、**Remove Selected**、**Show Overlay** 或 **Hide Overlay**。这些命令只修改临时 Runtime Diagnostics 状态：不会序列化调试开关、产生 Prefab Override、拥有或 Dispose ASC、调用 `ClearTargets`、移除未选中的 ASC，也不会销毁 Overlay Singleton。Registry 对每个 ASC 只有一条共享记录，因此添加、更新或移除选中 ASC 时，会修改这条记录，而不区分最初由哪个调用方完成注册。
 
-项目使用其他 ASC Host 时，可以在自己的 Custom Inspector 中调用 `TryAddTarget`、`IsTargetRegistered`、`RemoveTarget` 与 `SetEnabled`，提供相同工作流。注册应位于显式 Host 或 Composition Boundary；不要在每次 Inspector Repaint 时扫描 Scene 来发现 ASC。
+项目使用其他 ASC Host 时，可以在自己的 Custom Inspector 中调用 `TryAddTarget`、`IsTargetRegistered`、`RemoveTarget` 与 `SetEnabled`，提供相同工作流。
 
 可选 Runtime Overlay 接受一组有界、显式注册且存活的 ASC。Runtime Assembly 不执行全 Scene Discovery，也不使用 Reflection。Runtime Startup 不会自动创建它：
 
@@ -1037,11 +1026,9 @@ Overlay 按以下顺序解析配置：`GASDebugOverlay.Initialize` 的 `configur
 
 `Toggle` 是单目标便捷 API：它使用传入的 Live ASC 替换完整 Target Set，并切换可见性。Editor 菜单会先从准确选中的 GameObject 收集 Live ASC，再替换自己的 Target Set，不会扫描 Scene。Sample 显式注册 Player 与 Enemy。
 
-所有 Overlay API 都是 Unity Main Thread 上的诊断 API。注册属于有界冷路径，最多线性扫描 32 个 Target。启用后的 IMGUI 表现会格式化诊断文本，不是 Zero-allocation Gameplay Path。除非 Runtime Diagnostics 是明确的产品需求，否则 Release 与 Headless Composition 应移除或禁用它。
+所有 Overlay API 都是 Unity Main Thread 上的诊断 API。注册属于有界冷路径，最多线性扫描 32 个 Target。启用后的 IMGUI 表现会格式化诊断文本，不是 Zero-allocation Gameplay Path。
 
 ## 平台指引
-
-下表描述静态设计兼容性。只有项目在代表性硬件运行目标 Player Build 与测试后，才能认定对应平台完成验证。
 
 | 平台 | 静态设计指引 | 项目必须完成的验证 |
 | --- | --- | --- |
@@ -1052,17 +1039,19 @@ Overlay 按以下顺序解析配置：`GASDebugOverlay.Initialize` 的 `configur
 | Dedicated Server | Core 为 Unity-free；Runtime 可以使用 `NullGameplayCueManager` | Headless Build、Transport Adapter、Tick Scheduling、State Checksum/Recovery、Soak |
 | 未来主机平台 | Core/Runtime asmdef 禁用 Unsafe Code；Attribute 显式注册，Runtime Path 不要求 Reflection 或 Native Plugin | SDK/Compiler 限制、AOT/Stripping、Suspend/Resume、Memory Budget、认证要求 |
 
-硬件质量档位应负责提供 `GASRuntimeCacheProfile` Backing Capacity 与 GameplayCue Pool Retention。低内存设备可以减少 Internal EffectSpec Backing Record 与 Cue Instance 的保留量，同时保持一致的 Public One-shot Lease 和 Gameplay-limit Contract。平台特定优化应位于 Adapter 或 Composition Profile，不能进入通用 Gameplay Contract。
-
-Core/Runtime 源码与 asmdef 中，Runtime 不依赖 `UnityEditor`，且不存在 Unsafe Code、Reflection-based Registration、Native Plugin、Platform-name-based Tuning、后台 Worker Requirement 或 Runtime Code-generation Path。Core 设置了 `noEngineReferences: true`；Runtime 持有 Unity-facing Adapter。这些是静态可移植性事实，不构成执行证据。Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机平台 Profile 仍需分别完成目标 Player Build、适用的 IL2CPP/AOT 与 Stripping 检查、代表性设备 Profiling、Lifecycle Test、Memory-pressure Test 和 Long-session Soak。
+Core/Runtime 源码与 asmdef 中，Runtime 不依赖 `UnityEditor`，且不存在 Unsafe Code、Reflection-based Registration、Native Plugin、Platform-name-based Tuning、后台 Worker Requirement 或 Runtime Code-generation Path。Core 设置了 `noEngineReferences: true`；Runtime 持有 Unity-facing Adapter。
 
 ## Integration Assembly
 
 ### AssetManagement
 
-`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Logging.Core` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 是可选的 UPM 条件 Adapter。它依赖 `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Logging.Core` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
 
-主 Runtime Assembly 只持有 `IResourceLocator` 与 `IResourceHandle<T>`，没有 AssetManagement asmdef Reference。Sample Assembly 显式引用该 Integration，并使用 `IAssetPackage` 构造 Adapter。从 Assembly 层看，不使用 AssetManagement 的项目可以保留 Core 与 Runtime 并提供其他 `IResourceLocator`，同时必须排除 AssetManagement Integration 及引用它的 Sample Composition。`package.json` 把 AssetManagement 声明为直接需求，因此省略它的 UPM Packaging Profile 必须同步调整该元数据。
+只有当 Unity Package Manager 解析到受支持的 `com.cyclone-games.asset-management` `[1.0.0,2.0.0)` 时，该 Integration 才会激活。其 asmdef 通过 `versionDefines` 把 Package Version 映射为 Assembly-local `CYCLONEGAMES_HAS_ASSETMANAGEMENT` Capability，再由 `defineConstraints` 要求同一 Capability。它设置为 `autoReferenced: false`，应用必须在专用 Composition asmdef 中显式引用。`package.json` 不把 AssetManagement 声明为依赖：只安装 GameplayAbilities 不会把资源后端带入项目。
+
+主 Runtime Assembly 只持有 `IResourceLocator` 与 `IResourceHandle<T>`，没有 AssetManagement asmdef Reference。Core、Runtime、Editor、Tests 与 Sample Assembly 在缺少 AssetManagement 时都能编译。Host 可以提供任意 `IResourceLocator`；Sample 内含 `ResourcesResourceLocator`，这是基于 Unity `Resources` 的零依赖参考实现，因为 Resources 没有缓存所有权模型，它会刻意忽略 `bucket`、`cacheTag` 与 `cacheOwner`。Headless 进程则注入 `NullGameplayCueManager.Instance`。
+
+`Assets/ThirdParty` 兄弟目录中的 `package.json` 不代表该 Package 已由 UPM 安装，也不会激活 `versionDefines`。只有 Unity Package Manager 在受支持条件下解析两个 Package 时，Integration 才会激活。禁止在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_ASSETMANAGEMENT`。
 
 ### DataTable
 
@@ -1072,12 +1061,10 @@ DataTable Adapter 源码位于 `Runtime/Integrations/DataTable`。其 Integratio
 
 该 Integration 设置为 `autoReferenced: false`。应用应在专用 Composition asmdef 中显式引用 `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` 以及实际使用的 DataTable Assembly。如果 Consumer Assembly 也需要在 DataTable 缺失时自然消失，则必须在该 Consumer asmdef 中重复相同的 Package Version Define 与 Constraint。禁止在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_DATA_TABLE`。
 
-`Assets/ThirdParty` 兄弟目录中的 `package.json` 不代表该 Package 已由 UPM 安装，也不会激活 `versionDefines`。只有 Unity Package Manager 在受支持条件下解析两个 Package 时，Integration 才会激活。Active Path 应在同时通过 UPM 安装两个 Package 的项目中验证。
+`Assets/ThirdParty` 兄弟目录中的 `package.json` 不代表该 Package 已由 UPM 安装，也不会激活 `versionDefines`。只有 Unity Package Manager 在受支持条件下解析两个 Package 时，Integration 才会激活。
 
 Integration 提供 Attribute Initialization、Level Value Provider、Modifier Factory 与 Magnitude Calculation。Core 与 Runtime 不依赖它。
 
 ### VContainer Sample
 
 VContainer Composition Sample 隔离在 `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer`，其 Assembly 仅在 `VCONTAINER_PRESENT` 条件激活时参与编译。
-
-使用其他 Container 的项目应复用显式生命周期图，而不是让 Core 或 Runtime 引用 Container。

@@ -4,7 +4,7 @@
 
 This folder contains a playable sample scene and authoring assets for `CycloneGames.GameplayAbilities`. The samples demonstrate how to connect an `AbilitySystemComponent`, attributes, GameplayTags, GameplayEffects, GameplayAbilities, GameplayCues, target actors, one-shot runtime leases, bounded cue pooling, and startup helpers.
 
-The sample project is learning material. Production projects should copy the relevant patterns into their own assemblies, replace scene lookups with project services, and add authority, validation, asset registry, runtime lease/cache, and cue-pool rules that match the game.
+The sample project is learning material.
 
 ## Asset Locations
 
@@ -107,7 +107,8 @@ Read the ability scripts in this order:
 | `Scripts/UILogWriter.cs` | Sample-only `ILogWriter`/`IDisposable` decorator that forwards to the previously installed writer, copies bounded messages into the UI, and is restored by `SampleCombatManager` during shutdown. |
 | `Scripts/Diagnostics/GameplayAbilitiesSampleLog.cs` | Runtime sample logging facade with stable `Category`, ambient `Channel`, and strict explicit-writer creation. |
 | `Editor/Diagnostics/GameplayAbilitiesSampleEditorLog.cs` | Editor sample logging facade in the separate Editor asmdef. |
-| `Scripts/Integrate/Setup/GASManualSetup.cs` | Manual non-DI cue manager startup using `CycloneGames.AssetManagement`, with an optional runtime backing-cache profile. |
+| `Scripts/Integrate/Setup/GASManualSetup.cs` | Manual non-DI cue manager startup that accepts a host-supplied `IResourceLocator`, with an optional runtime backing-cache profile. |
+| `Scripts/Integrate/Setup/ResourcesResourceLocator.cs` | Zero-dependency sample locator backed by Unity `Resources`; ignores `bucket`, `cacheTag` and `cacheOwner` because Resources has no cache-ownership model. |
 | `Scripts/Integrate/Setup/GASServerSetup.cs` | Server/headless startup with `NullGameplayCueManager` and an optional runtime backing-cache profile. |
 | `Scripts/Integrate/DI/VContainer/GASLifetimeScope.cs` | Optional VContainer composition. This file is isolated in `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer` and compiles only when the VContainer package is present. |
 
@@ -118,7 +119,7 @@ var cacheProfile = new GASRuntimeCacheProfile(
     effectSpecBackingCapacity: 32);
 
 GASRuntimeContext clientContext = GASManualSetup.CreateContext(
-    assetPackage,
+    new ResourcesResourceLocator(),
     cuePoolConfig,
     out GameplayCueManager cueManager,
     cacheProfile: cacheProfile);
@@ -144,8 +145,6 @@ The sample tags are centralized in `Scripts/GASSampleTags.cs` and registered thr
 "Faction.NPC.Enemy"
 ```
 
-Use the same hierarchy style for production content, but define project-owned tags in the project package or game assembly rather than editing sample tags.
-
 ## Package And UPM Notes
 
 Samples live in `Samples/` so they remain visible and runnable when CycloneGames modules are embedded directly under `Assets/ThirdParty`. The package manifest exposes the same folder through the `samples` entry:
@@ -156,8 +155,6 @@ Samples live in `Samples/` so they remain visible and runnable when CycloneGames
   "path": "Samples"
 }
 ```
-
-When a distribution pipeline requires hidden UPM sample folders, mirror this source folder into the release package's sample layout without changing the source scene, prefab, ScriptableObject, or `.meta` GUID ownership rooted in `Samples/`.
 
 ## Persistence
 

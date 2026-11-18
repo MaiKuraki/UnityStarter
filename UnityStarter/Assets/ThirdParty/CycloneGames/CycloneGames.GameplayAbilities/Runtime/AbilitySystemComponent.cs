@@ -7603,7 +7603,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             long scanTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 #endif
             // Each attribute owns its dependents, so the scan is a field read plus the dependent
-            // list. Unreal keeps the same relation in FAggregator::Dependents.
+            // list.
             List<LiveDependencySlot> slots = changedAttribute.LiveDependents;
             int slotCount = slots?.Count ?? 0;
             for (int i = 0; i < slotCount; i++)
