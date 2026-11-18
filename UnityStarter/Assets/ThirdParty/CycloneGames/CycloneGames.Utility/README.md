@@ -2,167 +2,108 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Utility is a compact set of concrete Unity helpers for collection operations, invariant formatting, color and vector math, safe-area calculation, authored Transform lookup, narrow singleton conveniences, diagnostics, and Editor authoring. Each helper exposes a focused contract rather than a general framework, and Unity-specific behavior is isolated to Runtime or Editor assemblies so the package can be consumed piece by piece.
+A set of small Unity helpers: invariant formatting, collection operations, color and vector math, safe-area fitting, authored Transform lookup, FPS diagnostics, singletons, and a few Editor drawers. Each helper is independent. Add the asmdef reference and use the one you need; there is no framework to initialize.
 
-## Table of Contents
+## Requirements
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
-- [Troubleshooting](#troubleshooting)
+| Package | Used for |
+| --- | --- |
+| `com.cyclone-games.hash` | Transform key lookup |
+| `com.cyclone-games.logging` | Diagnostics; `NullLogWriter` is the default when no backend is installed |
+| `com.unity.ugui` | `EmptyGraphic`, safe-area and FPS components |
 
-## Overview
-
-The package covers recurring needs in nearly every Unity project: bounds-checked collection helpers, invariant string and span formatting, named colors with WCAG contrast, vector helpers, safe-area fitting, FPS diagnostics, authored Transform lookup, and narrow singleton conveniences. The Runtime assembly references `CycloneGames.Hash.Core` and `UnityEngine.UI`; a physically isolated `SplashScreenModifier` submodule stops the Player splash screen automatically.
-
-`Singleton<T>` and `MonoSingleton<T>` are narrow convenience types for small parameterless objects or main-thread Unity components. They do not replace explicit construction, dependency injection, domain-owned shutdown, or scene/world-scoped ownership. Service location, DI containers, persistence, networking, security, deterministic simulation, and Inspector frameworks live in their own modules.
-
-Unity objects and Unity APIs in this package have main-thread affinity. Pure formatting and collection helpers do not touch Unity state, but mutable collections still require caller-owned synchronization if they cross threads.
-
-### Key Features
-
-- **Collections**: `CollectionUtils` — bounds-checked access, swap-remove, caller-owned RNG shuffle.
-- **Formatting**: `FormatUtil`, `MemoryFormatExtensions` — invariant string, `StringBuilder`, and destination-`Span<char>` paths.
-- **Colors**: `Colors` — named colors, hex parsing/formatting, stable `0xRRGGBBAA`, WCAG luminance/contrast.
-- **Vectors**: `Vector3Extensions` — finite-input helpers with explicit invalid-range behavior.
-- **Safe area**: `SafeAreaPolicy`, `SafeAreaUtility`, `AdaptiveSafeAreaFitter` — pure pixel/anchor math plus a driven-RectTransform component.
-- **Diagnostics**: `FPSCounter` — bounded frame-rate sampling with optional IMGUI display.
-- **Transform lookup**: `TransformKeyRegistry` — cold-path index build, collision-checked string lookup.
-- **Singletons**: `Singleton<T>` (CLR lazy) and `MonoSingleton<T>` (main-thread Unity component).
-- **Splash stop**: `SkipUnitySplashScreen` — automatic `BeforeSplashScreen` hook in an isolated assembly.
-- **Authoring**: `StringAsConstSelectorAttribute`, `PropertyGroupAttribute`, custom inspectors, Colors Preview.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    InputEditor[CycloneGames.InputSystem.Editor] --> Runtime[CycloneGames.Utility.Runtime]
-    Editor[CycloneGames.Utility.Editor] --> Runtime
-    Runtime --> Hash[CycloneGames.Hash.Core]
-    Runtime --> UGUI[UnityEngine.UI / com.unity.ugui]
-    Splash[CycloneGames.Utility.SplashScreenModifier.Runtime] --> Core[UnityEngine.CoreModule]
-    EditorTests[Utility Tests.Editor] --> Editor
-    EditorTests --> Runtime
-    EditorTests --> Splash
-    PlayTests[Utility Tests.PlayMode] --> Runtime
-```
+Versions are declared in `package.json`.
 
 | Assembly | Platform | `autoReferenced` | Direct references |
 | --- | --- | ---: | --- |
 | `CycloneGames.Utility.Runtime` | All Unity targets | `true` | `CycloneGames.Hash.Core`, `CycloneGames.Logging.Core`, `UnityEngine.UI` |
 | `CycloneGames.Utility.SplashScreenModifier.Runtime` | All Unity targets | `true` | None |
 | `CycloneGames.Utility.Editor` | Editor only | `true` | `CycloneGames.Utility.Runtime`, `CycloneGames.Logging.Core` |
-| `CycloneGames.Utility.Tests.Editor` | Editor only | `false` | Runtime, Splash Runtime, Editor, Test Framework |
-| `CycloneGames.Utility.Tests.PlayMode` | Test builds | `false` | Runtime, Test Framework |
-| `CycloneGames.Utility.Tests.Performance` | Editor, conditional | `false` | Runtime, Performance Testing |
-
-The package lives under `Assets/ThirdParty/CycloneGames/`. Its `package.json` records release metadata and intended dependencies, but Unity does not activate sibling asset packages from that file — the current asmdef graph, installed packages, source, and project configuration remain the compilation facts.
-
-Runtime and Editor diagnostics use `LogChannel` categories `CycloneGames.Utility` and `CycloneGames.Utility.Editor`. The package depends only on `CycloneGames.Logging`; when no backend is installed, `NullLogWriter` provides a silent no-op fallback.
-
-Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
-
-## Quick Start
-
-Add an asmdef reference to `CycloneGames.Utility.Runtime`, then import the namespace:
 
 ```csharp
 using CycloneGames.Utility.Runtime;
 ```
 
-### Format a byte count without allocation
+Diagnostics use `LogChannel` categories `CycloneGames.Utility` and `CycloneGames.Utility.Editor`. Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`.
+
+## Quick start
+
+Three helpers that need no scene setup:
 
 ```csharp
+// Invariant byte formatting into a caller-owned buffer, no intermediate string.
 Span<char> buffer = stackalloc char[64];
 if (FormatUtil.TryFormatBytes(1_572_864, buffer, out int written, decimalPlaces: 1))
 {
     ConsumeText(buffer.Slice(0, written)); // "1.5 MB"
 }
-```
 
-### Look up an authored Transform by key
-
-```csharp
-registry.BuildIndex(); // cold path: during initialization
-
-if (registry.TryGetTransform("Weapon.Muzzle", out Transform muzzle))
+// O(1) removal where order does not matter.
+if (activeProjectiles.TrySwapRemoveAt(index))
 {
-    SpawnAt(muzzle);
+    // index now holds the former last element.
 }
-```
 
-### Fit a RectTransform to the device safe area
-
-Attach `AdaptiveSafeAreaFitter` to a `RectTransform` in the scene. It owns a `DrivenRectTransformTracker`, caches the last screen state, and recalculates only when screen state, configuration, hierarchy dimensions, or driven values change.
-
-### Access a lazy singleton
-
-```csharp
-TelemetryNames names = Singleton<TelemetryNames>.Instance;
-```
-
-The CLR guarantees one lazy construction and safe publication per closed generic type; the instance lives for the AppDomain and has no reset, cancellation, `Dispose`, or shutdown ordering.
-
-## Core Concepts
-
-### Invariant formatting
-
-All formatting APIs use `CultureInfo.InvariantCulture`. String APIs (`FormatBytes`, `FormatNumber`, `FormatDuration`, `FormatPercent`) allocate the returned string; `Try*` overloads write into a caller-owned `Span<char>` and return `false` for invalid input or insufficient capacity. `AppendFormatted*` extensions avoid an intermediate string, but `StringBuilder` growth can still allocate.
-
-Formatting rules:
-
-- decimal places must be in `[0, 5]`;
-- byte counts must be non-negative;
-- percentage ratios must be finite and in `[0, 1]`;
-- durations must be finite and fit in an Int64 number of whole seconds;
-- `Try*` APIs return `false` for invalid input or insufficient destination capacity;
-- throwing string APIs use `ArgumentOutOfRangeException` for invalid contracts.
-
-Byte values use base-1024 units labelled `B`, `KB`, `MB`, `GB`, and `TB`. Number values use base-1000 with suffixes `K`, `M`, `B`, `T`. These labels are part of the current formatting contract.
-
-### Collection helpers
-
-`CollectionUtils` provides bounds-checked access (`TryGetElementAtIndex`, `TryFirst`, `TryLast`, `TryPop`), `IsNullOrEmpty` checks for `List<T>`, arrays, `Dictionary`, and `HashSet`, dictionary `GetOrDefault`, and `LinkedList` node helpers. Two operations warrant attention:
-
-**Swap-remove** is O(1) and does not preserve order — ideal for entity lists or projectile pools where order does not matter:
-
-```csharp
-if (!activeProjectiles.TrySwapRemoveAt(index))
-{
-    // The index was outside the current logical collection.
-}
-```
-
-Array swap-remove requires a caller-owned logical count and clears the released slot so references are not retained.
-
-**Shuffle** is an in-place Fisher-Yates. The default RNG is lazily allocated per thread; pass a seeded `System.Random` for deterministic output:
-
-```csharp
-var random = new System.Random(seed);
-items.Shuffle(random);
-```
-
-`System.Random` is not a network protocol or cross-runtime deterministic guarantee. For replay or lockstep simulation, use the product's versioned simulation RNG. Mutable operations are not thread-safe; if data crosses threads, the owner must define one synchronization policy around all access.
-
-### Color parsing and contrast
-
-```csharp
+// Hex parsing and WCAG contrast.
 if (Colors.TryParseHex("#4A90E2FF".AsSpan(), out Color color))
 {
     float contrast = color.GetContrastRatio(Color.black);
 }
 ```
 
-`GetLuminance` computes BT.601 weighted luma. Accessibility decisions should use `GetRelativeLuminance` and `GetContrastRatio`. Alpha is ignored by the contrast API; composite translucent colors before testing contrast. `Colors.RandomColor(System.Random)` uses caller-owned RNG state; parameterless overloads consume Unity's global random state and belong only on main-thread, non-deterministic presentation paths.
+## Runtime helpers
 
-### Safe-area calculation
+### Invariant formatting
 
-The pure calculator can be tested without a scene:
+`FormatUtil` and `MemoryFormatExtensions` use `CultureInfo.InvariantCulture`. String APIs (`FormatBytes`, `FormatNumber`, `FormatDuration`, `FormatPercent`) allocate the returned string. `Try*` overloads write into a caller-owned `Span<char>` and return `false` for invalid input or insufficient capacity. `AppendFormatted*` extensions avoid an intermediate string, though `StringBuilder` growth can still allocate.
+
+| Rule | Value |
+| --- | --- |
+| Decimal places | `[0, 5]` |
+| Byte counts | Non-negative, base-1024 units `B`, `KB`, `MB`, `GB`, `TB` |
+| Number values | Base-1000 suffixes `K`, `M`, `B`, `T` |
+| Percent ratios | Finite and in `[0, 1]` |
+| Durations | Finite, fit in an `Int64` number of whole seconds |
+| Throwing string APIs | `ArgumentOutOfRangeException` for invalid contracts |
+
+A HUD that updates every frame should write into a reusable `Span<char>` and call `ToString()` only when the displayed value changes. `FormatPercent` allocates one string per call:
+
+```csharp
+float ratio = totalBytes > 0 ? bytesDownloaded / (float)totalBytes : 0f;
+string percent = FormatUtil.FormatPercent(ratio, decimalPlaces: 0); // "73%"
+```
+
+### Collection helpers
+
+`CollectionUtils` provides bounds-checked access (`TryGetElementAtIndex`, `TryFirst`, `TryLast`, `TryPop`), `IsNullOrEmpty` checks for `List<T>`, arrays, `Dictionary` and `HashSet`, dictionary `GetOrDefault`, and `LinkedList` node helpers.
+
+Swap-remove is O(1) and does not preserve order. The array overload requires a caller-owned logical count and clears the released slot so references are not retained:
+
+```csharp
+public void DespawnAt(int index)
+{
+    if (!active.TrySwapRemoveAt(index))
+    {
+        return; // index was already invalidated this frame
+    }
+
+    // index now holds the former last element; update any cached indices.
+}
+```
+
+`Shuffle` is an in-place Fisher-Yates. The default RNG is lazily allocated per thread; pass a seeded `System.Random` for repeatable output. `System.Random` is not a network protocol or cross-runtime deterministic guarantee, so replay and lockstep need the product's versioned simulation RNG. Mutable operations are not thread-safe.
+
+### Colors
+
+`Colors` holds named colors, hex parsing/formatting, stable `0xRRGGBBAA`, BT.601 luminance and WCAG relative luminance/contrast. `GetLuminance` uses BT.601 weighted luma; accessibility decisions should use `GetRelativeLuminance` and `GetContrastRatio`. Contrast ignores alpha, so composite translucent colors before testing. `Colors.RandomColor(System.Random)` uses caller-owned RNG state; the parameterless overload consumes Unity's global random state and belongs on main-thread, non-deterministic presentation paths only.
+
+### Vector helpers
+
+`Vector3Extensions` provides finite-input helpers with explicit behavior for invalid ranges. These are float helpers, not a deterministic simulation boundary.
+
+### Safe area
+
+`SafeAreaUtility.CalculatePixelRect` is pure pixel/anchor math and can be tested without a scene:
 
 ```csharp
 var policy = new SafeAreaPolicy(
@@ -178,20 +119,16 @@ Rect usablePixels = SafeAreaUtility.CalculatePixelRect(
     in policy);
 ```
 
-`Vector4` padding order is left, bottom, right, top. Non-finite or negative padding becomes zero, and over-constrained padding is proportionally fitted so anchors cannot invert. Bottom extension is applied first; top-inset balancing runs afterward and can add bottom inset back to balance a top cutout. It does not enlarge the top inset when the bottom is already larger.
+`Vector4` padding order is left, bottom, right, top. Non-finite or negative padding becomes zero; over-constrained padding is proportionally fitted so anchors cannot invert. Bottom extension is applied first, then top-inset balancing runs and can add bottom inset back to balance a top cutout.
 
-### Singleton semantics
-
-`Singleton<T>` is a CLR lazy construction helper. Construction and publication are thread-safe; mutable state inside `T` is not. The instance lives for the AppDomain and has no reset, cancellation, `Dispose`, or shutdown ordering. Use it only for small parameterless objects that do not own Unity objects, subscriptions, threads, native handles, or session state. Services with dependencies or owned resources should use explicit construction and a domain composition root.
-
-`MonoSingleton<T>` is a separate main-thread-only Unity convenience. `Instance` first resolves an existing active or inactive scene component and otherwise creates a dedicated GameObject during Play Mode. `TryGetInstance` only returns the already registered cache; it neither searches nor creates. Multiple pre-existing candidates fail instead of selecting arbitrary authority. A duplicate component is disabled and destroyed without deleting its GameObject or sibling components. Static registration is cleared at `SubsystemRegistration`, including when Domain Reload is disabled. Derived lifecycle overrides must call their base implementation.
-
-## Usage Guide
+Attach `AdaptiveSafeAreaFitter` to a `RectTransform` for the driven component. It owns a `DrivenRectTransformTracker`, caches the last screen state, and recalculates only when screen state, configuration, hierarchy dimensions or driven values change. On a phone in portrait, `enforceVerticalSymmetry: true` adds a matching bottom inset for a top notch so layout stays centered. With the device rotated, `enforceHorizontalSymmetry: true` mirrors a side notch.
 
 ### Transform key registry
 
+`TransformKeyRegistry` maps authored string keys to Transforms. Build the index during initialization, then look up:
+
 ```csharp
-registry.BuildIndex(); // perform during initialization or an explicit cold phase
+registry.BuildIndex(); // cold path, during initialization
 
 if (registry.TryGetTransform("Weapon.Muzzle", out Transform muzzle))
 {
@@ -199,26 +136,42 @@ if (registry.TryGetTransform("Weapon.Muzzle", out Transform muzzle))
 }
 ```
 
-Runtime behavior:
+Behavior:
 
-- empty keys and missing Transform references are ignored;
-- the first valid authored duplicate key wins; later duplicates are counted and ignored;
-- up to 16 indexed entries use linear lookup; larger sets use a hash-sorted array and binary search;
-- string lookup verifies the ordinal key after hashing;
-- hash-only lookup returns `false` when a distinct-key collision is detected;
-- active and enabled nested registries are flattened with an iterative depth-first hierarchy traversal during build; disabled or inactive registries do not participate;
-- the first lookup can build if `Build On Awake` was disabled, which can allocate and scan the hierarchy;
-- optional `Transform.Find` fallback is a cold path, not a frame-loop path.
+- Empty keys and missing Transform references are ignored. The first valid authored duplicate key wins; later duplicates are counted and ignored.
+- Up to 16 indexed entries use linear lookup; larger sets use a hash-sorted array and binary search. String lookup verifies the ordinal key after hashing. A hash-only lookup returns `false` when a distinct-key collision is detected.
+- Active and enabled nested registries are flattened with an iterative depth-first traversal during build; disabled or inactive registries do not participate.
+- The first lookup can build the index if `Build On Awake` was disabled, which allocates and scans the hierarchy. The optional `Transform.Find` fallback is also a cold path.
+- Keys are authored strings, not network IDs, save IDs, Unity instance IDs or ECS entity identities.
 
-The registry stores authored string keys, not network IDs, save IDs, Unity instance IDs, or raw ECS entity identities. The `Collect Direct Children` Editor action adds missing direct-child entries through `SerializedObject`, retaining Unity's standard Undo and Prefab Override semantics.
+The `Collect Direct Children` Editor action adds missing direct-child entries through `SerializedObject`, retaining Unity's Undo and Prefab Override behavior.
 
 ### FPS diagnostics
 
-Attach `FPSCounter` to an explicitly owned diagnostic GameObject. It does not discover, create, or expose a global instance. Call `SetVisible` or assign `IsVisible` through a direct reference.
+Attach `FPSCounter` to a diagnostic GameObject owned by the product and call `SetVisible` or assign `IsVisible` through a direct reference. It does not discover or create a global instance. The moving average uses a fixed bounded sample ring. Instant-only and average-only modes lazily cache observed numeric strings; combined mode can allocate a composed string on display updates. IMGUI has engine-owned costs, so this is a diagnostic tool, not a production HUD. `Persist Across Scenes` applies `DontDestroyOnLoad` to the entire GameObject, so use a dedicated owner with no unrelated components.
 
-The moving average uses a fixed, bounded sample ring. Instant-only and average-only modes lazily cache observed numeric strings; combined mode can allocate a composed string on display updates. IMGUI itself has engine-owned costs; this component is a diagnostic tool, not a production HUD. `Persist Across Scenes` applies `DontDestroyOnLoad` to the entire GameObject — use a dedicated owner with no unrelated components.
+### Singleton and MonoSingleton
+
+`Singleton<T>` is a CLR lazy construction helper. Construction and publication are thread-safe; mutable state inside `T` is not. The instance lives for the AppDomain and has no reset, cancellation, `Dispose` or shutdown ordering. Use it for small parameterless objects that do not own Unity objects, subscriptions, threads, native handles or session state.
+
+```csharp
+public sealed class TelemetryNames : Singleton<TelemetryNames>
+{
+    public string BuildFlavor { get; } = "production";
+}
+
+string flavor = TelemetryNames.Instance.BuildFlavor;
+```
+
+`MonoSingleton<T>` is a separate main-thread-only Unity convenience. `Instance` resolves an existing active or inactive scene component, or creates a dedicated GameObject during Play Mode. `TryGetInstance` returns only the already registered cache; it neither searches nor creates. Multiple pre-existing candidates fail instead of selecting arbitrary authority. A duplicate component is disabled and destroyed without deleting its GameObject or sibling components. Static registration is cleared at `SubsystemRegistration`, including when Domain Reload is disabled. Derived lifecycle overrides must call the base implementation.
+
+A global authored `MonoSingleton<T>` must sit on a root GameObject; otherwise the implementation logs an error and retains Scene lifetime instead of moving an unrelated hierarchy. Use explicit construction for services with dependencies, owned resources, ordered shutdown or scene/world-scoped multi-instance systems.
+
+## Editor helpers
 
 ### String constant selector
+
+Use a constants class to offer known values while keeping the serialized value a plain string:
 
 ```csharp
 public static class ControlPaths
@@ -231,9 +184,9 @@ public static class ControlPaths
 [SerializeField] private string controlPath;
 ```
 
-The drawer reflects public `const string` fields once per constants type and domain reload, sorts names ordinally, ignores null/empty constants, and deterministically keeps the first field for duplicate values. `AllowCustom` preserves values from open external contracts. Multi-object edits use `SerializedObject`/`SerializedProperty` and retain Undo and Prefab Override semantics.
+The drawer reflects public `const string` fields once per constants type and domain reload, sorts names ordinally, ignores null/empty constants, and keeps the first field for duplicate values. `UseMenu` builds hierarchical menu paths from the field-name separator (`Separator`, default `_`). `AllowCustom` preserves values from open external contracts. Multi-object edits use `SerializedObject`/`SerializedProperty` and retain Undo and Prefab Override behavior.
 
-### Paired Inspector property groups
+### Property groups
 
 The Runtime attributes describe a top-level serialized-field segment:
 
@@ -246,7 +199,7 @@ The Runtime attributes describe a top-level serialized-field segment:
 [SerializeField] private bool playOnEnable;
 ```
 
-Opt the target into rendering with a target-specific Editor adapter:
+Opt the target in with a target-specific Editor adapter:
 
 ```csharp
 [CustomEditor(typeof(MyComponent), true)]
@@ -256,169 +209,74 @@ internal sealed class MyComponentEditor : PropertyGroupInspectorDrawer
 }
 ```
 
-The renderer follows Unity's top-level `SerializedProperty` order. A continuous group ends before the field marked with `EndPropertyGroup`, at the next `PropertyGroup`, or at the end of the object. A non-continuous group contains only its attributed field. Repeated names form independent segments. Arrays, lists, nested serializable objects, and managed references can be grouped as whole top-level properties and continue through their own property drawers; attributes inside nested serialized types are intentionally not recursively interpreted. Invalid or ambiguous metadata fails open by drawing the affected property normally, never by hiding serialized data.
+The renderer follows Unity's top-level `SerializedProperty` order. A continuous group ends before the field marked with `EndPropertyGroup`, at the next `PropertyGroup`, or at the end of the object. A non-continuous group contains only its attributed field. Repeated names form independent segments. Arrays, lists, nested serializable objects and managed references can be grouped as whole top-level properties; attributes inside nested serialized types are not recursively interpreted. Invalid or ambiguous metadata fails open by drawing the property normally.
 
-There is no global fallback Editor — this avoids intercepting unrelated Unity and third-party Inspectors. Foldout state belongs to the current Editor instance, is initialized from `ClosedByDefault`, and is intentionally not persisted. All value edits flow through `SerializedObject`/`SerializedProperty`, retaining Unity Undo, Prefab Override, and multi-object behavior.
+There is no global fallback Editor, so unrelated Unity and third-party Inspectors are never intercepted. Foldout state belongs to the current Editor instance, starts from `ClosedByDefault`, and is not persisted. All edits flow through `SerializedObject`/`SerializedProperty`.
 
-### Automatic Player splash stop
+### Custom inspectors and Colors Preview
 
-The physically isolated `Runtime/Scripts/SplashScreenModifier/` submodule is enabled by presence and requires no call site. Unity invokes its registration type `SkipUnitySplashScreen` at `BeforeSplashScreen`; Player targets synchronously request `SplashScreen.Stop(StopImmediate)` on the Unity-owned callback thread. Editor and Dedicated Server builds execute a no-op.
+`FPSCounter`, `AdaptiveSafeAreaFitter` and `TransformKeyRegistry` have explicit custom inspectors with cached styles, grouped sections, multi-object support and serialized editing. The generic paired-field renderer is exposed only through `PropertyGroupInspectorDrawer`; its traversal, metadata cache and visual helpers stay internal.
 
-The submodule does not use `Task.Run`, XR initialization, focus-event heuristics, a GameObject, or an Editor `PlayerSettings` policy. Its normal path is stateless and performs one native API call per callback invocation.
+Colors Preview derives color names from Runtime public color fields during an Editor-only reflection pass, so Player builds do not carry a duplicated table. `Tools/CycloneGames/Open Persistent Data Path` uses `EditorUtility.RevealInFinder`; it creates the directory if needed and reports failures with an Editor dialog and log.
 
-## Advanced Topics
+## Splash screen submodule
 
-### Custom Editor experience
+`Runtime/Scripts/SplashScreenModifier/` is a physically isolated assembly enabled by presence, with no call site. Adding this package registers `SkipUnitySplashScreen` at `BeforeSplashScreen`; Player builds request `SplashScreen.Stop(StopImmediate)`. Editor and Dedicated Server builds are no-ops. The assembly uses `AlwaysLinkAssembly` so Unity's linker processes its runtime-init root. `SplashScreen.Stop` requires a license that permits it.
 
-`FPSCounter`, `AdaptiveSafeAreaFitter`, and `TransformKeyRegistry` use explicit custom inspectors with cached internal styles, grouped sections, multi-object support, validation, and serialized editing. The generic paired-field renderer is exposed only through `PropertyGroupInspectorDrawer`; its traversal, metadata cache, and visual helpers stay internal so Utility does not become a general Editor framework.
+## Performance notes
 
-The Colors Preview derives color names from Runtime public color fields during an Editor-only cold reflection pass. Player builds do not carry a duplicated Editor color-name table. `Tools/CycloneGames/Open Persistent Data Path` uses `EditorUtility.RevealInFinder`; it creates the directory if it does not exist and reports failures with an actionable Editor dialog and log.
-
-### MonoSingleton lifecycle and reload
-
-A global authored `MonoSingleton<T>` component must be on a root GameObject; otherwise the implementation logs an error and retains Scene lifetime instead of moving an unrelated hierarchy. A duplicate component is disabled and destroyed without deleting its GameObject or sibling components. Static registration is cleared at `SubsystemRegistration`, including when Domain Reload is disabled. Do not access this API from worker threads or use it for scene/world-scoped multi-instance systems, constructor-injected services, or services with ordered shutdown.
-
-### Splash submodule and IL2CPP
-
-The unreferenced Splash assembly uses `AlwaysLinkAssembly` so Unity's linker processes its runtime-init root. IL2CPP and stripping still require target Player validation. Actual visual behavior, license eligibility, native launch screens, WebGL loaders, and platform consistency require target-specific Player evidence.
-
-## Common Scenarios
-
-### Format download progress for a HUD
-
-A download HUD needs compact, invariant text without per-frame string allocation:
-
-```csharp
-Span<char> buffer = stackalloc char[64];
-if (FormatUtil.TryFormatBytes(bytesDownloaded, buffer, out int bytesWritten, decimalPlaces: 1))
-{
-    // "1.5 MB" — written into the caller-owned span, no intermediate string.
-    hud.SetBytesText(buffer.Slice(0, bytesWritten));
-}
-
-float ratio = totalBytes > 0 ? bytesDownloaded / (float)totalBytes : 0f;
-string percent = FormatUtil.FormatPercent(ratio, decimalPlaces: 0); // "73%"
-```
-
-The destination span API avoids the intermediate string. The `FormatPercent` call allocates one string per frame; for higher frequency, write into a reusable `Span<char>` and only call `ToString()` when the displayed value actually changes.
-
-### Projectile pool with swap-remove
-
-A projectile pool stores active projectiles in a `List<Projectile>` and removes them by index when they hit or expire. Order does not matter, so swap-remove gives O(1) removal without shifting:
-
-```csharp
-public void DespawnAt(int index)
-{
-    if (!active.TrySwapRemoveAt(index))
-    {
-        return; // index was already invalidated this frame
-    }
-
-    // The projectile at `index` has been replaced by the former last element.
-    // Update any per-frame indices that referenced the moved element.
-}
-```
-
-Array swap-remove requires a caller-owned logical count and clears the released slot so references are not retained.
-
-### Notch-aware UI layout
-
-An `AdaptiveSafeAreaFitter` is attached to the root canvas `RectTransform`. With `enforceVerticalSymmetry: true`, a top notch on a phone in portrait adds matching bottom inset so the layout remains vertically centered. On landscape devices with a side notch, `enforceHorizontalSymmetry` mirrors the inset on the opposite edge. The component caches the last applied state and skips recalculation when neither the screen nor the configuration changes.
-
-### Build-time telemetry names
-
-A small `Singleton<T>` provides access to build-time telemetry labels without wiring a full DI container:
-
-```csharp
-public sealed class TelemetryNames : Singleton<TelemetryNames>
-{
-    public string BuildFlavor { get; } = "production";
-}
-
-string flavor = TelemetryNames.Instance.BuildFlavor;
-```
-
-Use this pattern only for read-only, parameterless, AppDomain-lifetime data. Anything that owns subscriptions, threads, native handles, or session state belongs in an explicitly constructed service.
-
-## Performance and Memory
-
-| Path | Ownership and allocation behavior |
+| Path | Allocation behavior |
 | --- | --- |
-| `TryFormat*` destination APIs | Caller owns the span; no result string. Insufficient capacity returns `false`. |
-| String formatting APIs | Allocate exactly the returned managed string, subject to runtime implementation. |
-| Collection helpers | Do not add hidden locks. `ClearAndResize` can allocate when capacity grows. Default shuffle lazily creates one RNG per thread. |
+| `TryFormat*` destination APIs | Caller owns the span; no result string. |
+| String formatting APIs | One managed string for the return value. |
+| Collection helpers | No hidden locks. `ClearAndResize` can allocate on capacity growth; default shuffle lazily creates one RNG per thread. |
 | Safe-area math | Struct-only calculation; no global cache. |
-| Transform registry build | Component owns arrays, a reusable key set, and iterative traversal buffers; capacity or hierarchy changes can allocate. Key-set and traversal-buffer peak capacity is retained for the component lifetime, while references are cleared after build. |
-| Transform registry lookup | No rebuild allocation after a valid explicit build; complexity is O(n) for `n <= 16`, otherwise O(log n + collisions). |
+| Transform registry build | Component owns arrays, a reusable key set and iterative traversal buffers; capacity or hierarchy changes can allocate. Peak capacity is retained for the component lifetime and references are cleared after build. |
+| Transform registry lookup | No rebuild allocation after a valid explicit build; O(n) for `n <= 16`, otherwise O(log n + collisions). |
 | FPS counter | Component owns bounded sample arrays and GUI caches; combined text and IMGUI can allocate. |
-| `Singleton<T>.Instance` | CLR initializes once per closed type; warm access is a static read with no result allocation. The instance remains AppDomain-owned. |
-| `MonoSingleton<T>.Instance` | Warm registered access has no result allocation. First resolution can allocate a search result array, cached name, GameObject, and component. |
-| Splash startup hook | One native stop request per bounded callback invocation; no persistent state, cache, subscription, worker, or explicit normal-path allocation. |
+| `Singleton<T>.Instance` | CLR initializes once per closed type; warm access is a static read. |
+| `MonoSingleton<T>.Instance` | Warm registered access has no result allocation. First resolution can allocate a search result array, cached name, GameObject and component. |
 | Editor drawers | Reflection/menu data is cached until domain reload; menu opening is a cold allocation path. |
-| Property groups | Type/field metadata is reflected once per Editor domain; each Inspector owns only fold state. Properties are streamed each draw and are not retained across Undo or structural changes. |
+| Property groups | Type/field metadata is reflected once per Editor domain; each Inspector owns only fold state. |
 
-No pool is used. None of these helpers repairs unclear object ownership. Measure the actual target backend and hardware before choosing them for a hot path.
+Profile the target backend and hardware before choosing a helper for a hot path.
 
-### Threading and platform notes
+## Threading and platform notes
 
-- Unity objects, `Screen`, IMGUI, UGUI, `Transform`, and Editor APIs are main-thread only here.
-- `Singleton<T>` construction/publication follows CLR static initialization semantics, including WebGL's single-threaded runtime; the mutable object is not made thread-safe.
-- `MonoSingleton<T>` is main-thread confined. Its guard prevents worker-thread Unity API access and it only creates during Play Mode.
-- Collection helpers do not claim thread safety. If mutable data crosses threads, the owner must define one synchronization policy around all access, cancellation, shutdown, and capacity.
-- The Runtime assemblies contain no background tasks, native plugins, unsafe blocks, runtime reflection discovery, or dynamic code generation.
-- The Splash submodule calls Unity synchronously on its startup callback thread. WebGL receives no thread-dependent or focus-event fallback path.
-- Dedicated Server builds should not attach UGUI, safe-area, or IMGUI diagnostic components. The Splash callback is a compile-time no-op under `UNITY_SERVER`.
-- Static review covers Windows, Linux, macOS, iOS, Android, WebGL, and console constraints. Compatibility still requires target Player builds, platform SDKs, and representative hardware evidence.
-- These float helpers are not a deterministic simulation boundary. Use a versioned fixed-point or otherwise proven simulation layer when deterministic replay is required.
+- Unity objects, `Screen`, IMGUI, UGUI, `Transform` and Editor APIs are main-thread only here.
+- `Singleton<T>` construction/publication follows CLR static initialization semantics, including WebGL's single-threaded runtime. The mutable object is not made thread-safe.
+- `MonoSingleton<T>` is main-thread confined and creates only during Play Mode. Its guard prevents worker-thread Unity API access.
+- Collection helpers do not claim thread safety. If mutable data crosses threads, the owner defines one synchronization policy around all access, capacity, cancellation and shutdown.
+- The Runtime assemblies contain no background tasks, native plugins, unsafe blocks, runtime reflection discovery or dynamic code generation.
+- The Splash submodule calls Unity on its startup callback thread. WebGL has no thread-dependent fallback path.
+- Dedicated Server builds should not attach UGUI, safe-area or IMGUI diagnostic components. The Splash callback is a compile-time no-op under `UNITY_SERVER`.
 
-### Persistence and data safety
-
-The module does not automatically create or write preferences, settings, cache indexes, save data, registry keys, plist values, or standalone project configuration assets. It does not use `EditorPrefs`, `PlayerPrefs`, or `SessionState`. Property-group fold state is transient and owned by the current Editor instance.
-
-The explicit inspectors and property drawer do write user-authorized Unity-serialized authoring changes to their selected Scene, Prefab, or asset targets through `SerializedObject`/`SerializedProperty`. Inspector edits retain normal Undo and Prefab Override behavior. The persistent-data menu command can create `Application.persistentDataPath`, but it writes no file content. Files already present there belong to the application, not this Utility package; do not delete them as a Utility cache. `TransformKeyRegistry`, `FPSCounter`, and `AdaptiveSafeAreaFitter` contain Unity-serialized fields. Renamed serialized fields use `FormerlySerializedAs` where declared.
+This package does not create or write preferences, settings, cache indexes, save data, registry keys, plist values or standalone project configuration assets. It does not use `EditorPrefs`, `PlayerPrefs` or `SessionState`. Inspector edits write Unity-serialized authoring changes through `SerializedObject`. `TransformKeyRegistry`, `FPSCounter` and `AdaptiveSafeAreaFitter` contain Unity-serialized fields; renamed fields use `FormerlySerializedAs` where declared.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| `TryFormat*` returns `false` | Invalid input or destination span too small | Validate decimal places in `[0, 5]`, byte count non-negative, ratio in `[0, 1]`; grow the destination span |
-| `Singleton<T>` holds stale state across sessions | AppDomain has not been reloaded | Use explicit construction for data with session lifetime; do not store mutable session state in a singleton |
-| `MonoSingleton<T>` logs an error about root GameObject | Authored global component is on a non-root GameObject | Move the component to a root GameObject, or set `IsGlobal` to `false` for scene-scoped usage |
-| `TransformKeyRegistry.TryGetTransform` returns `false` for a known key | Index not built, or distinct-key hash collision | Call `BuildIndex()` during initialization; check that the key is authored on an active, enabled registry |
-| `TransformKeyRegistry` lookup is slow on first call | `Build On Awake` disabled; first lookup triggers build | Build explicitly during load, or accept the one-time cost |
-| `AdaptiveSafeAreaFitter` does not update after rotation | Component disabled, or hierarchy dimensions unchanged | Verify the component is enabled; force a recalculation by changing screen state or configuration |
-| `FPSCounter` allocates every frame | Combined display mode with IMGUI rendering | Switch to instant-only or average-only mode; profile the IMGUI cost separately |
-| Property group does not render | Target Editor does not derive from `PropertyGroupInspectorDrawer` | Add a custom Editor for the target type that inherits `PropertyGroupInspectorDrawer` |
-| Splash screen is not stopped on device | License does not permit `SplashScreen.Stop`, or IL2CPP stripped the registration type | Verify license eligibility; confirm `AlwaysLinkAssembly` is preserved; check target Player logs |
-| `StringAsConstSelector` loses a custom value | `AllowCustom` is `false` | Set `AllowCustom = true` to preserve values from open external contracts |
-| Colors Preview is empty in Player build | Colors Preview is Editor-only; Player builds do not carry the color-name table | Expected; access colors through the Runtime `Colors` class directly |
+| `TryFormat*` returns `false` | Invalid input or destination span too small | Validate decimal places in `[0, 5]`, non-negative byte count, ratio in `[0, 1]`; grow the span. |
+| `Singleton<T>` holds stale state across sessions | AppDomain has not been reloaded | Use explicit construction for data with session lifetime. |
+| `MonoSingleton<T>` logs an error about root GameObject | Authored global component is on a non-root GameObject | Move it to a root GameObject, or set `IsGlobal` to `false` for scene-scoped use. |
+| `TransformKeyRegistry.TryGetTransform` returns `false` for a known key | Index not built, or a distinct-key hash collision | Call `BuildIndex()` during initialization; verify the registry is active and enabled. |
+| Transform registry lookup is slow on first call | `Build On Awake` disabled; first lookup triggers a build | Build explicitly during load, or accept the one-time cost. |
+| `AdaptiveSafeAreaFitter` does not update after rotation | Component disabled, or hierarchy dimensions unchanged | Verify the component is enabled; force a recalculation by changing screen state or configuration. |
+| `FPSCounter` allocates every frame | Combined display mode with IMGUI rendering | Switch to instant-only or average-only mode. |
+| Property group does not render | Target Editor does not derive from `PropertyGroupInspectorDrawer` | Add a custom Editor that inherits `PropertyGroupInspectorDrawer`. |
+| Splash screen is not stopped on device | License does not permit `SplashScreen.Stop`, or the registration type was stripped | Verify license eligibility; confirm `AlwaysLinkAssembly` is preserved; check target Player logs. |
+| `StringAsConstSelector` loses a custom value | `AllowCustom` is `false` | Set `AllowCustom = true` to preserve values from open external contracts. |
+| Colors Preview is empty in Player build | Colors Preview is Editor-only | Access colors through the Runtime `Colors` class directly. |
 
-## Validation
+## Running the tests
 
-Run focused tests from Unity Test Runner:
-
-- EditMode assembly: `CycloneGames.Utility.Tests.Editor`
-- PlayMode assembly: `CycloneGames.Utility.Tests.PlayMode`
-- Performance assembly: `CycloneGames.Utility.Tests.Performance` when `com.unity.test-framework.performance >= 3.0.0` is installed
-
-Equivalent batchmode shape:
+| Assembly | Platform |
+| --- | --- |
+| `CycloneGames.Utility.Tests.Editor` | EditMode |
+| `CycloneGames.Utility.Tests.PlayMode` | PlayMode |
+| `CycloneGames.Utility.Tests.Performance` | Editor, when `com.unity.test-framework.performance >= 3.0.0` is installed |
 
 ```text
 <UnityEditor> -batchmode -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Utility.Tests.Editor -testResults <result-path> -quit
 ```
-
-Minimum manual Editor checks:
-
-1. Multi-select two instances of each custom-inspected component and edit mixed values.
-2. Add/remove/collect Transform registry entries, then verify Undo/Redo and Prefab Overrides.
-3. Edit a `List<string>` using `StringAsConstSelector(AllowCustom = true)` and preserve an unknown control path.
-4. Resize and search the Colors Preview, then copy a named color reference.
-5. Enter Play Mode, rotate or resize the Game view, and verify safe-area anchors remain ordered.
-6. Open an opted-in property-group Inspector, verify collapsed/expanded rendering, multi-object mixed values, Undo/Redo, and Prefab Overrides.
-7. Enter Play Mode with Domain Reload and Scene Reload disabled; verify a `MonoSingleton<T>` resolves once, rejects duplicates without deleting siblings, and resets registration on the next session.
-
-Before shipping, run a disposable Player startup smoke on every selected target. Confirm that the Unity splash request is stopped where licensing permits, the first Scene still starts, `UNITY_SERVER` remains unaffected, and native OS/browser/platform launch UI is not mistaken for Unity's managed splash. Repeat with the product's IL2CPP, stripping, XR, and license configuration. Do not promote an Editor test result to Player, IL2CPP, mobile, WebGL, server, console, long-duration, or global zero-allocation evidence.
-
-## Memory Ownership
-
-Utility owns per-component `TransformKeyRegistry` buffers and AppDomain/Unity lifecycle singleton state, but exposes no process-global responder because no independently safe trim operation exists. External diagnostics must never reset a static singleton, destroy a component, clear authored registry state, or mutate business data under pressure. Aggregate diagnostics require explicit public owner snapshots.
