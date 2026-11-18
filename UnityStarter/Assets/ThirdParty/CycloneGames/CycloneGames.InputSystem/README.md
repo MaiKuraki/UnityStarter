@@ -17,10 +17,9 @@ Use this module when players need separate device ownership, or when input routi
 | `com.cysharp.r3` | Action streams |
 | `jp.hadashikick.vyaml` | YAML parsing |
 | `com.cyclone-games.hash` | Deterministic action IDs |
-| `com.cyclone-games.io` | File and URI configuration sources |
 | `com.cyclone-games.logging` | Diagnostics |
 
-Versions are declared in `package.json`. Add an asmdef reference to `CycloneGames.InputSystem.Runtime`. The UGUI, VContainer, AssetManagement and Tools assemblies are opt-in and need explicit references.
+Versions are declared in `package.json`. Add an asmdef reference to `CycloneGames.InputSystem.Runtime`. The UGUI, VContainer and Tools assemblies are opt-in and need explicit references.
 
 ### Minimal example
 
@@ -533,18 +532,19 @@ Input control paths and device layouts vary by platform and package version. Val
 
 **UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal/vertical menu-navigation components. The assembly owns presentation adapters only; core runtime does not reference UGUI.
 
-**VContainer.** The base integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer`, diagnostics and an `IAsyncStartable` when auto-initialization is enabled. Pass an explicit `InputSystemBootstrapOptions` to `InputSystemVContainerInstaller`; `Optional` and `Disabled` complete auto-start without throwing. Every consumer in that scope must resolve/inject the same manager, since `InputManager.Instance` would create a separate session.
-
-AssetManagement-backed package loading requires the sibling `CycloneGames.InputSystem.AssetManagement` package and a reference to `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`:
+**VContainer.** The integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer` and diagnostics. It does not discover configuration sources, storage roots, startup timing or failure handling: the composition root supplies an immutable `InputSystemVContainerOptions`. An entry point is registered only with `registerEntryPoint: true`, and a failed bootstrap is escalated only with `throwOnStartupFailure: true`; otherwise the result stays in `IInputSystemInitializerDiagnostics.LastResult`. Every consumer in that scope must resolve/inject the same manager, since `InputManager.Instance` would create a separate session.
 
 ```csharp
-var packageLoader =
-    InputSystemAssetManagementVContainerAdapter.CreatePackageConfigurationLoader();
+var bootstrap = new InputSystemBootstrapOptions(
+    InputSystemBootstrapMode.Optional,
+    new UriInputConfigurationSource(),
+    Path.Combine(Application.streamingAssetsPath, "input_config.yaml"),
+    new FileInputConfigurationStore(Application.persistentDataPath),
+    "input/user_input_settings.yaml");
 
-builder.Install(new InputSystemVContainerInstaller(
-    "input_config.yaml",
-    "user_input_settings.yaml",
-    packageLoader));
+var options = new InputSystemVContainerOptions(bootstrap);
+
+builder.Install(new InputSystemVContainerInstaller(options));
 ```
 
 **Tools.** `CycloneGames.InputSystem.Tools.Runtime` is opt-in diagnostic tooling. `InputRecorder` records selected context-qualified streams into a fixed-capacity in-memory buffer. Overflow increments `DroppedSampleCount`; it never grows the sample buffer while recording. `StopRecording` creates an immutable snapshot, and `InputReplayCursor` consumes samples in recorded tick/order.
@@ -559,7 +559,7 @@ builder.Install(new InputSystemVContainerInstaller(
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring, validation, safe file writes, constant generation. Editor-only. |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | Presentation adapters. `autoReferenced: false`. |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | Container-owned manager, async startup, resolver adapters. No AssetManagement dependency. |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | sibling package | Package-configuration loader adapter; supplied by `CycloneGames.InputSystem.AssetManagement`. |
+
 | `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` and `InputReplayCursor` diagnostic tooling. |
 | `CycloneGames.InputSystem.Sample` | `Samples/` | Opt-in scene and bootstrap example. |
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode validation and regression coverage. |

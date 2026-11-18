@@ -15,10 +15,9 @@
 | `com.cysharp.r3` | 动作流 |
 | `jp.hadashikick.vyaml` | YAML 解析 |
 | `com.cyclone-games.hash` | 稳定的动作 ID |
-| `com.cyclone-games.io` | 文件与 URI 配置源 |
 | `com.cyclone-games.logging` | 诊断日志 |
 
-版本声明见 `package.json`。在 asmdef 中添加对 `CycloneGames.InputSystem.Runtime` 的引用。UGUI、VContainer、AssetManagement 和 Tools 程序集均为可选，用到时才添加引用。
+版本声明见 `package.json`。在 asmdef 中添加对 `CycloneGames.InputSystem.Runtime` 的引用。UGUI、VContainer 和 Tools 程序集均为可选，用到时才添加引用。
 
 ### 最小示例
 
@@ -531,18 +530,19 @@ Unity API 以及玩家/上下文操作限定在主线程。`UriInputConfiguratio
 
 **UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 和横/纵向菜单导航组件。该程序集只负责展示适配，核心运行时不引用 UGUI。
 
-**VContainer。** 基础集成在启用自动初始化时注册容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer`、诊断组件和一个 `IAsyncStartable`。给 `InputSystemVContainerInstaller` 传入显式的 `InputSystemBootstrapOptions`；`Optional` 和 `Disabled` 会正常结束自动启动而不抛异常。同一作用域内的消费端必须解析/注入同一个 manager，混用 `InputManager.Instance` 会创建另一个会话。
-
-基于 AssetManagement 的包加载需要安装同级 `CycloneGames.InputSystem.AssetManagement` 包，并引用 `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`：
+**VContainer。** 集成层注册容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer` 与诊断组件。它不会自行决定配置来源、存储路径、启动时机或失败处理：由 composition root 构造不可变的 `InputSystemVContainerOptions` 传入。只有 `registerEntryPoint: true` 才注册 entry point，只有 `throwOnStartupFailure: true` 才把启动失败升级为异常；其余情况结果保留在 `IInputSystemInitializerDiagnostics.LastResult`。同一作用域内的消费端必须解析/注入同一个 manager，混用 `InputManager.Instance` 会创建另一个会话。
 
 ```csharp
-var packageLoader =
-    InputSystemAssetManagementVContainerAdapter.CreatePackageConfigurationLoader();
+var bootstrap = new InputSystemBootstrapOptions(
+    InputSystemBootstrapMode.Optional,
+    new UriInputConfigurationSource(),
+    Path.Combine(Application.streamingAssetsPath, "input_config.yaml"),
+    new FileInputConfigurationStore(Application.persistentDataPath),
+    "input/user_input_settings.yaml");
 
-builder.Install(new InputSystemVContainerInstaller(
-    "input_config.yaml",
-    "user_input_settings.yaml",
-    packageLoader));
+var options = new InputSystemVContainerOptions(bootstrap);
+
+builder.Install(new InputSystemVContainerInstaller(options));
 ```
 
 **Tools。** `CycloneGames.InputSystem.Tools.Runtime` 是可选的诊断工具。`InputRecorder` 把选定的带上下文限定的流记录到固定容量的内存缓冲区，溢出时递增 `DroppedSampleCount`，录制期间缓冲区不会增长。`StopRecording` 创建不可变快照，`InputReplayCursor` 按录制的 tick/顺序消费样本。
@@ -557,7 +557,7 @@ builder.Install(new InputSystemVContainerInstaller(
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、校验、安全写入、常量生成，仅 Editor。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | 展示适配器，`autoReferenced: false`。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、异步启动、resolver 适配器，无 AssetManagement 依赖。 |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | sibling package | 包配置加载适配器，由 `CycloneGames.InputSystem.AssetManagement` 提供。 |
+
 | `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` 与 `InputReplayCursor` 诊断工具。 |
 | `CycloneGames.InputSystem.Sample` | `Samples/` | 可选的 scene 与 bootstrap 示例。 |
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode 校验与回归覆盖。 |
