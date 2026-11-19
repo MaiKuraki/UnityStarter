@@ -544,9 +544,9 @@ namespace CycloneGames.Localization.Editor
                     SerializedProperty asset = entry.FindPropertyRelative("Asset");
                     string location = asset?.FindPropertyRelative("m_Location")?.stringValue;
                     if (string.IsNullOrWhiteSpace(location))
-                        Add("AssetTable key '" + key + "' has an empty AssetRef: " + path, MessageType.Error, table);
+                        Add("AssetTable key '" + key + "' has an empty LocalizedAssetRef: " + path, MessageType.Error, table);
                     else if (location.Length > LocalizationCatalogBuilder.MaxAssetReferenceChars)
-                        Add("AssetTable key '" + key + "' has an oversized AssetRef: " + path, MessageType.Error, table);
+                        Add("AssetTable key '" + key + "' has an oversized LocalizedAssetRef: " + path, MessageType.Error, table);
 
                     if (localeScan != null && !localeScan.Values.ContainsKey(key))
                         localeScan.Values.Add(key, location ?? string.Empty);

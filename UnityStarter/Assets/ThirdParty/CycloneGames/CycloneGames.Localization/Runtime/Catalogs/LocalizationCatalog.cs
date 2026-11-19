@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using UnityEngine;
 
@@ -204,16 +203,16 @@ namespace CycloneGames.Localization.Runtime
     public struct CatalogAssetEntry
     {
         [SerializeField] private string key;
-        [SerializeField] private AssetRef asset;
+        [SerializeField] private LocalizedAssetRef asset;
 
-        public CatalogAssetEntry(string key, AssetRef asset)
+        public CatalogAssetEntry(string key, LocalizedAssetRef asset)
         {
             this.key = key;
             this.asset = asset;
         }
 
         public string Key => key;
-        public AssetRef Asset => asset;
+        public LocalizedAssetRef Asset => asset;
     }
 
     internal sealed class CatalogHashWriter : IDisposable

@@ -1345,7 +1345,7 @@ namespace CycloneGames.Localization.Editor
                 return;
             if (!EditorUtility.DisplayDialog(
                     "Sync Localized Asset Keys",
-                    "Add " + _missingCount + " empty AssetRef entries? Sparse fallback cells will become explicit invalid references until configured.",
+                    "Add " + _missingCount + " empty LocalizedAssetRef entries? Sparse fallback cells will become explicit invalid references until configured.",
                     "Sync",
                     "Cancel"))
             {

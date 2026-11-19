@@ -73,7 +73,7 @@ Dynamic Atlas 示例是独立组件，不修改 `SampleScene.unity`：
 ## 扩展示例
 
 - 配置已由 Scene 或 Composition Asset 引用时，保留 `PrefabReference` 并调用 `OpenAsync(configuration)`。
-- 使用运行时内容时，构造 `IUIWindowAssetProvider` 并调用 `OpenAsync(windowId)`。
+- 使用运行时内容时，构造 `IUIWindowAssetProvider` 并调用 `OpenAsync(windowId)`。`DelegatedUIWindowAssetProvider` 是零依赖参考实现：由 composition root 注入两个加载委托。使用私有资源管理框架的宿主可以直接使用它，或实现同样两个方法的契约。
 - 需要 Opener/Back 关系时，通过 `UIServiceOptions.NavigationService` 添加 `UINavigationService`。
 - 在打开任何窗口前，为 MVP、DI、分析或无障碍添加彼此独立的 Binder。
 - Composition root 始终负责等待 `ShutdownAsync`。

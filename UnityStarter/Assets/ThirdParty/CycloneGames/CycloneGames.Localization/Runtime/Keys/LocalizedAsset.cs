@@ -1,13 +1,12 @@
 using System;
 using System.Runtime.CompilerServices;
-using CycloneGames.AssetManagement.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.Localization.Runtime
 {
     /// <summary>
     /// Serializable key that binds to a specific asset table entry.
-    /// Resolves to a per-locale <see cref="AssetRef"/> at runtime via
+    /// Resolves to a per-locale <see cref="LocalizedAssetRef"/> at runtime via
     /// <see cref="ILocalizationService.ResolveAsset{T}(LocalizedAsset{T})"/>.
     /// </summary>
     [Serializable]

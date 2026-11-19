@@ -1,4 +1,3 @@
-#if CYCLONEGAMES_HAS_ASSETMANAGEMENT
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -183,4 +182,3 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
         }
     }
 }
-#endif
