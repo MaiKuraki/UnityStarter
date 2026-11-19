@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.Localization.Runtime.Integrations.AssetManagement",
+    "rootNamespace": "CycloneGames.Localization.Runtime.Integrations.AssetManagement",
+    "references": [
+        "UniTask",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Localization.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.asset-management",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_ASSETMANAGEMENT"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -44,7 +44,7 @@ flowchart LR
     Voice --> Selector["AudioVoiceLocaleSelector"]
 ```
 
-Prepare 箭头有意位于 Bridge 之外。Bridge 收到 Localization 变更时，该 Locale 已经提交。
+Prepare 箭头位于 Bridge 之外。Bridge 收到 Localization 变更时，该 Locale 已经提交。
 
 ## 程序集与安装
 
@@ -55,8 +55,8 @@ Prepare 箭头有意位于 Bridge 之外。Bridge 收到 Localization 变更时�
 | Runtime assembly | `CycloneGames.Audio.Runtime.Integrations.Localization` |
 | Editor assembly | `CycloneGames.Audio.Editor.Integrations.Localization` |
 | Test assembly | `CycloneGames.Audio.Localization.Tests.Editor` |
-| 必需项目模块 | `CycloneGames.AssetManagement`、`CycloneGames.Audio`、`CycloneGames.Localization`、`CycloneGames.Logging` 与 UniTask |
-| Runtime 直接程序集引用 | `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`CycloneGames.Logging.Core`、`UniTask` |
+| 必需项目模块 | `CycloneGames.Audio`、`CycloneGames.Localization`、`CycloneGames.Logging` 与 UniTask |
+| Runtime 直接程序集引用 | `CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`CycloneGames.Logging.Core`、`UniTask` |
 | Editor 直接程序集引用 | `CycloneGames.Audio.Runtime.Integrations.Localization`、`CycloneGames.Logging.Core` |
 
 这是物理独立的本地 integration 包。Audio Runtime 不引用 integration 或 Localization，Localization 也不引用 Audio。依赖方向是 integration 同时指向两个核心模块，因此不会形成循环。
@@ -253,7 +253,7 @@ Bridge 将已提交的 Localization Locale 转发到 Audio 语音 Locale 状态�
 
 ## 移除
 
-移除过程有意保持可逆：
+移除过程可逆：
 
 1. 释放所有活动 Bridge，并从应用 Composition Root 中移除其注册。
 2. 确认应用会直接设置 Audio 语音 Locale，或明确接受 Audio Locale 未设置。

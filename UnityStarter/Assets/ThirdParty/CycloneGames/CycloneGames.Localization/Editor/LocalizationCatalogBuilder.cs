@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Runtime;
 using CycloneGames.Logging;
 using UnityEditor;
@@ -327,7 +326,7 @@ namespace CycloneGames.Localization.Editor
 
                     string location = RequireString(asset.FindPropertyRelative("m_Location"), "asset location", path, entryIndex, MaxAssetReferenceChars, false);
                     string guid = RequireString(asset.FindPropertyRelative("m_GUID"), "asset GUID", path, entryIndex, MaxAssetReferenceChars, true);
-                    catalogEntries.Add(new CatalogAssetEntry(key, new AssetRef(location, guid)));
+                    catalogEntries.Add(new CatalogAssetEntry(key, new LocalizedAssetRef(location, guid)));
                     IncrementEntryCount(data, false);
                 }
 

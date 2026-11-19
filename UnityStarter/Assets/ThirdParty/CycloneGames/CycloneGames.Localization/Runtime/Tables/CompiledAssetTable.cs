@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 
 namespace CycloneGames.Localization.Runtime
@@ -11,9 +10,9 @@ namespace CycloneGames.Localization.Runtime
     /// </summary>
     public sealed class CompiledAssetTable
     {
-        private readonly Dictionary<string, AssetRef> _lookup;
+        private readonly Dictionary<string, LocalizedAssetRef> _lookup;
 
-        public CompiledAssetTable(string tableId, LocaleId localeId, Dictionary<string, AssetRef> lookup)
+        public CompiledAssetTable(string tableId, LocaleId localeId, Dictionary<string, LocalizedAssetRef> lookup)
             : this(tableId, localeId, lookup, false)
         {
         }
@@ -21,7 +20,7 @@ namespace CycloneGames.Localization.Runtime
         internal CompiledAssetTable(
             string tableId,
             LocaleId localeId,
-            Dictionary<string, AssetRef> lookup,
+            Dictionary<string, LocalizedAssetRef> lookup,
             bool takeOwnership)
         {
             if (string.IsNullOrEmpty(tableId)) throw new ArgumentException("Table ID is required.", nameof(tableId));
@@ -32,7 +31,7 @@ namespace CycloneGames.Localization.Runtime
             LocaleId = localeId;
             _lookup = takeOwnership
                 ? lookup
-                : new Dictionary<string, AssetRef>(lookup.Count, StringComparer.Ordinal);
+                : new Dictionary<string, LocalizedAssetRef>(lookup.Count, StringComparer.Ordinal);
             long retainedReferenceCharacters = tableId.Length + localeId.Code.Length;
             foreach (var pair in lookup)
             {
@@ -55,7 +54,7 @@ namespace CycloneGames.Localization.Runtime
         public long RetainedReferenceCharacterCount { get; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetValue(string key, out AssetRef value)
+        public bool TryGetValue(string key, out LocalizedAssetRef value)
         {
             if (string.IsNullOrEmpty(key))
             {
@@ -66,6 +65,6 @@ namespace CycloneGames.Localization.Runtime
             return _lookup.TryGetValue(key, out value);
         }
 
-        internal Dictionary<string, AssetRef>.Enumerator GetEnumerator() => _lookup.GetEnumerator();
+        internal Dictionary<string, LocalizedAssetRef>.Enumerator GetEnumerator() => _lookup.GetEnumerator();
     }
 }

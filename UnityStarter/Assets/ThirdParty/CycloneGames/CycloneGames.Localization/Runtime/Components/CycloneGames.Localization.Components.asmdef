@@ -5,8 +5,7 @@
         "CycloneGames.Logging.Core",
         "CycloneGames.Localization.Core",
         "UniTask",
-        "CycloneGames.Localization.Runtime",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.Localization.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

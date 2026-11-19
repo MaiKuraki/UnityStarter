@@ -6,7 +6,6 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Editor;
 using CycloneGames.Localization.Runtime;
@@ -198,7 +197,7 @@ namespace CycloneGames.Localization.Tests.Editor
                 {
                     new CatalogAssetTable("icons", "en", new List<CatalogAssetEntry>
                     {
-                        new CatalogAssetEntry("flag", new AssetRef("Assets/Flag_en.png", "flag-guid")),
+                        new CatalogAssetEntry("flag", new LocalizedAssetRef("Assets/Flag_en.png", "flag-guid")),
                     }),
                 };
             catalog.SetData(
@@ -221,7 +220,7 @@ namespace CycloneGames.Localization.Tests.Editor
             var service = new LocalizationService();
             var en = CreateLocale("en");
             service.Initialize(new LocalizationOptions(en, new[] { en }, false));
-            var package = new ControlledAssetPackage();
+            var package = new ControlledAssetProvider();
             LocalizationCatalog catalog = CreateCatalog(
                 new List<CatalogStringTable>
                 {
@@ -653,7 +652,7 @@ namespace CycloneGames.Localization.Tests.Editor
                 {
                     new CatalogAssetTable("catalog-asset", "en", new List<CatalogAssetEntry>
                     {
-                        new CatalogAssetEntry("k", new AssetRef("p")),
+                        new CatalogAssetEntry("k", new LocalizedAssetRef("p")),
                     }),
                 });
 
@@ -1000,7 +999,7 @@ namespace CycloneGames.Localization.Tests.Editor
             service.RegisterAssetTable(CreateAssetTable(
                 "icons", "ja", AssetEntry("flag", "Flags/ja")));
 
-            var package = new ControlledAssetPackage();
+            var package = new ControlledAssetProvider();
             GameObject gameObject = null;
             Texture2D designerTexture = null;
             Texture2D enTexture = null;
@@ -1021,7 +1020,7 @@ namespace CycloneGames.Localization.Tests.Editor
                     out PropertyInfo spriteProperty);
 
                 SetLocalizedImageKey(binding, "icons", "flag");
-                SetBindingAssetPackage(binding, package);
+                SetBindingAssetProvider(binding, package);
                 binding.Bind(new LocalizationBindingContext(service));
                 Assert.That(package.Handles.Count, Is.EqualTo(1));
 
@@ -1068,7 +1067,7 @@ namespace CycloneGames.Localization.Tests.Editor
             service.RegisterAssetTable(CreateAssetTable(
                 "icons", "ja", AssetEntry("flag", "Flags/ja")));
 
-            var package = new ControlledAssetPackage();
+            var package = new ControlledAssetProvider();
             GameObject gameObject = null;
             Texture2D designerTexture = null;
             Texture2D enTexture = null;
@@ -1089,7 +1088,7 @@ namespace CycloneGames.Localization.Tests.Editor
                     out PropertyInfo spriteProperty);
 
                 SetLocalizedImageKey(binding, "icons", "flag");
-                SetBindingAssetPackage(binding, package);
+                SetBindingAssetProvider(binding, package);
                 binding.Bind(new LocalizationBindingContext(service));
                 var enHandle = (ControlledAssetHandle<Sprite>)package.Handles[0];
                 enHandle.Complete(enSprite);
@@ -1154,7 +1153,7 @@ namespace CycloneGames.Localization.Tests.Editor
             {
                 new CatalogAssetTable("icons", "en", new List<CatalogAssetEntry>
                 {
-                    new CatalogAssetEntry("flag", new AssetRef("Assets/Flag.png", "flag-guid")),
+                    new CatalogAssetEntry("flag", new LocalizedAssetRef("Assets/Flag.png", "flag-guid")),
                 }),
             };
 
@@ -1228,16 +1227,16 @@ namespace CycloneGames.Localization.Tests.Editor
             return catalog;
         }
 
-        private static void SetBindingAssetPackage(
+        private static void SetBindingAssetProvider(
             ILocalizationBindingTarget binding,
-            IAssetPackage package)
+            ILocalizedAssetProvider provider)
         {
             // The binding target is resolved reflectively because the component assembly is loaded
             // by name, so its asset package is injected the same way it is in production: through
             // the public property the component exposes for the composition root.
-            PropertyInfo property = binding.GetType().GetProperty("AssetPackage");
-            Assert.That(property, Is.Not.Null, "LocalizeImage must expose an AssetPackage property.");
-            property.SetValue(binding, package);
+            PropertyInfo property = binding.GetType().GetProperty("AssetProvider");
+            Assert.That(property, Is.Not.Null, "LocalizeImage must expose an AssetProvider property.");
+            property.SetValue(binding, provider);
         }
 
         private static void CreateImageBinding(
@@ -1544,30 +1543,32 @@ namespace CycloneGames.Localization.Tests.Editor
             int DisposeCount { get; }
         }
 
-        private sealed class ControlledAssetHandle<T> : IAssetHandle<T>, IControlledAssetHandle
+        /// <summary>
+        /// AcquireAsync stays pending until the test calls Complete or Fail. A failed load
+        /// disposes its underlying handle exactly once before propagating the exception.
+        /// </summary>
+        private sealed class ControlledAssetHandle<T> : ILocalizedAssetLease<T>, IControlledAssetHandle
             where T : UnityEngine.Object
         {
-            private readonly UniTaskCompletionSource _completion = new UniTaskCompletionSource();
+            private readonly UniTaskCompletionSource<ILocalizedAssetLease<T>> _completion =
+                new UniTaskCompletionSource<ILocalizedAssetLease<T>>();
+            private T _asset;
 
-            public T Asset { get; private set; }
-            public UnityEngine.Object AssetObject => Asset;
-            public bool IsDone { get; private set; }
-            public float Progress => IsDone ? 1f : 0f;
+            public T Asset => _asset;
             public string Error { get; private set; }
-            public UniTask Task => _completion.Task;
+            public UniTask<ILocalizedAssetLease<T>> Task => _completion.Task;
             public int DisposeCount { get; private set; }
 
             public void Complete(T asset)
             {
-                Asset = asset;
-                IsDone = true;
-                _completion.TrySetResult();
+                _asset = asset;
+                _completion.TrySetResult(this);
             }
 
             public void Fail(Exception exception)
             {
                 Error = exception.Message;
-                IsDone = true;
+                Dispose();
                 _completion.TrySetException(exception);
             }
 
@@ -1575,54 +1576,21 @@ namespace CycloneGames.Localization.Tests.Editor
             {
                 DisposeCount++;
             }
-
-            public void WaitForAsyncComplete()
-            {
-            }
         }
 
-        private sealed class ControlledAssetPackage : IAssetPackage
+        private sealed class ControlledAssetProvider : ILocalizedAssetProvider
         {
             public readonly List<IControlledAssetHandle> Handles = new List<IControlledAssetHandle>();
 
-            public string Name => "LocalizationTests";
-
-            public UniTask<bool> InitializeAsync(
-                AssetPackageInitOptions options,
-                CancellationToken cancellationToken = default)
-            {
-                return UniTask.FromResult(true);
-            }
-
-            public UniTask DestroyAsync() => UniTask.CompletedTask;
-
-            public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(
+            public UniTask<ILocalizedAssetLease<TAsset>> AcquireAsync<TAsset>(
                 string location,
-                string bucket = null,
-                string tag = null,
-                string owner = null,
-                CancellationToken cancellationToken = default)
+                CancellationToken cancellationToken)
                 where TAsset : UnityEngine.Object
             {
-                var handle = new ControlledAssetHandle<TAsset>();
-                Handles.Add(handle);
-                return handle;
+                var lease = new ControlledAssetHandle<TAsset>();
+                Handles.Add(lease);
+                return lease.Task;
             }
-
-            public IInstantiateHandle InstantiateAsync(
-                IAssetHandle<GameObject> handle,
-                Transform parent = null,
-                bool worldPositionStays = false,
-                bool setActive = true)
-            {
-                throw new NotSupportedException();
-            }
-
-            public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object => false;
-            public void SetCacheIdleMemoryBudget(long maxIdleBytes) { }
-            public int TrimIdleCache(AssetCacheRetentionPolicy policy) => 0;
-            public void ClearBucket(string bucket) { }
-            public void ClearBucketsByPrefix(string bucketPrefix) { }
         }
 
         private readonly struct TestAssetEntry

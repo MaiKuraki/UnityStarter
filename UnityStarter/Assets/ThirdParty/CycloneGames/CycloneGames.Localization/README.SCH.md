@@ -34,18 +34,19 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 - **表现层绑定**：`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder` 只在 enabled 时订阅；无 per-frame polling。
 - **Pseudo-localization**：保护 placeholder 与 tag 的文本变换，用于布局和内容 QA。
 - **Editor workspace**：多语言 table workspace、增量 CSV 交换（RFC 4180）、validation 窗口、分区 catalog build。
-- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`，产生诊断的 assembly 引用 `CycloneGames.Logging.Core`，并使用 `CycloneGames.Logging` API namespace。
+- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 只依赖 `UniTask` 与包内自有的 `ILocalizedAssetProvider` 契约；`CycloneGames.AssetManagement` 是可选 UPM 门控集成，产生诊断的 assembly 引用 `CycloneGames.Logging.Core`，并使用 `CycloneGames.Logging` API namespace。
 
 ## 架构
 
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`、fallback traversal、plural category、pseudo-localization。不引用 `UnityEngine`。 |
-| `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridge、`LocalizationService`、catalog、table、selector。依赖 Core、UniTask、AssetManagement。 |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`。依赖 Runtime、UGUI、AssetManagement、UniTask、Logging。不依赖 TextMeshPro。 |
+| `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridge、`LocalizationService`、catalog、table、selector。只依赖 Core 与 UniTask。 |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`。依赖 Runtime、UGUI、UniTask、Logging。不依赖 TextMeshPro。 |
 | `CycloneGames.Localization.Components.TextMeshPro` | `Runtime/Components/TextMeshPro/` | `LocalizeTMPText`。仅当派生出 `CYCLONEGAMES_HAS_TEXTMESHPRO` 时参与编译，覆盖 Unity 2022 LTS（`com.unity.textmeshpro`）与 Unity 6（`com.unity.ugui` 2.0.0）两条分支。 |
 | `CycloneGames.Localization.Editor` | `Editor/` | Inspector、table workspace、validation、CSV、catalog build。依赖 Runtime、Logging、UnityEditor。 |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale 同步；仅安装 Yarn Spinner 时参与编译。 |
+| `CycloneGames.Localization.Runtime.Integrations.AssetManagement` | `Runtime/Integrations/AssetManagement/` | 可选 `ILocalizedAssetProvider` adapter。UPM 门控、`autoReferenced: false`，需宿主 composition asmdef 显式引用。 |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core、runtime、catalog 与 Editor workflow 测试。 |
 
 Runtime 与 Editor 诊断分别使用 category `CycloneGames.Localization` 和 `CycloneGames.Localization.Editor`。该包不依赖具体 backend；`LogRuntime` 未安装 writer 时，由 `NullLogWriter` 静默处理诊断。
@@ -222,7 +223,7 @@ Regional table 可以是 sparse：缺少 `fr-CA` entry 时可从 `fr` 解析。C
 - Table ID 和 entry key 使用 ordinal matching；编译时拒绝 duplicate key。
 - 空字符串或纯空格 string value 表示缺失内容（不阻断 fallback）；隐藏 label 应由 presentation state 表达，而不是通过 translation data。
 - Compiled table 会将 authoring data 复制为 read-only lookup state。
-- Asset entry 将 Editor object GUID 与 provider-neutral runtime location 分开保存；runtime location 必须适用于所选 `IAssetPackage` provider。
+- Asset entry 将 Editor object GUID 与 provider-neutral runtime location 分开保存；runtime location 必须适用于宿主提供的 `ILocalizedAssetProvider`。
 - 空或无效的 table ID、locale code、key、超长 value 与 asset location 会按照 `LocalizationLimits` 被拒绝。
 
 Entry key 应视为稳定契约。使用 `menu.settings.audio` 这类语义 key，不使用显示文本。
@@ -325,12 +326,12 @@ Application-owned selector 从拥有其他用户偏好的同一个显式、versi
 ### 绑定表现层组件
 
 ```csharp
-// TMP 文本 —— 不需要 asset package
+// TMP 文本 —— 不需要 asset provider
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// 本地化图片 —— 绑定前先给组件设置 asset package
-localizeImage.AssetPackage = assetPackage;
+// 本地化图片 —— 绑定前先给组件设置任意 provider
+localizeImage.AssetProvider = provider;
 var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
@@ -338,8 +339,8 @@ localizeImage.Bind(in imageContext);
 var binder = new LocalizationWindowBinder(service);
 ```
 
-`LocalizeImage` 需要 `IAssetPackage`，`AssetPackage` 为 null 时 `Bind` 会抛 `InvalidOperationException`，
-因此必须在绑定前赋值。`LocalizationBindingContext` 不带任何资源类型，所以只有真正解析资源的组件才需要 package。
+`LocalizeImage` 需要 `ILocalizedAssetProvider`，`AssetProvider` 为 null 时 `Bind` 会抛 `InvalidOperationException`，
+因此必须在绑定前赋值。`LocalizationBindingContext` 不带任何资源类型。
 
 `LocalizeImage` 保留最后一个有效 handle，直到 current locale 的 candidate 成功完成。Cancellation、provider fault、stale completion、disable、unbind 和 destruction 都会释放各自拥有的 handle；candidate 失败不会提前 Dispose last-known-good image。`LocalizationWindowBinder` 对实例化的 window hierarchy 扫描一次，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。
 
@@ -391,55 +392,49 @@ var options = new LocalizationOptions(defaultLocale, locales, diagnosticSink: Re
 
 对于未被 Scene 或 Inspector 引用的内容，按以下顺序初始化：
 
-1. 初始化选定的 `IAssetPackage`，并完成远程 manifest/catalog 更新。
-2. 加载顶层 `LocalizationSettings` 资产并保留该 handle；其中引用的 `Locale` 资产是 provider dependency。
+1. 初始化宿主选定的 `ILocalizedAssetProvider`（或可选的 AssetManagement adapter），并完成后端特有的 manifest/catalog 更新。
+2. 加载顶层 `LocalizationSettings` 资产并保留该 lease；其中引用的 `Locale` 资产是 provider dependency。
 3. 通过 `settings.ToOptions()` 创建并初始化 `LocalizationService`。
 4. 加载并安装必需的 default-locale/base catalog。
 5. 加载并安装可选 locale、feature、season 或 mod catalog partition。
 6. 只有当前 locale 与 fallback 所需内容已提交后，才选择保存或请求的 locale。
 7. 绑定 TMP、image、UIFramework window 和其他 presentation target。
-8. shutdown 时先解除 presentation binding，再 dispose service，最后释放保留的 settings handle。
+8. shutdown 时先解除 presentation binding，再 dispose service，最后释放保留的 settings lease。
 
 ```csharp
 using System;
 using System.Threading;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 using Cysharp.Threading.Tasks;
 
 public sealed class HotUpdateLocalizationOwner : IDisposable
 {
-    private IAssetHandle<LocalizationSettings> _settingsHandle;
+    private ILocalizedAssetLease<LocalizationSettings> _settingsLease;
     public LocalizationService Service { get; private set; }
 
     public async UniTask InitializeAsync(
-        IAssetPackage package,
+        ILocalizedAssetProvider provider,
         string settingsLocation,
         string baseCatalogLocation,
         string savedLocaleCode,
         CancellationToken cancellationToken)
     {
-        _settingsHandle = package.LoadAssetAsync<LocalizationSettings>(
-            settingsLocation,
-            bucket: "localization/config",
-            owner: "localization-session",
-            cancellationToken: cancellationToken);
+        _settingsLease = await provider.AcquireAsync<LocalizationSettings>(
+            settingsLocation, cancellationToken);
 
         try
         {
-            await _settingsHandle.Task;
-            LocalizationSettings settings = _settingsHandle.Asset
+            LocalizationSettings settings = _settingsLease.Asset
                 ?? throw new InvalidOperationException("Localization settings did not load.");
 
             Service = new LocalizationService();
             Service.Initialize(settings.ToOptions());
 
             bool installed = await Service.LoadAndRegisterCatalogAsync(
-                package,
+                provider,
                 ownerId: "base-content",
                 location: baseCatalogLocation,
-                bucket: "localization/catalogs",
                 cancellationToken: cancellationToken);
             if (!installed)
                 throw new InvalidOperationException("The base localization catalog was rejected.");
@@ -458,13 +453,13 @@ public sealed class HotUpdateLocalizationOwner : IDisposable
     {
         Service?.Dispose();
         Service = null;
-        _settingsHandle?.Dispose();
-        _settingsHandle = null;
+        _settingsLease?.Dispose();
+        _settingsLease = null;
     }
 }
 ```
 
-`LoadAndRegisterCatalogAsync` 拥有临时 catalog handle，并在成功、拒绝、取消或 provider failure 时释放它。成功提交后，service 拥有复制后的 managed lookup data。Settings handle 不同：初始化后的 locale configuration 仍持有其 `Locale` 资产，因此 composition root 必须保留该 handle，直到 service 被 dispose。
+`LoadAndRegisterCatalogAsync` 拥有临时 catalog lease，并在成功、拒绝、取消或 provider failure 时释放它。成功提交后，service 拥有复制后的 managed lookup data。Settings lease 不同：初始化后的 locale configuration 仍持有其 `Locale` 资产，因此 composition root 必须保留该 lease，直到 service 被 dispose。
 
 如果 patch 改变 available locale identity 或 fallback graph，应从替换后的 settings 资产创建并初始化一个 replacement service，安装其必需 catalog，然后在受控 application transition 中重新绑定。仅替换 catalog 只会改变内容，不会修改 service 初始化时确定的 locale configuration。
 
@@ -511,7 +506,7 @@ CSV import/export 面向分批交付：
 
 ### 热更新 owner
 
-Live-service 游戏通过 Addressables/YooAsset 加载 `LocalizationSettings`，初始化 service，安装 base catalog，再按需安装 per-locale pack。Owner 保留 settings handle 直到 service 生命周期结束，并在 shutdown 时释放（见 [热更新启动顺序](#热更新启动顺序)）。
+Live-service 游戏通过 Addressables/YooAsset 加载 `LocalizationSettings`，初始化 service，安装 base catalog，再按需安装 per-locale pack。Owner 保留 settings lease 直到 service 生命周期结束，并在 shutdown 时释放（见 [热更新启动顺序](#热更新启动顺序)）。
 
 ### Per-locale pack 安装
 
@@ -591,7 +586,7 @@ Localization configuration 或 production preference 不写入 `EditorPrefs`、`
 | `LocalizeImage` 不显示图片 | Asset provider fault、cancellation 或 stale completion | 查看 provider diagnostic；有效 last-known-good handle 会保留 |
 | Locale 切换无可见效果 | Presentation 未绑定，或 subscriber 抛出异常被隔离 | 确认调用了 `Bind`；查看 diagnostic sink 中的 subscriber exception |
 | Reentrant `Changed` handler 看到过期状态 | Nested commit 在外层 commit 之后串行化 | 使用有界 reentrant queue；把重活推迟到 `Changed` 爆发之后 |
-| 多次 catalog 安装后内存增长 | 旧 catalog 未移除，或 settings handle 未释放 | 对未用 owner 调用 `RemoveCatalog`；shutdown 时释放 settings handle |
+| 多次 catalog 安装后内存增长 | 旧 catalog 未移除，或 settings lease 未释放 | 对未用 owner 调用 `RemoveCatalog`；shutdown 时释放 settings lease |
 | IL2CPP/stripping 破坏 lookup | 假设了 runtime reflection（不支持） | 在目标 backend 上验证 AOT/stripping；本模块使用显式构造 |
 
 ## 验证

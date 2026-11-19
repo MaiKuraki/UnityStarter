@@ -34,18 +34,19 @@ Use this module for versioned, partitioned, transactional localization through i
 - **Presentation bindings**: `LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder` subscribe only while enabled; no per-frame polling.
 - **Pseudo-localization**: Placeholder- and tag-safe text transformation for layout and content QA.
 - **Editor workspaces**: Multi-language table workspace, incremental CSV exchange (RFC 4180), validation window, partitioned catalog builds.
-- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and `CycloneGames.AssetManagement`, while diagnostic-producing assemblies reference `CycloneGames.Logging.Core` and use the `CycloneGames.Logging` API namespace.
+- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and the package-owned `ILocalizedAssetProvider` contract; `CycloneGames.AssetManagement` is an optional UPM-gated integration, while diagnostic-producing assemblies reference `CycloneGames.Logging.Core` and use the `CycloneGames.Logging` API namespace.
 
 ## Architecture
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`, fallback traversal, plural categories, pseudo-localization. No `UnityEngine` reference. |
-| `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridges, `LocalizationService`, catalogs, tables, selectors. Depends on Core, UniTask, AssetManagement. |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`. Depends on Runtime, UGUI, AssetManagement, UniTask, Logging. No TextMeshPro dependency. |
+| `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridges, `LocalizationService`, catalogs, tables, selectors. Depends on Core and UniTask only. |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeImage`. Depends on Runtime, UGUI, UniTask, Logging. No TextMeshPro dependency. |
 | `CycloneGames.Localization.Components.TextMeshPro` | `Runtime/Components/TextMeshPro/` | `LocalizeTMPText`. Compiles only when `CYCLONEGAMES_HAS_TEXTMESHPRO` is derived, which covers Unity 2022 LTS (`com.unity.textmeshpro`) and Unity 6 (`com.unity.ugui` 2.0.0). |
 | `CycloneGames.Localization.Editor` | `Editor/` | Inspectors, table workspaces, validation, CSV, catalog build. Depends on Runtime, Logging, UnityEditor. |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale synchronization; compiles only when Yarn Spinner is installed. |
+| `CycloneGames.Localization.Runtime.Integrations.AssetManagement` | `Runtime/Integrations/AssetManagement/` | Optional `ILocalizedAssetProvider` adapter. UPM-gated, `autoReferenced: false`, explicit host composition reference required. |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core, runtime, catalog, and editor workflow tests. |
 
 Runtime and Editor diagnostics use categories `CycloneGames.Localization` and `CycloneGames.Localization.Editor`. The package does not depend on a concrete backend; if `LogRuntime` has no installed writer, `NullLogWriter` silently handles diagnostics.
@@ -222,7 +223,7 @@ A `StringTable` or `AssetTable` represents one table ID for one locale. This lay
 - Table IDs and entry keys use ordinal matching; duplicate keys are rejected at compile time.
 - Empty or whitespace-only string values are missing content (do not block fallback); a hidden label belongs to presentation state, not translation data.
 - Compiled tables copy authoring data into read-only lookup state.
-- Asset entries store an Editor object GUID separately from the provider-neutral runtime location; the runtime location must be valid for the selected `IAssetPackage` provider.
+- Asset entries store an Editor object GUID separately from the provider-neutral runtime location; the runtime location must be valid for the host-supplied `ILocalizedAssetProvider`.
 - Empty/invalid table IDs, locale codes, keys, oversized values, and asset locations are rejected according to `LocalizationLimits`.
 
 Treat entry keys as stable contracts. Use semantic keys such as `menu.settings.audio` rather than display text.
@@ -325,12 +326,12 @@ An application-owned selector reads from the same explicit, versioned save/setti
 ### Bind presentation components
 
 ```csharp
-// TMP text — no asset package required
+// TMP text — no asset provider required
 var textContext = new LocalizationBindingContext(service);
 localizeText.Bind(in textContext);
 
-// Localized image — assign the asset package on the component before binding
-localizeImage.AssetPackage = assetPackage;
+// Localized image — assign any provider on the component before binding
+localizeImage.AssetProvider = provider;
 var imageContext = new LocalizationBindingContext(service);
 localizeImage.Bind(in imageContext);
 
@@ -338,9 +339,9 @@ localizeImage.Bind(in imageContext);
 var binder = new LocalizationWindowBinder(service);
 ```
 
-`LocalizeImage` requires an `IAssetPackage` and throws `InvalidOperationException` from `Bind` when
-`AssetPackage` is null, so assign it before binding. `LocalizationBindingContext` carries no asset
-types, so only components that resolve assets need a package.
+`LocalizeImage` requires an `ILocalizedAssetProvider` and throws `InvalidOperationException` from `Bind`
+when `AssetProvider` is null, so assign it before binding. `LocalizationBindingContext` carries no
+asset types.
 
 `LocalizeImage` keeps the last valid handle until the candidate for the current locale finishes successfully. Cancellation, provider faults, stale completions, disable, unbind, and destruction release the handles they own; a failed candidate does not dispose the last-known-good image prematurely. `LocalizationWindowBinder` scans the instantiated window hierarchy once, binds in hierarchy order, rolls back in reverse order if any bind fails, and unbinds in reverse order when the window is destroyed.
 
@@ -392,55 +393,49 @@ var options = new LocalizationOptions(defaultLocale, locales, diagnosticSink: Re
 
 For content not referenced from a scene or Inspector, initialize in this order:
 
-1. Initialize the selected `IAssetPackage` and complete its remote manifest/catalog update.
-2. Load the top-level `LocalizationSettings` asset and retain that handle; its referenced `Locale` assets are provider dependencies.
+1. Initialize the host-selected `ILocalizedAssetProvider` (or the optional AssetManagement adapter) and complete any backend-specific manifest/catalog update.
+2. Load the top-level `LocalizationSettings` asset and retain that lease; its referenced `Locale` assets are provider dependencies.
 3. Create and initialize `LocalizationService` from `settings.ToOptions()`.
 4. Load and install the required default-locale/base catalog.
 5. Load and install optional locale, feature, season, or mod catalog partitions.
 6. Select the saved or requested locale only after the required current/fallback content is committed.
 7. Bind TMP, images, UIFramework windows, and other presentation targets.
-8. On shutdown, unbind presentation, dispose the service, then release the retained settings handle.
+8. On shutdown, unbind presentation, dispose the service, then release the retained settings lease.
 
 ```csharp
 using System;
 using System.Threading;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 using Cysharp.Threading.Tasks;
 
 public sealed class HotUpdateLocalizationOwner : IDisposable
 {
-    private IAssetHandle<LocalizationSettings> _settingsHandle;
+    private ILocalizedAssetLease<LocalizationSettings> _settingsLease;
     public LocalizationService Service { get; private set; }
 
     public async UniTask InitializeAsync(
-        IAssetPackage package,
+        ILocalizedAssetProvider provider,
         string settingsLocation,
         string baseCatalogLocation,
         string savedLocaleCode,
         CancellationToken cancellationToken)
     {
-        _settingsHandle = package.LoadAssetAsync<LocalizationSettings>(
-            settingsLocation,
-            bucket: "localization/config",
-            owner: "localization-session",
-            cancellationToken: cancellationToken);
+        _settingsLease = await provider.AcquireAsync<LocalizationSettings>(
+            settingsLocation, cancellationToken);
 
         try
         {
-            await _settingsHandle.Task;
-            LocalizationSettings settings = _settingsHandle.Asset
+            LocalizationSettings settings = _settingsLease.Asset
                 ?? throw new InvalidOperationException("Localization settings did not load.");
 
             Service = new LocalizationService();
             Service.Initialize(settings.ToOptions());
 
             bool installed = await Service.LoadAndRegisterCatalogAsync(
-                package,
+                provider,
                 ownerId: "base-content",
                 location: baseCatalogLocation,
-                bucket: "localization/catalogs",
                 cancellationToken: cancellationToken);
             if (!installed)
                 throw new InvalidOperationException("The base localization catalog was rejected.");
@@ -459,13 +454,13 @@ public sealed class HotUpdateLocalizationOwner : IDisposable
     {
         Service?.Dispose();
         Service = null;
-        _settingsHandle?.Dispose();
-        _settingsHandle = null;
+        _settingsLease?.Dispose();
+        _settingsLease = null;
     }
 }
 ```
 
-`LoadAndRegisterCatalogAsync` owns the temporary catalog handle and releases it on success, rejection, cancellation, or provider failure. The service owns copied managed lookup data after a successful commit. The settings handle is different: the initialized locale configuration retains its `Locale` assets, so the composition root keeps that handle until the service is disposed.
+`LoadAndRegisterCatalogAsync` owns the temporary catalog lease and releases it on success, rejection, cancellation, or provider failure. The service owns copied managed lookup data after a successful commit. The settings lease is different: the initialized locale configuration retains its `Locale` assets, so the composition root keeps that lease until the service is disposed.
 
 If a patch changes available locale identities or fallback graphs, create and initialize a replacement service from the replacement settings asset, install its required catalogs, then rebind at a controlled application transition. Catalog replacement alone changes content; it does not mutate the service's initialized locale configuration.
 
@@ -512,7 +507,7 @@ A small game initializes the service from a `LocalizationSettings` asset and reg
 
 ### Hot-update owner
 
-A live-service game loads `LocalizationSettings` via Addressables/YooAsset, initializes the service, installs the base catalog, then installs per-locale packs on demand. The owner retains the settings handle for the service lifetime and disposes it on shutdown (see [Hot-update startup order](#hot-update-startup-order)).
+A live-service game loads `LocalizationSettings` via Addressables/YooAsset, initializes the service, installs the base catalog, then installs per-locale packs on demand. The owner retains the settings lease for the service lifetime and disposes it on shutdown (see [Hot-update startup order](#hot-update-startup-order)).
 
 ### Per-locale pack installation
 
@@ -592,7 +587,7 @@ No localization configuration or production preference is stored in `EditorPrefs
 | `LocalizeImage` shows no image | Asset provider fault, cancellation, or stale completion | Check provider diagnostics; the last-known-good handle is retained when valid |
 | Locale switch has no visible effect | Presentation not bound, or subscriber threw and was isolated | Confirm `Bind` was called; check the diagnostic sink for subscriber exceptions |
 | Reentrant `Changed` handler sees stale state | Nested commit serialized after outer commit | Use the bounded reentrant queue; defer heavy work to after the `Changed` burst |
-| Memory grows after many catalog installs | Old catalogs not removed, or settings handle not released | Call `RemoveCatalog` for unused owners; release the settings handle on shutdown |
+| Memory grows after many catalog installs | Old catalogs not removed, or settings lease not released | Call `RemoveCatalog` for unused owners; release the settings lease on shutdown |
 | IL2CPP/stripping breaks lookup | Runtime reflection assumed (not supported) | Verify AOT/stripping on the target backend; the module uses explicit construction |
 
 ## Validation
@@ -637,6 +632,6 @@ Use `Try...` APIs at untrusted or optional boundaries. Treat authoring validatio
 
 ## Bounded Diagnostic Maintenance
 
-`LocalizationService.GetMemorySnapshot()` returns O(1), allocation-free aggregate counts for locale/catalog/table owners, entries, retained string/reference characters, missing-key diagnostics, handlers, per-input limits, and shared resident limits. Character totals are exact UTF-16 element counts and deliberately exclude managed object headers, indexes, and allocator overhead.
+`LocalizationService.GetMemorySnapshot()` returns O(1), allocation-free aggregate counts for locale/catalog/table owners, entries, retained string/reference characters, missing-key diagnostics, handlers, per-input limits, and shared resident limits. Character totals are exact UTF-16 element counts and exclude managed object headers, indexes, and allocator overhead.
 
 `ClearMissingDiagnosticsStep(Span<string> scratch)` clears only reconstructible missing-key deduplication entries and performs no more work than the caller-supplied scratch capacity. It never removes compiled localization content, current locale state, catalogs, handlers, or application data. Callers may schedule this diagnostic-only maintenance explicitly.
