@@ -5,7 +5,6 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using Cysharp.Threading.Tasks;
 
@@ -369,7 +368,7 @@ namespace CycloneGames.Localization.Runtime
             return GetPluralStringInternal(tableId, entryKey, count, extraArgs);
         }
 
-        public AssetRef ResolveAsset(string tableId, string entryKey)
+        public LocalizedAssetRef ResolveAsset(string tableId, string entryKey)
         {
             Snapshot snapshot = ReadSnapshot();
             if (string.IsNullOrEmpty(tableId) || string.IsNullOrEmpty(entryKey)) return default;
@@ -379,7 +378,7 @@ namespace CycloneGames.Localization.Runtime
             for (int i = 0; i < snapshot.CurrentChain.Length; i++)
             {
                 if (localeMap.TryGetValue(snapshot.CurrentChain[i].Code, out CompiledAssetTable table) &&
-                    table.TryGetValue(entryKey, out AssetRef value))
+                    table.TryGetValue(entryKey, out LocalizedAssetRef value))
                 {
                     return value;
                 }
@@ -388,7 +387,7 @@ namespace CycloneGames.Localization.Runtime
             return default;
         }
 
-        public AssetRef<T> ResolveAsset<T>(LocalizedAsset<T> localizedAsset) where T : UnityEngine.Object
+        public LocalizedAssetRef<T> ResolveAsset<T>(LocalizedAsset<T> localizedAsset) where T : UnityEngine.Object
         {
             if (!localizedAsset.IsValid) return default;
             return ResolveAsset(localizedAsset.TableId, localizedAsset.EntryKey).Typed<T>();

@@ -1,6 +1,5 @@
 using System;
 using System.Threading;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
@@ -10,7 +9,7 @@ using UnityEngine.UI;
 namespace CycloneGames.Localization.Runtime
 {
     /// <summary>
-    /// Event-driven localized Image binding with explicit handle and cancellation ownership.
+    /// Event-driven localized Image binding with explicit lease and cancellation ownership.
     /// </summary>
     [RequireComponent(typeof(Image))]
     [AddComponentMenu("CycloneGames/Localization/Localize Image")]
@@ -23,8 +22,8 @@ namespace CycloneGames.Localization.Runtime
 
         private Image _image;
         private ILocalizationService _service;
-        private IAssetPackage _package;
-        private IAssetHandle<Sprite> _currentHandle;
+        private ILocalizedAssetProvider _provider;
+        private ILocalizedAssetLease<Sprite> _currentLease;
         private CancellationTokenSource _refreshCancellation;
         private Sprite _designerSprite;
         private Sprite _appliedSprite;
@@ -42,23 +41,24 @@ namespace CycloneGames.Localization.Runtime
         }
 
         /// <summary>
-        /// Asset package used to load the resolved sprite. Assigning it is a precondition of
+        /// Provider used to load the resolved sprite. Assigning it is a precondition of
         /// <see cref="Bind"/>, which throws <see cref="InvalidOperationException"/> when it is null.
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <see cref="LocalizationBindingContext"/> carries no asset types, so the package is
+        /// <see cref="LocalizationBindingContext"/> carries no asset types, so the provider is
         /// assigned on the component itself and only components that resolve assets need one.
+
         /// </para>
         /// <para>
         /// The composition root assigns it before binding, typically right after it collects the
         /// binding targets it is about to hand to the window binder:
-        /// <c>GetComponent&lt;LocalizeImage&gt;().AssetPackage = package;</c>.
-        /// A component that reaches <see cref="Bind"/> without a package fails the whole window
+        /// <c>GetComponent&lt;LocalizeImage&gt;().AssetProvider = provider;</c>.
+        /// A component that reaches <see cref="Bind"/> without a provider fails the whole window
         /// binding.
         /// </para>
         /// </remarks>
-        public IAssetPackage AssetPackage { get; set; }
+        public ILocalizedAssetProvider AssetProvider { get; set; }
 
         public void Bind(in LocalizationBindingContext context)
         {
@@ -72,16 +72,16 @@ namespace CycloneGames.Localization.Runtime
                     nameof(context));
             }
 
-            if (AssetPackage == null)
+            if (AssetProvider == null)
             {
                 throw new InvalidOperationException(
-                    "LocalizeImage requires an asset package. Assign " + nameof(AssetPackage)
+                    "LocalizeImage requires an asset provider. Assign " + nameof(AssetProvider)
                     + " before binding the component.");
             }
 
             Unbind();
             _service = service;
-            _package = AssetPackage;
+            _provider = AssetProvider;
             if (isActiveAndEnabled) Subscribe();
             Refresh();
         }
@@ -90,9 +90,9 @@ namespace CycloneGames.Localization.Runtime
         {
             Unsubscribe();
             CancelPendingRefresh();
-            ReleaseCurrentHandle(true);
+            ReleaseCurrentLease(true);
             _service = null;
-            _package = null;
+            _provider = null;
         }
 
         private void Awake()
@@ -111,7 +111,7 @@ namespace CycloneGames.Localization.Runtime
         {
             Unsubscribe();
             CancelPendingRefresh();
-            ReleaseCurrentHandle(true);
+            ReleaseCurrentLease(true);
         }
 
         private void OnDestroy()
@@ -124,7 +124,7 @@ namespace CycloneGames.Localization.Runtime
             if (change.Reason == LocalizationChangeReason.Shutdown)
             {
                 CancelPendingRefresh();
-                ReleaseCurrentHandle(true);
+                ReleaseCurrentLease(true);
                 return;
             }
 
@@ -153,17 +153,17 @@ namespace CycloneGames.Localization.Runtime
         private void Refresh()
         {
             CancelPendingRefresh();
-            if (!isActiveAndEnabled || _image == null || _service == null || _package == null ||
+            if (!isActiveAndEnabled || _image == null || _service == null || _provider == null ||
                 !localizedAsset.IsValid)
             {
-                ReleaseCurrentHandle(true);
+                ReleaseCurrentLease(true);
                 return;
             }
 
-            AssetRef<Sprite> assetRef = _service.ResolveAsset(localizedAsset);
+            LocalizedAssetRef<Sprite> assetRef = _service.ResolveAsset(localizedAsset);
             if (!assetRef.IsValid)
             {
-                ReleaseCurrentHandle(true);
+                ReleaseCurrentLease(true);
                 return;
             }
 
@@ -171,21 +171,20 @@ namespace CycloneGames.Localization.Runtime
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 this.GetCancellationTokenOnDestroy());
             _refreshCancellation = cancellation;
-            IAssetPackage package = _package;
-            RefreshAsync(version, assetRef, package, cancellation).Forget();
+            ILocalizedAssetProvider provider = _provider;
+            RefreshAsync(version, assetRef, provider, cancellation).Forget();
         }
 
         private async UniTaskVoid RefreshAsync(
             int version,
-            AssetRef<Sprite> assetRef,
-            IAssetPackage package,
+            LocalizedAssetRef<Sprite> assetRef,
+            ILocalizedAssetProvider provider,
             CancellationTokenSource cancellation)
         {
-            IAssetHandle<Sprite> candidate = null;
+            ILocalizedAssetLease<Sprite> candidate = null;
             try
             {
-                candidate = package.LoadAsync(assetRef, cancellationToken: cancellation.Token);
-                await candidate.Task;
+                candidate = await provider.AcquireAsync<Sprite>(assetRef.Location, cancellation.Token);
 
                 if (this == null || cancellation.IsCancellationRequested || version != _refreshVersion ||
                     !isActiveAndEnabled || candidate.Asset == null)
@@ -193,10 +192,10 @@ namespace CycloneGames.Localization.Runtime
                     return;
                 }
 
-                IAssetHandle<Sprite> previous = _currentHandle;
-                _currentHandle = candidate;
+                ILocalizedAssetLease<Sprite> previous = _currentLease;
+                _currentLease = candidate;
                 candidate = null;
-                _appliedSprite = _currentHandle.Asset;
+                _appliedSprite = _currentLease.Asset;
                 _image.sprite = _appliedSprite;
                 previous?.Dispose();
             }
@@ -234,14 +233,14 @@ namespace CycloneGames.Localization.Runtime
             }
         }
 
-        private void ReleaseCurrentHandle(bool clearImage)
+        private void ReleaseCurrentLease(bool clearImage)
         {
-            IAssetHandle<Sprite> handle = _currentHandle;
-            _currentHandle = null;
+            ILocalizedAssetLease<Sprite> lease = _currentLease;
+            _currentLease = null;
             if (clearImage && _image != null && _image.sprite == _appliedSprite)
                 _image.sprite = _designerSprite;
             _appliedSprite = null;
-            handle?.Dispose();
+            lease?.Dispose();
         }
     }
 }

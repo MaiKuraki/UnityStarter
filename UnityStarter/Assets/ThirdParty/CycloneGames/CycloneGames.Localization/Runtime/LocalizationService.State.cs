@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 
 namespace CycloneGames.Localization.Runtime

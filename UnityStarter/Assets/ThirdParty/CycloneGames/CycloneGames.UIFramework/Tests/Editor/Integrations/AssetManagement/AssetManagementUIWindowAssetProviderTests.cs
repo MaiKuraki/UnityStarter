@@ -1,4 +1,3 @@
-#if CYCLONEGAMES_HAS_ASSETMANAGEMENT
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -209,4 +208,3 @@ namespace CycloneGames.UIFramework.Tests.Editor
         }
     }
 }
-#endif

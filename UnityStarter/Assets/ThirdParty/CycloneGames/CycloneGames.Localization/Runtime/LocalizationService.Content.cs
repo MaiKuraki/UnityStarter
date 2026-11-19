@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 
 namespace CycloneGames.Localization.Runtime
@@ -904,7 +903,7 @@ namespace CycloneGames.Localization.Runtime
                 if (assets.ContainsKey(key))
                     return Fail("Duplicate catalog asset table identity.", out error);
 
-                var lookup = new Dictionary<string, AssetRef>(entries.Count, StringComparer.Ordinal);
+                var lookup = new Dictionary<string, LocalizedAssetRef>(entries.Count, StringComparer.Ordinal);
                 for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
                 {
                     CatalogAssetEntry entry = entries[entryIndex];

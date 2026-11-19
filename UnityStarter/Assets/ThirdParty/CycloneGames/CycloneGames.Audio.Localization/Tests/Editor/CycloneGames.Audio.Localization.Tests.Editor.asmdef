@@ -6,7 +6,6 @@
     "CycloneGames.Audio.Runtime",
     "CycloneGames.Localization.Core",
     "CycloneGames.Localization.Runtime",
-    "CycloneGames.AssetManagement.Runtime",
     "UniTask"
   ],
   "includePlatforms": [
