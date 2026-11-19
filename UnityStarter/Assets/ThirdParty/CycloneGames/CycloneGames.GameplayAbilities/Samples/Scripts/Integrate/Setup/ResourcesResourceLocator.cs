@@ -5,16 +5,13 @@ using CycloneGames.GameplayAbilities.Runtime;
 namespace CycloneGames.GameplayAbilities.Integrate.Setup
 {
     /// <summary>
-    /// Sample-only IResourceLocator backed by Unity Resources. It has no dependency on
-    /// any CycloneGames asset-management package, so the sample stays compilable when
-    /// the optional UPM integration is absent.
+    /// Sample-only IResourceLocator backed by Unity Resources.
     /// </summary>
     /// <remarks>
     /// Resources assets have no owned handle lifetime. The wrapper therefore only
     /// clears its reference on dispose; it must never unload or destroy the asset.
-    /// The bucket, cacheTag and cacheOwner parameters are intentionally ignored:
-    /// Resources has no bucket or cache-ownership model. Production hosts should
-    /// supply their own IResourceLocator when they need those capabilities.
+    /// The bucket, cacheTag and cacheOwner parameters are ignored: Resources has no
+    /// bucket or cache-ownership model.
     /// </remarks>
     public sealed class ResourcesResourceLocator : IResourceLocator
     {
@@ -54,7 +51,10 @@ namespace CycloneGames.GameplayAbilities.Integrate.Setup
                 return UniTask.FromResult<IResourceHandle<T>>(null);
             }
 
+            // CG0014: this sample locator uses Resources as its backend.
+#pragma warning disable CG0014
             T loaded = UnityEngine.Resources.Load<T>(key);
+#pragma warning restore CG0014
             if (loaded == null)
             {
                 return UniTask.FromResult<IResourceHandle<T>>(null);

@@ -28,7 +28,7 @@ Optional capabilities stay at assembly boundaries. MVP and navigation types live
 
 - **`UIService`** as the single main-thread-confined window-session owner with cancellation-aware `UniTask` operations.
 - **Explicit binder composition**: transactional per-window extension for MVP, DI, analytics, accessibility, or project policies.
-- **Provider-backed loading**: direct-prefab or `IUIWindowAssetProvider` with AssetManagement adapter and session-owned leases.
+- **Provider-backed loading**: direct-prefab or any `IUIWindowAssetProvider`; the optional AssetManagement adapter and a zero-dependency reference provider in `Samples/` are supplied separately, with session-owned leases.
 - **Causal navigation**: active-window graph with coordinated enter/leave transitions and caller-buffered queries.
 - **Lifecycle state machine**: `UIWindowState` owned solely by `UIService`; rollback, cleanup, and aggregated failure reporting.
 - **Bounded dynamic atlas**: runtime sprite packing with explicit leases; see [Dynamic Atlas Guide](Documents~/DynamicAtlas.md).
@@ -75,18 +75,22 @@ flowchart LR
 | --- | --- | --- |
 | `CycloneGames.UIFramework.Runtime` | Core runtime | Always |
 | `CycloneGames.UIFramework.Editor` | Authoring tools | Editor only |
-| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Asset handle/lease adapter | `CYCLONEGAMES_HAS_ASSETMANAGEMENT` define; `versionDefines` watches the `com.cyclone-games.asset-management` UPM package |
+| `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement` | Optional asset handle/lease adapter | `CYCLONEGAMES_HAS_ASSETMANAGEMENT` define; `versionDefines` watches the `com.cyclone-games.asset-management` UPM package; `autoReferenced: false` requires an explicit composition reference |
 | `CycloneGames.UIFramework.Runtime.Integrations.VContainer` | Window injection | `jp.hadashikick.vcontainer` package present |
 | `...Integrations.LitMotion` | Window transition driver | `com.annulusgames.lit-motion` package present |
 | `...Integrations.DOTween` | Window transition driver | `com.demigiant.dotween` package present |
 | `...Integrations.PrimeTween` | Window transition driver | `com.kyrylokuzyk.primetween` package present |
 | `CycloneGames.UIFramework.Samples` | Opt-in examples | `autoReferenced: false` |
 
-The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package. The AssetManagement integration follows the same rule: `versionDefines` watches the `com.cyclone-games.asset-management` UPM package and emits `CYCLONEGAMES_HAS_ASSETMANAGEMENT`. When AssetManagement exists only as a folder under `Assets/`, the define never fires and the integration assembly is silently skipped; install AssetManagement as a UPM or embedded package, or define the symbol yourself where the asmdef can see it.
+The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` plus `defineConstraints` and activate automatically when their dependency is installed as a UPM package. The AssetManagement integration follows the same rule: `versionDefines` watches the `com.cyclone-games.asset-management` UPM package and emits `CYCLONEGAMES_HAS_ASSETMANAGEMENT`, which `defineConstraints` consumes.
+
+All three set `autoReferenced: false`, which prevents predefined assemblies from referencing them implicitly. The Runtime adapter and its focused test assembly must be referenced explicitly by a host composition asmdef, which must repeat the same `versionDefines` rule because version-defined symbols do not propagate between assemblies. The Editor location resolver needs no such reference: the core Editor discovers `IUIWindowLocationResolver` implementations through `TypeCache`, so that resolver activates as soon as the backend UPM package resolves the gate. Disable it by removing the integration folder or tightening its `defineConstraints`. With no resolver registered, location resolution returns an empty string and authoring falls back to the Editor GUID and asset path.
+
+This package targets UPM-based consumption (registry, git URL, local or embedded package). `versionDefines` reads only the resolved UPM package manifest, so an `Assets/`-style sibling folder does not activate the gate and the integration assemblies are skipped. Do not add `CYCLONEGAMES_HAS_ASSETMANAGEMENT` to PlayerSettings: that bypasses the version check and couples a host to a backend layout that may not ship. A host with a private asset framework implements `IUIWindowAssetProvider` directly, or starts from `DelegatedUIWindowAssetProvider` in `Samples/`. `UIAssetLoadContext` fields are optional hints that such a provider may ignore.
 
 Localization binding is not part of this package. It lives in the optional companion module [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.md), so this package compiles without `CycloneGames.Localization` and without any conditional-compilation symbol.
 
-The integration is a separate module rather than an integration folder inside this package because `versionDefines` reads only the resolved UPM package manifest. `CycloneGames.Localization` is a raw folder under `Assets/` in some projects and a real package under `Packages/` in others, so a rule keyed on `com.cyclone-games.localization` matches in one layout and never matches in the other, silently disabling the integration in the project that needs it. Physical isolation is the only mechanism that behaves identically in both layouts. Delete the module folder to remove the integration. Do not add `CYCLONEGAMES_HAS_LOCALIZATION` to Player Settings.
+Delete the module folder to remove the integration. Do not add `CYCLONEGAMES_HAS_LOCALIZATION` to Player Settings.
 
 TextMeshPro is a separate optional capability layered on top of that module. `CYCLONEGAMES_HAS_TEXTMESHPRO` is derived per assembly by two `versionDefines` rules and consumed by `defineConstraints`; it covers both Unity branches where TextMeshPro exists. See [TextMeshPro compatibility](Documents~/TextMeshProCompatibility.md).
 
@@ -173,7 +177,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
 }
 ```
 
-Opening with a direct configuration does not require an asset provider when `Source` is `PrefabReference`. For provider-backed loading by stable window ID, supply an `IUIWindowAssetProvider`; the included adapter accepts an application-owned `IAssetPackage` and `IAssetPathBuilder`.
+Opening with a direct configuration does not require an asset provider when `Source` is `PrefabReference`. For provider-backed loading by stable window ID, supply any `IUIWindowAssetProvider` from the composition root; UIFramework does not depend on a specific asset backend. The optional AssetManagement adapter accepts an application-owned `IAssetPackage` and `IAssetPathBuilder`; `DelegatedUIWindowAssetProvider` in `Samples/` is a zero-dependency reference implementation: the composition root injects two load delegates.
 
 ## Core Concepts
 
@@ -271,6 +275,8 @@ The prefab root must contain a `UIWindow`-derived component. `UIAssetReference.L
 `CullWhenHidden` chooses between two hidden-window costs. With the default `false`, `SetVisible(false)` only drives the `CanvasGroup` (alpha to zero, interaction and raycasts off): the window keeps rendering and batching on the GPU, but showing it again has zero layout-rebuild cost. With `true`, hiding additionally calls `gameObject.SetActive(false)`, which culls the window from rendering and event processing entirely (the Canvas subtree stops batching); showing it again reactivates the GameObject with the visible `CanvasGroup` state already applied. Enable it for heavy windows that stay hidden for long periods; keep the default for windows toggled frequently, where repeated activation would rebuild layout every time.
 
 ### AssetManagement-backed windows
+
+The adapter lives in `CycloneGames.UIFramework.Runtime.Integrations.AssetManagement`. It compiles only when the backend UPM package satisfies the capability define, and it is used only when a host composition asmdef references that integration explicitly.
 
 ```csharp
 using CycloneGames.AssetManagement.Runtime;

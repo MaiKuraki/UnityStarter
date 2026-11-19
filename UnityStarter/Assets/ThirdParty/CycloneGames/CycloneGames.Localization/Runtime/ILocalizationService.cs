@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 
 namespace CycloneGames.Localization.Runtime
@@ -39,8 +38,8 @@ namespace CycloneGames.Localization.Runtime
         string GetPluralString(in LocalizedString baseKey, int count, params object[] extraArgs);
         string GetPluralString(string tableId, string entryKey, int count, params object[] extraArgs);
 
-        AssetRef ResolveAsset(string tableId, string entryKey);
-        AssetRef<T> ResolveAsset<T>(LocalizedAsset<T> localizedAsset) where T : UnityEngine.Object;
+        LocalizedAssetRef ResolveAsset(string tableId, string entryKey);
+        LocalizedAssetRef<T> ResolveAsset<T>(LocalizedAsset<T> localizedAsset) where T : UnityEngine.Object;
 
         int GetMaxLength(string tableId, string entryKey);
         bool RegisterMetadata(StringTableMetadata metadata);

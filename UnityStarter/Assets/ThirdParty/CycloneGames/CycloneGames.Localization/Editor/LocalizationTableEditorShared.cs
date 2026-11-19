@@ -842,7 +842,7 @@ namespace CycloneGames.Localization.Editor
 
             string consequence = workspace.Kind == LocalizationTableKind.String
                 ? "Sparse fallback cells will become explicit empty values."
-                : "Sparse fallback cells will become explicit invalid AssetRef values until configured.";
+                : "Sparse fallback cells will become explicit invalid LocalizedAssetRef values until configured.";
             if (!EditorUtility.DisplayDialog(
                     "Sync Localization Keys",
                     "Add " + workspace.MissingCount + " explicit empty entries? " + consequence,

@@ -44,7 +44,7 @@ flowchart LR
     Voice --> Selector["AudioVoiceLocaleSelector"]
 ```
 
-The prepare arrow is intentionally outside the bridge. A Localization change is already committed by the time the bridge receives it.
+The prepare arrow is outside the bridge. A Localization change is already committed by the time the bridge receives it.
 
 ## Assembly and Installation
 
@@ -55,8 +55,8 @@ The prepare arrow is intentionally outside the bridge. A Localization change is 
 | Runtime assembly | `CycloneGames.Audio.Runtime.Integrations.Localization` |
 | Editor assembly | `CycloneGames.Audio.Editor.Integrations.Localization` |
 | Test assembly | `CycloneGames.Audio.Localization.Tests.Editor` |
-| Required project modules | `CycloneGames.AssetManagement`, `CycloneGames.Audio`, `CycloneGames.Localization`, `CycloneGames.Logging`, and UniTask |
-| Direct Runtime assembly references | `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Audio.Runtime`, `CycloneGames.Localization.Core`, `CycloneGames.Localization.Runtime`, `CycloneGames.Logging.Core`, `UniTask` |
+| Required project modules | `CycloneGames.Audio`, `CycloneGames.Localization`, `CycloneGames.Logging`, and UniTask |
+| Direct Runtime assembly references | `CycloneGames.Audio.Runtime`, `CycloneGames.Localization.Core`, `CycloneGames.Localization.Runtime`, `CycloneGames.Logging.Core`, `UniTask` |
 | Direct Editor assembly references | `CycloneGames.Audio.Runtime.Integrations.Localization`, `CycloneGames.Logging.Core` |
 
 This is a physically separate local integration package. Audio Runtime does not reference the integration or Localization, and Localization does not reference Audio. The dependency direction is integration to both core modules, so no cycle is introduced.
@@ -253,7 +253,7 @@ Additional verification matrix:
 
 ## Removal
 
-Removal is intentionally reversible:
+Removal is reversible:
 
 1. Dispose any live bridge and remove its registration from the application composition root.
 2. Verify the application either sets Audio voice locale directly or accepts an unset Audio locale.

@@ -80,7 +80,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
 }
 ```
 
-`LocalizationWindowBinder` also accepts an optional `IAssetPackage`. Pass one when localized assets should resolve through a specific package instead of the default.
+`LocalizeImage` requires an `ILocalizedAssetProvider` through its `AssetProvider` property before binding. The composition root supplies any backend.
 
 Standalone canvases that are not managed by `UIService` can bind `UILocaleLayout` from the product composition root instead. The window binder is not required for that path.
 
@@ -93,7 +93,7 @@ that swaps the localization backend does not drag the CycloneGames implementatio
 | Contract | Assembly | Unity types | What it carries |
 | --- | --- | --- | --- |
 | `ILocalizationProvider` | `CycloneGames.Localization.Core` | none | Locale state, change notification, string-addressed text lookup |
-| `ILocalizationService` | `CycloneGames.Localization.Runtime` | `ScriptableObject`, `Object`, `AssetRef` | All of the above plus lifecycle, serializable key structs, localized assets, and catalogs |
+| `ILocalizationService` | `CycloneGames.Localization.Runtime` | `ScriptableObject`, `Object`, `LocalizedAssetRef` | All of the above plus lifecycle, serializable key structs, localized assets, and catalogs |
 
 `ILocalizationService` derives from `ILocalizationProvider`, so code that already hands a CycloneGames
 service to this module keeps compiling unchanged.
@@ -108,7 +108,7 @@ is not an `ILocalizationService`: `LocalizeTMPText` binds the serializable `Loca
 
 A project can end up with more than one text component technology at the same time. On Unity 2023.2 and Unity 6, TextMeshPro ships inside `com.unity.ugui` and cannot be removed, so adding a third-party text solution such as UniText does not replace TextMeshPro — it coexists with it.
 
-The module treats this as three separate slices rather than one abstraction:
+The module has three slices:
 
 | Slice | Detection | Behaviour when absent |
 | --- | --- | --- |
@@ -135,7 +135,7 @@ Never add `CYCLONEGAMES_HAS_TEXTMESHPRO` to Player Settings. A stale manual symb
 
 Construction, binding, and disposal are confined to the Unity main thread. The binder captures its owner thread and rejects use from another thread. Component discovery happens once per window instance; locale changes do not rescan the hierarchy.
 
-The binder does not require the localization service to be initialized. When the service is not yet initialized, the window still opens and the binding subscribes to `ILocalizationService.Changed`; it binds its targets as soon as the service reports `LocalizationChangeReason.Initialized`. This lets a composition root register the binder unconditionally instead of sequencing it behind catalog loading. A window that closes before initialization completes never binds and does not leak its subscription. Initialize the service from the main thread, otherwise the binding stays pending and logs an error instead of mutating components from a foreign thread.
+The binder does not require the localization service to be initialized. When the service is not yet initialized, the window still opens and the binding subscribes to `ILocalizationService.Changed`; it binds its targets as soon as the service reports `LocalizationChangeReason.Initialized`. A window that closes before initialization completes never binds and does not leak its subscription. Initialize the service from the main thread, otherwise the binding stays pending and logs an error instead of mutating components from a foreign thread.
 
 The binder participates in the `UIService` open transaction. If any target fails to bind, already-created bindings are disposed in reverse order and the open aborts. Window closure disposes in reverse order as well.
 
@@ -148,7 +148,7 @@ Delete the module folder, or remove its manifest entry in a `Packages/` project.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `CS0234: The type or namespace name 'Localization' does not exist in the namespace 'CycloneGames'` | `CycloneGames.Localization` is not installed | Install `CycloneGames.Localization`, or remove this module |
-| `CS0012: The type 'IAssetPackage' is defined in an assembly that is not referenced` | A consumer constructs `LocalizationBindingContext` without referencing `CycloneGames.AssetManagement.Runtime` | Add the reference; the optional constructor parameter forces it |
+| `InvalidOperationException: LocalizeImage requires an asset provider` | `LocalizeImage.AssetProvider` was not assigned before `Bind` | Assign any `ILocalizedAssetProvider` from the composition root before binding |
 | `CS0122: 'UIFrameworkLocalizationEditorLog' is inaccessible` | The editor TextMeshPro slice cannot see the internal facade | Keep `AssemblyInfo.cs` with `InternalsVisibleTo` for that assembly |
 | `UILocaleLayout` reports a missing script | The TextMeshPro slice was excluded | Install TextMeshPro, or on Unity 6 confirm uGUI is 2.0.0 or newer |
 | A window opens but its text stays in the authored language | The localization service had not initialized when the window opened | Expected: the binding applies on `Initialized`. If it never does, confirm `ILocalizationService.Initialize` runs on the main thread |

@@ -73,7 +73,7 @@ See the [Dynamic UI Atlas guide](../Documents~/DynamicAtlas.md) for batching con
 ## Adapting the sample
 
 - Keep `PrefabReference` and call `OpenAsync(configuration)` when configurations are already referenced by a scene or composition asset.
-- For runtime content, construct an `IUIWindowAssetProvider` and call `OpenAsync(windowId)`.
+- For runtime content, construct an `IUIWindowAssetProvider` and call `OpenAsync(windowId)`. `DelegatedUIWindowAssetProvider` is a zero-dependency reference implementation: inject two load delegates from the composition root. Hosts with a private asset framework can use it directly or implement the same two-method contract.
 - Add a `UINavigationService` through `UIServiceOptions.NavigationService` when opener/back relationships are required.
 - Add independent binders for MVP, DI, analytics, or accessibility before opening any window.
 - Keep the composition root responsible for awaiting `ShutdownAsync`.

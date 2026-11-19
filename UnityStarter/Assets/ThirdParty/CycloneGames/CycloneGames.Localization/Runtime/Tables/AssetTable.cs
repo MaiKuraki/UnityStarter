@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using UnityEngine;
 
@@ -43,7 +42,7 @@ namespace CycloneGames.Localization.Runtime
         internal IReadOnlyList<AssetEntry> AuthoringEntries => entries;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetValue(string key, out AssetRef value)
+        public bool TryGetValue(string key, out LocalizedAssetRef value)
         {
             if (string.IsNullOrEmpty(key))
             {
@@ -86,7 +85,7 @@ namespace CycloneGames.Localization.Runtime
             if (!LocaleId.IsValid)
                 throw new InvalidOperationException("Asset table locale code is invalid.");
 
-            var lookup = new Dictionary<string, AssetRef>(entries.Count, StringComparer.Ordinal);
+            var lookup = new Dictionary<string, LocalizedAssetRef>(entries.Count, StringComparer.Ordinal);
             for (int i = 0; i < entries.Count; i++)
             {
                 var e = entries[i];
@@ -117,6 +116,6 @@ namespace CycloneGames.Localization.Runtime
     public struct AssetEntry
     {
         public string Key;
-        public AssetRef Asset;
+        public LocalizedAssetRef Asset;
     }
 }
