@@ -1,0 +1,33 @@
+{
+  "name": "com.cyclone-games.dynamic-atlas",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.DynamicAtlas",
+  "description": "Bounded runtime sprite atlas with explicit leases: packs runtime-sourced sprites onto a fixed set of uncompressed pages under page, entry, and byte ceilings, with a per-frame miss budget, GPU-first copy paths, and a documented extraction contract for build-time SpriteAtlas pages.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.11",
+    "com.cyclone-games.logging": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "DynamicAtlas",
+    "Sprite",
+    "Texture",
+    "Atlas",
+    "Batching",
+    "Memory"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": [
+    {
+      "displayName": "Dynamic Atlas Lease Sample",
+      "description": "Acquire, retain, and dispose sprite leases through DynamicAtlasService.",
+      "path": "Samples"
+    }
+  ]
+}

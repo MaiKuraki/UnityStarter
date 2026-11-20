@@ -12,7 +12,6 @@ These samples demonstrate explicit, provider-free composition with a directly re
 | `UIFrameworkSampleBootstrap.cs` | Creates `UIService`, opens a direct configuration, and awaits shutdown |
 | `UIFrameworkMvpSampleBootstrap.cs` | Optional composition using an instance-owned `UIPresenterBinder` |
 | `UIWindow_SampleUI.cs` | Window, typed sample view, listener, and presenter |
-| `DynamicAtlasLeaseSample.cs` | Bounded Dynamic Atlas ownership with a stable key and explicit lease release |
 | `Resources/UIWindow_SampleUI.prefab` | Sample window prefab |
 | `Resources/UIWindow_SampleUI_Config.asset` | Configuration with stable ID `UIWindow_SampleUI` |
 
@@ -52,24 +51,6 @@ The MVP bootstrap creates one `UIPresenterBinder`, registers `SampleUIPresenter`
 
 `UIWindow_SampleUI.UICmd_PrimaryAction` can be connected directly to a Button `OnClick` event. The view forwards the command through `ISampleUIViewListener`; the presenter handles it without a global lookup.
 
-## Run the Dynamic Atlas lease sample
-
-The Dynamic Atlas sample is an independent component and does not change `SampleScene.unity`:
-
-1. Create or select a Canvas with an `Image` component.
-2. Add `DynamicAtlasLeaseSample` to a GameObject.
-3. Assign the target `Image` and a rectangular source `Sprite`.
-4. If the source belongs to a `SpriteAtlas`, disable rotation and Tight Packing on that atlas.
-5. Keep the default stable key or replace it with a namespaced content identity.
-6. Enter Play Mode, then disable and re-enable the component to exercise release and reacquisition.
-7. Open `Tools > CycloneGames > UI Framework > Dynamic Atlas Debugger` to inspect the page, lease reference count, copy path, and estimated texture bytes.
-
-The component owns one 512-pixel page with a 2 MiB estimated texture budget. It acquires a `DynamicAtlasSpriteLease` in `OnEnable`, clears the `Image` and disposes the lease in `OnDisable`, then disposes the owned service in `OnDestroy`. It uses direct `Sprite` acquisition and therefore needs no location loader. It does not use a global manager or hidden cache.
-
-For scene-hosted composition, add `DynamicAtlasManager` and use its styled Inspector to validate capacity, page-memory budget, active BuildTarget context, and the runtime-only loader/unloader ownership pair. The Inspector does not infer target-device copy support from the BuildTarget name.
-
-See the [Dynamic UI Atlas guide](../Documents~/DynamicAtlas.md) for batching constraints, copy paths, retention, diagnostics, capacity planning, and target-device validation.
-
 ## Adapting the sample
 
 - Keep `PrefabReference` and call `OpenAsync(configuration)` when configurations are already referenced by a scene or composition asset.
@@ -80,4 +61,4 @@ See the [Dynamic UI Atlas guide](../Documents~/DynamicAtlas.md) for batching con
 
 ## Validation boundary
 
-Running the Window scene and the Dynamic Atlas component checks their focused behavior in the current Editor. It does not establish Player, IL2CPP, target-platform, long-session, DrawCall reduction, or performance evidence. Use the package README validation matrix and the Dynamic Atlas guide for those scopes.
+Running the Window scene checks its focused behavior in the current Editor. It does not establish Player, IL2CPP, target-platform, long-session, or performance evidence. Use the package README validation matrix for those scopes.

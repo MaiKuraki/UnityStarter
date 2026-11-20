@@ -26,6 +26,7 @@ const (
 	ExitSuccess   = 0   // completed successfully
 	ExitFailure   = 1   // completed with failures
 	ExitUsage     = 2   // invalid command line
+	ExitPartial   = 3   // completed, but blocked targets were skipped
 	ExitCancelled = 130 // run cancelled by a user signal (128 + SIGINT)
 )
 

@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.DynamicAtlas.Tests.Editor",
+    "rootNamespace": "CycloneGames.DynamicAtlas.Tests.Editor",
+    "references": [
+        "CycloneGames.DynamicAtlas.Runtime",
+        "CycloneGames.DynamicAtlas.Editor",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

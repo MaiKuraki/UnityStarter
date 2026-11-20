@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.DynamicAtlas.Editor",
+    "rootNamespace": "CycloneGames.DynamicAtlas.Editor",
+    "references": [
+        "CycloneGames.DynamicAtlas.Runtime",
+        "CycloneGames.Logging.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
