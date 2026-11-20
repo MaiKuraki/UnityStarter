@@ -31,7 +31,7 @@ Optional capabilities stay at assembly boundaries. MVP and navigation types live
 - **Provider-backed loading**: direct-prefab or any `IUIWindowAssetProvider`; the optional AssetManagement adapter and a zero-dependency reference provider in `Samples/` are supplied separately, with session-owned leases.
 - **Causal navigation**: active-window graph with coordinated enter/leave transitions and caller-buffered queries.
 - **Lifecycle state machine**: `UIWindowState` owned solely by `UIService`; rollback, cleanup, and aggregated failure reporting.
-- **Bounded dynamic atlas**: runtime sprite packing with explicit leases; see [Dynamic Atlas Guide](Documents~/DynamicAtlas.md).
+- **Optional runtime atlas**: runtime sprite packing lives in the separate [CycloneGames.DynamicAtlas](../CycloneGames.DynamicAtlas/README.md) package; this package does not reference it.
 - **Localized layouts**: locale-specific geometry and typography overrides, provided by the optional [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.md) companion module.
 
 ## Architecture
@@ -487,7 +487,7 @@ For manual authoring, use:
 
 ### Diagnostics and observability
 
-`GetPerformanceStats()` returns counts for sessions, lifecycle phases, scene-bound windows, binders, isolated Canvases, layers, and the configured maximum. `CopyLayerRuntimeStats` and `CopyActiveWindows` write into caller-owned buffers. `DynamicAtlasService.GetStats()` reports pages, entries, references, estimated texture bytes, utilization, copy paths, cache hits, and failures. `Tools > CycloneGames > UI Framework > Runtime Monitor` reads these bounded snapshots from an explicitly selected `UIManager`. `Performance Auditor` starts only when `Scan Project` is pressed; it reports review candidates for layout authority, raycasts, materials, textures, masks, and canvas boundaries without modifying assets.
+`GetPerformanceStats()` returns counts for sessions, lifecycle phases, scene-bound windows, binders, isolated Canvases, layers, and the configured maximum. `CopyLayerRuntimeStats` and `CopyActiveWindows` write into caller-owned buffers. `Tools > CycloneGames > UI Framework > Runtime Monitor` reads these bounded snapshots from an explicitly selected `UIManager`. `Performance Auditor` starts only when `Scan Project` is pressed; it reports review candidates for layout authority, raycasts, materials, textures, masks, and canvas boundaries without modifying assets.
 
 `UIPresenterBinder.LogMissingPresenterMappings` reports unmapped windows through `CycloneGames.UIFramework` during development. Its message uses deferred state formatting, so a disabled channel does not build the message. Keep the option disabled when missing mappings are intentionally common or when logging volume would be harmful.
 
@@ -548,13 +548,11 @@ For recurring diagnostics and navigation queries, retain and reuse `List<T>` buf
 
 ### Cache and lease policy
 
-The window-session service keeps no window pool or closed-window cache. The provider may share underlying assets, but every successful acquisition returns a session-owned lease, disposed after binding cleanup and window destruction. Dynamic atlas retention is an independent, explicitly bounded cache with its own sprite leases and trimming policy. `DynamicAtlasSpriteLease` is a value-type handle over pooled records, so cache-hit acquisition allocates nothing; on a miss, `maxMissesPerFrame` bounds per-frame pixel work and excess misses return the transient `DynamicAtlasInsertStatus.Throttled`, which callers retry on a later frame. Add pooling only when profiling shows instance churn is a material cost and the product can define capacity, reset, exhaustion, stale-reference, scene, and shutdown policies.
-
-`DynamicAtlasStats` reports configured `PageCapacity`, `EntryCapacity`, and `MemoryBudgetBytes` beside current pages, entries, references, retained entries, estimated bytes, pending-destruction bytes, and pressure counters. Admission continues to fail through explicit `DynamicAtlasInsertStatus` values when a page, entry, or byte ceiling is reached; active sprite leases are never evicted. `TrimUnused(maximumEntriesToRemove)` is the safe owner-local mitigation and removes only zero-reference retained entries; values at or below zero are a no-op. The legacy no-argument call remains source-compatible and may drain every eligible entry, but total work is still bounded by validated `maxEntries` (hard maximum 65,535); pressure orchestration should always supply its smaller per-pump work budget.
+The window-session service keeps no window pool or closed-window cache. The provider may share underlying assets, but every successful acquisition returns a session-owned lease, disposed after binding cleanup and window destruction. Runtime sprite packing is not part of this package: when a project uses the optional [CycloneGames.DynamicAtlas](../CycloneGames.DynamicAtlas/README.md) package, its page, entry, and lease policy is owned there and is independent of window sessions. Add pooling only when profiling shows instance churn is a material cost and the product can define capacity, reset, exhaustion, stale-reference, scene, and shutdown policies.
 
 ### Threading, AOT, and stripping
 
-`UIService` and `DynamicAtlasService` capture their Unity owner thread and reject use from another thread. Binders, presenters, lifecycle callbacks, transitions, hierarchy changes, locale layout application, texture copies, and lease consumption also run on that thread. An asset provider may perform backend I/O or decompression under its own policy; completed Unity objects are switched back to the main thread before validation and instantiation. Do not add locks around Unity object access; marshal work to the owner thread instead.
+`UIService` captures its Unity owner thread and rejects use from another thread. Binders, presenters, lifecycle callbacks, transitions, hierarchy changes, locale layout application, texture copies, and lease consumption also run on that thread. An asset provider may perform backend I/O or decompression under its own policy; completed Unity objects are switched back to the main thread before validation and instantiation. Do not add locks around Unity object access; marshal work to the owner thread instead.
 
 The core avoids reflection discovery, runtime code generation, and JIT-only delegates; presenter mappings and binders are explicit, so IL2CPP/AOT composition works. A third-party container or content backend may still require its own generated registrations or `link.xml`. Validate stripping in a representative Player build; Editor compilation is insufficient evidence. WebGL has no general managed worker-thread assumption; the main-thread-confined API and asynchronous yielding work without background threads.
 
@@ -564,7 +562,6 @@ The core avoids reflection discovery, runtime code generation, and JIT-only dele
 - Make binding and presenter disposal idempotent.
 - Do not destroy managed windows directly; call `CloseAsync`.
 - Do not dispose provider handles outside their lease owner.
-- Keep each dynamic-atlas lease alive while any `Image` uses its sprite, then dispose it exactly once.
 - Bound `MaxActiveWindows` and content-system cache budgets independently.
 - Profile retained Unity objects after repeated open/close and scene changes.
 
@@ -627,4 +624,3 @@ For dynamic-atlas governance, configure a small page/entry/byte budget, retain o
 | `IUITransitionCoordinator` | Two-window navigation transition |
 | `TryGetWindow`, `CopyActiveWindows` | Active window lookup/snapshot |
 | `GetPerformanceStats`, `CopyLayerRuntimeStats` | Bounded runtime diagnostics |
-| `DynamicAtlasService`, `DynamicAtlasSpriteLease` | Bounded runtime sprite packing with explicit ownership |

@@ -21,3 +21,6 @@ func tryExclusiveOpen(path string) error {
 }
 
 func replaceExisting(stage, target string) error { return os.Rename(stage, target) }
+
+// ProbeExclusive is a no-op on non-Windows hosts; see publish_unix.go.
+func ProbeExclusive(string, bool) error { return nil }

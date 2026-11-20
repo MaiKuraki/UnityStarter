@@ -35,3 +35,8 @@ func tryExclusiveOpen(path string) error {
 }
 
 func replaceExisting(stage, target string) error { return os.Rename(stage, target) }
+
+// ProbeExclusive is a no-op on Unix: rename(2) does not require a directory
+// tree to be free of open handles, so a Windows-style occupancy preflight has
+// no meaning here and must not add syscalls per entry.
+func ProbeExclusive(string, bool) error { return nil }
