@@ -11,6 +11,7 @@ namespace CycloneGames.DynamicAtlas.Editor
     internal sealed class SpriteAtlasImportMonitor : AssetPostprocessor
     {
         private const string SpriteAtlasExtension = ".spriteatlas";
+        private const string SpriteAtlasV2Extension = ".spriteatlasv2";
 
         private static bool _pumpRegistered;
 
@@ -36,11 +37,19 @@ namespace CycloneGames.DynamicAtlas.Editor
             RegisterPump();
         }
 
-        private static bool TouchesSpriteAtlas(string[] paths)
+        internal static bool TouchesSpriteAtlas(string[] paths)
         {
+            if (paths == null)
+            {
+                return false;
+            }
+
             for (int i = 0; i < paths.Length; i++)
             {
-                if (paths[i].EndsWith(SpriteAtlasExtension, StringComparison.OrdinalIgnoreCase))
+                string path = paths[i];
+                if (path != null &&
+                    (path.EndsWith(SpriteAtlasExtension, StringComparison.OrdinalIgnoreCase) ||
+                     path.EndsWith(SpriteAtlasV2Extension, StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }

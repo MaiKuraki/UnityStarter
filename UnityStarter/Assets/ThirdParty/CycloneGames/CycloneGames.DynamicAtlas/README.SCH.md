@@ -1,6 +1,6 @@
 # CycloneGames.DynamicAtlas
 
-[English | 简体中文](README.SCH.md)
+[English](README.md) | 简体中文
 
 `CycloneGames.DynamicAtlas` 是有边界的运行时精灵图集。它把只能在运行时才确定的精灵打进固定数量的未压缩页，为每个条目发放显式租约，并在页数、条目数和字节预算触顶时直接拒绝，而不是继续增长。
 
