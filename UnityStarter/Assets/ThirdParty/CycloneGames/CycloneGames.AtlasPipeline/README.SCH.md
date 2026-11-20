@@ -38,14 +38,14 @@
 
 ## 运行时提取（DynamicAtlas）
 
-大多数图集是纯静态内容，应保留渲染最优的默认配置：开启 rotation、开启 tight packing、使用分平台压缩格式。少数图集需要把 Sprite 交给运行时 `DynamicAtlas` 消费（见 [UIFramework 包文档](../CycloneGames.UIFramework/Documents~/DynamicAtlas.SCH.md)），后者要求矩形、未旋转、未压缩的源几何。在规则上启用 **Runtime Extraction (DynamicAtlas)** 可以把这组要求作为一键预设应用，无需手动调整三个字段。
+大多数图集是纯静态内容，应保留渲染最优的默认配置：开启 rotation、开启 tight packing、使用分平台压缩格式。少数图集需要把 Sprite 交给运行时 `DynamicAtlas` 消费（见 [CycloneGames.DynamicAtlas 包文档](../CycloneGames.DynamicAtlas/Documents~/DynamicAtlas.SCH.md)），后者要求矩形、未旋转、未压缩的源几何。在规则上启用 **Runtime Extraction (DynamicAtlas)** 可以把这组要求作为一键预设应用，无需手动调整三个字段。
 
 ### 选择图集策略
 
 | 内容 | 推荐路径 |
 | --- | --- |
 | 构建期已知的静态 UI | 构建期 `SpriteAtlas`，使用默认设置（rotation、tight packing、压缩） |
-| 运行时下载或 Live Service 图片 | 运行时把松散或远程纹理直接喂给 `DynamicAtlasService`（UIFramework 包） |
+| 运行时下载或 Live Service 图片 | 运行时把松散或远程纹理直接喂给 `DynamicAtlasService`（`CycloneGames.DynamicAtlas` 包） |
 | 混合：既要打进图集又要进入运行时图集的创作 Sprite | 在规则上启用 Runtime Extraction 预设 |
 
 ### Runtime Extraction 预设

@@ -18,6 +18,7 @@ const (
 	fileAttributeReadOnly   = 0x00000001
 	invalidHandleValue      = ^uintptr(0)
 	moveFileReplaceExisting = 0x00000001
+	fileFlagBackupSemantics = 0x02000000
 	errorFileNotFound       = syscall.Errno(2)
 	errorPathNotFound       = syscall.Errno(3)
 	errorAccessDenied       = syscall.Errno(5)
@@ -72,6 +73,48 @@ func tryExclusiveOpen(path string) error {
 				return nil
 			}
 			return errno
+		}
+		return callErr
+	}
+	_, _, _ = closeHandleProc.Call(handle)
+	return nil
+}
+
+// ProbeExclusive proves that path can be opened with no sharing modes at all.
+// Directories need FILE_FLAG_BACKUP_SEMANTICS; without it CreateFileW reports a
+// spurious access denied. Windows refuses to rename a directory while any entry
+// in its tree is held open, so this read-only probe is a best-effort preflight
+// before a quarantine move. Nothing is created, written or locked.
+func ProbeExclusive(path string, isDir bool) error {
+	prepared, err := prepareWindowsPath(path)
+	if err != nil {
+		return err
+	}
+	pointer, err := syscall.UTF16PtrFromString(prepared)
+	if err != nil {
+		return err
+	}
+	flags := uintptr(fileAttributeNormal)
+	if isDir {
+		flags |= fileFlagBackupSemantics
+	}
+	handle, _, callErr := createFileW.Call(
+		uintptr(unsafe.Pointer(pointer)),
+		genericReadValue,
+		0,
+		0,
+		openExistingValue,
+		flags,
+		0)
+	if handle == invalidHandleValue {
+		var errno syscall.Errno
+		if errors.As(callErr, &errno) {
+			if errno == errorSharingViolation || errno == errorAccessDenied {
+				return fmt.Errorf("%w: %s: %v", ErrLocked, path, errno)
+			}
+			if errno == errorFileNotFound || errno == errorPathNotFound {
+				return nil
+			}
 		}
 		return callErr
 	}

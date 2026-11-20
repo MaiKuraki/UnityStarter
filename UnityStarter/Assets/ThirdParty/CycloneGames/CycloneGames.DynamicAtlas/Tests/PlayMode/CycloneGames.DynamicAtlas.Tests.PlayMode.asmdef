@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.DynamicAtlas.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.DynamicAtlas.Tests.PlayMode",
+    "references": [
+        "CycloneGames.DynamicAtlas.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

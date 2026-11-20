@@ -281,6 +281,8 @@ owned by the build pipeline.
 | `--strict-recovery` | Treat unclassified transaction records as blocking. |
 | `--max-entries <n>` | Entry budget for each individual cleanup target. |
 | `--max-depth <n>` | Depth budget for each individual cleanup target. |
+| `--lock-retry-timeout <duration>` | Wall-clock budget for retrying a quarantine move blocked by another process (default `5s`; `0` disables retries). |
+| `--all-or-nothing` | Restore the legacy behaviour: any blocked target rolls back the entire cleanup. |
 
 Behaviour:
 
@@ -291,15 +293,42 @@ Behaviour:
   skipped and never deleted. A present but malformed marker fails closed.
 - `durableRoots` are never deleted; their footprint is reported in the preview.
 - Deletion moves each target into a journaled quarantine first, then removes it
-  through a bound directory handle. On any failure the claims are restored.
+  through a bound directory handle. A failure that cannot be proven safe still
+  restores every claim; a target that is merely held open is skipped instead.
+- A read-only, bounded occupancy preflight warns during the preview when a
+  target appears to be held open. The probe is advisory: the claim phase is the
+  authority, and a bounded sample cannot prove that a huge tree is free of
+  handles.
+- On Windows a directory cannot be renamed while any handle inside its tree is
+  open. An IDE language server, a file watcher, Unity Hub helper processes or
+  an antivirus scan can therefore block a `Library` move even after the Editor
+  has exited. A quarantine move blocked by such a holder is retried for
+  `--lock-retry-timeout` (default 5s, formerly a fixed 240 ms).
+- A target still blocked after that budget is left untouched and reported as
+  `[SKIP]`; the remaining targets are still cleaned. The run exits with code 3
+  (partial success) and lists the skipped paths, so one locked cache no longer
+  cancels the whole cleanup. Use `--all-or-nothing` to restore the previous
+  all-or-nothing behaviour (exit code 1 on any blocked target).
+- A failure during physical deletion is different: by then the tree has already
+  been claimed into the quarantine, so its original path is empty and the tree
+  may be only partially removed. The remainder is deliberately not moved back,
+  because a half-restored cache would be unsafe for Unity to read. The run stops
+  with exit code 1, prints the quarantine path, notes that other claimed targets
+  are retained there too, and points to `--resolve-stale-quarantine`. A later
+  normal run reports that recovery evidence and refuses to start until it is
+  resolved.
+- Every fail-closed outcome is classified in the console output (Unity started,
+  held handle, identity drift, lease, journal, reparse point, ownership marker,
+  cancellation or an unclassified error) with a concrete next step instead of a
+  bare error and an opaque exit code. On Windows, Resource Monitor or Sysinternals
+  `handle.exe` can identify the process holding a cache tree.
 - A multi-gigabyte `Library` is removed with a bounded worker pool and periodic
   progress reporting; cancellation is checked between items.
 - Cache roots are live by nature: an editor, importer, indexer or antivirus may
   write inside `Logs`, `Library` or `Temp/Burst` while the inventory runs.
   Directory size and timestamps are therefore not identity. Identity is the
   file-system object plus its type, rechecked together with path containment
-  before deletion. A sharing conflict during the quarantine move is retried a
-  few times; a persistent holder is reported with an actionable message.
+  before deletion. Every other error still fails closed.
 
 ```bash
 unity-project-tools unity_project_full_clean --project ./MyProject --dry-run --ci
@@ -472,7 +501,7 @@ are ignored.
 
 | Platform | Considerations |
 | --- | --- |
-| Windows | `MAX_PATH` is bypassed with the `\\?\` prefix for long absolute paths; UNC paths use the UNC extended form. Reserved device names, alternate data streams and trailing dots or spaces are rejected. A sharing violation means another process holds the file — close the editor, explorer, antivirus or media player. Read-only attributes are cleared before an authorized replacement. |
+| Windows | `MAX_PATH` is bypassed with the `\\?\` prefix for long absolute paths; UNC paths use the UNC extended form. Reserved device names, alternate data streams and trailing dots or spaces are rejected. A sharing violation means another process holds a handle in the tree — close the Unity Editor and Hub helper processes, your IDE and its language server or file watcher (for example VS Code with C# Dev Kit / Roslyn), File Explorer, antivirus or media player. Read-only attributes are cleared before an authorized replacement. A directory rename additionally requires the whole tree to be free of open handles, which is why `unity_project_full_clean` preflights and skips blocked caches. |
 | Linux | Mount identity uses `STATX_MNT_ID` where available and falls back to device identity on older kernels. `renameat2(RENAME_NOREPLACE)` provides no-replace publishing; filesystems without that flag fall back to an existence check. Advisory locks are cooperative. |
 | macOS | Case sensitivity and Unicode normalization are measured rather than assumed, because APFS volumes differ. `RenamexNp(RENAME_EXCL)` provides no-replace publishing. |
 | Other Unix | Build tags compile, but no-replace operations report that the platform primitive is unavailable. |

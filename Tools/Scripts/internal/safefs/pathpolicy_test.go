@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHostPathPolicyLimits(t *testing.T) {
@@ -186,5 +187,58 @@ func TestRetryOnLock(t *testing.T) {
 	})
 	if !errors.Is(err, os.ErrInvalid) || calls != 1 {
 		t.Fatalf("a non-lock error must stop immediately: %v after %d calls", err, calls)
+	}
+}
+
+func TestRetryOnLockForHonoursWallClockBudget(t *testing.T) {
+	calls := 0
+	start := time.Now()
+	err := RetryOnLockFor(context.Background(), 60*time.Millisecond, 10*time.Millisecond, func() error {
+		calls++
+		return ErrLocked
+	})
+	if err == nil || !errors.Is(err, ErrLocked) {
+		t.Fatalf("expected a wrapped lock error, got %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("a wall-clock budget must retry, got %d call(s)", calls)
+	}
+	if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
+		t.Fatalf("budget was not honoured: elapsed %s", elapsed)
+	}
+	// Callers append LockHint once. A hint embedded here would be duplicated.
+	if strings.Contains(err.Error(), "Another process") {
+		t.Fatalf("RetryOnLockFor must not embed a hint: %v", err)
+	}
+}
+
+func TestRetryOnLockForStopsOnNonLockError(t *testing.T) {
+	calls := 0
+	err := RetryOnLockFor(context.Background(), 5*time.Second, time.Millisecond, func() error {
+		calls++
+		return os.ErrInvalid
+	})
+	if !errors.Is(err, os.ErrInvalid) || calls != 1 {
+		t.Fatalf("a non-lock error must stop immediately: %v after %d calls", err, calls)
+	}
+}
+
+func TestRetryOnLockForZeroTimeoutAttemptsOnce(t *testing.T) {
+	calls := 0
+	err := RetryOnLockFor(context.Background(), 0, time.Millisecond, func() error {
+		calls++
+		return ErrLocked
+	})
+	if err == nil || calls != 1 {
+		t.Fatalf("zero timeout must attempt exactly once: %v after %d calls", err, calls)
+	}
+}
+
+func TestLockHintNamesIDEAndWatcherHolders(t *testing.T) {
+	hint := LockHint(ErrLocked)
+	for _, expected := range []string{"IDE", "language server", "file watcher", "Unity Editor"} {
+		if !strings.Contains(hint, expected) {
+			t.Fatalf("hint %q must mention %q", hint, expected)
+		}
 	}
 }

@@ -50,18 +50,31 @@ const (
 	// goroutines. The wide upper levels of a Library tree benefit most from
 	// concurrency; deeper levels are usually small and not worth the overhead.
 	parallelDeletionDepth = 3
+
+	// defaultLockRetryTimeout is the wall-clock budget for a quarantine move
+	// blocked by another process. The previous 5 x 60 ms budget could not
+	// outlast an antivirus scan or an IDE releasing a multi-GB cache tree.
+	defaultLockRetryTimeout = 5 * time.Second
+	// lockRetryDelay spaces attempts inside the wall-clock budget.
+	lockRetryDelay = 100 * time.Millisecond
+	// occupancyProbeBudget bounds the read-only preflight scan per target. The
+	// probe is advisory: a bounded sample cannot prove that a huge tree is free
+	// of handles, so the claim phase remains the authority.
+	occupancyProbeBudget = 4096
 )
 
 // runConfig is injected once per command run. An atomic pointer keeps the value
 // immutable after publication, so deletion workers can read it concurrently
 // without a mutex and repeated in-process runs never inherit stale settings.
 type runConfig struct {
-	layout         projectlayout.Layout
-	facts          safefs.Facts
-	policy         safefs.PathPolicy
-	maxEntries     int
-	maxDepth       int
-	strictRecovery bool
+	layout           projectlayout.Layout
+	facts            safefs.Facts
+	policy           safefs.PathPolicy
+	maxEntries       int
+	maxDepth         int
+	strictRecovery   bool
+	lockRetryTimeout time.Duration
+	allOrNothing     bool
 }
 
 var activeConfig atomic.Pointer[runConfig]
@@ -73,11 +86,12 @@ func currentConfig() runConfig {
 		return *cfg
 	}
 	return runConfig{
-		layout:     projectlayout.Default(),
-		facts:      safefs.Fallback(),
-		policy:     safefs.HostPathPolicy(),
-		maxEntries: defaultMaxCleanEntries,
-		maxDepth:   defaultMaxCleanDepth,
+		layout:           projectlayout.Default(),
+		facts:            safefs.Fallback(),
+		policy:           safefs.HostPathPolicy(),
+		maxEntries:       defaultMaxCleanEntries,
+		maxDepth:         defaultMaxCleanDepth,
+		lockRetryTimeout: defaultLockRetryTimeout,
 	}
 }
 
@@ -86,6 +100,13 @@ func currentFacts() safefs.Facts          { return currentConfig().facts }
 func currentPolicy() safefs.PathPolicy    { return currentConfig().policy }
 func maxCleanEntries() int                { return currentConfig().maxEntries }
 func maxCleanDepth() int                  { return currentConfig().maxDepth }
+
+func lockRetryTimeout() time.Duration {
+	// Zero is a valid explicit value: it disables lock retries entirely.
+	return currentConfig().lockRetryTimeout
+}
+
+func allowPartialCleanup() bool { return !currentConfig().allOrNothing }
 
 // ensureFacts measures the volume once when a package-level helper is called
 // outside run(), so case comparisons do not depend on caller setup.
@@ -106,6 +127,51 @@ func layoutPath(root, relative string) (string, error) {
 // move or delete because some other process still holds a handle in the tree.
 func lockContentionHint(err error) string {
 	return safefs.LockHint(err)
+}
+
+// explainFailure classifies a fail-closed outcome into an actionable next step.
+// It never changes control flow and never weakens a safety check: some failures
+// must stay fatal, but a fatal result should tell the user what to do instead of
+// ending on a bare error string and an opaque exit code.
+func explainFailure(cause error) string {
+	text := cause.Error()
+	switch {
+	case strings.Contains(text, "Unity Editor started") || strings.Contains(text, "Unity activity"):
+		return "Unity Editor became active during cleanup. Close it completely, including Hub helper processes, then re-run."
+	case errors.Is(cause, safefs.ErrLocked) || safefs.IsSharingViolation(cause) || strings.Contains(text, "sharing conflict"):
+		return "A process holds a handle in the cache tree. Close the IDE, language server, file watcher, editor or antivirus, then re-run. Blocked targets are skipped by default, never force-deleted."
+	case strings.Contains(text, "identity drifted") || strings.Contains(text, "identity changed") || strings.Contains(text, "identity also drifted"):
+		return "A target was replaced or moved by another process. Let the editor, importer or build finish, then re-run."
+	case strings.Contains(text, "lease"):
+		return "Another tool run owns the Build workspace. Wait for it to finish and release the lease, then re-run."
+	case strings.Contains(text, "journal") || strings.Contains(text, "persist"):
+		return "Recovery evidence could not be written. Check free disk space and write permissions, then re-run."
+	case strings.Contains(text, "recovery state"):
+		return "Build recovery state changed during the run. Inspect the transaction records under the durable Build workspace, then re-run."
+	case strings.Contains(text, "cannot be inspected"):
+		return "A target cannot be read back after the move. Check permissions and any security software filtering the path, then re-run."
+	case strings.Contains(text, "reparse") || strings.Contains(text, "redirected") || strings.Contains(text, "mount boundary") || strings.Contains(text, "escapes project root"):
+		return "A path became a link, crossed a volume boundary or left the project root. Restore the expected layout, then re-run."
+	case strings.Contains(text, "owner marker") || strings.Contains(text, "Player output"):
+		return "Build ownership evidence changed. Review the publication marker and its sidecar, then re-run."
+	case strings.Contains(text, "cancelled") || errors.Is(cause, context.Canceled):
+		return "The run was cancelled. No force deletion was performed; re-run to clean the remaining items."
+	default:
+		return "No cache data was force-deleted. Review the error above, fix its cause, then re-run. Recovery evidence, when present, is never deleted automatically."
+	}
+}
+
+// reportPartialDeletionFailure explains the one state in which a cache tree can
+// be split: the tree was already claimed into the quarantine, and rooted
+// removal stopped part-way through. Its original path is empty by design, and
+// the remaining tree stays with recovery evidence instead of being moved back,
+// because a half-restored cache would be unsafe for Unity to read.
+func reportPartialDeletionFailure(output io.Writer, cause error, itemPath, transactionRoot string) {
+	fmt.Fprintf(output, "[FAIL] Quarantined target deletion failed without permission mutation: %v%s\n", cause, lockContentionHint(cause))
+	fmt.Fprintf(output, "  -> '%s' had already been moved into the quarantine, so its original path is now empty. The tree may be only partially removed; the remaining content and transaction.json are at %s.\n", itemPath, transactionRoot)
+	fmt.Fprintln(output, "  -> Other targets claimed in this run also remain in the quarantine until recovery completes. The partial tree is deliberately NOT moved back: restoring half of a cache would leave Unity reading a corrupted Library.")
+	fmt.Fprintf(output, "  -> %s\n", explainFailure(cause))
+	fmt.Fprintln(output, "  -> Recovery: release the holder, then re-run with --resolve-stale-quarantine (or review transaction.json and remove the quarantine entry manually). A normal re-run reports this evidence and refuses to start until it is resolved.")
 }
 
 // globalDeletionSlots caps the total number of concurrent deletion goroutines
@@ -347,6 +413,8 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var layoutOverride string
 	var maxEntries int
 	var maxDepth int
+	var lockRetryTimeoutFlag time.Duration
+	var allOrNothing bool
 	flags.BoolVar(&ciMode, "ci", false, "Non-interactive mode")
 	flags.BoolVar(&dryRun, "dry-run", false, "Validate and preview without writing or deleting")
 	flags.BoolVar(&includeBuildOutputs, "include-build-outputs", false, "Delete only output trees proven to be Build-owned")
@@ -356,6 +424,8 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&layoutOverride, "layout", "", "Project layout document (default: <root>/Tools/project-layout.json)")
 	flags.IntVar(&maxEntries, "max-entries", defaultMaxCleanEntries, "Maximum inventory entries")
 	flags.IntVar(&maxDepth, "max-depth", defaultMaxCleanDepth, "Maximum inventory depth")
+	flags.DurationVar(&lockRetryTimeoutFlag, "lock-retry-timeout", defaultLockRetryTimeout, "Wall-clock budget for retrying a quarantine move blocked by another process (0 disables retries)")
+	flags.BoolVar(&allOrNothing, "all-or-nothing", false, "Roll back the entire cleanup if any target is blocked (legacy behaviour)")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return toolkit.ExitSuccess
@@ -368,6 +438,10 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	if maxEntries < 1 || maxDepth < 1 {
 		logging.Error("--max-entries and --max-depth must be positive")
+		return toolkit.ExitUsage
+	}
+	if lockRetryTimeoutFlag < 0 {
+		logging.Error("--lock-retry-timeout must not be negative")
 		return toolkit.ExitUsage
 	}
 
@@ -392,6 +466,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	configure(runConfig{
 		layout: layout, facts: facts, policy: policy,
 		maxEntries: maxEntries, maxDepth: maxDepth, strictRecovery: strictRecovery,
+		lockRetryTimeout: lockRetryTimeoutFlag, allOrNothing: allOrNothing,
 	})
 
 	logging.Info("resolved Unity project root", "path", projectRoot, "source", resolution.Origin.String())
@@ -464,7 +539,17 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		logging.Errorf("Cleanup inventory rejected: %v", err)
 		return toolkit.ExitFailure
 	}
-	printPreview(stdout, resolution, items, inspection, includeBuildOutputs)
+	logging.Info("preflighting cache targets for open handles (read-only, bounded sample)")
+	occupancy := probeCleanItemOccupancy(items)
+	if len(occupancy) != 0 {
+		blocked := make([]string, 0, len(occupancy))
+		for path, sample := range occupancy {
+			blocked = append(blocked, fmt.Sprintf("%s (e.g. %s)", path, sample))
+		}
+		sort.Strings(blocked)
+		logging.Warnf("%d cleanup target(s) appear to be held open: %s. Windows cannot rename a directory while a handle in its tree is open; Resource Monitor or Sysinternals handle.exe can identify the holder. A blocked target is skipped, not force-deleted", len(occupancy), strings.Join(blocked, "; "))
+	}
+	printPreview(stdout, resolution, items, inspection, includeBuildOutputs, occupancy)
 	if len(items) == 0 || dryRun {
 		if dryRun {
 			fmt.Fprintln(stdout, "[Dry Run] Validation passed; no files were written or deleted.")
@@ -538,14 +623,28 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 
 	start := time.Now()
-	deleted, failed, freed := executeQuarantinedCleanup(ctx, projectRoot, lease, items, stdout)
-	fmt.Fprintf(stdout, "Deleted %d items; failed %d; reclaimed %s; elapsed %s.\n", deleted, failed, formatSize(freed), time.Since(start).Round(time.Millisecond))
+	outcome := executeQuarantinedCleanup(ctx, projectRoot, lease, items, stdout)
+	fmt.Fprintf(stdout, "Deleted %d items; skipped %d (held open); failed %d; reclaimed %s; elapsed %s.\n",
+		outcome.deleted, len(outcome.locked), outcome.failed, formatSize(outcome.freed), time.Since(start).Round(time.Millisecond))
+	if len(outcome.locked) != 0 {
+		if outcome.failed == 0 {
+			fmt.Fprintln(stdout, "[PARTIAL] Some cache targets were held open and were left untouched. Close the IDE, language server, file watcher, editor or antivirus holding them. On Windows, Resource Monitor or Sysinternals handle.exe can identify the holder; then re-run to clean the remainder.")
+		}
+		for _, path := range outcome.locked {
+			fmt.Fprintf(stdout, "  [skipped] %s\n", path)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		fmt.Fprintf(stdout, "[FAIL] Cleanup was cancelled (%v). Re-run to clean the remaining items.\n", err)
 		return toolkit.ExitFailure
 	}
-	if failed != 0 {
+	if outcome.failed != 0 {
+		fmt.Fprintln(stdout, "[RESULT] Exit code 1: cleanup stopped on a safety failure. Every claimed path was either restored or retained as recovery evidence; nothing was force-deleted. Follow the guidance above. If a quarantine entry remains, complete it with --resolve-stale-quarantine; a normal re-run reports that evidence and refuses to start until it is resolved.")
 		return toolkit.ExitFailure
+	}
+	if len(outcome.locked) != 0 {
+		fmt.Fprintln(stdout, "[RESULT] Exit code 3 (partial success): healthy targets were cleaned, the listed targets were skipped because they are held open. No recovery evidence is pending; re-run after releasing the handles.")
+		return toolkit.ExitPartial
 	}
 	return toolkit.ExitSuccess
 }
@@ -2044,23 +2143,75 @@ func validateStaleQuarantineJournal(entryPath string) error {
 	return nil
 }
 
-func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *buildWorkspaceLease, items []cleanItem, output io.Writer) (int, int, int64) {
+// cleanupOutcome separates a completed deletion from targets that stayed
+// blocked. failed means the transaction could not be proven safe; locked means
+// healthy targets were cleaned but some unclaimed targets were left untouched.
+type cleanupOutcome struct {
+	deleted int
+	failed  int
+	freed   int64
+	locked  []string
+}
+
+// quarantineMove is the only seam used by tests to simulate a target that
+// cannot be claimed. Production always uses the real no-replace move.
+var quarantineMove = safefs.MoveNoReplace
+
+// occupancyReport maps a cleanup target to the first path found to be held
+// open. It is advisory only: the probe is a bounded sample and never decides
+// whether a target is deleted.
+type occupancyReport map[string]string
+
+// probeCleanItemOccupancy performs a bounded, read-only scan of each target.
+// On Windows a directory rename requires the whole tree to be free of open
+// handles, so an early warning is far more useful than discovering the holder
+// only after the user has confirmed the deletion. Unix has no such constraint
+// and ProbeExclusive is a no-op there.
+func probeCleanItemOccupancy(items []cleanItem) occupancyReport {
+	report := occupancyReport{}
+	for _, item := range items {
+		visited := 0
+		_ = filepath.WalkDir(item.path, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil // advisory: an unreadable entry is not a hard failure
+			}
+			if visited >= occupancyProbeBudget {
+				return filepath.SkipAll
+			}
+			visited++
+			if err := safefs.ProbeExclusive(path, entry.IsDir()); err != nil &&
+				(errors.Is(err, safefs.ErrLocked) || safefs.IsSharingViolation(err)) {
+				report[item.path] = path
+				return filepath.SkipAll
+			}
+			return nil
+		})
+	}
+	return report
+}
+
+func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *buildWorkspaceLease, items []cleanItem, output io.Writer) cleanupOutcome {
 	transactionRoot, journalPath, journal, err := createQuarantineTransaction(projectRoot, items)
 	if err != nil {
 		fmt.Fprintf(output, "[FAIL] Cannot create cleanup quarantine transaction: %v\n", err)
-		return 0, 1, 0
+		return cleanupOutcome{failed: 1}
 	}
 	quarantineRoot, err := openBoundQuarantineRoot(projectRoot, transactionRoot)
 	if err != nil {
 		fmt.Fprintf(output, "[FAIL] Cannot bind cleanup quarantine to its directory handle: %v. Recovery evidence: %s\n", err, transactionRoot)
-		return 0, 1, 0
+		return cleanupOutcome{failed: 1}
 	}
 	defer quarantineRoot.close()
 	claimed := make([]claimedCleanItem, 0, len(items))
-	failClaim := func(cause error) (int, int, int64) {
+	// locked collects targets whose quarantine move stayed blocked for the whole
+	// retry budget. They are never touched again in this run; the other targets
+	// still go through the full claim/delete/journal cycle.
+	var locked []string
+	failClaim := func(cause error) cleanupOutcome {
 		if bindErr := quarantineRoot.validate(projectRoot); bindErr != nil {
 			fmt.Fprintf(output, "[FAIL] Cleanup claim failed: %v. Quarantine directory identity also drifted, so no path-based rollback or journal overwrite was attempted: %v. Recovery evidence was originally rooted at %s\n", cause, bindErr, transactionRoot)
-			return 0, 1, 0
+			fmt.Fprintf(output, "  -> %s\n", explainFailure(cause))
+			return cleanupOutcome{failed: 1}
 		}
 		journal.State = "recovery-required"
 		_ = writeQuarantineJournal(journalPath, journal, false)
@@ -2079,7 +2230,8 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 		} else {
 			fmt.Fprintf(output, "[FAIL] Cleanup claim failed and all claimed paths were restored without replacement: %v\n", cause)
 		}
-		return 0, 1, 0
+		fmt.Fprintf(output, "  -> %s\n", explainFailure(cause))
+		return cleanupOutcome{failed: 1}
 	}
 
 	if err := lease.validate(); err != nil {
@@ -2093,16 +2245,28 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 			return failClaim(err)
 		}
 		claimedPath := journal.Entries[index].ClaimedPath
-		// A live cache may briefly hold an open handle while a log or importer
-		// writes. Retry only sharing conflicts; every other error fails closed.
-		moveErr := safefs.RetryOnLock(ctx, 5, 60*time.Millisecond, func() error {
-			return safefs.MoveNoReplace(item.path, claimedPath)
+		// Windows cannot rename a directory while any handle inside its tree
+		// stays open (an IDE language server, a file watcher or an antivirus
+		// scan). Give a persistent holder a wall-clock budget rather than the old
+		// 240 ms, and treat an exhausted budget as a per-item skip so one locked
+		// cache no longer cancels cleanup of every healthy target.
+		moveErr := safefs.RetryOnLockFor(ctx, lockRetryTimeout(), lockRetryDelay, func() error {
+			return quarantineMove(item.path, claimedPath)
 		})
 		claimedInfo, claimedErr := os.Lstat(claimedPath)
 		if claimedErr == nil && item.identity != nil && os.SameFile(item.identity, claimedInfo) {
 			claimed = append(claimed, claimedCleanItem{item: item, claimedPath: claimedPath, claimedIdentity: claimedInfo, entryIndex: index})
 		}
 		if moveErr != nil {
+			if allowPartialCleanup() && (errors.Is(moveErr, safefs.ErrLocked) || safefs.IsSharingViolation(moveErr)) {
+				journal.Entries[index].State = "locked-skipped"
+				if err := quarantineRoot.validate(projectRoot); err == nil {
+					_ = writeQuarantineJournal(journalPath, journal, false)
+				}
+				locked = append(locked, item.path)
+				fmt.Fprintf(output, "[SKIP] Held open, left untouched: %s (%s)%s\n", item.path, formatSize(item.size), lockContentionHint(moveErr))
+				continue
+			}
 			return failClaim(fmt.Errorf("no-replace quarantine move failed for '%s': %w%s", item.path, moveErr, lockContentionHint(moveErr)))
 		}
 		if claimedErr != nil {
@@ -2159,29 +2323,29 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 			journal.State = "recovery-required"
 			_ = writeQuarantineJournal(journalPath, journal, false)
 			fmt.Fprintf(output, "[FAIL] Cleanup cancelled before deleting '%s': %v. Remaining recovery evidence: %s\n", claim.item.path, err, transactionRoot)
-			return deleted, 1, freed
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		if err := lease.validate(); err != nil {
 			journal.State = "recovery-required"
 			_ = writeQuarantineJournal(journalPath, journal, false)
 			fmt.Fprintf(output, "[FAIL] Lease identity changed during physical deletion: %v. Remaining recovery evidence: %s\n", err, transactionRoot)
-			return deleted, 1, freed
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		if err := validateBoundCleanItem(projectRoot, claim.item, claim.claimedPath, true); err != nil {
 			journal.State = "recovery-required"
 			_ = writeQuarantineJournal(journalPath, journal, false)
 			fmt.Fprintf(output, "[FAIL] Quarantined target identity changed before removal: %v. Recovery evidence: %s\n", err, transactionRoot)
-			return deleted, 1, freed
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		if err := quarantineRoot.validate(projectRoot); err != nil {
 			journal.State = "recovery-required"
 			fmt.Fprintf(output, "[FAIL] Quarantine directory identity changed before removal: %v. No path-based deletion was attempted. Recovery evidence was originally rooted at %s\n", err, transactionRoot)
-			return deleted, 1, freed
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		journal.Entries[claim.entryIndex].State = "deleting"
 		if err := writeQuarantineJournal(journalPath, journal, false); err != nil {
 			fmt.Fprintf(output, "[FAIL] Cannot persist per-target delete intent: %v. Recovery evidence: %s\n", err, transactionRoot)
-			return deleted, 1, freed
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		itemStart := time.Now()
 		var progressMutex sync.Mutex
@@ -2201,41 +2365,45 @@ func executeQuarantinedCleanup(ctx context.Context, projectRoot string, lease *b
 			if bindErr := quarantineRoot.validate(projectRoot); bindErr == nil {
 				_ = writeQuarantineJournal(journalPath, journal, false)
 			}
-			fmt.Fprintf(output, "[FAIL] Quarantined target deletion failed without permission mutation: %v%s Recovery evidence: %s\n", err, lockContentionHint(err), transactionRoot)
-			return deleted, 1, freed
+			reportPartialDeletionFailure(output, err, claim.item.path, transactionRoot)
+			return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 		}
 		if err := quarantineRoot.validate(projectRoot); err != nil {
 			fmt.Fprintf(output, "[FAIL] Target was removed through the bound quarantine handle, but the canonical quarantine directory drifted before journaling: %v. Recovery evidence was originally rooted at %s\n", err, transactionRoot)
-			return deleted + 1, 1, freed + claim.item.size
+			return cleanupOutcome{deleted: deleted + 1, failed: 1, freed: freed + claim.item.size}
 		}
 		journal.Entries[claim.entryIndex].State = "deleted"
 		if err := writeQuarantineJournal(journalPath, journal, false); err != nil {
 			fmt.Fprintf(output, "[FAIL] Target was deleted but the journal update failed: %v. Recovery evidence: %s\n", err, transactionRoot)
-			return deleted + 1, 1, freed + claim.item.size
+			return cleanupOutcome{deleted: deleted + 1, failed: 1, freed: freed + claim.item.size}
 		}
 		fmt.Fprintf(output, "[OK] Deleted %s through quarantine: %s (%s)\n", claim.item.kind, claim.item.path, formatSize(claim.item.size))
 		deleted++
 		freed += claim.item.size
 	}
-	journal.State = "complete"
+	if len(locked) != 0 {
+		journal.State = "complete-with-skips"
+	} else {
+		journal.State = "complete"
+	}
 	if err := quarantineRoot.validate(projectRoot); err != nil {
 		fmt.Fprintf(output, "[FAIL] Cleanup completed through the bound quarantine handle, but its canonical directory drifted before final journaling: %v. Recovery evidence was originally rooted at %s\n", err, transactionRoot)
-		return deleted, 1, freed
+		return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 	}
 	if err := writeQuarantineJournal(journalPath, journal, false); err != nil {
 		fmt.Fprintf(output, "[FAIL] Cleanup completed but final journal write failed: %v. Recovery evidence: %s\n", err, transactionRoot)
-		return deleted, 1, freed
+		return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 	}
 	if err := quarantineRoot.validate(projectRoot); err != nil {
 		fmt.Fprintf(output, "[FAIL] Cleanup completed but quarantine identity changed before finalization: %v. Recovery evidence was originally rooted at %s\n", err, transactionRoot)
-		return deleted, 1, freed
+		return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 	}
 	_ = quarantineRoot.close()
 	if err := cleanupEmptyQuarantineTransaction(transactionRoot, journalPath); err != nil {
 		fmt.Fprintf(output, "[FAIL] Cleanup completed but quarantine finalization failed: %v. Recovery evidence: %s\n", err, transactionRoot)
-		return deleted, 1, freed
+		return cleanupOutcome{deleted: deleted, failed: 1, freed: freed}
 	}
-	return deleted, 0, freed
+	return cleanupOutcome{deleted: deleted, freed: freed, locked: locked}
 }
 
 func openBoundQuarantineRoot(projectRoot, transactionRoot string) (*boundQuarantineRoot, error) {
@@ -2770,9 +2938,12 @@ func deduplicateItems(items []cleanItem) []cleanItem {
 	return result
 }
 
-func printPreview(output io.Writer, resolution projectroot.Result, items []cleanItem, inspection publicationInspection, includeOutputs bool) {
+func printPreview(output io.Writer, resolution projectroot.Result, items []cleanItem, inspection publicationInspection, includeOutputs bool, occupancy occupancyReport) {
 	fmt.Fprintf(output, "Project: %s (source: %s)\n", resolution.Root, resolution.Origin)
 	projectRoot := resolution.Root
+	if len(occupancy) != 0 {
+		fmt.Fprintf(output, "Occupancy preflight: %d target(s) appear to be held open; a blocked target is skipped, not force-deleted.\n", len(occupancy))
+	}
 	if len(inspection.owned) != 0 && !includeOutputs {
 		fmt.Fprintf(output, "Protected Build-owned publications: %d (use -include-build-outputs after review).\n", len(inspection.owned))
 	}
@@ -2790,6 +2961,13 @@ func printPreview(output io.Writer, resolution projectroot.Result, items []clean
 	for _, item := range items {
 		relative, _ := filepath.Rel(projectRoot, item.path)
 		fmt.Fprintf(output, "  [%s] %s (%s)\n", item.kind, filepath.ToSlash(relative), formatSize(item.size))
+		if blocked, ok := occupancy[item.path]; ok {
+			blockedRelative, err := filepath.Rel(projectRoot, blocked)
+			if err != nil {
+				blockedRelative = blocked
+			}
+			fmt.Fprintf(output, "           [held open] %s - close the IDE, language server, file watcher, editor or antivirus holding it\n", filepath.ToSlash(blockedRelative))
+		}
 		total += item.size
 	}
 	fmt.Fprintf(output, "Planned deletion: %d items, %s.\n", len(items), formatSize(total))

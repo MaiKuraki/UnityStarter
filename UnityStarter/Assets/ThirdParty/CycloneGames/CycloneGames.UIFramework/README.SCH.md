@@ -31,7 +31,7 @@ CycloneGames.UIFramework 负责 Unity 中 UGUI 窗口的生命周期管理。它
 - **Provider 加载**：直接 Prefab 或任意 `IUIWindowAssetProvider`；可选 AssetManagement adapter 与零依赖的参考 Provider 独立提供，Lease 由会话持有。
 - **因果导航**：活动窗口图，支持协调进入/离开过渡和调用方缓冲查询。
 - **生命周期状态机**：`UIWindowState` 仅由 `UIService` 持有；回滚、清理与聚合失败上报。
-- **有界动态图集**：运行时 Sprite Packing，具有显式 Lease；详见[动态图集指南](Documents~/DynamicAtlas.SCH.md)。
+- **可选运行时图集**：运行时 Sprite Packing 位于独立的 [CycloneGames.DynamicAtlas](../CycloneGames.DynamicAtlas/README.SCH.md) 包；本包不引用它。
 - **本地化布局**：按语言区分的几何与排版覆盖，由可选的 companion 模块 [CycloneGames.UIFramework.Localization](../CycloneGames.UIFramework.Localization/README.SCH.md) 提供。
 
 ## 架构
@@ -487,7 +487,7 @@ LitMotion Driver 的 fade、scale 与 slide 动画从窗口当前值（alpha、l
 
 ### 诊断与可观测性
 
-`GetPerformanceStats()` 返回 Session、生命周期阶段、Scene-bound Window、Binder、Isolated Canvas、Layer 与配置最大值等计数。`CopyLayerRuntimeStats` 和 `CopyActiveWindows` 写入调用方缓冲区。`DynamicAtlasService.GetStats()` 报告 Page、Entry、引用、估算 Texture Bytes、利用率、Copy Path、Cache Hit 与失败。`Tools > CycloneGames > UI Framework > Runtime Monitor` 从显式选择的 `UIManager` 读取这些有界 Snapshot。`Performance Auditor` 只在按下 `Scan Project` 后启动；它为 Layout Authority、Raycast、Material、Texture、Mask 与 Canvas Boundary 提供待复核项，不修改 Asset。
+`GetPerformanceStats()` 返回 Session、生命周期阶段、Scene-bound Window、Binder、Isolated Canvas、Layer 与配置最大值等计数。`CopyLayerRuntimeStats` 和 `CopyActiveWindows` 写入调用方缓冲区。`Tools > CycloneGames > UI Framework > Runtime Monitor` 从显式选择的 `UIManager` 读取这些有界 Snapshot。`Performance Auditor` 只在按下 `Scan Project` 后启动；它为 Layout Authority、Raycast、Material、Texture、Mask 与 Canvas Boundary 提供待复核项，不修改 Asset。
 
 `UIPresenterBinder.LogMissingPresenterMappings` 可以在开发阶段通过 `CycloneGames.UIFramework` 报告未映射窗口。其消息使用 deferred state formatting，因此 channel 关闭时不会构建消息。若未映射是常态或日志量会产生负担，应保持关闭。
 
@@ -548,13 +548,11 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 
 ### 缓存与 Lease policy
 
-窗口会话 Service 不保留窗口池或已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease，在 Binding 清理和窗口销毁后 Dispose。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。`DynamicAtlasSpriteLease` 是引用池化记录的值类型句柄，缓存命中路径零分配；cache miss 时 `maxMissesPerFrame` 限制每帧像素工作，超出预算返回瞬态的 `DynamicAtlasInsertStatus.Throttled`，调用方在后续帧重试即可。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
-
-`DynamicAtlasStats` 会在当前 page、entry、reference、retained entry、estimated bytes、pending-destruction bytes 与压力 counter 之外，报告配置的 `PageCapacity`、`EntryCapacity` 和 `MemoryBudgetBytes`。达到 page、entry 或 byte ceiling 时，admission 继续通过显式 `DynamicAtlasInsertStatus` 失败；active sprite lease 永不被驱逐。`TrimUnused(maximumEntriesToRemove)` 是安全的 owner-local mitigation，只移除零引用 retained entry；参数小于等于零时 no-op。legacy 无参数调用保持源码兼容，并可能清空全部 eligible entry，但总 work 仍受已校验的 `maxEntries` 限制（hard maximum 为 65,535）；pressure orchestration 应始终传入更小的单 pump work budget。
+窗口会话 Service 不保留窗口池或已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease，在 Binding 清理和窗口销毁后 Dispose。运行时 Sprite Packing 不属于本包：项目使用可选的 [CycloneGames.DynamicAtlas](../CycloneGames.DynamicAtlas/README.SCH.md) 包时，其 Page、Entry 与 Lease policy 由该包负责，与窗口会话相互独立。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
 
 ### 线程、AOT 与 Stripping
 
-`UIService` 与 `DynamicAtlasService` 捕获 Unity Owner Thread，并拒绝其他线程调用。Binder、Presenter、生命周期回调、过渡、Hierarchy 修改、Locale Layout 应用、Texture Copy 与 Lease 消费也在该线程运行。Asset Provider 可以按自身 policy 执行后端 I/O 或解压；完成的 Unity Object 会在校验与实例化前切回主线程。不要用 Lock 包围 Unity Object 访问；应把工作调度到 Owner Thread。
+`UIService` 捕获 Unity Owner Thread，并拒绝其他线程调用。Binder、Presenter、生命周期回调、过渡、Hierarchy 修改与 Locale Layout 应用也运行在该线程。Asset Provider 可以按自身 policy 执行后端 I/O 或解压；完成的 Unity Object 会在校验与实例化前切回主线程。不要用 Lock 包围 Unity Object 访问；应把工作调度到 Owner Thread。
 
 核心避免反射发现、运行时代码生成与仅 JIT 可用的 Delegate；Presenter Mapping 与 Binder 均显式连接，因此 IL2CPP/AOT Composition 可以工作。第三方容器或内容后端仍可能需要自己的生成注册或 `link.xml`。必须用代表性 Player Build 验证 Stripping；Editor 编译不能作为证据。WebGL 不能假定存在通用托管 Worker Thread；主线程受限 API 与异步 Yield 不依赖后台线程。
 
@@ -564,7 +562,6 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 - Binding 与 Presenter Dispose 必须幂等。
 - 不要直接 Destroy 受管窗口；调用 `CloseAsync`。
 - 不要在 Lease Owner 之外 Dispose Provider Handle。
-- `Image` 使用动态图集 Sprite 的完整期间都要持有对应 Lease，随后只 Dispose 一次。
 - 独立限制 `MaxActiveWindows` 与内容系统缓存预算。
 - 重复 Open/Close 和场景切换后检查 Retained Unity Object。
 
@@ -627,4 +624,3 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 | `IUITransitionCoordinator` | 双窗口导航过渡 |
 | `TryGetWindow`、`CopyActiveWindows` | 活动窗口查找/快照 |
 | `GetPerformanceStats`、`CopyLayerRuntimeStats` | 有界 Runtime 诊断 |
-| `DynamicAtlasService`、`DynamicAtlasSpriteLease` | 具有显式 Ownership 的有界 Runtime Sprite Packing |

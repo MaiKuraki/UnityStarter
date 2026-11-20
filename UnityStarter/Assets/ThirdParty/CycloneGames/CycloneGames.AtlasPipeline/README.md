@@ -38,14 +38,14 @@ Atlases are generated into `Assets/Settings`-adjacent content folders — the ex
 
 ## Runtime Extraction (DynamicAtlas)
 
-Most atlases are purely static content and should keep the render-optimal defaults: rotation on, tight packing on, and a compressed per-platform format. A small number of atlases need their sprites consumed by a runtime `DynamicAtlas` (see the [UIFramework package documentation](../CycloneGames.UIFramework/Documents~/DynamicAtlas.md)), which requires rectangular, unrotated, uncompressed source geometry. Enabling **Runtime Extraction (DynamicAtlas)** on a rule applies that requirement as a one-click preset instead of hand-tuning three separate fields.
+Most atlases are purely static content and should keep the render-optimal defaults: rotation on, tight packing on, and a compressed per-platform format. A small number of atlases need their sprites consumed by a runtime `DynamicAtlas` (see the [CycloneGames.DynamicAtlas package documentation](../CycloneGames.DynamicAtlas/Documents~/DynamicAtlas.md)), which requires rectangular, unrotated, uncompressed source geometry. Enabling **Runtime Extraction (DynamicAtlas)** on a rule applies that requirement as a one-click preset instead of hand-tuning three separate fields.
 
 ### Choosing an atlas strategy
 
 | Content | Recommended path |
 | --- | --- |
 | Static UI known at build time | Build-time `SpriteAtlas` with default settings (rotation, tight packing, compression) |
-| Runtime-downloaded or live-service images | Feed loose or remote textures directly to `DynamicAtlasService` at runtime (UIFramework package) |
+| Runtime-downloaded or live-service images | Feed loose or remote textures directly to `DynamicAtlasService` at runtime (`CycloneGames.DynamicAtlas` package) |
 | Mixed: authored sprites that must also enter a runtime atlas | Enable the Runtime Extraction preset on the rule |
 
 ### Runtime Extraction preset
