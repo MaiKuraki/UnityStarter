@@ -1,6 +1,6 @@
 # Runtime Guide
 
-[English | 简体中文](RuntimeGuide.SCH.md)
+English | [简体中文](RuntimeGuide.SCH.md)
 
 Related: [Getting started](GettingStarted.md) | [Configuration guide](Configuration.md) | [Module reference](../README.md)
 
@@ -8,9 +8,9 @@ Related: [Getting started](GettingStarted.md) | [Configuration guide](Configurat
 
 This guide covers runtime ownership, configuration loading, player creation, context routing, local multiplayer, rebinding, persistence, and shutdown.
 
-## Core Concepts
+## Core concepts
 
-### Runtime Ownership
+### Runtime ownership
 
 The composition root owns one `InputManager` for one input session:
 
@@ -27,7 +27,7 @@ flowchart LR
 
 The owner is responsible for selecting and validating configuration, creating and removing players, subscribing and unsubscribing manager events, disposing contexts owned by scenes or features, and disposing the manager during shutdown. Unity objects and Input System operations belong to the Unity main thread unless an API explicitly documents another thread.
 
-### Loading Policy
+### Loading policy
 
 `InputSystemBootstrapOptions` declares whether configuration is disabled, optional, or required:
 
@@ -54,9 +54,9 @@ InputSystemLoadResult load = await InputSystemLoader.LoadAndInitializeAsync(
 
 Invalid, inaccessible, or oversized content is reported as a failure in every mode. `IsBootstrapComplete` includes `NotConfigured`; `IsSuccess` means a validated runtime configuration was committed.
 
-## Usage Guide
+## Usage guide
 
-### Player Creation Patterns
+### Player creation patterns
 
 **One player, best available scheme:**
 
@@ -108,7 +108,7 @@ bool removed = manager.RemovePlayer(playerId);
 
 Removal disposes player-owned input resources. Product code remains responsible for despawning the corresponding gameplay object and releasing feature-owned contexts.
 
-### Context Routing
+### Context routing
 
 An `InputContext` binds configured observables to product commands:
 
@@ -153,7 +153,7 @@ menu.Dispose();
 
 Use capture scopes for temporary modal ownership when several systems must restore context state reliably after nested operations.
 
-### Event-Driven and Polled Input
+### Event-driven and polled input
 
 Use observable APIs for event-driven product behavior:
 
@@ -167,7 +167,7 @@ Use `InputContext` command binding when a product wants context arbitration, blo
 
 Polling actions are sampled by the configured frame provider. Keep frame-loop reads allocation-free and avoid constructing identities or collections in the hot path.
 
-### Long Press
+### Long press
 
 Configuration enables module-level long press with `longPressMs` and `longPressValueThreshold`:
 
@@ -209,7 +209,7 @@ string report = InputManager.FormatConflictsReport(conflicts);
 
 Run rebinding and conflict reports in settings flows, not gameplay hot paths.
 
-### Binding Profiles
+### Binding profiles
 
 The manager exports one profile covering declared players:
 
@@ -225,7 +225,7 @@ bool applied = manager.ImportBindingOverrideProfileJson(json);
 
 The product owns the profile key, save timing, retention, account association, cloud synchronization, and reset UX. Keep the configured defaults active when a profile is rejected and present a deliberate reset action.
 
-### Updating Configuration
+### Updating configuration
 
 Configuration replacement is a session boundary:
 
@@ -238,7 +238,7 @@ Configuration replacement is a session boundary:
 
 If replacement fails, the manager retains its current committed configuration.
 
-### Persistence Ownership
+### Persistence ownership
 
 `IInputConfigurationSource` reads configuration. `IInputConfigurationStore` adds save and delete. A store implementation owns its root or remote endpoint, path/key rules, size and timeout budgets, atomic replacement, backup and recovery, cancellation and shutdown behavior, and encryption and account policy when required.
 
@@ -273,7 +273,7 @@ Do not initialize a disposed manager. Construct a new manager for a new session.
 | `action.controls` resolves but nothing ever fires | No context was pushed, so the action map stays disabled | Push a context after join. `controls` resolves independently of `enabled`, so it cannot be used to decide whether input is live. |
 | Input goes silent after `ReassignPlayerDevices` | Reassignment builds a new `InputPlayer`; the old subscriptions and context stack are not carried over | Re-push the context and re-subscribe on the returned instance. |
 
-### Production Checklist
+### Production checklist
 
 - One composition owner controls the manager lifetime.
 - Every async operation receives a product cancellation token.

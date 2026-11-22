@@ -14,9 +14,9 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Regression coverage for device ownership, the locked-versus-mixed distinction, local-multiplayer
-    /// isolation, device-switch debounce and the new configuration fields. Every assertion reads the
-    /// synchronous Input System graph state, so it is deterministic in EditMode where callbacks do not fire.
+    /// Regression coverage for device ownership, locked and mixed slots, local-multiplayer isolation
+    /// and device-switch debounce. Assertions read the synchronous Input System graph state, so they
+    /// are deterministic in EditMode where callbacks do not fire.
     /// </summary>
     public sealed class InputDevicePolicyRegressionTests : InputDeviceTestBase
     {
@@ -274,7 +274,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 }
 
                 Assert.That(changes - baseline, Is.GreaterThanOrEqualTo(4),
-                    "Zero debounce must preserve the legacy immediate-switch behaviour.");
+                    "Zero debounce must switch device kinds immediately.");
                 subscription.Dispose();
             }
             finally
@@ -480,7 +480,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 Assert.That(activity.DeviceLayout, Is.EqualTo("Keyboard"));
                 Assert.That(activity.Family, Is.EqualTo(InputDeviceFamily.Keyboard));
                 Assert.That(activity.PromptKind, Is.EqualTo(InputDeviceKind.KeyboardMouse),
-                    "The legacy coarse kind must stay unchanged for existing consumers.");
+                    "The coarse device kind must stay unchanged for existing consumers.");
                 Assert.That(activity.ControlPath, Does.Contain("space"));
                 Assert.That(activity.Timestamp, Is.EqualTo(12.5d));
             }
@@ -590,7 +590,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 Assert.That(iconSet.GetIcon(InputDeviceKind.Gamepad, "SomeUnknownLayout"),
                     Is.SameAs(generic));
                 Assert.That(iconSet.GetIcon(InputDeviceKind.Gamepad), Is.SameAs(generic),
-                    "The legacy single-argument overload must keep its behaviour.");
+                    "The single-argument overload must keep its behaviour.");
 
                 var activity = new InputDeviceActivity(
                     0, 1, "DualShockGamepad", InputDeviceFamily.Gamepad,
@@ -684,11 +684,9 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 manager.AutoReassignOnDeviceLoss = true;
                 Assert.That(manager.JoinSinglePlayer(0), Is.Not.Null);
 
-                // The recovery has to complete inside the removal notification. InputSystem raises
-                // onDeviceChange before InputUser drops the device from pairedDevices (measured: the
-                // Removed notification for the second of two paired devices still reports one entry), and
-                // no further topology event follows. A player that is only recovered by some later
-                // unrelated device event is dead on every platform that stays quiet after an unplug.
+                // Recovery must complete inside the removal notification: InputSystem raises
+                // onDeviceChange before InputUser drops the device from pairedDevices, and no further
+                // topology event follows the last removal.
                 UIS.RemoveDevice(devices[0]);
                 UIS.RemoveDevice(devices[1]);
 

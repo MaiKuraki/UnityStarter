@@ -270,7 +270,7 @@ Snapshot payloads may exceed the shared `NetworkConstants.DefaultMTU` (1200): th
 
 ### Profiles and scheduling
 
-A profile defines supported/required features, channels, intervals, snapshot budgets, and authority-transfer behavior. Its `ProfileHash` is deterministic over typed values. Intervals are policy values — the network session or replication loop owns tick scheduling, congestion response, and send retries.
+A profile defines supported/required features, channels, intervals, snapshot budgets, and authority-transfer behavior. Its `ProfileHash` is deterministic over typed values. Intervals are policy values. The network session or replication loop owns tick scheduling, congestion response, and send retries.
 
 ### Security and failure handling
 
@@ -313,4 +313,4 @@ FNV state hashes are synchronization checksums, not authentication codes. Transp
 | Entries are limited | `WriteDetectionEntries` loss counts and the 4,096-input work ceiling: unresolved, invalid, capacity-limited, duplicates |
 | Interest filtering produces no observers | Observer/candidate entity mapping, interest evaluator configuration |
 | Allocation in hot path | Verify spans and reusable buffers; profile the target Player backend |
-| Profile change has no effect | Profiles are immutable — create and exchange a new profile through the handshake |
+| Profile change has no effect | Profiles are immutable; create and exchange a new profile through the handshake |

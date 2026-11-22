@@ -1,6 +1,6 @@
 # InputSystem Sample
 
-[简体中文](README.SCH.md) | [Getting started](../Documents~/GettingStarted.md) | [Configuration guide](../Documents~/Configuration.md) | [Runtime guide](../Documents~/RuntimeGuide.md)
+English | [简体中文](README.SCH.md) | [Getting started](../Documents~/GettingStarted.md) | [Configuration guide](../Documents~/Configuration.md) | [Runtime guide](../Documents~/RuntimeGuide.md)
 
 This opt-in sample demonstrates a complete local-input session: load a YAML configuration, create players, route actions through contexts, react to device changes, and release every owned resource. Its assembly is not auto-referenced, its scene is not in Build Settings, and its fixture is not copied into `StreamingAssets` automatically.
 
@@ -89,7 +89,7 @@ The bootstrap continues only after a successful load. Its cancellation token bel
 
 Join failure is handled as initialization failure in the sample. A product can instead show a bounded retry UI, a device-selection screen, or an explicit cancel action.
 
-**Configuration source isolation.** Each startup mode derives its own user configuration key (`user_input_settings_<Mode>.yaml`) and uses `InputSystemBootstrapOptions` with `persistDefaultToUser: false`. The selected `TextAsset` is therefore the active configuration on every run. Previously all modes shared one key and the six-argument loader overload persisted the authored fixture implicitly: once a mixed configuration had been saved, switching back to `AutoJoinLockedSinglePlayer` still loaded the mixed file, making the two modes look identical. The bootstrap logs `mode`, `fixture`, `userKey` and `InputSystemLoadResult.Status` so the active source is visible in the Console.
+**Configuration source isolation.** Each startup mode derives its own user configuration key (`user_input_settings_<Mode>.yaml`) and uses `InputSystemBootstrapOptions` with `persistDefaultToUser: false`. The selected `TextAsset` is the active configuration on every run. The bootstrap logs `mode`, `fixture`, `userKey` and `InputSystemLoadResult.Status` so the active source is visible in the Console.
 
 ## Stage 4: Spawn on player-ready
 
@@ -155,7 +155,7 @@ if (controller != null) controller.ApplyDeviceTint(kind);
 
 A takeover only reaches the player if the device is paired. Under a locked control scheme only that scheme's devices are paired, so a gamepad cannot drive anything regardless of its bindings. `pairAllMatchingDevices: true` on the player slot claims one device per referenced layout and leaves the scheme unset, which is what `Fixtures/input_config_mixed.txt` uses. Every player still associates its action asset with its `InputUser`, so the mixed player's actions are confined to its own paired-device whitelist: keyboard, mouse and gamepad all work, while devices belonging to another player do not. `maxDevicesPerLayout: 1` leaves spare devices for other players, and `deviceSwitchDebounceMs: 120` suppresses prompt jitter when the player alternates rapidly.
 
-**Why SingleLock and Mixed now behave differently.** `AutoJoinLockedSinglePlayer` loads `Fixtures/input_config.txt`, activates the `KeyboardMouse` scheme, and its action asset sees only the paired keyboard and mouse. `AutoJoinMixedDevices` loads `Fixtures/input_config_mixed.txt`, activates no scheme, and its action asset sees keyboard, mouse and gamepad. With both keyboards/mice and a gamepad attached, pressing the gamepad drives player `0` only in the mixed mode. If the two modes still look identical, check the bootstrap log: a `SuccessFromUserConfiguration` status means the per-mode user override took precedence over the fixture.
+`AutoJoinLockedSinglePlayer` activates the `KeyboardMouse` scheme, so gamepad bindings stay masked out on player `0`. `AutoJoinMixedDevices` activates no scheme, so its action asset resolves keyboard, mouse and gamepad controls for that player.
 
 Treat `ActiveDeviceKind` as presentation state. Device ownership and join policy remain the manager's responsibility.
 
@@ -206,7 +206,5 @@ Delete the sample's user file only when deliberately resetting this sample. Prod
 4. Trigger repeated player-ready refreshes and confirm one scene object per player ID.
 5. Destroy the bootstrap during loading and confirm that no player or subscription remains.
 6. Validate keyboard, mouse, and gamepad paths in the Unity Input Debugger.
-7. Switch between `AutoJoinLockedSinglePlayer` and `AutoJoinMixedDevices` with all three device families attached. Confirm the bootstrap log reports different fixtures, and that only the mixed mode resolves a gamepad control for player `0`.
+7. With keyboard, mouse and gamepad attached, run `AutoJoinLockedSinglePlayer` and `AutoJoinMixedDevices`. Confirm that only the mixed mode resolves a gamepad control for player `0`.
 8. Run `AutoJoinKeyboardMouseVsGamepad` with at least one gamepad and confirm two players spawn with disjoint device sets.
-
-These checks validate the Editor workflow and sample ownership. Target Player, IL2CPP, console, reconnect, suspend/resume, and long-running device behavior require platform-specific verification.

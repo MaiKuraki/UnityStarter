@@ -18,11 +18,21 @@ namespace CycloneGames.Networking.Buffers
     {
         private readonly NetworkBufferStorage _storage;
         private readonly long _leaseToken;
+        private readonly NetworkBufferPoolInstance _owner;
 
         internal NetworkBuffer(NetworkBufferStorage storage, long leaseToken)
+            : this(storage, leaseToken, null)
+        {
+        }
+
+        internal NetworkBuffer(
+            NetworkBufferStorage storage,
+            long leaseToken,
+            NetworkBufferPoolInstance owner)
         {
             _storage = storage ?? throw new ArgumentNullException(nameof(storage));
             _leaseToken = leaseToken;
+            _owner = owner;
         }
 
         public int Position
@@ -111,7 +121,13 @@ namespace CycloneGames.Networking.Buffers
 
         public void Dispose()
         {
-            NetworkBufferPool.ReturnLease(_storage, _leaseToken);
+            // Leases issued by an injected pool return to that pool, not to the
+            // process-wide default. A null owner uses the default pool.
+            NetworkBufferPoolInstance owner = _owner;
+            if (owner != null)
+                owner.ReturnLease(_storage, _leaseToken);
+            else
+                NetworkBufferPool.ReturnLease(_storage, _leaseToken);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -143,6 +159,9 @@ namespace CycloneGames.Networking.Buffers
         private int _length;
         private int _initializedLength;
         private bool _readMode;
+        // Set by the owning pool when a lease begins, so an injected pool's clear
+        // policy is honoured even when the storage grows and returns an old array.
+        private bool _clearOnBufferReturn;
 
         // Even values are available; odd values identify one active lease. The entire
         // generation/state transition is one atomic value, so an old lease cannot return
@@ -152,6 +171,11 @@ namespace CycloneGames.Networking.Buffers
         internal int Position => _position;
         internal int Capacity => _buffer == null ? 0 : Math.Min(_buffer.Length, MaxCapacity);
         internal int Remaining => _length - _position;
+
+        internal void SetClearPolicy(bool clearOnBufferReturn)
+        {
+            _clearOnBufferReturn = clearOnBufferReturn;
+        }
 
         internal long BeginLease()
         {
@@ -526,7 +550,7 @@ namespace CycloneGames.Networking.Buffers
                 Buffer.BlockCopy(_buffer, 0, newBuffer, 0, bytesToCopy);
             }
 
-            ArrayPool<byte>.Shared.Return(_buffer, NetworkBufferPool.ClearBuffersOnReturn);
+            ArrayPool<byte>.Shared.Return(_buffer, _clearOnBufferReturn);
             _buffer = newBuffer;
         }
     }

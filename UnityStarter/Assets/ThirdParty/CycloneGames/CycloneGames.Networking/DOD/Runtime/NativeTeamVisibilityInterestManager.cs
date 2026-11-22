@@ -298,7 +298,7 @@ namespace CycloneGames.Networking.DOD
 
                 bool isHidden = (entity.Flags & 2) != 0;
 
-                // Rule 3: Hidden enemies — need deep-reveal
+                // Rule 3: Hidden enemies need deep-reveal
                 if (isHidden)
                 {
                     if (IsInDeepReveal(entity.Position.x, entity.Position.z, myTeamId))
@@ -307,7 +307,7 @@ namespace CycloneGames.Networking.DOD
                 }
 
                 // Rule 4: Enemy in detection range of any allied source
-                // Scan the contiguous ally source block — cache-friendly linear read
+                // Scan the contiguous ally source block; cache-friendly linear read
                 if (allyRange.y > 0 && IsInAllyDetection(entity.Position.x, entity.Position.z,
                         allyRange.x, allyRange.y))
                 {

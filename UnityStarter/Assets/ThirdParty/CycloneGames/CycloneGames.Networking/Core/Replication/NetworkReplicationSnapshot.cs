@@ -119,10 +119,9 @@ namespace CycloneGames.Networking.Replication
                 throw new ArgumentOutOfRangeException(nameof(teamId));
             }
 
-            if (lastSentTick < NEVER_SENT)
-            {
-                throw new ArgumentOutOfRangeException(nameof(lastSentTick));
-            }
+            // lastSentTick is a 32-bit modular tick and may be negative after
+            // the int.MaxValue wrap. NEVER_SENT (-1) remains a sentinel value;
+            // writers avoid storing that exact value (see NetworkTickMath).
 
             if (estimatedPayloadBytes < 0)
             {
@@ -155,7 +154,6 @@ namespace CycloneGames.Networking.Replication
             && Position.IsFinite()
             && OwnerConnectionId >= 0
             && TeamId >= 0
-            && LastSentTick >= NEVER_SENT
             && EstimatedPayloadBytes >= 0;
     }
 }

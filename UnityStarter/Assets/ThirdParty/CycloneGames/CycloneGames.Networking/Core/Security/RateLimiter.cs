@@ -14,6 +14,13 @@ namespace CycloneGames.Networking.Security
     {
         private const int DefaultMaxTrackedConnections = 4096;
         private const double DefaultIdleTimeoutSeconds = 120d;
+        private const int DefaultMaxMessagesPerSecond = 60;
+        private const int DefaultBurstLimit = 20;
+
+        // The per-connection byte budget sustains the per-connection message
+        // budget at the default canonical payload size.
+        private const long DefaultMaxBytesPerSecond =
+            (long)NetworkConstants.DefaultMaxPayloadSize * DefaultMaxMessagesPerSecond;
 
         private readonly ConcurrentDictionary<int, ConnectionBucket> _buckets = new ConcurrentDictionary<int, ConnectionBucket>();
         private readonly object _creationLock = new object();
@@ -21,9 +28,9 @@ namespace CycloneGames.Networking.Security
         private long _expiredConnectionPruneCount;
 
         public RateLimiter(
-            int maxMessagesPerSecond = 60,
-            long maxBytesPerSecond = 65536,
-            int burstLimit = 20,
+            int maxMessagesPerSecond = DefaultMaxMessagesPerSecond,
+            long maxBytesPerSecond = DefaultMaxBytesPerSecond,
+            int burstLimit = DefaultBurstLimit,
             int maxTrackedConnections = DefaultMaxTrackedConnections,
             double idleTimeoutSeconds = DefaultIdleTimeoutSeconds)
         {
@@ -51,6 +58,20 @@ namespace CycloneGames.Networking.Security
         public int MaxTrackedConnections { get; }
         public double IdleTimeoutSeconds { get; }
         public int TrackedConnectionCount => _buckets.Count;
+
+        /// <summary>
+        /// Machine-checkable budget consistency for a given average payload size.
+        /// Returns false when the byte budget throttles the message budget before
+        /// that rate is reached. Products with non-default payload sizes should
+        /// call this at composition time instead of assuming the defaults fit.
+        /// </summary>
+        public bool CanSustain(int averagePayloadBytes)
+        {
+            if (averagePayloadBytes <= 0)
+                throw new ArgumentOutOfRangeException(nameof(averagePayloadBytes));
+
+            return (long)averagePayloadBytes * MaxMessagesPerSecond <= MaxBytesPerSecond;
+        }
 
         public RateLimiterMemorySnapshot GetMemorySnapshot()
         {

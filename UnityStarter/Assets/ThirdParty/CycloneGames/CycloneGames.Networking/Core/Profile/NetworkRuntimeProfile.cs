@@ -1,13 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace CycloneGames.Networking
 {
     public sealed class NetworkRuntimeProfile
     {
-        private readonly Dictionary<string, int> _intSettings;
-        private readonly Dictionary<string, float> _floatSettings;
-        private readonly Dictionary<string, string> _stringSettings;
+        // Profiles with no custom settings share three immutable empty tables instead
+        // of allocating three Dictionary instances for every composed profile.
+        private static readonly IReadOnlyDictionary<string, int> EmptyIntSettings =
+            new ReadOnlyDictionary<string, int>(new Dictionary<string, int>(0, StringComparer.Ordinal));
+        private static readonly IReadOnlyDictionary<string, float> EmptyFloatSettings =
+            new ReadOnlyDictionary<string, float>(new Dictionary<string, float>(0, StringComparer.Ordinal));
+        private static readonly IReadOnlyDictionary<string, string> EmptyStringSettings =
+            new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(0, StringComparer.Ordinal));
+
+        private readonly IReadOnlyDictionary<string, int> _intSettings;
+        private readonly IReadOnlyDictionary<string, float> _floatSettings;
+        private readonly IReadOnlyDictionary<string, string> _stringSettings;
 
         internal NetworkRuntimeProfile(NetworkRuntimeProfileBuilder builder)
         {
@@ -33,9 +43,15 @@ namespace CycloneGames.Networking
             ReconnectWindowSeconds = ValidateNonNegative(builder.ReconnectWindowSeconds, nameof(builder.ReconnectWindowSeconds));
             HostMigrationTimeoutSeconds = ValidateNonNegative(builder.HostMigrationTimeoutSeconds, nameof(builder.HostMigrationTimeoutSeconds));
 
-            _intSettings = new Dictionary<string, int>(builder.IntSettings, StringComparer.Ordinal);
-            _floatSettings = new Dictionary<string, float>(builder.FloatSettings, StringComparer.Ordinal);
-            _stringSettings = new Dictionary<string, string>(builder.StringSettings, StringComparer.Ordinal);
+            _intSettings = builder.IntSettings.Count > 0
+                ? new Dictionary<string, int>(builder.IntSettings, StringComparer.Ordinal)
+                : EmptyIntSettings;
+            _floatSettings = builder.FloatSettings.Count > 0
+                ? new Dictionary<string, float>(builder.FloatSettings, StringComparer.Ordinal)
+                : EmptyFloatSettings;
+            _stringSettings = builder.StringSettings.Count > 0
+                ? new Dictionary<string, string>(builder.StringSettings, StringComparer.Ordinal)
+                : EmptyStringSettings;
         }
 
         public string ProfileId { get; }
@@ -268,13 +284,12 @@ namespace CycloneGames.Networking
 
     public static class NetworkRuntimeProfiles
     {
-        public static NetworkRuntimeProfile Default
-        {
-            get
-            {
-                return CreateDefaultBuilder().Build();
-            }
-        }
+        // Immutable after construction: every getter on NetworkRuntimeProfile is
+        // read-only, so one shared default instance is safe and removes three
+        // dictionary allocations per access.
+        private static readonly NetworkRuntimeProfile s_default = CreateDefaultBuilder().Build();
+
+        public static NetworkRuntimeProfile Default => s_default;
 
         public static NetworkRuntimeProfileBuilder CreateDefaultBuilder()
         {
@@ -330,9 +345,16 @@ namespace CycloneGames.Networking
 
         public NetworkRuntimeProfile GetOrDefault(string profileId)
         {
-            return TryGet(profileId, out NetworkRuntimeProfile profile)
-                ? profile
-                : _profiles["default"];
+            if (TryGet(profileId, out NetworkRuntimeProfile profile))
+                return profile;
+
+            // Clear(includeDefault: true) legitimately removes the registered
+            // default. Fall back to the immutable shared default instead of
+            // indexing a key that no longer exists.
+            if (_profiles.TryGetValue("default", out profile))
+                return profile;
+
+            return NetworkRuntimeProfiles.Default;
         }
 
         public void Clear(bool includeDefault = false)

@@ -1,6 +1,6 @@
 # CycloneGames.InputSystem
 
-[English | 简体中文](README.SCH.md)
+English | [简体中文](README.SCH.md)
 
 An input layer over Unity Input System. Contexts, actions and bindings are authored in YAML. The file is validated before it becomes active, and each local player gets an independent `InputUser` and action asset. Game code pushes mapping contexts and reads actions through R3 streams or synchronous reads.
 
@@ -204,7 +204,7 @@ Every player associates its action asset with its `InputUser`, so `InputActionAs
 
 Async overloads accept a `CancellationToken`. A single-player timeout returns `null`; caller cancellation is propagated. Batch aggregate timeout or manager shutdown returns the successfully joined prefix. Caller cancellation rolls back only players created by that batch, preserves pre-existing registrations, then throws. Join methods are idempotent for an already registered player ID.
 
-`JoinPlayersBatchAsync` spreads a batch across frames, yielding after each player except the last, so N players span up to N frames. At the reference configuration of eight players, three contexts and 32 actions per context, the EditMode benchmark measured 739.9 ms total, 92.5 ms per player and a 114.8 ms worst frame. Run the batch during a loading screen. The returned list is complete only when the task completes. `JoinPlayersBatch` is the synchronous counterpart and completes inside the calling frame.
+`JoinPlayersBatchAsync` spreads a batch across frames, yielding after each player except the last, so N players span up to N frames. Run the batch during a loading screen; `Tests/Editor/Performance/` contains the frame-split measurements. The returned list is complete only when the task completes. `JoinPlayersBatch` is the synchronous counterpart and completes inside the calling frame.
 
 Control-scheme matching uses `deviceRequirements`: `isOptional` permits a missing device, `isOr` expresses an alternative in Unity Input System scheme order. With no schemes declared, layouts derived from configured direct and composite-part paths are alternatives and the first claimable matching device is selected. When that device is a keyboard or mouse, the other claimable keyboard/mouse device is added as its companion. Explicit schemes make ownership reviewable.
 
@@ -499,7 +499,7 @@ Subsystem registration invalidates every still-active manager so domain-reload-d
 | Device activity | Uses action activity and Input System device/user notifications. | `ActiveDeviceKind` is a presentation hint; debounce product UI if hardware is noisy. |
 | Tools recording | Fixed-capacity list while recording; snapshot creation copies samples. `CancelRecording(maximumSamplesToDiscard)` stops subscriptions and releases sample references in caller-bounded chunks. | Inspect `WasTruncated`/`DroppedSampleCount`. |
 
-Profile initialization and player construction with Unity Profiler markers `CycloneGames.Input.Initialize`, `CycloneGames.Input.JoinPlayer` and `CycloneGames.Input.BuildAsset`.
+Initialization and player construction emit `CycloneGames.Input.Initialize`, `CycloneGames.Input.JoinPlayer` and `CycloneGames.Input.BuildAsset`; context refresh and activation emit `CycloneGames.Input.RequestContextRefresh` and `CycloneGames.Input.ActivateTopContext`. These markers are visible in the Unity Profiler.
 
 ### Threading and platforms
 
@@ -559,7 +559,6 @@ builder.Install(new InputSystemVContainerInstaller(options));
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring, validation, safe file writes, constant generation. Editor-only. |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | Presentation adapters. `autoReferenced: false`. |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | Container-owned manager, async startup, resolver adapters. No AssetManagement dependency. |
-
 | `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` and `InputReplayCursor` diagnostic tooling. |
 | `CycloneGames.InputSystem.Sample` | `Samples/` | Opt-in scene and bootstrap example. |
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode validation and regression coverage. |

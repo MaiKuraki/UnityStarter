@@ -100,9 +100,7 @@ namespace CycloneGames.InputSystem.Sample
                         "Assign a configuration TextAsset on the InputManagerSample component.");
                 }
 
-                // Every startup mode gets its own user key and never persists the authored fixture. A shared
-                // key plus implicit persistence made a previously saved mixed configuration override the
-                // locked fixture on the next run, so SingleLock and Mixed appeared identical.
+                // Each startup mode owns a distinct user key; the authored fixture is never persisted.
                 string userKey = BuildUserKey();
                 var userStore = new FileInputConfigurationStore(
                     Application.persistentDataPath);

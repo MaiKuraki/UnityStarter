@@ -54,10 +54,9 @@ namespace CycloneGames.Networking.Replication
             INetworkSnapshotPayloadSource payloadSource,
             INetWriter writer)
         {
-            if (serverTick < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(serverTick));
-            }
+            // serverTick is a 32-bit modular counter; negative values are valid
+            // after a wrap. The wire field is a plain int and carries the wrapped
+            // value unchanged (see NetworkTickMath).
 
             if (payloadSource == null)
             {

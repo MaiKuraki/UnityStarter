@@ -38,7 +38,7 @@ namespace CycloneGames.InputSystem.Runtime
         public const int CurrentSchemaVersion = 1;
 
         /// <summary>
-        /// Explicit persisted schema version. A missing value deserializes as schema zero and is migrated during validation.
+        /// Persisted schema version. An omitted value deserializes as zero and is normalized during validation.
         /// </summary>
         [YamlMember("schemaVersion")]
         public int SchemaVersion { get; set; }
@@ -54,7 +54,7 @@ namespace CycloneGames.InputSystem.Runtime
         [YamlMember("playerSlots")]
         public List<PlayerSlotConfig> PlayerSlots { get; set; }
 
-        // A special action definition used to listen for players wanting to join.
+        // Join action evaluated while listening for players to join.
         [YamlMember("joinAction")]
         public ActionBindingConfig JoinAction { get; set; }
     }
@@ -105,9 +105,8 @@ namespace CycloneGames.InputSystem.Runtime
         public int MaxDevicesPerLayout { get; set; } = 1;
 
         /// <summary>
-        /// Minimum dwell time in milliseconds before <c>ActiveDeviceKind</c> may switch again. Zero preserves
-        /// the legacy immediate-switch behaviour. A non-zero value suppresses rapid device jitter without
-        /// delaying the first switch of a session.
+        /// Minimum dwell time in milliseconds before <c>ActiveDeviceKind</c> may switch again. Zero switches
+        /// immediately; a non-zero value suppresses rapid device jitter without delaying the first switch.
         /// </summary>
         [YamlMember("deviceSwitchDebounceMs")]
         public int DeviceSwitchDebounceMs { get; set; }
@@ -154,10 +153,9 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>
         /// Optional Unity Input System binding groups, positionally aligned with <see cref="DeviceBindings"/>.
         /// Each entry may be a semicolon-separated group list. An omitted list or an empty entry falls back
-        /// to the action-level <see cref="BindingGroups"/>, so existing configurations keep their exact
-        /// behaviour. Use this to give a keyboard binding and a gamepad binding of the same action
-        /// different groups, which makes the control-scheme binding mask an independent second line of
-        /// defence alongside the InputUser device whitelist.
+        /// to the action-level <see cref="BindingGroups"/>. Per-binding groups let a keyboard binding and a
+        /// gamepad binding of the same action declare different schemes, making the control-scheme binding
+        /// mask an independent second line of defence alongside the InputUser device whitelist.
         /// </summary>
         [YamlMember("deviceBindingGroups")]
         public List<string> DeviceBindingGroups { get; set; }

@@ -9,13 +9,11 @@ using VYaml.Serialization;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Splits a full manager initialization into its phases so that any caching work can be justified by its
-    /// measured share instead of by assumption. Every phase runs through the same public entry points the runtime
-    /// uses, in the same order, over identical input bytes.
+    /// Splits manager initialization into its phases and measures each one through the public entry
+    /// points, in runtime order, over identical input bytes.
     /// </summary>
     /// <remarks>
-    /// The scenario matrix keeps every configuration inside the serialized line budget, because a rejected
-    /// configuration would time the failure path rather than the work. Warmup runs are discarded so that first-call
+    /// Configurations stay inside the serialized line budget. Warmup runs are discarded so first-call
     /// JIT and static initialization do not land in the reported medians.
     /// </remarks>
     public sealed class InputPerfCostBreakdownTests

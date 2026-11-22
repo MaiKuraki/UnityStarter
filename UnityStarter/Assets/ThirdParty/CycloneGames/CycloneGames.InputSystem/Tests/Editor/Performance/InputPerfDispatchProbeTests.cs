@@ -10,11 +10,9 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Records a host capability that constrains every measurement in this suite: in a batch-mode EditMode run the
-    /// Input System processes state events into device state but does not drive enabled InputAction callbacks,
-    /// because the editor update type uses a different state buffer than the action state created for dynamic
-    /// updates. These probes therefore assert the observed behaviour instead of asserting dispatch, and the
-    /// dispatch-dependent dimensions are reported as not measured in this host.
+    /// Records a host capability: in a batch-mode EditMode run the Input System processes state events
+    /// into device state but does not drive enabled InputAction callbacks. Dispatch-dependent dimensions
+    /// are reported as not measured in this host.
     /// </summary>
     public sealed class InputPerfDispatchProbeTests
     {

@@ -128,7 +128,6 @@ namespace CycloneGames.Networking.Compression
             if (absZ > largest) { largest = absZ; largestIndex = 2; }
             if (absW > largest) { largestIndex = 3; }
 
-            // Ensure largest is positive
             float sign = largestIndex switch
             {
                 0 => Mathf.Sign(q.x),

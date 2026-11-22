@@ -7,9 +7,8 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Baseline for local multiplayer device assignment. These cases record what the current selection path does
-    /// when several players compete for the attached devices, which is the behaviour any change to single-player
-    /// device pairing must not disturb.
+    /// Device assignment when several players compete for the attached devices. Assertions read the
+    /// synchronous Input System graph state.
     /// </summary>
     public sealed class InputLocalMultiplayerTests : InputDeviceTestBase
     {

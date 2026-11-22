@@ -379,9 +379,8 @@ namespace CycloneGames.InputSystem.Runtime
             }
             catch (MissingMethodException)
             {
-                // The type resolved but its parameterless constructor is gone. In a player build that is a
-                // managed-code-stripping artifact, not an authoring mistake, so it must not be reported as
-                // invalid parameters: that sends integrators to inspect YAML that is actually correct.
+                // A missing parameterless constructor in a player build is a managed-stripping artifact.
+                // Report it as an unavailable registration rather than an authoring error in the YAML.
                 AddIssue(
                     issues,
                     ref wasTruncated,
