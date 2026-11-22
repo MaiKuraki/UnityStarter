@@ -37,7 +37,7 @@ namespace CycloneGames.InputSystem.Runtime
         public Sprite TouchIcon => touchIcon;
 
         /// <summary>
-        /// Resolves a prompt icon from the coarse legacy kind. Kept for existing consumers.
+        /// Resolves a prompt icon from the coarse device kind.
         /// </summary>
         public Sprite GetIcon(InputDeviceKind kind)
         {

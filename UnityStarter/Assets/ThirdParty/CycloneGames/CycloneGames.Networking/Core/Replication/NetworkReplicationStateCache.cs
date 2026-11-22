@@ -135,10 +135,11 @@ namespace CycloneGames.Networking.Replication
             ushort sequence = 0)
         {
             ValidateConnectionAndObject(connectionId, objectId);
-            if (serverTick < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(serverTick));
-            }
+
+            // A wrapped tick equal to NEVER_SENT must not be stored as-is, or
+            // IsKnown would report "never sent" forever.
+            int storedTick = NetworkTickMath.AvoidSentinel(
+                serverTick, NetworkReplicatedObject.NEVER_SENT);
 
             if (payloadBytes < 0)
             {
@@ -151,8 +152,8 @@ namespace CycloneGames.Networking.Replication
                 : NetworkObjectReplicationState.Unknown;
 
             _states[key] = new NetworkObjectReplicationState(
-                serverTick,
-                fullState ? serverTick : previous.LastFullStateTick,
+                storedTick,
+                fullState ? storedTick : previous.LastFullStateTick,
                 previous.LastAckedTick,
                 payloadHash,
                 payloadBytes,
@@ -163,10 +164,6 @@ namespace CycloneGames.Networking.Replication
         public bool TryMarkAcked(int connectionId, ulong objectId, int ackedTick)
         {
             ValidateConnectionAndObject(connectionId, objectId);
-            if (ackedTick < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(ackedTick));
-            }
 
             var key = new StateKey(connectionId, objectId);
             if (!_states.TryGetValue(key, out NetworkObjectReplicationState previous))
@@ -174,10 +171,18 @@ namespace CycloneGames.Networking.Replication
                 return false;
             }
 
+            // Math.Max is wrong for wrapping ticks: after a wrap the newer ack
+            // is numerically smaller. Compare in modular order instead.
+            int lastAcked = previous.LastAckedTick == NetworkReplicatedObject.NEVER_SENT
+                ? ackedTick
+                : (NetworkTickMath.IsAfter(ackedTick, previous.LastAckedTick)
+                    ? ackedTick
+                    : previous.LastAckedTick);
+
             _states[key] = new NetworkObjectReplicationState(
                 previous.LastSentTick,
                 previous.LastFullStateTick,
-                Math.Max(previous.LastAckedTick, ackedTick),
+                lastAcked,
                 previous.LastPayloadHash,
                 previous.LastPayloadBytes,
                 previous.Sequence,

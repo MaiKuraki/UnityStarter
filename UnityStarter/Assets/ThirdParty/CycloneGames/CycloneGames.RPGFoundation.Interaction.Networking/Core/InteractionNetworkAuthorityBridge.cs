@@ -9,7 +9,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
     /// Trust boundary: <see cref="InteractionNetworkRequest.InstigatorPosition"/> is
     /// client-reported and therefore untrusted. The two-parameter overloads
     /// (<see cref="Validate(in InteractionNetworkRequest, int)"/> etc.) validate
-    /// against that claimed position and exist for products that deliberately run
+    /// against that claimed position and exist for products that run
     /// client-informative / server-permissive interaction rules. Servers that
     /// enforce range authoritatively must resolve the instigator position from
     /// their own simulation and call the server-position overloads

@@ -1,6 +1,6 @@
 # InputSystem 示例
 
-[English](README.md) | [快速上手](../Documents~/GettingStarted.SCH.md) | [配置指南](../Documents~/Configuration.SCH.md) | [Runtime 指南](../Documents~/RuntimeGuide.SCH.md)
+[English](README.md) | 简体中文 | [快速上手](../Documents~/GettingStarted.SCH.md) | [配置指南](../Documents~/Configuration.SCH.md) | [Runtime 指南](../Documents~/RuntimeGuide.SCH.md)
 
 这是一个按需启用的完整本地输入示例，演示加载 YAML 配置、创建 player、通过 context 路由 action、响应设备变化，以及释放全部受管资源。示例 assembly 不会被自动引用，scene 不在 Build Settings 中，fixture 也不会自动复制到 `StreamingAssets`。
 
@@ -89,7 +89,7 @@ if (!result.IsSuccess)
 
 示例把 join failure 视为 initialization failure。产品可以提供有次数限制的重试 UI、设备选择界面或显式取消操作。
 
-**配置来源隔离。** 每个 startup mode 派生各自的 user configuration key（`user_input_settings_<Mode>.yaml`），并通过 `InputSystemBootstrapOptions` 设置 `persistDefaultToUser: false`。因此每次运行真正生效的都是 Inspector 里选中的 `TextAsset`。此前所有模式共用同一个 key，而六参数 loader 重载会隐式持久化 authored fixture：一旦保存过 mixed 配置，切回 `AutoJoinLockedSinglePlayer` 仍会加载 mixed 文件，导致两种模式看起来完全一样。Bootstrap 会在 Console 输出 `mode`、`fixture`、`userKey` 和 `InputSystemLoadResult.Status`，让生效来源可见。
+**配置来源隔离。** 每个 startup mode 派生各自的 user configuration key（`user_input_settings_<Mode>.yaml`），并通过 `InputSystemBootstrapOptions` 设置 `persistDefaultToUser: false`。每次运行真正生效的都是 Inspector 里选中的 `TextAsset`。Bootstrap 会在 Console 输出 `mode`、`fixture`、`userKey` 和 `InputSystemLoadResult.Status`，让生效来源可见。
 
 ## 阶段 4：在 Player Ready 时创建对象
 
@@ -155,7 +155,7 @@ if (controller != null) controller.ApplyDeviceTint(kind);
 
 只有设备被配对，接管才能生效。锁定 scheme 时只配对该 scheme 需要的设备，手柄无论 binding 怎么写都驱动不了任何 action。在 player slot 上设置 `pairAllMatchingDevices: true` 会为每个被引用的 layout 认领一台设备并保持 scheme 未激活，`Fixtures/input_config_mixed.txt` 用的就是这种方式。每个 player 仍会把 action asset 关联到自己的 `InputUser`，因此 mixed player 的 action 只作用于自己的配对设备白名单：键鼠和手柄都可用，但属于其他 player 的设备不会串进来。`maxDevicesPerLayout: 1` 为其他 player 留出剩余设备，`deviceSwitchDebounceMs: 120` 抑制快速交替时的提示抖动。
 
-**为什么 SingleLock 与 Mixed 现在表现不同。** `AutoJoinLockedSinglePlayer` 加载 `Fixtures/input_config.txt`，激活 `KeyboardMouse` scheme，其 action asset 只能看到配对的键盘和鼠标；`AutoJoinMixedDevices` 加载 `Fixtures/input_config_mixed.txt`，不激活任何 scheme，其 action asset 能看到键盘、鼠标和手柄。同时插着键鼠和手柄时，只有 mixed 模式下按手柄才会驱动 player `0`。如果两种模式看起来仍然一样，请查看 bootstrap 日志：状态为 `SuccessFromUserConfiguration` 说明该模式的 user override 覆盖了 fixture。
+`AutoJoinLockedSinglePlayer` 激活 `KeyboardMouse` scheme，gamepad binding 在 player `0` 上保持被 mask 屏蔽；`AutoJoinMixedDevices` 不激活 scheme，其 action asset 会为该 player 解析键盘、鼠标与手柄 control。
 
 `ActiveDeviceKind` 属于 presentation state。设备所有权与 join policy 仍由 manager 负责。
 
@@ -206,7 +206,5 @@ shutdown 按照与创建相反的顺序执行：
 4. 重复触发 player-ready refresh，确认每个 player ID 只有一个 scene object。
 5. 在加载期间销毁 bootstrap，确认没有遗留 player 或 subscription。
 6. 在 Unity Input Debugger 中验证 keyboard、mouse 与 gamepad path。
-7. 同时接上键鼠与手柄，在 `AutoJoinLockedSinglePlayer` 与 `AutoJoinMixedDevices` 之间切换。确认 bootstrap 日志报告不同的 fixture，且只有 mixed 模式为 player `0` 解析到 gamepad control。
+7. 同时接上键鼠与手柄，分别运行 `AutoJoinLockedSinglePlayer` 与 `AutoJoinMixedDevices`，确认只有 mixed 模式为 player `0` 解析到 gamepad control。
 8. 至少接一个手柄运行 `AutoJoinKeyboardMouseVsGamepad`，确认两个 player 生成且设备集合不相交。
-
-这些检查覆盖 Editor workflow 与示例 ownership。Target Player、IL2CPP、console、reconnect、suspend/resume 与长时间设备行为需要在目标平台单独验证。

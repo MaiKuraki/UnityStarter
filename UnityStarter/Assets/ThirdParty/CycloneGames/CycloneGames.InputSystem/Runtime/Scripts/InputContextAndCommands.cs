@@ -10,12 +10,9 @@ namespace CycloneGames.InputSystem.Runtime
     #region Context
 
     /// <summary>
-    /// Runtime container for input bindings.
-    /// <para>
-    /// Memory Management: Implements <see cref="IDisposable"/> for automatic lifecycle management.
-    /// Use ".AddTo(this)" (R3 extension) to bind this context to a GameObject/Component, ensuring it is
-    /// automatically removed from the input stack when the object is destroyed.
-    /// </para>
+    /// Runtime container for input bindings. Disposing the context removes it from every player stack
+    /// that currently uses it. Bind it to a component with the R3 <c>AddTo</c> extension to tie its
+    /// lifetime to that component.
     /// </summary>
     public class InputContext : IDisposable
     {
@@ -29,14 +26,12 @@ namespace CycloneGames.InputSystem.Runtime
         internal bool HasExplicitPolicy { get; }
         internal bool IsDisposed => _isDisposed;
 
-        // Dictionary lookups are O(1).
         internal readonly Dictionary<Observable<Unit>, IActionCommand> ActionBindings = new();
         internal readonly Dictionary<Observable<Vector2>, IMoveCommand> MoveBindings = new();
         internal readonly Dictionary<Observable<float>, IScalarCommand> ScalarBindings = new();
         internal readonly Dictionary<Observable<bool>, IBoolCommand> BoolBindings = new();
 
-        // Tracks which players currently have this context in their stack.
-        // Used to auto-remove this context from those players upon disposal.
+        // Players whose stacks currently contain this context; disposal removes it from each of them.
         private readonly HashSet<IInputPlayer> _owners = new();
         private bool _isDisposed;
 
@@ -223,7 +218,7 @@ namespace CycloneGames.InputSystem.Runtime
     }
 
     /// <summary>
-    /// Null Object pattern to avoid null checks during execution.
+    /// No-op command used when a binding has no target.
     /// </summary>
     public class NullCommand : IActionCommand, IMoveCommand, IScalarCommand, IBoolCommand
     {

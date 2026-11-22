@@ -13,7 +13,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
     /// </summary>
     /// <remarks>
     /// Only successful verdicts are cached, so an invalid configuration is always re-validated. The fuzz case
-    /// alternates a valid and an invalid configuration to verify exactly that property instead of trusting it.
+    /// alternates a valid and an invalid configuration to verify that property.
     /// </remarks>
     public sealed class InputPerfPreflightCacheTests
     {

@@ -282,7 +282,6 @@ namespace CycloneGames.Networking.Lockstep
 
             OnSimulateFrame?.Invoke(_currentFrame, inputs);
 
-            // Clear slot for reuse
             for (int i = 0; i < _peerCount; i++)
             {
                 _inputReceived[slot, i] = false;

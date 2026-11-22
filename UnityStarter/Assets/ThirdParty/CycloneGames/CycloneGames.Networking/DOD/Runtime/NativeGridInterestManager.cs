@@ -159,7 +159,7 @@ namespace CycloneGames.Networking.DOD
             int cx = (int)math.floor(observerPos.x * _invCellSize);
             int cz = (int)math.floor(observerPos.z * _invCellSize);
 
-            // Scan sorted entities in nearby cells — contiguous memory access
+            // Scan sorted entities in nearby cells; contiguous memory access
             for (int dx = -_cellRange; dx <= _cellRange; dx++)
             {
                 for (int dz = -_cellRange; dz <= _cellRange; dz++)
@@ -250,7 +250,7 @@ namespace CycloneGames.Networking.DOD
 
         internal struct SortedEntity : IComparable<SortedEntity>
         {
-            public long CellKey;       // 8 bytes — packed (cellX << 32 | cellZ)
+            public long CellKey;       // 8 bytes, packed (cellX << 32 | cellZ)
             public uint NetworkId;     // 4 bytes
             public float3 Position;    // 12 bytes
             public int OwnerConnectionId; // 4 bytes

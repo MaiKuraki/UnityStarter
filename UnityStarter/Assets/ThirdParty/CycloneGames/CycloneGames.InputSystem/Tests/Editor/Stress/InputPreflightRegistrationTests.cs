@@ -6,19 +6,17 @@ using NUnit.Framework;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Covers the registration-resolution branch of the configuration preflight. That branch resolves
-    /// interaction, processor and composite instances from the Input System registry by name and instantiates
-    /// them through reflection, so it is the place where a stripped or missing implementation surfaces.
+    /// Covers the registration-resolution branch of the configuration preflight, which resolves
+    /// interaction, processor and composite instances from the Input System registry by name and
+    /// instantiates them through reflection.
     /// <para>
-    /// The contract being verified is fail-closed with a typed issue code: an unusable registration must be
-    /// reported, never skipped and never thrown out of the public entry point. A positive control runs first so
-    /// that a preflight which rejected everything could not make the negative cases pass while proving nothing.
+    /// Unusable registrations must fail closed with a typed issue code: never skipped and never thrown
+    /// out of the public entry point. A positive control runs first.
     /// </para>
     /// <para>
-    /// Code assertions are split into two groups on purpose. Unknown registrations are deterministic and are
-    /// asserted with an exact code. Invalid parameter values are converted by package-owned code, whose choice
-    /// between "throw" and "reject with a related code" is not part of this module's contract, so those cases
-    /// assert rejection plus membership in the invalid-parameter code set instead of one pinned code.
+    /// Unknown registrations are asserted with an exact code. Invalid parameter values are asserted as
+    /// rejection plus membership in the invalid-parameter code set, because the package chooses between
+    /// throwing and reporting a related code.
     /// </para>
     /// </summary>
     public sealed class InputPreflightRegistrationTests

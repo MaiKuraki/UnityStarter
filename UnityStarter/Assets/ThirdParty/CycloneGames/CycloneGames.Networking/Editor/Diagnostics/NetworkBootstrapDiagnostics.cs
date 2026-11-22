@@ -17,7 +17,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             new CycloneRuntimeChecker(),
             new MirrorPackageChecker(),
             new MiragePackageChecker(),
-            new BackendSdkPackageChecker()
+            new BackendSdkPackageChecker(),
+            new NetworkMaintenanceChecker()
         };
 
         private static readonly Dictionary<string, Type> TypeLookupCache =

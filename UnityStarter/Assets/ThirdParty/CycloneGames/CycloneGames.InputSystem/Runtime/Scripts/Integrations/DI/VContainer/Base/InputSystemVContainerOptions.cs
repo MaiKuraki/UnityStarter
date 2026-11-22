@@ -39,9 +39,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         }
 
         /// <summary>
-        /// Pure decision: an entry point escalates a failed bootstrap only when the
-        /// composition root explicitly opted in. All other failures stay observable
-        /// through the diagnostics contract.
+        /// Escalates a failed bootstrap only when the composition root opted in. All other
+        /// failures stay observable through the diagnostics contract.
         /// </summary>
         public bool ShouldEscalateStartupFailure(InputSystemLoadResult result)
         {

@@ -62,6 +62,7 @@ namespace CycloneGames.Networking
         public readonly double MaximumRejectedRatio;
         public readonly int MaximumFailureCount;
         public readonly bool RequirePassed;
+        public readonly bool RequireTrustedOrigin;
         public readonly string Description;
 
         public NetworkValidationRequirement(
@@ -76,6 +77,25 @@ namespace CycloneGames.Networking
             int maximumFailureCount = 0,
             bool requirePassed = true,
             string description = "")
+            : this(id, severity, minimumConnectionCount, minimumSameAreaConnectionCount,
+                   minimumIterations, minimumDurationSeconds, maximumAllocatedBytesPerTick,
+                   maximumRejectedRatio, maximumFailureCount, requirePassed, description, false)
+        {
+        }
+
+        internal NetworkValidationRequirement(
+            NetworkValidationId id,
+            NetworkReadinessSeverity severity,
+            int minimumConnectionCount,
+            int minimumSameAreaConnectionCount,
+            int minimumIterations,
+            double minimumDurationSeconds,
+            long maximumAllocatedBytesPerTick,
+            double maximumRejectedRatio,
+            int maximumFailureCount,
+            bool requirePassed,
+            string description,
+            bool requireTrustedOrigin)
         {
             if (minimumConnectionCount < 0)
             {
@@ -122,7 +142,20 @@ namespace CycloneGames.Networking
             MaximumRejectedRatio = maximumRejectedRatio;
             MaximumFailureCount = maximumFailureCount;
             RequirePassed = requirePassed;
+            RequireTrustedOrigin = requireTrustedOrigin;
             Description = description ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Returns an equivalent requirement that refuses untrusted (self-reported)
+        /// evidence. Existing callers keep the permissive behaviour explicitly.
+        /// </summary>
+        public NetworkValidationRequirement WithTrustedOrigin()
+        {
+            return new NetworkValidationRequirement(
+                Id, Severity, MinimumConnectionCount, MinimumSameAreaConnectionCount,
+                MinimumIterations, MinimumDurationSeconds, MaximumAllocatedBytesPerTick,
+                MaximumRejectedRatio, MaximumFailureCount, RequirePassed, Description, true);
         }
     }
 
@@ -138,6 +171,7 @@ namespace CycloneGames.Networking
         public readonly double RejectedRatio;
         public readonly int FailureCount;
         public readonly string Description;
+        public readonly NetworkValidationEvidenceOrigin Origin;
 
         public NetworkValidationEvidence(
             NetworkValidationId id,
@@ -150,6 +184,24 @@ namespace CycloneGames.Networking
             double rejectedRatio = -1d,
             int failureCount = 0,
             string description = "")
+            : this(id, passed, connectionCount, sameAreaConnectionCount, iterations,
+                   durationSeconds, allocatedBytesPerTick, rejectedRatio, failureCount,
+                   description, default)
+        {
+        }
+
+        internal NetworkValidationEvidence(
+            NetworkValidationId id,
+            bool passed,
+            int connectionCount,
+            int sameAreaConnectionCount,
+            int iterations,
+            double durationSeconds,
+            long allocatedBytesPerTick,
+            double rejectedRatio,
+            int failureCount,
+            string description,
+            in NetworkValidationEvidenceOrigin origin)
         {
             if (connectionCount < 0)
             {
@@ -196,6 +248,7 @@ namespace CycloneGames.Networking
             RejectedRatio = rejectedRatio;
             FailureCount = failureCount;
             Description = description ?? string.Empty;
+            Origin = origin;
         }
     }
 
@@ -248,6 +301,13 @@ namespace CycloneGames.Networking
         public string DisplayName { get; set; } = "Default";
         public string Description { get; set; } = string.Empty;
 
+        /// <summary>
+        /// When enabled, requirements added through the convenience overload refuse
+        /// self-reported evidence. Preset production plans enable this explicitly;
+        /// hand-authored plans keep permissive behaviour unless they opt in.
+        /// </summary>
+        public bool RequireTrustedOriginByDefault { get; set; }
+
         public NetworkProductionValidationPlanBuilder RequireEvidence(in NetworkValidationRequirement requirement)
         {
             Requirements.Add(requirement);
@@ -267,7 +327,7 @@ namespace CycloneGames.Networking
             bool requirePassed = true,
             string description = "")
         {
-            Requirements.Add(new NetworkValidationRequirement(
+            NetworkValidationRequirement requirement = new NetworkValidationRequirement(
                 id,
                 severity,
                 minimumConnectionCount,
@@ -278,7 +338,11 @@ namespace CycloneGames.Networking
                 maximumRejectedRatio,
                 maximumFailureCount,
                 requirePassed,
-                description));
+                description);
+
+            Requirements.Add(RequireTrustedOriginByDefault
+                ? requirement.WithTrustedOrigin()
+                : requirement);
             return this;
         }
 
@@ -316,6 +380,7 @@ namespace CycloneGames.Networking
                 PlanId = "validation.small_session",
                 DisplayName = "Small Session Validation",
                 Description = "Validation evidence for LAN, platform lobby, relay, or listen-server sessions."
+                , RequireTrustedOriginByDefault = true
             }
                 .RequireEvidence(NetworkValidationIds.AdapterContract, minimumConnectionCount: SMALL_SESSION_CONNECTIONS)
                 .RequireEvidence(NetworkValidationIds.ProtocolFuzz, minimumIterations: DEFAULT_FUZZ_ITERATIONS)
@@ -330,6 +395,7 @@ namespace CycloneGames.Networking
                 PlanId = "validation.authoritative_arena",
                 DisplayName = "Authoritative Arena Validation",
                 Description = "Validation evidence for server-authoritative action sessions."
+                , RequireTrustedOriginByDefault = true
             }
                 .RequireEvidence(NetworkValidationIds.LoadSimulation, minimumConnectionCount: ARENA_CONNECTIONS, minimumSameAreaConnectionCount: ARENA_CONNECTIONS)
                 .RequireEvidence(NetworkValidationIds.GcBudget, maximumAllocatedBytesPerTick: 0L)
@@ -345,6 +411,7 @@ namespace CycloneGames.Networking
                 PlanId = "validation.large_area",
                 DisplayName = "Large Area Validation",
                 Description = "Validation evidence for AOI, send-budget, and reconnect-heavy large areas."
+                , RequireTrustedOriginByDefault = true
             }
                 .RequireEvidence(NetworkValidationIds.LoadSimulation, minimumConnectionCount: LARGE_AREA_CONNECTIONS, minimumSameAreaConnectionCount: LARGE_AREA_CONNECTIONS)
                 .RequireEvidence(NetworkValidationIds.GcBudget, maximumAllocatedBytesPerTick: 0L)
@@ -360,6 +427,7 @@ namespace CycloneGames.Networking
                 PlanId = "validation.massive_shard",
                 DisplayName = "Massive Shard Validation",
                 Description = "Validation evidence for shard, zone, gateway, fleet, and soak-test readiness."
+                , RequireTrustedOriginByDefault = true
             }
                 .RequireEvidence(NetworkValidationIds.LoadSimulation, minimumConnectionCount: MASSIVE_CONNECTIONS, minimumSameAreaConnectionCount: MASSIVE_CONNECTIONS)
                 .RequireEvidence(NetworkValidationIds.GcBudget, maximumAllocatedBytesPerTick: 0L)
@@ -570,6 +638,13 @@ namespace CycloneGames.Networking
                 return false;
             }
 
+            // A self-reported evidence record has no provenance and cannot satisfy a
+            // strict requirement even when every counter looks plausible.
+            if (requirement.RequireTrustedOrigin && !evidence.Origin.Matches(evidence))
+            {
+                return false;
+            }
+
             if (evidence.ConnectionCount < requirement.MinimumConnectionCount)
             {
                 return false;
@@ -622,10 +697,23 @@ namespace CycloneGames.Networking
             in NetworkValidationRequirement requirement,
             in NetworkValidationEvidence bestEvidence)
         {
-            string message = string.IsNullOrEmpty(bestEvidence.Id.Value)
-                ? $"Validation evidence is missing for {requirement.Id}."
-                : $"Validation evidence for {requirement.Id} does not satisfy the production requirement.";
-            string recommendation = "Run or import a project-owned validation probe for this requirement before treating the scenario as production-ready.";
+            string message;
+            if (string.IsNullOrEmpty(bestEvidence.Id.Value))
+            {
+                message = $"Validation evidence is missing for {requirement.Id}.";
+            }
+            else if (requirement.RequireTrustedOrigin && !bestEvidence.Origin.Matches(bestEvidence))
+            {
+                message = $"Validation evidence for {requirement.Id} is untrusted (missing provenance or invalid run digest).";
+            }
+            else
+            {
+                message = $"Validation evidence for {requirement.Id} does not satisfy the production requirement.";
+            }
+
+            string recommendation = requirement.RequireTrustedOrigin
+                ? "Execute a project-owned validation probe and attach its run origin before treating the scenario as production-ready."
+                : "Run or import a project-owned validation probe for this requirement before treating the scenario as production-ready.";
             issues.Add(new NetworkProductionValidationIssue(
                 requirement.Id,
                 requirement.Severity,

@@ -10,9 +10,8 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Verifies that the measurement rig actually exercises action dispatch. A rig whose action maps are not
-    /// enabled would report plausible but meaningless timings, so the enabled state and the current action value
-    /// are asserted before any matrix measurement is trusted.
+    /// Verifies that the measurement rig enables its action maps and resolves current action values
+    /// before any matrix measurement is used.
     /// </summary>
     public sealed class InputPerfDiagnosticTests
     {

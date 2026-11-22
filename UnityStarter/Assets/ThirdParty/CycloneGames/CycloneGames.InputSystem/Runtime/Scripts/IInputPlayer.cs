@@ -41,7 +41,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Emits continuous progress (0~1) while holding button. Emits -1 when released before completion.
-        /// Useful for showing a progress bar during long press. Returns empty if not configured.
+        /// Returns an empty observable when long press is not configured.
         /// </summary>
         Observable<float> GetLongPressProgressObservable(string actionName);
         Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName);
@@ -89,7 +89,6 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Creates a scoped input block. Dispose the returned scope to release it.
-        /// This is the preferred API for loading screens and async flows.
         /// </summary>
         IDisposable BlockInputScope();
 
@@ -161,8 +160,8 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Emits when two button actions are pressed within the specified time window of each other.
-        /// Resets when either button is released. Useful for combo input like A+B.
-        /// Returns empty observable if either action is not configured as Button type.
+        /// Resets when either button is released. Returns an empty observable if either action is not
+        /// configured as a Button.
         /// </summary>
         Observable<Unit> GetChordObservable(string actionName1, string actionName2, float windowMs = 300f);
         Observable<Unit> GetChordObservable(string actionMapName, string actionName1, string actionName2, float windowMs = 300f);

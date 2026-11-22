@@ -1,6 +1,6 @@
 # 配置指南
 
-[English | 简体中文](Configuration.md)
+[English](Configuration.md) | 简体中文
 
 相关：[快速上手](GettingStarted.SCH.md) | [Runtime 指南](RuntimeGuide.SCH.md) | [模块参考](../README.SCH.md)
 
@@ -49,7 +49,7 @@ flowchart TD
 
 Player ID 是配置 identity，不是 list position。只要处于配置 limit 内，也可以使用非连续 ID。
 
-锁定 slot（选中了 control scheme 的 slot）会把设备白名单和 binding mask 同时收窄到该 scheme；`pairAllMatchingDevices` slot 把设备白名单放宽到所有被引用的 layout，但保持 binding mask 开放，这正是单个 player 无需重新 join 就能同时响应键盘、鼠标和手柄的方式。本地多人场景请把 `maxDevicesPerLayout` 保持较小值，让其他 player 仍能认领剩余设备。超出上述范围的值会被钳制而不是拒绝，因此省略这些 key 的旧文件会保持原有行为。
+锁定 slot（选中了 control scheme 的 slot）会把设备白名单和 binding mask 同时收窄到该 scheme；`pairAllMatchingDevices` slot 把设备白名单放宽到所有被引用的 layout，但保持 binding mask 开放，这正是单个 player 无需重新 join 就能同时响应键盘、鼠标和手柄的方式。本地多人场景请把 `maxDevicesPerLayout` 保持较小值，让其他 player 仍能认领剩余设备。超出上述范围的值会被钳制而不是拒绝。
 
 ### Control scheme
 
@@ -107,7 +107,7 @@ Runtime `InputContext` 引用已配置的 context/action-map identity，并持�
 
 Direct 与 composite binding 可以同时存在。同一 action 内每个 direct path 必须唯一。
 
-`Device Binding Groups` 是可选且 additive 的。存在时必须与 `Device Bindings` 条目数完全一致；每个非空条目必须引用已声明的 control-scheme `bindingGroup`。为每条设备 binding 指定各自的 group 后，scheme 的 `bindingMask` 会成为独立的第二道防线：只标记为 `Gamepad` 的手柄 binding，在 `KeyboardMouse` scheme 下即使该 player 的设备白名单后来被放宽，也仍会被 mask 挡住。省略该 key 的配置保持原有行为不变。
+`Device Binding Groups` 是可选且 additive 的。存在时必须与 `Device Bindings` 条目数完全一致；每个非空条目必须引用已声明的 control-scheme `bindingGroup`。为每条设备 binding 指定各自的 group 后，scheme 的 `bindingMask` 会成为独立的第二道防线：只标记为 `Gamepad` 的手柄 binding，在 `KeyboardMouse` scheme 下即使该 player 的设备白名单后来被放宽，也仍会被 mask 挡住。省略列表或空条目回退到 action 级 `Binding Groups`。
 
 #### 选择 `Type`
 

@@ -121,7 +121,7 @@ namespace CycloneGames.Networking
     }
 
     /// <summary>
-    /// Composes the two orthogonal axes — hardware capability and session scale —
+    /// Composes the two orthogonal axes, hardware capability and session scale.
     /// plus the endpoint role into a single runtime profile.
     ///
     /// Composition rules:
@@ -146,18 +146,54 @@ namespace CycloneGames.Networking
             NetworkSessionScale sessionScale,
             NetworkEndpointRole role)
         {
+            ValidateCombination(sessionScale, role);
+
+            NetworkTierSpec tierSpec = role == NetworkEndpointRole.DedicatedServer
+                ? NetworkDeviceProfiles.GetSpec(NetworkPerformanceTier.Server)
+                : NetworkDeviceProfiles.GetSpec(hardwareTier);
+            NetworkScaleSpec scaleSpec = NetworkSessionScaleTable.GetSpec(sessionScale);
+            return BuildFromSpecs(sessionScale, role, tierSpec, scaleSpec);
+        }
+
+        /// <summary>
+        /// Composition with injected, instance-scoped tier/scale registries. This is
+        /// the preferred path for DI and multi-session composition: it avoids the
+        /// process-wide override statics entirely. No delegates or closures are used.
+        /// </summary>
+        public static NetworkRuntimeProfile Compose(
+            NetworkPerformanceTier hardwareTier,
+            NetworkSessionScale sessionScale,
+            NetworkEndpointRole role,
+            NetworkTierRegistry tierRegistry,
+            NetworkSessionScaleRegistry scaleRegistry)
+        {
+            if (tierRegistry == null) throw new ArgumentNullException(nameof(tierRegistry));
+            if (scaleRegistry == null) throw new ArgumentNullException(nameof(scaleRegistry));
+            ValidateCombination(sessionScale, role);
+
+            NetworkTierSpec tierSpec = role == NetworkEndpointRole.DedicatedServer
+                ? tierRegistry.GetSpec(NetworkPerformanceTier.Server)
+                : tierRegistry.GetSpec(hardwareTier);
+            NetworkScaleSpec scaleSpec = scaleRegistry.GetSpec(sessionScale);
+            return BuildFromSpecs(sessionScale, role, tierSpec, scaleSpec);
+        }
+
+        private static void ValidateCombination(NetworkSessionScale sessionScale, NetworkEndpointRole role)
+        {
             if (role == NetworkEndpointRole.ListenHost && sessionScale == NetworkSessionScale.Massive)
             {
                 throw new ArgumentException(
                     "Massive sessions require a dedicated server; a player-hosted listen server cannot absorb this scale safely.",
                     nameof(sessionScale));
             }
+        }
 
-            NetworkTierSpec tierSpec = role == NetworkEndpointRole.DedicatedServer
-                ? NetworkDeviceProfiles.GetSpec(NetworkPerformanceTier.Server)
-                : NetworkDeviceProfiles.GetSpec(hardwareTier);
-            NetworkScaleSpec scaleSpec = NetworkSessionScaleTable.GetSpec(sessionScale);
-
+        private static NetworkRuntimeProfile BuildFromSpecs(
+            NetworkSessionScale sessionScale,
+            NetworkEndpointRole role,
+            in NetworkTierSpec tierSpec,
+            in NetworkScaleSpec scaleSpec)
+        {
             NetworkRuntimeProfileBuilder builder = NetworkRuntimeProfiles.CreateDefaultBuilder();
             builder.ProfileId = tierSpec.ProfileId + "-" + sessionScale.ToString().ToLowerInvariant();
             builder.DisplayName = tierSpec.DisplayName + " / " + sessionScale;
@@ -184,7 +220,7 @@ namespace CycloneGames.Networking
         {
             // Only the two axes compete; the builder default applies solely when
             // NEITHER axis specifies the knob. Folding the default into the max
-            // would silently re-inflate values a tier deliberately tuned DOWN
+            // would silently re-inflate values a tier tuned down
             // (e.g. Low tier sets MaxConnections 32 < default 100 on purpose).
             int result = 0;
             bool specified = false;
