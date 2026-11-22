@@ -7,17 +7,19 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 {
     public sealed class ActorMigrationCodecTests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         [SetUp]
         public void SetUp()
         {
-            NetworkBufferPool.Clear();
-            NetworkBufferPool.Configure(maxPoolSize: 8, clearBuffersOnReturn: false);
+            _bufferPool = new NetworkBufferPoolInstance();
+            _bufferPool.Clear();
+            _bufferPool.Configure(maxPoolSize: 8, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
-            NetworkBufferPool.Clear();
+            _bufferPool.Clear();
         }
 
         [Test]
@@ -29,7 +31,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 new NetworkVector3(2f, 3f, 4f),
                 new[] { "Player", "Authority" });
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteMigrationState(in state);
             buffer.FlipForRead();
             ActorMigrationState result = buffer.ReadMigrationState();
@@ -90,7 +92,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 0x01, 0x00, 0x4E,
             };
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteMigrationState(in state);
             System.ArraySegment<byte> segment = buffer.ToArraySegment();
             var actual = new byte[segment.Count];
@@ -267,12 +269,12 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 
             byte[] invalidBoolean = (byte[])encoded.Clone();
             invalidBoolean[47] = 2;
-            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(invalidBoolean))
+            using (NetworkBuffer reader = _bufferPool.GetWithData(invalidBoolean))
             {
                 Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
             }
 
-            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(
+            using (NetworkBuffer reader = _bufferPool.GetWithData(
                        new System.ReadOnlySpan<byte>(encoded, 0, encoded.Length - 1)))
             {
                 Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
@@ -280,7 +282,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 
             byte[] trailing = new byte[encoded.Length + 1];
             System.Buffer.BlockCopy(encoded, 0, trailing, 0, encoded.Length);
-            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(trailing))
+            using (NetworkBuffer reader = _bufferPool.GetWithData(trailing))
             {
                 Assert.Throws<System.InvalidOperationException>(() => reader.ReadMigrationState());
             }
@@ -319,7 +321,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 NetworkVector3.One,
                 tags);
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteMigrationState(in state);
             buffer.FlipForRead();
             ActorMigrationState result = buffer.ReadMigrationState(maxRuntimeTagCount: 1024);
@@ -336,7 +338,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 NetworkVector3.One,
                 new[] { "Player" });
             byte[] payloadWithTag = Encode(in stateWithTag);
-            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(payloadWithTag))
+            using (NetworkBuffer reader = _bufferPool.GetWithData(payloadWithTag))
             {
                 Assert.Throws<System.InvalidOperationException>(() =>
                     reader.ReadMigrationState(maxRuntimeTagCount: 0));
@@ -348,7 +350,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 NetworkVector3.One,
                 System.Array.Empty<string>());
             byte[] payloadWithoutTags = Encode(in stateWithoutTags);
-            using (NetworkBuffer reader = NetworkBufferPool.GetWithData(payloadWithoutTags))
+            using (NetworkBuffer reader = _bufferPool.GetWithData(payloadWithoutTags))
             {
                 ActorMigrationState decoded = reader.ReadMigrationState(maxRuntimeTagCount: 0);
                 Assert.AreEqual(0, decoded.TagCount);
@@ -364,7 +366,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 NetworkVector3.One,
                 System.Array.Empty<string>());
             byte[] payload = Encode(in state);
-            using NetworkBuffer reader = NetworkBufferPool.GetWithData(payload);
+            using NetworkBuffer reader = _bufferPool.GetWithData(payload);
 
             Assert.Throws<System.ArgumentOutOfRangeException>(() =>
                 reader.ReadMigrationState(maxRuntimeTagCount: -1));
@@ -394,7 +396,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 new string('N', ActorMigrationNetworkingExtensions.MaxActorNameUtf8Bytes),
                 false);
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteMigrationState(in state);
             System.ArraySegment<byte> segment = buffer.ToArraySegment();
             NetworkProtocolManifest manifest = GameplayFrameworkNetworkProtocol.CreateProtocolManifest();
@@ -429,9 +431,9 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 true);
         }
 
-        private static byte[] Encode(in ActorMigrationState state)
+        private byte[] Encode(in ActorMigrationState state)
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteMigrationState(in state);
             System.ArraySegment<byte> segment = buffer.ToArraySegment();
             var encoded = new byte[segment.Count];

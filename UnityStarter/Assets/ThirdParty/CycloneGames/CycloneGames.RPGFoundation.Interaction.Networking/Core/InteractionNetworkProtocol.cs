@@ -14,7 +14,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
     public static class InteractionNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.RPGFoundation.Interaction";
-        public const byte PROTOCOL_VERSION = 1;
         public const ushort MESSAGE_ID_BASE = 13000;
         public const ushort MESSAGE_ID_MAX = 13999;
         public const ushort REQUEST_MESSAGE_ID = MESSAGE_ID_BASE;
@@ -28,11 +27,11 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
         public const NetworkChannel CANCEL_REQUEST_CHANNEL = NetworkChannel.Reliable;
         public const NetworkChannel DETERMINISTIC_REQUEST_CHANNEL = NetworkChannel.Reliable;
 
-        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
-        private const ulong REQUEST_SCHEMA_V1 = 0xD76DBACD901D2BB7UL;
-        private const ulong RESULT_SCHEMA_V1 = 0x50B6ECBD2F378EC9UL;
-        private const ulong CANCEL_REQUEST_SCHEMA_V1 = 0x00E384398B2C4151UL;
-        private const ulong DETERMINISTIC_REQUEST_SCHEMA_V1 = 0x883AF62EA5C98FCBUL;
+        // Frozen FNV-1a64 identities of the wire contracts.
+        private const ulong REQUEST_SCHEMA = 0x2ADFB567B325490CUL;
+        private const ulong RESULT_SCHEMA = 0x9694E2DD45B6B8DAUL;
+        private const ulong CANCEL_REQUEST_SCHEMA = 0x3C386AC6CE4B6C22UL;
+        private const ulong DETERMINISTIC_REQUEST_SCHEMA = 0x9A5D1D02A7D24950UL;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
@@ -50,10 +49,6 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
             return Module.ContainsMessageId(messageId);
         }
 
-        public static bool IsSupportedProtocolVersion(byte protocolVersion)
-        {
-            return Module.IsSupportedProtocolVersion(protocolVersion);
-        }
 
         public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
         {
@@ -73,34 +68,32 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
                 MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.RPGFoundation.Interaction.Networking",
-                CurrentVersion = PROTOCOL_VERSION,
-                MinimumSupportedVersion = PROTOCOL_VERSION
             };
 
             builder
                 .SetMetadata("module", "RPGFoundation.Interaction")
                 .AddMessage(
-                    "InteractionNetworkRequest:v1",
+                    "InteractionNetworkRequest",
                     REQUEST_MESSAGE_ID,
-                    REQUEST_SCHEMA_V1,
+                    REQUEST_SCHEMA,
                     REQUEST_CHANNEL,
                     MAX_PAYLOAD_BYTES)
                 .AddMessage(
-                    "InteractionNetworkResult:v1",
+                    "InteractionNetworkResult",
                     RESULT_MESSAGE_ID,
-                    RESULT_SCHEMA_V1,
+                    RESULT_SCHEMA,
                     RESULT_CHANNEL,
                     MAX_PAYLOAD_BYTES)
                 .AddMessage(
-                    "InteractionNetworkCancelRequest:v1",
+                    "InteractionNetworkCancelRequest",
                     CANCEL_REQUEST_MESSAGE_ID,
-                    CANCEL_REQUEST_SCHEMA_V1,
+                    CANCEL_REQUEST_SCHEMA,
                     CANCEL_REQUEST_CHANNEL,
                     MAX_PAYLOAD_BYTES)
                 .AddMessage(
-                    "InteractionNetworkDeterministicRequest:v1",
+                    "InteractionNetworkDeterministicRequest",
                     DETERMINISTIC_REQUEST_MESSAGE_ID,
-                    DETERMINISTIC_REQUEST_SCHEMA_V1,
+                    DETERMINISTIC_REQUEST_SCHEMA,
                     DETERMINISTIC_REQUEST_CHANNEL,
                     MAX_PAYLOAD_BYTES);
 

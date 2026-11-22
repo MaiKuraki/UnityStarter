@@ -44,7 +44,6 @@ namespace CycloneGames.Networking.Replication
 
     public sealed class NetworkSnapshotPacketBuilder
     {
-        public const byte PROTOCOL_VERSION = 1;
         private const ulong FnvOffsetBasis = Fnv1a64.OffsetBasis;
         private const ulong FnvPrime = Fnv1a64.Prime;
 
@@ -78,7 +77,6 @@ namespace CycloneGames.Networking.Replication
             int deltaCount = 0;
             ulong aggregateHash = FnvOffsetBasis;
 
-            writer.WriteByte(PROTOCOL_VERSION);
             writer.WriteInt(serverTick);
             writer.WriteUShort((ushort)selections.Length);
 

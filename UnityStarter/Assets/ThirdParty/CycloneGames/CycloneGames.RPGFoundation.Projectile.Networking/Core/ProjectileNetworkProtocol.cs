@@ -11,15 +11,13 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
     /// contract identity.
     /// </summary>
     /// <remarks>
-    /// Contract values are frozen for a given contract version. Tunable defaults use
+    /// Contract values are frozen. Tunable defaults use
     /// static readonly fields so a change is visible to every consuming assembly
     /// without recompilation of embedded literals.
     /// </remarks>
     public static class ProjectileNetworkProtocol
     {
         public static readonly string MessageOwner = "CycloneGames.RPGFoundation.Projectile";
-        public static readonly byte PROTOCOL_VERSION = 1;
-        public static readonly byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
         public static readonly ushort MESSAGE_ID_BASE = 17000;
         public static readonly ushort MESSAGE_ID_MAX = 17999;
@@ -38,14 +36,14 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
         public static readonly int DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE = 512;
         public static readonly int DEFAULT_MAX_HIT_PAYLOAD_SIZE = 256;
 
-        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
-        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0xBCEFB413200046DAUL;
-        private const ulong SPAWN_SCHEMA_V1 = 0xB9F717F41389BE93UL;
-        private const ulong SNAPSHOT_SCHEMA_V1 = 0x706E549553486060UL;
-        private const ulong CORRECTION_SCHEMA_V1 = 0x9259A444E90A56A8UL;
-        private const ulong HIT_SCHEMA_V1 = 0xEF8D26DB044A29F1UL;
-        private const ulong DESPAWN_SCHEMA_V1 = 0x2C4E503FF06B2126UL;
-        private const ulong FULL_STATE_REQUEST_SCHEMA_V1 = 0xF9FF5A38C895A567UL;
+        // Frozen FNV-1a64 identities of the wire contracts.
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA = 0xBF9603F2BAF7ED8BUL;
+        private const ulong SPAWN_SCHEMA = 0x8C2D1AFA9AE1FD98UL;
+        private const ulong SNAPSHOT_SCHEMA = 0x468C2C096E6CAA95UL;
+        private const ulong CORRECTION_SCHEMA = 0xD33279596778BC7DUL;
+        private const ulong HIT_SCHEMA = 0x2BADF5DACE4C4AC2UL;
+        private const ulong DESPAWN_SCHEMA = 0x2B2F979D125D7257UL;
+        private const ulong FULL_STATE_REQUEST_SCHEMA = 0xB3B227B956ADE17CUL;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
@@ -63,10 +61,6 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             return messageId >= MSG_MANIFEST_HANDSHAKE && messageId <= MSG_FULL_STATE_REQUEST;
         }
 
-        public static bool IsSupportedProtocolVersion(byte protocolVersion)
-        {
-            return Module.IsSupportedProtocolVersion(protocolVersion);
-        }
 
         public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
         {
@@ -86,8 +80,6 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.RPGFoundation.Projectile.Networking",
-                CurrentVersion = PROTOCOL_VERSION,
-                MinimumSupportedVersion = MIN_SUPPORTED_PROTOCOL_VERSION
             };
 
             builder
@@ -95,45 +87,45 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
                 .SetMetadata("authority", "Server-authoritative projectile spawn, snapshot, hit, despawn, and correction contracts")
                 .SetMetadata("extension", "High-density bullet patterns should replicate seed, definition id, and start tick through project-owned manifests when needed")
                 .AddMessage(
-                    "ProjectileManifestHandshakeMessage:v1",
+                    "ProjectileManifestHandshakeMessage",
                     MSG_MANIFEST_HANDSHAKE,
-                    MANIFEST_HANDSHAKE_SCHEMA_V1,
+                    MANIFEST_HANDSHAKE_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileSpawnMessage:v1",
+                    "ProjectileSpawnMessage",
                     MSG_SPAWN,
-                    SPAWN_SCHEMA_V1,
+                    SPAWN_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SPAWN_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileSnapshotMessage:v1",
+                    "ProjectileSnapshotMessage",
                     MSG_AUTHORITATIVE_SNAPSHOT,
-                    SNAPSHOT_SCHEMA_V1,
+                    SNAPSHOT_SCHEMA,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileCorrectionMessage:v1",
+                    "ProjectileCorrectionMessage",
                     MSG_CORRECTION,
-                    CORRECTION_SCHEMA_V1,
+                    CORRECTION_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileHitMessage:v1",
+                    "ProjectileHitMessage",
                     MSG_HIT,
-                    HIT_SCHEMA_V1,
+                    HIT_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_HIT_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileDespawnMessage:v1",
+                    "ProjectileDespawnMessage",
                     MSG_DESPAWN,
-                    DESPAWN_SCHEMA_V1,
+                    DESPAWN_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
                 .AddMessage(
-                    "ProjectileFullStateRequestMessage:v1",
+                    "ProjectileFullStateRequestMessage",
                     MSG_FULL_STATE_REQUEST,
-                    FULL_STATE_REQUEST_SCHEMA_V1,
+                    FULL_STATE_REQUEST_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE);
 

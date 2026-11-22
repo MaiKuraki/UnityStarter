@@ -6,7 +6,7 @@ namespace CycloneGames.Networking
     /// <summary>
     /// Instance-scoped tier table. Each registry owns its overrides and thresholds,
     /// so parallel tests, multi-session composition and DI roots stay isolated.
-    /// NetworkDeviceProfiles is a facade over the default registry.
+    /// Override state lives here; NetworkDeviceProfiles exposes read-only built-in specs.
     /// </summary>
     public sealed class NetworkTierRegistry
     {

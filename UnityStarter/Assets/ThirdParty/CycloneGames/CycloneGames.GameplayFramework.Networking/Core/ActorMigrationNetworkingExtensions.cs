@@ -64,7 +64,7 @@ namespace CycloneGames.GameplayFramework.Networking
     }
 
     /// <summary>
-    /// Version-1 actor migration wire value. Content identity is carried by
+    /// Actor migration wire value. Content identity is carried by
     /// <see cref="PrefabDefinitionId"/> and is independent of Unity asset paths.
     /// </summary>
     public readonly struct ActorMigrationState
@@ -126,7 +126,7 @@ namespace CycloneGames.GameplayFramework.Networking
     }
 
     /// <summary>
-    /// Bounded version-1 codec for <see cref="ActorMigrationState"/>. Field order, message identity,
+    /// Bounded fixed-layout codec for <see cref="ActorMigrationState"/>. Field order, message identity,
     /// and byte representation are fixed by <see cref="GameplayFrameworkNetworkProtocol"/>.
     /// </summary>
     public static class ActorMigrationNetworkingExtensions

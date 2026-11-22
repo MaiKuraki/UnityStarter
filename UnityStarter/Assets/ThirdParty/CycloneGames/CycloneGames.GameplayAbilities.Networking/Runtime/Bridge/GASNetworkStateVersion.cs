@@ -5,11 +5,11 @@ using CycloneGames.GameplayAbilities.Runtime;
 namespace CycloneGames.GameplayAbilities.Networking
 {
     /// <summary>
-    /// Shared owner-thread version domain for one authority ASC and one stream epoch.
+    /// Shared owner-thread state-sequence domain for one authority ASC and one stream epoch.
     /// </summary>
     /// <remarks>
     /// Local ASC revisions and explicitly reported external identity changes advance the same
-    /// monotonic wire version used by state snapshots, command results, and Gameplay Cues. The
+    /// monotonic wire state sequence used by state snapshots, command results, and Gameplay Cues. The
     /// owner supplies dependency tracking; this clock creates no registry, thread, or lock.
     /// </remarks>
     public sealed class GASNetworkStateVersion
@@ -47,7 +47,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
         }
 
-        public ulong CurrentVersion
+        public ulong CurrentSequence
         {
             get
             {
@@ -103,7 +103,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         }
 
         /// <summary>
-        /// Advances the wire version after a known external entity identity change alters this
+        /// Advances the wire state sequence after a known external entity identity change alters this
         /// ASC's network-visible state without mutating the ASC itself.
         /// </summary>
         public bool MarkExternalIdentityChanged()
@@ -119,7 +119,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             return true;
         }
 
-        /// <summary>Starts a new version domain after every consumer has stopped the retired epoch.</summary>
+        /// <summary>Starts a new sequence domain after every consumer has stopped the retired epoch.</summary>
         public void ResetEpoch(uint newStreamEpoch)
         {
             AssertOwnerThread();
@@ -140,7 +140,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (currentThreadId != ownerThreadId)
             {
                 throw new InvalidOperationException(
-                    $"GAS network state version is owned by thread {ownerThreadId} and cannot be accessed from thread {currentThreadId}.");
+                    $"GAS network state sequence is owned by thread {ownerThreadId} and cannot be accessed from thread {currentThreadId}.");
             }
         }
 
@@ -148,7 +148,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         {
             if (localStateVersion == ulong.MaxValue)
                 throw new InvalidOperationException(
-                    "The GAS local state version is exhausted. Rotate the replication stream epoch before publishing more state.");
+                    "The GAS local state sequence is exhausted. Rotate the replication stream epoch before publishing more state.");
             return localStateVersion + 1UL;
         }
     }

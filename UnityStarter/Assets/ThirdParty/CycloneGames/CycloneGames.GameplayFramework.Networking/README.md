@@ -210,9 +210,9 @@ The default validator fails closed for:
 - out-of-range requests;
 - requests inside the authoritative cooldown window.
 
-`ServerAuthoritativeDamageProcessor` always runs the default fail-closed baseline before a custom validator. The custom validator can reject a baseline-approved request or reduce its approved damage, but it cannot bypass the baseline or raise damage above the authoritative cap. The processor ignores the caller-provided `LastAcceptedTimeSeconds` and rebuilds it from its own `DamageCooldownTracker`. Authoritative timestamps and cooldown durations are `double`, preserving sub-second cooldown resolution during long-running sessions; accepted timestamps are monotonic and cannot move backward.
+`ServerAuthoritativeDamageProcessor` always runs the default fail-closed baseline before a custom validator. The custom validator can reject a baseline-approved request or reduce its approved damage, but it cannot bypass the baseline or raise damage above the authoritative cap. The processor ignores the caller-provided `LastAcceptedTimeSeconds` and rebuilds it from its own `DamageCooldownTracker`. It also replaces the caller-provided `CurrentTimeSeconds` with a reading from its injected `INetworkMonotonicTimeProvider`; client wall-clock values are never used for authoritative cooldown decisions. `PruneIdle` reads the same monotonic clock, so clock steps cannot suppress expiry. Authoritative timestamps and cooldown durations are `double`, preserving sub-second cooldown resolution during long-running sessions; accepted timestamps are monotonic and cannot move backward.
 
-`DamageCooldownTracker` is owner-thread-bound and has an injected maximum instigator count. `GetAdmissionSnapshot()` reports tracked count, capacity, and rejected admissions. A new accepted instigator fails with `CooldownCapacityReached` when the budget is full; this result is distinct from game-specific `Custom` rejection. Remove an instigator on Actor teardown and clear the tracker on session shutdown.
+`DamageCooldownTracker` is owner-thread-bound and has an injected maximum instigator count and an injected monotonic clock. `GetAdmissionSnapshot()` reports tracked count, capacity, and rejected admissions. A new accepted instigator fails with `CooldownCapacityReached` when the budget is full; this result is distinct from game-specific `Custom` rejection. Remove an instigator on Actor teardown and clear the tracker on session shutdown.
 
 `ServerDamageValidationResult.Accept` accepts only finite non-negative damage, while `Reject` accepts only defined rejection reasons. The processor converts malformed custom-validator results, or damage above the baseline-approved amount, into a `Custom` rejection. Before committing cooldown state, it validates the complete outbound result. An accepted result requires positive, distinct instigator and target Actor IDs, finite non-negative applied damage, and a finite hit location. Rejected results cannot carry non-zero damage. Invalid hit locations fail before custom validation and are replaced with zero only in the rejection payload so that the fail-closed result remains serializable.
 
@@ -226,11 +226,11 @@ This float-based path targets server-authoritative combat. Deterministic ability
 
 | Message | ID | Channel | Purpose |
 | --- | ---: | --- | --- |
-| `ActorMigrationState:v1` | `11000` | Reliable | Bounded Actor transfer state |
-| `DamageRequestMessage:v1` | `11001` | Reliable | Client damage intent |
-| `DamageResultMessage:v2` | `11002` | Reliable | Authoritative result, including cooldown-capacity rejection |
+| `ActorMigrationState` | `11000` | Reliable | Bounded Actor transfer state |
+| `DamageRequestMessage` | `11001` | Reliable | Client damage intent |
+| `DamageResultMessage` | `11002` | Reliable | Authoritative result, including cooldown-capacity rejection |
 
-Protocol version 2 is the only supported module version. All primitive fields are serialized explicitly in a fixed order. Protocol IDs, schema identities, message sizes, result codes, and fingerprints are covered by frozen-contract tests. Deserializers reject non-canonical booleans, invalid identities, non-finite numeric values, truncation, trailing bytes, and data outside runtime budgets.
+Compatibility is decided by exact fingerprint equality. All primitive fields are serialized explicitly in a fixed order. Protocol IDs, schema identities, message sizes, result codes, and fingerprints are covered by frozen-contract tests. Deserializers reject non-canonical booleans, invalid identities, non-finite numeric values, truncation, trailing bytes, and data outside runtime budgets.
 
 ## Performance and memory
 

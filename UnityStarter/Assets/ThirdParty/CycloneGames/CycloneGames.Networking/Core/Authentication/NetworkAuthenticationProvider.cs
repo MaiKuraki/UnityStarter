@@ -49,20 +49,17 @@ namespace CycloneGames.Networking.Authentication
     public readonly struct NetworkAuthenticationContext
     {
         public readonly string Scheme;
-        public readonly int ProtocolVersion;
         public readonly ulong ClientNonce;
         public readonly NetworkRuntimeProfile RuntimeProfile;
         public readonly NetworkNodeCapabilities ClientCapabilities;
 
         public NetworkAuthenticationContext(
             string scheme,
-            int protocolVersion,
             ulong clientNonce = 0UL,
             NetworkRuntimeProfile runtimeProfile = null,
             NetworkNodeCapabilities clientCapabilities = null)
         {
             Scheme = scheme ?? string.Empty;
-            ProtocolVersion = protocolVersion;
             ClientNonce = clientNonce;
             RuntimeProfile = runtimeProfile;
             ClientCapabilities = clientCapabilities;

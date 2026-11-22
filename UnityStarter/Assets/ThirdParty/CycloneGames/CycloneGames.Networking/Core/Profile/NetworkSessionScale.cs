@@ -82,27 +82,9 @@ namespace CycloneGames.Networking
         public static readonly NetworkScaleSpec MassiveSpec = new NetworkScaleSpec(
             expectedParticipants: 1024, maxConnections: 1024, snapshotBufferSize: 256, poolSize: 256);
 
-        private static readonly Dictionary<NetworkSessionScale, NetworkScaleSpec> s_overrides =
-            new Dictionary<NetworkSessionScale, NetworkScaleSpec>(4);
-
-        /// <summary>Composition-time override of a built-in scale; symmetric with tier overrides.</summary>
-        public static void RegisterScaleOverride(NetworkSessionScale scale, in NetworkScaleSpec spec)
-        {
-            ValidateScale(scale);
-            s_overrides[scale] = spec;
-        }
-
-        public static void ClearScaleOverrides()
-        {
-            s_overrides.Clear();
-        }
-
         public static NetworkScaleSpec GetSpec(NetworkSessionScale scale)
         {
             ValidateScale(scale);
-            if (s_overrides.TryGetValue(scale, out NetworkScaleSpec spec))
-                return spec;
-
             switch (scale)
             {
                 case NetworkSessionScale.Coop: return CoopSpec;
@@ -194,7 +176,7 @@ namespace CycloneGames.Networking
             in NetworkTierSpec tierSpec,
             in NetworkScaleSpec scaleSpec)
         {
-            NetworkRuntimeProfileBuilder builder = NetworkRuntimeProfiles.CreateDefaultBuilder();
+            NetworkRuntimeProfileBuilder builder = new NetworkRuntimeProfileBuilder();
             builder.ProfileId = tierSpec.ProfileId + "-" + sessionScale.ToString().ToLowerInvariant();
             builder.DisplayName = tierSpec.DisplayName + " / " + sessionScale;
 

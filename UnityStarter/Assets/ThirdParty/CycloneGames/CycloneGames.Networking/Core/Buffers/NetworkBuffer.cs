@@ -121,13 +121,14 @@ namespace CycloneGames.Networking.Buffers
 
         public void Dispose()
         {
-            // Leases issued by an injected pool return to that pool, not to the
-            // process-wide default. A null owner uses the default pool.
+            // Every lease is issued by an explicit pool instance; a lease
+            // without an owner is a default/disposed value and fails closed.
             NetworkBufferPoolInstance owner = _owner;
-            if (owner != null)
-                owner.ReturnLease(_storage, _leaseToken);
-            else
-                NetworkBufferPool.ReturnLease(_storage, _leaseToken);
+            if (owner == null)
+                throw new InvalidOperationException(
+                    "A network buffer lease without an owning pool cannot be returned.");
+
+            owner.ReturnLease(_storage, _leaseToken);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -147,7 +148,7 @@ namespace CycloneGames.Networking.Buffers
 
     /// <summary>
     /// Mutable state behind a <see cref="NetworkBuffer"/> lease. Instances are owned by
-    /// <see cref="NetworkBufferPool"/> and never escape the assembly.
+    /// <see cref="NetworkBufferPoolInstance"/> and never escape the assembly.
     /// </summary>
     internal sealed class NetworkBufferStorage
     {

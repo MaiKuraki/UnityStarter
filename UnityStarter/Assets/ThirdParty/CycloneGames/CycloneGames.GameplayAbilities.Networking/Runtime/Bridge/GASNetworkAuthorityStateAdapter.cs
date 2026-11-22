@@ -60,17 +60,17 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!identityMap.IsOwnerThread)
                 throw new InvalidOperationException("The authority identity map must be created on the adapter owner thread.");
             if (!stateVersion.IsOwnerThread)
-                throw new InvalidOperationException("The network state version must be created on the adapter owner thread.");
+                throw new InvalidOperationException("The network state sequence must be created on the adapter owner thread.");
             if (!ReferenceEquals(stateVersion.AbilitySystem, abilitySystem))
             {
                 throw new ArgumentException(
-                    "The network state version must own the supplied AbilitySystemComponent.",
+                    "The network state sequence must own the supplied AbilitySystemComponent.",
                     nameof(stateVersion));
             }
             if (stateVersion.StreamEpoch != identityMap.StreamEpoch)
             {
                 throw new ArgumentException(
-                    "The network state version and authority identity map must use the same stream epoch.",
+                    "The network state sequence and authority identity map must use the same stream epoch.",
                     nameof(stateVersion));
             }
             if (!entityResolver.TryGetNetworkEntityId(abilitySystem, out GASNetworkEntityId entity) ||
@@ -114,7 +114,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         }
 
         /// <summary>
-        /// Captures a newer complete network-visible state. A repeated or decreasing wire version is
+        /// Captures a newer complete network-visible state. A repeated or decreasing wire state sequence is
         /// rejected; callers rotate the stream epoch before the version reaches <see cref="ulong.MaxValue"/>.
         /// The returned view remains valid until the next successful capture.
         /// </summary>

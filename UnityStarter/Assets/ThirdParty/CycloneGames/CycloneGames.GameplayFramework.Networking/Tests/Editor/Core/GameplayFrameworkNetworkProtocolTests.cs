@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
     public sealed class GameplayFrameworkNetworkProtocolTests
     {
         [Test]
-        public void ProtocolRegistersBoundedVersionTwoManifest()
+        public void ProtocolRegistersBoundedManifest()
         {
             var catalog = new NetworkMessageCatalog();
 
@@ -17,16 +17,14 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 
             Assert.AreEqual(3, catalog.MessageCount);
             Assert.AreEqual(1, catalog.ManifestCount);
-            Assert.AreEqual(2, GameplayFrameworkNetworkProtocol.DefaultManifest.CurrentVersion);
-            Assert.AreEqual(2, GameplayFrameworkNetworkProtocol.DefaultManifest.MinimumSupportedVersion);
             Assert.AreEqual(
-                "ActorMigrationState:v1",
+                "ActorMigrationState",
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Messages[0].ContractId);
             Assert.AreEqual(
-                "DamageRequestMessage:v1",
+                "DamageRequestMessage",
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Messages[1].ContractId);
             Assert.AreEqual(
-                "DamageResultMessage:v2",
+                "DamageResultMessage",
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Messages[2].ContractId);
             Assert.AreEqual(
                 ActorMigrationNetworkingExtensions.MaximumEncodedSize,
@@ -38,7 +36,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 GameplayFrameworkNetworkProtocol.DamageResultPayloadBytes,
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Messages[2].MaxPayloadSize);
             Assert.AreEqual(
-                "895DD9A4C8618476",
+                "A8D7E18C57BD1E3B",
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Metadata["damageWireSchemaFingerprint"]);
             Assert.AreEqual(0x4853FB7FFAE15D14UL, GameplayFrameworkNetworkProtocol.ProtocolFingerprint);
         }

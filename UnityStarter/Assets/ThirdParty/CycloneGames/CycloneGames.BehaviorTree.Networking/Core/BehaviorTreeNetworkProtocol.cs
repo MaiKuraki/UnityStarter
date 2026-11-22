@@ -26,10 +26,10 @@ namespace CycloneGames.BehaviorTree.Networking
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
         public const int ABSOLUTE_MAX_TRACKED_BLACKBOARD_KEYS = 4096;
 
-        // Frozen FNV-1a64 identities of the versioned wire contracts.
-        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0x059263302E9505CDUL;
-        private const string FULL_SNAPSHOT_WIRE_SCHEMA_V2 =
-            "BehaviorTreeStatePayloadMessage.FullSnapshot:v2|TargetNetworkId:u32le|Sequence:u16le|" +
+        // Frozen FNV-1a64 identities of the wire contracts.
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA = 0x6898D682C47854FEUL;
+        private const string FULL_SNAPSHOT_WIRE_SCHEMA =
+            "BehaviorTreeStatePayloadMessage.FullSnapshot|TargetNetworkId:u32le|Sequence:u16le|" +
             "Tick:i32le|PayloadKind:u8=1|TreeTemplateHash:u64le|BlackboardHash:u64le|" +
             "TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTS2{Magic:u32le=0x32535442|" +
             "IsValid:u8(0,1)|Timestamp:f64le|TreeStateHash:u64le|BlackboardHash:u64le|" +
@@ -43,22 +43,22 @@ namespace CycloneGames.BehaviorTree.Networking
             "Long2Count:i32le|Long2s:Long2Count*(Key:i32le,X:i64le,Y:i64le)|" +
             "Long3Count:i32le|Long3s:Long3Count*(Key:i32le,X:i64le,Y:i64le,Z:i64le)|" +
             "StampCount:i32le|Stamps:StampCount*(Key:i32le,Stamp:u64le)}}";
-        private const string BLACKBOARD_DELTA_WIRE_SCHEMA_V2 =
-            "BehaviorTreeStatePayloadMessage.BlackboardDelta:v2|TargetNetworkId:u32le|Sequence:u16le|" +
+        private const string BLACKBOARD_DELTA_WIRE_SCHEMA =
+            "BehaviorTreeStatePayloadMessage.BlackboardDelta|TargetNetworkId:u32le|Sequence:u16le|" +
             "Tick:i32le|PayloadKind:u8=2|TreeTemplateHash:u64le|BlackboardHash:u64le|" +
             "TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTDP1{Magic:u32le=0x50445442|" +
-            "Version:u16le=1|HeaderSize:u16le=16|BodyLength:i32le|EntryCount:i32le|" +
+            "HeaderSize:u16le=16|BodyLength:i32le|EntryCount:i32le|" +
             "Entry:Key:i32le+Tag:u8+Value:tagged-le|" +
             "Tags:0=i32,1=f32,2=bool-u8(0,1),3=3*f32,4=i64,5=2*i64,6=3*i64,255=remove}";
-        private const string DESYNC_REPORT_WIRE_SCHEMA_V2 =
-            "BehaviorTreeDesyncReportMessage:v2|TargetNetworkId:u32le|Sequence:u16le|LocalTick:i32le|" +
+        private const string DESYNC_REPORT_WIRE_SCHEMA =
+            "BehaviorTreeDesyncReportMessage|TargetNetworkId:u32le|Sequence:u16le|LocalTick:i32le|" +
             "RemoteTick:i32le|LocalBlackboardHash:u64le|RemoteBlackboardHash:u64le|" +
             "LocalTreeStateHash:u64le|RemoteTreeStateHash:u64le|AuthorityGeneration:u32le";
-        private const ulong FULL_SNAPSHOT_SCHEMA_V2 = 0x750F7F22C73B0946UL;
-        private const ulong BLACKBOARD_DELTA_SCHEMA_V2 = 0x5528AAF0A310630DUL;
-        private const ulong DESYNC_REPORT_SCHEMA_V2 = 0x566A9F2B1C5C9202UL;
-        private const ulong TICK_CONTROL_SCHEMA_V1 = 0x6299F932DCE53765UL;
-        private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0x94B78D8EED490D89UL;
+        private const ulong FULL_SNAPSHOT_SCHEMA = 0x7F95590BCB67D660UL;
+        private const ulong BLACKBOARD_DELTA_SCHEMA = 0xB2B40724FD8B87DAUL;
+        private const ulong DESYNC_REPORT_SCHEMA = 0xDAB47023610B0058UL;
+        private const ulong TICK_CONTROL_SCHEMA = 0x6F19C5519F2372D6UL;
+        private const ulong AUTHORITY_TRANSFER_SCHEMA = 0x9E4A1D764326F29AUL;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
@@ -94,8 +94,6 @@ namespace CycloneGames.BehaviorTree.Networking
                 MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.BehaviorTree.Networking",
-                CurrentVersion = 2,
-                MinimumSupportedVersion = 2
             };
 
             builder
@@ -103,39 +101,39 @@ namespace CycloneGames.BehaviorTree.Networking
                 .SetMetadata("snapshot", "RuntimeBehaviorTree blackboard snapshot payload")
                 .SetMetadata("delta", "RuntimeBlackboard tracked-key delta payload")
                 .AddMessage(
-                    "BehaviorTreeManifestHandshakeMessage:v1",
+                    "BehaviorTreeManifestHandshakeMessage",
                     MSG_MANIFEST_HANDSHAKE,
-                    MANIFEST_HANDSHAKE_SCHEMA_V1,
+                    MANIFEST_HANDSHAKE_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
                 .AddMessage(
-                    FULL_SNAPSHOT_WIRE_SCHEMA_V2,
+                    FULL_SNAPSHOT_WIRE_SCHEMA,
                     MSG_FULL_SNAPSHOT,
-                    FULL_SNAPSHOT_SCHEMA_V2,
+                    FULL_SNAPSHOT_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_STATE_MESSAGE_SIZE)
                 .AddMessage(
-                    BLACKBOARD_DELTA_WIRE_SCHEMA_V2,
+                    BLACKBOARD_DELTA_WIRE_SCHEMA,
                     MSG_BLACKBOARD_DELTA,
-                    BLACKBOARD_DELTA_SCHEMA_V2,
+                    BLACKBOARD_DELTA_SCHEMA,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_STATE_MESSAGE_SIZE)
                 .AddMessage(
-                    DESYNC_REPORT_WIRE_SCHEMA_V2,
+                    DESYNC_REPORT_WIRE_SCHEMA,
                     MSG_DESYNC_REPORT,
-                    DESYNC_REPORT_SCHEMA_V2,
+                    DESYNC_REPORT_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
                 .AddMessage(
-                    "BehaviorTreeTickControlMessage:v1",
+                    "BehaviorTreeTickControlMessage",
                     MSG_TICK_CONTROL,
-                    TICK_CONTROL_SCHEMA_V1,
+                    TICK_CONTROL_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
                 .AddMessage(
-                    "BehaviorTreeAuthorityTransferMessage:v1",
+                    "BehaviorTreeAuthorityTransferMessage",
                     MSG_AUTHORITY_TRANSFER,
-                    AUTHORITY_TRANSFER_SCHEMA_V1,
+                    AUTHORITY_TRANSFER_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE);
 

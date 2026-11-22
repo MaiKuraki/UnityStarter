@@ -3,66 +3,41 @@ using System;
 namespace CycloneGames.Networking
 {
     /// <summary>
-    /// Outcome of negotiating a remote protocol handshake against the local module protocol.
+    /// Outcome of matching a remote protocol handshake against the local module protocol.
     /// </summary>
-    /// <remarks>
-    /// A diagnosable enum (rather than a bare bool) lets callers log, classify, and surface the
-    /// exact rejection reason, mirroring the per-object drift reporting GAS already uses.
-    /// </remarks>
     public enum NetworkHandshakeResult : byte
     {
         Invalid = 0,
         Compatible = 1,
         Malformed = 2,
         FingerprintMismatch = 3,
-        VersionIncompatible = 4,
         DomainStateMismatch = 5
     }
 
     /// <summary>
     /// Common contract for a domain networking module's manifest-handshake message.
+    /// Peers are compatible when both fingerprints match exactly.
     /// </summary>
-    /// <remarks>
-    /// Implementing this lets the version/fingerprint negotiation be written once in
-    /// <see cref="NetworkProtocolHandshake"/> instead of being copy-pasted into every per-module
-    /// handshake struct. <see cref="DomainStateHash"/> carries an optional module-specific
-    /// fingerprint that must also match for the peers to be compatible (behavior-tree template hash,
-    /// AI perception profile hash, gameplay-tag manifest hash, ...); modules without such a
-    /// requirement expose 0.
-    /// </remarks>
     public interface INetworkProtocolHandshakeMessage
     {
         ulong ProtocolFingerprint { get; }
-        byte CurrentProtocolVersion { get; }
-        byte MinimumSupportedProtocolVersion { get; }
         ulong DomainStateHash { get; }
     }
 
-    /// <summary>
-    /// Shared negotiation for <see cref="INetworkProtocolHandshakeMessage"/> payloads.
-    /// </summary>
-    /// <remarks>
-    /// The generic <c>in</c> constraint permits constrained calls for value-type handshakes while
-    /// reusing one implementation. Allocation behavior still requires a target-runtime benchmark.
-    /// </remarks>
+    /// <summary>Shared exact-match negotiation for handshake payloads.</summary>
     public static class NetworkProtocolHandshake
     {
-        /// <summary>
-        /// True when the handshake fields form a valid version window with a non-zero fingerprint.
-        /// </summary>
+        /// <summary>True when the handshake carries a non-zero protocol fingerprint.</summary>
         public static bool IsWellFormed<T>(in T handshake) where T : INetworkProtocolHandshakeMessage
         {
-            return handshake.ProtocolFingerprint != 0UL
-                   && handshake.CurrentProtocolVersion > 0
-                   && handshake.MinimumSupportedProtocolVersion > 0
-                   && handshake.MinimumSupportedProtocolVersion <= handshake.CurrentProtocolVersion;
+            return handshake.ProtocolFingerprint != 0UL;
         }
 
         /// <summary>
-        /// Negotiate a remote handshake against the local module protocol. When
+        /// Match a remote handshake against the local module protocol. When
         /// <paramref name="requireDomainStateMatch"/> is set, the remote
-        /// <see cref="INetworkProtocolHandshakeMessage.DomainStateHash"/> must also equal
-        /// <paramref name="localDomainStateHash"/>.
+        /// <see cref="INetworkProtocolHandshakeMessage.DomainStateHash"/> must equal
+        /// <paramref name="localDomainStateHash"/> as well.
         /// </summary>
         public static NetworkHandshakeResult Negotiate<T>(
             in T remote,
@@ -83,15 +58,6 @@ namespace CycloneGames.Networking
             if (remote.ProtocolFingerprint != local.Fingerprint)
             {
                 return NetworkHandshakeResult.FingerprintMismatch;
-            }
-
-            var remoteVersion = new NetworkProtocolVersion(
-                remote.CurrentProtocolVersion,
-                remote.MinimumSupportedProtocolVersion);
-
-            if (!local.Version.IsCompatibleWith(remoteVersion))
-            {
-                return NetworkHandshakeResult.VersionIncompatible;
             }
 
             if (requireDomainStateMatch && remote.DomainStateHash != localDomainStateHash)

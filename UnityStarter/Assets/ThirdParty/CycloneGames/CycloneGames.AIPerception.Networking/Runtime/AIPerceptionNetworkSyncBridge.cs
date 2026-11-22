@@ -124,7 +124,6 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             message = new AIPerceptionDetectionEventMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 observerNetworkId,
                 sequence,
                 tick,
@@ -265,7 +264,6 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             message = new AIPerceptionDetectionSnapshotMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 observerNetworkId,
                 sequence,
                 tick,
@@ -318,7 +316,6 @@ namespace CycloneGames.AIPerception.Networking
             ulong lastKnownStateHash = 0UL)
         {
             var message = new AIPerceptionFullStateRequestMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 observerNetworkId,
                 sequence,
                 tick,
@@ -345,7 +342,6 @@ namespace CycloneGames.AIPerception.Networking
             ulong snapshotStateHash)
         {
             var message = new AIPerceptionAuthorityTransferMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 observerNetworkId,
                 previousOwnerConnectionId,
                 newOwnerConnectionId,

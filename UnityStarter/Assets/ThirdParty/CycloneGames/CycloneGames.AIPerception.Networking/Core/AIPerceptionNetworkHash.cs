@@ -3,7 +3,7 @@ using CycloneGames.Hash.Core;
 
 namespace CycloneGames.AIPerception.Networking
 {
-    /// <summary>Deterministic checksum and ordering helpers for canonical v1 detection entries.</summary>
+    /// <summary>Deterministic checksum and ordering helpers for canonical detection entries.</summary>
     public static class AIPerceptionNetworkHash
     {
         public static ulong Compute(ReadOnlySpan<AIPerceptionDetectionEntry> entries)

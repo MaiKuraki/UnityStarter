@@ -93,7 +93,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
             Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
             Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(InteractionNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.ContractId, Is.EqualTo("InteractionNetworkRequest:v1"));
+            Assert.That(descriptor.ContractId, Is.EqualTo("InteractionNetworkRequest"));
             Assert.That(descriptor.Owner, Is.EqualTo(InteractionNetworkProtocol.MessageOwner));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.Reliable));
         }
@@ -116,20 +116,20 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
             NetworkProtocolManifest manifest = InteractionNetworkProtocol.CreateProtocolManifest();
             string[] canonicalSchemaLiterals =
             {
-                "InteractionNetworkRequest:v1",
-                "InteractionNetworkResult:v1",
-                "InteractionNetworkCancelRequest:v1",
-                "InteractionNetworkDeterministicRequest:v1"
+                "InteractionNetworkRequest",
+                "InteractionNetworkResult",
+                "InteractionNetworkCancelRequest",
+                "InteractionNetworkDeterministicRequest"
             };
             ulong[] expectedSchemaHashes =
             {
-                0xD76DBACD901D2BB7UL,
-                0x50B6ECBD2F378EC9UL,
-                0x00E384398B2C4151UL,
-                0x883AF62EA5C98FCBUL
+                0x2ADFB567B325490CUL,
+                0x9694E2DD45B6B8DAUL,
+                0x3C386AC6CE4B6C22UL,
+                0x9A5D1D02A7D24950UL
             };
 
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0x5174F5208F2F55A6UL));
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0x9BAF57145B881F1AUL));
             Assert.That(InteractionNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));

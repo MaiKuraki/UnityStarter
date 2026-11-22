@@ -103,12 +103,6 @@ namespace CycloneGames.Networking.Security
                 return Reject(connection, envelope, MessageSecurityResult.MalformedEnvelope, currentTime, "Message envelope is malformed.");
             }
 
-            if (envelope.Version < NetworkWireProtocol.MinSupportedVersion
-                || envelope.Version > NetworkWireProtocol.CurrentVersion)
-            {
-                return Reject(connection, envelope, MessageSecurityResult.UnsupportedVersion, currentTime, "Message protocol version is not supported.");
-            }
-
             MessageSecurityPolicy policy = _policies.GetPolicy(envelope.MessageId);
             if (!IsDirectionAllowed(policy.AllowedDirections, envelope.Direction))
             {

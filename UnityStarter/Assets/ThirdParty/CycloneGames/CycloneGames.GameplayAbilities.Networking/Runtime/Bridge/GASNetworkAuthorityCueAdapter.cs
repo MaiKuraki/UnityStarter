@@ -89,17 +89,17 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!identityMap.IsOwnerThread)
                 throw new InvalidOperationException("The authority identity map must be owned by the cue adapter thread.");
             if (!stateVersion.IsOwnerThread)
-                throw new InvalidOperationException("The network state version must be owned by the cue adapter thread.");
+                throw new InvalidOperationException("The network state sequence must be owned by the cue adapter thread.");
             if (!ReferenceEquals(stateVersion.AbilitySystem, abilitySystem))
             {
                 throw new ArgumentException(
-                    "The network state version must own the supplied AbilitySystemComponent.",
+                    "The network state sequence must own the supplied AbilitySystemComponent.",
                     nameof(stateVersion));
             }
             if (stateVersion.StreamEpoch != identityMap.StreamEpoch)
             {
                 throw new ArgumentException(
-                    "The network state version and authority identity map must use the same stream epoch.",
+                    "The network state sequence and authority identity map must use the same stream epoch.",
                     nameof(stateVersion));
             }
 

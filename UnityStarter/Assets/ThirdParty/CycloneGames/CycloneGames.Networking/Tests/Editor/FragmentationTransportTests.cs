@@ -139,7 +139,9 @@ namespace CycloneGames.Networking.Tests.Editor
             clientInner.Send(null, new ArraySegment<byte>(hostile), clientInner.GetChannelId(NetworkChannel.Reliable));
             server.PollEvents();
 
-            Assert.AreEqual(0, deliverCount);
+            // A semantically invalid fragment is an ordinary payload for the
+            // next layer (never a silent drop), but it creates no reassembly state.
+            Assert.AreEqual(1, deliverCount);
             Assert.AreEqual(0, server.Metrics.ActiveGroups);
             Assert.AreEqual(0, server.Metrics.ReassemblyBytesInFlight);
         }

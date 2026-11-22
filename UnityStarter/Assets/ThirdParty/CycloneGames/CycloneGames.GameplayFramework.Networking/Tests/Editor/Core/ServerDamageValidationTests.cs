@@ -2,24 +2,27 @@ using System;
 using System.Threading;
 using CycloneGames.Networking;
 using CycloneGames.Networking.Buffers;
+using CycloneGames.Networking.Transports;
 using NUnit.Framework;
 
 namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 {
     public sealed class ServerDamageValidationTests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         [SetUp]
         public void SetUp()
         {
-            NetworkBufferPool.Clear();
-            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
+            _bufferPool = new NetworkBufferPoolInstance();
+            _bufferPool.Clear();
+            _bufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
-            NetworkBufferPool.Clear();
-            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
+            _bufferPool.Clear();
+            _bufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         private static ServerDamageValidationRequest MakeRequest(
@@ -63,7 +66,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.IsFalse(validation.Accepted);
             Assert.AreEqual(ServerDamageRejectReason.Unknown, message.ResultCode);
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             Assert.Throws<System.InvalidOperationException>(() => buffer.WriteDamageResult(message));
         }
 
@@ -310,7 +313,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 ClientTimeSeconds = 12.5f
             };
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteDamageRequest(message);
             buffer.FlipForRead();
             DamageRequestMessage roundTripped = buffer.ReadDamageRequest();
@@ -340,7 +343,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 HitLocation = new NetworkVector3(4f, 5f, 6f)
             };
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteDamageResult(message);
             buffer.FlipForRead();
             DamageResultMessage roundTripped = buffer.ReadDamageResult();
@@ -354,7 +357,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void DamageResult_WriteRejectsInvalidDamageAndHitLocation()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
 
             Assert.Throws<System.InvalidOperationException>(() => buffer.WriteDamageResult(
                 CreateDamageResult(appliedDamage: -1f)));
@@ -373,7 +376,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void DamageResult_WriteRejectsAcceptedInvalidActorIdentifiers()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
 
             Assert.Throws<System.InvalidOperationException>(() => buffer.WriteDamageResult(
                 CreateDamageResult(instigatorActorId: 0)));
@@ -386,7 +389,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void DamageResult_ReadRejectsAcceptedInvalidActorIdentifiers()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteUInt(1u);
             buffer.WriteInt(0);
             buffer.WriteInt(2);
@@ -427,7 +430,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 0x00, 0x00, 0x00, 0x3F
             };
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteDamageResult(message);
             System.ArraySegment<byte> segment = buffer.ToArraySegment();
             var actual = new byte[segment.Count];
@@ -441,7 +444,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [TestCase(10)]
         public void DamageResult_ReadRejectsUnknownOrOutOfRangeResultCode(byte resultCode)
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteUInt(1u);
             buffer.WriteInt(1);
             buffer.WriteInt(2);
@@ -472,7 +475,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 ClientTimeSeconds = 0f
             };
 
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             Assert.Throws<System.InvalidOperationException>(() => buffer.WriteDamageRequest(message));
 
             message.RequestedDamage = 1f;
@@ -498,7 +501,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 ClientTimeSeconds = 0f
             };
             byte[] requestBytes;
-            using (NetworkBuffer writer = NetworkBufferPool.Get())
+            using (NetworkBuffer writer = _bufferPool.Get())
             {
                 writer.WriteDamageRequest(request);
                 requestBytes = Copy(writer.ToArraySegment());
@@ -512,7 +515,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 
             DamageResultMessage result = CreateDamageResult();
             byte[] resultBytes;
-            using (NetworkBuffer writer = NetworkBufferPool.Get())
+            using (NetworkBuffer writer = _bufferPool.Get())
             {
                 writer.WriteDamageResult(result);
                 resultBytes = Copy(writer.ToArraySegment());
@@ -543,7 +546,9 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void Processor_Accept_Updates_Cooldown_And_Builds_Result()
         {
-            var processor = new ServerAuthoritativeDamageProcessor();
+            var clock = new ControlledMonotonicTimeProvider();
+            clock.SetSeconds(10d);
+            var processor = new ServerAuthoritativeDamageProcessor(timeProvider: clock);
 
             ServerDamageValidationResult result = processor.Process(
                 MakeRequest(currentTime: 10f, lastAcceptedTime: processor.CooldownTracker.GetLastAcceptedTime(1)),
@@ -595,7 +600,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         {
             AssertBaselineRejectsBeforeCustom(MakeRequest(instigatorId: 0));
             AssertBaselineRejectsBeforeCustom(MakeRequest(ownerConn: 0));
-            AssertBaselineRejectsBeforeCustom(MakeRequest(currentTime: float.NaN));
+            AssertBaselineRejectsBeforeCustom(MakeRequest(requestedDamage: float.NaN));
             AssertBaselineRejectsBeforeCustom(MakeRequest(
                 instigatorPos: new NetworkVector3(float.NaN, 0f, 0f)));
         }
@@ -618,7 +623,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.AreEqual(ServerDamageRejectReason.InvalidPayload, result.Reason);
             Assert.AreEqual(expectedInstigatorActorId, resultMessage.InstigatorActorId);
             Assert.AreEqual(expectedTargetActorId, resultMessage.TargetActorId);
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             Assert.DoesNotThrow(() => buffer.WriteDamageResult(resultMessage));
             buffer.FlipForRead();
             DamageResultMessage roundTripped = buffer.ReadDamageResult();
@@ -642,7 +647,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.AreEqual(0, validator.CallCount);
             Assert.AreEqual(double.NegativeInfinity, processor.CooldownTracker.GetLastAcceptedTime(1));
             Assert.IsTrue(resultMessage.HitLocation.IsFinite());
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             Assert.DoesNotThrow(() => buffer.WriteDamageResult(resultMessage));
         }
 
@@ -665,11 +670,14 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void ProcessorUsesOwnCooldownTrackerInsteadOfCallerTimestamp()
         {
-            var processor = new ServerAuthoritativeDamageProcessor();
+            var clock = new ControlledMonotonicTimeProvider();
+            clock.SetSeconds(10d);
+            var processor = new ServerAuthoritativeDamageProcessor(timeProvider: clock);
             ServerDamageValidationResult first = processor.Process(
                 MakeRequest(currentTime: 10d, lastAcceptedTime: double.NegativeInfinity, cooldown: 0.5d),
                 out _);
 
+            clock.SetSeconds(10.2d);
             ServerDamageValidationResult bypassAttempt = processor.Process(
                 MakeRequest(currentTime: 10.2d, lastAcceptedTime: double.NegativeInfinity, cooldown: 0.5d),
                 out _);
@@ -692,18 +700,22 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         [Test]
         public void Processor_Enforces_Cooldown_Across_Two_Shots()
         {
-            var processor = new ServerAuthoritativeDamageProcessor();
+            var clock = new ControlledMonotonicTimeProvider();
+            clock.SetSeconds(10d);
+            var processor = new ServerAuthoritativeDamageProcessor(timeProvider: clock);
 
             ServerDamageValidationResult first = processor.Process(
                 MakeRequest(currentTime: 10.0f, lastAcceptedTime: processor.CooldownTracker.GetLastAcceptedTime(1), cooldown: 0.5f),
                 out _);
             Assert.IsTrue(first.Accepted);
 
+            clock.SetSeconds(10.2d);
             ServerDamageValidationResult tooSoon = processor.Process(
                 MakeRequest(currentTime: 10.2f, lastAcceptedTime: processor.CooldownTracker.GetLastAcceptedTime(1), cooldown: 0.5f),
                 out _);
             Assert.AreEqual(ServerDamageRejectReason.OnCooldown, tooSoon.Reason);
 
+            clock.SetSeconds(10.6d);
             ServerDamageValidationResult later = processor.Process(
                 MakeRequest(currentTime: 10.6f, lastAcceptedTime: processor.CooldownTracker.GetLastAcceptedTime(1), cooldown: 0.5f),
                 out _);
@@ -714,14 +726,18 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         public void ProcessorRetainsSubSecondCooldownPrecisionAfterLongSessionEpoch()
         {
             const double LongSessionEpoch = 16_777_216d;
-            var processor = new ServerAuthoritativeDamageProcessor();
+            var clock = new ControlledMonotonicTimeProvider();
+            clock.SetSeconds(LongSessionEpoch);
+            var processor = new ServerAuthoritativeDamageProcessor(timeProvider: clock);
 
             ServerDamageValidationResult first = processor.Process(
                 MakeRequest(currentTime: LongSessionEpoch, cooldown: 0.5d),
                 out _);
+            clock.SetSeconds(LongSessionEpoch + 0.25d);
             ServerDamageValidationResult tooSoon = processor.Process(
                 MakeRequest(currentTime: LongSessionEpoch + 0.25d, cooldown: 0.5d),
                 out _);
+            clock.SetSeconds(LongSessionEpoch + 0.5d);
             ServerDamageValidationResult elapsed = processor.Process(
                 MakeRequest(currentTime: LongSessionEpoch + 0.5d, cooldown: 0.5d),
                 out _);
@@ -816,15 +832,15 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             return result;
         }
 
-        private static void AssertMalformedRequestPayload(ReadOnlySpan<byte> payload)
+        private void AssertMalformedRequestPayload(ReadOnlySpan<byte> payload)
         {
-            using NetworkBuffer reader = NetworkBufferPool.GetWithData(payload);
+            using NetworkBuffer reader = _bufferPool.GetWithData(payload);
             Assert.Throws<InvalidOperationException>(() => reader.ReadDamageRequest());
         }
 
-        private static void AssertMalformedResultPayload(ReadOnlySpan<byte> payload)
+        private void AssertMalformedResultPayload(ReadOnlySpan<byte> payload)
         {
-            using NetworkBuffer reader = NetworkBufferPool.GetWithData(payload);
+            using NetworkBuffer reader = _bufferPool.GetWithData(payload);
             Assert.Throws<InvalidOperationException>(() => reader.ReadDamageResult());
         }
 
@@ -866,5 +882,19 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 return default;
             }
         }
+        private sealed class ControlledMonotonicTimeProvider : INetworkMonotonicTimeProvider
+        {
+            private long ticks;
+
+            public long TicksPerSecond => 1000L;
+
+            public long GetMonotonicTicks() => ticks;
+
+            public void SetSeconds(double seconds)
+            {
+                ticks = (long)(seconds * 1000d);
+            }
+        }
+
     }
 }

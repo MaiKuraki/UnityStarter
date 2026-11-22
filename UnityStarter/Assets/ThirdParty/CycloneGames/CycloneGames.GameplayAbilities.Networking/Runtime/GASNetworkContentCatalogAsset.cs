@@ -406,7 +406,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         [Serializable]
         private sealed class AbilityRegistration
         {
-            [SerializeField, Tooltip("Stable, version-independent network key. Renaming it changes wire identity.")]
+            [SerializeField, Tooltip("Stable, layout-independent network key. Renaming it changes wire identity.")]
             internal string stableKey;
 
             [SerializeField, Tooltip("Explicit semantic revision. Change it whenever authoritative behavior changes.")]
@@ -419,7 +419,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         [Serializable]
         private sealed class EffectRegistration
         {
-            [SerializeField, Tooltip("Stable, version-independent network key. Renaming it changes wire identity.")]
+            [SerializeField, Tooltip("Stable, layout-independent network key. Renaming it changes wire identity.")]
             internal string stableKey;
 
             [SerializeField, Tooltip("Explicit semantic revision. Change it whenever authoritative behavior changes.")]
@@ -432,7 +432,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         [Serializable]
         private sealed class NameRegistration
         {
-            [SerializeField, Tooltip("Stable, version-independent network key. Renaming it changes wire identity.")]
+            [SerializeField, Tooltip("Stable, layout-independent network key. Renaming it changes wire identity.")]
             internal string stableKey;
 
             [SerializeField, Tooltip("Explicit semantic revision. Change it whenever authoritative behavior changes.")]
@@ -445,7 +445,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         [Serializable]
         private sealed class TargetSurfaceRegistration
         {
-            [SerializeField, Tooltip("Stable, version-independent network key. Renaming it changes wire identity.")]
+            [SerializeField, Tooltip("Stable, layout-independent network key. Renaming it changes wire identity.")]
             internal string stableKey;
 
             [SerializeField, Tooltip("Explicit semantic revision. Change it whenever target validation semantics change.")]

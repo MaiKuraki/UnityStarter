@@ -20,7 +20,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         Compatible = 1,
         Malformed = 2,
         ProtocolFingerprintMismatch = 3,
-        ProtocolVersionMismatch = 4,
         WireSchemaMismatch = 5,
         ContentCatalogMismatch = 6,
         GameplayTagManifestMismatch = 7,
@@ -35,30 +34,22 @@ namespace CycloneGames.GameplayAbilities.Networking
         public readonly ulong ContentCatalogHash;
         public readonly ulong GameplayTagManifestHash;
         public readonly GASNetworkFeatureFlags SupportedFeatures;
-        public readonly byte MinimumSupportedProtocolVersion;
-        public readonly byte CurrentProtocolVersion;
 
         public GASNetworkHandshake(
             ulong protocolFingerprint,
             ulong wireSchemaFingerprint,
             ulong contentCatalogHash,
             ulong gameplayTagManifestHash,
-            GASNetworkFeatureFlags supportedFeatures,
-            byte minimumSupportedProtocolVersion,
-            byte currentProtocolVersion)
+            GASNetworkFeatureFlags supportedFeatures)
         {
             ProtocolFingerprint = protocolFingerprint;
             WireSchemaFingerprint = wireSchemaFingerprint;
             ContentCatalogHash = contentCatalogHash;
             GameplayTagManifestHash = gameplayTagManifestHash;
             SupportedFeatures = supportedFeatures;
-            MinimumSupportedProtocolVersion = minimumSupportedProtocolVersion;
-            CurrentProtocolVersion = currentProtocolVersion;
         }
 
         ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
         ulong INetworkProtocolHandshakeMessage.DomainStateHash =>
             GameplayAbilitiesNetworkProtocol.ComputeCompatibilityHash(ContentCatalogHash, GameplayTagManifestHash);
 
@@ -222,7 +213,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// </remarks>
     public readonly struct GASAbilityCommand
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint CommandSequence;
         public readonly GASNetworkEntityId Entity;
@@ -241,31 +231,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             GASTargetDataKind targetDataKind = GASTargetDataKind.None,
             byte targetCount = 0,
             GASNetworkSingleTargetHit singleHit = default)
-            : this(
-                GameplayAbilitiesNetworkProtocol.ProtocolVersion,
-                streamEpoch,
-                commandSequence,
-                entity,
-                grant,
-                kind,
-                targetDataKind,
-                targetCount,
-                singleHit)
         {
-        }
-
-        public GASAbilityCommand(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint commandSequence,
-            GASNetworkEntityId entity,
-            GASNetworkGrantId grant,
-            GASAbilityCommandKind kind,
-            GASTargetDataKind targetDataKind,
-            byte targetCount,
-            GASNetworkSingleTargetHit singleHit)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             CommandSequence = commandSequence;
             Entity = entity;
@@ -295,7 +261,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// <summary>Single terminal authority response correlated by stream epoch and command sequence.</summary>
     public readonly struct GASCommandResult
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint CommandSequence;
         public readonly GASNetworkEntityId Entity;
@@ -312,29 +277,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             GASAbilityCommandKind commandKind,
             GASCommandStatus status,
             ulong authoritativeStateVersion)
-            : this(
-                GameplayAbilitiesNetworkProtocol.ProtocolVersion,
-                streamEpoch,
-                commandSequence,
-                entity,
-                grant,
-                commandKind,
-                status,
-                authoritativeStateVersion)
         {
-        }
-
-        public GASCommandResult(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint commandSequence,
-            GASNetworkEntityId entity,
-            GASNetworkGrantId grant,
-            GASAbilityCommandKind commandKind,
-            GASCommandStatus status,
-            ulong authoritativeStateVersion)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             CommandSequence = commandSequence;
             Entity = entity;
@@ -590,7 +533,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// <summary>Header for one bounded snapshot or delta chunk. Record arrays are caller-owned.</summary>
     public readonly struct GASStateBatchChunk
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint BatchSequence;
         public readonly GASNetworkEntityId Entity;
@@ -625,47 +567,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             ushort effectMagnitudeCount,
             ushort looseTagCount,
             ulong stateChecksum)
-            : this(
-                GameplayAbilitiesNetworkProtocol.ProtocolVersion,
-                streamEpoch,
-                batchSequence,
-                entity,
-                kind,
-                baseStateVersion,
-                stateVersion,
-                lastProcessedCommandSequence,
-                chunkIndex,
-                chunkCount,
-                abilityCount,
-                attributeCount,
-                effectCount,
-                effectTagCount,
-                effectMagnitudeCount,
-                looseTagCount,
-                stateChecksum)
         {
-        }
-
-        public GASStateBatchChunk(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint batchSequence,
-            GASNetworkEntityId entity,
-            GASStateBatchKind kind,
-            ulong baseStateVersion,
-            ulong stateVersion,
-            uint lastProcessedCommandSequence,
-            ushort chunkIndex,
-            ushort chunkCount,
-            ushort abilityCount,
-            ushort attributeCount,
-            ushort effectCount,
-            ushort effectTagCount,
-            ushort effectMagnitudeCount,
-            ushort looseTagCount,
-            ulong stateChecksum)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             BatchSequence = batchSequence;
             Entity = entity;
@@ -690,7 +592,6 @@ namespace CycloneGames.GameplayAbilities.Networking
 
     public readonly struct GASStateAcknowledgement
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint BatchSequence;
         public readonly GASNetworkEntityId Entity;
@@ -703,19 +604,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             GASNetworkEntityId entity,
             ulong appliedStateVersion,
             ulong stateChecksum)
-            : this(GameplayAbilitiesNetworkProtocol.ProtocolVersion, streamEpoch, batchSequence, entity, appliedStateVersion, stateChecksum)
         {
-        }
-
-        public GASStateAcknowledgement(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint batchSequence,
-            GASNetworkEntityId entity,
-            ulong appliedStateVersion,
-            ulong stateChecksum)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             BatchSequence = batchSequence;
             Entity = entity;
@@ -740,7 +629,6 @@ namespace CycloneGames.GameplayAbilities.Networking
 
     public readonly struct GASResyncRequest
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint RequestSequence;
         public readonly GASNetworkEntityId Entity;
@@ -757,29 +645,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             uint expectedBatchSequence,
             ulong observedChecksum,
             GASResyncReason reason)
-            : this(
-                GameplayAbilitiesNetworkProtocol.ProtocolVersion,
-                streamEpoch,
-                requestSequence,
-                entity,
-                observedStateVersion,
-                expectedBatchSequence,
-                observedChecksum,
-                reason)
         {
-        }
-
-        public GASResyncRequest(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint requestSequence,
-            GASNetworkEntityId entity,
-            ulong observedStateVersion,
-            uint expectedBatchSequence,
-            ulong observedChecksum,
-            GASResyncReason reason)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             RequestSequence = requestSequence;
             Entity = entity;
@@ -813,7 +679,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// <summary>Transient cue notification. It never carries Unity object references.</summary>
     public readonly struct GASCueExecuted
     {
-        public readonly byte ProtocolVersion;
         public readonly uint StreamEpoch;
         public readonly uint CueSequence;
         public readonly GASNetworkEntityId Entity;
@@ -842,41 +707,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             float magnitude,
             GASNetworkVector3 location,
             GASNetworkVector3 normal)
-            : this(
-                GameplayAbilitiesNetworkProtocol.ProtocolVersion,
-                streamEpoch,
-                cueSequence,
-                entity,
-                cue,
-                instigator,
-                sourceEffect,
-                sourceCommandSequence,
-                authoritativeStateVersion,
-                cueEvent,
-                flags,
-                magnitude,
-                location,
-                normal)
         {
-        }
-
-        public GASCueExecuted(
-            byte protocolVersion,
-            uint streamEpoch,
-            uint cueSequence,
-            GASNetworkEntityId entity,
-            GASNetworkTagId cue,
-            GASNetworkEntityId instigator,
-            GASNetworkEffectId sourceEffect,
-            uint sourceCommandSequence,
-            ulong authoritativeStateVersion,
-            GASCueEvent cueEvent,
-            GASCueFlags flags,
-            float magnitude,
-            GASNetworkVector3 location,
-            GASNetworkVector3 normal)
-        {
-            ProtocolVersion = protocolVersion;
             StreamEpoch = streamEpoch;
             CueSequence = cueSequence;
             Entity = entity;
