@@ -15,10 +15,8 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.PlayMode
 {
     /// <summary>
-    /// End-to-end coverage of the module graph inside a real player loop. Every EditMode test in this package
-    /// asserts graph *shape* (how many controls an action resolves, which groups a binding declares); none of
-    /// them can prove that a signal actually reaches a subscriber, because EditMode dispatch is inert.
-    /// These tests close that gap: they queue real device state, let the player loop run, and count emissions.
+    /// End-to-end coverage inside a real player loop: real device state is queued, the player loop runs
+    /// and emissions are counted. EditMode tests assert only graph shape because EditMode dispatch is inert.
     /// </summary>
     /// <remarks>
     /// <para>

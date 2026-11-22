@@ -285,9 +285,8 @@ namespace CycloneGames.InputSystem.Tools
 
         /// <summary>
         /// Stops the current recording and discards at most <paramref name="maximumSamplesToDiscard"/>
-        /// buffered samples without creating an <see cref="InputRecording"/>. Repeated calls may
-        /// continue bounded cleanup after recording has stopped. Callers must make the business
-        /// decision that the captured diagnostic data is no longer required.
+        /// buffered samples without creating an <see cref="InputRecording"/>. Repeated calls continue
+        /// bounded cleanup after recording has stopped.
         /// </summary>
         /// <returns>The number of buffered samples discarded by this call.</returns>
         public int CancelRecording(int maximumSamplesToDiscard)

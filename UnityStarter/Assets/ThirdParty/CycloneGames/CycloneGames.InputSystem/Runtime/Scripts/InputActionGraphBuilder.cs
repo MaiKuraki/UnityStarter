@@ -35,9 +35,8 @@ namespace CycloneGames.InputSystem.Runtime
         {
             for (int i = 0; i < config.DeviceBindings.Count; i++)
             {
-                // Per-binding groups are the precise form: they let one action's keyboard and gamepad
-                // bindings belong to different control schemes. An omitted or empty entry falls back to
-                // the legacy action-level groups so existing configurations are bit-for-bit unchanged.
+                // Per-binding groups let one action's keyboard and gamepad bindings belong to different
+                // control schemes. An omitted or empty entry falls back to the action-level groups.
                 string groups = i < config.DeviceBindingGroups.Count &&
                                 !string.IsNullOrEmpty(config.DeviceBindingGroups[i])
                     ? config.DeviceBindingGroups[i]

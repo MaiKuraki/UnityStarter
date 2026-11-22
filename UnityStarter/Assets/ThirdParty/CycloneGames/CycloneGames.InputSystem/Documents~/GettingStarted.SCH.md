@@ -1,12 +1,12 @@
 # 快速上手
 
-[English | 简体中文](GettingStarted.md)
+[English](GettingStarted.md) | 简体中文
 
 相关：[配置指南](Configuration.SCH.md) | [Runtime 指南](RuntimeGuide.SCH.md) | [模块参考](../README.SCH.md)
 
 ## 概述
 
-本指南从配置 authoring 开始，完成一个 active player 和一个 Gameplay context。第一个接入示例使用 serialized `TextAsset`，可以先理解输入模型，再决定产品采用哪种 storage policy。
+本指南从配置 authoring 开始，完成一个 active player 和一个 Gameplay context。第一个接入示例读取 serialized `TextAsset`；storage policy 由产品在后文「选择配置 owner」中确定。
 
 ### 前置条件
 

@@ -6,16 +6,14 @@ using NUnit.Framework;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Pins the contract between <see cref="InputHashUtility"/> and the CycloneGames.Hash primitives, plus the
-    /// equality contract of <see cref="InputActionKey"/>. The utility delegates its folding to <see cref="Fnv1a32"/>,
-    /// so this suite fixes the numeric equivalence that any future change must preserve: generated action IDs are
-    /// baked into source as integer literals, and a divergence would silently break ID-based lookup in every project
-    /// that already committed a generated constants file.
+    /// Fixes the numeric equivalence between <see cref="InputHashUtility"/> and the CycloneGames.Hash
+    /// primitives, plus the equality contract of <see cref="InputActionKey"/>. Generated action IDs are
+    /// committed to source as integer literals, so a digest change breaks ID-based lookup in consuming
+    /// projects.
     /// </summary>
     /// <remarks>
-    /// Assert relations or package-derived values here. Never assert a literal <c>GetHashCode()</c> value from
-    /// <see cref="InputActionKey"/>: it derives from the runtime string hash, which is not reproducible across
-    /// processes.
+    /// Assert relations or package-derived values. <see cref="InputActionKey"/> hashes use the runtime
+    /// string hash and are not reproducible across processes.
     /// </remarks>
     public sealed class InputHashContractTests
     {
@@ -56,8 +54,8 @@ namespace CycloneGames.InputSystem.Tests.Editor
         [Test]
         public void DeterministicHash_PinnedKnownValues()
         {
-            // Anchors produced by the shipped implementation. A failure here is a breaking change for
-            // already-generated constants, not a test that needs updating.
+            // Anchors produced by the shipped implementation. A failure here means generated constants
+            // no longer match the hash implementation.
             Assert.AreEqual(1073456347, InputHashUtility.GetDeterministicHashCode("Gameplay/Move"));
             Assert.AreEqual(-1488689387, InputHashUtility.GetDeterministicHashCode("Gameplay"));
             Assert.AreEqual(705468254, InputHashUtility.GetDeterministicHashCode("/"));

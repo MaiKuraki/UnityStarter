@@ -9,10 +9,9 @@ namespace CycloneGames.InputSystem.Editor
     /// <c>const string</c> fields declared by a type.
     /// </summary>
     /// <remarks>
-    /// This type is intentionally isolated from CycloneGames.Utility so the InputSystem
-    /// Editor assembly has no dependency on that package. It changes Editor authoring
-    /// only; the serialized value remains a plain string and requires the owning
-    /// contract to define its own validation and migration rules.
+    /// The type is local to this assembly so the Editor assembly has no dependency on
+    /// CycloneGames.Utility. The serialized value is a plain string; the owning contract
+    /// supplies validation rules.
     /// </remarks>
     [AttributeUsage(AttributeTargets.Field)]
     internal sealed class StringAsConstSelectorAttribute : PropertyAttribute

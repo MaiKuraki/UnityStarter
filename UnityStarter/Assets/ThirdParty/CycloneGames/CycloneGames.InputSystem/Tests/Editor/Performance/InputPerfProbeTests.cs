@@ -8,9 +8,8 @@ using UnityEngine.TestTools;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Validates the measurement instruments themselves before any product measurement is trusted.
-    /// A counter that never advances would make every allocation assertion pass vacuously, so each candidate
-    /// instrument is calibrated against a known garbage volume.
+    /// Calibrates each candidate allocation instrument against a known garbage volume before any
+    /// product measurement is used.
     /// </summary>
     public sealed class InputPerfProbeTests
     {

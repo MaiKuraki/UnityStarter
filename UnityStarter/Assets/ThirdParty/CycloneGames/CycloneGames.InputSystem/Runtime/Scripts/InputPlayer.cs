@@ -54,8 +54,8 @@ namespace CycloneGames.InputSystem.Runtime
             public string overrideProcessors;
         }
 
-        // Reference type on purpose: this record embeds Unity's InputBinding and measured 104 bytes as a
-        // struct, which made every List<T> copy and every foreach iteration copy the whole value.
+        // Reference type: the record embeds Unity's InputBinding and measures 104 bytes as a struct,
+        // so List<T> copies and foreach iterations would copy the whole value.
         private sealed class BindingOverrideApplication
         {
             public BindingOverrideApplication(InputAction action, int bindingIndex, InputBinding binding)
@@ -315,11 +315,10 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _inputActionAsset = BuildAssetFromConfig(config);
 
-                // The InputUser always owns the device whitelist. Associating the asset applies that whitelist
-                // to every action map, so a player answering to several devices at once still cannot read
-                // devices claimed by another local player. InputManager activates a control scheme after
-                // construction only for locked slots; a slot without a selected scheme keeps every binding
-                // live on its own devices, which is what enables seamless keyboard/mouse/gamepad switching.
+                // The InputUser owns the device whitelist. Associating the asset applies that whitelist to
+                // every action map, so a player answering to several devices cannot read devices claimed by
+                // another local player. InputManager activates a control scheme after construction only for
+                // locked slots; a slot without a selected scheme keeps every binding live on its own devices.
                 User.AssociateActionsWithUser(_inputActionAsset);
                 _deviceSwitchDebounceSeconds = config.DeviceSwitchDebounceMs / 1000d;
 
@@ -1598,7 +1597,7 @@ namespace CycloneGames.InputSystem.Runtime
                 CleanupSafely(() => _activeContextName.Value = null, "clear failed active-context state");
             }
 
-            // Cleanup callbacks can request another refresh. Keep the projection failed closed; callers may
+            // Cleanup callbacks can request another refresh. Keep the projection fail closed; callers may
             // explicitly call RefreshActiveContext after the failing subscriber or binding has been removed.
             _contextRefreshPending = false;
             Log.Error(

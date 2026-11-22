@@ -1,6 +1,6 @@
 # CycloneGames.InputSystem
 
-[English | 简体中文](README.md)
+[English](README.md) | 简体中文
 
 建立在 Unity Input System 之上的输入层。适合需要按玩家隔离设备所有权，或输入路由随 UI 状态（游戏、菜单、弹窗）变化的场景。单人、静态 action map 的项目直接用 Unity Input System 更简单。
 
@@ -202,7 +202,7 @@ IInputPlayer player2 = manager.JoinPlayerAndLockDevice(1, gamepad2);
 
 异步重载接受 `CancellationToken`。单玩家超时返回 `null`；调用方取消会向上传播。批量总超时或 manager 关闭返回已成功加入的前缀。调用方取消只回滚该批次创建的玩家，保留已有注册，然后抛出异常。对已注册的玩家 ID，join 方法是幂等的，直接返回该玩家。
 
-`JoinPlayersBatchAsync` 把批次摊到多帧，除最后一个玩家外每加入一个就让出一帧，N 个玩家最多跨 N 帧。在八玩家、每玩家三个上下文、每上下文 32 个动作的参考配置下，EditMode 基准测得总计 739.9 ms、每玩家 92.5 ms、最差帧 114.8 ms。请在加载界面执行批量加入。返回的列表只在任务完成后才完整，同步版本 `JoinPlayersBatch` 在调用帧内完成。
+`JoinPlayersBatchAsync` 把批次摊到多帧，除最后一个玩家外每加入一个就让出一帧，N 个玩家最多跨 N 帧。请在加载界面执行批量加入；`Tests/Editor/Performance/` 包含分帧测量。返回的列表只在任务完成后才完整，同步版本 `JoinPlayersBatch` 在调用帧内完成。
 
 control scheme 匹配由 `deviceRequirements` 驱动：`isOptional` 允许设备缺失，`isOr` 按 Unity Input System 的 scheme 顺序表达替代条件。没有声明 scheme 时，从配置的直接绑定和 composite part 路径推导出的 layout 互为替代，选中第一个可占用的匹配设备。若选中的是键盘或鼠标，另一个可占用的键鼠设备会作为伴随设备加入。显式声明 scheme 更利于审查设备所有权。
 
@@ -497,7 +497,7 @@ Subsystem registration 会让所有仍活动的 manager 失效，避免关闭 Do
 | 设备活动 | 使用动作活动以及 Input System 的设备/用户通知。 | `ActiveDeviceKind` 只是展示提示；硬件抖动时业务 UI 需自行去抖。 |
 | Tools 录制 | 录制期间使用固定容量列表，创建快照时复制样本。`CancelRecording(maximumSamplesToDiscard)` 停止订阅并按调用方限定的分块释放样本引用。 | 检查 `WasTruncated`/`DroppedSampleCount`。 |
 
-初始化和玩家构造可用 Unity Profiler 标记 `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer`、`CycloneGames.Input.BuildAsset` 观测。
+初始化和玩家构造产生 `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer`、`CycloneGames.Input.BuildAsset`；context refresh 与 activation 产生 `CycloneGames.Input.RequestContextRefresh`、`CycloneGames.Input.ActivateTopContext`。这些标记可在 Unity Profiler 中查看。
 
 ### 线程与平台
 
@@ -557,7 +557,6 @@ builder.Install(new InputSystemVContainerInstaller(options));
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、校验、安全写入、常量生成，仅 Editor。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | 展示适配器，`autoReferenced: false`。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、异步启动、resolver 适配器，无 AssetManagement 依赖。 |
-
 | `CycloneGames.InputSystem.Tools.Runtime` | `Runtime/Tools/` | `InputRecorder` 与 `InputReplayCursor` 诊断工具。 |
 | `CycloneGames.InputSystem.Sample` | `Samples/` | 可选的 scene 与 bootstrap 示例。 |
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode 校验与回归覆盖。 |

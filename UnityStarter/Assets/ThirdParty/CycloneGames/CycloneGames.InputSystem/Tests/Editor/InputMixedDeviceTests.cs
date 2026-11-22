@@ -7,9 +7,9 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// A single local player with a gamepad and keyboard/mouse attached must receive input from all of them.
-    /// The default selection path locks onto one control scheme and therefore pairs one device group; enabling
-    /// <c>pairAllMatchingDevices</c> pairs every device the configuration references so all bindings stay live.
+    /// A single local player with a gamepad and keyboard/mouse attached receives input from all of them
+    /// when <c>pairAllMatchingDevices</c> is enabled: the join pairs every referenced layout and leaves
+    /// the control scheme unset.
     /// </summary>
     public sealed class InputMixedDeviceTests : InputDeviceTestBase
     {

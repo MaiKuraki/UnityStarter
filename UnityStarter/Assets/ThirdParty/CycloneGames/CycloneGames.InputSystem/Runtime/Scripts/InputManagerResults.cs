@@ -120,8 +120,7 @@ namespace CycloneGames.InputSystem.Runtime
         public const int CurrentSchemaVersion = 1;
 
         /// <summary>
-        /// Unambiguous alias for <see cref="CurrentSchemaVersion"/>. Prefer this name in new code so the
-        /// profile contract is not confused with the configuration schema version.
+        /// Schema version of the binding-override profile, distinct from the authored YAML configuration schema.
         /// </summary>
         public const int ProfileSchemaVersion = CurrentSchemaVersion;
 

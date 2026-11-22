@@ -116,18 +116,14 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Extracts the element type if it's a [YamlObject] or enum that should be included in fingerprint.
-        /// Handles direct types, List<T>, and enums.
+        /// Extracts the element type of a [YamlObject] type, an enum or a List<T> of either.
         /// </summary>
         private static Type GetYamlElementType(Type type)
         {
-            // Direct [YamlObject] type
             if (type.GetCustomAttribute<YamlObjectAttribute>() != null) return type;
 
-            // Enum type
             if (type.IsEnum) return type;
 
-            // List<T> where T is [YamlObject] or enum
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
             {
                 var elementType = type.GetGenericArguments()[0];
