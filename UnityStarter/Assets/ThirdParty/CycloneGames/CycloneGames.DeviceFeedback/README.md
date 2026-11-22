@@ -2,495 +2,699 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.DeviceFeedback provides hardware-feedback abstractions and mobile vibration implementations for Unity. It packages Android, iOS, and WebGL haptic routes, a `HapticClip` asset for curve- and event-based authoring, and injectable interfaces for gamepad rumble and device light control with safe no-op defaults.
+Device feedback controls hardware output: vibration on a phone, rumble motors on
+a gamepad, and RGB light on a controller or keyboard. This package provides one
+set of contracts for those outputs, platform implementations for mobile haptics,
+and injectable backends for controller hardware.
 
-## Table of Contents
+## Table of contents
 
 - [Overview](#overview)
+- [Getting started](#getting-started)
+- [Core concepts](#core-concepts)
 - [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
-- [Troubleshooting](#troubleshooting)
+- [Service contracts](#service-contracts)
+- [Playing feedback](#playing-feedback)
+- [Dependency injection](#dependency-injection)
+- [Low-latency playback](#low-latency-playback)
+- [Cross-thread submission](#cross-thread-submission)
+- [Capability and lifecycle](#capability-and-lifecycle)
+- [Admission, limits and diagnostics](#admission-limits-and-diagnostics)
+- [Performance and memory](#performance-and-memory)
+- [Threading](#threading)
+- [Platform and AOT](#platform-and-aot)
+- [Authoring](#authoring)
+- [Error handling](#error-handling)
+- [Validation](#validation)
+- [Extending](#extending)
+- [References](#references)
 
 ## Overview
 
-A device feedback call answers one question: which hardware output should fire, at what intensity, for how long? CycloneGames.DeviceFeedback answers that with a small set of interfaces — `IHapticFeedbackService`, `IMobileVibrationService`, `IGamepadRumbleService`, `IDeviceLightService` — backed by platform-specific implementations that pick the strongest available native route at runtime.
+Three services cover the three output families:
 
-Mobile haptics ship ready-to-use: Android uses `VibrationEffect` (API 26+) with API 30+ composition primitives, iOS uses Core Haptics (iOS 13+) with `UIFeedbackGenerator` and `AudioToolbox` fallbacks, and WebGL uses `navigator.vibrate`. Gamepad rumble and device light control use injectable backends with explicit no-op defaults so unsupported platforms and projects without a hardware backend remain deterministic.
-
-Use this module when a project needs cross-platform haptics from one API, a designer-authored `HapticClip` asset workflow, or a clean boundary for plugging in platform-specific controller and lighting backends. Real hardware output for gamepad rumble and device light requires a separate platform integration assembly; the module only ships the contracts and a no-op fallback.
-
-### Key Features
-
-- **`IHapticFeedbackService`** — common interface for `IsAvailable`, `IsActive`, `Initialize`, `PlayPreset`, `Play`, `PlayCurve`, `PlayClip`, and `Cancel`.
-- **`IMobileVibrationService`** — mobile extensions: pattern vibration, iOS-specific impact/notification/selection, and real-time continuous parameter modulation.
-- **`MobileVibration` static facade** — same API as a singleton-style entry point for non-DI projects.
-- **`HapticClip` ScriptableObject** — designer-authored asset with curve or discrete-event modes.
-- **`IGamepadRumbleService` / `IDeviceLightService`** — backend-injectable contracts with explicit `NoopGamepadRumbleBackend` / `NoopDeviceLightBackend` defaults.
-- **iOS Core Haptics (iOS 13+)** — transient and continuous events, parameter curves, composite patterns, and real-time modulation.
-- **Android API 30+ primitives** — CLICK, TICK, LOW_TICK, and THUD composition routes with amplitude fallback.
-
-## Architecture
-
-| Assembly | Path | Purpose |
+| Service | Output | Default availability |
 | --- | --- | --- |
-| `CycloneGames.DeviceFeedback.Runtime` | `Runtime/` | All public contracts, `MobileVibrationService`, `GamepadRumbleService`, `GamepadLightService`, no-op backends, and `HapticClip`. References `UnityEngine`. |
-| `CycloneGames.DeviceFeedback.Tests.Editor` | `Tests/Editor/` | Guard and no-op behavior tests for `GamepadRumbleService` and `GamepadLightService`. |
+| `MobileVibrationService` | Phone vibration, Core Haptics, browser vibration | Platform-dependent |
+| `GamepadRumbleService` | Dual rumble motors | Requires an injected backend |
+| `GamepadLightService` | Controller or keyboard RGB light | Requires an injected backend |
 
-The runtime assembly is included on Android, iOS, WebGL, tvOS, VisionOS, Editor, and desktop standalone platforms. Mobile native plugins (`HapticFeedback.mm`, `CoreHaptics.mm` on iOS; JNI calls on Android) live alongside the C# sources and are selected by `#if UNITY_IOS` / `#if UNITY_ANDROID` blocks.
+The package is appropriate when a project needs one haptic API across Android,
+iOS and WebGL, designer-authored clip assets, or a boundary for platform-specific
+controller hardware. It does not implement device discovery, per-player input
+routing, adaptive triggers or multi-zone keyboard lighting. Those belong to an
+input or platform integration layer.
 
-```mermaid
-flowchart LR
-    Caller["Caller\nplay code, GM console"] --> Service["IHapticFeedbackService\n/ IMobileVibrationService\n/ IGamepadRumbleService\n/ IDeviceLightService"]
-    Service --> Mobile["MobileVibrationService"]
-    Service --> Rumble["GamepadRumbleService"]
-    Service --> Light["GamepadLightService"]
-    Mobile --> IOSRoute{"iOS route"}
-    Mobile --> AndroidRoute{"Android route"}
-    Mobile --> WebGLRoute{"WebGL route"}
-    IOSRoute -->|13+| CoreHaptics["Core Haptics\nCHHapticEngine"]
-    IOSRoute -->|10+| UIFeedback["UIFeedbackGenerator"]
-    IOSRoute -->|fallback| AudioToolbox["AudioToolbox"]
-    AndroidRoute -->|30+| Composition["VibrationEffect\n.startComposition"]
-    AndroidRoute -->|26+| Waveform["VibrationEffect\ncreateWaveform"]
-    AndroidRoute -->|1+| Vibrate["vibrate()"]
-    WebGLRoute --> NavVibrate["navigator.vibrate"]
-    Rumble --> RumbleBackend["IGamepadRumbleBackend\n(no-op default)"]
-    Light --> LightBackend["IDeviceLightBackend\n(no-op default)"]
+Mobile routes are selected at runtime:
 
-    classDef core fill:#dbeafe,stroke:#1d4ed8,color:#111827;
-    classDef adapter fill:#fef3c7,stroke:#b45309,color:#111827;
-    classDef external fill:#dcfce7,stroke:#15803d,color:#111827;
-    class Service,Mobile,Rumble,Light core;
-    class RumbleBackend,LightBackend adapter;
-    class CoreHaptics,UIFeedback,AudioToolbox,Composition,Waveform,Vibrate,NavVibrate external;
-```
+| Platform | Route |
+| --- | --- |
+| Android 30+ | `VibrationEffect` composition primitives, with amplitude fallback |
+| Android 26+ | `VibrationEffect.createWaveform` |
+| Android below 26 | `Vibrator.vibrate` with an on/off pattern |
+| iOS 13+ | Core Haptics transient, continuous and pattern players |
+| iOS below 13 | `UIFeedbackGenerator` and the public vibration sound |
+| WebGL | `navigator.vibrate` |
+| Editor and desktop | No hardware route; calls are refused by admission |
 
-The caller invokes a service; the service routes to the strongest available native path on mobile, or forwards to an injected backend for gamepad rumble and device light. Mobile fallbacks are automatic; controller and lighting backends are explicit injections.
+## Getting started
 
-## Quick Start
+### Requirements
 
-Reference `CycloneGames.DeviceFeedback.Runtime` from your asmdef and import the namespace:
+Unity 2022.3 or newer. Read the exact editor version from
+`UnityStarter/ProjectSettings/ProjectVersion.txt` in this repository. The runtime
+assembly is `CycloneGames.DeviceFeedback.Runtime`; add it to your asmdef
+references.
+
+### First haptic
 
 ```csharp
 using CycloneGames.DeviceFeedback.Runtime;
 using UnityEngine;
-```
 
-### Use the static facade
-
-```csharp
-void Awake() => MobileVibration.Init();
-
-void OnPlayerHit() => MobileVibration.PlayPreset(HapticPreset.Heavy);
-void OnCollect()   => MobileVibration.Play(0.3f, 0.1f, sharpness: 0.8f);
-void OnCancel()    => MobileVibration.Cancel();
-
-void OnApplicationQuit() => MobileVibration.Shutdown();
-```
-
-`Init()` lazily constructs and initializes the singleton `MobileVibrationService`. `Shutdown()` disposes native resources (JNI, Core Haptics engine) and is safe to call from `OnApplicationQuit` or test teardown.
-
-### Use dependency injection
-
-```csharp
-public sealed class GameManager
+public sealed class HapticButton : MonoBehaviour
 {
-    private readonly IHapticFeedbackService _haptics;
+    private void Awake() => MobileVibration.Init();
 
-    public GameManager(IHapticFeedbackService haptics)
-    {
-        _haptics = haptics;
-        _haptics.Initialize();
-    }
+    public void OnClick() => MobileVibration.PlayPreset(HapticPreset.Medium);
 
-    public void OnPlayerHit() => _haptics.PlayPreset(HapticPreset.Heavy);
-    public void OnCollect()   => _haptics.Play(0.3f, 0.1f, sharpness: 0.8f);
-    public void OnExplosion() => _haptics.PlayClip(explosionClip);
+    private void OnApplicationQuit() => MobileVibration.Shutdown();
 }
 ```
 
-Register `MobileVibrationService` as `IMobileVibrationService` or `IHapticFeedbackService` in your container of choice.
+`Init()` creates the service and initializes the platform route. `Shutdown()`
+disposes native resources. Calling `Init()` more than once is safe.
 
-## Core Concepts
+### Use the result of a call
 
-### Intensity, duration, and sharpness
-
-Three parameters describe a haptic across every platform:
-
-- **`intensity`** — `0.0` to `1.0`, normalized. Maps to amplitude on Android 26+, `CHHapticEventParameterIntensity` on iOS 13+, and `navigator.vibrate` total duration on WebGL.
-- **`durationSeconds`** — seconds. Maps to a `VibrationEffect` waveform length on Android, a continuous `CHHapticEvent` on iOS 13+, and a millisecond call on WebGL.
-- **`sharpness`** — `0.0` (deep/broad) to `1.0` (sharp/crisp). Native on iOS 13+ via `CHHapticEventParameterSharpness`. Approximated or ignored on other platforms.
+Every `void` playback method publishes its outcome through `LastResult`. The
+`*Checked` methods return the same value directly.
 
 ```csharp
-MobileVibration.Play(intensity: 0.8f, durationSeconds: 0.3f, sharpness: 0.9f);
+FeedbackResult result = MobileVibration.LastResult;
+if (result.IsRejected)
+{
+    Debug.Log("Haptic refused: " + result.Status);
+}
 ```
+
+`FeedbackStatus` covers accepted, degraded, invalid input, capacity, inactive,
+unavailable, disposed, unsupported, native failure and thread affinity. See
+[Admission, limits and diagnostics](#admission-limits-and-diagnostics).
+
+## Core concepts
+
+### Parameters
+
+| Parameter | Range | Meaning |
+| --- | --- | --- |
+| `intensity` | 0 to 1 | Amplitude on Android 26+, `CHHapticEventParameterIntensity` on iOS 13+, duration on WebGL |
+| `durationSeconds` | positive, bounded by `DeviceFeedbackLimits` | Length of the effect |
+| `sharpness` | 0 to 1 | Native on iOS 13+; approximated elsewhere |
+
+All three are checked before any buffer growth or native dispatch. Non-finite
+values are rejected as `RejectedInvalid`.
 
 ### Presets
 
-`HapticPreset` is a shared enum used by all feedback devices:
+`HapticPreset` has seven values: `Light`, `Medium`, `Heavy`, `Success`, `Warning`,
+`Error`, `Selection`. Each service maps a preset to its own hardware route.
 
-| Preset | Typical use |
+### Authoring data and runtime data
+
+`HapticClip` is a `ScriptableObject` used for authoring. It holds an
+`AnimationCurve` pair or an array of `HapticEvent` values. Runtime playback uses
+an immutable `HapticClipSnapshot` produced by `HapticClipBaker`. The asset itself
+is never modified. See [Low-latency playback](#low-latency-playback).
+
+### Admission, limits and profile
+
+`DeviceFeedbackLimits` bounds one operation. `DeviceFeedbackProfile` holds
+runtime policies such as the minimum sample interval and cache sizes. Both are
+value types supplied by the composition root; the defaults are shared immutable
+instances.
+
+### Capability
+
+`DeviceCapability` reports which routes the current device can use:
+`SupportsHaptics`, `SupportsAmplitude`, `SupportsSharpness`,
+`SupportsCoreHaptics`, `SupportsPattern`, `SupportsContinuousModulation` and
+`PlatformApiLevel`.
+
+## Architecture
+
+### Directory layout
+
+| Path | Contents |
 | --- | --- |
-| `Light` | Soft tap, selection confirmation. |
-| `Medium` | UI button press. |
-| `Heavy` | Impact, player hit. |
-| `Success` | Action completed successfully. |
-| `Warning` | Recoverable error or caution. |
-| `Error` | Failure, denial. |
-| `Selection` | Tick while scrolling or rotating. |
+| `Runtime/Data/` | Value types, limits, profiles, admission, diagnostics, buffer lease, snapshots and command ring (same runtime assembly) |
+| `Runtime/Haptics/` | Mobile and gamepad haptic services, authoring assets and the clip baker |
+| `Runtime/Lighting/` | Device light service and backend contracts |
+| `Runtime/Plugins/iOS/` | Core Haptics and fallback Objective-C bridge |
+| `Runtime/Plugins/WebGL/` | `navigator.vibrate` JavaScript bridge |
+| `Editor/` | `HapticClip` inspector |
+| `Tests/Editor/` | EditMode tests |
+| `Samples~/` | Opt-in example scene |
 
-```csharp
-MobileVibration.PlayPreset(HapticPreset.Success);
+### Assemblies
+
+| Assembly | Platform | Purpose |
+| --- | --- | --- |
+| `CycloneGames.DeviceFeedback.Runtime` | Android, iOS, WebGL, tvOS, VisionOS, desktop, Editor | Public contracts and services |
+| `CycloneGames.DeviceFeedback.Editor` | Editor | Inspector and authoring validation |
+| `CycloneGames.DeviceFeedback.Tests.Editor` | Editor | EditMode tests |
+
+The runtime assembly has no references to other CycloneGames packages. Optional
+integrations can reference it from a separate assembly; the runtime never
+references an integration.
+
+### Data flow
+
+```mermaid
+flowchart LR
+    Caller["Caller"] --> Services["Service contracts"]
+    Services --> Mobile["MobileVibrationService"]
+    Services --> Rumble["GamepadRumbleService"]
+    Services --> Light["GamepadLightService"]
+
+    Mobile --> Data["Runtime/Data<br/>limits, admission, results<br/>snapshot, buffers, command ring"]
+    Data --> Routes{"Platform route"}
+    Routes --> Android["Android VibrationEffect"]
+    Routes --> IOS["iOS Core Haptics"]
+    Routes --> WebGL["WebGL navigator.vibrate"]
+
+    Rumble --> BackendR["IGamepadRumbleBackend"]
+    Light --> BackendL["IDeviceLightBackend"]
+
+    Worker["Worker thread"] -.->|TrySubmit| Queue["Command queue"]
+    Queue -.->|Drain| Services
+
+    Android --> Hardware["Hardware"]
+    IOS --> Hardware
+    WebGL --> Hardware
+    BackendR --> Hardware
+    BackendL --> Hardware
+
+    classDef core fill:#dbeafe,stroke:#1d4ed8,color:#111827;
+    classDef adapter fill:#fef3c7,stroke:#b45309,color:#111827;
+    classDef external fill:#dcfce7,stroke:#15803d,color:#111827;
+    class Services,Mobile,Rumble,Light,Data,Queue core;
+    class Routes,BackendR,BackendL adapter;
+    class Android,IOS,WebGL,Hardware external;
 ```
 
-### HapticClip
+`MobileVibrationService` either uses an immutable `HapticClipSnapshot` or direct
+parameters, then selects the platform route. `GamepadRumbleService` and
+`GamepadLightService` forward to an injected backend instead. Worker threads
+only enter through `TrySubmit`; `Drain` delivers queued commands on the owner
+thread.
 
-`HapticClip` is a `ScriptableObject` created via **Assets > Create > CycloneGames > Device Feedback > Haptic Clip**. It has two modes:
+## Service contracts
 
-**Curve mode (default)** — `intensityCurve` and `sharpnessCurve` (X: normalized time `0–1`, Y: value `0–1`) plus `duration`:
+### `IHapticFeedbackService`
+
+| Member | Purpose |
+| --- | --- |
+| `IsAvailable`, `IsActive` | Availability and master switch |
+| `Initialize` | Prepare the platform route |
+| `PlayPreset(HapticPreset)` | Play a shared preset |
+| `Play(float, float, float)` | Play intensity, duration and sharpness |
+| `PlayCurve(AnimationCurve, float, AnimationCurve, int)` | Sample an intensity curve |
+| `PlayClip(HapticClip)` | Play an authored clip |
+| `Cancel` | Stop active output |
+
+### `IMobileVibrationService`
+
+Adds `HasVibrator`, `Vibrate` overloads, `VibratePop`, `VibratePeek`,
+`VibrateNope`, the iOS-specific feedback methods, and
+`UpdateContinuousParameters`. It inherits `IDisposable`.
+
+### `IGamepadRumbleService`
+
+Adds `SetMotorSpeeds(float, float)` and `Rumble(float, float, float)`.
+
+### `IDeviceLightService`
+
+Adds `SetColor`, `Flash`, `PlayGradient`, `PlayIntensityCurve`,
+`CancelAnimation` and `Reset`.
+
+### `IFeedbackResultProvider`
+
+| Member | Purpose |
+| --- | --- |
+| `LastResult` | Outcome of the most recent call |
+| `Limits` | Active operation budgets |
+| `Capability` | Active hardware capabilities |
+| `GetMemoryStats()` | Per-instance counters and buffer state |
+| `RefreshCapabilities()` | Re-probe hardware |
+| `ResetDiagnostics()` | Clear per-instance counters |
+
+All three services implement this contract.
+
+### Backends
+
+`IGamepadRumbleBackend` and `IDeviceLightBackend` own device discovery, timing
+and native calls. `NoopGamepadRumbleBackend.Instance` and
+`NoopDeviceLightBackend.Instance` are the defaults; both report
+`IsAvailable = false`, so a project without a backend produces no hardware
+output.
+
+The `ownsBackend` constructor flag controls whether the service disposes the
+backend. Set it to `false` when a composition root owns the backend.
+
+## Playing feedback
+
+### Direct playback
+
+```csharp
+var service = new MobileVibrationService();
+service.Initialize();
+
+service.Play(intensity: 0.8f, durationSeconds: 0.25f, sharpness: 0.9f);
+FeedbackResult result = service.LastResult;
+```
+
+### Curves
+
+`PlayCurve` samples the intensity curve and an optional sharpness curve. The
+sample grid is quantized to a power of two and covers `t = 0` through `t = 1`.
+The effective interval keeps the total duration close to `durationSeconds`.
+
+```csharp
+AnimationCurve intensity = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+AnimationCurve sharpness = AnimationCurve.Linear(0f, 0.3f, 1f, 0.9f);
+service.PlayCurve(intensity, 1.5f, sharpness, sampleIntervalMs: 20);
+```
+
+### Haptic clips
+
+Create a `HapticClip` with `Assets > Create > CycloneGames > Device Feedback >
+Haptic Clip`. In curve mode the `intensityCurve` and `sharpnessCurve` drive the
+effect. In event mode the `events` array takes precedence and the curves are
+ignored.
 
 ```csharp
 [CreateAssetMenu] public HapticClip explosionClip;
-MobileVibration.PlayClip(explosionClip);
+
+service.PlayClip(explosionClip);
 ```
 
-**Event mode** — populate the `events` array with discrete `HapticEvent` entries:
-
-| Field | Description |
-| --- | --- |
-| `type` | `Transient` (sharp tap) or `Continuous` (sustained). |
-| `time` | Start time in seconds from clip start. |
-| `duration` | Duration in seconds (Continuous only). |
-| `intensity` | `0.0`–`1.0`. |
-| `sharpness` | `0.0`–`1.0`. |
-
-When `events` is non-empty, curves are ignored. Events map directly to `CHHapticEvent` on iOS 13+ for sample-accurate playback.
-
-### Master switch and availability
+### Pattern vibration
 
 ```csharp
-if (!MobileVibration.IsAvailable) return;
-
-MobileVibration.SetActive(false);  // master switch; subsequent calls become no-ops
-MobileVibration.SetActive(true);   // re-enable
+service.Vibrate(200);                                  // 200 ms
+service.Vibrate(new long[] { 0, 100, 50, 100 }, -1);  // one pass
+service.Vibrate(new long[] { 0, 100, 50, 100 }, 0);   // loop from index 0
+service.Cancel();                                      // stop a loop
 ```
 
-`IsActive = false` short-circuits every call without touching native code. Each service also exposes `IsAvailable` to query whether hardware is present and initialized.
-
-## Usage Guide
-
-### Pattern vibration (mobile only)
-
-```csharp
-MobileVibration.Vibrate(200);                       // 200 ms
-MobileVibration.Vibrate(new long[] { 0, 100, 50, 100 }, repeat: -1);  // one-shot pattern
-MobileVibration.Vibrate(new long[] { 0, 100, 50, 100 }, repeat: 0);   // repeat from index 0
-```
-
-`repeat = -1` plays the pattern once. Any other index loops the pattern from that offset. Call `Cancel()` to stop a repeating pattern.
+`repeat = -1` plays once. Any other valid index loops from that offset. Android
+passes the pattern to `VibrationEffect`; iOS 13+ builds a Core Haptics pattern;
+WebGL collapses the pattern to a total duration.
 
 ### iOS-specific feedback
 
 ```csharp
-MobileVibration.VibrateIOS(IOSImpactStyle.Heavy);
-MobileVibration.VibrateIOS(IOSNotificationStyle.Success);
-MobileVibration.VibrateIOSSelection();
+service.VibrateIOS(IOSImpactStyle.Heavy);
+service.VibrateIOS(IOSNotificationStyle.Success);
+service.VibrateIOSSelection();
 ```
 
-On iOS 13+, these route through Core Haptics transients. On iOS 10+, they fall back to `UIFeedbackGenerator`. On non-iOS platforms, they are no-ops.
+On iOS 13+ these use Core Haptics transients. On older iOS versions they use
+`UIFeedbackGenerator`. Invalid enum values are rejected without an exception.
 
-### Real-time modulation (iOS 13+)
+### Real-time modulation
 
 ```csharp
-MobileVibration.Play(intensity: 0.5f, durationSeconds: 5.0f, sharpness: 0.5f);
+service.Play(0.5f, 5f, 0.5f);
 
 void Update()
 {
-    float intensity = Mathf.PingPong(Time.time, 1f);
-    MobileVibration.UpdateContinuousParameters(intensity, sharpness: 0.7f);
+    service.UpdateContinuousParameters(charge, 0.7f);
 }
 ```
 
-`UpdateContinuousParameters` sends `CHHapticDynamicParameter` updates to the active continuous player. It is a no-op on platforms without Core Haptics.
+This route requires `SupportsContinuousModulation`. It is unavailable on Android
+and WebGL.
 
-### Gamepad rumble
+### Platform capability matrix
 
-```csharp
-var rumble = new GamepadRumbleService();  // no-op default
-rumble.Rumble(lowFrequency: 0.6f, highFrequency: 0.4f, durationSeconds: 0.2f);
-rumble.SetMotorSpeeds(0.5f, 0.5f);
-rumble.Cancel();
-rumble.Dispose();
-```
-
-`GamepadRumbleService` defaults to `NoopGamepadRumbleBackend`. Install a real backend through the constructor:
-
-```csharp
-var rumble = new GamepadRumbleService(new MyDualSenseBackend(), ownsBackend: true);
-```
-
-The backend owns device discovery, player loop hooks, and native/Input System calls. `Play` and `PlayPreset` map intensity and sharpness to dual-motor speeds through `CalculateMotorSpeeds`; `PlayCurve` samples the curve and plays the peak.
-
-### Device light
-
-```csharp
-var light = new GamepadLightService();  // no-op default
-light.SetColor(Color.red);
-light.Flash(Color.red, Color.black, onDurationSeconds: 0.1f, offDurationSeconds: 0.1f);
-light.PlayGradient(myGradient, durationSeconds: 2.0f, sampleIntervalMs: 50);
-light.PlayIntensityCurve(Color.blue, pulseCurve, durationSeconds: 1.5f);
-light.CancelAnimation();
-light.Reset();
-```
-
-Install a real `IDeviceLightBackend` (DualSense, DualShock, keyboard RGB) through the constructor. The service clamps colors, sanitizes sample intervals, and forwards after guard checks.
-
-## Advanced Topics
-
-### iOS Core Haptics architecture
-
-On iOS 13+, the runtime upgrades every haptic call to Core Haptics:
-
-- **Transient events** — `VibratePop`, `VibratePeek`, `VibrateIOS(Impact)`, `PlayPreset` use `CHHapticEventTypeHapticTransient` with calibrated intensity/sharpness pairs.
-- **Continuous events** — `Play(intensity, duration, sharpness)` uses `CHHapticEventTypeHapticContinuous` for sustained haptics with precise control.
-- **Composite patterns** — `VibrateNope`, `PlayClip(events)` build multi-event `CHHapticPattern` sent as a single batch.
-- **Parameter curves** — `PlayCurve` converts sampled points to `CHHapticParameterCurve`; the OS handles smooth interpolation between control points.
-- **Real-time modulation** — `UpdateContinuousParameters` sends `CHHapticDynamicParameter` updates each frame.
-
-Fallback to `UIFeedbackGenerator` (iOS 10+) is automatic when Core Haptics is unavailable.
-
-### Native player lifecycle strategies
-
-Native implementations separate initialization, transient playback, and continuous playback so callers can control when setup work occurs.
-
-**iOS: pre-warmed UIFeedbackGenerators** — `HapticFeedback.mm` creates seven static generator instances (Light, Medium, Heavy, Rigid, Soft impact + Notification + Selection) during initialization. Each calls `[prepare]` before first use and again after a trigger, moving generator creation out of the trigger call. OS scheduling, engine state, hardware, thermal state, and power policy still determine observed latency.
-
-**iOS: fire-and-forget transient players** — `CoreHaptics.mm` uses two player strategies:
-
-- **Transient haptics** (`PlayTransient`) create an ephemeral player per tap, started with `CHHapticTimeImmediate` and released by the engine after completion. They do not stop the continuous player.
-- **Continuous, pattern, and curve effects** use a persistent `s_continuousPlayer` that supports `UpdateParameters` for real-time modulation. Previous continuous player is stopped before starting a new one.
-
-The separate player slots allow transient calls without replacing the tracked continuous player; device-level mixing remains platform-controlled.
-
-### Android API 30+ composition primitives
-
-On Android API 30+, `PlayPreset` uses `VibrationEffect.startComposition()` with platform primitives (CLICK=1, TICK=7, LOW_TICK=8, THUD=3). Android defines these primitives for device-specific implementation. If the device does not support the requested primitive, the service falls back to the amplitude path.
-
-### Platform fallback chains
-
-```text
-iOS:     Core Haptics (13+) → UIFeedbackGenerator (10+) → AudioToolbox
-Android: Composition API (30+) → VibrationEffect (26+) → vibrate() (1–25)
-WebGL:   navigator.vibrate()
-```
-
-### Platform implementation matrix
-
-This table describes routes present in the source. Browser policy, OS version, device capabilities, Player backend, and native plugin import settings can change effective behavior.
-
-| Feature | Android | iOS (< 13) | iOS (13+) | WebGL | Editor |
+| Feature | Android | iOS below 13 | iOS 13+ | WebGL | Editor |
 | --- | --- | --- | --- | --- | --- |
-| Basic vibration | Yes | Yes | Yes | Yes | No-op |
-| Duration control | Yes | No | Yes (continuous) | Yes | No-op |
-| Amplitude/Intensity | Yes (API 26+) | No | Yes (native) | No | No-op |
-| Sharpness | No | No | Yes (native) | No | No-op |
-| Vibration pattern | Yes | No | Yes (composite) | No | No-op |
-| AnimationCurve waveform | Yes (API 26+) | Peak only | Yes (native curves) | Total ms | No-op |
-| HapticClip events | Yes (waveform) | No | Yes (CHHapticEvent) | Total ms | No-op |
-| Haptic presets | Yes | Yes (native) | Yes (Core Haptics) | Fallback | No-op |
-| API 30+ primitives | Yes (CLICK/TICK/THUD) | — | — | — | No-op |
-| Real-time modulation | No | No | Yes | No | No-op |
-| Cancel | Yes | No | Yes | Yes | No-op |
-| Gamepad rumble | Backend required | Backend required | Backend required | Backend required | No-op default |
-| Device light | Backend required | Backend required | Backend required | Backend required | No-op default |
+| Basic vibration | Yes | Yes | Yes | Yes | No output |
+| Duration control | Yes | No | Yes | Yes | No output |
+| Amplitude | API 26+ | No | Yes | No | No output |
+| Sharpness | No | No | Yes | No | No output |
+| Pattern | Yes | No | Composite | Total duration | No output |
+| Curve waveform | API 26+ | Peak only | Native curves | Total duration | No output |
+| HapticClip events | Waveform | No | `CHHapticEvent` | Total duration | No output |
+| Real-time modulation | No | No | Yes | No | No output |
+| Cancel | Yes | No | Yes | Yes | No output |
+| Gamepad rumble and light | Backend required | Backend required | Backend required | Backend required | No-op default |
 
-## Common Scenarios
+## Dependency injection
 
-### Gameplay haptics through DI
+Register a concrete service against the interface your gameplay code needs.
 
 ```csharp
 public sealed class CombatController
 {
     private readonly IHapticFeedbackService _haptics;
-    [SerializeField] private HapticClip _explosionClip;
 
-    public CombatController(IHapticFeedbackService haptics) => _haptics = haptics;
-
-    public void OnLightHit()  => _haptics.Play(0.3f, 0.05f, sharpness: 0.9f);
-    public void OnHeavyHit()  => _haptics.Play(0.9f, 0.15f, sharpness: 0.2f);
-    public void OnExplosion() => _haptics.PlayClip(_explosionClip);
-    public void OnDeath()     => _haptics.PlayPreset(HapticPreset.Error);
-}
-```
-
-A single `IHapticFeedbackService` covers mobile, gamepad (with a backend), and any future haptic device — the gameplay layer never branches on platform.
-
-### Designer-authored haptic pattern
-
-A designer creates a `HapticClip` asset with a heartbeat rhythm:
-
-```text
-events:
-  - Transient  t=0.00  intensity=0.6  sharpness=0.4
-  - Transient  t=0.15  intensity=0.6  sharpness=0.4
-  - Transient  t=0.30  intensity=0.6  sharpness=0.4
-duration: 0.45
-```
-
-Gameplay triggers it on boss attack wind-up:
-
-```csharp
-MobileVibration.PlayClip(heartbeatClip);
-```
-
-On iOS 13+, the events map directly to `CHHapticEvent` entries with sample-accurate timing. On Android 26+, the runtime samples the events into a `VibrationEffect` waveform.
-
-### Real-time parameter modulation
-
-A charging mechanic ramps intensity while the player holds the trigger:
-
-```csharp
-public sealed class ChargeAttack : MonoBehaviour
-{
-    [SerializeField] private float _maxChargeSeconds = 2f;
-    private float _chargeTime;
-
-    void Update()
+    public CombatController(IHapticFeedbackService haptics)
     {
-        if (Input.GetButton("Fire1"))
-        {
-            if (_chargeTime == 0f)
-            {
-                MobileVibration.Play(intensity: 0.2f, durationSeconds: _maxChargeSeconds, sharpness: 0.3f);
-            }
-
-            _chargeTime = Mathf.Min(_chargeTime + Time.deltaTime, _maxChargeSeconds);
-            float intensity = _chargeTime / _maxChargeSeconds;
-            MobileVibration.UpdateContinuousParameters(intensity, sharpness: 0.3f + intensity * 0.4f);
-        }
-        else if (_chargeTime > 0f)
-        {
-            _chargeTime = 0f;
-            MobileVibration.Cancel();
-        }
-    }
-}
-```
-
-This pattern only modulates on iOS 13+; on other platforms, `Play` fires the initial haptic and `UpdateContinuousParameters` is a no-op.
-
-### Gamepad rumble with platform backend
-
-```csharp
-public sealed class DualSenseRumbleBackend : IGamepadRumbleBackend
-{
-    private readonly DualSenseGamepad _gamepad;
-
-    public DualSenseRumbleBackend(DualSenseGamepad gamepad) => _gamepad = gamepad;
-
-    public bool IsAvailable => _gamepad != null;
-
-    public void Rumble(float low, float high, float duration)
-    {
-        _gamepad.SetMotorSpeeds(low, high);
-        // Schedule auto-stop in the player loop or a coroutine.
+        _haptics = haptics;
+        _haptics.Initialize();
     }
 
-    public void SetMotorSpeeds(float low, float high) => _gamepad.SetMotorSpeeds(low, high);
-    public void Stop() => _gamepad.SetMotorSpeeds(0f, 0f);
-    public void Initialize() { }
-    public void Dispose() { }
+    public void OnHit() => _haptics.Play(0.9f, 0.12f, 0.25f);
+    public void OnExplosion(HapticClip clip) => _haptics.PlayClip(clip);
 }
-
-// In the composition root:
-var rumble = new GamepadRumbleService(new DualSenseRumbleBackend(dualSense), ownsBackend: true);
-rumble.Rumble(0.6f, 0.4f, 0.2f);
 ```
-
-The high-level service clamps inputs, applies the master switch, and translates `HapticPreset` and `Play` calls into dual-motor speeds via `CalculateMotorSpeeds`.
-
-### Accessibility toggle
-
-A settings panel lets players disable all haptics:
 
 ```csharp
-public void SetHapticsEnabled(bool enabled)
-{
-    MobileVibration.SetActive(enabled);
-    _gamepadRumble.IsActive = enabled;
-    _deviceLight.IsActive = enabled;
-}
+var limits = new DeviceFeedbackLimits(300_000, 4_096, 2_048, 4_096);
+var profile = new DeviceFeedbackProfile(minimumSampleIntervalMilliseconds: 10);
+var service = new MobileVibrationService(limits, profile);
+container.RegisterInstance<IHapticFeedbackService>(service);
 ```
 
-When `IsActive` is `false`, every service short-circuits before reaching native code, so the player can disable feedback without changing gameplay code.
+Use `MobileVibration` only in projects without a composition root. Mixing the
+static facade and an injected service in one scope creates two independent
+sessions with separate buffers and native handles.
 
-## Performance and Memory
+### Ownership
 
-| Path | Allocation |
+| Owner | Owns |
 | --- | --- |
-| `MobileVibration.Play` / `PlayPreset` | One JNI/Core Haptics call; managed buffers reused |
-| `MobileVibration.PlayCurve` | Sampling reuses `s_intensityBuf` / `s_sharpnessBuf` |
-| `MobileVibration.PlayClip(events)` | Event marshaling reuses `s_typeBuf` / `s_timeBuf` / `s_durationBuf` |
-| `MobileVibration.Vibrate(pattern)` | One JNI call; pattern array passed by reference |
-| `GamepadRumbleService` / `GamepadLightService` calls | Zero allocation; forwarded to backend |
-| `MobileVibration.Shutdown` | Disposes native engine and JNI handles |
+| Composition root | Service instances, backends, limits and profiles |
+| Service | Buffer lease, clip cache, command queue and counters |
+| Backend | Device discovery, timers and native handles |
+| Scope shutdown | `Cancel`, `Dispose`, then backend disposal when `ownsBackend` is true |
 
-Waveform sampling and event marshaling use shared managed buffers that grow on demand and never shrink:
+`Dispose` stops active output and releases native resources. `Reinitialize`
+prepares the disposed instance again.
 
-```text
-s_timingBuf, s_amplitudeBuf, s_floatTimeBuf,
-s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
+## Low-latency playback
+
+Sampling a curve or building an event timeline on the calling thread costs time
+proportional to the clip size. Baking moves that work to load time.
+
+### Bake a clip
+
+```csharp
+HapticClip clip = Resources.Load<HapticClip>("Haptics/Explosion");
+
+if (HapticClipBaker.TryBake(
+        clip,
+        DeviceFeedbackLimits.Default,
+        DeviceFeedbackProfile.Default,
+        out HapticClipSnapshot snapshot,
+        out FeedbackResult result))
+{
+    // Keep the snapshot for the lifetime of the scene.
+}
+else
+{
+    Debug.Log("Bake refused: " + result.Status);
+}
 ```
 
-`EnsureBuffers(count)` reuses managed arrays for later calls with equal or smaller counts. The long-lived Android vibrator and `VibrationEffect` class handles are cached for the service lifetime. Individual effects, compositions, and some platform queries create disposable `AndroidJavaObject` or `AndroidJavaClass` wrappers per call. Enum names used for native marshaling are held in static readonly arrays rather than produced with `ToString()` on each call.
+`TryBake` samples curves, orders events by time, expands silence gaps, converts
+amplitudes and trims arrays to the exact lengths required by the platform APIs.
+A failed bake returns `false` and a `FeedbackResult` with the rejection status.
+The source asset is unchanged.
 
-Growth is admission-bounded. Default limits are 300,000 ms per effect, 4,096 waveform samples, 2,048 haptic events, and 4,096 pattern segments. Custom `DeviceFeedbackLimits` can lower or raise these values, but never above the hard ceilings of 3,600,000 ms, 65,536 waveform samples, 16,384 events, and 65,536 pattern segments. Invalid or over-capacity calls return before buffer growth or native dispatch. Existing public playback methods remain `void` for compatibility, so rejection is a fail-closed no-op; inspect `GetMemoryStats()`/`DeviceFeedbackDiagnostics.GetMemoryStats()` to distinguish accepted, invalid-rejected, and capacity-rejected operations and to read retained buffer bytes plus peak duration/sample/event/pattern counts.
+### Play a snapshot
 
-The gamepad rumble and device light services forward to an injected backend after guard checks. Allocation behavior depends on that backend. Native mobile plugins, JNI, IL2CPP marshaling, browser interop, and buffer growth must be profiled separately on each target.
+```csharp
+service.PlayClipSnapshot(snapshot);
+FeedbackResult result = service.PlayClipSnapshotChecked(snapshot);
+```
 
-### Threading
+`PlayClipSnapshot` does no sampling, sorting, interval computation or buffer
+growth. The baked arrays are passed to the platform boundary directly. On iOS
+and Android 26+ no copy is needed; the arrays already have the required length.
 
-- `MobileVibration` static facade lazily constructs the singleton service under a lock.
-- `MobileVibrationService` native calls are intended for the Unity main thread; JNI and Core Haptics engine calls have their own thread affinity requirements.
-- `GamepadRumbleService` and `GamepadLightService` are not thread-safe; they assume the Unity main thread or a single owner.
+### Clip cache
 
-### Platform and AOT
+`PlayClip(HapticClip)` bakes on first use and keeps the snapshot in a bounded
+cache owned by the service. `DeviceFeedbackProfile.ClipCacheMaxEntries` sets the
+capacity (default 32, absolute ceiling 128). Replaying the same clip takes the
+snapshot path. Clear the cache with `Dispose`; `Reinitialize` rebuilds state on
+demand.
 
-The runtime assembly targets Unity 2019.3+, with native iOS plugins in Objective-C (`HapticFeedback.mm`, `CoreHaptics.mm`) and Android JNI calls through `AndroidJavaClass` / `AndroidJavaObject`. IL2CPP and AOT targets require their own Player evidence; Editor tests do not certify mobile hardware output, latency, GC behavior, WebGL browser policy, or console backends.
+### Latency contract
 
-## Troubleshooting
+Synchronous playback on the owner thread is dispatched immediately and never
+queued. Cross-thread commands are delivered at the next `Drain`. Baking is the
+only preparation step; do it outside input-sensitive frames.
 
-| Symptom | Likely cause | Resolution |
+## Cross-thread submission
+
+Use `TrySubmit` when a worker thread needs to request feedback. Use `Drain` on
+the owner thread, once per frame.
+
+```csharp
+var command = new FeedbackCommand
+{
+    Kind = FeedbackCommandKind.VibrateMilliseconds,
+    Priority = FeedbackPriority.Normal,
+    DeviceId = new FeedbackDeviceId(playerId),
+    DurationMilliseconds = 40
+};
+
+if (!service.TrySubmit(in command))
+{
+    // Queue is full or the payload is invalid.
+}
+```
+
+```csharp
+void Update() => service.Drain(maxCommands: 64);
+```
+
+| Member | Contract |
+| --- | --- |
+| `TrySubmit` | Safe from any thread. Returns `false` on a full queue or an invalid payload |
+| `Drain` | Owner thread only. Bounded by `maxCommands` |
+| `GetCommandStats()` | Capacity, enqueued, rejected, drained, deferred and pending counts |
+
+The ring has 256 slots. Overflow is refused and counted; it never allocates.
+Each slot has a free, writing or ready state. A producer still writing defers
+that slot to the next drain. `FeedbackCommandKind` covers `Play`, `PlayPreset`,
+`PlayClipSnapshot`, `VibrateMilliseconds` and `Cancel`.
+
+`FeedbackCommand` holds value fields and an optional `HapticClipSnapshot`. It
+contains no closures, delegates or Unity objects.
+
+## Capability and lifecycle
+
+```csharp
+DeviceCapability capability = service.Capability;
+if (!capability.SupportsSharpness)
+{
+    // Select a route that does not need sharpness.
+}
+
+service.RefreshCapabilities();
+```
+
+| Method | Effect |
+| --- | --- |
+| `RefreshCapabilities()` | Clear the cached capability and composition-failure latches, then re-probe on next use |
+| `Reinitialize()` | Revive a disposed instance and initialize its platform route |
+| `ResetDiagnostics()` | Clear per-instance counters |
+| `IsActive` | Master switch; setting it to `false` stops active output |
+| `Dispose()` | Stop output, release native resources, clear the cache and queue |
+
+`HasVibrator` reports `SupportsHaptics`. On iOS, capability detection checks
+Core Haptics first and falls back to the device class.
+
+## Admission, limits and diagnostics
+
+### Limits
+
+`DeviceFeedbackLimits` has four fields with defaults and hard ceilings:
+
+| Budget | Default | Hard ceiling |
 | --- | --- | --- |
-| No haptic on iOS device | `IsAvailable` is false or Core Haptics engine failed to start | Call `Initialize()` before play; check `IsAvailable` and the device log for engine errors |
-| `Play` works but `UpdateContinuousParameters` does nothing | Target platform lacks Core Haptics (iOS < 13, Android, WebGL) | Use `Play` with a finite duration; modulation is iOS 13+ only |
-| Android amplitude ignored on old devices | Device API level < 26 | `VibrationEffect.CreateWaveform` requires API 26+; older devices fall back to `vibrate()` |
-| Sharpness has no effect | Platform does not expose sharpness | Only iOS 13+ Core Haptics consumes sharpness natively |
-| Gamepad rumble is silent | No backend installed or backend `IsAvailable` is false | Install a real `IGamepadRumbleBackend` through the constructor |
-| Device light does not change | No backend installed | Install a real `IDeviceLightBackend` |
-| `Vibrate(pattern, repeat)` loops forever | `repeat` is not `-1` and `Cancel` was never called | Call `MobileVibration.Cancel()` when the loop should stop |
-| WebGL haptic silently fails | Browser blocked `navigator.vibrate` | Require a user gesture before calling, or treat WebGL as no-haptic |
-| Haptic fires once then stops | `IsActive` was set to `false` or service was disposed | Check `IsActive` and ensure `Shutdown` is only called on teardown |
+| `MaximumDurationMilliseconds` | 300,000 | 3,600,000 |
+| `MaximumWaveformSampleCount` | 4,096 | 65,536 |
+| `MaximumHapticEventCount` | 2,048 | 16,384 |
+| `MaximumPatternSegmentCount` | 4,096 | 65,536 |
+
+The constructor rejects values outside 1 through the hard ceiling. Admission
+returns before any buffer growth or native dispatch when an operation exceeds a
+budget.
+
+### Profile
+
+| Field | Default | Absolute ceiling |
+| --- | --- | --- |
+| `MinimumSampleIntervalMilliseconds` | 5 | 1 to 300,000 |
+| `ExactArrayCacheMaxEntries` | 16 | 64 |
+| `ExactArrayCacheBudgetBytes` | 1 MiB | 8 MiB |
+| `CacheableMaximumLength` | 8,192 | 65,536 |
+| `ClipCacheMaxEntries` | 32 | 128 |
+
+### Results and counters
+
+`FeedbackResult` carries `Status`, `DurationMilliseconds`,
+`WaveformSampleCount`, `HapticEventCount` and `PatternSegmentCount`. Use
+`IsAccepted` and `IsRejected` for branching.
+
+`GetMemoryStats()` returns a `DeviceFeedbackMemoryStats` snapshot with accepted
+and rejected counts, peak values, retained buffer bytes, buffer growth count and
+exact-array allocation and reuse counts. Counters belong to one service
+instance.
+
+`DeviceFeedbackDiagnostics` is a process-wide aggregate for hosts that do not
+hold a service instance. It is disabled by default. Set
+`GlobalAggregationEnabled = true` to enable it; call `Reset()` to clear it.
+
+## Performance and memory
+
+| Property | Design |
+| --- | --- |
+| Scratch buffers | One `DeviceFeedbackBufferLease` per service, disposed with the service |
+| Growth | Power-of-two capacity, amortized |
+| Exact-length arrays | Length-keyed cache with a bounded entry count and byte budget |
+| Sample grid | Quantized down to a power of two; the effective interval preserves duration |
+| Authoring events | Copied and ordered at bake time, never on the dispatch thread |
+| Admission | Integer arithmetic, no floating-point division on the dispatch path |
+| Presets | Static readonly payload table |
+| Diagnostics | Plain fields per instance; atomic operations only in the optional global aggregate |
+
+Steady-state playback allocates no managed buffers. Android JNI calls still
+create `AndroidJavaObject` wrappers per native dispatch; that cost belongs to the
+Unity platform boundary. iOS and WebGL steady-state paths allocate no managed
+memory after initialization.
+
+The one-time bake of a clip allocates its snapshot arrays. This is a fixed cost
+per baked clip, independent of how often the clip plays.
+
+## Threading
+
+Each service is owner-thread confined. The first call records the owner thread;
+later calls from that thread proceed with one volatile read. Synchronous calls
+from another thread return `RejectedThreadAffinity` without touching instance
+state. Use `TrySubmit` and `Drain` for cross-thread work.
+
+`MobileVibration` reads its singleton under the same lock as `Shutdown` and
+clears it on subsystem registration, so a play session with domain reload
+disabled does not retain a stale instance.
+
+Native iOS state is main-thread only. The Objective-C bridge retains transient
+players in a bounded set and suppresses engine callbacks during shutdown.
+
+## Platform and AOT
+
+The runtime assembly declares Unity 2022.3. It targets Android, iOS, WebGL,
+tvOS, VisionOS, desktop and Editor. Only Android, iOS and WebGL have mobile
+routes; the other targets accept gamepad and light backends but produce no built-in
+vibration.
+
+Runtime code uses no reflection discovery, no dynamic code generation and no
+`RegexOptions.Compiled`. Native plugins validate counts and pointers at the C
+ABI boundary and enforce a 16,384-event ceiling. Validate shipped configurations
+on target Player builds with IL2CPP and managed stripping.
+
+## Authoring
+
+### `HapticClip`
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `duration` | `float` | Clip length in seconds in curve mode |
+| `intensityCurve` | `AnimationCurve` | Intensity over normalized time |
+| `sharpnessCurve` | `AnimationCurve` | Sharpness over normalized time |
+| `events` | `HapticEvent[]` | Discrete events; when non-empty, curves are ignored |
+| `HasEvents` | `bool` | True when `events` has at least one entry |
+
+### `HapticEvent`
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `type` | `HapticEventType` | `Transient` or `Continuous` |
+| `time` | `float` | Non-negative start time in seconds |
+| `duration` | `float` | Non-negative; used for `Continuous` |
+| `intensity` | `float` | 0 to 1 |
+| `sharpness` | `float` | 0 to 1 |
+
+Events are ordered by `time` at bake time. `Transient` uses a fixed 30 ms length;
+`Continuous` with a zero duration uses a 10 ms minimum. Silence between events
+becomes a zero-amplitude waveform segment on Android.
+
+### Inspector
+
+`HapticClipInspector` shows which mode is active, validates event values, and
+warns when the event count exceeds the default admission limit. It edits through
+`SerializedObject`, so Undo, multi-object editing and Prefab overrides work.
+
+## Error handling
+
+| Status | Cause | Action |
+| --- | --- | --- |
+| `RejectedInvalid` | Non-finite or out-of-range input, null clip, unknown preset or enum | Fix the caller input |
+| `RejectedCapacity` | Operation exceeds a limit, or the command queue is full | Lower the request or drain the queue |
+| `RejectedInactive` | `IsActive` is false | Re-enable the service |
+| `RejectedUnavailable` | No hardware route or no backend | Install a backend or check capability |
+| `RejectedDisposed` | Service was disposed | Call `Reinitialize` or create a new service |
+| `RejectedUnsupported` | Route lacks the requested capability | Select a supported route |
+| `RejectedNativeFailure` | Platform adapter failure recorded during fallback | Check `GetMemoryStats` and device logs |
+| `RejectedThreadAffinity` | Synchronous call from a non-owner thread | Use `TrySubmit` |
+| `Degraded` | Output produced through a reduced route | Treat as success with reduced fidelity |
+
+Rejected calls produce no native dispatch. Use `LastResult` or a `*Checked`
+method to distinguish them from accepted calls.
 
 ## Validation
 
-Run focused tests from Unity Test Runner:
+Run the EditMode suite from Unity Test Runner:
 
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.DeviceFeedback.Tests.Editor -testResults <result-path> -quit
 ```
 
-The Editor test suite covers guard and no-op behavior for `GamepadRumbleService` and `GamepadLightService`. Mobile hardware output, latency, GC behavior, WebGL browser policy, and console backends must be validated separately on each target device.
+The suite covers capacity boundaries, non-finite input rejection, invalid enums,
+per-instance diagnostics, reinitialization, buffer growth, baked snapshots,
+authoring immutability and cross-thread submission.
 
-Capacity fixtures must also exercise every boundary at `limit - 1`, `limit`, and `limit + 1`, confirming that the legacy `void` API emits no native call when rejected and that accepted/invalid/capacity counters and peak values advance exactly once.
+For a new backend or a target Player, check these points:
+
+1. Open the Unity project and confirm the runtime and editor assemblies compile.
+2. Run the EditMode suite.
+3. Open a `HapticClip` asset and confirm the inspector, Undo and Prefab override.
+4. Build for Android, iOS and WebGL and verify output on representative hardware.
+5. Check latency, allocation and managed stripping on an IL2CPP Player build.
+
+## Extending
+
+Implement a backend and pass it to the service constructor.
+
+```csharp
+public sealed class MyRumbleBackend : IGamepadRumbleBackend
+{
+    public bool IsAvailable => true;
+
+    public void Initialize() { }
+    public void SetMotorSpeeds(float low, float high) { /* write to hardware */ }
+    public void Rumble(float low, float high, float duration) { /* schedule a stop */ }
+    public void Stop() { /* stop motors */ }
+    public void Dispose() { /* release handles */ }
+}
+
+var rumble = new GamepadRumbleService(new MyRumbleBackend(), ownsBackend: true);
+```
+
+A backend owns device discovery, timing and native calls. The service clamps
+inputs, applies admission, records results and forwards calls. Keep optional
+third-party dependencies in a separate integration assembly; the runtime
+assembly does not reference integrations.
 
 ## References
 
-- [Core Haptics](https://developer.apple.com/documentation/corehaptics) — iOS haptic engine.
-- [Android VibrationEffect](https://developer.android.com/reference/android/os/VibrationEffect) — Android vibration API.
-- [Web Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Vibration_API) — browser vibration standard.
+- [Core Haptics](https://developer.apple.com/documentation/corehaptics)
+- [Android VibrationEffect](https://developer.android.com/reference/android/os/VibrationEffect)
+- [Web Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Vibration_API)

@@ -1,14 +1,7 @@
-﻿////////////////////////////////////////////////////////////////////////////////
-//
-// MobileVibration Example
-// Demonstrates mobile haptic feedback: presets, sharpness, curves, HapticClip,
-// real-time Core Haptics modulation, and legacy vibration APIs.
-//
-////////////////////////////////////////////////////////////////////////////////
+// Sample for the mobile vibration API.
 
 using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using CycloneGames.DeviceFeedback.Runtime;
 using UnityEngine;
 using UnityEngine.UI;
@@ -39,8 +32,6 @@ public class MobileVibrationExample : MonoBehaviour
 
     [Header("Toggle")]
     public Toggle toggleVibration;
-
-    private static readonly Regex PatternRegex = new Regex(@"^\s*\d+\s*(,\s*\d+\s*)*$", RegexOptions.Compiled);
 
     void Start()
     {
@@ -81,11 +72,7 @@ public class MobileVibrationExample : MonoBehaviour
         return '\0';
     }
 
-    // ── Default vibration ──
-
     public void TapVibrate() => MobileVibration.Vibrate();
-
-    // ── Custom duration (ms) ──
 
     public void TapVibrateCustom()
     {
@@ -93,19 +80,17 @@ public class MobileVibrationExample : MonoBehaviour
             MobileVibration.Vibrate(ms);
     }
 
-    // ── Pattern: comma-separated [wait, vibrate, wait, vibrate, ...] ──
-
     public void TapVibratePattern()
     {
         string raw = inputPattern.text;
-        if (string.IsNullOrWhiteSpace(raw) || !PatternRegex.IsMatch(raw)) return;
+        if (string.IsNullOrWhiteSpace(raw)) return;
 
         string[] parts = raw.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
         var values = new List<long>(parts.Length);
         foreach (string part in parts)
         {
-            if (long.TryParse(part.Trim(), out long v))
-                values.Add(v);
+            if (!long.TryParse(part.Trim(), out long v) || v < 0) return;
+            values.Add(v);
         }
         if (values.Count == 0) return;
 
@@ -118,13 +103,9 @@ public class MobileVibrationExample : MonoBehaviour
 
     public void TapCancelVibrate() => MobileVibration.Cancel();
 
-    // ── Classic haptic shortcuts ──
-
     public void TapPopVibrate() => MobileVibration.VibratePop();
     public void TapPeekVibrate() => MobileVibration.VibratePeek();
     public void TapNopeVibrate() => MobileVibration.VibrateNope();
-
-    // ── Unified haptic presets ──
 
     public void TapPresetLight() => MobileVibration.PlayPreset(HapticPreset.Light);
     public void TapPresetMedium() => MobileVibration.PlayPreset(HapticPreset.Medium);
@@ -136,11 +117,9 @@ public class MobileVibrationExample : MonoBehaviour
 
     public void TapVibratePreset(string presetName)
     {
-        if (Enum.TryParse<HapticPreset>(presetName, out var preset))
+        if (Enum.TryParse<HapticPreset>(presetName, out var preset) && Enum.IsDefined(typeof(HapticPreset), preset))
             MobileVibration.PlayPreset(preset);
     }
-
-    // ── Play with intensity + sharpness (slider-driven) ──
 
     public void TapPlayWithSharpness()
     {
@@ -149,22 +128,16 @@ public class MobileVibrationExample : MonoBehaviour
         MobileVibration.Play(intensity, 0.3f, sharpness);
     }
 
-    // ── Dual-curve vibration (intensity + sharpness curves) ──
-
     public void TapPlayDualCurve()
     {
         MobileVibration.PlayCurve(intensityCurve, 2.0f, sharpnessCurve, sampleIntervalMs: 15);
     }
-
-    // ── HapticClip playback ──
 
     public void TapPlayClip()
     {
         if (hapticClip != null)
             MobileVibration.PlayClip(hapticClip);
     }
-
-    // ── Real-time parameter modulation (iOS Core Haptics) ──
     // Call from Update() while a continuous haptic is active to dynamically
     // change intensity/sharpness in response to game state.
 
@@ -189,8 +162,6 @@ public class MobileVibrationExample : MonoBehaviour
         MobileVibration.UpdateContinuousParameters(intensity, sharpness);
     }
 
-    // ── iOS-specific Haptic Feedback (no-op on other platforms) ──
-
     public void TapIOSImpactLight() => MobileVibration.VibrateIOS(IOSImpactStyle.Light);
     public void TapIOSImpactMedium() => MobileVibration.VibrateIOS(IOSImpactStyle.Medium);
     public void TapIOSImpactHeavy() => MobileVibration.VibrateIOS(IOSImpactStyle.Heavy);
@@ -202,8 +173,6 @@ public class MobileVibrationExample : MonoBehaviour
     public void TapIOSNotifError() => MobileVibration.VibrateIOS(IOSNotificationStyle.Error);
 
     public void TapIOSSelection() => MobileVibration.VibrateIOSSelection();
-
-    // ── Toggle vibration on/off ──
 
     public void TapToggleVibration(bool active)
     {
