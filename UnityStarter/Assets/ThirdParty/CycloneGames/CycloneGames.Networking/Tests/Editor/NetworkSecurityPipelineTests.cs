@@ -18,7 +18,7 @@ namespace CycloneGames.Networking.Tests.Editor
             NetworkAuthenticationResult result = chain.Authenticate(
                 new TestConnection(1, authenticated: false),
                 ReadOnlySpan<byte>.Empty,
-                new NetworkAuthenticationContext("test", NetworkWireProtocol.CurrentVersion));
+                new NetworkAuthenticationContext("test"));
 
             Assert.IsTrue(result.IsAccepted);
             Assert.AreEqual(42UL, result.Principal.PlayerId);
@@ -222,10 +222,10 @@ namespace CycloneGames.Networking.Tests.Editor
                 flags: NetworkMessageFlags.Reliable | NetworkMessageFlags.Ordered);
             byte[] expected =
             {
-                0x27, 0xAF, 0xE7, 0x7D, 0x9D, 0xB4, 0x46, 0xE1,
-                0x47, 0x09, 0x7D, 0x23, 0x2E, 0x55, 0x91, 0xB3,
-                0x05, 0x24, 0x11, 0xD1, 0xC0, 0x46, 0xFE, 0x89,
-                0x98, 0xB0, 0xD2, 0x6A, 0xF0, 0x9D, 0x26, 0x9F
+                0x07, 0x73, 0xA7, 0x8E, 0xA6, 0x38, 0x4B, 0x7B,
+                0xC3, 0x83, 0x4E, 0x07, 0x93, 0x65, 0xB8, 0x18,
+                0x46, 0xBF, 0x5F, 0xCB, 0xA4, 0x83, 0x28, 0x70,
+                0x1C, 0xE9, 0x2D, 0xC1, 0x88, 0x8F, 0xF4, 0xBD
             };
             Span<byte> signature = stackalloc byte[HmacSha256NetworkMessageSigner.SIGNATURE_LENGTH];
 

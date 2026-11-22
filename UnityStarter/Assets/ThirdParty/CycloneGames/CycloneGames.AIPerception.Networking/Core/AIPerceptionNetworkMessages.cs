@@ -39,7 +39,6 @@ namespace CycloneGames.AIPerception.Networking
         Compatible = 1,
         Malformed = 2,
         FingerprintMismatch = 3,
-        VersionIncompatible = 4,
         ProfileMismatch = 5,
         RemoteRequirementsUnsupported = 6,
         LocalRequirementsUnsupported = 7
@@ -51,28 +50,20 @@ namespace CycloneGames.AIPerception.Networking
         public readonly ulong PerceptionProfileHash;
         public readonly AIPerceptionNetworkFeatureFlags SupportedFeatures;
         public readonly AIPerceptionNetworkFeatureFlags RequiredFeatures;
-        public readonly byte MinimumSupportedProtocolVersion;
-        public readonly byte CurrentProtocolVersion;
 
         public AIPerceptionManifestHandshakeMessage(
             ulong protocolFingerprint,
             ulong perceptionProfileHash,
             AIPerceptionNetworkFeatureFlags supportedFeatures,
-            AIPerceptionNetworkFeatureFlags requiredFeatures,
-            byte minimumSupportedProtocolVersion,
-            byte currentProtocolVersion)
+            AIPerceptionNetworkFeatureFlags requiredFeatures)
         {
             ProtocolFingerprint = protocolFingerprint;
             PerceptionProfileHash = perceptionProfileHash;
             SupportedFeatures = supportedFeatures;
             RequiredFeatures = requiredFeatures;
-            MinimumSupportedProtocolVersion = minimumSupportedProtocolVersion;
-            CurrentProtocolVersion = currentProtocolVersion;
         }
 
         ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
         ulong INetworkProtocolHandshakeMessage.DomainStateHash => PerceptionProfileHash;
 
         public bool IsWellFormed => AIPerceptionNetworkMessageValidator.Validate(in this) ==
@@ -97,8 +88,6 @@ namespace CycloneGames.AIPerception.Networking
             {
                 case NetworkHandshakeResult.FingerprintMismatch:
                     return AIPerceptionNetworkHandshakeResult.FingerprintMismatch;
-                case NetworkHandshakeResult.VersionIncompatible:
-                    return AIPerceptionNetworkHandshakeResult.VersionIncompatible;
                 case NetworkHandshakeResult.Malformed:
                     return AIPerceptionNetworkHandshakeResult.Malformed;
                 case NetworkHandshakeResult.Compatible:
@@ -138,9 +127,7 @@ namespace CycloneGames.AIPerception.Networking
                 AIPerceptionNetworkProtocol.ProtocolFingerprint,
                 profile.ProfileHash,
                 profile.Features,
-                profile.RequiredFeatures,
-                AIPerceptionNetworkProtocol.MIN_SUPPORTED_PROTOCOL_VERSION,
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION);
+                profile.RequiredFeatures);
         }
     }
 
@@ -184,7 +171,6 @@ namespace CycloneGames.AIPerception.Networking
 
     public readonly struct AIPerceptionDetectionEventMessage
     {
-        public readonly byte ProtocolVersion;
         public readonly uint ObserverNetworkId;
         public readonly ushort Sequence;
         public readonly int Tick;
@@ -194,7 +180,6 @@ namespace CycloneGames.AIPerception.Networking
         public readonly AIPerceptionDetectionEntry Entry;
 
         public AIPerceptionDetectionEventMessage(
-            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
@@ -203,7 +188,6 @@ namespace CycloneGames.AIPerception.Networking
             ulong stateHash,
             in AIPerceptionDetectionEntry entry)
         {
-            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;
@@ -222,7 +206,6 @@ namespace CycloneGames.AIPerception.Networking
     /// </summary>
     public readonly struct AIPerceptionDetectionSnapshotMessage
     {
-        public readonly byte ProtocolVersion;
         public readonly uint ObserverNetworkId;
         public readonly ushort Sequence;
         public readonly int Tick;
@@ -232,7 +215,6 @@ namespace CycloneGames.AIPerception.Networking
         public readonly ulong StateHash;
 
         public AIPerceptionDetectionSnapshotMessage(
-            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
@@ -241,7 +223,6 @@ namespace CycloneGames.AIPerception.Networking
             ushort entryCount,
             ulong stateHash)
         {
-            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;
@@ -257,7 +238,6 @@ namespace CycloneGames.AIPerception.Networking
 
     public readonly struct AIPerceptionAuthorityTransferMessage
     {
-        public readonly byte ProtocolVersion;
         public readonly uint ObserverNetworkId;
         public readonly int PreviousOwnerConnectionId;
         public readonly int NewOwnerConnectionId;
@@ -269,7 +249,6 @@ namespace CycloneGames.AIPerception.Networking
         public readonly ulong SnapshotStateHash;
 
         public AIPerceptionAuthorityTransferMessage(
-            byte protocolVersion,
             uint observerNetworkId,
             int previousOwnerConnectionId,
             int newOwnerConnectionId,
@@ -280,7 +259,6 @@ namespace CycloneGames.AIPerception.Networking
             int snapshotTick,
             ulong snapshotStateHash)
         {
-            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             PreviousOwnerConnectionId = previousOwnerConnectionId;
             NewOwnerConnectionId = newOwnerConnectionId;
@@ -298,7 +276,6 @@ namespace CycloneGames.AIPerception.Networking
 
     public readonly struct AIPerceptionFullStateRequestMessage
     {
-        public readonly byte ProtocolVersion;
         public readonly uint ObserverNetworkId;
         public readonly ushort Sequence;
         public readonly int Tick;
@@ -307,7 +284,6 @@ namespace CycloneGames.AIPerception.Networking
         public readonly ulong LastKnownStateHash;
 
         public AIPerceptionFullStateRequestMessage(
-            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
@@ -315,7 +291,6 @@ namespace CycloneGames.AIPerception.Networking
             uint expectedAuthorityGeneration,
             ulong lastKnownStateHash)
         {
-            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;

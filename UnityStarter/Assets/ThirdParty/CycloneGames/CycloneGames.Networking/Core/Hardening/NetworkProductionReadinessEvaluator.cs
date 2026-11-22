@@ -368,7 +368,7 @@ namespace CycloneGames.Networking
                     NetworkHardeningRequirementIds.ProtocolManifest,
                     NetworkReadinessSeverity.Required,
                     "Protocol manifest is required but none were provided.",
-                    "Register project protocol manifests so message ids, versions, and payload budgets are explicit.");
+                    "Register project protocol manifests so message ids, contract identities, and payload budgets are explicit.");
             }
 
             if (scenario.MinimumProtocolManifestCount > 0 && manifestCount < scenario.MinimumProtocolManifestCount)

@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.SCH.md)
 
-`CycloneGames.BehaviorTree.Networking` bridges [CycloneGames.BehaviorTree](../CycloneGames.BehaviorTree/README.md) and [CycloneGames.Networking](../CycloneGames.Networking/README.md). It defines a versioned protocol, network replication profiles, state payload DTOs, authority-generation helpers, and a runtime bridge for snapshots, deltas, hashes, and tick-control operations. The base BehaviorTree package does not require this package.
+`CycloneGames.BehaviorTree.Networking` bridges [CycloneGames.BehaviorTree](../CycloneGames.BehaviorTree/README.md) and [CycloneGames.Networking](../CycloneGames.Networking/README.md). It defines a fingerprinted protocol, network replication profiles, state payload DTOs, authority-generation helpers, and a runtime bridge for snapshots, deltas, hashes, and tick-control operations. The base BehaviorTree package does not require this package.
 
 ## Table of Contents
 
@@ -155,22 +155,22 @@ The transport adapter serializes the DTO, selects the profile channel, sends it,
 1. Check authority, authentication, rate, target identity, and enabled profile features.
 2. Capture a snapshot, delta, or hash-only message on the tree owner thread.
 3. Encode and send the DTO through the networking backend.
-4. Decode incoming bytes using the same versioned contract.
+4. Decode incoming bytes using the same contract identity.
 5. Queue the decoded message to the tree owner thread.
 6. Call `TryApplyPayload`; treat `false` only as a packet rejected before live commit. Handle exceptions separately -- they can occur after live state has changed.
 
 ## Protocol Contract
 
-The package reserves message range `14000-14999`. Protocol version 2; a peer is accepted only when its fingerprint matches exactly:
+The package reserves message range `14000-14999`. A peer is accepted only when its fingerprint matches exactly:
 
 | Constant | ID | Contract identity | Frozen schema hash | Default channel |
 | --- | ---: | --- | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `14000` | `BehaviorTreeManifestHandshakeMessage:v1` | `0x059263302E9505CD` | Reliable |
-| `MSG_FULL_SNAPSHOT` | `14001` | `BehaviorTreeStatePayloadMessage.FullSnapshot:v2` | `0x750F7F22C73B0946` | Reliable |
-| `MSG_BLACKBOARD_DELTA` | `14002` | `BehaviorTreeStatePayloadMessage.BlackboardDelta:v2` | `0x5528AAF0A310630D` | UnreliableSequenced |
-| `MSG_DESYNC_REPORT` | `14003` | `BehaviorTreeDesyncReportMessage:v2` | `0x566A9F2B1C5C9202` | Reliable |
-| `MSG_TICK_CONTROL` | `14004` | `BehaviorTreeTickControlMessage:v1` | `0x6299F932DCE53765` | Reliable |
-| `MSG_AUTHORITY_TRANSFER` | `14005` | `BehaviorTreeAuthorityTransferMessage:v1` | `0x94B78D8EED490D89` | Reliable |
+| `MSG_MANIFEST_HANDSHAKE` | `14000` | `BehaviorTreeManifestHandshakeMessage` | `0x6898D682C47854FE` | Reliable |
+| `MSG_FULL_SNAPSHOT` | `14001` | `BehaviorTreeStatePayloadMessage.FullSnapshot` | `0x7F95590BCB67D660` | Reliable |
+| `MSG_BLACKBOARD_DELTA` | `14002` | `BehaviorTreeStatePayloadMessage.BlackboardDelta` | `0xB2B40724FD8B87DA` | UnreliableSequenced |
+| `MSG_DESYNC_REPORT` | `14003` | `BehaviorTreeDesyncReportMessage` | `0xDAB47023610B0058` | Reliable |
+| `MSG_TICK_CONTROL` | `14004` | `BehaviorTreeTickControlMessage` | `0x6F19C5519F2372D6` | Reliable |
+| `MSG_AUTHORITY_TRANSFER` | `14005` | `BehaviorTreeAuthorityTransferMessage` | `0x9E4A1D764326F29A` | Reliable |
 
 Schema hashes are frozen wire identities. The current v2 protocol fingerprint is `0x633B1F15F69258AB`. `BehaviorTreeManifestHandshakeMessage.IsCompatibleWithLocalProtocol` compares the protocol fingerprint; the application must also check the tree template hash and required feature compatibility.
 
@@ -236,7 +236,7 @@ if (bridge.TryCreateBlackboardDelta(
 }
 ```
 
-Delta bytes use the versioned `BTDP1` frame. On receive, the bridge clones the `Networked` scope, applies the candidate delta, validates hashes, then commits under one write lock. A revision mismatch throws before live mutation. Observer callbacks run after the commit, outside the lock.
+Delta bytes use the `BTDP1` frame. On receive, the bridge clones the `Networked` scope, applies the candidate delta, validates hashes, then commits under one write lock. A revision mismatch throws before live mutation. Observer callbacks run after the commit, outside the lock.
 
 ### Hash-only messages and desync reports
 
@@ -302,7 +302,7 @@ Do not use `PlayerPrefs`, `EditorPrefs`, or `SessionState` for protocol, profile
 | `TryApplyPayload` always returns `false` | Cursor target/template/authority does not match envelope | Create the cursor with all three stream identities; use `ResetProgress(newAuthorityGeneration)` only after an accepted handoff |
 | First payload succeeds, later packets fail | Duplicate/old sequence, older tick, or cursor recreated incorrectly | Store one mutable cursor per stream and pass it by `ref`; verify half-range sequence generation |
 | Full snapshot is valid but rejected | Local managed node state or a composite cursor differs | Coordinate a project-owned execution reset/restart, then retry |
-| Valid-looking delta is rejected | Schema key/type/sync flags or hash provider differ | Use the same versioned schema and `StringHashFunc` on every peer |
+| Valid-looking delta is rejected | Schema key/type/sync flags or hash provider differ | Use the same schema and `StringHashFunc` on every peer |
 | Remote object reference is absent | Object keys are `LocalOnly` | Replicate a stable primitive ID and resolve the object locally |
 | Wrong-thread exception | Transport callback called the bridge directly | Queue the operation to the bridge/tree owner thread |
 | Delta capture throws for payload size | Exact patch size exceeds `MaxDeltaPayloadBytes` | Increase the budget or reduce tracked state |

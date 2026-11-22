@@ -245,7 +245,7 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 ## Protocol Reference
 
-### Wire v1 contract
+### Wire contract
 
 | Message | ID | Payload bytes | Default channel |
 | --- | ---: | ---: | --- |
@@ -277,7 +277,7 @@ A profile defines supported/required features, channels, intervals, snapshot bud
 | Failure | Required response |
 | --- | --- |
 | Invalid length, enum, flags, float, order, count, or hash | Drop the payload; increment bounded telemetry; apply the session abuse policy |
-| Profile, fingerprint, version, or feature mismatch | Disable this module's traffic or reject the peer |
+| Profile, fingerprint, or feature mismatch | Disable this module's traffic or reject the peer |
 | Unauthenticated, wrong-direction, or non-authoritative sender | Drop and report as an authority violation |
 | Generation mismatch, stale tick, replay, or out-of-order sequence | Drop without changing replay state |
 | Destination capacity too small | Use a configured bounded buffer or reject |

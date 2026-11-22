@@ -41,17 +41,17 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!identityMap.IsOwnerThread)
                 throw new InvalidOperationException("The authority identity map must be owned by the processor thread.");
             if (!stateVersion.IsOwnerThread)
-                throw new InvalidOperationException("The network state version must be owned by the processor thread.");
+                throw new InvalidOperationException("The network state sequence must be owned by the processor thread.");
             if (!ReferenceEquals(stateVersion.AbilitySystem, abilitySystem))
             {
                 throw new ArgumentException(
-                    "The network state version must own the supplied AbilitySystemComponent.",
+                    "The network state sequence must own the supplied AbilitySystemComponent.",
                     nameof(stateVersion));
             }
             if (stateVersion.StreamEpoch != identityMap.StreamEpoch)
             {
                 throw new ArgumentException(
-                    "The network state version and authority identity map must use the same stream epoch.",
+                    "The network state sequence and authority identity map must use the same stream epoch.",
                     nameof(stateVersion));
             }
             if (!entityResolver.TryResolveAbilitySystem(
@@ -71,7 +71,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!stateVersion.TryObserveCurrentState(out lastKnownWireStateVersion))
             {
                 throw new InvalidOperationException(
-                    "The GAS network state version cannot observe the current authority state.");
+                    "The GAS network state sequence cannot observe the current authority state.");
             }
         }
 
@@ -171,7 +171,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!stateVersion.TryObserveCurrentState(out ulong currentWireStateVersion))
             {
                 throw new InvalidOperationException(
-                    "The GAS network state version cannot observe the current authority state.");
+                    "The GAS network state sequence cannot observe the current authority state.");
             }
             replayWindow.Reset(newStreamEpoch);
             lastKnownWireStateVersion = currentWireStateVersion;

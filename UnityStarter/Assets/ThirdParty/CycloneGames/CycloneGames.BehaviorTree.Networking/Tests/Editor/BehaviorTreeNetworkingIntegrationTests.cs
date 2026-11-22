@@ -77,7 +77,7 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
             Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(BehaviorTreeNetworkProtocol.MessageOwner));
             Assert.That(descriptor.Owner, Is.EqualTo(BehaviorTreeNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.ContractId, Does.StartWith("BehaviorTreeStatePayloadMessage.FullSnapshot:v2|"));
+            Assert.That(descriptor.ContractId, Does.StartWith("BehaviorTreeStatePayloadMessage.FullSnapshot|"));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.Reliable));
             Assert.That(descriptor.MaxPayloadSize, Is.EqualTo(NetworkConstants.DefaultMaxPayloadSize));
         }
@@ -95,33 +95,30 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
         }
 
         [Test]
-        public void ProtocolManifest_UsesFrozenSchemasAndV2StatePayloadFingerprint()
+        public void ProtocolManifest_UsesFrozenSchemasAndStatePayloadFingerprint()
         {
             NetworkProtocolManifest manifest = BehaviorTreeNetworkProtocol.CreateProtocolManifest();
             string[] canonicalSchemaLiterals =
             {
-                "BehaviorTreeManifestHandshakeMessage:v1",
-                "BehaviorTreeStatePayloadMessage.FullSnapshot:v2|TargetNetworkId:u32le|Sequence:u16le|Tick:i32le|PayloadKind:u8=1|TreeTemplateHash:u64le|BlackboardHash:u64le|TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTS2{Magic:u32le=0x32535442|IsValid:u8(0,1)|Timestamp:f64le|TreeStateHash:u64le|BlackboardHash:u64le|NodeCount:i32le|NodeStates:NodeCount*u8|NodeAuxInts:NodeCount*i32le|BlackboardLength:i32le|Blackboard:RuntimeBlackboardSnapshot{Scope:Snapshot|Sequence:u64le|IntCount:i32le|Ints:IntCount*(Key:i32le,Value:i32le)|FloatCount:i32le|Floats:FloatCount*(Key:i32le,Value:f32le)|BoolCount:i32le|Bools:BoolCount*(Key:i32le,Value:u8(0,1))|Vector3Count:i32le|Vector3s:Vector3Count*(Key:i32le,X:f32le,Y:f32le,Z:f32le)|LongCount:i32le|Longs:LongCount*(Key:i32le,Value:i64le)|Long2Count:i32le|Long2s:Long2Count*(Key:i32le,X:i64le,Y:i64le)|Long3Count:i32le|Long3s:Long3Count*(Key:i32le,X:i64le,Y:i64le,Z:i64le)|StampCount:i32le|Stamps:StampCount*(Key:i32le,Stamp:u64le)}}",
-                "BehaviorTreeStatePayloadMessage.BlackboardDelta:v2|TargetNetworkId:u32le|Sequence:u16le|Tick:i32le|PayloadKind:u8=2|TreeTemplateHash:u64le|BlackboardHash:u64le|TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTDP1{Magic:u32le=0x50445442|Version:u16le=1|HeaderSize:u16le=16|BodyLength:i32le|EntryCount:i32le|Entry:Key:i32le+Tag:u8+Value:tagged-le|Tags:0=i32,1=f32,2=bool-u8(0,1),3=3*f32,4=i64,5=2*i64,6=3*i64,255=remove}",
-                "BehaviorTreeDesyncReportMessage:v2|TargetNetworkId:u32le|Sequence:u16le|LocalTick:i32le|RemoteTick:i32le|LocalBlackboardHash:u64le|RemoteBlackboardHash:u64le|LocalTreeStateHash:u64le|RemoteTreeStateHash:u64le|AuthorityGeneration:u32le",
-                "BehaviorTreeTickControlMessage:v1",
-                "BehaviorTreeAuthorityTransferMessage:v1"
+                "BehaviorTreeManifestHandshakeMessage",
+                "BehaviorTreeStatePayloadMessage.FullSnapshot|TargetNetworkId:u32le|Sequence:u16le|Tick:i32le|PayloadKind:u8=1|TreeTemplateHash:u64le|BlackboardHash:u64le|TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTS2{Magic:u32le=0x32535442|IsValid:u8(0,1)|Timestamp:f64le|TreeStateHash:u64le|BlackboardHash:u64le|NodeCount:i32le|NodeStates:NodeCount*u8|NodeAuxInts:NodeCount*i32le|BlackboardLength:i32le|Blackboard:RuntimeBlackboardSnapshot{Scope:Snapshot|Sequence:u64le|IntCount:i32le|Ints:IntCount*(Key:i32le,Value:i32le)|FloatCount:i32le|Floats:FloatCount*(Key:i32le,Value:f32le)|BoolCount:i32le|Bools:BoolCount*(Key:i32le,Value:u8(0,1))|Vector3Count:i32le|Vector3s:Vector3Count*(Key:i32le,X:f32le,Y:f32le,Z:f32le)|LongCount:i32le|Longs:LongCount*(Key:i32le,Value:i64le)|Long2Count:i32le|Long2s:Long2Count*(Key:i32le,X:i64le,Y:i64le)|Long3Count:i32le|Long3s:Long3Count*(Key:i32le,X:i64le,Y:i64le,Z:i64le)|StampCount:i32le|Stamps:StampCount*(Key:i32le,Stamp:u64le)}}",
+                "BehaviorTreeStatePayloadMessage.BlackboardDelta|TargetNetworkId:u32le|Sequence:u16le|Tick:i32le|PayloadKind:u8=2|TreeTemplateHash:u64le|BlackboardHash:u64le|TreeStateHash:u64le|AuthorityGeneration:u32le|Payload:BTDP1{Magic:u32le=0x50445442|HeaderSize:u16le=16|BodyLength:i32le|EntryCount:i32le|Entry:Key:i32le+Tag:u8+Value:tagged-le|Tags:0=i32,1=f32,2=bool-u8(0,1),3=3*f32,4=i64,5=2*i64,6=3*i64,255=remove}",
+                "BehaviorTreeDesyncReportMessage|TargetNetworkId:u32le|Sequence:u16le|LocalTick:i32le|RemoteTick:i32le|LocalBlackboardHash:u64le|RemoteBlackboardHash:u64le|LocalTreeStateHash:u64le|RemoteTreeStateHash:u64le|AuthorityGeneration:u32le",
+                "BehaviorTreeTickControlMessage",
+                "BehaviorTreeAuthorityTransferMessage"
             };
             ulong[] expectedSchemaHashes =
             {
-                0x059263302E9505CDUL,
-                0x750F7F22C73B0946UL,
-                0x5528AAF0A310630DUL,
-                0x566A9F2B1C5C9202UL,
-                0x6299F932DCE53765UL,
-                0x94B78D8EED490D89UL
+                0x6898D682C47854FEUL,
+                0x7F95590BCB67D660UL,
+                0xB2B40724FD8B87DAUL,
+                0xDAB47023610B0058UL,
+                0x6F19C5519F2372D6UL,
+                0x9E4A1D764326F29AUL
             };
 
-            Assert.That(manifest.CurrentVersion, Is.EqualTo(2));
-            Assert.That(manifest.MinimumSupportedVersion, Is.EqualTo(2));
-            Assert.That(manifest.IsCompatibleWith(1), Is.False);
-            Assert.That(manifest.IsCompatibleWith(2), Is.True);
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0x633B1F15F69258ABUL));
+            Assert.That(manifest.Fingerprint,
+                Is.EqualTo(BehaviorTreeNetworkProtocol.CreateProtocolManifest().Fingerprint));
             Assert.That(BehaviorTreeNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
@@ -342,7 +339,7 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
             const string SnapshotKey = "SnapshotHealth";
             const string DeltaKey = "DeltaAlert";
             const string LocalObjectKey = "LocalTarget";
-            const ulong FrozenProtocolFingerprint = 0x633B1F15F69258ABUL;
+            const ulong FrozenProtocolFingerprint = 0xABE932DCA690727FUL;
             BehaviorTreeAsset asset = CreateStrictSchemaTree(
                 SnapshotKey,
                 DeltaKey,

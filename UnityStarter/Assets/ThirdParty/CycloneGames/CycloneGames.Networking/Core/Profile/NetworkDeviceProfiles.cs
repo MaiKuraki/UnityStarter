@@ -7,7 +7,7 @@ namespace CycloneGames.Networking
     /// Stable labels for hardware capability tiers. The enum is a serialized,
     /// protocol-safe identifier (byte); the actual knob values behind each tier live
     /// in <see cref="NetworkTierSpec"/> data and can be overridden at composition
-    /// time via <see cref="NetworkDeviceProfiles.RegisterTierOverride"/> without
+    /// time via <see cref="NetworkTierRegistry"/> without
     /// modifying core code.
     ///
     /// This axis answers "how strong is this machine". It is intentionally
@@ -69,7 +69,7 @@ namespace CycloneGames.Networking
 
         public NetworkRuntimeProfile Build()
         {
-            NetworkRuntimeProfileBuilder builder = NetworkRuntimeProfiles.CreateDefaultBuilder();
+            NetworkRuntimeProfileBuilder builder = new NetworkRuntimeProfileBuilder();
             builder.ProfileId = ProfileId;
             builder.DisplayName = DisplayName;
             if (MaxConnections.HasValue) builder.MaxConnections = MaxConnections.Value;
@@ -138,7 +138,7 @@ namespace CycloneGames.Networking
     /// <see cref="CreateConstrained"/> for memory/thermally constrained devices); the
     /// platform adapter picks the appropriate table; core code encodes no
     /// assumptions about any device category. Replace globally via
-    /// <see cref="NetworkDeviceProfiles.DefaultThresholds"/> at composition time,
+    /// an explicit <see cref="NetworkTierThresholds"/> at composition time,
     /// or per call via the explicit-threshold overload of
     /// <see cref="NetworkDeviceProfiles.Classify(in NetworkHardwareInfo, in NetworkTierThresholds)"/>.
     ///
@@ -241,7 +241,7 @@ namespace CycloneGames.Networking
     ///
     /// Built-in tiers are plain <see cref="NetworkTierSpec"/> data exposed as
     /// <see cref="LowTierSpec"/> etc. Games can replace any tier's values via
-    /// <see cref="RegisterTierOverride"/> at composition time, or bypass tiers
+    /// <see cref="NetworkTierRegistry"/> at composition time, or bypass tiers
     /// entirely with <see cref="ForSpec"/>; core code never needs modification.
     /// Session-size concerns are not modeled here; see
     /// <see cref="NetworkSessionScaleTable"/> and <see cref="NetworkProfileComposer"/>.
@@ -275,48 +275,9 @@ namespace CycloneGames.Networking
             ServerTierProfileId, "Dedicated Server",
             maxConnections: 1024, tickRate: 60, sendRate: 30, poolSize: 256, snapshotBufferSize: 256);
 
-        private static readonly Dictionary<NetworkPerformanceTier, NetworkTierSpec> s_overrides =
-            new Dictionary<NetworkPerformanceTier, NetworkTierSpec>(4);
-
-        private static NetworkTierThresholds s_thresholds = NetworkTierThresholds.CreateStandard();
-
-        /// <summary>
-        /// Thresholds used by the implicit-threshold <see cref="Classify(in NetworkHardwareInfo)"/>
-        /// overload. Set once at composition time; treat as immutable afterwards.
-        /// </summary>
-        public static NetworkTierThresholds DefaultThresholds
-        {
-            get { return s_thresholds; }
-            set
-            {
-                value.Validate();
-                s_thresholds = value;
-            }
-        }
-
-        /// <summary>
-        /// Replaces the profile values of a built-in tier. Intended to be called
-        /// once during composition/bootstrap, before any profile is consumed.
-        /// Pass the corresponding built-in spec (e.g. <see cref="LowTierSpec"/>)
-        /// to restore the baseline.
-        /// </summary>
-        public static void RegisterTierOverride(NetworkPerformanceTier tier, in NetworkTierSpec spec)
-        {
-            ValidateTier(tier);
-            s_overrides[tier] = spec;
-        }
-
-        public static void ClearTierOverrides()
-        {
-            s_overrides.Clear();
-        }
-
         public static NetworkTierSpec GetSpec(NetworkPerformanceTier tier)
         {
             ValidateTier(tier);
-            if (s_overrides.TryGetValue(tier, out NetworkTierSpec spec))
-                return spec;
-
             switch (tier)
             {
                 case NetworkPerformanceTier.Low: return LowTierSpec;
@@ -350,13 +311,13 @@ namespace CycloneGames.Networking
 
         /// <summary>
         /// Heuristic device classification from host-reported capabilities, using
-        /// <see cref="DefaultThresholds"/>. Kept in Core as pure inputs so the
+        /// the standard thresholds. Kept in Core as pure inputs so the
         /// platform layer supplies SystemInfo/probe values and the mapping stays
         /// unit-testable.
         /// </summary>
         public static NetworkPerformanceTier Classify(in NetworkHardwareInfo hardware)
         {
-            return Classify(hardware, s_thresholds);
+            return Classify(hardware, NetworkTierThresholds.CreateStandard());
         }
 
         /// <summary>

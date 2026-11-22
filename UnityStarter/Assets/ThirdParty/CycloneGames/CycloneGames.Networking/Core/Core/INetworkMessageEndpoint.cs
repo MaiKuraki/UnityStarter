@@ -591,8 +591,6 @@ namespace CycloneGames.Networking
                 || right == null
                 || !string.Equals(left.ProtocolId, right.ProtocolId, StringComparison.Ordinal)
                 || !string.Equals(left.Owner, right.Owner, StringComparison.Ordinal)
-                || left.CurrentVersion != right.CurrentVersion
-                || left.MinimumSupportedVersion != right.MinimumSupportedVersion
                 || !IsSameRange(left.MessageRange, right.MessageRange)
                 || left.Messages.Count != right.Messages.Count)
             {

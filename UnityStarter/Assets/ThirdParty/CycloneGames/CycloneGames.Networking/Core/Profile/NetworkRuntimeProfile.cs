@@ -242,6 +242,36 @@ namespace CycloneGames.Networking
         public double ReconnectWindowSeconds { get; set; } = NetworkConstants.DefaultReconnectWindowSeconds;
         public double HostMigrationTimeoutSeconds { get; set; } = NetworkConstants.DefaultHostMigrationTimeoutSeconds;
 
+        /// <summary>Baseline builder. Protocol constants supply the invariant defaults.</summary>
+        public NetworkRuntimeProfileBuilder()
+        {
+        }
+
+        /// <summary>
+        /// Builder seeded from an instance-scoped deployment configuration. Each
+        /// composition root can supply different budgets without a process-wide knob.
+        /// </summary>
+        public NetworkRuntimeProfileBuilder(NetworkDeploymentDefaults defaults)
+        {
+            if (defaults == null)
+                throw new ArgumentNullException(nameof(defaults));
+
+            MaxConnections = defaults.MaxConnections;
+            TickRate = defaults.TickRate;
+            SendRate = defaults.SendRate;
+            Mtu = defaults.Mtu;
+            MaxPayloadBytes = defaults.MaxPayloadBytes;
+            BufferSize = defaults.BufferSize;
+            PoolSize = defaults.PoolSize;
+            SnapshotBufferSize = defaults.SnapshotBufferSize;
+            SessionSearchMaxResults = defaults.SessionSearchMaxResults;
+            TimeoutSeconds = defaults.TimeoutSeconds;
+            HeartbeatIntervalSeconds = defaults.HeartbeatIntervalSeconds;
+            DisconnectTimeoutSeconds = defaults.DisconnectTimeoutSeconds;
+            ReconnectWindowSeconds = defaults.ReconnectWindowSeconds;
+            HostMigrationTimeoutSeconds = defaults.HostMigrationTimeoutSeconds;
+        }
+
         public NetworkRuntimeProfileBuilder SetInt(string key, int value)
         {
             ValidateKey(key);
@@ -282,26 +312,12 @@ namespace CycloneGames.Networking
         }
     }
 
-    public static class NetworkRuntimeProfiles
-    {
-        // Immutable after construction: every getter on NetworkRuntimeProfile is
-        // read-only, so one shared default instance is safe and removes three
-        // dictionary allocations per access.
-        private static readonly NetworkRuntimeProfile s_default = CreateDefaultBuilder().Build();
-
-        public static NetworkRuntimeProfile Default => s_default;
-
-        public static NetworkRuntimeProfileBuilder CreateDefaultBuilder()
-        {
-            return new NetworkRuntimeProfileBuilder();
-        }
-    }
-
     public sealed class NetworkRuntimeProfileRegistry
     {
         private const int DEFAULT_PROFILE_CAPACITY = 8;
 
         private readonly Dictionary<string, NetworkRuntimeProfile> _profiles;
+        private readonly NetworkRuntimeProfile _defaultProfile;
 
         public NetworkRuntimeProfileRegistry(int capacity = DEFAULT_PROFILE_CAPACITY)
         {
@@ -311,7 +327,8 @@ namespace CycloneGames.Networking
             }
 
             _profiles = new Dictionary<string, NetworkRuntimeProfile>(capacity, StringComparer.Ordinal);
-            Register(NetworkRuntimeProfiles.Default);
+            _defaultProfile = new NetworkRuntimeProfileBuilder().Build();
+            Register(_defaultProfile);
         }
 
         public int Count
@@ -354,7 +371,7 @@ namespace CycloneGames.Networking
             if (_profiles.TryGetValue("default", out profile))
                 return profile;
 
-            return NetworkRuntimeProfiles.Default;
+            return _defaultProfile;
         }
 
         public void Clear(bool includeDefault = false)
@@ -362,7 +379,7 @@ namespace CycloneGames.Networking
             _profiles.Clear();
             if (!includeDefault)
             {
-                Register(NetworkRuntimeProfiles.Default);
+                Register(_defaultProfile);
             }
         }
     }

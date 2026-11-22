@@ -245,7 +245,7 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 ## 协议参考
 
-### Wire v1 契约
+### Wire 契约
 
 | Message | ID | Payload 字节数 | 默认 channel |
 | --- | ---: | ---: | --- |
@@ -277,7 +277,7 @@ Profile 定义 supported/required features、channel、interval、snapshot budge
 | 失败 | 必需响应 |
 | --- | --- |
 | Length、enum、flags、float、order、count 或 hash 无效 | 丢弃 payload；增加有界 telemetry；执行会话 abuse policy |
-| Profile、fingerprint、version 或 feature 不匹配 | 按产品策略禁用本模块流量或拒绝 peer |
+| Profile、fingerprint 或 feature 不匹配 | 按产品策略禁用本模块流量或拒绝 peer |
 | 未认证、方向错误或 sender 非 authority | 丢弃并记录 authority violation |
 | Generation 不匹配、stale tick、replay 或 sequence 乱序 | 丢弃且不改变 replay state |
 | Destination capacity 太小 | 使用配置好的有界 buffer 或拒绝 |

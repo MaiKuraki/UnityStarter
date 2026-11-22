@@ -14,37 +14,39 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class NetworkBufferPoolTests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         [SetUp]
         public void SetUp()
         {
-            NetworkBufferPool.Clear();
-            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
+            _bufferPool = new NetworkBufferPoolInstance();
+            _bufferPool.Clear();
+            _bufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
-            NetworkBufferPool.Clear();
-            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
+            _bufferPool.Clear();
+            _bufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [Test]
         public void Return_RejectsDoubleDisposeAndStaleLease()
         {
-            int invalidReturnsBefore = NetworkBufferPool.InvalidReturnCount;
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            int invalidReturnsBefore = _bufferPool.InvalidReturnCount;
+            NetworkBuffer buffer = _bufferPool.Get();
             NetworkBuffer staleCopy = buffer;
             buffer.WriteInt(123);
 
-            Assert.AreEqual(1, NetworkBufferPool.OutstandingCount);
+            Assert.AreEqual(1, _bufferPool.OutstandingCount);
             buffer.Dispose();
 
-            Assert.AreEqual(0, NetworkBufferPool.OutstandingCount);
+            Assert.AreEqual(0, _bufferPool.OutstandingCount);
             Assert.Throws<ObjectDisposedException>(() => staleCopy.WriteInt(456));
             Assert.Throws<ObjectDisposedException>(() => staleCopy.Dispose());
-            Assert.AreEqual(invalidReturnsBefore + 1, NetworkBufferPool.InvalidReturnCount);
+            Assert.AreEqual(invalidReturnsBefore + 1, _bufferPool.InvalidReturnCount);
 
-            using NetworkBuffer next = NetworkBufferPool.Get();
+            using NetworkBuffer next = _bufferPool.Get();
             next.WriteInt(456);
 
             Assert.AreEqual(4, next.Position);
@@ -54,8 +56,8 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Return_ConcurrentCopiesAcceptsExactlyOneReturn()
         {
-            int invalidReturnsBefore = NetworkBufferPool.InvalidReturnCount;
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            int invalidReturnsBefore = _bufferPool.InvalidReturnCount;
+            NetworkBuffer buffer = _bufferPool.Get();
             NetworkBuffer firstCopy = buffer;
             NetworkBuffer secondCopy = buffer;
             int successfulReturns = 0;
@@ -89,33 +91,33 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.AreEqual(1, successfulReturns);
             Assert.AreEqual(1, rejectedReturns);
-            Assert.AreEqual(0, NetworkBufferPool.OutstandingCount);
-            Assert.AreEqual(1, NetworkBufferPool.Count);
-            Assert.AreEqual(invalidReturnsBefore + 1, NetworkBufferPool.InvalidReturnCount);
+            Assert.AreEqual(0, _bufferPool.OutstandingCount);
+            Assert.AreEqual(1, _bufferPool.Count);
+            Assert.AreEqual(invalidReturnsBefore + 1, _bufferPool.InvalidReturnCount);
         }
 
         [Test]
         public void Configure_MaxPoolSizeZero_ReleasesReturnedBuffers()
         {
-            NetworkBufferPool.Configure(maxPoolSize: 0, clearBuffersOnReturn: true);
+            _bufferPool.Configure(maxPoolSize: 0, clearBuffersOnReturn: true);
 
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteInt(123);
             buffer.Dispose();
 
-            Assert.AreEqual(0, NetworkBufferPool.Count);
+            Assert.AreEqual(0, _bufferPool.Count);
         }
 
         [Test]
         public void Configure_ClearBuffersOnReturn_ClearsRetainedBuffer()
         {
-            NetworkBufferPool.Configure(maxPoolSize: 1, clearBuffersOnReturn: true);
+            _bufferPool.Configure(maxPoolSize: 1, clearBuffersOnReturn: true);
 
-            NetworkBuffer first = NetworkBufferPool.Get();
+            NetworkBuffer first = _bufferPool.Get();
             first.WriteBytes(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
             first.Dispose();
 
-            using NetworkBuffer second = NetworkBufferPool.Get();
+            using NetworkBuffer second = _bufferPool.Get();
             second.Position = 8;
             ArraySegment<byte> segment = second.ToArraySegment();
 
@@ -126,7 +128,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void WriteBytes_RejectsPayloadsBeyondNetworkBufferCapacity()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             byte[] oversizedPayload = new byte[NetworkConstants.MaxMTU + 1];
 
             Assert.Throws<InvalidOperationException>(() => buffer.WriteBytes(oversizedPayload));
@@ -135,13 +137,13 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void ForwardSeek_Initializes_Bytes_Exposed_By_A_Reused_Lease()
         {
-            NetworkBufferPool.Configure(maxPoolSize: 1, clearBuffersOnReturn: false);
+            _bufferPool.Configure(maxPoolSize: 1, clearBuffersOnReturn: false);
 
-            NetworkBuffer first = NetworkBufferPool.Get();
+            NetworkBuffer first = _bufferPool.Get();
             first.WriteBytes(new byte[] { 91, 92, 93, 94, 95, 96, 97, 98 });
             first.Dispose();
 
-            using NetworkBuffer second = NetworkBufferPool.Get();
+            using NetworkBuffer second = _bufferPool.Get();
             second.Position = 8;
             ArraySegment<byte> segment = second.ToArraySegment();
 
@@ -152,7 +154,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void ReadMode_Position_Cannot_Move_Beyond_Payload()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.GetWithData(new byte[] { 7 });
+            using NetworkBuffer buffer = _bufferPool.GetWithData(new byte[] { 7 });
 
             Assert.Throws<ArgumentOutOfRangeException>(() => buffer.Position = 2);
             Assert.AreEqual(1, buffer.Remaining);
@@ -165,20 +167,20 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void GetWithData_FailureReturnsOutstandingLease()
         {
-            int outstandingBefore = NetworkBufferPool.OutstandingCount;
+            int outstandingBefore = _bufferPool.OutstandingCount;
             byte[] oversizedPayload = new byte[ushort.MaxValue + 1];
 
             Assert.Throws<InvalidOperationException>(() =>
-                NetworkBufferPool.GetWithData(new ReadOnlySpan<byte>(oversizedPayload)));
+                _bufferPool.GetWithData(new ReadOnlySpan<byte>(oversizedPayload)));
 
-            Assert.AreEqual(outstandingBefore, NetworkBufferPool.OutstandingCount);
-            Assert.AreEqual(1, NetworkBufferPool.Count);
+            Assert.AreEqual(outstandingBefore, _bufferPool.OutstandingCount);
+            Assert.AreEqual(1, _bufferPool.Count);
         }
 
         [Test]
         public void UnityJsonSerializer_WriterRoundTripsThroughNetworkBuffer()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             var value = new JsonRoundTripData
             {
                 A = 17,
@@ -198,7 +200,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void PrimitiveWireFields_AreLittleEndian()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             buffer.WriteInt(0x01020304);
             buffer.WriteFloat(1f);
 
@@ -215,7 +217,7 @@ namespace CycloneGames.Networking.Tests.Editor
             var receiver = new DeltaCompressor();
             var position = new Vector3(1f, 2f, 3f);
             var rotation = new Quaternion(0f, 0f, 0f, 1f);
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
 
             DeltaFlags flags = sender.WriteDelta(buffer, position, rotation);
             ArraySegment<byte> payload = buffer.ToArraySegment();
@@ -239,13 +241,13 @@ namespace CycloneGames.Networking.Tests.Editor
         public void DeltaCompressor_ReadDeltaRejectsMalformedFlags()
         {
             var receiver = new DeltaCompressor();
-            using NetworkBuffer unsupported = NetworkBufferPool.Get();
+            using NetworkBuffer unsupported = _bufferPool.Get();
             unsupported.WriteByte((byte)DeltaFlags.DeltaRotation);
             unsupported.FlipForRead();
 
             Assert.Throws<FormatException>(() => receiver.ReadDelta(unsupported, out _, out _));
 
-            using NetworkBuffer conflicting = NetworkBufferPool.Get();
+            using NetworkBuffer conflicting = _bufferPool.Get();
             conflicting.WriteByte((byte)(DeltaFlags.FullPosition | DeltaFlags.DeltaPosition | DeltaFlags.FullRotation));
             conflicting.FlipForRead();
 
@@ -255,7 +257,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void QuantizedVector3_ReadFromRejectsOverflowingVarInt()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.GetWithData(
+            using NetworkBuffer buffer = _bufferPool.GetWithData(
                 new byte[] { 0x80, 0x80, 0x80, 0x80, 0x10 });
 
             Assert.Throws<FormatException>(() => QuantizedVector3.ReadFrom(buffer));

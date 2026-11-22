@@ -21,31 +21,31 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         }
 
         [Test]
-        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        public void ProtocolManifest_UsesFrozenSchemasAndFingerprint()
         {
             NetworkProtocolManifest manifest = ProjectileNetworkProtocol.CreateProtocolManifest();
             string[] canonicalSchemaLiterals =
             {
-                "ProjectileManifestHandshakeMessage:v1",
-                "ProjectileSpawnMessage:v1",
-                "ProjectileSnapshotMessage:v1",
-                "ProjectileCorrectionMessage:v1",
-                "ProjectileHitMessage:v1",
-                "ProjectileDespawnMessage:v1",
-                "ProjectileFullStateRequestMessage:v1"
+                "ProjectileManifestHandshakeMessage",
+                "ProjectileSpawnMessage",
+                "ProjectileSnapshotMessage",
+                "ProjectileCorrectionMessage",
+                "ProjectileHitMessage",
+                "ProjectileDespawnMessage",
+                "ProjectileFullStateRequestMessage"
             };
             ulong[] expectedSchemaHashes =
             {
-                0xBCEFB413200046DAUL,
-                0xB9F717F41389BE93UL,
-                0x706E549553486060UL,
-                0x9259A444E90A56A8UL,
-                0xEF8D26DB044A29F1UL,
-                0x2C4E503FF06B2126UL,
-                0xF9FF5A38C895A567UL
+                0xBF9603F2BAF7ED8BUL,
+                0x8C2D1AFA9AE1FD98UL,
+                0x468C2C096E6CAA95UL,
+                0xD33279596778BC7DUL,
+                0x2BADF5DACE4C4AC2UL,
+                0x2B2F979D125D7257UL,
+                0xB3B227B956ADE17CUL
             };
 
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0x1C14C99D4AC2EB61UL));
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0xCD662BC0D0FDF609UL));
             Assert.That(ProjectileNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
@@ -455,7 +455,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         {
             Assert.That(ProjectileNetworkProtocol.MESSAGE_ID_BASE, Is.EqualTo(17000));
             Assert.That(ProjectileNetworkProtocol.MSG_FULL_STATE_REQUEST, Is.EqualTo(17006));
-            Assert.That(ProjectileNetworkProtocol.ProtocolFingerprint, Is.EqualTo(0x1C14C99D4AC2EB61UL));
+            Assert.That(ProjectileNetworkProtocol.ProtocolFingerprint, Is.EqualTo(0xCD662BC0D0FDF609UL));
             Assert.That(ProjectileNetworkCorrectionPolicy.Default.PositionCorrectionThresholdSqr, Is.GreaterThan(0f));
         }
     }

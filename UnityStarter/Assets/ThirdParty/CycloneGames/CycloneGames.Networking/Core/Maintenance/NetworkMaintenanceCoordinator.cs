@@ -84,11 +84,29 @@ namespace CycloneGames.Networking.Maintenance
                 "ackstore.release"
             });
 
+        private static readonly ReadOnlyCollection<string> s_teardown =
+            new ReadOnlyCollection<string>(new[]
+            {
+                "gas.identity.teardown",
+                "gas.state.teardown",
+                "gas.replica.teardown",
+                "gf.damage.teardown",
+                "interaction.replay.teardown",
+                "movement.history.teardown",
+                "movement.audit.teardown",
+                "projectile.history.teardown",
+                "ackstore.teardown",
+                "session.roster.teardown"
+            });
+
         public static IReadOnlyList<string> RequiredPeriodicIds => s_periodic;
 
         public static IReadOnlyList<string> RequiredReleaseIds => s_release;
 
-        public static int RequiredCount => s_periodic.Count + s_release.Count;
+        public static IReadOnlyList<string> RequiredTeardownIds => s_teardown;
+
+        public static int RequiredCount =>
+            s_periodic.Count + s_release.Count + s_teardown.Count;
     }
 
     /// <summary>
@@ -114,16 +132,19 @@ namespace CycloneGames.Networking.Maintenance
 
         private readonly INetworkPeriodicMaintenanceTarget[] _periodic;
         private readonly INetworkConnectionReleaseTarget[] _release;
+        private readonly INetworkSessionTeardownTarget[] _teardown;
         private readonly int[] _lastRunTick;
         private readonly bool[] _hasRun;
 
         private int _periodicCount;
         private int _releaseCount;
+        private int _teardownCount;
         private int _currentTick;
         private long _totalPollCalls;
         private long _totalPeriodicRuns;
         private long _totalReleaseCalls;
         private long _totalReleasedConnections;
+        private long _totalTeardownCalls;
 
         public NetworkMaintenanceCoordinator(int maxTargets = DefaultMaxTargets)
         {
@@ -132,6 +153,7 @@ namespace CycloneGames.Networking.Maintenance
 
             _periodic = new INetworkPeriodicMaintenanceTarget[maxTargets];
             _release = new INetworkConnectionReleaseTarget[maxTargets];
+            _teardown = new INetworkSessionTeardownTarget[maxTargets];
             _lastRunTick = new int[maxTargets];
             _hasRun = new bool[maxTargets];
         }
@@ -139,11 +161,13 @@ namespace CycloneGames.Networking.Maintenance
         public int MaxTargets => _periodic.Length;
         public int PeriodicTargetCount => _periodicCount;
         public int ReleaseTargetCount => _releaseCount;
+        public int TeardownTargetCount => _teardownCount;
         public int CurrentTick => _currentTick;
         public long TotalPollCalls => _totalPollCalls;
         public long TotalPeriodicRuns => _totalPeriodicRuns;
         public long TotalReleaseCalls => _totalReleaseCalls;
         public long TotalReleasedConnections => _totalReleasedConnections;
+        public long TotalTeardownCalls => _totalTeardownCalls;
 
         public bool RegisterPeriodic(INetworkPeriodicMaintenanceTarget target)
         {
@@ -187,6 +211,36 @@ namespace CycloneGames.Networking.Maintenance
             _release[_releaseCount] = target;
             _releaseCount++;
             return true;
+        }
+
+        public bool RegisterSessionTeardown(INetworkSessionTeardownTarget target)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+            if (_teardownCount >= _teardown.Length)
+                return false;
+
+            string id = target.MaintenanceId;
+            if (string.IsNullOrEmpty(id))
+                throw new ArgumentException("A session-teardown target must have a non-empty id.", nameof(target));
+            for (int i = 0; i < _teardownCount; i++)
+            {
+                if (string.Equals(_teardown[i].MaintenanceId, id, StringComparison.Ordinal))
+                    return false;
+            }
+
+            _teardown[_teardownCount] = target;
+            _teardownCount++;
+            return true;
+        }
+
+        /// <summary>Broadcasts session shutdown to every registered teardown target.</summary>
+        public int TeardownSession()
+        {
+            _totalTeardownCalls++;
+            for (int i = 0; i < _teardownCount; i++)
+                _teardown[i].TeardownSession();
+            return _teardownCount;
         }
 
         /// <summary>
@@ -248,7 +302,7 @@ namespace CycloneGames.Networking.Maintenance
         public int Evaluate(Span<NetworkMaintenanceIssue> issues, out ulong fingerprint)
         {
             int requiredCapacity = NetworkMaintenanceRequirements.RequiredCount
-                                   + _periodicCount + _releaseCount + 2;
+                                   + _periodicCount + _releaseCount + _teardownCount + 2;
             if (issues.Length < requiredCapacity)
             {
                 throw new ArgumentException(
@@ -282,6 +336,19 @@ namespace CycloneGames.Networking.Maintenance
                         "Required connection-release target is not registered.",
                         "Register a connection-release target with this id and call ReleaseConnection on disconnect.",
                         requiredRelease[r], 0);
+                }
+            }
+
+            IReadOnlyList<string> requiredTeardown = NetworkMaintenanceRequirements.RequiredTeardownIds;
+            for (int r = 0; r < requiredTeardown.Count; r++)
+            {
+                if (!ContainsSessionTeardown(requiredTeardown[r]))
+                {
+                    Add(issues, ref count, ref hash,
+                        NetworkMaintenanceSeverity.Error, "MAINT-006",
+                        "Required session-teardown target is not registered.",
+                        "Register a teardown target with this id and call TeardownSession at session shutdown.",
+                        requiredTeardown[r], 0);
                 }
             }
 
@@ -349,6 +416,16 @@ namespace CycloneGames.Networking.Maintenance
             return false;
         }
 
+        public bool ContainsSessionTeardown(string id)
+        {
+            for (int i = 0; i < _teardownCount; i++)
+            {
+                if (string.Equals(_teardown[i].MaintenanceId, id, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
         public void Reset()
         {
             for (int i = 0; i < _periodicCount; i++)
@@ -359,14 +436,18 @@ namespace CycloneGames.Networking.Maintenance
             }
             for (int i = 0; i < _releaseCount; i++)
                 _release[i] = null;
+            for (int i = 0; i < _teardownCount; i++)
+                _teardown[i] = null;
 
             _periodicCount = 0;
             _releaseCount = 0;
+            _teardownCount = 0;
             _currentTick = 0;
             _totalPollCalls = 0;
             _totalPeriodicRuns = 0;
             _totalReleaseCalls = 0;
             _totalReleasedConnections = 0;
+            _totalTeardownCalls = 0;
         }
 
         private static void Add(

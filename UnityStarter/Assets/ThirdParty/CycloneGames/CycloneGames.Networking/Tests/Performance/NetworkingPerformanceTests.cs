@@ -12,6 +12,7 @@ namespace CycloneGames.Networking.Tests.Performance
 {
     public sealed class NetworkingPerformanceTests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         private const int WARMUP_COUNT = 5;
         private const int MEASUREMENT_COUNT = 20;
         private const int ROUNDTRIP_MESSAGES = 2_048;
@@ -81,7 +82,7 @@ namespace CycloneGames.Networking.Tests.Performance
         [Test, Performance]
         public void FixedVector3_EncodeDecode()
         {
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             try
             {
                 var value = new NetworkFixedVector3(
@@ -112,7 +113,7 @@ namespace CycloneGames.Networking.Tests.Performance
         [Test, Performance]
         public void QuantizedVector3_EncodeDecode()
         {
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             try
             {
                 var value = new NetworkVector3(123.5f, -8.25f, 4096.125f);
@@ -191,7 +192,7 @@ namespace CycloneGames.Networking.Tests.Performance
         [Test]
         public void FixedVector3_Codec_SteadyStateAllocatesZeroBytes()
         {
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             var value = new NetworkFixedVector3(
                 FPInt64.FromFloat(1.5f), FPInt64.FromFloat(2.5f), FPInt64.FromFloat(3.5f));
 

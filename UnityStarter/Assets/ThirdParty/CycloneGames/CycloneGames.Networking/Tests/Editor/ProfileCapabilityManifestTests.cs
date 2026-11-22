@@ -8,13 +8,13 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void RuntimeProfile_ProjectProfile_OverridesDefaultsWithoutChangingConstants()
         {
-            NetworkRuntimeProfile profile = NetworkRuntimeProfiles.CreateDefaultBuilder()
+            NetworkRuntimeProfile profile = new NetworkRuntimeProfileBuilder()
                 .SetInt("mygame.max_zone_players", 10000)
                 .SetFloat("mygame.snapshot_jitter_buffer_seconds", 0.15f)
                 .SetString("mygame.deployment", "regional-shard")
                 .Build();
 
-            Assert.AreEqual(NetworkConstants.DefaultMaxConnections, NetworkRuntimeProfiles.Default.MaxConnections);
+            Assert.AreEqual(NetworkConstants.DefaultMaxConnections, new NetworkRuntimeProfileBuilder().Build().MaxConnections);
             Assert.AreEqual(10000, profile.IntSettings["mygame.max_zone_players"]);
             Assert.IsTrue(profile.TryGetFloat("mygame.snapshot_jitter_buffer_seconds", out float jitter));
             Assert.AreEqual(0.15f, jitter);
@@ -94,11 +94,9 @@ namespace CycloneGames.Networking.Tests.Editor
                 maxMessageId: 30010)
             {
                 ProtocolId = "project.gameplay",
-                CurrentVersion = 3,
-                MinimumSupportedVersion = 2
             }
-                .AddMessage("TestProjectileMessage:v1", 30000, 0xF3D3AFA95EFF61ECUL, NetworkChannel.UnreliableSequenced, 96)
-                .AddMessage("TestInventoryMessage:v1", 30001, 0x9CA010B33A030EEDUL, NetworkChannel.Reliable, 256)
+                .AddMessage("TestProjectileMessage", 30000, 0x471FB160A5D78561UL, NetworkChannel.UnreliableSequenced, 96)
+                .AddMessage("TestInventoryMessage", 30001, 0x63A1C1C240EF951EUL, NetworkChannel.Reliable, 256)
                 .Build();
 
             var catalog = new NetworkMessageCatalog();
@@ -109,8 +107,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual("Project.Gameplay", descriptor.Owner);
             Assert.AreEqual(2, catalog.MessageCount);
             Assert.AreEqual(1, catalog.ManifestCount);
-            Assert.IsTrue(manifest.IsCompatibleWith(2));
-            Assert.IsFalse(manifest.IsCompatibleWith(1));
         }
 
         [Test]
@@ -121,7 +117,7 @@ namespace CycloneGames.Networking.Tests.Editor
                     "Project.Bad",
                     minMessageId: 30000,
                     maxMessageId: 30001)
-                    .AddMessage("TestProjectileMessage:v1", 30002, 0xF3D3AFA95EFF61ECUL)
+                    .AddMessage("TestProjectileMessage", 30002, 0x471FB160A5D78561UL)
                     .Build());
         }
 
@@ -132,13 +128,13 @@ namespace CycloneGames.Networking.Tests.Editor
                 "Project.First",
                 minMessageId: 30000,
                 maxMessageId: 30001)
-                .AddMessage("TestProjectileMessage:v1", 30000, 0xF3D3AFA95EFF61ECUL)
+                .AddMessage("TestProjectileMessage", 30000, 0x471FB160A5D78561UL)
                 .Build();
             NetworkProtocolManifest second = new NetworkProtocolManifestBuilder(
                 "Project.Second",
                 minMessageId: 30000,
                 maxMessageId: 30001)
-                .AddMessage("TestInventoryMessage:v1", 30000, 0x9CA010B33A030EEDUL)
+                .AddMessage("TestInventoryMessage", 30000, 0x63A1C1C240EF951EUL)
                 .Build();
             var catalog = new NetworkMessageCatalog();
 

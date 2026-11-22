@@ -26,7 +26,7 @@ namespace CycloneGames.Networking.Tests.Editor
             NetworkProductionReadinessScenario scenario = NetworkProductionReadinessScenarios
                 .CreateAuthoritativeArenaBuilder()
                 .Build();
-            NetworkRuntimeProfile profile = NetworkRuntimeProfiles.CreateDefaultBuilder().Build();
+            NetworkRuntimeProfile profile = new NetworkRuntimeProfileBuilder().Build();
             NetworkNodeCapabilities node = new NetworkNodeCapabilitiesBuilder
             {
                 NodeId = "small-node",
@@ -63,18 +63,18 @@ namespace CycloneGames.Networking.Tests.Editor
                     "Project.First",
                     30000,
                     30010)
-                .AddMessage("TestInputMessage:v1", 30000, 0x187DA17362D559D1UL)
+                .AddMessage("TestInputMessage", 30000, 0x60B58963066CB5A2UL)
                 .Build();
             NetworkProtocolManifest second = new NetworkProtocolManifestBuilder(
                     "Project.Second",
                     30000,
                     30010)
-                .AddMessage("TestInventoryMessage:v1", 30000, 0x9CA010B33A030EEDUL)
+                .AddMessage("TestInventoryMessage", 30000, 0x63A1C1C240EF951EUL)
                 .Build();
 
             var input = new NetworkProductionReadinessInput
             {
-                RuntimeProfile = NetworkRuntimeProfiles.CreateDefaultBuilder().Build()
+                RuntimeProfile = new NetworkRuntimeProfileBuilder().Build()
             }
                 .AddProtocolManifest(first)
                 .AddProtocolManifest(second);
@@ -204,7 +204,7 @@ namespace CycloneGames.Networking.Tests.Editor
                     owner,
                     minMessageId,
                     maxMessageId)
-                .AddMessage("TestInputMessage:v1", minMessageId, 0x187DA17362D559D1UL, NetworkChannel.UnreliableSequenced, 128)
+                .AddMessage("TestInputMessage", minMessageId, 0x60B58963066CB5A2UL, NetworkChannel.UnreliableSequenced, 128)
                 .Build();
         }
 

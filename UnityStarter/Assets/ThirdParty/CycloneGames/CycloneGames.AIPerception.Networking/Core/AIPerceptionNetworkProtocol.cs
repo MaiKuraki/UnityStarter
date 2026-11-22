@@ -5,8 +5,6 @@ namespace CycloneGames.AIPerception.Networking
     public static class AIPerceptionNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.AIPerception";
-        public const byte PROTOCOL_VERSION = 1;
-        public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
         public const ushort MESSAGE_ID_BASE = 15000;
         public const ushort MESSAGE_ID_MAX = 15999;
@@ -20,7 +18,7 @@ namespace CycloneGames.AIPerception.Networking
         public const int DEFAULT_MAX_EVENT_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes;
         // Exceeds the shared transport MTU: delivering snapshots at this ceiling
         // requires a fragmenting transport decorator (FragmentationTransport).
-        // See README "Wire v1 contract" before raising or lowering this budget.
+        // See README "Wire contract" before raising or lowering this budget.
         public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 4;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes;
         public const int MAX_SNAPSHOT_ENTRIES =
@@ -37,13 +35,13 @@ namespace CycloneGames.AIPerception.Networking
             AIPerceptionNetworkFeatureFlags.DebugSpectator |
             AIPerceptionNetworkFeatureFlags.HostMigrationSnapshot;
 
-        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
-        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0xE24FD3DF9C74AB1CUL;
-        private const ulong DETECTION_EVENT_SCHEMA_V1 = 0x7FB1540691D2B0BFUL;
-        private const ulong DETECTION_SNAPSHOT_SCHEMA_V1 = 0xA9F15D28F3BC339DUL;
-        private const ulong MEMORY_SNAPSHOT_SCHEMA_V1 = 0xE163CF3EDDDC2E25UL;
-        private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0xDD0A7C2010BB2D4CUL;
-        private const ulong FULL_STATE_REQUEST_SCHEMA_V1 = 0xF715DC535205849DUL;
+        // Frozen FNV-1a64 identities of the wire contracts.
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA = 0x9CE592CBAE108BD1UL;
+        private const ulong DETECTION_EVENT_SCHEMA = 0x385B23646DDC7EB4UL;
+        private const ulong DETECTION_SNAPSHOT_SCHEMA = 0x0D52F063C83E2E0EUL;
+        private const ulong MEMORY_SNAPSHOT_SCHEMA = 0x013A4547E6E41496UL;
+        private const ulong AUTHORITY_TRANSFER_SCHEMA = 0x3714E559D1084EC1UL;
+        private const ulong FULL_STATE_REQUEST_SCHEMA = 0xB319FA2CDAE6210EUL;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
@@ -61,10 +59,6 @@ namespace CycloneGames.AIPerception.Networking
             return messageId >= MSG_MANIFEST_HANDSHAKE && messageId <= MSG_FULL_STATE_REQUEST;
         }
 
-        public static bool IsSupportedProtocolVersion(byte protocolVersion)
-        {
-            return Module.IsSupportedProtocolVersion(protocolVersion);
-        }
 
         public static bool AreKnownFeatures(AIPerceptionNetworkFeatureFlags features)
         {
@@ -89,8 +83,6 @@ namespace CycloneGames.AIPerception.Networking
                 MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.AIPerception.Networking",
-                CurrentVersion = PROTOCOL_VERSION,
-                MinimumSupportedVersion = MIN_SUPPORTED_PROTOCOL_VERSION
             };
 
             builder
@@ -98,39 +90,39 @@ namespace CycloneGames.AIPerception.Networking
                 .SetMetadata("wire", "Fixed little-endian v1")
                 .SetMetadata("snapshot", "Caller-owned canonical detection entry spans")
                 .AddMessage(
-                    "AIPerceptionManifestHandshakeMessage:v1",
+                    "AIPerceptionManifestHandshakeMessage",
                     MSG_MANIFEST_HANDSHAKE,
-                    MANIFEST_HANDSHAKE_SCHEMA_V1,
+                    MANIFEST_HANDSHAKE_SCHEMA,
                     NetworkChannel.Reliable,
                     AIPerceptionNetworkWireCodec.HandshakePayloadBytes)
                 .AddMessage(
-                    "AIPerceptionDetectionEventMessage:v1",
+                    "AIPerceptionDetectionEventMessage",
                     MSG_DETECTION_EVENT,
-                    DETECTION_EVENT_SCHEMA_V1,
+                    DETECTION_EVENT_SCHEMA,
                     NetworkChannel.UnreliableSequenced,
                     AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes)
                 .AddMessage(
-                    "AIPerceptionDetectionSnapshotMessage:v1",
+                    "AIPerceptionDetectionSnapshotMessage",
                     MSG_DETECTION_SNAPSHOT,
-                    DETECTION_SNAPSHOT_SCHEMA_V1,
+                    DETECTION_SNAPSHOT_SCHEMA,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
                 .AddMessage(
-                    "AIPerceptionMemorySnapshotMessage:v1",
+                    "AIPerceptionMemorySnapshotMessage",
                     MSG_MEMORY_SNAPSHOT,
-                    MEMORY_SNAPSHOT_SCHEMA_V1,
+                    MEMORY_SNAPSHOT_SCHEMA,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
                 .AddMessage(
-                    "AIPerceptionAuthorityTransferMessage:v1",
+                    "AIPerceptionAuthorityTransferMessage",
                     MSG_AUTHORITY_TRANSFER,
-                    AUTHORITY_TRANSFER_SCHEMA_V1,
+                    AUTHORITY_TRANSFER_SCHEMA,
                     NetworkChannel.Reliable,
                     AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes)
                 .AddMessage(
-                    "AIPerceptionFullStateRequestMessage:v1",
+                    "AIPerceptionFullStateRequestMessage",
                     MSG_FULL_STATE_REQUEST,
-                    FULL_STATE_REQUEST_SCHEMA_V1,
+                    FULL_STATE_REQUEST_SCHEMA,
                     NetworkChannel.Reliable,
                     AIPerceptionNetworkWireCodec.FullStateRequestPayloadBytes);
 
