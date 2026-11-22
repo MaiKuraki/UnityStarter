@@ -30,31 +30,52 @@ namespace CycloneGames.Networking.Transports
     public sealed class FragmentationTransport : IPollableTransport, IDisposable
     {
         // Fragment header layout (little-endian, 16 bytes), at the start of each fragment payload:
-        //   magic "CF" (2) | version (1) | reserved (1) | groupId u32 (4) | index u16 (2) | count u16 (2) | totalLength i32 (4)
-        private const byte FragMagic0 = (byte)'C';
-        private const byte FragMagic1 = (byte)'F';
-        private const byte FragVersion = 1;
+        //   fixed 4-byte tag "CFR1" | groupId u32 (4) | index u16 (2) | count u16 (2) | totalLength i32 (4)
+        // A tag match alone never identifies a fragment: semantic validation and a
+        // successful reassembly step are both required, and every failure path passes
+        // the original payload through to the next layer instead of dropping it.
+        private const byte FragTag0 = (byte)'C';
+        private const byte FragTag1 = (byte)'F';
+        private const byte FragTag2 = (byte)'R';
+        private const byte FragTag3 = (byte)'1';
         public const int FragmentHeaderSize = 16;
         public const int MaxFragmentCount = 256;
 
         private readonly INetTransport _inner;
         private readonly FragmentationOptions _options;
+        private readonly INetworkMonotonicTimeProvider _timeProvider;
+        private readonly long _groupTimeoutTicks;
         private readonly int _maxUnfragmentedPayload;
         private readonly Dictionary<ulong, ReassemblyGroup> _groups;
         private readonly List<ulong> _expiredKeys;
         private uint _nextGroupId;
         private int _reassemblyBytesInFlight;
-        private double _lastPruneTime;
+        private long _lastPruneTicks;
+        private int _unrecognizedFramesPassedThrough;
+        private int _incompleteGroupsReleased;
+        private int _fragmentsRejected;
         private bool _disposed;
 
         public FragmentationTransport(INetTransport inner) : this(inner, FragmentationOptions.Default) { }
 
         public FragmentationTransport(INetTransport inner, in FragmentationOptions options)
+            : this(inner, options, new NetworkStopwatchTimeProvider())
+        {
+        }
+
+        public FragmentationTransport(
+            INetTransport inner,
+            in FragmentationOptions options,
+            INetworkMonotonicTimeProvider timeProvider)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
             options.Validate();
             _options = options;
             _maxUnfragmentedPayload = Math.Max(64, options.Mtu - FragmentHeaderSize);
+            _groupTimeoutTicks = (long)(options.GroupTimeoutSeconds * _timeProvider.TicksPerSecond);
+            if (_groupTimeoutTicks <= 0L)
+                _groupTimeoutTicks = 1L;
             _groups = new Dictionary<ulong, ReassemblyGroup>(16);
             _expiredKeys = new List<ulong>(16);
             _nextGroupId = 1;
@@ -71,7 +92,12 @@ namespace CycloneGames.Networking.Transports
         {
             get
             {
-                return new FragmentationMetrics(_groups.Count, _reassemblyBytesInFlight);
+                return new FragmentationMetrics(
+                    _groups.Count,
+                    _reassemblyBytesInFlight,
+                    _unrecognizedFramesPassedThrough,
+                    _incompleteGroupsReleased,
+                    _fragmentsRejected);
             }
         }
 
@@ -319,10 +345,10 @@ namespace CycloneGames.Networking.Transports
 
         private static void WriteFragmentHeader(byte[] buffer, int offset, uint groupId, ushort index, ushort count, int totalLength)
         {
-            buffer[offset] = FragMagic0;
-            buffer[offset + 1] = FragMagic1;
-            buffer[offset + 2] = FragVersion;
-            buffer[offset + 3] = 0;
+            buffer[offset] = FragTag0;
+            buffer[offset + 1] = FragTag1;
+            buffer[offset + 2] = FragTag2;
+            buffer[offset + 3] = FragTag3;
             WriteU32(buffer, offset + 4, groupId);
             WriteU16(buffer, offset + 8, index);
             WriteU16(buffer, offset + 10, count);
@@ -337,47 +363,88 @@ namespace CycloneGames.Networking.Transports
         {
             if (!TryReadFragmentHeader(payload, out FragmentHeader header))
             {
-                OnDataReceived?.Invoke(connection, payload, channelId);
+                PassThrough(connection, payload, channelId);
                 return;
             }
 
             if (!ValidateFragmentHeader(header))
-                return; // Hostile or corrupt fragment: drop silently, no state growth.
+            {
+                // A tag match is not a frame type. Bytes that fail semantic validation
+                // are ordinary payloads for the next layer, never silent drops.
+                _unrecognizedFramesPassedThrough++;
+                PassThrough(connection, payload, channelId);
+                return;
+            }
 
             ulong key = MakeGroupKey(connection != null ? connection.ConnectionId : 0, header.GroupId);
+            bool groupCreatedHere = false;
             if (!_groups.TryGetValue(key, out ReassemblyGroup group))
             {
                 if (_groups.Count >= _options.MaxConcurrentGroups)
                     PruneExpiredGroups(forceOne: true);
                 if (_groups.Count >= _options.MaxConcurrentGroups)
+                {
+                    PassThrough(connection, payload, channelId);
                     return;
-                if (_reassemblyBytesInFlight + header.TotalLength > _options.MaxReassemblyBytesInFlight)
-                    return;
+                }
 
-                group = ReassemblyGroup.Create(header.TotalLength, header.Count, NowSeconds());
+                if (_reassemblyBytesInFlight + header.TotalLength > _options.MaxReassemblyBytesInFlight)
+                {
+                    PassThrough(connection, payload, channelId);
+                    return;
+                }
+
+                group = ReassemblyGroup.Create(header.TotalLength, header.Count, NowTicks());
                 if (group == null)
-                    return; // Allocation refused by pool or invalid size.
+                {
+                    PassThrough(connection, payload, channelId);
+                    return;
+                }
 
                 _groups.Add(key, group);
                 _reassemblyBytesInFlight += header.TotalLength;
+                groupCreatedHere = true;
             }
             else if (group.TotalLength != header.TotalLength || group.FragmentCount != header.Count)
             {
-                // Group metadata mismatch indicates spoofing or a reused group id.
+                // Metadata mismatch: release the ambiguous group and let the bytes
+                // continue. No half-open state is retained.
                 RemoveGroup(key, group);
+                _incompleteGroupsReleased++;
+                PassThrough(connection, payload, channelId);
                 return;
             }
 
             int fragmentLength = payload.Count - FragmentHeaderSize;
-            if (fragmentLength <= 0 || fragmentLength > _maxUnfragmentedPayload)
+            if (fragmentLength <= 0
+                || fragmentLength > _maxUnfragmentedPayload
+                || !group.AcceptFragment(header.Index, payload.Array,
+                    payload.Offset + FragmentHeaderSize, fragmentLength, NowTicks()))
+            {
+                _fragmentsRejected++;
+
+                // A group created by THIS payload can never complete; release it
+                // immediately. A pre-existing group may still be waiting for its
+                // remaining fragments and is reclaimed by the monotonic timeout.
+                if (groupCreatedHere)
+                {
+                    RemoveGroup(key, group);
+                    _incompleteGroupsReleased++;
+                }
+
+                PassThrough(connection, payload, channelId);
                 return;
-            if (!group.AcceptFragment(header.Index, payload.Array, payload.Offset + FragmentHeaderSize, fragmentLength, NowSeconds()))
-                return;
+            }
 
             if (!group.IsComplete)
                 return;
 
             DeliverReassembled(connection, key, group, channelId);
+        }
+
+        private void PassThrough(INetConnection connection, ArraySegment<byte> payload, int channelId)
+        {
+            OnDataReceived?.Invoke(connection, payload, channelId);
         }
 
         private void DeliverReassembled(INetConnection connection, ulong key, ReassemblyGroup group, int channelId)
@@ -408,9 +475,8 @@ namespace CycloneGames.Networking.Transports
                 return false;
             byte[] a = payload.Array;
             int o = payload.Offset;
-            if (a[o] != FragMagic0 || a[o + 1] != FragMagic1)
-                return false;
-            if (a[o + 2] != FragVersion || a[o + 3] != 0)
+            if (a[o] != FragTag0 || a[o + 1] != FragTag1
+                || a[o + 2] != FragTag2 || a[o + 3] != FragTag3)
                 return false;
 
             header = new FragmentHeader(
@@ -463,11 +529,11 @@ namespace CycloneGames.Networking.Transports
 
         private void PruneExpiredGroups(bool forceOne)
         {
-            double now = NowSeconds();
+            long now = NowTicks();
             _expiredKeys.Clear();
             foreach (var pair in _groups)
             {
-                if (now - pair.Value.LastUpdateTime >= _options.GroupTimeoutSeconds)
+                if (now - pair.Value.LastUpdateTicks >= _groupTimeoutTicks)
                     _expiredKeys.Add(pair.Key);
             }
 
@@ -475,12 +541,12 @@ namespace CycloneGames.Networking.Transports
             {
                 // Evict the oldest group to guarantee forward progress under pressure.
                 ulong oldestKey = 0;
-                double oldestTime = double.MaxValue;
+                long oldestTicks = long.MaxValue;
                 foreach (var pair in _groups)
                 {
-                    if (pair.Value.LastUpdateTime < oldestTime)
+                    if (pair.Value.LastUpdateTicks < oldestTicks)
                     {
-                        oldestTime = pair.Value.LastUpdateTime;
+                        oldestTicks = pair.Value.LastUpdateTicks;
                         oldestKey = pair.Key;
                     }
                 }
@@ -511,17 +577,22 @@ namespace CycloneGames.Networking.Transports
             _reassemblyBytesInFlight = 0;
         }
 
-        private static double NowSeconds()
+        private long NowTicks()
         {
-            return DateTime.UtcNow.Ticks / (double)TimeSpan.TicksPerSecond;
+            return _timeProvider.GetMonotonicTicks();
         }
 
         public void PollEvents()
         {
-            double now = NowSeconds();
-            if (now - _lastPruneTime >= Math.Min(1d, _options.GroupTimeoutSeconds * 0.5d))
+            long now = NowTicks();
+            long pruneIntervalTicks = (long)(Math.Min(1d, _options.GroupTimeoutSeconds * 0.5d)
+                                             * _timeProvider.TicksPerSecond);
+            if (pruneIntervalTicks <= 0L)
+                pruneIntervalTicks = 1L;
+
+            if (now - _lastPruneTicks >= pruneIntervalTicks)
             {
-                _lastPruneTime = now;
+                _lastPruneTicks = now;
                 PruneExpiredGroups(forceOne: false);
             }
 
@@ -644,17 +715,17 @@ namespace CycloneGames.Networking.Transports
             public byte[] Buffer;
             public int TotalLength;
             public ushort FragmentCount;
-            public double LastUpdateTime;
+            public long LastUpdateTicks;
 
-            private ReassemblyGroup(int totalLength, ushort fragmentCount, double now)
+            private ReassemblyGroup(int totalLength, ushort fragmentCount, long now)
             {
                 TotalLength = totalLength;
                 FragmentCount = fragmentCount;
-                LastUpdateTime = now;
+                LastUpdateTicks = now;
                 _receivedBitmap = new ulong[BitmapWords];
             }
 
-            public static ReassemblyGroup Create(int totalLength, ushort fragmentCount, double now)
+            public static ReassemblyGroup Create(int totalLength, ushort fragmentCount, long now)
             {
                 if (totalLength <= 0)
                     return null;
@@ -668,7 +739,7 @@ namespace CycloneGames.Networking.Transports
 
             public bool IsComplete => _receivedCount == FragmentCount;
 
-            public bool AcceptFragment(ushort index, byte[] source, int sourceOffset, int length, double now)
+            public bool AcceptFragment(ushort index, byte[] source, int sourceOffset, int length, long now)
             {
                 int word = index >> 6;
                 ulong bit = 1UL << (index & 63);
@@ -686,7 +757,7 @@ namespace CycloneGames.Networking.Transports
                 _receivedBitmap[word] |= bit;
                 _receivedCount++;
                 _receivedBytes += length;
-                LastUpdateTime = now;
+                LastUpdateTicks = now;
 
                 if (IsComplete && _receivedBytes != TotalLength)
                     return false; // Internal inconsistency; caller drops the group.
@@ -709,7 +780,10 @@ namespace CycloneGames.Networking.Transports
     {
         public static FragmentationOptions Default => new FragmentationOptions(
             mtu: NetworkConstants.DefaultMTU,
-            maxReassembledBytes: 256 * 1024,
+            // Exactly the byte range reachable with MaxFragmentCount fragments
+            // at this MTU: 256 * (1200 - 16) = 303104.
+            maxReassembledBytes: FragmentationTransport.MaxFragmentCount
+                                 * (NetworkConstants.DefaultMTU - FragmentationTransport.FragmentHeaderSize),
             maxConcurrentGroups: 256,
             maxReassemblyBytesInFlight: 4 * 1024 * 1024,
             groupTimeoutSeconds: 5d,
@@ -750,6 +824,21 @@ namespace CycloneGames.Networking.Transports
                 throw new ArgumentOutOfRangeException(nameof(Mtu));
             if (MaxReassembledBytes <= Mtu)
                 throw new ArgumentOutOfRangeException(nameof(MaxReassembledBytes));
+
+            // A reassembled message can never be larger than the byte range
+            // reachable with the allowed fragment count at this MTU. Rejecting an
+            // over-large ceiling here makes the two limits machine-checkable and
+            // prevents unreachable fragment slots.
+            int fragmentPayload = Mtu - FragmentationTransport.FragmentHeaderSize;
+            if (fragmentPayload <= 0)
+                throw new ArgumentOutOfRangeException(nameof(Mtu));
+            long reachableBytes = (long)FragmentationTransport.MaxFragmentCount * fragmentPayload;
+            if (MaxReassembledBytes > reachableBytes)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(MaxReassembledBytes),
+                    "MaxReassembledBytes exceeds the byte range reachable with MaxFragmentCount fragments at this MTU.");
+            }
             if (MaxConcurrentGroups <= 0)
                 throw new ArgumentOutOfRangeException(nameof(MaxConcurrentGroups));
             if (MaxReassemblyBytesInFlight < MaxReassembledBytes)
@@ -763,11 +852,27 @@ namespace CycloneGames.Networking.Transports
     {
         public readonly int ActiveGroups;
         public readonly int ReassemblyBytesInFlight;
+        public readonly int UnrecognizedFramesPassedThrough;
+        public readonly int IncompleteGroupsReleased;
+        public readonly int FragmentsRejected;
 
         public FragmentationMetrics(int activeGroups, int reassemblyBytesInFlight)
+            : this(activeGroups, reassemblyBytesInFlight, 0, 0, 0)
+        {
+        }
+
+        public FragmentationMetrics(
+            int activeGroups,
+            int reassemblyBytesInFlight,
+            int unrecognizedFramesPassedThrough,
+            int incompleteGroupsReleased,
+            int fragmentsRejected)
         {
             ActiveGroups = activeGroups;
             ReassemblyBytesInFlight = reassemblyBytesInFlight;
+            UnrecognizedFramesPassedThrough = unrecognizedFramesPassedThrough;
+            IncompleteGroupsReleased = incompleteGroupsReleased;
+            FragmentsRejected = fragmentsRejected;
         }
     }
 }

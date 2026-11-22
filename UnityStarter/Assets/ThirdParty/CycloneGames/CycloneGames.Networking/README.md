@@ -17,6 +17,8 @@ CycloneGames.Networking is a transport-neutral foundation for versioned message 
 - [Performance and Memory](#performance-and-memory)
 - [Troubleshooting](#troubleshooting)
 
+If you are new to this module, read Overview, Quick Start, then Steps 1 through 6 in order. Each step adds one concept and ends with a runnable code sample. If you already work with transport layers, start at Core Concepts, then Advanced Topics for the protocol, security and long-running contracts.
+
 ## Overview
 
 The module provides transport, connection, runtime-context, serializer, and canonical message-endpoint contracts. Protocol registration is manifest-only, with explicit ID ranges, contract identities, payload budgets, channels, version windows, and fingerprints. Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories are owned explicitly by the product composition root or its subsystems. Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives are building blocks for explicit product composition. Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations complete the package.
@@ -52,7 +54,7 @@ This asset-style package lives below `Assets/ThirdParty/CycloneGames`; its `pack
 
 An optional assembly is eligible to compile when its target platform matches, every assembly reference resolves, its `versionDefines` capability symbols are generated, and its `defineConstraints` pass. `autoReferenced: false` does not disable assembly compilation; it means a consumer must add an explicit asmdef reference before using that assembly's API. Do not duplicate generated capability symbols in PlayerSettings.
 
-Core, Unity Runtime, Permissions, Editor, Tests, DOD, NewtonsoftJson, and the domain Networking packages use direct assembly references. Mirror, Mirage, Nakama, and MessagePack adapters compile only when Unity Package Manager resolves their declared packages and version constraints. A consumer that does not install an optional dependency does not reference or use its adapter assembly.
+Core, Unity Runtime, Permissions, Editor, Tests, DOD, NewtonsoftJson, and the domain Networking packages use direct assembly references. Mirror, Mirage, Nakama, and MessagePack adapters compile only when Unity Package Manager resolves their declared packages. Their `versionDefines` expressions are currently empty, so no version range is enforced; the product must pin and verify the exact SDK version at integration time. A consumer that does not install an optional dependency does not reference or use its adapter assembly.
 
 ### Ownership
 
@@ -90,9 +92,9 @@ flowchart LR
 
 Networking Core owns `INetworkingDiagnostics`, `NetworkingDiagnosticLevel`, `NullNetworkingDiagnostics`, and the canonical `NetworkingDiagnosticCategories.Root`. It avoids references to `ILogWriter`, `LogChannel`, Unity, or a concrete backend. `RollbackNetcode` overloads without diagnostics use the no-op sink; the explicit diagnostics overload supports a pure host implementation.
 
-`NetworkingDiagnosticLevel` has the same stable numeric profile as `LogSeverity`: `Trace = 0`, `Debug = 1`, `Info = 2`, `Warning = 3`, `Error = 4`, `Fatal = 5`, and `None = 6`. `NetworkingLogWriterAdapter` maps the six output levels exactly; `None` and unknown values are disabled and dropped. Core diagnostics are a best-effort side channel: ordinary exceptions from a custom sink or shared writer are contained and cannot change rollback admission or simulation control flow. `OutOfMemoryException` deliberately remains visible to the host so its process-level resource-exhaustion policy can run. Sinks must remain non-blocking, bounded, and safe for the caller's simulation thread.
+`NetworkingDiagnosticLevel` has the same stable numeric profile as `LogSeverity`: `Trace = 0`, `Debug = 1`, `Info = 2`, `Warning = 3`, `Error = 4`, `Fatal = 5`, and `None = 6`. `NetworkingLogWriterAdapter` maps the six output levels exactly; `None` and unknown values are disabled and dropped. Core diagnostics are a best-effort side channel: ordinary exceptions from a custom sink or shared writer are contained and cannot change rollback admission or simulation control flow. `OutOfMemoryException` propagates to the host so its process-level resource-exhaustion policy can run. Sinks must remain non-blocking, bounded, and safe for the caller's simulation thread.
 
-This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.networking` package root also contains non-Core assemblies and therefore still declares `com.cyclone-games.logging`; installing only Core without that package dependency requires a future physical Core package split.
+Core is an assembly boundary. The combined `com.cyclone-games.networking` package root also contains non-Core assemblies and declares `com.cyclone-games.logging` as a dependency.
 
 `NetworkingLogWriterAdapter` in `CycloneGames.Networking.Integrations.Logging` optionally maps that Core-local contract to an explicit `ILogWriter` or the current `LogRuntime.Writer`. Non-Core logging-producing assemblies continue to centralize category ownership in internal facades such as `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, and `NetworkingPermissionsLog`. Stable specialized categories remain unchanged.
 
@@ -159,7 +161,7 @@ The FNV-1a checksum detects accidental corruption and parser disagreement; it is
 
 ## Performance Tiers and Session Scaling
 
-One runtime profile cannot fit every device and every session. A flagship PC hosting a 4-player co-op game, a mid-range phone joining a 128-player battle, and a dedicated server absorbing 1,024 connections need different budgets — but they must still speak exactly the same protocol, at a cadence the whole session agrees on. The profile system solves this with two independent axes plus an endpoint role, composed into one `NetworkRuntimeProfile`.
+One runtime profile cannot fit every device and every session. A flagship PC hosting a 4-player co-op game, a mid-range phone joining a 128-player battle, and a dedicated server absorbing 1,024 connections need different budgets while speaking the same protocol at a cadence the whole session agrees on. The profile system composes two independent axes and an endpoint role into one `NetworkRuntimeProfile`.
 
 ```mermaid
 flowchart LR
@@ -190,7 +192,7 @@ The three questions the system answers separately:
 | `NetworkSessionScale` | How large is this session? | `Coop` (8), `Room` (32), `Battle` (128), `Massive` (1024) |
 | `NetworkEndpointRole` | What does this endpoint do? | `Client`, `ListenHost`, `DedicatedServer` |
 
-### Step 1 — Take a tier profile (simplest)
+### Step 1: Take a tier profile
 
 ```csharp
 using CycloneGames.Networking;
@@ -198,9 +200,9 @@ using CycloneGames.Networking;
 NetworkRuntimeProfile profile = NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Medium);
 ```
 
-Tier specs only tune capacity (pools, buffers, connection counts) and rates. Protocol values — MTU, payload limits, message format — are identical on every tier, so a Low-tier phone and a High-tier PC interoperate in the same session.
+Tier specs only tune capacity (pools, buffers, connection counts) and rates. Protocol values (MTU, payload limits, message format) are identical on every tier, so a Low-tier phone and a High-tier PC interoperate in the same session.
 
-### Step 2 — Classify the local device
+### Step 2: Classify the local device
 
 ```csharp
 // Static heuristics: core count and memory. Works everywhere, no measurement.
@@ -215,9 +217,9 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-Threshold tables are data, not code. `NetworkTierThresholds.CreateStandard()` fits devices with generous memory and cooling; `CreateConstrained()` fits memory/thermally constrained devices. The platform layer picks the table — core code encodes no device-category assumptions. Replace the global table at composition time via `NetworkDeviceProfiles.DefaultThresholds`, or pass one per call.
+Threshold tables are data, not code. `NetworkTierThresholds.CreateStandard()` fits devices with generous memory and cooling; `CreateConstrained()` fits memory/thermally constrained devices. The platform layer picks the table; core code encodes no device-category assumptions. Replace the global table at composition time via `NetworkDeviceProfiles.DefaultThresholds`, or pass one per call.
 
-### Step 3 — Compose tier with session scale and role
+### Step 3: Compose tier with session scale and role
 
 ```csharp
 // A low-end device joining a large battle as a pure client.
@@ -227,13 +229,13 @@ NetworkRuntimeProfile profile = NetworkProfileComposer.Compose(
 
 Composition rules, and the reasoning behind them:
 
-- **Capacities take `max(tier, scale)` per knob.** A weak device in a large session still gets the buffers the session demands; a strong device in a small session keeps its budget.
-- **Rates come from the tier axis only.** Freshness is a function of what the machine sustains, not of how many participants there are.
-- **Clients ignore connection counts.** A client holds exactly one connection; `MaxConnections` only applies to endpoints that accept connections.
-- **`Massive` scale rejects `ListenHost`** at composition time. A player-hosted instance cannot absorb thousand-connection pressure; the failure is explicit, not a runtime collapse.
-- **Anything past `Massive` is an architecture problem**, not a profile problem: world partitioning, interest management and sharding live above this system.
+- Capacities take `max(tier, scale)` per knob. A weak device in a large session still gets the buffers the session demands; a strong device in a small session keeps its budget.
+- Rates come from the tier axis only. Freshness is a function of what the machine sustains, not of how many participants there are.
+- Clients ignore connection counts. `MaxConnections` only applies to endpoints that accept connections. A pure client keeps the builder default because the value has no meaning for a single-connection endpoint.
+- `Massive` scale rejects `ListenHost` at composition time. A player-hosted instance cannot absorb thousand-connection pressure; the failure is explicit, not a runtime collapse.
+- Anything past `Massive` is an architecture problem, not a profile problem: world partitioning, interest management and sharding live above this system.
 
-### Step 4 — Measure instead of guessing (recommended)
+### Step 4: Measure instead of guessing
 
 Core count is a poor proxy for networking throughput: heterogeneous big.LITTLE cores and 2–3x per-core spreads across architectures make static tables misjudge real devices. `NetworkCapabilityProbe` measures the actual hot path (checksum + copy + pool churn) in a bounded time budget:
 
@@ -245,17 +247,17 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-The probe runs multiple warmed rounds over MTU-sized and 64 KB payloads, scores each round by its worse payload class, and returns the median — a single GC pause, scheduler hiccup or VM time-slice gap ruins one round, not the result. Cache the score per install instead of re-probing every launch.
+The probe runs multiple warmed rounds over MTU-sized and 64 KB payloads, scores each round by its worse payload class, and returns the median. A single GC pause, scheduler hiccup or VM time-slice gap affects one round, not the result. Cache the score per install instead of re-probing every launch.
 
-Scores are only comparable **within the same scripting backend**. Measured on the same desktop: Unity Editor (Mono JIT) ≈ 600 MB/s vs CoreCLR ≈ 1.0–1.7 GB/s. Therefore:
+Scores are comparable only within the same scripting backend. Calibrate the benchmark ceilings in `NetworkTierThresholds` on the target backend and device class, then cache the score per install.
 
-- Never classify from an Editor-measured score using player-calibrated thresholds — in the Editor everything looks 2–3x slower. In the Editor, use static heuristics.
-- Calibrate the benchmark ceilings in `NetworkTierThresholds` from IL2CPP development builds on real target hardware, per backend. The shipped defaults (800/2500, 500/1500 MB/s) are starting points, not universal facts.
-- When Unity's runtime evolves (e.g. CoreCLR-based Unity), the probe automatically measures the new reality; only the threshold data needs recalibration.
+- Do not classify from an Editor-measured score using player-calibrated thresholds. Use static heuristics in the Editor.
+- The shipped ceilings (800/2500, 500/1500 MB/s) are starting points; recalibrate them per backend.
+- Recalibrate threshold data when the scripting backend changes.
 
-### Step 5 — Let the server set the cadence
+### Step 5: Let the server set the cadence
 
-Rates are a session-level contract. If every endpoint derived cadence from its own tier, two peers could disagree on input/snapshot timing — an asymmetry that is extremely hard to debug. The server derives a tuning from its own profile and hands it to clients during session setup (the wire transport belongs to the handshake/adapter layer):
+Rates are a session-level contract. If every endpoint derived cadence from its own tier, two peers could disagree on input/snapshot timing, which produces asymmetric simulation timing. The server derives a tuning from its own profile and hands it to clients during session setup (the wire transport belongs to the handshake/adapter layer):
 
 ```csharp
 // Server side:
@@ -266,9 +268,9 @@ NetworkSessionTuning tuning = NetworkSessionTuning.FromProfile(serverProfile);
 NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
 ```
 
-`ApplyTo` clamps with **ceiling semantics**: effective rates are `min(local, server)` per knob. A client on a weak uplink may run slower than the ceiling, but no endpoint may run faster, so session cadence stays single-sourced. Local capacity budgets (pools, buffers) are never overridden.
+`ApplyTo` clamps with ceiling semantics: effective rates are `min(local, server)` per knob. A client on a weak uplink may run slower than the ceiling, but no endpoint may run faster, so session cadence stays single-sourced. Local capacity budgets (pools, buffers) are never overridden.
 
-### Step 6 — Customize without touching core code
+### Step 6: Customize without touching core code
 
 Every table in the system is replaceable data. Games override at composition/bootstrap time, before any profile is consumed:
 
@@ -290,11 +292,11 @@ NetworkRuntimeProfile custom = NetworkDeviceProfiles.ForSpec(
 
 When differently-profiled devices share a session, the design keeps three invariants:
 
-1. **Protocol is locked.** MTU, payload limits and message formats are uniform across tiers; there is nothing to mismatch.
-2. **Cadence is single-sourced.** Rates come from the server ceiling; no device runs faster than the session, and authority-sensitive decisions (damage validation, simulation) stay server-side.
-3. **Capacity is self-affecting only.** A smaller local buffer can only degrade the experience of the device that owns it — deterministic overflow policies (`RejectNew` / `DropOldest`) drop that device's own queued data, never a peer's. A weak phone stutters itself; it cannot eat another player's packets.
+1. Protocol is locked. MTU, payload limits and message formats are uniform across tiers; there is nothing to mismatch.
+2. Cadence is single-sourced. Rates come from the server ceiling; no device runs faster than the session, and authority-sensitive decisions (damage validation, simulation) stay server-side.
+3. Capacity is self-affecting only. A smaller local buffer can only degrade the experience of the device that owns it; deterministic overflow policies (`RejectNew` / `DropOldest`) drop that device's own queued data, never a peer's.
 
-One convention the integration layer must uphold: **interpolation delay is a session constant** (e.g. 100 ms, agreed via session tuning), not derived from local buffer capacity. `SnapshotBufferSize` exists to absorb jitter, not to stretch delay — otherwise weaker devices would see the world later than strong ones, which is a real competitive asymmetry.
+One convention the integration layer must uphold: interpolation delay is a session constant (e.g. 100 ms, agreed via session tuning), not derived from local buffer capacity. `SnapshotBufferSize` exists to absorb jitter, not to stretch delay; otherwise weaker devices would see the world later than strong ones.
 
 ## Usage Guide
 
@@ -323,11 +325,11 @@ Adapters use explicit instance references and receive canonical bytes through `I
 
 The adapter keeps its synchronous queue/control API and socket-event signatures, but delegates asynchronous SDK work to observed `UniTask` workers. `.Forget()` is the terminal exception observer for these detached workers; it does not own or add cancellation. Expected provider faults are routed through `OnError`; any exception that escapes that boundary is published through UniTask's unobserved-exception pipeline instead of escaping an `async void` callback. Every product observer (`OnConnectedToServer`, disconnect, route, presence, match-state, data, matchmaker, and error notifications) is isolated from the transport state machine. After any observer that can re-enter lifecycle code, the adapter revalidates socket epoch, match, and connection before continuing dispatch. Observer exceptions are published once through the same UniTask pipeline.
 
-Connect work is bounded to one active provider operation plus one coalesced latest request. A duplicate `StartClient` during the same `StartingClient` generation is idempotent. A restart requested after `Stop`, client/socket replacement, or a re-entrant failure observer overwrites the sole latest slot and starts on the next Unity `Update` after the active worker reaches a terminal state; this one-frame handoff prevents synchronous provider failures from creating recursive retry loops. `Stop`, `Initialize`, and destruction invalidate queued work. There is no predecessor-task chain. If the active provider task never terminates, the latest request remains blocked and capacity stays constant rather than growing. The adapter never reconnects the same socket because Nakama 3.21.1 queues Unity-thread events against mutable listener lists. Adapter-owned sockets therefore receive a new `UnitySocket` dispatcher for each epoch, and the retired dispatcher is destroyed after its tracked close terminates. A process-wide weak registry claims every adapter-owned or injected socket before event binding, so an `ISocket` exposed by one adapter cannot be injected into another adapter and two adapters cannot bind the same fresh socket. Replacing or destroying an adapter releases an unused injected-socket claim; once a connection epoch begins, or when an adapter-owned socket is relinquished, that socket remains retired while referenced. Call `Initialize` with a new disconnected `ISocket` before restarting an injected socket. Replacing a socket also requests close of the previous connected or connecting instance before publishing the replacement. Mutating APIs reject use after destruction; `Stop` remains an idempotent teardown no-op after destruction.
+Connect work is bounded to one active provider operation plus one coalesced latest request. A duplicate `StartClient` during the same `StartingClient` generation is idempotent. A restart requested after `Stop`, client/socket replacement, or a re-entrant failure observer overwrites the sole latest slot and starts on the next Unity `Update` after the active worker reaches a terminal state; this one-frame handoff prevents synchronous provider failures from creating recursive retry loops. `Stop`, `Initialize`, and destruction invalidate queued work. There is no predecessor-task chain. If the active provider task never terminates, the latest request remains blocked and capacity stays constant rather than growing. The adapter does not reconnect the same socket. Adapter-owned sockets therefore receive a new `UnitySocket` dispatcher for each epoch, and the retired dispatcher is destroyed after its tracked close terminates. A process-wide weak registry claims every adapter-owned or injected socket before event binding, so an `ISocket` exposed by one adapter cannot be injected into another adapter and two adapters cannot bind the same fresh socket. Replacing or destroying an adapter releases an unused injected-socket claim; once a connection epoch begins, or when an adapter-owned socket is relinquished, that socket remains retired while referenced. Call `Initialize` with a new disconnected `ISocket` before restarting an injected socket. Replacing a socket also requests close of the previous connected or connecting instance before publishing the replacement. Mutating APIs reject use after destruction; `Stop` remains an idempotent teardown no-op after destruction.
 
-Device authentication has a separate adapter-wide single-flight gate, including across injected-client replacement. Stop or timeout cancels only the current connection's wait. `ClearSession` and `Initialize` advance a session/authentication epoch; an older provider result remains observed until terminal but is discarded and cannot restore the cleared or replaced session. `ClearSession` also invalidates an active, coalesced, or next-frame scheduled connect request, so logout cannot trigger an automatic reauthentication during the handoff window. A later explicit authentication waits for the old real request to terminate before creating another. With the currently audited Nakama UnityWebRequest adapter, the SDK cancellation path completes its task but does not physically abort the underlying `UnityWebRequest`; mechanically passing each lifecycle token would therefore permit orphan HTTP requests to overlap after rapid restart. The adapter deliberately keeps the real provider task alive and observed and fails on the configured wait timeout. Real request cancellation requires a verified SDK/source adapter that aborts and disposes the request and its token registration.
+Device authentication has a separate adapter-wide single-flight gate, including across injected-client replacement. Stop or timeout cancels only the current connection's wait. `ClearSession` and `Initialize` advance a session/authentication epoch; an older provider result remains observed until terminal but is discarded and cannot restore the cleared or replaced session. `ClearSession` also invalidates an active, coalesced, or next-frame scheduled connect request, so logout cannot trigger an automatic reauthentication during the handoff window. A later explicit authentication waits for the old real request to terminate before creating another. The adapter keeps the provider task observed until it reaches a terminal state and fails on the configured wait timeout. Request cancellation belongs to the SDK adapter.
 
-Leave-match, matchmaker-add, matchmaker-remove, and matched-join SDK operations each have a single-flight gate. Stop invalidates their state generation and unbinds socket events, but those Nakama SDK methods do not accept the adapter cancellation token: each gate remains held until the underlying SDK task actually reaches a terminal state. Socket delegates capture their bound socket identity and event generation, and physical socket replacement prevents a retired Unity event queue from targeting the new epoch. Sends are admitted only while that binding is active; stale send faults are suppressed, pooled payload memory is returned only after the provider task is terminal, and successful byte/packet counters remain adapter-lifetime statistics. A provider task that never completes therefore fails closed by blocking another operation of that kind instead of allowing unbounded task growth; the product should treat that adapter instance as unhealthy and replace it through its composition/lifecycle policy.
+Leave-match, matchmaker-add, matchmaker-remove, and matched-join SDK operations each have a single-flight gate. Stop invalidates their state generation and unbinds socket events, but those Nakama SDK methods do not accept the adapter cancellation token: each gate remains held until the underlying SDK task actually reaches a terminal state. Socket delegates capture their bound socket identity and event generation, and physical socket replacement prevents a retired Unity event queue from targeting the new epoch. Sends are admitted only while that binding is active; stale send faults are suppressed, pooled payload memory is returned only after the provider task is terminal, and successful byte/packet counters remain adapter-lifetime statistics. A provider task that never completes therefore fails closed by blocking another operation of that kind instead of allowing unbounded task growth; the composition/lifecycle policy replaces that adapter instance.
 
 Socket close operations are deduplicated by socket object identity rather than by one adapter-wide task. The in-flight slot is published before calling the SDK, so synchronous completion, failure, or event re-entry cannot start a duplicate close. During `Initialize` replacement, capacity is reserved first, old socket events are unbound and the replacement state is committed, and only then is the old provider close started; an inline `Closed` callback therefore cannot re-enter a half-published replacement transaction. Up to four ordinary distinct closes may be pending concurrently; one additional slot is reserved for adapter destruction so teardown cannot be starved by reconnect churn. A fifth ordinary close reports `TransportError.Congestion` at most once until capacity recovers, and socket replacement fails before publishing partial state when it cannot reserve a close slot. Completed slots are reclaimed on the next close or connect request. Adapter-owned Unity dispatchers are destroyed only after their tracked provider close reaches a terminal state. Connecting a socket waits only for that same socket's tracked close, not an unrelated socket shutdown. A late close fault from a retired socket does not dispatch `OnError` against the replacement socket's lifecycle.
 
@@ -373,6 +375,38 @@ Treat every frame, payload, sequence, token, backend response, and address as un
 - Process result enums reserve value 0 for `Invalid` or `Unknown`; compatible, accepted, valid, launched, and authenticated outcomes are explicit nonzero values. Default-initialized result structs therefore fail closed.
 
 Transport encryption, certificate validation, identity proof, key storage, and key exchange stay outside this package. Use a target-validated TLS/DTLS/WSS or platform/backend security boundary and test its real failure modes.
+
+### Long-running contracts
+
+- Replication ticks are 32-bit modular counters. `serverTick`, `LastSentTick` and ack ticks may be negative after the `int.MaxValue` wrap. Every elapsed-time comparison must use `NetworkTickMath`; a raw `int` subtraction is wrong once the counter wraps. The true gap between two comparisons of the same object must stay below 2^31 ticks (about 414 days at 60 tick/s). Simulation frame indices in `RollbackNetcode` are a different contract: they index a ring buffer and fail fast at `int.MaxValue`, requiring resynchronization.
+- Periodic reclamation is an explicit host responsibility. Call `IPollableTransport.PollEvents()` (or `FragmentationTransport.PollEvents`) once per network tick to expire incomplete reassembly groups. At disconnect, object destruction and session teardown, call `RateLimiter.PruneExpired` / `RemoveConnection`, `NetworkReplicationStateCache.RemoveConnection` / `RemoveObject`, `NetworkSnapshotAckStore.Remove`, and the message/handler catalog `Clear`. Only `RateLimiter` (capacity-bound) and `PollEvents` reclaim automatically; the other long-lived containers do not.
+- Sentinel: `NetworkReplicatedObject.NEVER_SENT` is `-1`. Writers of replication state must keep a stored tick away from that exact value (`NetworkTickMath.AvoidSentinel`), so a wrapped tick is never mistaken for "never sent".
+- Optional unified orchestration. `NetworkMaintenanceCoordinator` (Core, instance-scoped, allocation-free) collapses the periodic entry points into `Poll(serverTick)` and the connection-scoped ones into `ReleaseConnection(connectionId)`. Scheduling uses `NetworkTickMath` and stays correct across a tick wrap. `Evaluate(...)` returns deterministic coverage issues plus an FNV-1a64 fingerprint (reusing `CycloneGames.Hash.Core`) for CI comparison. `NetworkMaintenanceRequirements` lists the ids that leak when omitted; the Editor bootstrap diagnostics surfaces missing scene targets. Register thin targets; adapters are product-owned because time semantics differ:
+
+```csharp
+sealed class PollTarget : INetworkPeriodicMaintenanceTarget
+{
+    private readonly FragmentationTransport _transport;
+    public PollTarget(FragmentationTransport transport) { _transport = transport; }
+    public string MaintenanceId => "transport.poll";
+    public int MaintenanceIntervalTicks => 1;
+    public void RunPeriodicMaintenance(int tick) { _transport.PollEvents(); }
+}
+
+sealed class StateCacheTarget : INetworkConnectionReleaseTarget
+{
+    private readonly NetworkReplicationStateCache _cache;
+    public StateCacheTarget(NetworkReplicationStateCache cache) { _cache = cache; }
+    public string MaintenanceId => "statecache.release";
+    public void ReleaseConnection(int id) { _cache.RemoveConnection(id); }
+}
+
+var coordinator = new NetworkMaintenanceCoordinator();
+coordinator.RegisterPeriodic(new PollTarget(transport));
+coordinator.RegisterConnectionRelease(new StateCacheTarget(cache));
+coordinator.Poll(serverTick);                  // once per network tick
+coordinator.ReleaseConnection(connectionId);  // on disconnect
+```
 
 ### Contract and release rules
 
@@ -438,8 +472,7 @@ is still retained. `Reset` clears both hashes and frame stamps. Unavailable and 
 protocol blind spots, not proof of synchronization; the product decides whether to retry,
 request a snapshot, disconnect, or record diagnostics.
 
-`OnDesyncDetected` fires only for confirmed `HashMismatch` results. Blind-spot conditions —
-unavailable or expired evidence — are surfaced through `OnValidationUnavailable` and
+`OnDesyncDetected` fires only for confirmed `HashMismatch` results. Blind-spot conditions (unavailable or expired evidence) are surfaced through `OnValidationUnavailable` and
 `EvaluateRemoteHash` instead. Frame ordering uses
 modular `int` arithmetic and supports `int.MaxValue` to `int.MinValue` rollover; comparisons
 separated by `2^31` or more ticks are intentionally unsupported because their ordering is
@@ -549,8 +582,8 @@ Run the following checks for every shipping configuration:
 
 ## Related Packages
 
-- `CycloneGames.GameplayAbilities` — owns gameplay state, an explicit authority/replica role, and the authoritative `TryExecuteAuthorityAbility` boundary, with no transport bridge of its own.
-- `CycloneGames.GameplayAbilities.Networking` — fixed-wire protocol, codec, structural validator, and result mapper for non-predicted authority-owned `AuthorityOnly` activation. It is a protocol integration rather than a transport endpoint; the product endpoint supplies authentication, ownership, replay/rate policy, bounded pending state, authority-ID mapping, and owner-thread marshaling.
+- `CycloneGames.GameplayAbilities`: owns gameplay state, an explicit authority/replica role, and the authoritative `TryExecuteAuthorityAbility` boundary, with no transport bridge of its own.
+- `CycloneGames.GameplayAbilities.Networking`: fixed-wire protocol, codec, structural validator, and result mapper for non-predicted authority-owned `AuthorityOnly` activation. It is a protocol integration rather than a transport endpoint; the product endpoint supplies authentication, ownership, replay/rate policy, bounded pending state, authority-ID mapping, and owner-thread marshaling.
 - `CycloneGames.GameplayFramework.Networking`
 - `CycloneGames.BehaviorTree.Networking`
 - `CycloneGames.AIPerception.Networking`

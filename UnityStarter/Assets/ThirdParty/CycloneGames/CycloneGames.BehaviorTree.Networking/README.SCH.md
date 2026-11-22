@@ -18,7 +18,7 @@
 
 ### 同步哪些内容
 
-Bridge 通过网络同步 `RuntimeBlackboard` 状态。Full snapshot 携带 managed node state 的信息性投影和 `Snapshot` scope 的 blackboard 值。Blackboard delta 携带对 `Delta` scope 或 `Networked` scope key 的增量变更。Hash-only message 不携带 payload——仅包含 blackboard 和 tree-state hash，用于轻量校验。Object key 始终为 `LocalOnly`。
+Bridge 通过网络同步 `RuntimeBlackboard` 状态。Full snapshot 携带 managed node state 的信息性投影和 `Snapshot` scope 的 blackboard 值。Blackboard delta 携带对 `Delta` scope 或 `Networked` scope key 的增量变更。Hash-only message 不携带 payload，仅包含 blackboard 和 tree-state hash，用于轻量校验。Object key 始终为 `LocalOnly`。
 
 ### Assembly
 
@@ -157,7 +157,7 @@ Transport adapter 负责序列化 DTO、选择 profile channel、发送数据、
 3. 通过 networking backend 编码并发送 DTO。
 4. 使用相同的版本化契约解码传入数据。
 5. 把已解码消息排队到 tree owner thread。
-6. 调用 `TryApplyPayload`；只有在 live commit 前拒绝 packet 时才把返回值视为 `false`。异常必须单独处理——它们可能发生在 live state 已改变之后。
+6. 调用 `TryApplyPayload`；只有在 live commit 前拒绝 packet 时才把返回值视为 `false`。异常必须单独处理，它们可能发生在 live state 已改变之后。
 
 ## 协议契约
 

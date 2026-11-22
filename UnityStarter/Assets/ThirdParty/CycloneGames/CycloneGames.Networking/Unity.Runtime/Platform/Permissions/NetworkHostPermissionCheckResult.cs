@@ -11,7 +11,7 @@ namespace CycloneGames.Networking.Platform
     {
         public readonly NetworkHostPermissionStatus Status;
 
-        /// <summary>True when the user or operating system likely still has to allow inbound traffic
+        /// <summary>True when the user or operating system still has to allow inbound traffic
         /// (firewall rule, OS privacy permission, or router/hotspot configuration) before peers can connect.</summary>
         public readonly bool RequiresSystemConfiguration;
 

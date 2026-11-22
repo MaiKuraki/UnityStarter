@@ -12,7 +12,7 @@ namespace CycloneGames.Networking.Transports
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Two <see cref="LocalLoopTransport"/> instances—one acting as server, one as client—are
+    /// Two <see cref="LocalLoopTransport"/> instances, one acting as server and one as client, are
     /// paired through a named <see cref="LocalLoopChannel"/>. The server creates the channel
     /// on <see cref="INetTransport.StartServer"/>, and the client finds it by name on
     /// <see cref="INetTransport.StartClient"/>.

@@ -4,7 +4,7 @@ namespace CycloneGames.Networking
 {
     /// <summary>
     /// Server-authoritative session rate ceiling. Freshness rates (tick/send) are
-    /// a session-level contract decided by the server — not a local device choice:
+    /// a session-level contract decided by the server, not a local device choice:
     /// if every endpoint derived rates from its own hardware tier, two peers in
     /// the same session could disagree on input/snapshot cadence, which produces
     /// asymmetric simulation timing that is very hard to debug.
@@ -17,7 +17,7 @@ namespace CycloneGames.Networking
     ///
     /// Flow: the server derives this from its own composed profile and hands it to
     /// clients during session setup (the wire format and transport of these values
-    /// belong to the adapter/handshake layer, deliberately out of scope here).
+    /// belong to the adapter/handshake layer).
     /// Clients then call <see cref="ApplyTo"/> to clamp their local profile against
     /// the ceiling while keeping their local capacity budgets (pool/buffer sizes
     /// remain a per-device concern and are NOT overridden).

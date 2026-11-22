@@ -104,7 +104,6 @@ namespace CycloneGames.Networking.Interest
                         continue;
                     }
 
-                    // Check via entity group map
                     if (_entityGroupMap.TryGetValue(entity.NetworkId, out int entityGroup) && myGroups.Contains(entityGroup))
                     {
                         results.Add(entity.NetworkId);

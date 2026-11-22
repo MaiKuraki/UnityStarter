@@ -270,7 +270,7 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 ### Profile 与 scheduling
 
-Profile 定义 supported/required features、channel、interval、snapshot budget 和 authority-transfer 行为。`ProfileHash` 对强类型值进行确定性计算。Interval 是 policy 值 — network session 或 replication loop 负责 tick scheduling、拥塞响应和 send retry。
+Profile 定义 supported/required features、channel、interval、snapshot budget 和 authority-transfer 行为。`ProfileHash` 对强类型值进行确定性计算。Interval 是 policy 值；network session 或 replication loop 负责 tick scheduling、拥塞响应和 send retry。
 
 ### 安全与失败处理
 
@@ -313,4 +313,4 @@ FNV state hash 只是同步 checksum，不是认证码。传输认证和密码�
 | Entry 受到限制 | 检查 `WriteDetectionEntries` loss count 与 4,096 输入工作上限：unresolved、invalid、capacity-limited、duplicates |
 | Interest filtering 无 observer | Observer/candidate entity mapping、interest evaluator 配置 |
 | 热路径有分配 | 验证 span 和可复用 buffer；在目标 Player backend profile |
-| Profile 更改无效 | Profile 不可变 — 通过 handshake 创建并交换新 profile |
+| Profile 更改无效 | Profile 不可变；通过 handshake 创建并交换新 profile |

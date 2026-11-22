@@ -17,6 +17,8 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 - [性能与内存](#性能与内存)
 - [故障排查](#故障排查)
 
+初次接触本模块时，按概述、快速上手、性能分级与会话规模的第一步到第六步顺序阅读：每一步只引入一个概念，并以可运行的代码示例收尾。已熟悉 transport 层的开发者可从核心概念开始，再读进阶主题中的协议、安全与长期运行契约。
+
 ## 概述
 
 本模块提供 transport、connection、runtime-context、serializer 和 canonical message-endpoint 契约。Protocol 注册仅通过 manifest 完成，具有显式 ID range、contract identity、payload budget、channel、version window 和 fingerprint。有界 buffer、queue、rate-limit state、sequence window、reconnection reservation 和 simulation history 由产品 composition root 或相应 subsystem 显式持有。Replication、interest、prediction、lockstep、rollback、session 和 host-handoff primitive 是供产品显式组合的基础能力。Unity runtime bridge、LAN host permission 指引、Editor diagnostics 以及可选 backend/serializer integration 共同构成完整 package。
@@ -52,7 +54,7 @@ RPC framework、通用 Service Locator 与自动 state-variable replication 不�
 
 可选 assembly 只有在目标平台匹配、全部 assembly reference 可解析、`versionDefines` 已生成 capability symbol 且 `defineConstraints` 成立时，才具备编译条件。`autoReferenced: false` 不会关闭 assembly 编译；它表示 consumer 必须显式添加 asmdef reference 才能使用该 assembly 的 API。不要在 PlayerSettings 中重复定义自动生成的 capability symbol。
 
-Core、Unity Runtime、Permissions、Editor、Tests、DOD、NewtonsoftJson 与各领域 Networking package 使用直接 assembly reference。Mirror、Mirage、Nakama 与 MessagePack adapter 只在 Unity Package Manager 能解析其声明的 package 和版本约束时参与编译。未安装可选依赖的 consumer 不应引用或使用对应 adapter assembly。
+Core、Unity Runtime、Permissions、Editor、Tests、DOD、NewtonsoftJson 与各领域 Networking package 使用直接 assembly reference。Mirror、Mirage、Nakama 与 MessagePack adapter 只在 Unity Package Manager 能解析其声明的 package 时参与编译。当前 `versionDefines` 的 expression 为空，不校验版本区间；产品必须在集成时锁定并验证精确的 SDK version。未安装可选依赖的 consumer 不应引用或使用对应 adapter assembly。
 
 ### 所有权
 
@@ -90,9 +92,9 @@ flowchart LR
 
 Networking Core 自己持有 `INetworkingDiagnostics`、`NetworkingDiagnosticLevel`、`NullNetworkingDiagnostics` 和规范 category `NetworkingDiagnosticCategories.Root`，不依赖 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`RollbackNetcode` 不带 diagnostics 的 overload 使用 no-op sink；显式 diagnostics overload 支持纯 C# host 实现。
 
-`NetworkingDiagnosticLevel` 与 `LogSeverity` 使用相同的稳定数值布局：`Trace = 0`、`Debug = 1`、`Info = 2`、`Warning = 3`、`Error = 4`、`Fatal = 5`、`None = 6`。`NetworkingLogWriterAdapter` 精确映射六个可输出级别；`None` 与未知值一律禁用并丢弃。Core diagnostics 是 best-effort side channel：自定义 sink 或共享 writer 抛出的普通异常会被隔离，不能改变 rollback admission 或 simulation 控制流。`OutOfMemoryException` 会刻意继续传播，以便 host 执行进程级资源耗尽策略。sink 仍必须非阻塞、有界，并满足调用方 simulation thread 的安全要求。
+`NetworkingDiagnosticLevel` 与 `LogSeverity` 使用相同的稳定数值布局：`Trace = 0`、`Debug = 1`、`Info = 2`、`Warning = 3`、`Error = 4`、`Fatal = 5`、`None = 6`。`NetworkingLogWriterAdapter` 精确映射六个可输出级别；`None` 与未知值一律禁用并丢弃。Core diagnostics 是 best-effort side channel：自定义 sink 或共享 writer 抛出的普通异常会被隔离，不能改变 rollback admission 或 simulation 控制流。`OutOfMemoryException` 会继续传播，以便 host 执行进程级资源耗尽策略。sink 仍必须非阻塞、有界，并满足调用方 simulation thread 的安全要求。
 
-这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.networking` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
+Core 是 assembly 边界。组合式 `com.cyclone-games.networking` package root 还包含非 Core assembly，并声明 `com.cyclone-games.logging` 依赖。
 
 `CycloneGames.Networking.Integrations.Logging` 中的 `NetworkingLogWriterAdapter` 可以把 Core 本地契约映射到显式 `ILogWriter` 或当前 `LogRuntime.Writer`。非 Core 的日志生产 assembly 继续使用 `NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 与 `NetworkingPermissionsLog` 等 internal facade 集中持有 category；稳定专用 category 保持不变。
 
@@ -159,7 +161,7 @@ FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先�
 
 ## 性能分级与会话规模
 
-一份 runtime profile 不可能同时适合所有设备和所有会话。旗舰 PC 开 4 人合作房、中端手机加入 128 人战场、dedicated server 承接 1024 个连接，三者需要的预算完全不同——但它们必须讲完全相同的协议，并且节奏由整局会话统一决定。Profile 系统用两条相互独立的轴加端点角色来解决这个问题，最终合成为一份 `NetworkRuntimeProfile`。
+一份 runtime profile 不可能同时适合所有设备和所有会话。旗舰 PC 开 4 人合作房、中端手机加入 128 人战场、dedicated server 承接 1024 个连接，三者需要的预算完全不同，但必须讲完全相同的协议，并且节奏由整局会话统一决定。Profile 系统用两条相互独立的轴加端点角色来解决这个问题，最终合成为一份 `NetworkRuntimeProfile`。
 
 ```mermaid
 flowchart LR
@@ -190,7 +192,7 @@ flowchart LR
 | `NetworkSessionScale` | 这局会话有多大？ | `Coop`(8)、`Room`(32)、`Battle`(128)、`Massive`(1024) |
 | `NetworkEndpointRole` | 这个端点做什么？ | `Client`、`ListenHost`、`DedicatedServer` |
 
-### 第一步 —— 直接取一份 tier profile（最简单）
+### 第一步：直接取一份 tier profile
 
 ```csharp
 using CycloneGames.Networking;
@@ -198,9 +200,9 @@ using CycloneGames.Networking;
 NetworkRuntimeProfile profile = NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Medium);
 ```
 
-Tier spec 只调节容量（pool、buffer、连接数）和速率。协议值——MTU、payload 上限、消息格式——在所有 tier 上完全一致，所以 Low 档手机和 High 档 PC 可以在同一局里互通。
+Tier spec 只调节容量（pool、buffer、连接数）和速率。协议值（MTU、payload 上限、消息格式）在所有 tier 上完全一致，所以 Low 档手机和 High 档 PC 可以在同一局里互通。
 
-### 第二步 —— 对本地设备分类
+### 第二步：对本地设备分类
 
 ```csharp
 // 静态启发式：核心数 + 内存。任何环境可用，无需测量。
@@ -215,9 +217,9 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-阈值表是数据，不是代码。`NetworkTierThresholds.CreateStandard()` 适合内存和散热宽裕的设备；`CreateConstrained()` 适合内存/热受限的设备。选哪张表由平台层决定——Core 不编码任何设备类别假设。可以在 composition 阶段通过 `NetworkDeviceProfiles.DefaultThresholds` 全局替换，也可以按调用传入。
+阈值表是数据，不是代码。`NetworkTierThresholds.CreateStandard()` 适合内存和散热宽裕的设备；`CreateConstrained()` 适合内存/热受限的设备。选哪张表由平台层决定；Core 不编码任何设备类别假设。可以在 composition 阶段通过 `NetworkDeviceProfiles.DefaultThresholds` 全局替换，也可以按调用传入。
 
-### 第三步 —— 用 tier + 会话规模 + 角色合成 profile
+### 第三步：用 tier + 会话规模 + 角色合成 profile
 
 ```csharp
 // 低端设备以纯 client 身份加入大型战场。
@@ -227,13 +229,13 @@ NetworkRuntimeProfile profile = NetworkProfileComposer.Compose(
 
 合成规则及其理由：
 
-- **容量按旋钮取 `max(tier, scale)`。** 弱设备进大会话也能拿到会话需要的缓冲；强设备进小会话不会被套小预算。
-- **速率只来自 tier 轴。** 数据新鲜度取决于机器能持续输出多少，与人数无关。
-- **Client 忽略连接数。** Client 永远只有一个连接；`MaxConnections` 只对接受连接的端点有意义。
-- **`Massive` 拒绝 `ListenHost`**，在 composition 期直接失败。玩家主机扛不住千级连接压力，显式失败好过运行时崩溃。
-- **超过 `Massive` 的规模是架构问题，不是 profile 问题**：世界分区、兴趣管理和分片属于这个系统之上的层。
+- 容量按旋钮取 `max(tier, scale)`。 弱设备进大会话也能拿到会话需要的缓冲；强设备进小会话不会被套小预算。
+- 速率只来自 tier 轴。 数据新鲜度取决于机器能持续输出多少，与人数无关。
+- Client 忽略连接数。 `MaxConnections` 只对接受连接的端点有意义；纯 Client 保留 builder 默认值，因为该值对单连接端点没有语义。
+- `Massive` 拒绝 `ListenHost`，在 composition 期直接失败。玩家主机扛不住千级连接压力，显式失败好过运行时崩溃。
+- 超过 `Massive` 的规模是架构问题，不是 profile 问题：世界分区、兴趣管理和分片属于这个系统之上的层。
 
-### 第四步 —— 用实测代替猜测（推荐）
+### 第四步：用实测代替猜测
 
 核心数是网络吞吐的很差的代理指标：big.LITTLE 异构核心、不同架构 2–3 倍的单核差距，会让静态表误判真实设备。`NetworkCapabilityProbe` 在有限时间预算内测量真实热路径（checksum + copy + pool 周转）：
 
@@ -245,17 +247,17 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-探针运行多轮预热过的测量，每轮覆盖 MTU 大小和 64 KB 两种载荷、按较差者计分，最终取中位数——一次 GC 停顿、调度抖动或 VM 时间片空洞只会毁掉一轮，不会毁掉结果。分数应按安装缓存，不要每次启动都重测。
+探针运行多轮预热过的测量，每轮覆盖 MTU 大小和 64 KB 两种载荷、按较差者计分，最终取中位数。一次 GC 停顿、调度抖动或 VM 时间片空洞只影响一轮，不影响结果。分数应按安装缓存，不要每次启动都重测。
 
-分数**只在同一 scripting backend 内可比**。同一台桌面机实测：Unity Editor（Mono JIT）≈ 600 MB/s，CoreCLR ≈ 1.0–1.7 GB/s。因此：
+分数只在同一 scripting backend 内可比。请在目标 backend 与设备档位上校准 `NetworkTierThresholds` 的 benchmark 阈值，并按安装缓存分数。
 
-- 不要用 Editor 实测分数套用按 player 校准的阈值——Editor 里一切都慢 2–3 倍，旗舰 CPU 也会被判成 Low。Editor 下用静态启发式。
-- `NetworkTierThresholds` 的 benchmark 阈值要用 IL2CPP development build 在真实目标硬件上按后端分别校准。出厂默认值（800/2500、500/1500 MB/s）是起点，不是普适事实。
-- Unity 运行时演进（例如 CoreCLR 化的 Unity）时，探针自动测出新现实，只需重新校准阈值数据。
+- 不要用 Editor 实测分数套用按 player 校准的阈值；Editor 下使用静态启发式。
+- 出厂阈值（800/2500、500/1500 MB/s）是起点，需按 backend 重新校准。
+- scripting backend 变化时重新校准阈值数据。
 
-### 第五步 —— 让 server 决定节奏
+### 第五步：让 server 决定节奏
 
-速率是 session 级契约。如果每个端点各自按 tier 推导节奏，两个 peer 可能在输入/快照时序上不一致——这种不对称极难排查。Server 从自己的 profile 派生 tuning，在 session 建立时交给 client（线上传输属于 handshake/adapter 层）：
+速率是 session 级契约。如果每个端点各自按 tier 推导节奏，两个 peer 可能在输入/快照时序上不一致，从而产生模拟时序差异。Server 从自己的 profile 派生 tuning，在 session 建立时交给 client（线上传输属于 handshake/adapter 层）：
 
 ```csharp
 // Server 侧：
@@ -266,9 +268,9 @@ NetworkSessionTuning tuning = NetworkSessionTuning.FromProfile(serverProfile);
 NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
 ```
 
-`ApplyTo` 采用**上限（ceiling）语义**：每个旋钮的有效速率为 `min(local, server)`。上行弱的 client 可以比上限更慢，但任何端点都不能比上限更快，因此会话节奏保持单源。本地容量预算（pool、buffer）永不被覆盖。
+`ApplyTo` 采用上限（ceiling）语义：每个旋钮的有效速率为 `min(local, server)`。上行弱的 client 可以比上限更慢，但任何端点都不能比上限更快，因此会话节奏保持单源。本地容量预算（pool、buffer）永不被覆盖。
 
-### 第六步 —— 不改核心代码完成定制
+### 第六步：不改核心代码完成定制
 
 系统里每张表都是可替换的数据。游戏在 composition/bootstrap 阶段、任何 profile 被消费之前完成覆盖：
 
@@ -290,11 +292,11 @@ NetworkRuntimeProfile custom = NetworkDeviceProfiles.ForSpec(
 
 当不同 profile 的设备同局游戏时，设计保证三条不变量：
 
-1. **协议锁死。** MTU、payload 上限和消息格式跨 tier 一致，不存在可错位的东西。
-2. **节奏单源。** 速率来自 server 上限；没有设备能比会话更快，权威敏感的判定（伤害校验、模拟）都在 server 侧。
-3. **容量只影响自己。** 更小的本地缓冲只会降低拥有者自己的体验——确定性溢出策略（`RejectNew` / `DropOldest`）丢的是这台设备自己排队的数据，永远不会丢对端的。弱手机只会让自己卡顿，吃不掉其他玩家的包。
+1. 协议锁死。 MTU、payload 上限和消息格式跨 tier 一致，不存在可错位的东西。
+2. 节奏单源。 速率来自 server 上限；没有设备能比会话更快，权威敏感的判定（伤害校验、模拟）都在 server 侧。
+3. 容量只影响自己。 更小的本地缓冲只会降低拥有者自己的体验；确定性溢出策略（`RejectNew` / `DropOldest`）丢的是这台设备自己排队的数据，永远不会丢对端的。
 
-集成层必须遵守一条约定：**插值延迟是 session 常量**（例如统一的 100 ms，经 session tuning 协商），不得从本地缓冲容量推导。`SnapshotBufferSize` 的作用是吸收抖动，而不是拉长延迟——否则弱设备看到的世界会比强设备晚，这是真实的竞技不对称。
+集成层必须遵守一条约定：插值延迟是 session 常量（例如统一的 100 ms，经 session tuning 协商），不得从本地缓冲容量推导。`SnapshotBufferSize` 的作用是吸收抖动，而不是拉长延迟；否则弱设备看到的世界会比强设备晚。
 
 ## 使用指南
 
@@ -323,11 +325,11 @@ Adapter 使用显式 instance reference，并通过 `INetworkMessageEndpoint` �
 
 Adapter 保留同步 queue/control API 与 socket-event 签名，但将异步 SDK 工作委托给受观察的 `UniTask` worker。`.Forget()` 是这些 detached worker 的终态异常观察器；它不拥有 cancellation，也不会自动添加 cancellation。预期 provider fault 通过 `OnError` 报告；逃出该边界的异常进入 UniTask unobserved-exception pipeline，不再从 `async void` callback 逃逸。所有产品 observer（连接、断开、route、presence、match state、data、matchmaker 和 error 通知）都与 transport 状态机隔离。任何可能重入 lifecycle 的 observer 返回后，adapter 都会重新校验 socket epoch、match 和 connection，再继续分发。Observer 异常只会发布一次到同一个 UniTask pipeline。
 
-Connect 工作有界为一个 active provider operation 加一个合并后的 latest request。同一 `StartingClient` generation 内的重复 `StartClient` 保持幂等。在 `Stop`、client/socket 替换或 failure observer 重入之后请求 restart 时，只覆盖唯一 latest 槽位；active worker 进入终态后，latest 会在下一次 Unity `Update` 启动。这一帧的交接可防止同步 provider failure 形成递归 retry loop。`Stop`、`Initialize` 与销毁会使 queued work 失效。实现中不存在 predecessor-task chain。若 active provider task 永不结束，latest 会保持阻塞，但容量恒定而不会增长。Adapter 不会重连同一个 socket，因为 Nakama 3.21.1 会把 Unity-thread event 排入引用可变 listener list 的队列。Adapter 自有 socket 因此会为每个 epoch 创建新的 `UnitySocket` dispatcher，并在已退役 dispatcher 对应的受跟踪 close 进入终态后销毁它。进程级弱引用 registry 会在绑定 event 前声明每个 adapter 自有或注入 socket 的所有权，因此一个 adapter 暴露的 `ISocket` 不能再注入另一个 adapter，两个 adapter 也不能共同绑定同一个 fresh socket。替换或销毁 adapter 时会释放尚未使用的注入 socket claim；connection epoch 一旦开始，或 adapter 自有 socket 被放弃，只要该 socket 仍被引用就保持 retired。注入 socket restart 前必须用新的、未连接的 `ISocket` 调用 `Initialize`。替换 socket 时，也会在发布 replacement 前请求关闭旧的 connected 或 connecting 实例。销毁后 mutating API 会拒绝继续使用；`Stop` 在销毁后仍是幂等的 teardown no-op。
+Connect 工作有界为一个 active provider operation 加一个合并后的 latest request。同一 `StartingClient` generation 内的重复 `StartClient` 保持幂等。在 `Stop`、client/socket 替换或 failure observer 重入之后请求 restart 时，只覆盖唯一 latest 槽位；active worker 进入终态后，latest 会在下一次 Unity `Update` 启动。这一帧的交接可防止同步 provider failure 形成递归 retry loop。`Stop`、`Initialize` 与销毁会使 queued work 失效。实现中不存在 predecessor-task chain。若 active provider task 永不结束，latest 会保持阻塞，但容量恒定而不会增长。Adapter 不会重连同一个 socket。Adapter 自有 socket 因此会为每个 epoch 创建新的 `UnitySocket` dispatcher，并在已退役 dispatcher 对应的受跟踪 close 进入终态后销毁它。进程级弱引用 registry 会在绑定 event 前声明每个 adapter 自有或注入 socket 的所有权，因此一个 adapter 暴露的 `ISocket` 不能再注入另一个 adapter，两个 adapter 也不能共同绑定同一个 fresh socket。替换或销毁 adapter 时会释放尚未使用的注入 socket claim；connection epoch 一旦开始，或 adapter 自有 socket 被放弃，只要该 socket 仍被引用就保持 retired。注入 socket restart 前必须用新的、未连接的 `ISocket` 调用 `Initialize`。替换 socket 时，也会在发布 replacement 前请求关闭旧的 connected 或 connecting 实例。销毁后 mutating API 会拒绝继续使用；`Stop` 在销毁后仍是幂等的 teardown no-op。
 
-Device authentication 另有 adapter-wide single-flight gate，注入 client 被替换时也适用。Stop 或 timeout 只取消当前 connect 对结果的等待。`ClearSession` 与 `Initialize` 会推进 session/authentication epoch；旧 provider result 仍会被观察到终态，但会被丢弃，不能恢复已清除或已替换的 session。`ClearSession` 还会使 active、coalesced 或已安排到下一帧的 connect request 失效，因此 logout 不会在 handoff 窗口自动重新认证。后续显式认证必须等待该旧真实请求进入终态，才能创建新请求。当前已审计的 Nakama UnityWebRequest adapter 在 SDK cancellation 路径中只结束其 task，并不会物理中止底层 `UnityWebRequest`；如果机械地给每一代请求传 lifecycle token，快速 restart 后反而可能让遗留 HTTP request 与新请求重叠。Adapter 因此会保留并观察真实 provider task，并按配置的等待 timeout 失败。若要实现真实 request cancellation，必须使用已验证、会 abort/dispose request 以及 token registration 的 SDK/source adapter。
+Device authentication 另有 adapter-wide single-flight gate，注入 client 被替换时也适用。Stop 或 timeout 只取消当前 connect 对结果的等待。`ClearSession` 与 `Initialize` 会推进 session/authentication epoch；旧 provider result 仍会被观察到终态，但会被丢弃，不能恢复已清除或已替换的 session。`ClearSession` 还会使 active、coalesced 或已安排到下一帧的 connect request 失效，因此 logout 不会在 handoff 窗口自动重新认证。后续显式认证必须等待该旧真实请求进入终态，才能创建新请求。Adapter 会观察 provider task 直到终态，并按配置的等待 timeout 失败。Request cancellation 由 SDK adapter 负责。
 
-Leave-match、matchmaker-add、matchmaker-remove 与 matched-join SDK 操作分别具有 single-flight gate。Stop 会使其状态 generation 失效并解绑 socket event，但这些 Nakama SDK 方法不接受 adapter cancellation token：每个 gate 会一直保持到对应 SDK task 真正进入终态。Socket delegate 会捕获其绑定 socket identity 与 event generation，而物理替换 socket 会阻止已退役 Unity event queue 命中新 epoch。只有 binding 仍 active 时才接纳 send；过期 send fault 会被抑制，pooled payload memory 只会在 provider task 进入终态后归还，而成功 byte/packet counter 保持 adapter-lifetime statistics。永不完成的 provider task 因此会 fail closed，阻止同类新操作，而不是允许 task 无界增长；产品应把该 adapter instance 视为不健康，并按自身 composition/lifecycle policy 替换它。
+Leave-match、matchmaker-add、matchmaker-remove 与 matched-join SDK 操作分别具有 single-flight gate。Stop 会使其状态 generation 失效并解绑 socket event，但这些 Nakama SDK 方法不接受 adapter cancellation token：每个 gate 会一直保持到对应 SDK task 真正进入终态。Socket delegate 会捕获其绑定 socket identity 与 event generation，而物理替换 socket 会阻止已退役 Unity event queue 命中新 epoch。只有 binding 仍 active 时才接纳 send；过期 send fault 会被抑制，pooled payload memory 只会在 provider task 进入终态后归还，而成功 byte/packet counter 保持 adapter-lifetime statistics。永不完成的 provider task 因此会 fail closed，阻止同类新操作，而不是允许 task 无界增长；composition/lifecycle policy 负责替换该 adapter instance。
 
 Socket close operation 按 socket 对象引用去重，而不是共享一个 adapter-wide task。在调用 SDK 前就会发布 in-flight 槽位，因此同步完成、失败或 event 重入都不能重复启动 close。`Initialize` replacement 会先预留容量，再解绑旧 socket event 并提交 replacement state，最后才启动旧 provider close；因此内联 `Closed` callback 不能重入一个只发布了一半的替换事务。普通路径最多允许四个不同 socket 同时处于关闭中；另有一个槽位专门保留给 adapter 销毁，避免 teardown 被 reconnect churn 饿死。第五个普通 close 在容量恢复前最多报告一次 `TransportError.Congestion`；无法预留 close 槽位时，socket replacement 会在发布任何部分状态前失败。完成的槽位会在下一次 close 或 connect 请求时回收。Adapter 自有 Unity dispatcher 只会在对应受跟踪 provider close 进入终态后销毁。连接某个 socket 只等待该 socket 自身已跟踪的 close，不等待无关 socket 的 shutdown。已退役 socket 的迟到 close fault 不会针对替换 socket 的生命周期分发 `OnError`。
 
@@ -373,6 +375,38 @@ Diagnostics 只在用户请求时运行，并且只在此时扫描 scene。未�
 - Process result enum 将 0 保留给 `Invalid` 或 `Unknown`；compatible、accepted、valid、launched 和 authenticated outcome 都是显式非零值。因此，默认初始化的 result struct 会 fail closed。
 
 transport encryption、certificate validation、identity proof、key storage 与 key exchange 不在本包范围内。应使用经过目标平台验证的 TLS/DTLS/WSS 或 platform/backend security boundary，并测试真实 failure mode。
+
+### 长期运行契约
+
+- 复制 tick 是 32 位 modular 计数器。 `serverTick`、`LastSentTick` 与 ack tick 在 `int.MaxValue` 回绕后可以是负值。所有"距上次经过多少 tick"的比较必须使用 `NetworkTickMath`；裸 `int` 减法在回绕后是错的。同一对象两次比较之间的真实间隔必须小于 2^31 tick（60 tick/s 下约 414 天）。`RollbackNetcode` 的模拟帧号是另一套契约：它用于环形缓冲索引，在 `int.MaxValue` 处 fail-fast 并要求重新同步。
+- 周期性回收是宿主侧的显式责任。 每个网络 tick 调用一次 `IPollableTransport.PollEvents()`（或 `FragmentationTransport.PollEvents`）以清理未完成的重组组。在断线、对象销毁与会话结束时调用 `RateLimiter.PruneExpired` / `RemoveConnection`、`NetworkReplicationStateCache.RemoveConnection` / `RemoveObject`、`NetworkSnapshotAckStore.Remove` 以及消息/handler catalog 的 `Clear`。只有 `RateLimiter`（容量上限触发）与 `PollEvents` 会自动回收，其余长生命周期容器不会。
+- 哨兵值： `NetworkReplicatedObject.NEVER_SENT` 为 `-1`。写入复制状态的路径必须让存储的 tick 避开该值（`NetworkTickMath.AvoidSentinel`），避免回绕后的 tick 被误判为"从未发送"。
+- 可选统一编排。 `NetworkMaintenanceCoordinator`（Core、实例作用域、零分配）把周期性回收入口收敛为 `Poll(serverTick)`、把断线回收入口收敛为 `ReleaseConnection(connectionId)`。调度使用 `NetworkTickMath`，tick 回绕后仍正确。`Evaluate(...)` 返回确定性的覆盖率 issue 与 FNV-1a64 fingerprint（复用 `CycloneGames.Hash.Core`）便于 CI 比对。`NetworkMaintenanceRequirements` 列出遗漏即会泄漏的 id；Editor bootstrap 诊断会提示场景中缺失的 target。框架不把适配器强绑到具体组件（各组件时间语义不同），由产品注册薄适配器：
+
+```csharp
+sealed class PollTarget : INetworkPeriodicMaintenanceTarget
+{
+    private readonly FragmentationTransport _transport;
+    public PollTarget(FragmentationTransport transport) { _transport = transport; }
+    public string MaintenanceId => "transport.poll";
+    public int MaintenanceIntervalTicks => 1;
+    public void RunPeriodicMaintenance(int tick) { _transport.PollEvents(); }
+}
+
+sealed class StateCacheTarget : INetworkConnectionReleaseTarget
+{
+    private readonly NetworkReplicationStateCache _cache;
+    public StateCacheTarget(NetworkReplicationStateCache cache) { _cache = cache; }
+    public string MaintenanceId => "statecache.release";
+    public void ReleaseConnection(int id) { _cache.RemoveConnection(id); }
+}
+
+var coordinator = new NetworkMaintenanceCoordinator();
+coordinator.RegisterPeriodic(new PollTarget(transport));
+coordinator.RegisterConnectionRelease(new StateCacheTarget(cache));
+coordinator.Poll(serverTick);                  // 每个网络 tick 一次
+coordinator.ReleaseConnection(connectionId);  // 断线时
+```
 
 ### Contract 与发布规则
 
@@ -434,7 +468,7 @@ Unity adapter 通过 `OnDisable`/`OnDestroy` 清理 backend callback；销毁或
 `Reset` 会同时清除 hash 与 frame stamp。Unavailable 与 expired 是 protocol blind spot，不代表同步成立；产品负责决定 retry、请求 snapshot、
 断开连接或记录 diagnostics。
 
-`OnDesyncDetected` 只对已确认的 `HashMismatch` 触发。blind spot 条件——证据不可用或已过期——
+`OnDesyncDetected` 只对已确认的 `HashMismatch` 触发。blind spot 条件（证据不可用或已过期）
 通过 `OnValidationUnavailable` 与 `EvaluateRemoteHash` 呈现。Frame 排序使用 modular `int` arithmetic，支持从 `int.MaxValue` rollover
 到 `int.MinValue`；相距 `2^31` tick 或更远的比较因顺序存在歧义而明确不支持。
 
@@ -542,8 +576,8 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 
 ## 相关包
 
-- `CycloneGames.GameplayAbilities` — 拥有 gameplay state、显式 authority/replica role 与权威 `TryExecuteAuthorityAbility` 边界，自身不携带 transport bridge。
-- `CycloneGames.GameplayAbilities.Networking` — 面向非预测、authority-owned `AuthorityOnly` activation 的 fixed-wire protocol、codec、structural validator 与 result mapper。它是 protocol integration，不是 transport endpoint；产品 endpoint 负责 authentication、ownership、replay/rate policy、有界 pending state、authority-ID mapping 与 owner-thread marshaling。
+- `CycloneGames.GameplayAbilities`：拥有 gameplay state、显式 authority/replica role 与权威 `TryExecuteAuthorityAbility` 边界，自身不携带 transport bridge。
+- `CycloneGames.GameplayAbilities.Networking`：面向非预测、authority-owned `AuthorityOnly` activation 的 fixed-wire protocol、codec、structural validator 与 result mapper。它是 protocol integration，不是 transport endpoint；产品 endpoint 负责 authentication、ownership、replay/rate policy、有界 pending state、authority-ID mapping 与 owner-thread marshaling。
 - `CycloneGames.GameplayFramework.Networking`
 - `CycloneGames.BehaviorTree.Networking`
 - `CycloneGames.AIPerception.Networking`

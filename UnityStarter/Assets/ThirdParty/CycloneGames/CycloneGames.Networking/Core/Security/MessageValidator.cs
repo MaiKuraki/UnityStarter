@@ -230,7 +230,17 @@ namespace CycloneGames.Networking.Security
             return checked(NetworkWireProtocol.HeaderLength + payloadLength);
         }
 
+        /// <summary>Default payload ceiling for a canonical Cyclone frame.</summary>
+        public static int DefaultMaxFramePayloadLength =>
+            NetworkConstants.MaxMTU - NetworkWireProtocol.HeaderLength;
+
         public static NetworkFrameResult TryReadHeader(ArraySegment<byte> frame, out NetworkEnvelopeHeader header)
+        {
+            return TryReadHeader(frame, DefaultMaxFramePayloadLength, out header);
+        }
+
+        public static NetworkFrameResult TryReadHeader(
+            ArraySegment<byte> frame, int maxPayloadLength, out NetworkEnvelopeHeader header)
         {
             if (frame.Array == null || frame.Offset < 0 || frame.Count < 0 || frame.Offset > frame.Array.Length || frame.Count > frame.Array.Length - frame.Offset)
             {
@@ -238,12 +248,28 @@ namespace CycloneGames.Networking.Security
                 return NetworkFrameResult.InvalidBufferRange;
             }
 
-            return TryReadHeader(new ReadOnlySpan<byte>(frame.Array, frame.Offset, frame.Count), out header);
+            return TryReadHeader(
+                new ReadOnlySpan<byte>(frame.Array, frame.Offset, frame.Count),
+                maxPayloadLength, out header);
         }
 
         public static NetworkFrameResult TryReadHeader(ReadOnlySpan<byte> frame, out NetworkEnvelopeHeader header)
         {
+            return TryReadHeader(frame, DefaultMaxFramePayloadLength, out header);
+        }
+
+        /// <summary>
+        /// Validates a frame with an explicit payload ceiling. The codec is an
+        /// untrusted boundary: a well-formed but oversized frame must be rejected
+        /// here, before any downstream allocation or deserialization, even when
+        /// the caller forgot to compose a MessageValidator.
+        /// </summary>
+        public static NetworkFrameResult TryReadHeader(
+            ReadOnlySpan<byte> frame, int maxPayloadLength, out NetworkEnvelopeHeader header)
+        {
             header = default;
+            if (maxPayloadLength < 0)
+                maxPayloadLength = 0;
             if (frame.Length < NetworkWireProtocol.HeaderLength)
                 return NetworkFrameResult.BufferTooSmall;
 
@@ -275,7 +301,9 @@ namespace CycloneGames.Networking.Security
             int payloadLength = ReadInt(frame, NetworkWireProtocol.PayloadLengthOffset);
             uint checksum = ReadUInt(frame, NetworkWireProtocol.ChecksumOffset);
 
-            if (payloadLength < 0 || payloadLength != frame.Length - headerLength)
+            if (payloadLength < 0
+                || payloadLength > maxPayloadLength
+                || payloadLength != frame.Length - headerLength)
                 return NetworkFrameResult.InvalidPayloadLength;
 
             header = new NetworkEnvelopeHeader(
